@@ -204,9 +204,10 @@ func denyOpenedRoot(root *os.Root) error {
 // operator file. The lexical check is only a cheap first gate against `..`.
 // An existing file is left alone and reported (skipped) UNLESS it is byte-identical to
 // what Wardyn would write now: .devcontainer/Dockerfile, AGENTS.md and the artifact
-// config files (.npmrc, pip.conf, .cargo/config.toml) are all places an operator keeps
+// config files (.npmrc, NuGet.Config, .cargo/config.toml) are all places an operator keeps
 // hand-written content, and keying on existence alone would permanently block the
-// regenerate path for a file Wardyn wrote itself.
+// regenerate path for a file Wardyn wrote itself. A file whose name an existing entry matches apart
+// from letter case is left alone and reported the same way.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
 	if err := runner.ValidateMountSource(cleanRoot); err != nil {
@@ -232,6 +233,16 @@ func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) 
 			return nil, fmt.Errorf("refusing to write outside workspace: %s", rel)
 		}
 		relPath := filepath.FromSlash(rel)
+		// A name that differs from an existing entry only by letter case is the project's own spelling of
+		// the same file (nuget.config beside NuGet.Config): NuGet reads one of them, and a clone on a
+		// case-insensitive disk checks out one of them. Keep theirs, as an exact-name match is kept.
+		if ents, derr := fs.ReadDir(root.FS(), filepath.ToSlash(filepath.Dir(relPath))); derr == nil {
+			name := filepath.Base(relPath)
+			if slices.ContainsFunc(ents, func(e fs.DirEntry) bool { return e.Name() != name && strings.EqualFold(e.Name(), name) }) {
+				skipped = append(skipped, rel)
+				continue
+			}
+		}
 		if dir := filepath.Dir(relPath); dir != "." {
 			if err := root.MkdirAll(dir, 0o755); err != nil {
 				return nil, fmt.Errorf("refusing to write %s: %w", rel, err)

@@ -333,6 +333,17 @@ describe("ElevationRequestDialog: loading its own units", () => {
     expect(screen.getByRole("combobox", { name: "Unit" })).toHaveTextContent("Billing");
   });
 
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 503 with no sentence", Object.assign(new HttpError(503, "Service Unavailable"), { said: "" }), "Wardyn couldn't load your units. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't load your units."],
+  ])("a units read that fails with %s says so", async (_name, error, text) => {
+    listMock.mockRejectedValueOnce(error);
+    setup({ offers: undefined });
+    const note = await screen.findByRole("alert");
+    expect(within(note).getByText(text)).toBeInTheDocument();
+  });
+
   it("shows the Retry note on failure, and Retry asks again", async () => {
     listMock.mockRejectedValueOnce(new Error("down"));
     setup({ offers: undefined });

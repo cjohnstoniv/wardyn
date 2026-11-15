@@ -4,7 +4,19 @@
  */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getToken, onAuthChange, onUnauthorized, setExpectedPrincipal, setSignedOutHold, setToken, wfetch } from "./core";
+import {
+  getToken,
+  holdWritesForIdentityCheck,
+  IDENTITY_CHECK_WAIT_MS,
+  identityCheckSettled,
+  onAuthChange,
+  onUnauthorized,
+  setExpectedPrincipal,
+  setSignedOutHold,
+  setToken,
+  wfetch,
+} from "./core";
+import { secrets } from "./secrets";
 
 const changed = vi.fn();
 let unsubscribe: () => void;
@@ -109,4 +121,86 @@ it("names the confirmed person on an asPerson draft write only (DR-0034)", async
   setExpectedPrincipal("");
   await wfetch("/agent-providers", { method: "PUT", asPerson: true });
   expect(sent()).toBeNull();
+});
+
+it("a later step of a save names the person it began under, not the one this tab has confirmed since", async () => {
+  const sent = () => (fetchMock.mock.calls.at(-1)![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
+  fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }));
+  setExpectedPrincipal("b@example.com");
+  await wfetch("/permissions/grants", { method: "POST", asPerson: "a@example.com" });
+  expect(sent()).toBe("a%40example.com");
+  // A save begun before /me had answered knows no person of its own: its later steps name whoever is confirmed
+  // when each is made, as a plain asPerson write does, and nobody only while nobody is confirmed.
+  await wfetch("/permissions/grants", { method: "POST", asPerson: "" });
+  expect(sent()).toBe("b%40example.com");
+  setExpectedPrincipal("");
+  await wfetch("/permissions/grants", { method: "POST", asPerson: "" });
+  expect(sent()).toBeNull();
+});
+
+it("a write held for an identity check names the person confirmed when it was made, not the one confirmed by the time it leaves", async () => {
+  // The server then refuses it rather than make it as whoever signed in while it waited.
+  const sent = () => (fetchMock.mock.calls.at(-1)![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
+  fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }));
+  setExpectedPrincipal("a@example.com");
+  holdWritesForIdentityCheck();
+  const held = wfetch("/secrets/npm-token", { method: "PUT", asPerson: true });
+  setExpectedPrincipal("b@example.com");
+  identityCheckSettled();
+  await held;
+  expect(sent()).toBe("a%40example.com");
+  // Made before /me had answered, it names nobody then, so the person confirmed by the time it leaves is named.
+  setExpectedPrincipal("");
+  holdWritesForIdentityCheck();
+  const early = wfetch("/secrets/npm-token", { method: "PUT", asPerson: true });
+  setExpectedPrincipal("b@example.com");
+  identityCheckSettled();
+  await early;
+  expect(sent()).toBe("b%40example.com");
+  setExpectedPrincipal("");
+});
+
+it("a secret saved while writes wait for an identity check names the person who confirmed it, or is refused unsent", async () => {
+  // Saved, then someone else is confirmed, then the check answers: the PUT names the first person, so the server
+  // refuses it rather than store the value in the second person's secrets. A check that never answers refuses it.
+  const sent = () => (fetchMock.mock.calls.at(-1)![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
+  fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+  setExpectedPrincipal("a@example.com");
+  holdWritesForIdentityCheck();
+  const saved = secrets.setSecret("npm-token", "s3cret");
+  setExpectedPrincipal("b@example.com");
+  identityCheckSettled();
+  await saved;
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(sent()).toBe("a%40example.com");
+
+  fetchMock.mockClear();
+  vi.useFakeTimers();
+  try {
+    setExpectedPrincipal("a@example.com");
+    holdWritesForIdentityCheck();
+    const unanswered = secrets.setSecret("npm-token", "s3cret");
+    const refusal = expect(unanswered).rejects.toMatchObject({ status: 401 });
+    setExpectedPrincipal("b@example.com");
+    await vi.advanceTimersByTimeAsync(IDENTITY_CHECK_WAIT_MS);
+    await refusal;
+  } finally {
+    vi.useRealTimers();
+    identityCheckSettled();
+    setExpectedPrincipal("");
+  }
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(unauthorized).toHaveBeenCalledTimes(1);
+});
+
+it("a delayed 401 from a read sent before the next sign-in signs nobody out and keeps the new token", async () => {
+  let resolve!: (response: Response) => void;
+  fetchMock.mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+  setToken("old");
+  const request = wfetch("/setup/status");
+  setToken("new");
+  resolve(new Response("", { status: 401 }));
+  await expect(request).rejects.toMatchObject({ status: 401 });
+  expect(unauthorized).not.toHaveBeenCalled();
+  expect(getToken()).toBe("new");
 });

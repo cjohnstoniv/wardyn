@@ -301,7 +301,7 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 	if n := rep.Withheld(); n > 0 {
 		fmt.Fprintf(w, "%d event(s) withheld: linked into the signed list, content not re-hashed at your role\n", n)
 	}
-	fmt.Fprintf(w, "%s: %d checkpoint(s), %d event(s)\n", rep.Format, len(rep.Checkpoints), len(rep.Events))
+	fmt.Fprintf(w, "%s: %d checkpoint(s), %d event(s)\n", termLine(rep.Format), len(rep.Checkpoints), len(rep.Events))
 	for i, c := range rep.Checkpoints {
 		state := "signature checked, inclusion not checked"
 		switch {
@@ -310,7 +310,7 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 		case c.Inclusion:
 			state = "signature and hash list checked"
 		}
-		fmt.Fprintf(w, "checkpoint %d seq %d-%d kid %.8s: %s\n", i, c.SeqLo, c.SeqHi, c.Kid, state)
+		fmt.Fprintf(w, "checkpoint %d seq %d-%d kid %.8s: %s\n", i, c.SeqLo, c.SeqHi, termLine(c.Kid), state)
 	}
 	for _, e := range rep.Events {
 		state := "FAILED"
@@ -320,16 +320,16 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 		case e.OK:
 			state = "verified"
 		}
-		fmt.Fprintf(w, "event seq %d %s %s: %s\n", e.Seq, e.ID, e.Action, state)
+		fmt.Fprintf(w, "event seq %d %s %s: %s\n", e.Seq, e.ID, termLine(e.Action), state)
 	}
 	for _, p := range rep.Policies {
 		switch p.Status {
 		case auditreceipt.PolicyLinked:
-			fmt.Fprintf(w, "policy seq %d %s: matching policy content at seq %d\n", p.Seq, p.Action, p.Resolve)
+			fmt.Fprintf(w, "policy seq %d %s: matching policy content at seq %d\n", p.Seq, termLine(p.Action), p.Resolve)
 		case auditreceipt.PolicyUnlinked:
-			fmt.Fprintf(w, "policy seq %d %s: stamped %.12s, no matching policy content in this bundle\n", p.Seq, p.Action, p.Digest)
+			fmt.Fprintf(w, "policy seq %d %s: stamped %.12s, no matching policy content in this bundle\n", p.Seq, termLine(p.Action), termLine(p.Digest))
 		default:
-			fmt.Fprintf(w, "policy seq %d %s: %s\n", p.Seq, p.Action, p.Status)
+			fmt.Fprintf(w, "policy seq %d %s: %s\n", p.Seq, termLine(p.Action), termLine(p.Status))
 		}
 	}
 	for _, f := range rep.Failures {
@@ -340,7 +340,7 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 		if f.Seq > 0 {
 			where += fmt.Sprintf(" seq %d", f.Seq)
 		}
-		fmt.Fprintf(w, "FAIL %s %s: %s\n", where, f.Reason, f.Detail)
+		fmt.Fprintf(w, "FAIL %s %s: %s\n", where, f.Reason, termLine(f.Detail))
 	}
 	switch {
 	case !rep.OK():

@@ -642,6 +642,54 @@ func TestMCPBroker_GatewayIdentityAttachedAndEchoMasked(t *testing.T) {
 	}
 }
 
+// A server with no route of its own, on the host and port of another destination's identity route, is not
+// sent, and a call to it that approve_each holds is not put to a person first: there the proxy sends only
+// what carries the token. REVERT PROOF: without the check in handleMCPBroker the server gets its credential
+// and the call id, and no token; with the check after holdApproveEach a person is asked about the call.
+func TestMCPBroker_ServerOnAnotherRoutesHostIsNotSent(t *testing.T) {
+	f, cp := newEachFixture(t)
+	t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+	withMCPGatewayRoute(f, "linear", "/mcp")
+	f.p.gatewayRoutes[0] = GatewayIdentityRoute{Host: "mcp.linear.test", Port: 443, PathPrefix: "/v1", ProviderID: "prov-1", Audience: gwidAudience}
+	for _, body := range []string{mcpInit, eachCall(1, "delete_issue", `{"id":"ENG-1"}`)} {
+		if rec := f.post(t, mcpToken("codex-cli"), "linear", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("status %d, want 400: %s", rec.Code, rec.Body)
+		}
+	}
+	if rows := strings.Count(f.buf.String(), "outside every route here (provider prov-1, path prefix /v1)"); f.up.hitCount() != 0 || cp.count() != 0 || rows != 2 {
+		t.Fatalf("%d upstream hits, %d approvals asked, %d rows that name the route; want none, none and 2: %s", f.up.hitCount(), cp.count(), rows, f.buf)
+	}
+	// No dial at all: the server's credential was not resolved and no identity was minted.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.targets) != 0 || f.up.mintBody != "" || strings.Contains(f.buf.String(), "mcp-server-secret-value") || strings.Contains(f.buf.String(), mcpToken("codex-cli")) {
+		t.Fatalf("dials %v, mint %q, or a credential in the rows: %s", f.targets, f.up.mintBody, f.buf)
+	}
+}
+
+// The same when the other destination's route covers the server's path (a whole-host route, or one on
+// the server's own path): refused before the body is read, so no person is asked about the call and the
+// server's credential is not resolved. REVERT PROOF: without the check in handleMCPBroker the held call
+// asks a person, and the initialize resolves the credential before forward refuses it.
+func TestMCPBroker_ServerUnderAnotherRoutesPathIsNotHeld(t *testing.T) {
+	for _, prefix := range []string{"", "/mcp"} {
+		f, cp := newEachFixture(t)
+		t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+		withMCPGatewayRoute(f, "linear", "/mcp")
+		f.p.gatewayRoutes[0] = GatewayIdentityRoute{Host: "mcp.linear.test", Port: 443, PathPrefix: prefix, ProviderID: "prov-1", Audience: gwidAudience}
+		for _, body := range []string{mcpInit, eachCall(1, "delete_issue", `{"id":"ENG-1"}`)} {
+			if rec := f.post(t, mcpToken("codex-cli"), "linear", body); rec.Code != http.StatusBadGateway {
+				t.Errorf("prefix %q: status %d, want 502: %s", prefix, rec.Code, rec.Body)
+			}
+		}
+		f.mu.Lock()
+		if f.up.hitCount() != 0 || cp.count() != 0 || len(f.targets) != 0 {
+			t.Errorf("prefix %q: %d upstream hits, %d approvals asked, dials %v; want none of them", prefix, f.up.hitCount(), cp.count(), f.targets)
+		}
+		f.mu.Unlock()
+	}
+}
+
 // A server the route does not cover (the github server, another host) gets the call id and no token, and
 // a run's other server is not asked for one.
 func TestMCPBroker_GatewayIdentityOnlyOnItsOwnRoute(t *testing.T) {

@@ -145,11 +145,11 @@ func (s *narrowStore) ActiveProxyStart(ctx context.Context, id uuid.UUID) (store
 	return s.readbackStore.ActiveProxyStart(ctx, id)
 }
 
-func (s *narrowStore) BeginProxyStart(ctx context.Context, id uuid.UUID, gen int, jti, mode string) (store.ProxyStart, error) {
+func (s *narrowStore) BeginProxyStart(ctx context.Context, id uuid.UUID, gen int, jti, mode string, inPlace bool) (store.ProxyStart, error) {
 	s.mu2.Lock()
 	s.begun = append(s.begun, jti)
 	s.mu2.Unlock()
-	p, err := s.readbackStore.BeginProxyStart(ctx, id, gen, jti, mode)
+	p, err := s.readbackStore.BeginProxyStart(ctx, id, gen, jti, mode, inPlace)
 	if s.afterBegin != nil {
 		s.afterBegin()
 	}
@@ -186,7 +186,7 @@ func newNarrowFixture(t *testing.T) *narrowFixture {
 		postLoaded(t, f.srv, f.run.ID, p.JTI, hash)
 	}
 	ctx := context.Background()
-	if _, err := f.rb.BeginProxyStart(ctx, f.run.ID, 1, nf.jti, store.ProxyStartExpected); err != nil {
+	if _, err := f.rb.BeginProxyStart(ctx, f.run.ID, 1, nf.jti, store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	sha := proxy.ConfigSHA256(f.rs.cfg)
@@ -318,8 +318,8 @@ func TestNarrowEdit_ConfirmsAndAnswers200(t *testing.T) {
 		t.Errorf("stored live_denies = %v, want %v", got, want)
 	}
 	p := f.active(t)
-	if p.State != types.ProxyStartEnforced || p.Generation != 2 || p.ExpectedSHA256 != proxy.ConfigSHA256(f.stored(t)) {
-		t.Errorf("start = %+v, want generation 2 enforced on the hash of the stored config", p)
+	if p.State != types.ProxyStartEnforced || p.Generation != 2 || p.ExpectedSHA256 != proxy.ConfigSHA256(f.stored(t)) || !p.InPlace {
+		t.Errorf("start = %+v, want generation 2 enforced on the hash of the stored config, recorded in place", p)
 	}
 	if len(f.rr.replaced) != 0 || len(f.audit.eventsFor(f.run.ID, "run.revive")) != 0 {
 		t.Errorf("a proxy was replaced (%d) or a revive row written", len(f.rr.replaced))
@@ -356,6 +356,9 @@ func TestNarrowEdit_DockerKeepsRevivePath(t *testing.T) {
 	}
 	if _, n := f.nr.counts(); n != 0 {
 		t.Errorf("NarrowProxy ran %d times on Docker", n)
+	}
+	if p := f.active(t); p.InPlace {
+		t.Errorf("the revive's start = %+v, want it not recorded in place", p)
 	}
 	if row := f.editRow(t); row["applied"] != nil {
 		t.Errorf("a Docker edit's row says applied %v", row["applied"])
@@ -933,24 +936,27 @@ func TestNarrowEdit_UnconfirmedRunHintSaysNarrowed(t *testing.T) {
 	})
 }
 
-// runStopHint gives the narrowed words only on a context an in-place narrowing marked, and the replace
-// path's words, with the image cause, on any other. The subtests above go through a whole edit, where a
-// report can win the race and contain on its own context; this pins the choice itself. Catches: a hint
-// chosen without reading the mark, or a mark read the wrong way round.
-func TestRunStopHint_TheMarkChoosesTheWords(t *testing.T) {
+// runStopHint gives the narrowed words when the start's row says it was applied in place or the context
+// is an in-place narrowing's own, and the replace path's words, with the image cause, otherwise. The
+// subtests above go through a whole edit; this pins the choice itself. Catches: a hint chosen without
+// reading the row or the mark, or either read the wrong way round.
+func TestRunStopHint_TheRowOrTheMarkChoosesTheWords(t *testing.T) {
 	marked := withNarrowedStart(context.Background())
 	for _, c := range []struct {
 		name    string
 		ctx     context.Context
+		inPlace bool
 		stopped bool
 		want    string
 	}{
-		{"marked, stopped", marked, true, unconfirmedNarrowedHint},
-		{"marked, stop pending", marked, false, unconfirmedNarrowedStopPendingHint},
-		{"unmarked, stopped", context.Background(), true, unconfirmedPolicyHint},
-		{"unmarked, stop pending", context.Background(), false, unconfirmedStopPendingHint},
+		{"row in place, stopped", context.Background(), true, true, unconfirmedNarrowedHint},
+		{"row in place, stop pending", context.Background(), true, false, unconfirmedNarrowedStopPendingHint},
+		{"marked, stopped", marked, false, true, unconfirmedNarrowedHint},
+		{"marked, stop pending", marked, false, false, unconfirmedNarrowedStopPendingHint},
+		{"neither, stopped", context.Background(), false, true, unconfirmedPolicyHint},
+		{"neither, stop pending", context.Background(), false, false, unconfirmedStopPendingHint},
 	} {
-		if got := runStopHint(c.ctx, c.stopped); got != c.want {
+		if got := runStopHint(c.ctx, c.inPlace, c.stopped); got != c.want {
 			t.Errorf("%s: hint = %q, want %q", c.name, got, c.want)
 		}
 	}

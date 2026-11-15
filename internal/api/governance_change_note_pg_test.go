@@ -133,6 +133,16 @@ func TestChangeNoteBounds(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400", name, w.Code, w.Body)
 		}
 	}
+	// One value, with no field written twice: the decode would keep the last.
+	for name, body := range map[string]string{
+		"a second value":     `{"reason":"first"} {"reason":"second"}`,
+		"a key twice":        `{"reason":"first","reason":"second"}`,
+		"a key in two cases": `{"reason":"first","REASON":"second"}`,
+	} {
+		if w := e.call(proposer, http.MethodPut, notePath(ch.ID), body); w.Code != http.StatusBadRequest || noteReasonOf(t, w) != reasonInvalidRequestBody {
+			t.Errorf("%s: %d %s, want 400 %s", name, w.Code, w.Body, reasonInvalidRequestBody)
+		}
+	}
 	if _, has := e.readChange(ch.ID)["note"]; has {
 		t.Fatalf("a refused note left one on the change")
 	}

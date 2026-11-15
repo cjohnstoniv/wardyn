@@ -42,6 +42,13 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 		}
 		return runner.Status{}, fmt.Errorf("k8s: status: get pod: %w", err)
 	}
+	kept, isKept, err := d.keptPodStatus(ctx, ns, pod)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)
+	}
+	if isKept {
+		return kept, nil
+	}
 	st, replaced, err := d.replacedPodStatus(ctx, ns, pod)
 	if err != nil {
 		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)
@@ -212,8 +219,8 @@ func waitingDetail(pod *corev1.Pod) string {
 // proxyNotReadyDetail is the extra start-failure line for a proxy container that is Running but not
 // Ready when the start deadline passes, else "": the probe is a connect to the listen port, and the proxy
 // did not open it in time. In runner mode the proxy opens it only once its lapse gate opens on the first
-// run-token renewal (Server.awaitOpen), so the line says it may be waiting for that; wardynd's own driver
-// has no lapse gate. image is named when it is known.
+// run-token renewal and wardyn-runnerd's decision sink has granted it credit (Server.awaitOpen), so the
+// line says it may be waiting for either; wardynd's own driver has neither. image is named when it is known.
 func proxyNotReadyDetail(pod *corev1.Pod, image string, runnerMode bool) string {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != proxyContainerName || cs.State.Running == nil || cs.Ready {
@@ -225,7 +232,7 @@ func proxyNotReadyDetail(pod *corev1.Pod, image string, runnerMode bool) string 
 		}
 		line := fmt.Sprintf("%s is running but its port %d readiness probe has not passed; check the proxy log and connectivity", proxy, runner.ProxyListenPort)
 		if runnerMode {
-			line += "; the proxy may be waiting for its first run-token renewal with the organisation"
+			line += "; the proxy may be waiting for its first run-token renewal with the organisation, or for wardyn-runnerd's decision sink"
 		}
 		return line
 	}
@@ -283,7 +290,9 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // name, the only shape CreateSandbox has handed out), never from the agent pod's wardyn.run-id label,
 // which anyone who can patch the pod can change: a label naming another run would tear that run down,
 // and a missing one would leave this run's objects behind. It then sweeps every Wardyn-owned object
-// carrying the run's label via three DeleteCollection calls (pods, NetworkPolicies, Secrets).
+// carrying the run's label via three DeleteCollection calls (pods, Secrets, NetworkPolicies); the agent-sandbox
+// backend's Sandbox is deleted before them, and with keep on the run's Service and a fourth DeleteCollection, of
+// its EndpointSlices, come between the pods and the Secrets.
 //
 // An agent pod whose label no longer names the ref's run is deleted by its name and UID besides
 // (teardownRun), since the run's label selector no longer reaches it.
@@ -372,6 +381,12 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 	if drifted != nil {
 		if err := d.waitPodGone(ctx, ns, drifted, waitBound); err != nil {
 			return fmt.Errorf("k8s: teardown: waiting for the relabelled agent pod to terminate before dropping NetworkPolicies: %w", err)
+		}
+	}
+
+	if d.keepOn() {
+		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
+			return fmt.Errorf("k8s: teardown: %w", err)
 		}
 	}
 
@@ -492,7 +507,8 @@ func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, ti
 // Deduped by run id, since teardownByRunID reaches every object from the id.
 //
 // A drive PVC is never touched: it carries labelDrive, never labelRun, and
-// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets.
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; with
+// keep on it also deletes the run's Service and EndpointSlices (deleteKeepAddress).
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {

@@ -76,6 +76,8 @@ interface PickOption {
   othersSee?: boolean;
   /** The person's own drive: its row carries "Delete drive". */
   own?: boolean;
+  /** A disk kept on a Mac (backend mac_disk): its delete confirm says what an offline or unregistered Mac means. */
+  onMac?: boolean;
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
@@ -111,7 +113,7 @@ export interface UserDriveSeam {
   creating: boolean;
   setCreating: (creating: boolean) => void;
   /** The own drive whose "Delete drive" was pressed, and the button to return focus to. */
-  deleting: { drive: { id: string; name: string }; opener: HTMLElement } | null;
+  deleting: { drive: { id: string; name: string; onMac?: boolean }; opener: HTMLElement } | null;
   setDeleting: (d: UserDriveSeam["deleting"]) => void;
 }
 
@@ -160,7 +162,7 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
     shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d), meta: driveMeta(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
-    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true,
+    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true, onMac: d.backend === "mac_disk",
   }));
 }
 
@@ -462,7 +464,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          setDeletingDrive({ drive: { id: o.key, name: o.name }, opener: e.currentTarget });
+                          setDeletingDrive({ drive: { id: o.key, name: o.name, onMac: o.onMac }, opener: e.currentTarget });
                         }}
                       >
                         {NR_FILES.DELETE_DRIVE}

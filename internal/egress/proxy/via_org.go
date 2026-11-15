@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -81,7 +82,7 @@ func (p *Proxy) viaOrgRouteFor(r *http.Request) (ViaOrgRoute, string, bool) {
 }
 
 func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
-	i := slices.IndexFunc(p.viaOrgRoutes, func(rt ViaOrgRoute) bool { return strings.EqualFold(rt.Host, host) })
+	i := slices.IndexFunc(p.viaOrgRoutes, func(rt ViaOrgRoute) bool { return hostKey(rt.Host) == hostKey(host) })
 	if i < 0 {
 		return ViaOrgRoute{}, false
 	}
@@ -253,6 +254,9 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
+	r = trackNetworkBody(r)
+	defer interruptBodyReadOnCancel(w, r)()
+	host = hostKey(host) // the grant's destination as stored: the engine's tables are keyed in this one spelling
 	if e.refuseClosed(w) {
 		return
 	}
@@ -282,6 +286,9 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 	if log != nil {
 		p.sink.emit(*log)
 	}
+	// The control plane's listener sets no read timeout, so the body gets the bound a terminated
+	// tunnel's does, armed after the hold above and before allowed_models, the first gate that reads it.
+	rearmBodyDeadline(w, r)
 	p.serveMITMRequest(w, r, host, 443)
 }
 
@@ -289,7 +296,8 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
-	r = trackNetworkBody(r) // redundant today, as nothing reads the body before the re-arm below; kept for a later gate
+	r = trackNetworkBody(r)
+	defer interruptBodyReadOnCancel(w, r)()
 	if e.refuseClosed(w) {
 		return
 	}
@@ -301,6 +309,30 @@ func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 	// gets the same bound a terminated tunnel's does.
 	rearmBodyDeadline(w, r)
 	e.srv.proxy.handleGitBroker(w, r)
+}
+
+// interruptBodyReadOnCancel makes the end of a forwarded request's stream (run end, release, idle: the
+// control plane cancels r's context) end a body Read blocked on an upload that stopped arriving, by
+// re-arming the body deadline, which is now once the context has ended. The control plane's listener
+// sets no read timeout and its cancel sets only a write deadline. The returned stop fences the handler's
+// return, as the control plane fences that write deadline: AfterFunc's stop does not wait for a callback
+// already running, so the deadline is never set once the handler has returned.
+func interruptBodyReadOnCancel(w http.ResponseWriter, r *http.Request) (stop func()) {
+	var mu sync.Mutex
+	returned := false
+	stopAfter := context.AfterFunc(r.Context(), func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !returned {
+			rearmBodyDeadline(w, r)
+		}
+	})
+	return func() {
+		stopAfter()
+		mu.Lock()
+		returned = true
+		mu.Unlock()
+	}
 }
 
 // Close flushes the engine's decision rows and releases it.

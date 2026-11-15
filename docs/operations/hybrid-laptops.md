@@ -337,6 +337,7 @@ install, outbound only.
    ```
 
    It needs no Docker, and lists your home folder unless `--folder-root <dir>` (repeatable) narrows it.
+   At start it opens every folder from the top of the drive down to each root: if your user cannot read one, it refuses to start and names that folder.
    Also set `"substrate": "folders"` in `runnerd.json` ([the settings file](../runner-registration.md#the-runners-settings-file)), so `wardyn-runnerd doctor` reads the same substrate as `serve`. Setup does not write it.
 3. In New Run, add "Your computer" under Files, pick the folder, and choose **Both ways** or **Copy in only**.
 

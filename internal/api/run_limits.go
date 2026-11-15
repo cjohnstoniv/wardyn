@@ -60,6 +60,12 @@ func runLimitsRefusal(l types.RunLimits) string {
 // end is the create's decision (run_end_create.go): the run's end and its
 // lifetime_cap_at, both counted from created_at. nil is a create that decides
 // none (the record path), which keeps the profile's default end, else its max.
+//
+// A run launched under an elevation is capped at the elevation's end when that
+// is earlier. The end and the cap are set here on created_at's clock and kept
+// as CapInputs, from which the insert decides them again on the database's
+// clock: a span from created_at and the elevation's fixed end are only
+// compared once both are on that one clock.
 func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling, end *createEnd) {
 	l := ceiling.Limits.RunLimits
 	run.RunLimits = l
@@ -68,48 +74,31 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 		run.UnitID = &id
 	}
 	run.RestrictionIDs = slices.Clone(ceiling.RestrictionIDs)
+	in := types.RunCapInputs{Elevation: ceiling.ContextExpiresAt}
 	if end != nil {
 		if end.endSec != nil {
-			endsAt := run.CreatedAt.Add(time.Duration(*end.endSec) * time.Second)
-			run.EndsAt = &endsAt
+			d := time.Duration(*end.endSec) * time.Second
+			in.End = &d
 		}
 		if end.capSec > 0 {
-			capAt := run.CreatedAt.Add(time.Duration(end.capSec) * time.Second)
-			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, end.capSource
+			in.Span, in.SpanSource = time.Duration(end.capSec)*time.Second, end.capSource
 		}
 	} else {
 		if sec := cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec); sec > 0 {
-			endsAt := run.CreatedAt.Add(time.Duration(sec) * time.Second)
-			run.EndsAt = &endsAt
+			d := time.Duration(sec) * time.Second
+			in.End = &d
 		}
 		// These runs have no pool: the deployment's maximum age is their only cap.
 		if s.cfg.RunMaxAge > 0 {
-			capAt := run.CreatedAt.Add(s.cfg.RunMaxAge)
-			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
+			in.Span, in.SpanSource = s.cfg.RunMaxAge, types.LimitSourceDeployment
 		}
+		// A run never shows an end it will not reach: a record-path run whose
+		// profile names no end ends at the cap, not "No end".
+		in.EndAtCap = true
 	}
-	capAtElevation(run, ceiling.ContextExpiresAt)
-	// A run never shows an end it will not reach: a profile's default end past
-	// the cap is the cap (the record path above; a create already cut its ask).
-	// A record-path run whose profile names no end ends at the cap too, not "No end".
-	if end == nil && run.EndsAt == nil && run.LifetimeCapAt != nil {
-		run.EndsAt = run.LifetimeCapAt
-	}
-	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.After(*run.LifetimeCapAt) {
-		run.EndsAt = run.LifetimeCapAt
-	}
+	run.EndsAt, run.LifetimeCapAt, run.LifetimeCapSource = in.At(run.CreatedAt)
+	run.CapInputs = &in
 	run.WaitBudgetSec = runWaitSec(l, s.cfg.ApprovalExpiryAfter)
-}
-
-// capAtElevation caps a run launched under an elevation at the elevation's end: the earlier of that and the cap it already has.
-func capAtElevation(run *types.AgentRun, until *time.Time) {
-	if until == nil {
-		return
-	}
-	if run.LifetimeCapAt == nil || until.Before(*run.LifetimeCapAt) {
-		at := *until
-		run.LifetimeCapAt, run.LifetimeCapSource = &at, types.LimitSourceElevation
-	}
 }
 
 // runWaitSec is a new run's wait for a decision: the profile's default, else

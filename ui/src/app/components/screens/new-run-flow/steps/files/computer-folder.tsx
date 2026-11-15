@@ -44,7 +44,7 @@ const FIELD_LABEL = "text-xs font-semibold";
 const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
 
 export interface ComputerFoldersLookup {
-  /** WARDYN_COMPUTER_FOLDERS as /setup/status says it: undefined until it answers, and after a failed read. */
+  /** WARDYN_COMPUTER_FOLDERS as /setup/status says it: undefined until it answers, and after a failed read (the status client's unreachable fallback included). */
   allowed?: boolean;
   /** The read failed: not an answer, so not evidence that the organisation forbids folders. */
   failed: boolean;
@@ -60,7 +60,12 @@ export function useComputerFoldersAllowed(): ComputerFoldersLookup {
     let alive = true;
     setFailed(false);
     setupApi.getSetupStatus()
-      .then((s) => alive && setAllowed(s.runner.computer_folders === true))
+      .then((s) => {
+        if (!alive) return;
+        // The status read's own fallback (unreachable) carries no setting at all: a failed read, never a no.
+        if (s.unreachable) setFailed(true);
+        else setAllowed(s.runner.computer_folders === true);
+      })
       .catch(() => alive && setFailed(true));
     return () => {
       alive = false;

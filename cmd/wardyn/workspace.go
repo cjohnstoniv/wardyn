@@ -260,7 +260,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
 			for _, ws := range wss {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, termLine(ws.Name), termLine(workspaceComposition(ws)), ws.Status)
 			}
 			return tw.Flush()
 		},
@@ -288,7 +288,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			}
 			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, termLine(ws.Name), termLine(workspaceComposition(ws)), ws.Status)
 			return tw.Flush()
 		},
 	}

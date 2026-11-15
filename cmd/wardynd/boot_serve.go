@@ -27,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -177,7 +178,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
 				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
 				lockEnd:               srv.LockRunEnd,
+				fenceStarts:           srv.FenceRunStarts,
 				bringBack:             srv.BringComputerFolderBack,
+				holdPassed:            api.EndHoldPassed,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},
@@ -413,8 +416,10 @@ const forwarderJoinWait = 5 * time.Second
 // orgFederation is nil unless hybrid enrolment (issue #103) is on; when set,
 // it is joined (not merely cancelled) before this returns, so the process
 // never exits while its goroutine might still be logging or touching the
-// store.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) error {
+// store. cleanUpsWaited reports that the shutdown sequence waited for the
+// secret store's clean-ups; a serve error returns before that wait, so it is
+// false there.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) (cleanUpsWaited bool, err error) {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -485,7 +490,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	case <-rootCtx.Done():
 		slog.Info("wardynd: shutdown signal received")
 	case err := <-errCh:
-		return fmt.Errorf("serve: %w", err)
+		return false, fmt.Errorf("serve: %w", err)
 	}
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
@@ -495,7 +500,20 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	}
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
-	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)
+	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, secretstorepg.WaitForCleanUps, orgFederation)
+}
+
+// cleanUpWaitAfterServe is how long run's deferred CloseAfterCleanUps still
+// waits once serveAndShutdown has returned. None when the shutdown sequence
+// already waited within its budget: a second wait would run past the
+// termination grace, so whatever started since is cut at once. The whole
+// budget otherwise (a serve that failed at once), so the clean-ups the boot's
+// Puts left are still waited for.
+func cleanUpWaitAfterServe(cleanUpsWaited bool) time.Duration {
+	if cleanUpsWaited {
+		return 0
+	}
+	return api.BackgroundShutdownBudget
 }
 
 // httpShutdowner is the *http.Server surface runShutdownSequence drives,
@@ -524,7 +542,7 @@ type backgroundServer interface {
 // fails and prove WaitBackground/FlushAuthFailedStreak still ran
 // (TestRunShutdownSequence*) — TestServeShutdownOrder used to pin the same
 // invariant by walking serveAndShutdown's AST for call order.
-func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, orgFederation *federation.Forwarder) error {
+func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, waitCleanUps func(context.Context) error, orgFederation *federation.Forwarder) (cleanUpsWaited bool, err error) {
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
@@ -548,7 +566,23 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	// still live. WaitBackground carries its own bound (killCascadeTimeout plus
 	// a margin) and logs if it hits it, so this cannot turn an orderly stop
 	// into a hang.
+	//
+	// The secret store's clean-ups (removing a value a save replaced, or one
+	// whose row was not written) run detached from the save, so neither the
+	// drain nor WaitBackground waits for them. They are waited for beside
+	// WaitBackground, within its budget, so the grace period does not grow; one
+	// still running at the budget's end is cut, and the value it was removing
+	// stays for `wardynd -reconcile` to list. waitCleanUps is
+	// secretstorepg.WaitForCleanUps, passed in so a test can see it run.
+	cleanCtx, stopCleanWait := context.WithTimeout(context.Background(), api.BackgroundShutdownBudget)
+	defer stopCleanWait()
+	cleaned := make(chan error, 1)
+	go func() { cleaned <- waitCleanUps(cleanCtx) }()
 	srv.WaitBackground()
+	if err := <-cleaned; err != nil {
+		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+			slog.Duration("budget", api.BackgroundShutdownBudget))
+	}
 
 	// The forwarder goroutine bootHybrid started on rootCtx is already
 	// stopping (it selects on the same rootCtx.Done() this function's own
@@ -572,7 +606,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	srv.FlushAuthFailedStreak()
 
 	if shutErr != nil {
-		return fmt.Errorf("shutdown: %w", shutErr)
+		return true, fmt.Errorf("shutdown: %w", shutErr)
 	}
-	return nil
+	return true, nil
 }

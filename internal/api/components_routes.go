@@ -275,12 +275,16 @@ func (s *Server) handleUpdateMyComponent(w http.ResponseWriter, r *http.Request)
 		saveRefusal(w, reason, msg)
 		return
 	}
-	s.updateComponent(w, r, cs, c)
+	s.updateComponent(w, r, cs, c, req.ExpectedVersion)
 }
 
+// componentStaleMsg answers a PUT whose expected_version the row no longer holds.
+const componentStaleMsg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again."
+
 // updateComponent is the write the two PUT routes share once a row is known to
-// exist and its new shape passed.
-func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs store.ComponentStore, c types.Component) {
+// exist and its new shape passed. expected is the version the caller read, 0
+// for none: the store writes only while the row still holds it.
+func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs store.ComponentStore, c types.Component, expected int) {
 	rows, err := cs.ListComponents(r.Context(), c.Owner)
 	if err != nil {
 		writeServerError(w, r, "list components", err)
@@ -290,8 +294,11 @@ func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs stor
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "a component with that name already exists")
 		return
 	}
-	updated, err := cs.UpdateComponent(r.Context(), c)
+	updated, err := cs.UpdateComponent(r.Context(), c, expected)
 	switch {
+	case errors.Is(err, store.ErrComponentStale):
+		writeErrorReason(w, http.StatusConflict, reasonComponentVersionConflict, componentStaleMsg)
+		return
 	case errors.Is(err, store.ErrConflict):
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "a component with that name already exists")
 		return
@@ -410,6 +417,12 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 	old, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
+		// A save from an editor opened at another version would write back what was changed
+		// since, so it is refused before the write and before anything the write would purge.
+		if req.ExpectedVersion != 0 && old.Version != req.ExpectedVersion {
+			writeErrorReason(w, http.StatusConflict, reasonComponentVersionConflict, componentStaleMsg)
+			return
+		}
 		// A row whose AWS sign-ins would point somewhere it no longer names, or
 		// whose Azure sign-ins were captured for subscriptions it no longer pins,
 		// takes them with it, before the write.
@@ -420,7 +433,10 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		s.updateComponent(w, r, cs, c)
+		s.updateComponent(w, r, cs, c, req.ExpectedVersion)
+	case errors.Is(err, store.ErrNotFound) && req.ExpectedVersion != 0:
+		// The row the editor opened is gone: its save must not create it again.
+		notFoundIf(w, err, "component", reasonComponentNotFound)
 	case errors.Is(err, store.ErrNotFound):
 		s.createOrgComponent(w, r, cs, c)
 	default:

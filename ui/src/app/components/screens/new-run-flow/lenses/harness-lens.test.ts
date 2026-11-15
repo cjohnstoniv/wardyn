@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RunIntent } from "../draft/run-intent";
-import { addHarness, agentTask, clearStarter, harnessIssues, removeHarness, setAgentTask, setStartPrompt, setStarter, setTask, swapHarness } from "./harness-lens";
+import { addHarness, agentTask, clearStarter, harnessIssues, removeHarness, setAgentTask, setStartPrompt, setStarter, setTask, swapHarness, swapHeld } from "./harness-lens";
 import { chooseMode } from "./run-lens";
 
 const AUTONOMOUS: RunIntent = {
@@ -71,6 +71,14 @@ describe("harness lens (U5)", () => {
     const swapped = swapHarness(AUTONOMOUS, "claude-code", "codex-cli");
     expect(swapped.workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: "fix it" });
     expect(setTask(swapped, "next").workload?.agent).toBe("codex-cli");
+  });
+
+  it("what is held for a card's harness follows a swap, never over text held for the new one", () => {
+    const held = { "codex-cli": "fix it", "": "first" };
+    expect(swapHeld(held, "codex-cli", "claude-code")).toEqual({ "claude-code": "fix it", "": "first" });
+    expect(swapHeld({ ...held, "claude-code": "review" }, "codex-cli", "claude-code")).toEqual({ ...held, "claude-code": "review" });
+    expect(swapHeld(held, "none", "claude-code")).toBe(held);
+    expect(swapHeld(undefined, "codex-cli", "claude-code")).toBeUndefined();
   });
 
   it("a harness added beside the older approval hold starts held, and a swap keeps it held", () => {

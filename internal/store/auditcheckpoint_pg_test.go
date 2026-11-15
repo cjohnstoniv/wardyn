@@ -174,6 +174,45 @@ func TestAuditCheckpointRange_RefusesHashlessAboveStart(t *testing.T) {
 	}
 }
 
+// TestAuditCheckpointRange_ResumesPastAnAttestedDrop: the last checkpoint ended at the fourth legacy row and
+// signing stopped there; an attested drop then removed the legacy partition, the unsigned fifth row with it.
+// The range from that head resumes at the first retained row, which chains to the drop's recorded tail. A
+// head at the drop's last row is still held to its own hash, a head above the drop reads on from its own hash,
+// and a partition removed after it without an attested drop is a break: the resume never skips an unattested
+// gap.
+func TestAuditCheckpointRange_ResumesPastAnAttestedDrop(t *testing.T) {
+	c := newRetChain(t)
+	ctx := context.Background()
+	pg := store.NewPG(c.pool)
+	head := c.preSeqs[3]
+	headHash := scalar[string](t, c.pool, `SELECT row_hash FROM audit_events WHERE seq = $1`, head)
+	if _, err := c.drop("audit_events_legacy", c.digest(t, "audit_events_legacy"), "ops@example.com"); err != nil {
+		t.Fatalf("attested drop: %v", err)
+	}
+	first := scalar[int64](t, c.pool, `SELECT min(seq) FROM audit_events`)
+	rows, _, err := pg.AuditCheckpointRange(ctx, head, headHash, store.AuditCheckpointMaxRows)
+	if err != nil || len(rows) == 0 || rows[0].Seq != first {
+		t.Fatalf("range after the drop = %v, %v; want the retained rows from seq %d", rows, err, first)
+	}
+	var brk *store.AuditCheckpointBreak
+	if _, _, err := pg.AuditCheckpointRange(ctx, c.preSeqs[4], headHash, store.AuditCheckpointMaxRows); !errors.As(err, &brk) || brk.Seq != first {
+		t.Fatalf("a head at the drop's last row with another row's hash: %v, want a break at seq %d", err, first)
+	}
+	// A head above the drop is still held to its own hash: the drop's tail seeds the walk only for a head below it.
+	above := scalar[int64](t, c.pool, `SELECT max(seq) FROM `+retMid)
+	aboveHash := scalar[string](t, c.pool, `SELECT row_hash FROM audit_events WHERE seq = $1`, above)
+	if rows, _, err := pg.AuditCheckpointRange(ctx, above, aboveHash, store.AuditCheckpointMaxRows); err != nil || len(rows) == 0 || rows[0].Seq <= above {
+		t.Fatalf("a head above the drop = %v, %v; want the rows after seq %d", rows, err, above)
+	}
+
+	c.exec(t, `ALTER TABLE audit_events DETACH PARTITION `+retMid)
+	c.exec(t, `DROP TABLE `+retMid)
+	_, _, err = pg.AuditCheckpointRange(ctx, head, headHash, store.AuditCheckpointMaxRows)
+	if !errors.As(err, &brk) || !strings.Contains(brk.Reason, "rows removed without an attested retention drop") {
+		t.Fatalf("range after a partition was removed without an attested drop: %v, want a break", err)
+	}
+}
+
 // TestAuditCheckpoints_InsertReadAndConflict: a checkpoint is stored verbatim and read back in seq order; a
 // second insert over the same range is refused with the stored row, so the signer can check whose it is.
 func TestAuditCheckpoints_InsertReadAndConflict(t *testing.T) {

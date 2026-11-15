@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -284,28 +287,169 @@ func TestRunExecRefusals(t *testing.T) {
 	}
 }
 
-// TestRunExecBackgroundRunIsRefused: POST /exec is the SSH access door (backgroundDoors), so a background
-// task refuses a command as SSH does, and the runner is never called. The 409 says exec needs an interactive
-// run (experience: interactive) and does not say "no SSH access"; it catches the SSH-only sentence
-// (runBackgroundOnlyMsg) reaching an exec caller again.
-func TestRunExecBackgroundRunIsRefused(t *testing.T) {
-	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
+// background makes the harness's run a background task (experience: background).
+func (e *execHarness) background() {
 	e.ast.mu.Lock()
+	defer e.ast.mu.Unlock()
 	run := e.ast.runs[e.id]
 	run.Experience = types.ExperienceBackground
 	e.ast.runs[e.id] = run
+}
+
+// underProfile launches the harness's run under a governance profile named "ci" that carries limits.
+func (e *execHarness) underProfile(limits types.GovernanceLimits) {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: limits}
+	e.ast.mu.Lock()
+	run := e.ast.runs[e.id]
+	run.UnitID = &profile.ID
+	e.ast.runs[e.id] = run
 	e.ast.mu.Unlock()
-	w := e.exec(t, `{"command":"id"}`)
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || !strings.Contains(w.Body.String(), "interactive run") ||
-		!strings.Contains(w.Body.String(), "experience: interactive") || strings.Contains(w.Body.String(), "no SSH access") {
-		t.Errorf("a background run = %d %s, want 409 %s naming an interactive run", w.Code, w.Body, reasonRunExecUnavailable)
+	e.srv.cfg.Store = &profileListStore{authzStore: e.ast, profiles: []types.GovernanceUnit{profile}}
+}
+
+// execError is the error sentence of a refused POST /exec.
+func execError(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s: %v", w.Body, err)
 	}
-	if n := e.execs.Load(); n != 0 {
-		t.Errorf("ExecStream was called %d times for a background run", n)
+	return body.Error
+}
+
+// TestRunExecBackgroundRunTakesACommand: a background task takes a command through this route, though it has
+// no SSH access (TestSSHFreshRun_BackgroundRunRefusesEveryChannel): the runner is called once and the
+// run.command.exec row holds the command and its exit code.
+func TestRunExecBackgroundRunTakesACommand(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("uid=1000", "", 0), nil })
+	e.background()
+	res := execResult(t, e.execWithin(t, `{"command":"id"}`, 10*time.Second))
+	if res.ExitCode != 0 || res.Stdout != "uid=1000" {
+		t.Errorf("result = %+v, want exit 0 and the command's output", res)
 	}
-	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), `"error":`) || strings.Contains(string(rows[0].Data), `"command":`) {
-		t.Errorf("run.command.exec rows = %v, want one failure carrying the refusal and no command", rows)
+	if n := e.execs.Load(); n != 1 {
+		t.Errorf("ExecStream was called %d times, want 1", n)
+	}
+	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "success" ||
+		!strings.Contains(string(rows[0].Data), `"command":"id"`) {
+		t.Errorf("run.command.exec rows = %v, want one success row naming the command", rows)
+	}
+}
+
+// TestRunExecBackgroundRunKeepsTheDoors: a background run's command meets every door an interactive run's does,
+// before the runner is called, and is answered in words a pipeline step can read: the governance profile
+// (deny_interactive on any run, deny_task_mode_exec on a background run alone), the data_out rule, the channel
+// cap and the run's state. A sandbox with nothing to exec into answers 501 in this route's own words.
+func TestRunExecBackgroundRunKeepsTheDoors(t *testing.T) {
+	ok := func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil }
+	refusedFirst := func(t *testing.T, e *execHarness, w *httptest.ResponseRecorder, code int, reason string) {
+		t.Helper()
+		if w.Code != code || wireReason(t, w) != reason {
+			t.Errorf("POST /exec = %d %s, want %d %s", w.Code, w.Body, code, reason)
+		}
+		if n := e.execs.Load(); n != 0 {
+			t.Errorf("ExecStream was called %d times; the door is before the runner", n)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		limits types.GovernanceLimits
+		msg    string
+	}{
+		{"deny_interactive", types.GovernanceLimits{DenyInteractive: true}, runExecDenyInteractiveMsg},
+		{"deny_task_mode_exec", types.GovernanceLimits{DenyTaskModeExec: true}, runExecDenyTaskModeExecMsg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, ok)
+			e.background()
+			e.underProfile(tc.limits)
+			w := e.exec(t, `{"command":"id"}`)
+			refusedFirst(t, e, w, http.StatusForbidden, string(authz.ReasonGovernanceUnit))
+			if got, want := execError(t, w), fmt.Sprintf(tc.msg, "ci"); got != want {
+				t.Errorf("error = %q, want %q", got, want)
+			}
+			if !recHasRefusal(e.h.audit, authz.ReasonGovernanceUnit, "runs.exec") {
+				t.Error("no authz.denied governance_unit row for runs.exec")
+			}
+		})
+	}
+	t.Run("deny_task_mode_exec leaves an interactive run's command alone", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.underProfile(types.GovernanceLimits{DenyTaskModeExec: true})
+		execResult(t, e.exec(t, `{"command":"id"}`))
+		if n := e.execs.Load(); n != 1 {
+			t.Errorf("ExecStream was called %d times, want 1", n)
+		}
+	})
+	t.Run("data_out", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.withDataOut(types.TransferBlocked, nil)
+		refusedFirst(t, e, e.exec(t, `{"command":"id"}`), http.StatusConflict, reasonDataOutBlocked)
+	})
+	t.Run("channel cap", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.srv.cfg.SSHMaxSessionsPerRun = 1
+		if !e.srv.sshAcquireSession(e.id) {
+			t.Fatal("could not hold the run's one channel slot")
+		}
+		defer e.srv.sshReleaseSession(e.id)
+		refusedFirst(t, e, e.exec(t, `{"command":"id"}`), http.StatusTooManyRequests, reasonRunExecBusy)
+	})
+	t.Run("ended", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.ast.mu.Lock()
+		run := e.ast.runs[e.id]
+		run.State = types.RunCompleted
+		e.ast.runs[e.id] = run
+		e.ast.mu.Unlock()
+		w := e.exec(t, `{"command":"id"}`)
+		refusedFirst(t, e, w, http.StatusConflict, reasonRunExecUnavailable)
+		if got, want := execError(t, w), fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted); got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+	t.Run("a sandbox with nothing to exec into", func(t *testing.T) {
+		e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, runner.ErrExecStreamUnsupported })
+		e.background()
+		w := e.exec(t, `{"command":"id"}`)
+		if w.Code != http.StatusNotImplemented || wireReason(t, w) != reasonRunInspectExecStreamUnsupported || execError(t, w) != runExecUnsupportedMsg {
+			t.Errorf("POST /exec = %d %s, want 501 %s saying %q", w.Code, w.Body, reasonRunInspectExecStreamUnsupported, runExecUnsupportedMsg)
+		}
+		if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Errorf("run.command.exec rows = %v, want one failure row", rows)
+		}
+	})
+}
+
+// TestRunExecSuperAdminSkipsTheGovernanceDoor: a super admin's command into a run they may enter passes the
+// governance door, as sshAuth exempts them, unless WARDYN_GOVERN_ADMIN_RUNS governs their runs and the run is not
+// operator-owned (adminDoorExempt).
+func TestRunExecSuperAdminSkipsTheGovernanceDoor(t *testing.T) {
+	ok := func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil }
+	for _, tc := range []struct {
+		name     string
+		governed bool
+		execs    int32
+	}{
+		{"exempt", false, 1},
+		{"governed by WARDYN_GOVERN_ADMIN_RUNS", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, ok)
+			e.underProfile(types.GovernanceLimits{DenyInteractive: true})
+			e.srv.cfg.GovernAdminRuns = tc.governed
+			admin := ssoSession(t, execOwner, "owner@corp.example", oidc.RoleAdmin)
+			w := doSSO(t, e.srv, http.MethodPost, "/api/v1/runs/"+e.id.String()+"/exec", admin, `{"command":"id"}`)
+			if n := e.execs.Load(); n != tc.execs {
+				t.Errorf("ExecStream was called %d times, want %d (POST /exec = %d %s)", n, tc.execs, w.Code, w.Body)
+			}
+			if tc.governed && (w.Code != http.StatusForbidden || wireReason(t, w) != string(authz.ReasonGovernanceUnit)) {
+				t.Errorf("POST /exec = %d %s, want 403 %s", w.Code, w.Body, authz.ReasonGovernanceUnit)
+			}
+		})
 	}
 }
 
@@ -366,6 +510,397 @@ func TestRunExecKeepsTheRunAwake(t *testing.T) {
 	}
 	if n := touches.touches(); n < 3 {
 		t.Errorf("the run was touched %d times over a 1 s command with a 50 ms keepalive, want at least 3", n)
+	}
+}
+
+// stallingTouchStore's TouchRun waits until its context ends, as an UPDATE behind a row another transaction holds
+// does, and counts the touches asked.
+type stallingTouchStore struct {
+	*authzStore
+	asked atomic.Int32
+}
+
+func (s *stallingTouchStore) TouchRun(ctx context.Context, _ uuid.UUID) error {
+	s.asked.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestRunExecTimeoutOutlastsAStalledTouch: an idle-clock touch that never answers does not hold a command past its
+// timeout: the answer is timed_out within a bound, the runner's stream is closed, and the command's SSH channel slot
+// is free again. Catches: the first touch made before collectExec, on a context the timeout does not reach.
+func TestRunExecTimeoutOutlastsAStalledTouch(t *testing.T) {
+	closed := &atomic.Bool{}
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(closed), nil })
+	stall := &stallingTouchStore{authzStore: e.ast}
+	e.srv.cfg.Store = stall
+	e.srv.cfg.SSHMaxSessionsPerRun = 1
+	res := execResult(t, e.execWithin(t, `{"command":"sleep 3600","timeout_sec":1}`, 5*time.Second))
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Errorf("result = %+v, want timed_out and exit_code -1", res)
+	}
+	if !closed.Load() {
+		t.Error("the runner's exec stream was not closed on the timeout")
+	}
+	if stall.asked.Load() == 0 {
+		t.Error("the run was never touched, so the stall was never met")
+	}
+	if !e.srv.sshAcquireSession(e.id) {
+		t.Error("the command did not give its SSH channel slot back")
+	}
+	e.srv.sshReleaseSession(e.id)
+}
+
+// startLockFree reports whether run id's start lock is free now.
+func startLockFree(srv *Server, id uuid.UUID) bool {
+	_, unlock, ok := srv.tryLock(context.Background(), db.RunStartLockClass, id.String())
+	if ok {
+		unlock()
+	}
+	return ok
+}
+
+// startLockFreeWithin polls run id's start lock for up to d and reports whether it was ever free.
+func startLockFreeWithin(srv *Server, id uuid.UUID, d time.Duration) bool {
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if startLockFree(srv, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRunExecHoldsTheStartLockOnlyToStart: the run's start lock is held while ExecStream starts the command, so no
+// end lands between the last fresh read and the start, and is free once ExecStream has returned, while the command
+// still runs, so an end never waits out a command. The command ends only when the test closes its streams.
+// Catches: no lock held through ExecStream, and the lock held until the handler returns.
+func TestRunExecHoldsTheStartLockOnlyToStart(t *testing.T) {
+	outR, outW := io.Pipe()
+	errR, errW := io.Pipe()
+	inExec, startExec := make(chan struct{}), make(chan struct{})
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		close(inExec)
+		<-startExec
+		return &runner.ExecSession{Stdout: outR, Stderr: errR, Wait: func() (int, error) { return 0, nil },
+			Close: func() error { _ = outW.Close(); _ = errW.Close(); return nil }}, nil
+	})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.exec(t, `{"command":"sleep 3600"}`) }()
+	<-inExec
+	if startLockFree(e.srv, e.id) {
+		t.Error("the run's start lock was free while ExecStream was starting the command")
+	}
+	close(startExec)
+	if !startLockFreeWithin(e.srv, e.id, 10*time.Second) {
+		t.Error("the run's start lock was still held 10 s into a running command")
+	}
+	_ = outW.Close()
+	_ = errW.Close()
+	if res := execResult(t, <-done); res.ExitCode != 0 || res.TimedOut {
+		t.Errorf("result = %+v, want exit 0 once the test ended the command", res)
+	}
+}
+
+// TestRunExecCutsOffAStartPastItsBudget: a runner that has not started the command by execStartBudget has the
+// run's start lock taken back from it, so the run's end does not wait on it, and the session it hands back late is
+// closed and refused with 502 run_exec_failed. Catches: no start budget, and a late session run anyway.
+func TestRunExecCutsOffAStartPastItsBudget(t *testing.T) {
+	defer func(b time.Duration) { execStartBudget = b }(execStartBudget)
+	execStartBudget = 50 * time.Millisecond
+	closed := &atomic.Bool{}
+	inExec, startExec := make(chan struct{}), make(chan struct{})
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		close(inExec)
+		<-startExec
+		return hangingExecSession(closed), nil
+	})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.exec(t, `{"command":"id","timeout_sec":1}`) }()
+	<-inExec
+	free := startLockFreeWithin(e.srv, e.id, 10*time.Second)
+	close(startExec)
+	w := <-done
+	if !free {
+		t.Error("the run's start lock was still held 10 s into a start past its budget")
+	}
+	if w.Code != http.StatusBadGateway || wireReason(t, w) != reasonRunExecFailed {
+		t.Errorf("POST /exec = %d %s, want 502 %s", w.Code, w.Body, reasonRunExecFailed)
+	}
+	if !closed.Load() {
+		t.Error("the session the runner handed back after the budget was not closed")
+	}
+}
+
+// endsAtTheLock is a Locker whose first wait for key runs end first: an end that held the run's operation lock
+// (lockRunEnd) writes the terminal state before a waiting door gets the lock. asked counts the waits for key.
+type endsAtTheLock struct {
+	db.Locker
+	key   db.LockKey
+	end   func()
+	once  sync.Once
+	asked atomic.Int32
+}
+
+func (l *endsAtTheLock) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	if k == l.key {
+		l.asked.Add(1)
+		l.once.Do(l.end)
+	}
+	return l.Locker.Lock(ctx, k, wait)
+}
+
+// lockEndsRun makes srv's first wait for run id's operation lock run end first.
+func lockEndsRun(srv *Server, id uuid.UUID, end func()) *endsAtTheLock {
+	l := &endsAtTheLock{Locker: db.NewLocalLocker(), key: db.NewLockKey(db.RunOpLockClass, id.String()), end: end}
+	srv.locks.override = l
+	return l
+}
+
+// startEndsRun makes srv's first wait for run id's start lock run end first: an end that takes no operation lock (a
+// run with no computer folder pass back, a kill) lands just before a command's last read.
+func startEndsRun(srv *Server, id uuid.UUID, end func()) *endsAtTheLock {
+	l := &endsAtTheLock{Locker: db.NewLocalLocker(), key: runStartKey(id), end: end}
+	srv.locks.override = l
+	return l
+}
+
+// endRun applies end to the run ast holds, as an end's terminal write does.
+func endRun(ast *authzStore, id uuid.UUID, end func(*types.AgentRun)) {
+	ast.mu.Lock()
+	defer ast.mu.Unlock()
+	run := ast.runs[id]
+	end(&run)
+	ast.runs[id] = run
+}
+
+// endsAtTheStamp is a store with a run pauser whose presence stamp runs end first, as an end that takes no lock (a
+// run with no computer folder pass back to wait for) may land then, and answers as StampRunActive answers for a run
+// that has ended: false, nil.
+type endsAtTheStamp struct {
+	store.Store
+	store.RunPauser // nil: a stamp of a run that is not paused reaches only StampRunActive
+	end             func()
+}
+
+func (s *endsAtTheStamp) StampRunActive(context.Context, uuid.UUID) (bool, error) {
+	s.end()
+	return false, nil
+}
+
+// TestRunExecRefusesARunThatEnded: a command into a run that ended is refused with the ended run's words and never
+// reaches the runner, whenever the end landed: before the first read (refused without waiting for any lock), while
+// the command waited for the run's operation lock to thaw it (an end that keeps the sandbox for its computer folder's
+// pass back holds it), during the thaw, where the stamp answers false, nil, or just before its last read, under the
+// start lock, by an end that takes no operation lock. Catches: the first read dropped, and no read under the start
+// lock.
+func TestRunExecRefusesARunThatEnded(t *testing.T) {
+	ok := func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil }
+	completed := func(r *types.AgentRun) { r.State = types.RunCompleted }
+	lost := time.Now()
+	for _, tc := range []struct {
+		name, when string // when: read, lock or thaw
+		end        func(*types.AgentRun)
+		want       string
+	}{
+		{"completed before the first read", "read", completed, fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted)},
+		{"completed at its lock, its sandbox kept", "lock", completed, fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted)},
+		{"its sandbox ref cleared at its lock", "lock", func(r *types.AgentRun) { r.SandboxRef = "" }, fmt.Sprintf(execLiveRunWords.notRunning, types.RunRunning)},
+		{"kept at its lock", "lock", func(r *types.AgentRun) { r.LostAt = &lost }, execLiveRunWords.ended},
+		{"completed during its thaw", "thaw", completed, fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted)},
+		{"completed at its start lock, by an end that takes no run lock", "start", completed, fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted)},
+		{"kept at its start lock", "start", func(r *types.AgentRun) { r.LostAt = &lost }, execLiveRunWords.ended},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, ok)
+			end := func() { endRun(e.ast, e.id, tc.end) }
+			atLock := func() {}
+			switch tc.when {
+			case "read":
+				end()
+			case "lock":
+				atLock = end
+			case "thaw":
+				e.srv.cfg.Store = &endsAtTheStamp{Store: e.ast, end: end}
+			}
+			l := lockEndsRun(e.srv, e.id, atLock)
+			if tc.when == "start" {
+				l = startEndsRun(e.srv, e.id, end)
+			}
+			w := e.exec(t, `{"command":"id"}`)
+			if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || execError(t, w) != tc.want {
+				t.Errorf("POST /exec = %d %s, want 409 %s saying %q", w.Code, w.Body, reasonRunExecUnavailable, tc.want)
+			}
+			if n := e.execs.Load(); n != 0 {
+				t.Errorf("ExecStream was called %d times for a run that ended", n)
+			}
+			if n := l.asked.Load(); (n > 0) != (tc.when != "read") {
+				t.Errorf("the run's lock was asked %d times; want it asked only after a first read that found the run live", n)
+			}
+		})
+	}
+}
+
+// TestRunExecRefusesWhenTheRunLockCannotBeTaken: a run lock that cannot be taken refuses the command with the
+// lock's own words, and nothing reaches the runner. Catches: a command admitted without the lock.
+func TestRunExecRefusesWhenTheRunLockCannotBeTaken(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
+	e.srv.locks.override = exhaustedPool()
+	w := e.exec(t, `{"command":"id"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || execError(t, w) != lockUnavailableMsg {
+		t.Errorf("POST /exec = %d %s, want 409 %s saying %q", w.Code, w.Body, reasonRunExecUnavailable, lockUnavailableMsg)
+	}
+	if n := e.execs.Load(); n != 0 {
+		t.Errorf("ExecStream was called %d times without the run's lock", n)
+	}
+}
+
+// refusesStarts is the in-process locker with every run start lock refused, as an exhausted lock pool refuses it.
+type refusesStarts struct{ db.Locker }
+
+func (l refusesStarts) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	if k.Class == db.RunStartLockClass {
+		return ctx, nil, db.ErrLockNoCapacity
+	}
+	return l.Locker.Lock(ctx, k, wait)
+}
+
+// TestRunExecRefusesWhenTheStartLockCannotBeTaken: a start lock that cannot be taken refuses the command with the
+// lock's own words and nothing reaches the runner, while an end of the same run still lands, unfenced. Catches: a
+// command started without the fence, and an end the fence refused.
+func TestRunExecRefusesWhenTheStartLockCannotBeTaken(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
+	e.srv.locks.override = refusesStarts{db.NewLocalLocker()}
+	w := e.exec(t, `{"command":"id"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || execError(t, w) != lockUnavailableMsg {
+		t.Errorf("POST /exec = %d %s, want 409 %s saying %q", w.Code, w.Body, reasonRunExecUnavailable, lockUnavailableMsg)
+	}
+	if n := e.execs.Load(); n != 0 {
+		t.Errorf("ExecStream was called %d times without the run's start lock", n)
+	}
+	if ok, err := e.srv.casRunState(context.Background(), e.id, types.RunRunning, types.RunCompleted); !ok || err != nil {
+		t.Errorf("an end whose fence was refused: applied %v, %v; want it written anyway", ok, err)
+	}
+}
+
+// casAfterTheLastRead is the store of a run that ends with no run lock (no computer folder pass back) right after a
+// command start's last read: the read under the run's start lock sets a terminal CAS going, then gives it time to
+// land.
+type casAfterTheLastRead struct {
+	store.Store
+	srv    *Server
+	once   sync.Once
+	landed chan bool
+}
+
+func (s *casAfterTheLastRead) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.Store.GetRun(ctx, id)
+	if slices.ContainsFunc(db.HeldLocks(ctx), func(k db.LockKey) bool { return k.Class == db.RunStartLockClass }) {
+		s.once.Do(func() {
+			go func() {
+				ok, _ := s.srv.casRunState(context.Background(), id, types.RunRunning, types.RunCompleted)
+				s.landed <- ok
+			}()
+			time.Sleep(50 * time.Millisecond)
+		})
+	}
+	return run, err
+}
+
+// TestRunExecAnEndAfterTheLastReadWaitsForTheStart: a background run with no computer folder ends (its terminal
+// CAS) right after a command's last read. The end waits for the start, so the runner starts the command in a run that
+// is still RUNNING, and the end lands once the start has returned. Catches: a terminal write that does not take the
+// run's start lock, so a command starts after the run ended.
+func TestRunExecAnEndAfterTheLastReadWaitsForTheStart(t *testing.T) {
+	var e *execHarness
+	var atStart types.RunState
+	e = newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		run, _ := e.ast.GetRun(context.Background(), e.id)
+		atStart = run.State
+		return fakeExecSession("", "", 0), nil
+	})
+	e.background()
+	cs := &casAfterTheLastRead{Store: e.ast, srv: e.srv, landed: make(chan bool, 1)}
+	e.srv.cfg.Store = cs
+	if w := e.exec(t, `{"command":"id"}`); w.Code != http.StatusOK || atStart != types.RunRunning {
+		t.Errorf("POST /exec = %d %s with the run %s at the start; want 200 with the run still RUNNING when the command started",
+			w.Code, w.Body, atStart)
+	}
+	select {
+	case ok := <-cs.landed:
+		if !ok {
+			t.Error("the end did not land once the command had started")
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("the end was still waiting 10 s after the command started")
+	}
+}
+
+// losesStarts is the in-process locker whose run start locks a test can lose, as a Postgres session's lock is lost
+// with its connection: lose ends the last start hold's context with db.ErrLockLost, and atTake loses each one as it
+// is taken.
+type losesStarts struct {
+	db.Locker
+	atTake bool
+	mu     sync.Mutex
+	last   context.CancelCauseFunc
+}
+
+func (l *losesStarts) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	lctx, release, err := l.Locker.Lock(ctx, k, wait)
+	if err != nil || k.Class != db.RunStartLockClass {
+		return lctx, release, err
+	}
+	hctx, lose := context.WithCancelCause(lctx)
+	l.mu.Lock()
+	l.last = lose
+	l.mu.Unlock()
+	if l.atTake {
+		lose(db.ErrLockLost)
+	}
+	return hctx, release, nil
+}
+
+func (l *losesStarts) lose() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.last(db.ErrLockLost)
+}
+
+// TestRunExecRefusesAStartWhoseLockIsLost: a start lock lost after the last read, before ExecStream, during it, or
+// found lost on the lock's own connection once ExecStream has returned, refuses the command with 502
+// run_exec_failed; no command is started after a loss the server saw, and a session the runner hands back is closed.
+// Catches: the loss ignored before the start, during it, and after it.
+func TestRunExecRefusesAStartWhoseLockIsLost(t *testing.T) {
+	for _, when := range []string{"before", "during", "after"} {
+		t.Run(when, func(t *testing.T) {
+			closed := &atomic.Bool{}
+			l := &losesStarts{Locker: db.NewLocalLocker(), atTake: when == "before"}
+			e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+				if when == "during" {
+					l.lose()
+				}
+				return hangingExecSession(closed), nil
+			})
+			e.srv.locks.override = l
+			if when == "after" {
+				e.srv.locks.held = func(ctx context.Context) error {
+					if slices.ContainsFunc(db.HeldLocks(ctx), func(k db.LockKey) bool { return k.Class == db.RunStartLockClass }) {
+						return db.ErrLockLost
+					}
+					return db.LockHeld(ctx)
+				}
+			}
+			w := e.exec(t, `{"command":"id","timeout_sec":1}`)
+			if w.Code != http.StatusBadGateway || wireReason(t, w) != reasonRunExecFailed {
+				t.Errorf("POST /exec = %d %s, want 502 %s", w.Code, w.Body, reasonRunExecFailed)
+			}
+			if n := e.execs.Load(); (n == 0) != (when == "before") {
+				t.Errorf("ExecStream was called %d times; want none exactly when the lock was lost before the start", n)
+			}
+			if when != "before" && !closed.Load() {
+				t.Error("the session the runner handed back after the loss was not closed")
+			}
+		})
 	}
 }
 

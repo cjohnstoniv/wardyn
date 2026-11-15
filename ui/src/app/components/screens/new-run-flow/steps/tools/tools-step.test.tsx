@@ -9,6 +9,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { adoCapName } from "../../../../../lib/ado-access-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
+import { health } from "../../../../../lib/api/health";
 import { secrets } from "../../../../../lib/api/secrets";
 import { MY_COMPONENTS, ORG_GITHUB } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
@@ -95,6 +96,7 @@ beforeEach(() => {
   h.mine.mockReturnValue(new Promise(() => {}));
   h.presets.mockReturnValue(new Promise(() => {}));
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
+  vi.spyOn(health, "whoami").mockResolvedValue(null);
 });
 afterEach(() => {
   cleanup();
@@ -392,7 +394,7 @@ describe("Tools and access step", () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
-    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok"));
+    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok", { scope: "shared", createOnly: true }));
   };
 
   it("counts only items the server reports missing: satisfied and unverified ones are neither listed nor counted", async () => {

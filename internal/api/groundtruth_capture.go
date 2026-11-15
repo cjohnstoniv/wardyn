@@ -14,6 +14,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -35,12 +36,30 @@ const (
 		"bound to this run by the kernel sensor, so the proxy's own egress decisions are the whole of the evidence here"
 	// The four host-sensor states, as REVIEW-TIME
 	// state about the host rather than a claim about this capture.
+	// No beat on record: audit retention may have dropped an old one, so this does not say "ever".
 	hostSensorUnavailableCaveat = "Kernel ground truth (host sensor, as of this review): unavailable — no eBPF sensor " +
-		"heartbeat has ever been observed on this host"
+		"heartbeat is on record for this host"
+	// Unavailable because the sensor's latest beat could not be read (the read failed, ran out of time,
+	// or was still running with nothing kept), which is not "none on record".
+	hostSensorUnreadableCaveat = "Kernel ground truth (host sensor, as of this review): unavailable — the latest eBPF " +
+		"sensor heartbeat could not be read on this host, so whether a sensor is running here is unknown"
 	hostSensorDegradedCaveat = "Kernel ground truth (host sensor, as of this review): degraded — the eBPF sensor's " +
 		"heartbeat is stale; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
-	hostSensorIdleCaveat = "Kernel ground truth (host sensor, as of this review): idle — the eBPF sensor is alive but " +
-		"has mapped zero kernel events; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
+	// A heartbeat proves the ingest process, not Tetragon, so no idle note says the sensor is alive.
+	hostSensorIdleCaveat = "Kernel ground truth (host sensor, as of this review): idle — heartbeats arrive, but they " +
+		"show zero mapped kernel events, so the sensor may be seeing nothing or tying nothing to a run; this capture's own kernel evidence shows what was seen while it ran"
+	// Idle because the counts stopped rising, which is not "zero events".
+	hostSensorQuietCaveat = "Kernel ground truth (host sensor, as of this review): idle — heartbeats still arrive, but they " +
+		"show no new kernel events in the last 15 minutes, so the sensor or its export may have stopped; this capture's own kernel evidence shows what was seen while it ran"
+	// The quiet note with two or more node sensors: how many of the live nodes went quiet.
+	hostSensorsQuietCaveat = "Kernel ground truth (host sensors, as of this review): idle — heartbeats still arrive from %d of %d " +
+		"node sensors, but they show no new kernel events in the last 15 minutes, so those sensors or their exports may have stopped; this capture's own kernel evidence shows what was seen while it ran"
+	// Idle because no rise in the counts is on record yet: lifetime counts say nothing about now.
+	hostSensorNotYetKnownCaveat = "Kernel ground truth (host sensor, as of this review): idle — heartbeats arrive, but no recent " +
+		"rise in their kernel event counts is on record yet, so whether the sensor still sees kernel events is not yet known; this capture's own kernel evidence shows what was seen while it ran"
+	// The not-yet-known note with two or more node sensors.
+	hostSensorsNotYetKnownCaveat = "Kernel ground truth (host sensors, as of this review): idle — for %d of %d node sensors, " +
+		"heartbeats arrive but no recent rise in their kernel event counts is on record yet, so whether those sensors still see kernel events is not yet known; this capture's own kernel evidence shows what was seen while it ran"
 	hostSensorPartialCaveatPrefix = "Kernel ground truth (host sensor, as of this review): partial — the eBPF sensor " +
 		"has never observed "
 	hostSensorPartialCaveatSuffix = "; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
@@ -74,21 +93,47 @@ func (s *Server) groundtruthCaveats(ctx context.Context, obs recordmode.Observat
 // hostSensorCaveat is the review-time state of the host's eBPF sensor, read
 // through the SAME ebpfGroundtruthStatus /healthz uses so the two surfaces can
 // never disagree about what "healthy" means. "" when it is fully healthy —
-// there is nothing to report.
+// there is nothing to report. The note comes from the sensors' causes, never
+// from the reason text: with several node sensors the reason only counts them.
 func (s *Server) hostSensorCaveat(ctx context.Context) string {
-	status := s.ebpfGroundtruthStatus(ctx)
+	status, causes := s.ebpfGroundtruthVerdict(ctx)
 	switch status["state"] {
 	case "unavailable":
+		if causes[sensorUnreadable] > 0 {
+			return hostSensorUnreadableCaveat
+		}
 		return hostSensorUnavailableCaveat
 	case "degraded":
 		return hostSensorDegradedCaveat
 	case "idle":
-		return hostSensorIdleCaveat
+		return hostSensorIdleNote(causes)
 	case "partial":
 		missing, _ := status["missing_kinds"].([]string)
 		return hostSensorPartialCaveatPrefix + strings.Join(missing, ", ") + hostSensorPartialCaveatSuffix
 	default: // "healthy", or absent (tests with no Store)
 		return ""
+	}
+}
+
+// hostSensorIdleNote is the idle note for the live sensors' causes. The counted
+// notes (quiet, then not yet known) are true of the nodes they count, so they
+// come before the zero-events note, which has no counted form.
+func hostSensorIdleNote(causes sensorCauses) string {
+	live := 0
+	for _, n := range causes {
+		live += n
+	}
+	switch {
+	case causes[sensorQuiet] > 0 && live > 1:
+		return fmt.Sprintf(hostSensorsQuietCaveat, causes[sensorQuiet], live)
+	case causes[sensorQuiet] > 0:
+		return hostSensorQuietCaveat
+	case causes[sensorNotYetKnown] > 0 && live > 1:
+		return fmt.Sprintf(hostSensorsNotYetKnownCaveat, causes[sensorNotYetKnown], live)
+	case causes[sensorNotYetKnown] > 0:
+		return hostSensorNotYetKnownCaveat
+	default:
+		return hostSensorIdleCaveat
 	}
 }
 
@@ -118,7 +163,7 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	status := s.ebpfGroundtruthStatus(ctx)
 	beat, ok := status["last_heartbeat"].(string)
 	if !ok {
-		return recordmode.KernelWindow{} // no sensor has ever beaten here
+		return recordmode.KernelWindow{} // no beat on record, or it could not be read
 	}
 	at, err := time.Parse(time.RFC3339, beat)
 	if err != nil {

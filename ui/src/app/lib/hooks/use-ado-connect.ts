@@ -143,7 +143,9 @@ export function useAdoConnect(): {
         scmAccess
           .getMine()
           .then((rows) => {
-            if (!mountedRef.current) return;
+            // Settled (cancelled or superseded) polls act on nothing: the next attempt reuses the same named
+            // window, so this attempt's onLive would close the popup the person is signing in with now.
+            if (!mountedRef.current || settled) return;
             if (signInCompleted(rows, match)) {
               onLive?.();
               finish(true);

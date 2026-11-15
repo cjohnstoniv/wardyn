@@ -49,6 +49,17 @@ var cliNow = time.Now
 // cliLockWait is how long a command waits for another one's refresh before it re-reads the item.
 var cliLockWait = 10 * time.Second
 
+// errSessionChanged is a running command's refusal to go on once the stored sign-in it started with was
+// signed out or replaced by another sign-in, which may be another person's.
+var errSessionChanged = errors.New(errSessionChangedText)
+
+// sessionRefusal is a request a running command did not send: the sign-in it started with changed, or could
+// not be read. It is refused on this computer, so it is not a network failure.
+type sessionRefusal struct{ err error }
+
+func (e *sessionRefusal) Error() string { return e.err.Error() }
+func (e *sessionRefusal) Unwrap() error { return e.err }
+
 // cliItem is the stored sign-in for one organisation URL.
 type cliItem struct {
 	SessionID        uuid.UUID `json:"session_id"`
@@ -272,8 +283,9 @@ func (f fileStore) save(items map[string]cliItem) error {
 // lockRefresh takes <dir>/cli.lock, waiting up to cliLockWait. Every write of a stored item happens under
 // it (a refresh, login, the admin step-up, logout), as one read-modify-write against the current item, so
 // two commands never refresh at once and look like a replay, and none writes back a rotated-past secret.
-// ok is false when another holder kept it that long.
-func lockRefresh(dir string) (unlock func(), ok bool, err error) {
+// ok is false when another holder kept it that long. A ctx that ends first stops the wait and is returned as
+// the error, so a command with a wait budget is not held past it by a lock another command holds.
+func lockRefresh(ctx context.Context, dir string) (unlock func(), ok bool, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, false, err
 	}
@@ -295,7 +307,12 @@ func lockRefresh(dir string) (unlock func(), ok bool, err error) {
 			_ = f.Close()
 			return nil, false, nil
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, false, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 }
 
@@ -308,19 +325,27 @@ type storedSession struct {
 }
 
 // loadSession reads origin's stored sign-in and returns a live bearer for it, refreshing under the lock
-// when the cached tokens are spent. No stored sign-in is a zero token and a nil error.
-func loadSession(ctx context.Context, origin string) (storedSession, error) {
+// when the cached tokens are spent. No stored sign-in is a zero token and a nil error. want is the session
+// a running command started with, uuid.Nil for none: any other stored session, or none, is
+// errSessionChanged, found before that session is refreshed or its token returned.
+func loadSession(ctx context.Context, origin string, want uuid.UUID) (storedSession, error) {
 	s := storedSession{origin: origin}
 	dir, err := cliprofile.Dir()
 	if err != nil {
 		return s, err
 	}
 	if s.kind, err = cliprofile.ReadSessionStore(dir, origin); err != nil || s.kind == "" {
+		if err == nil && want != uuid.Nil {
+			err = errSessionChanged
+		}
 		return s, err
 	}
 	st := storeFor(s.kind, dir)
 	read := func() (bool, error) {
 		it, ok, err := st.get(origin)
+		if err == nil && want != uuid.Nil && (!ok || it.SessionID != want) {
+			return false, errSessionChanged
+		}
 		s.item = it
 		if ok {
 			s.token, s.tokenKind = it.bearer(cliNow())
@@ -337,7 +362,7 @@ func loadSession(ctx context.Context, origin string) (storedSession, error) {
 	if why := s.item.endedWhy(cliNow()); why != "" {
 		return s, fmt.Errorf(errSessionEnded, origin, why)
 	}
-	unlock, locked, err := lockRefresh(dir)
+	unlock, locked, err := lockRefresh(ctx, dir)
 	if err != nil {
 		return s, fmt.Errorf(errRenew, origin, err)
 	}
@@ -407,8 +432,17 @@ func (t sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if u := types.CLIOrigin(req.URL); u != t.origin && !strings.HasPrefix(u, t.origin+"/") {
 		return t.base.RoundTrip(req)
 	}
+	tok, _, err := t.sess.bearer(req.Context())
+	if err != nil {
+		// The command's sign-in changed or could not be read, or the request's context ended during the
+		// renewal: nothing is sent, under another sign-in or none.
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
 	r := req.Clone(req.Context())
-	if tok, _ := t.sess.bearer(req.Context()); tok != "" {
+	if tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)
 	} else {
 		r.Header.Del("Authorization")

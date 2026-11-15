@@ -166,7 +166,7 @@ describe("RunCanvas — Expand", () => {
     expect(within(dialog).getAllByRole("heading", { name: "Files changed" })).toContain(heading);
     expect(heading.closest("[role=dialog]")).toBe(dialog);
     // It starts below the shell's top bar and banners, so the daemon banner stays above it.
-    expect(dialog).toHaveClass("top-[calc(var(--shell-banner-h,3.5rem)_+_0.5rem)]");
+    expect(dialog).toHaveClass("top-[calc(var(--shell-banner-h,3.5rem)_+_0.5rem)]", "bottom-auto");
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

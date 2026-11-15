@@ -371,6 +371,43 @@ func TestDecidersPresentEmptySectionPrunes(t *testing.T) {
 	}
 }
 
+// TestDecidersEmptySectionSurvivesEncoding: an empty section written to a file and read back strictly (as
+// `wardyn governance set` reads one) is still present, so --prune still clears every unit's rules; a nil
+// section is left out of the file.
+func TestDecidersEmptySectionSurvivesEncoding(t *testing.T) {
+	f, c := newSectionsFake(t)
+	platformTree(f)
+	doc, err := c.GetGovernance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Deciders = nil
+	if raw, _ := json.Marshal(doc); strings.Contains(string(raw), `"deciders"`) {
+		t.Errorf("a nil section encoded as %s, want no deciders key", raw)
+	}
+	doc.Deciders = map[string][]client.DeciderRule{}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	var back client.GovernanceDocument
+	if err := dec.Decode(&back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Deciders == nil {
+		t.Fatalf("an empty section read back as absent from %s", raw)
+	}
+	if _, err := c.ApplyGovernanceResult(context.Background(), back, true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"PUT /api/v1/governance/units/<team>/deciders", "PUT /api/v1/governance/units/<other>/deciders"}
+	if got := f.decidersWrites(); !slices.Equal(got, want) {
+		t.Errorf("prune of the read-back document wrote %v, want %v", got, want)
+	}
+}
+
 // TestDecidersCanonicalCompare: the document's durations are compared in the server's canonical form, so
 // "240m" against a stored "4h" is no step.
 func TestDecidersCanonicalCompare(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	neturl "net/url"
 	"os"
@@ -42,6 +43,17 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&spec); err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// A second object would be ignored with every restriction it names.
+	if err := dec.Decode(new(json.RawMessage)); err == nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: more than one JSON value", path)
+	} else if !errors.Is(err, io.EOF) {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// After the decode, which checks the syntax and the depth: it kept only the last of a key
+	// written twice, also in another letter case, so a restriction written first would be dropped.
+	if err := types.RefuseRepeatedJSONKeysFor(b, "the policy", &spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
@@ -565,6 +577,18 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	return validateEligibleGrantMode(i, g, true)
 }
 
+// apiKeyRuleFromScope is injectionRuleFromScope for an authored api_key grant, whose host is also held to
+// the rule the proxy's config load holds an injection host to (proxy.ValidConfigHost).
+func apiKeyRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error) {
+	rule, err := injectionRuleFromScope(scope)
+	if err == nil {
+		if herr := proxy.ValidConfigHost(rule.Host); herr != nil {
+			err = fmt.Errorf("host %w", herr)
+		}
+	}
+	return rule, err
+}
+
 // validateEligibleGrantMode is validateEligibleGrant with the git_pat scope
 // decode chosen: strict for a write, lenient for record-mode synthesis.
 func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
@@ -614,7 +638,7 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 	// is a header-splitting shape rather than a typo. The injection sink
 	// (handleInternalInjection) enforces this too, defense-in-depth.
 	if g.Kind == types.GrantAPIKey {
-		rule, derr := injectionRuleFromScope(g.Scope)
+		rule, derr := apiKeyRuleFromScope(g.Scope)
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope invalid: %w", i, derr)
 		}

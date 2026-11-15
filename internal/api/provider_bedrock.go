@@ -114,7 +114,8 @@ func sameStartURL(a, b string) bool {
 // refresh allows (dispatch alone: a dry run never spends a one-use refresh
 // token, and an expired-but-renewable session reads live there). A refusal a
 // fresh sign-in or a stored key repairs — no key, not signed in, a session for
-// another pinned account/role or another access portal, a renewal AWS refused —
+// another pinned account/role, another access portal or another region, a
+// renewal AWS refused —
 // is a credential one (connectDenial); an install with no store, the admin
 // token, a provider with no region or model, and a renewal AWS did not answer
 // are not. A store
@@ -152,13 +153,10 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	if !found {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}
-	// The pin and the portal before any renewal: a session the provider
+	// The pin, the portal and the region before any renewal: a session the provider
 	// would refuse is never worth spending a refresh token on.
-	if b.SSOAccountID != "" && (blob.AccountID != b.SSOAccountID || blob.RoleName != b.SSORoleName) {
-		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRPinned, blob.AccountID, blob.RoleName, b.SSOAccountID, b.SSORoleName)))
-	}
-	if !sameStartURL(blob.StartURL, b.SSOStartURL) {
-		return refuse(connectDenial(p.ID, mpBRPortal))
+	if state := sessionNotForProvider(blob, b); state != "" {
+		return refuse(connectDenial(p.ID, state))
 	}
 	if refresh {
 		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)
@@ -188,6 +186,23 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}
 	return blob, providerDenial{}, nil
+}
+
+// sessionNotForProvider is why the stored session blob is none for a provider with the settings
+// b, "" when it is one: another account or role than the pin, then another access portal, then
+// another region. A sign-in stores a session for its provider's region only, so a session for
+// another one (a secret store restored apart from the database, a direct write) reads as not
+// signed in: a run dispatched on it would be refused at its first session resolve, every time.
+func sessionNotForProvider(blob awsSSOBlob, b types.BedrockSettings) string {
+	switch {
+	case b.SSOAccountID != "" && (blob.AccountID != b.SSOAccountID || blob.RoleName != b.SSORoleName):
+		return fmt.Sprintf(mpBRPinned, blob.AccountID, blob.RoleName, b.SSOAccountID, b.SSORoleName)
+	case !sameStartURL(blob.StartURL, b.SSOStartURL):
+		return mpBRPortal
+	case blob.Region != b.Region:
+		return mpBRNotSignedIn
+	}
+	return ""
 }
 
 // modelCredential is the model-credential fact both doors read for a run that
@@ -253,9 +268,10 @@ func runBedrockProvider(sc types.SiteConfig, run types.AgentRun, uid string, kin
 // providerSSOScopeAt is the provider arm of resolveAWSSSOInjection's scope
 // re-derivation: the run owner's own session for the provider the grant
 // recorded, when that provider is still the run's own bedrock_sso provider, on
-// and serving its agent, and still pins what the grant recorded. drift names
-// the first thing that moved ("" = equal). A grant with no provider on a run
-// that chose one — or one naming a provider on a run that did not — drifts.
+// and serving its agent, and still pins the account, role and region the grant
+// recorded. drift names the first thing that moved ("" = equal). A grant with no
+// provider on a run that chose one — or one naming a provider on a run that did
+// not — drifts.
 func providerSSOScopeAt(sc types.SiteConfig, run types.AgentRun, sn awsSSOScopeSnapshot, subject string) (awsSSOScope, string) {
 	p, live := runBedrockProvider(sc, run, sn.ProviderUID, types.ModelProviderBedrockSSO)
 	switch {
@@ -265,8 +281,14 @@ func providerSSOScopeAt(sc types.SiteConfig, run types.AgentRun, sn awsSSOScopeS
 	case sn.OwnerSubject == "" || sn.OwnerSubject != subject:
 		return awsSSOScope{}, "owner_not_caller"
 	}
-	if b := providerBedrockSettings(p); b.SSOAccountID != "" && (b.SSOAccountID != sn.SSOAccountID || b.SSORoleName != sn.SSORoleName) {
+	b := providerBedrockSettings(p)
+	switch {
+	case b.SSOAccountID != "" && (b.SSOAccountID != sn.SSOAccountID || b.SSORoleName != sn.SSORoleName):
 		return awsSSOScope{}, "sso_pin"
+	// The grant's region is its session's, and a sign-in stores a session for the provider's region
+	// only: once the provider moves, no sign-in can serve this run, so it is refused, never held.
+	case b.Region != sn.Region:
+		return awsSSOScope{}, "region"
 	}
 	return chosenProvider{provider: p, owner: subject}.awsScope(), ""
 }

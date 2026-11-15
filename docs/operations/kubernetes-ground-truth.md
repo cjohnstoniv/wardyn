@@ -33,6 +33,7 @@ helm upgrade wardyn deploy/helm/wardyn --reuse-values \
 - Tetragon on every node that can host runs, exporting JSON to a file. Tetragon's chart writes `tetragon.log` in its `exportDirectory`, mode 600. Set `exportDirectory` to the value your release uses.
 - A namespace that allows a hostPath volume. The Pod Security `baseline` level forbids it, so use Tetragon's own namespace or one labelled `privileged`.
 - Exec events at least. `/healthz` reports `partial` with `missing_kinds` when other kinds never arrive. Add Tetragon policies for the kinds you want.
+- Wardyn reads three kinds of event from the export: process execs; connects from a hook on `tcp_connect`, `security_socket_connect`, `__sys_connect`, `__x64_sys_connect` or `sys_connect`; and writes from `security_file_permission`, kept only for a write the kernel allowed to a sensitive path. The write hook must export its access mask as an `int` argument and its return value as an `int` (`return: true` with a `returnArg`). Every other probe is ignored: a read, open or receive hook adds nothing, and neither does a connect hook on another function. The Compose policy, `deploy/compose/tetragon-policies/wardyn-groundtruth.yaml`, shows both hooks.
 - If the sensor namespace has a default-deny egress policy, allow the sensor to reach wardynd's internal port. The chart opens the wardynd side only.
 
 ### How it works

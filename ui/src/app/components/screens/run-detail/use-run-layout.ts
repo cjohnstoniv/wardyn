@@ -20,7 +20,7 @@
 //     load would give every human a "saved layout" the instant they opened a
 //     run, and they would never see a default improve again.
 import * as React from "react";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import {
   runLayout as runLayoutApi,
   type RunLayoutPreset,
@@ -45,11 +45,11 @@ export type SaveResult = "ok" | "unsupported" | "failed";
 export type SaveStatus = "idle" | "saving" | "saved" | "failed";
 
 // One preset's write queue: the request in flight, the newest body waiting behind it, the body of a write that failed
-// (what Retry repeats), and who is awaiting the outcome.
-type WriteSlot = { inflight: boolean; pending: RunLayoutWidget[] | null; failed: RunLayoutWidget[] | null; waiters: Array<(r: SaveResult) => void> };
+// (what Retry repeats), and who is awaiting the outcome. `person` arranged the waiting body, so it is stored as theirs.
+type WriteSlot = { inflight: boolean; pending: RunLayoutWidget[] | null; person: string; failed: RunLayoutWidget[] | null; waiters: Array<(r: SaveResult) => void> };
 
 function slotFor(slots: Partial<Record<RunLayoutPreset, WriteSlot>>, p: RunLayoutPreset): WriteSlot {
-  return (slots[p] ??= { inflight: false, pending: null, failed: null, waiters: [] });
+  return (slots[p] ??= { inflight: false, pending: null, person: "", failed: null, waiters: [] });
 }
 
 export type RunLayoutState = {
@@ -91,7 +91,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   // Each preset's write queue (see enqueue).
   const slots = React.useRef<Partial<Record<RunLayoutPreset, WriteSlot>>>({});
   // The debounced write not yet sent, bound to the preset and arrangement it was made under.
-  const timer = React.useRef<{ id: ReturnType<typeof setTimeout>; preset: RunLayoutPreset; body: RunLayoutWidget[] } | null>(null);
+  const timer = React.useRef<{ id: ReturnType<typeof setTimeout>; preset: RunLayoutPreset; body: RunLayoutWidget[]; person: string } | null>(null);
   // Has the human arranged anything since this preset's GET was issued? A slow
   // control plane made the load's answer land AFTER a drag/remove/add, and the
   // load committed it unconditionally — silently undoing the gesture on screen
@@ -144,13 +144,14 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       const slot = slotFor(slots.current, p);
       if (slot.inflight || !slot.pending) return;
       const body = slot.pending;
+      const person = slot.person;
       const waiters = slot.waiters;
       slot.pending = null;
       slot.waiters = [];
       slot.inflight = true;
       let result: SaveResult = "ok";
       try {
-        await runLayoutApi.putLayout(p, body);
+        await runLayoutApi.putLayout(p, body, person);
       } catch (err) {
         // Any non-501 failure stays retryable. Reported DISTINCTLY from "unsupported": the two need opposite
         // sentences ("this deployment can't store layouts" is a permanent fact; a 400 or a blip is not).
@@ -182,10 +183,11 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
 
   /** Queue the newest wire body for a preset. Resolves with the outcome of the request that carried it (or its successor). */
   const enqueue = React.useCallback(
-    (p: RunLayoutPreset, body: RunLayoutWidget[]): Promise<SaveResult> => {
+    (p: RunLayoutPreset, body: RunLayoutWidget[], person = getExpectedPrincipal()): Promise<SaveResult> => {
       if (!persistRef.current) return Promise.resolve("unsupported");
       const slot = slotFor(slots.current, p);
       slot.pending = body;
+      slot.person = person;
       slot.failed = null;
       setStatusFor(p, "saving");
       return new Promise<SaveResult>((resolve) => {
@@ -210,13 +212,15 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       cancelPending();
       lastBody.current = norm;
       if (persistRef.current) setStatusFor(preset, "saving");
+      const person = getExpectedPrincipal();
       timer.current = {
         id: setTimeout(() => {
           timer.current = null;
-          void enqueue(preset, wire(norm));
+          void enqueue(preset, wire(norm), person);
         }, SAVE_DEBOUNCE_MS),
         preset,
         body: norm,
+        person,
       };
     },
     [preset, service, vm, machine, enqueue, setStatusFor, wire],
@@ -300,7 +304,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       if (t) {
         clearTimeout(t.id);
         timer.current = null;
-        void enqueue(t.preset, wire(t.body));
+        void enqueue(t.preset, wire(t.body), t.person);
       }
     },
     [preset, enqueue, wire],

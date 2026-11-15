@@ -7,7 +7,7 @@
 // whose value is the id the resolver compares, with "Every one (*)" first, and
 // grants shown by that name. Kinds without a list keep free text.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { act, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../lib/api/core";
@@ -194,5 +194,43 @@ describe("Existing grants show the item's name", () => {
     const table = screen.getByRole("table");
     expect(within(table).getByText("00000000-0000-4000-8000-000000000000")).toBeInTheDocument();
     expect(within(table).getByText("*")).toBeInTheDocument();
+  });
+});
+
+describe("Add grant while the grant is being written", () => {
+  it("is read-only, so a value typed then is not cleared by its answer", async () => {
+    upsertGrantMock.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findAllByText(PERM.ADD_TITLE);
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
+    expect(screen.getByLabelText(KIND.egress_host.valueLabel)).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: PERM.FIELD_WHO })).toBeDisabled();
+    expect(screen.getByRole("button", { name: PERM.SUBJECT_GROUP })).toBeDisabled();
+    expect(screen.getByRole("button", { name: PERM.EFFECT_DENY })).toBeDisabled();
+    // The capability picker is not a native control: it must be disabled itself, not only by a fieldset.
+    await user.click(screen.getByRole("combobox", { name: PERM.FIELD_CAPABILITY }));
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+});
+
+describe("Add grant: a value a feature row fills in during a write", () => {
+  it("stays when the earlier grant answers", async () => {
+    let answer: ((v: unknown) => void) | undefined;
+    upsertGrantMock.mockReturnValue(new Promise((done) => (answer = done)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findAllByText(PERM.ADD_TITLE);
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Add a grant" }));
+    expect(screen.getByLabelText(KIND.feature.valueLabel)).toHaveValue("inbound");
+    await act(async () => answer?.({ id: "x" }));
+    expect(screen.getByLabelText(KIND.feature.valueLabel)).toHaveValue("inbound");
   });
 });

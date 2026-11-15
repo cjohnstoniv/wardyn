@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -110,3 +111,42 @@ func TestDeviceEnrolTokenListAndRevokeCmds(t *testing.T) {
 		t.Fatal("revoke with a truncated id succeeded, want a parse error before any request")
 	}
 }
+
+// A one-time token that cannot be written out exists on the server and nowhere else: each mint command
+// fails after its one mint, names the token's id and how to revoke it, and prints the token nowhere else.
+func TestMintCommandsFailWhenTheTokenCannotBeWritten(t *testing.T) {
+	id := uuid.New()
+	exp := time.Now().Add(72 * time.Hour)
+	for _, tc := range []struct {
+		args   []string
+		body   any
+		revoke string
+	}{
+		{[]string{"device", "enrol-token", "--name", "laptop"}, types.DeviceEnrolmentToken{ID: id, DeviceName: "laptop", ExpiresAt: exp, Token: "wde_secret"}, "wardyn device enrol-token-revoke " + id.String()},
+		{[]string{"runner", "token"}, types.RunnerRegistrationToken{ID: id, Token: "wdr_secret", ExpiresAt: exp}, "wardyn runner tokens revoke " + id.String()},
+		{[]string{"runner", "org-token", "mint", "--name", "cluster-a"}, types.RunnerRegistrationToken{ID: id, Token: "wdr_secret", OwnerKind: types.RunnerOwnerOrg, ExpiresAt: exp}, "wardyn runner tokens revoke " + id.String()},
+	} {
+		srv := newCmdServer(t, http.StatusCreated, tc.body)
+		root := rootCmd()
+		var stderr strings.Builder
+		root.SetArgs(append(tc.args, "--url", srv.URL, "--token", "tok"))
+		root.SetOut(failingWriter{})
+		root.SetErr(&stderr)
+		err := root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "was minted but could not be written out") || !strings.Contains(err.Error(), tc.revoke) {
+			t.Errorf("%v: err = %v, want the mint named with %q", tc.args, err, tc.revoke)
+			continue
+		}
+		if strings.Contains(err.Error(), "_secret") || strings.Contains(stderr.String(), "_secret") {
+			t.Errorf("%v: the token reached another stream: err %v, stderr %q", tc.args, err, stderr.String())
+		}
+		if n := len(srv.reqs); n != 1 || srv.last().method != http.MethodPost {
+			t.Errorf("%v: %d requests, want exactly one mint", tc.args, n)
+		}
+	}
+}
+
+// failingWriter is a stdout that cannot be written, as a full disk or a closed pipe is.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }

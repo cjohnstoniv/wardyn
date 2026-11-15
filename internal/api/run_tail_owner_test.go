@@ -731,8 +731,9 @@ func TestTailOwner_UnreadableStatusOfARunOwingNothingIsNotGivenUp(t *testing.T) 
 
 // Past the cap a row whose data_out rule or seed cannot be read is given up like any other (one statement), with a
 // given_up audit row saying the rule could not be read, and its sandbox is stopped; the reads' failure does not
-// hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read also keeps the audit row
-// from being written (it names the folder), so the row follows once the seed reads, with the same field.
+// hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read leaves the audit row no
+// folder to name; the row is still written with the give-up, naming no folder, because a give-up with no audit
+// row and a WARN on every tail tick is worse.
 // Catches: a read error past the cap returning tailNone (the row waits for ever), a give-up that drops the
 // field, and the cap read as the server's clock.
 func TestTailOwner_UnreadableRuleIsGivenUpPastTheCapNotInsideIt(t *testing.T) {
@@ -1318,9 +1319,10 @@ func (f *forced) crashedBeforeItsTail(t *testing.T, to types.RunState) types.Age
 	return run
 }
 
-// sweepPaths are the three destructive sweeps, each run on its own against run: the boot orphan pass
-// (reconcileOrphanedRun), the label orphan sweep (reconcile.go isOrphan) and the terminal-sandbox sweep
-// (stopTerminalSandbox). A sweep reports whether it tore the sandbox down.
+// sweepPaths are the destructive sweeps, each run on its own against run: the boot orphan pass
+// (reconcileOrphanedRun), the label orphan sweep (reconcile.go isOrphan), the sweep a runner gets when it
+// reconnects (sweepRunnerOrphansOnce) and the terminal-sandbox sweep (stopTerminalSandbox). A sweep reports
+// whether it tore the sandbox down.
 var sweepPaths = map[string]func(*testing.T, *forced, types.AgentRun) bool{
 	"the boot orphan pass": func(t *testing.T, f *forced, _ types.AgentRun) bool {
 		before := f.sb.stopCount()
@@ -1334,6 +1336,9 @@ var sweepPaths = map[string]func(*testing.T, *forced, types.AgentRun) bool{
 			t.Error(err)
 		}
 		return f.s.cfg.Runner.(*proxyCounted).orphan
+	},
+	"the READY orphan sweep": func(t *testing.T, f *forced, _ types.AgentRun) bool {
+		return f.readySweep(t)
 	},
 	"the terminal-sandbox sweep": func(_ *testing.T, f *forced, run types.AgentRun) bool {
 		before := f.sb.stopCount()
@@ -1373,7 +1378,7 @@ func TestSweeps_KeepASeededRunThatCrashedBeforeItsTail(t *testing.T) {
 			f.tailPassAfterCrash(t)
 		})
 	}
-	t.Run("all three before the tail owner", func(t *testing.T) {
+	t.Run("every sweep before the tail owner", func(t *testing.T) {
 		f := newCrashed(t)
 		run := f.crashedBeforeItsTail(t, types.RunStopped)
 		for name, sweep := range sweepPaths {
@@ -1382,7 +1387,7 @@ func TestSweeps_KeepASeededRunThatCrashedBeforeItsTail(t *testing.T) {
 			}
 		}
 		if cur := f.terminalRun(t); f.sb.stopCount() != 0 || cur.SandboxRef == "" {
-			t.Fatalf("after all three: %d stops, ref %q; want no stop and the ref kept", f.sb.stopCount(), cur.SandboxRef)
+			t.Fatalf("after every sweep: %d stops, ref %q; want no stop and the ref kept", f.sb.stopCount(), cur.SandboxRef)
 		}
 		f.tailPassAfterCrash(t)
 	})
@@ -1762,6 +1767,7 @@ func TestSweepForcedStops_AnOwedPassIsKeptOnlyOnAConfirmedCut(t *testing.T) {
 			f.claimOnly(t)
 			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
 			f.release()
+			f.cs.giveUpApplies = true // a stop on a cut that is not confirmed ends the keep: the owed pass is given up before the ref is cleared
 			f.tick(t, f.s)
 			if f.sb.stopCount() != tc.stops || f.leaser.markCount() != 0 {
 				t.Errorf("%d stops, %d marks; want %d and 0", f.sb.stopCount(), f.leaser.markCount(), tc.stops)

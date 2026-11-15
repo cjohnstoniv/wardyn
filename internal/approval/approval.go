@@ -341,27 +341,36 @@ func expireOne(ctx context.Context, st Store, ap types.ApprovalRequest, cutoff t
 // treats as denied stays PENDING and approvable for up to one sweep interval
 // (#811).
 //
-// Idempotent: a row already decided (human or concurrent sweep) is left
-// untouched, ErrAlreadyDecided swallowed as the race it is.
+// A row already decided (human, concurrent sweep or another end) is left
+// untouched and writes no audit row: ErrAlreadyDecided, as Decide answers, so a
+// caller counts only the end that moved the row. Callers that only need the
+// row ended treat it as done.
 //
 // Attributed to the run's agent, not the system: the sandbox can call this at
-// any time, so nothing ties it to a deadline.
+// any time, so nothing ties it to a deadline. An actor that is not a SPIFFE ID
+// is the server ending a row that can no longer be answered (an AWS sign-in
+// request whose provider now signs in elsewhere or is gone), recorded as the
+// system.
 func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string) error {
 	result, err := st.DecideApproval(ctx, id, types.ApprovalDecision{
 		State: types.ApprovalExpired, DecidedBy: "system", Reason: reason,
 	})
 	if err != nil {
 		if errors.Is(err, ErrAlreadyDecided) {
-			return nil
+			return ErrAlreadyDecided
 		}
 		return fmt.Errorf("approval: expire %s: %w", id, err)
 	}
 	auditData, _ := json.Marshal(map[string]any{"approval_id": id, "reason": reason})
+	actorType := types.ActorAgent
+	if !strings.HasPrefix(actor, "spiffe://") {
+		actorType = types.ActorSystem
+	}
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		RunID:     &result.RunID,
-		ActorType: types.ActorAgent,
+		ActorType: actorType,
 		Actor:     actor,
 		Action:    "approval.expire",
 		Target:    id.String(),

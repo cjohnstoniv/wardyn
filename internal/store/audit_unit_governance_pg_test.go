@@ -53,6 +53,19 @@ func TestAuditUnitGovernanceArmQueryPG(t *testing.T) {
 		"no unit named":         seed(nil, "governance.unit.write", "ua-a", map[string]any{}),
 		"units holds objects":   seed(nil, "governance.membership.delete", "", map[string]any{"units": []any{map[string]any{"id": u1.String()}}}),
 	}
+	// A laptop may forward any action naming any unit; the view would show its row as a security admin's.
+	dev, err := pg.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorHuman,
+		Actor: "carol@corp.example", Action: "governance.unit.write", Target: u1.String(), Outcome: "success",
+		Data: json.RawMessage(`{"unit_id":"` + u1.String() + `"}`)}
+	forged.RowHash = auditRowHash(t, pool, "", forged)
+	if _, err := pg.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
+		t.Fatalf("a laptop forwarding a governance row: %v", err)
+	}
+	absent["a laptop's forwarded row"] = forged.ID
 	units := []uuid.UUID{u1, u2}
 
 	feed, err := pg.QueryAuditEventsForUnits(ctx, units, store.AuditFilter{}, store.Page{Limit: 1000})

@@ -160,13 +160,28 @@ describe("TokenDialog form", () => {
     expect(screen.getByRole("button", { name: T.CLAIM_SUBMIT })).toBeEnabled();
   });
 
-  it("says Wardyn isn't answering for a server error or a dropped connection", async () => {
-    const submit = vi.fn().mockRejectedValueOnce(new HttpError(500, "internal")).mockRejectedValueOnce(new TypeError("fetch failed"));
+  it("says Wardyn isn't answering for a dropped connection, and the deadline's own sentence for a timeout", async () => {
+    const submit = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new HttpError(0, "Could not reach the control plane."));
     mount({ submit });
     await claim();
     expect(await screen.findByRole("alert")).toHaveTextContent("Wardyn isn't answering. Try again.");
     await claim();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Wardyn isn't answering. Try again.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach the control plane.");
+  });
+
+  it.each([
+    ["a 500 with no sentence", Object.assign(new HttpError(500, "Internal Server Error"), { said: "" }), "Wardyn couldn't create the token. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't create the token."],
+    ["a 503 that names its cause", new HttpError(503, "Token store is restarting."), "Token store is restarting."],
+    ["a body that does not parse", new SyntaxError("Unexpected token"), "Wardyn's answer couldn't be read."],
+  ])("an answered failure, %s, says what failed", async (_name, error, text) => {
+    mount({ submit: vi.fn().mockRejectedValue(error) });
+    await claim();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByText(/isn't answering/)).toBeNull();
   });
 
   it("a stale answer leaves only Close and no warning", async () => {

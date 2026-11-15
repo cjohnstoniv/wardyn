@@ -219,7 +219,7 @@ a new login ends the last.
 | `POST /api/v1/people` `{"tenant_id":"<tid>","object_id":"<oid>","email":"<email>"}` | Entra ID only: the same, keyed by the tenant and object id (see below); the principal is `entra:<tid>:<oid>` |
 | `POST /api/v1/people/{principal}/tokens` | refused: `403` `person_token_mint_removed`, one `person.token.create` audit row with outcome `denied` |
 | `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included |
-| `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change, each with a [`disposition`](#what-happens-to-a-token-an-admin-created) (metadata only, never a plaintext); also on the console's Admin > Credentials page |
+| `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change, less those refused for their owner ([below](#what-happens-to-a-token-an-admin-created)), each with a [`disposition`](#what-happens-to-a-token-an-admin-created) (metadata only, never a plaintext); also on the console's Admin > Credentials page |
 
 - **Tokens already minted keep working until you revoke them.**
   - Nothing is revoked by the upgrade.
@@ -322,7 +322,7 @@ Both replace a token an admin created for someone else, and nothing that works t
 ### What happens to a token an admin created
 
 Each row of `GET /api/v1/tokens?minted_for_others=true` carries a `disposition`, derived when you read it.
-Revoked and expired rows stay out unless you add `&include_revoked=true`, so a finished move stays visible.
+Revoked, expired and refused rows stay out without `&include_revoked=true`, so a finished move stays visible.
 Admin > Credentials shows it as a State column and an "Also show revoked and expired tokens" toggle.
 
 | `disposition` | Condition |
@@ -333,6 +333,10 @@ Admin > Credentials shows it as a State column and an "Also show revoked and exp
 | `linked_to_service_identity` | Live; moved to a service identity that is not retired. |
 | `moved_to_service_identity` | Revoked after a move. |
 | `revoked` | Revoked, neither of the above. |
+
+| Field | Set on a row |
+|---|---|
+| `owner_refused` | Live, but refused for its owner: deactivated, cut off by a later revocation of the owner's credentials, a reserved name, or a role stamp older than `WARDYN_ROLE_STAMP_TTL`. |
 
 - **To hand the token to its owner,** invite the token's principal with `--replaces <token-id>`. The owner is the token's principal, never `minted_by`.
 - **To hand it to automation,** link it to a service identity: `wardyn token move <token-id> <service-identity>`, or `POST /api/v1/tokens/{id}/move` with `{"service_identity":"<name>"}` (security tier, audited `token.update`).

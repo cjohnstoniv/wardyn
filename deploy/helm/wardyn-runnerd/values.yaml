@@ -84,7 +84,8 @@ apiServer:
 
 egress:
   # CIDRs the organisation is reached at, on relay.servicePort. Empty allows 0.0.0.0/0 except RFC 1918,
-  # 100.64.0.0/10 and 169.254.0.0/16, so runnerd has no route to pods on a private range.
+  # 100.64.0.0/10 and 169.254.0.0/16, so this rule reaches no pod on a private range. The apiserver rule
+  # above still does while apiServer.peers is empty.
   orgCIDRs: []
   # Raw NetworkPolicyEgressRule list appended to runnerd's egress.
   extra: []

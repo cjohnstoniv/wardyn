@@ -31,6 +31,13 @@ describe("refusalText", () => {
     expect(refusalText(refused("", "scheduled_runs_off"))).toBe(SCHEDULE_REFUSAL.OFF());
   });
 
+  it("says the console's own sentence for a start the server's clocks skip or repeat, never the RFC 3339 advice", () => {
+    const server = "The start time is skipped or repeated in Europe/London when the clocks change. Choose another time, or give start_at with its UTC offset (RFC 3339).";
+    const clock = new HttpError(400, server, "start_at_invalid", "", "", "", undefined, "", "", "", "", "clock_change");
+    expect(refusalText(clock)).toBe(NR_RUN.START_CLOCK);
+    expect(refusalText(refused(SCHEDULE_REFUSAL.INVALID(), "start_at_invalid"))).toBe(SCHEDULE_REFUSAL.INVALID());
+  });
+
   it("leaves every other refusal as it came", () => {
     expect(refusalText(refused("runner_pool_full", "runner_pool_full"))).toBe("runner_pool_full");
     expect(refusalText(new Error("boom"))).toBe("boom");

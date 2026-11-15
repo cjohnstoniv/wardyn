@@ -120,6 +120,18 @@ test.describe("Run page: data_out", () => {
     await expect(page.getByTestId("terminal-keeps-in")).toHaveText(DATA_OUT_RUN.TERMINAL);
   });
 
+  test("a run whose rule the page cannot read says its terminal does not copy out, and why", async ({ page }) => {
+    const { id } = await findRunningFixture(page);
+    await stubInteractiveRun(page, id);
+    await stubAttachTicket(page, id);
+    await stubAttachSocket(page, (_n, ws) => ws.send(attachModeFrame(false)));
+    await page.route(`**/api/v1/runs/${id}/policy`, (route) => route.fulfill({ status: 503, json: { error: "boom" } }));
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${id}`);
+    await expect(page.getByTestId("run-terminal-pane").locator(".xterm-screen").first()).toBeVisible();
+    await expect(page.getByTestId("terminal-keeps-in")).toHaveText(DATA_OUT_RUN.TERMINAL_UNREAD);
+  });
+
   test("the Files panel says why a blocked download is blocked", async ({ page }) => {
     const id = seededRunId();
     await stubPolicy(page, id, "blocked");

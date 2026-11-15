@@ -75,6 +75,8 @@ because #457 touches its neighbors).
 | `SIGNIN.TOKEN_HINT` | Changed | under the token field | Paste the admin token this Wardyn was started with — your Wardyn admin has it. |
 | `SIGNIN.TOKEN_REJECTED` | Reused | alert, on a real 401 | That admin token was rejected. Check the value and try again. |
 | `SIGNIN.UNREACHABLE_ERROR` | Changed | alert, on a network error | Wardyn isn't answering. Try again. |
+| `SIGNIN.CHECK_FAILED` | New (rc.21) | alert, on a 5xx that names no sentence of its own | Wardyn couldn't check your sign-in. Try again. |
+| `SIGNIN.CHECK_FAILED_FINAL` | New (rc.21) | alert, on a 403 or another non-401 4xx that names no sentence of its own | Wardyn couldn't check your sign-in. |
 | `SIGNIN.EMAIL_DOMAIN` | Changed | `auth_error=email_domain` | This email's domain isn't allowed to sign in here. Ask your Wardyn admin to allow it. |
 | `SIGNIN.NO_ROLE` | Changed | `auth_error=no_role` | Your account has no Wardyn role assigned. Ask your Wardyn admin to add you to a role mapping. |
 | `SIGNIN.CLAIMS_OVERAGE` | Changed | `auth_error=claims_overage` | Your identity provider sent too many groups to list in a sign-in token, so Wardyn can't tell what access you should have — and won't guess. Ask your Wardyn admin to map your role by App Role or email instead. Trying again won't help. |
@@ -96,6 +98,8 @@ because #457 touches its neighbors).
 | `STATES.ERROR_TITLE` | Reused | `ErrorState` heading, every pane | Something went wrong |
 | `STATES.ERROR_DEFAULT` | Changed | `ErrorState` body, no `message` passed | Wardyn isn't answering. Try again. |
 | `STATES.ERROR_ANSWERED` | New (rc.18) | `ErrorState` body for a server answer that gave no real reason (a plain 500 or no reason) | Couldn't load this. Try again. |
+| `STATES.ANSWER_UNREADABLE` | New (rc.21) | a failed load or action whose answer has a body that does not parse | Wardyn's answer couldn't be read. |
+| `STATES.TRY_AGAIN` | New (rc.21) | appended to a screen's "Wardyn couldn't ..." sentence for a 5xx only | Try again. |
 | `STATES.RETRY` | Reused | `ErrorState` retry button | Retry |
 
 **`USER_TYPE_AMBIGUOUS` / `USER_TYPE_UNKNOWN`** were added by #778 (0.8 user types), transcribed

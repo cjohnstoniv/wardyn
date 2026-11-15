@@ -4,3 +4,10 @@ Anyone with both the database and that key can read them. Set kek.provider to tr
 azurekv or awskms and run `wardynd -rewrap` to keep the two apart; set kek.required=true to
 refuse to start without one (existing rows still need `wardynd -rewrap`).
 {{- end }}
+{{- $ui := .Values.uiSandbox | default dict }}
+{{- if and $ui.enabled (not (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_OIDC_ISSUER"))) (not $ui.originTemplate) (not (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"))) (not (include "wardyn.allowUISharedOrigin" $)) }}
+WARNING: the UI-sandbox gateway has no per-run origin (uiSandbox.originTemplate is unset).
+Every run's apps share one browser origin, separated only by a path-scoped cookie, so a page one run serves can reach another run's app in the same person's browser.
+Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com; it needs wildcard DNS
+and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin.
+{{- end }}

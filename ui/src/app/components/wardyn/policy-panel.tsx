@@ -121,11 +121,11 @@ export function policyTemplates(providers?: readonly SetupModelProvider[]): read
     id: "model-provider",
     label: C.MODEL_PROVIDER,
     hint: tp.modelProviderHint,
-    // examples/policies/ci-claude-llm.json, auto_stop included: this is the one
-    // template carrying a minted credential, so the source's idle cap matters
-    // most here — without it a non-interactive run holds the key forever and
-    // preflight grades it RiskHigh. Idle-stop only fires after a genuinely
-    // silent hour (lifecycle TouchDebounce keeps active sessions alive).
+    // examples/policies/ci-claude-llm.json, its empty eligible_grants and
+    // auto_stop included: the model credential is the provider's to inject (see
+    // policy-template-providers.ts), and without the idle cap a non-interactive
+    // run holds it forever. Idle-stop only fires after a genuinely silent hour
+    // (lifecycle TouchDebounce keeps active sessions alive).
     spec: {
       allowed_domains: tp.hosts,
       denied_domains: [],
@@ -134,7 +134,7 @@ export function policyTemplates(providers?: readonly SetupModelProvider[]): read
       allowed_methods: [],
       min_confinement_class: "CC1",
       auto_stop_after_sec: 3600,
-      eligible_grants: tp.grants,
+      eligible_grants: [],
     },
   },
   {
@@ -450,7 +450,7 @@ export function PolicyPanel({
                           {/* The doc anchor rides the field name's tooltip: the
                               console does not serve docs/, so a real href would be
                               a dead link. */}
-                          <code className="font-mono text-xs text-foreground" title={`docs/POLICIES.md#${help.doc}`}>
+                          <code className="font-mono text-xs text-foreground [overflow-wrap:anywhere]" title={`docs/POLICIES.md#${help.doc}`}>
                             {key}
                           </code>
                           <Button

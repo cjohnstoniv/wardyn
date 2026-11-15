@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -632,10 +633,26 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 	}
 	header := "Bearer " + tok.Token
 	ttl := time.Duration(min(max(tok.ExpiresIn, 30), 300)) * time.Second
-	c.mu.Lock()
-	c.tokens[ref.Registry+"|"+cacheScope] = cachedToken{header: header, expires: time.Now().Add(ttl)}
-	c.mu.Unlock()
+	c.keepToken(ref.Registry+"|"+cacheScope, header, time.Now().Add(ttl))
 	return header, nil
+}
+
+// keepToken caches a Bearer header until expires. One client serves the daemon's life and every repository
+// name under a covered prefix is its own scope, so a write first drops the expired entries and, at
+// CacheEntries, one live entry: the map never holds more than one token lifetime's distinct scopes, capped.
+// ponytail: a full sweep per write; a write follows a token round trip, which costs far more than 1024 checks.
+func (c *RegistryClient) keepToken(key, header string, expires time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	maps.DeleteFunc(c.tokens, func(_ string, t cachedToken) bool { return now.After(t.expires) })
+	if _, ok := c.tokens[key]; !ok && len(c.tokens) >= CacheEntries {
+		for k := range c.tokens {
+			delete(c.tokens, k)
+			break
+		}
+	}
+	c.tokens[key] = cachedToken{header: header, expires: expires}
 }
 
 var challengeParam = regexp.MustCompile(`(\w+)="([^"]*)"`)

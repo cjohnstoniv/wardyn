@@ -82,8 +82,11 @@ func TestMigrationFailureIsDocumentedAsHalfApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
+	// "down" must be a whole word of the name, a word being a run of letters: "teardown" is not a down
+	// migration, and "down2", "x down" and "downgrade" are.
 	for _, e := range entries {
-		if strings.Contains(strings.ToLower(e.Name()), "down") {
+		words := strings.FieldsFunc(strings.ToLower(e.Name()), func(r rune) bool { return r < 'a' || r > 'z' })
+		if slices.Contains(words, "down") || slices.Contains(words, "downgrade") {
 			t.Errorf("a down migration exists (%s) — the runbook says the dump is the only rollback", e.Name())
 		}
 	}
@@ -953,9 +956,11 @@ func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) 
 //     ACTUALLY resolves to (0251.0376.0.1 is 169.254.0.1, link-local — not
 //     127.0.0.1, which the merged text claimed and which glibc, the repo's own
 //     ipguard table and the guard itself all contradict);
-//   - the QUALIFIER on bound (3), so the unhedged "is still denied at the
-//     literal-IP guard" promise cannot return unnoticed: the guard covers the
-//     spellings it PARSES, and the residual it does not cover is stated.
+//   - bound (3)'s "in every literal spelling", which holds only because step 0
+//     also refuses every spelling it cannot read as one standard address and
+//     every non-ASCII host, so that arm and the doc fail together; the
+//     residual it does not cover (embedded-v4 prefixes it does not know) is
+//     stated.
 func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 	// (1) The premise: step 0 is literalIPGuard and its non-canonical arm covers
 	// both axes.
@@ -980,6 +985,7 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 	for _, want := range []string{
 		"func nonCanonicalLiteralIP(", "nonCanonicalLiteralIP(host)",
 		"func nonCanonicalIPv4(", "func zonedIPv6Literal(",
+		"nonASCIIHost(host)", "nonStandardIPSpelling(host)",
 	} {
 		if !strings.Contains(lig, want) {
 			t.Fatalf("literal_ip_guard.go no longer contains %q — the non-canonical coverage the doc claims has changed shape", want)
@@ -1004,10 +1010,11 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 		"fe80::1%eth0",
 		"fe80::1%25eth0",
 		"`nonCanonicalLiteralIP`",
-		"Deny only: a spelling the",
-		// Bound (3) is qualified, and the residual is named rather than implied.
-		"**in every literal spelling that guard parses**",
-		"**Residual, stated rather than hedged:**",
+		"Deny only: such a spelling inherits no `allowed_domains` grant",
+		// Bound (3) holds for every spelling, by the refusal of the ones the guard
+		// cannot read, and the residual is named rather than implied.
+		"**in every literal spelling** (see below)",
+		"**Residual, stated rather than hedged:** the guard refuses every ASCII spelling it cannot read as one standard address, and every non-ASCII host",
 		"::127.0.0.1",
 		// The IPv4-compatible form is stated as CLOSED, by the arm that closes it.
 		"`v4CompatibleEmbeddedV4`",

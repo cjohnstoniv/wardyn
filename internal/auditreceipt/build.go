@@ -37,6 +37,10 @@ var (
 	// ErrInconsistent: the stored hash list does not hold the event's own row hash. The chain is broken or
 	// the read raced a rewrite; no receipt is better than a wrong one.
 	ErrInconsistent = errors.New("auditreceipt: a checkpoint's hash list does not hold the event")
+	// ErrProofUnavailable: the stored rows of a checkpoint holding an event no longer match its signed
+	// statement, so the receipt would fail verification. Retention dropped a partition the checkpoint also
+	// covers, or the log changed after it was signed.
+	ErrProofUnavailable = errors.New("auditreceipt: a checkpoint's stored rows no longer match its signed statement")
 )
 
 // SignedCheckpoint is a stored checkpoint: the signed statement text, its signature and the seq range the
@@ -133,13 +137,8 @@ func Assemble(in AssembleInput) (Assembled, error) {
 		sc := cps[c]
 		cp := Checkpoint{Statement: sc.Statement, Signature: sc.Signature}
 		if next < len(slots) && slots[next].cp == c {
-			list, err := in.Hashes(sc.SeqLo, sc.SeqHi)
-			if err != nil {
+			if err := fillHashList(&cp, sc, in.Hashes); err != nil {
 				return Assembled{}, err
-			}
-			cp.Seqs, cp.RowHashes = make([]int64, len(list)), make([]string, len(list))
-			for k, e := range list {
-				cp.Seqs[k], cp.RowHashes[k] = e.Seq, e.RowHash
 			}
 			for _, ev := range in.Events[slots[next].first:slots[next].end] {
 				k := sort.Search(len(cp.Seqs), func(k int) bool { return cp.Seqs[k] >= ev.Row.Seq })
@@ -157,6 +156,28 @@ func Assemble(in AssembleInput) (Assembled, error) {
 		out.Checkpoints = append(out.Checkpoints, cp)
 	}
 	return Assembled{Bundle: out, Included: included}, nil
+}
+
+// fillHashList reads sc's hash list into cp and runs the verifier's own hash-list checks on it: a list that
+// fails them proves nothing, so it is never served.
+func fillHashList(cp *Checkpoint, sc SignedCheckpoint, hashes func(lo, hi int64) ([]SeqHash, error)) error {
+	list, err := hashes(sc.SeqLo, sc.SeqHi)
+	if err != nil {
+		return err
+	}
+	cp.Seqs, cp.RowHashes = make([]int64, len(list)), make([]string, len(list))
+	for k, e := range list {
+		cp.Seqs[k], cp.RowHashes[k] = e.Seq, e.RowHash
+	}
+	st, err := ParseStatement(sc.Statement)
+	var rep Report
+	if err == nil && !rep.checkHashList(0, st, *cp, ReceiptFormat) {
+		err = fmt.Errorf("%+v", rep.Failures)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: checkpoint %d-%d: %v", ErrProofUnavailable, sc.SeqLo, sc.SeqHi, err)
+	}
+	return nil
 }
 
 // CheckpointExport is the signed statements alone, for a reader who wants to pin or compare heads: verifying

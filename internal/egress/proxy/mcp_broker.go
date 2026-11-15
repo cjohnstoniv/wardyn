@@ -222,6 +222,25 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		x.deny(w, ruleSourceMCPRequest, "unsupported MCP request method", http.StatusMethodNotAllowed)
 		return
 	}
+	// A server on the host and port of an identity route that does not cover it is not sent, as on the
+	// other lanes (gatewayOffRouteRefused): there the proxy sends only what carries the token. It is
+	// refused before the body is read, so no call to it is held for a person first (holdApproveEach).
+	if cause := p.gatewayOffRouteCause(x.server.host, x.server.port, x.server.path); cause != "" {
+		if p.sink != nil {
+			log := decisionLog(x.req, egress.Deny, ruleSourceMCPCredential)
+			log.Cause = cause
+			p.sink.emit(log)
+		}
+		http.Error(w, cause, http.StatusBadRequest)
+		return
+	}
+	// A route there that covers the server but is another destination's is refused here as forward
+	// refuses it, before the body is read: no person is asked and no credential is resolved first.
+	if rt := p.gatewayRouteFor(x.server.host, x.server.port, x.server.path); rt != nil && rt.MCPKey != x.server.key {
+		x.emit(egress.Deny, ruleSourceMCPCredential)
+		p.httpError(w, "the MCP server's gateway identity route is not its own", errors.New("another destination's route covers this server"), http.StatusBadGateway)
+		return
+	}
 	var body []byte
 	if r.Method == http.MethodPost {
 		var ok bool
@@ -377,10 +396,17 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		return false
 	}
 	x.emit(egress.Deny, ruleSourceMCPToolDeny)
+	answerMCPRefused(w, msgs, batch, mcpBlockedMessage)
+	return true
+}
+
+// answerMCPRefused answers every request of a refused body with the JSON-RPC error msg, a batch
+// as one array.
+func answerMCPRefused(w http.ResponseWriter, msgs []mcpMessage, batch bool, msg string) {
 	var out []map[string]any
 	for _, m := range msgs {
 		if m.id != nil {
-			out = append(out, jsonRPCError(m.id, mcpBlockedCode, mcpBlockedMessage))
+			out = append(out, jsonRPCError(m.id, mcpBlockedCode, msg))
 		}
 	}
 	switch {
@@ -391,7 +417,6 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 	default:
 		writeJSONRPC(w, out[0])
 	}
-	return true
 }
 
 // identToolNameRE is what Codex CLI's code mode replaces with "_" when it
@@ -523,6 +548,10 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
+	scan, ok := x.scanBody(w, body)
+	if !ok {
+		return
+	}
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -568,7 +597,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID, Scan: scan}, s.host, "MCP upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -576,7 +605,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		// The server was sent the id, so its log and this row join on it.
 		if p.sink != nil {
 			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
-			denied.GatewayCallID = callID
+			denied.GatewayCallID, denied.Scan = callID, scan
 			p.sink.emit(denied)
 		}
 		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
@@ -586,7 +615,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if x.approvalID != nil {
 		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
 	}
-	allow.GatewayCallID, allow.Cause = callID, mcpToolCause(body)
+	allow.GatewayCallID, allow.Cause, allow.Scan = callID, mcpToolCause(body), scan
 	p.emitDialledAllow(allow, s.host)
 	if listActive && !x.filterToolLists(w, resp, callID) {
 		return

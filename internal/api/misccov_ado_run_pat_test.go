@@ -100,8 +100,8 @@ type miscCovPATStore struct {
 	insertErr error
 }
 
-func (s *miscCovPATStore) BeginADOSignInEnd(context.Context, string, string) error { return nil }
-func (s *miscCovPATStore) FinishADOSignInEnd(context.Context, string) error        { return nil }
+func (s *miscCovPATStore) BeginADOSignInEnd(context.Context, string, string) error  { return nil }
+func (s *miscCovPATStore) FinishADOSignInEnd(context.Context, string, string) error { return nil }
 
 func (s *miscCovPATStore) ADOSignInEnds(context.Context, string) (store.ADOSignInEndState, error) {
 	s.mu.Lock()

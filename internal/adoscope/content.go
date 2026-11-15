@@ -151,12 +151,14 @@ func pullRequestContent(method string, req Request, t ContentTarget, sub string)
 }
 
 // Push is what a Git Pushes - Create body writes: the refs it moves, every
-// path its changes name (a rename names both), and a digest of the body
-// (the request names no commit until the service makes one).
+// path its changes name (a rename names both), a digest of the body (the
+// request names no commit until the service makes one), and Unsized: the item
+// path of every change that puts content there without carrying it.
 type Push struct {
-	Refs   []string
-	Paths  []string
-	Digest string
+	Refs    []string
+	Paths   []string
+	Digest  string
+	Unsized []string
 }
 
 // ParsePush reads a Git Pushes - Create body already let through peekBody.
@@ -180,6 +182,8 @@ func ParsePush(req Request) (Push, error) {
 					Path string `json:"path"`
 				} `json:"item"`
 				SourceServerItem string `json:"sourceServerItem"`
+				ChangeType       any    `json:"changeType"`
+				NewContent       any    `json:"newContent"`
 			} `json:"changes"`
 		} `json:"commits"`
 	}
@@ -197,6 +201,7 @@ func ParsePush(req Request) (Push, error) {
 			if ch.Item == nil || ch.Item.Path == "" {
 				return Push{}, fmt.Errorf("adoscope: a push change names no item path")
 			}
+			first := len(out.Paths)
 			for _, raw := range []string{ch.Item.Path, ch.SourceServerItem} {
 				if raw == "" {
 					continue // no rename source
@@ -206,6 +211,17 @@ func ParsePush(req Request) (Push, error) {
 					return Push{}, err
 				}
 				out.Paths = append(out.Paths, p)
+			}
+			// Only content the body carries shows its size: a newContent object with a string content, on a
+			// change that names no rename source. Any other newContent ({}, a null content, a value that is
+			// no object) carries none, and a rename may keep the content already on the server whatever
+			// newContent says. A delete leaves no file.
+			carried := false
+			if nc, ok := ch.NewContent.(map[string]any); ok && ch.SourceServerItem == "" {
+				_, carried = nc["content"].(string)
+			}
+			if kind, _ := ch.ChangeType.(string); !carried && !strings.EqualFold(strings.TrimSpace(kind), "delete") {
+				out.Unsized = append(out.Unsized, out.Paths[first])
 			}
 		}
 	}

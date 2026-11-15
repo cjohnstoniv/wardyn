@@ -256,6 +256,9 @@ export const PERM = {
   ENFORCE_OFF_BODY: "Members go back to the powers they had before this capability was enforced. Denies still apply.",
   ENFORCE_CONFIRM: "Enforce",
   ENFORCE_STOP: "Stop enforcing",
+  // Toast detail when the save was refused because another admin changed the switches after this page loaded.
+  ENFORCE_STALE:
+    "Someone else changed enforcement after this page loaded. The latest is loading; confirm again if your change still applies.",
 
   // ---- grant table ----
   GRANTS_TITLE: "Grants",

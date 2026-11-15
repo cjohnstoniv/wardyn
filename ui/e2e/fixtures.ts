@@ -247,6 +247,16 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
+// Every box in the dialog that scrolls or clips sideways, the dialog itself included; empty when none does. A text
+// field scrolling its own text is how a field works, so inputs are not counted.
+export async function sidewaysScroll(dialog: Locator): Promise<string[]> {
+  return dialog.evaluate((d) =>
+    [d, ...d.querySelectorAll("*")]
+      .filter((e) => (e === d || getComputedStyle(e).overflowX !== "visible") && !e.matches(".sr-only, input, textarea") && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1)
+      .map((e) => `${e.tagName.toLowerCase()} ${e.scrollWidth}/${e.clientWidth}`),
+  );
+}
+
 // Resolves once `target` has not moved for `frames` animation frames in a row. The shell's banners are lazy
 // chunks that push the page down when they arrive, so a control can be visible and stable for Playwright's own
 // two frames and still be somewhere else by the time the pointer is released over it; a click that follows

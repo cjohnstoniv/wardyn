@@ -370,3 +370,20 @@ func TestAuditReceiptCommands(t *testing.T) {
 		t.Fatalf("keys file = %q, %v", raw, err)
 	}
 }
+
+// A bundle is a file anyone can hand over: its format, actions and failure details are shown escaped, so
+// a line break cannot print a forged "verified" line and an escape sequence cannot repaint the verdict.
+func TestPrintVerifyReportEscapesTheBundlesText(t *testing.T) {
+	var buf bytes.Buffer
+	printVerifyReport(&buf, auditreceipt.Report{
+		Format:      "x\x1b[32m\nVERIFIED",
+		Checkpoints: []auditreceipt.CheckpointResult{{Kid: "k\x1b[0m"}},
+		Events:      []auditreceipt.EventResult{{Seq: 2, Action: "run.create: verified\nevent seq 3"}},
+		Policies:    []auditreceipt.PolicyResult{{Seq: 2, Action: "a\rb", Status: "odd\x07"}},
+		Failures:    []auditreceipt.Failure{{Checkpoint: -1, Reason: auditreceipt.ReasonFormat, Detail: "d\nVERIFIED"}},
+	})
+	got := buf.String()
+	if strings.ContainsAny(got, "\x1b\r\x07") || strings.Count(got, "\n") != 6 || strings.Contains(got, "\nVERIFIED") || strings.Contains(got, "\nevent seq 3") {
+		t.Fatalf("report = %q, want every field escaped onto its own line", got)
+	}
+}

@@ -75,3 +75,15 @@ func TestRunWindowFlagAsksAtStart(t *testing.T) {
 		t.Fatalf("desktop_window sent without --window: %s", srv.last().body)
 	}
 }
+
+// The refusal is shown as the server's sentence, and the exit code still follows its status class.
+func TestWindowRefusalKeepsItsExitClass(t *testing.T) {
+	const sentence = "Only a macOS VM run has a window."
+	for status, code := range map[int]int{http.StatusConflict: 3, http.StatusForbidden: 2, http.StatusServiceUnavailable: 4} {
+		srv := newCmdServer(t, status, map[string]string{"error": sentence})
+		_, err := execCmdCapture(t, "window", uuid.NewString(), "--url", srv.URL, "--token", "t")
+		if err == nil || err.Error() != sentence || exitCodeFor(err) != code {
+			t.Errorf("%d: err = %v (exit %d), want exactly %q with exit %d", status, err, exitCodeFor(err), sentence, code)
+		}
+	}
+}

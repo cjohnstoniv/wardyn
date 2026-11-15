@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -101,5 +102,22 @@ func TestPreflight_ValidBodyStillSucceeds(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("valid preflight body: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// decodeStrictKeys holds a body to decodeStrictMsg's rules: the decode keeps the last of a key
+// written twice, so `"a":["x"],"a":[]` would write the empty list over a whole-document PUT's
+// stored value.
+func TestDecodeStrictKeysRefusesAKeyWrittenTwice(t *testing.T) {
+	var dst struct {
+		A []string `json:"a"`
+	}
+	r := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"a":["x"],"a":[]}`))
+	if _, msg := decodeStrictKeys(httptest.NewRecorder(), r, &dst); msg != `invalid JSON body: the body has the key "a" twice` {
+		t.Errorf("msg = %q, want the repeated key refused", msg)
+	}
+	r = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"a":["x"]}`))
+	if present, msg := decodeStrictKeys(httptest.NewRecorder(), r, &dst); msg != "" || !present["a"] {
+		t.Errorf("one key: present %v, msg %q", present, msg)
 	}
 }

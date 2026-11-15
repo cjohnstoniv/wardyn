@@ -164,9 +164,11 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	if p.upstream != nil && !p.bypassUpstream(host) {
 		// The one thing the upstream hop cannot be trusted to re-derive: a
 		// NON-CANONICAL literal (inet_aton spelling, zone-suffixed IPv6) that
-		// net.ParseIP refuses, so evaluate's step-0 guard never saw it, and
-		// the corp proxy's own parser would turn it back into
-		// loopback/link-local/metadata. Canonical literals are NOT re-vetted
+		// net.ParseIP refuses, which the corp proxy's own parser would turn
+		// back into loopback/link-local/metadata. Step 0 refuses a sandbox's
+		// request in such a spelling, and config load a configured host in one
+		// (refuseIPSpellingEntries); this is the backstop for a host a caller
+		// hands here without evaluate. Canonical literals are NOT re-vetted
 		// here since evaluate has already decided them.
 		if ip := nonCanonicalLiteralIP(host); ip != nil {
 			if kind, why := isBlockedIP(ip); kind != blockNone {
@@ -308,7 +310,8 @@ func ValidNoProxyEntry(raw string) bool {
 	if _, _, err := net.ParseCIDR(e); err == nil {
 		return true
 	}
-	return noProxyHostRE.MatchString(e)
+	// An address in a non-standard spelling is refused here as at config load (ValidConfigHost).
+	return noProxyHostRE.MatchString(e) && ValidConfigHost(e) == nil
 }
 
 // noProxyStrings renders the COMPILED rules back for the boot log, so what is

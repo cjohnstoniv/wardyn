@@ -36,6 +36,36 @@ func startAuditDelivery(ctx context.Context, sinksJSON string, st store.PG, rec 
 	leaderGo(ctx, leader, "audit.delivery", run)
 }
 
+// newOTLPMetrics builds the OTLP metrics push when the sinks config has an
+// otlp_metrics block, and nil otherwise. ParseSinks already refused a bad block
+// at boot (buildAuditFanout), so an error here is logged and the push stays off.
+func newOTLPMetrics(sinksJSON string) *sinks.OTLPMetrics {
+	m, err := sinks.NewOTLPMetrics([]byte(sinksJSON))
+	if err != nil {
+		slog.Error("wardynd: OTLP metrics push not started", slog.Any("err", err))
+		return nil
+	}
+	return m
+}
+
+// otlpMetricsFailures adapts the push to api.Config.OTLPMetricsPushFailures; nil
+// when the push is off, so the counter is omitted.
+func otlpMetricsFailures(m *sinks.OTLPMetrics) func() int64 {
+	if m == nil {
+		return nil
+	}
+	return m.Failures
+}
+
+// startOTLPMetrics runs the push on this replica. Every replica pushes its own
+// body, as every replica is scraped.
+func startOTLPMetrics(ctx context.Context, m *sinks.OTLPMetrics, collect func(context.Context) []byte) {
+	if m == nil {
+		return
+	}
+	go goSafe("otlp.metrics", func() { m.Run(ctx, collect) })
+}
+
 // auditDeliveryReporter adapts the store's checkpoint status to the
 // api.Config.AuditDelivery callback. Nil unless acknowledged delivery is
 // configured, so the wardyn_audit_delivery_* series are omitted rather than

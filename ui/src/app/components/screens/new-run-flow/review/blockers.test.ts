@@ -11,6 +11,7 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import { buildBlockers, groupsBlockedBy, missingSetup, specifies, type BlockerInput } from "./blockers";
+import type { RunIntent } from "../draft/run-intent";
 
 const ITEM: SetupItem = { id: "secret:deploy-key", kind: "secret", label: "deploy-key", required_by: "Application", status: "missing", detail: "Add the deploy key." };
 const NOTHING: BlockerInput = { issues: [], unsupported: [], templateNeeds: [], refusal: null, setupItems: [], stale: false };
@@ -190,5 +191,24 @@ describe("Review blockers", () => {
     expect(specifies({}, "inline_policy.model_provider")).toBe(false);
     expect(specifies({ inline_policy: { allowed_domains: [] } }, "inline_policy.allowed_domains")).toBe(true);
     expect(specifies({ no_end: false }, "no_end")).toBe(true);
+  });
+
+  // Guided setup writes the run mode in the carriers, and the server refuses the older field beside them.
+  it.each<[string, RunIntent, boolean]>([
+    ["task", {}, false],
+    ["task", { experience: "background", workload: { kind: "agent_task", agent: "claude-code", task: "" } }, false],
+    ["task", { experience: "background", workload: { kind: "agent_task", agent: "claude-code", task: "fix it" } }, true],
+    ["task", { experience: "background", workload: { kind: "command", command: "make test" } }, true],
+    ["task", { experience: "interactive", startup: { kind: "harness", tool: "claude-code" } }, false],
+    ["task", { experience: "interactive", startup: { kind: "harness", tool: "claude-code", prompt: "do x" } }, true],
+    ["agent", { experience: "interactive" }, false],
+    ["agent", { tools: [{ id: "claude-code", kind: "harness" }] }, true],
+    ["interactive", { shape: "agent_task" }, false],
+    ["interactive", { experience: "background" }, true],
+    ["task_mode", { experience: "background" }, false],
+    ["task_mode", { experience: "background", workload: { kind: "command", command: "" } }, true],
+    ["task_mode", { experience: "interactive" }, true],
+  ])("counts the older field %s as set by the run-mode field that replaces it (%#)", (field, intent, want) => {
+    expect(specifies(intent, field)).toBe(want);
   });
 });

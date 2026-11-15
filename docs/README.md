@@ -61,6 +61,7 @@
 | Require a signed image when a member creates a run (audit first, then enforce) | [operations/image-signature-checks.md](operations/image-signature-checks.md) |
 | Make a cluster refuse unsigned Wardyn images (policy-controller or Kyverno) | [operations/image-admission.md](operations/image-admission.md) |
 | Let an agent-sandbox controller make the agent pods (experimental) | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
+| Keep warm placeholder pods so runs can start on a node with the image pulled (experimental) | [operations/kubernetes-warm-pools.md](operations/kubernetes-warm-pools.md) |
 | See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
 | Set up as a security admin: a first-setup checklist | [operations/security-admin-setup.md](operations/security-admin-setup.md) |
 | Monitor a deployment: metrics, health and audit sinks | [operations/monitoring.md](operations/monitoring.md) |

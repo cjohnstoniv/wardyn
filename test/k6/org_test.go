@@ -34,6 +34,8 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -50,9 +52,10 @@ type orgEnv struct {
 	http                         *http.Client
 	poolID                       string
 	// state the later cases continue from
-	fenced *fencedProxy
-	lapse  *lapseRun
-	runs   runIDs // the runs launched since the last case ended: what a failed case dumps
+	fenced    *fencedProxy
+	restarted time.Time // when restart-fence-replay-reregister-sinks restarted runnerd
+	lapse     *lapseRun
+	runs      runIDs // the runs launched since the last case ended: what a failed case dumps
 }
 
 // lapseRun is self-lapse-end-to-end's run: renewed once, then ended at the org behind runnerd's back.
@@ -83,14 +86,22 @@ func (l *proxyLog) String() string {
 }
 
 // followProxyLog follows the run's proxy container log until ctx ends, restarting the follow if it
-// drops while the pod is still there, and stops once the lapse line has been captured.
+// drops while the pod is still there, and stops once the lapse line has been captured or the pod is
+// gone. A gone pod ends the log with one line saying by when, instead of a NotFound every 2 s that
+// would push the proxy's own last lines out of a tail.
 func (o *orgEnv) followProxyLog(ctx context.Context, id string) *proxyLog {
 	l := &proxyLog{}
 	go func() {
 		for ctx.Err() == nil && !strings.Contains(l.String(), lapseLine) {
+			var stderr bytes.Buffer
 			cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "-f", "wardyn-proxy-"+id, "-c", "wardyn-proxy")
-			cmd.Stdout, cmd.Stderr = l, l
+			cmd.Stdout, cmd.Stderr = l, &stderr
 			_ = cmd.Run()
+			if strings.Contains(stderr.String(), "NotFound") {
+				fmt.Fprintf(l, "k6: proxy pod gone by %s\n", time.Now().UTC().Format(time.RFC3339))
+				return
+			}
+			_, _ = l.Write(stderr.Bytes())
 			time.Sleep(2 * time.Second)
 		}
 	}()
@@ -410,15 +421,25 @@ func (o *orgEnv) getJSON(path string, out any) error {
 
 func (o *orgEnv) waitAudit(t *testing.T, runID string, within time.Duration, what string, match func(auditRow) bool) auditRow {
 	t.Helper()
+	r, ok := o.pollAudit(t, runID, within, match)
+	if !ok {
+		t.Fatalf("run %s: no audit row %s within %s", runID, what, within)
+	}
+	return r
+}
+
+// pollAudit is waitAudit that reports false, instead of failing, once within has passed.
+func (o *orgEnv) pollAudit(t *testing.T, runID string, within time.Duration, match func(auditRow) bool) (auditRow, bool) {
+	t.Helper()
 	deadline := time.Now().Add(within)
 	for {
 		for _, r := range o.audit(t, runID) {
 			if match(r) {
-				return r
+				return r, true
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("run %s: no audit row %s within %s", runID, what, within)
+			return auditRow{}, false
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -680,6 +701,7 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 		t.Fatalf("run B control before the restart: %q", got)
 	}
 	restarted := time.Now()
+	o.restarted = restarted
 	o.kubectl(t, "-n", o.ownNS, "rollout", "restart", "deployment/"+o.deploy)
 	o.kubectl(t, "-n", o.ownNS, "rollout", "status", "deployment/"+o.deploy, "--timeout=300s")
 	deadline := time.Now().Add(5 * time.Minute)
@@ -770,7 +792,8 @@ func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
 // org ends a run without the stop reaching runnerd), so its next renew (10 min +-1 after a success) is
 // refused permanently. The row is written as a finalize that believed its stop succeeded leaves it,
 // sandbox_ref cleared: with the ref kept, wardynd's terminal-sandbox sweep (every 5 min) retries the
-// stop and tears the sandbox down before that renew.
+// stop and tears the sandbox down before that renew. The row is written only once the READY sweep of
+// runnerd's restart has ended (awaitReadySweepEnd), since that sweep would tear it down as well.
 func (o *orgEnv) lapseSetup(t *testing.T) {
 	o.lapse = &lapseRun{}
 	parent := t
@@ -793,6 +816,7 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 			}
 			time.Sleep(3 * time.Second)
 		}
+		o.awaitReadySweepEnd(t)
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",
 			"UPDATE agent_runs SET state = 'FAILED', sandbox_ref = '' WHERE id = '"+id+"'")
 		o.lapse.marked = time.Now()
@@ -811,9 +835,13 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		t.Fatalf("self-lapse setup: %+v", o.lapse)
 	}
 	id := o.lapse.id
-	row := o.waitAudit(t, id, time.Until(o.lapse.marked.Add(14*time.Minute)), "a refused renew", func(r auditRow) bool {
+	within := time.Until(o.lapse.marked.Add(14 * time.Minute))
+	row, ok := o.pollAudit(t, id, within, func(r auditRow) bool {
 		return r.Action == "identity.renew" && r.Outcome == "denied"
 	})
+	if !ok {
+		o.lapseUnrefused(t, id, within)
+	}
 	note(t, "renew refused at the org %s after the run was ended: %s", time.Since(o.lapse.marked).Round(time.Second), row.Data)
 	deadline := time.Now().Add(2 * time.Minute)
 	for !strings.Contains(o.lapse.proxy.String(), lapseLine) {
@@ -829,6 +857,122 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		note(t, "proxy logged the permanent refusal and lapsed; runnerd deleted the proxy pod %s after the mark; agent egress now %q",
 			time.Since(o.lapse.marked).Round(time.Second), tail(got, 200))
 	}
+}
+
+// lapseUnrefused ends self-lapse-end-to-end when no refused renew reached the org by the deadline,
+// with what became of the run: its pods and the followed proxy log, which outlives the proxy pod. A
+// READY orphan sweep removes both pods of a run the org holds terminal, and the lapse run is one from
+// its mark on; when a pass logged since the mark removed a run and both pods are gone, the proxy never
+// had a renew to be refused, and the case is INCONCLUSIVE. The pass's attempt says which READY it
+// came from: 1 is a new session, more is a retry of an earlier one.
+func (o *orgEnv) lapseUnrefused(t *testing.T, id string, within time.Duration) {
+	t.Helper()
+	proxy, agent := o.podState("wardyn-proxy-"+id), o.podState("wardyn-agent-"+id)
+	passes, err := o.readySweeps(o.lapse.marked)
+	took := ""
+	for _, p := range passes {
+		if strings.Contains(p, "swept=") && !strings.Contains(p, "swept=0") {
+			took = p
+			break
+		}
+	}
+	sweeps := strings.Join(passes, "\n")
+	if err != nil {
+		sweeps = err.Error()
+	}
+	state := fmt.Sprintf("run %s: no audit row a refused renew within %s; proxy pod %s; agent pod %s\nthe org's READY sweep passes since the mark:\n%s\nfollowed proxy log (tail):\n%s",
+		id, within.Round(time.Second), proxy, agent, orNone(sweeps, "none"), orNone(tailLines(o.lapse.proxy.String()), "nothing captured"))
+	if proxy == podGone && agent == podGone && took != "" {
+		t.Log(state)
+		o.dumpFailure(t, []string{id})
+		inconclusive(t, fmt.Sprintf("a READY orphan sweep removed both pods of run %s, which the org holds FAILED, before its renew was due, so the self-lapse was not exercised: %s", id, took))
+	}
+	t.Fatal(state)
+}
+
+// readySweepChain bounds a READY sweep's passes: four at most, 10, 30 and 90 s apart
+// (readySweepRetries), each up to about 50 s while a held run's two pods wait out their kill bound.
+const readySweepChain = 6 * time.Minute
+
+// awaitReadySweepEnd waits until the org's last READY orphan sweep pass since runnerd's restart did
+// not err. A pass removes every run the org then holds terminal, and one that errs is tried again on
+// the same session: restart-fence-replay-reregister-sinks' first pass errs on the fenced run, whose
+// node has no kubelet at READY, so its later passes can come after that case has ended and, once the
+// lapse run is marked, remove it. A chain its session cut short logs no end, so after readySweepChain
+// the run is marked anyway and lapseUnrefused names a pass that took it.
+func (o *orgEnv) awaitReadySweepEnd(t *testing.T) {
+	t.Helper()
+	if o.restarted.IsZero() {
+		return // the restart case did not run
+	}
+	deadline := time.Now().Add(readySweepChain)
+	for {
+		passes, err := o.readySweeps(o.restarted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(passes); n > 0 {
+			switch last := passes[n-1]; {
+			case strings.Contains(last, " INFO "):
+				return
+			case !strings.Contains(last, " WARN "):
+				t.Fatalf("the org's READY orphan sweep line reads neither INFO nor WARN, so its end cannot be told: the line changed: %s", last)
+			}
+		}
+		if time.Now().After(deadline) {
+			if len(passes) == 0 {
+				t.Fatalf("no READY orphan sweep pass for runner %s in the org's log %s after runnerd's restart: every READY logs one, so the runner never came back or the line changed",
+					o.runnerID, time.Since(o.restarted).Round(time.Second))
+			}
+			t.Logf("the READY sweep since runnerd's restart logged no end within %s; marking the run anyway after: %s", readySweepChain, passes[len(passes)-1])
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// readySweeps are the org's lines for the runner's READY orphan sweep passes logged at or after since,
+// one per pass (sweepRunnerOrphansOnce): INFO for a pass that did not err, which ends its chain, else
+// WARN, each with its attempt and swept counts.
+func (o *orgEnv) readySweeps(since time.Time) ([]string, error) {
+	out, err := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.orgNS, "logs", "deployment/wardyn-org", "--all-containers",
+		"--timestamps", "--since-time="+since.UTC().Format(time.RFC3339)).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("org log: %v: %s", err, tail(strings.TrimSpace(string(out)), 300))
+	}
+	var passes []string
+	for _, l := range strings.Split(string(out), "\n") {
+		at, perr := time.Parse(time.RFC3339Nano, strings.SplitN(l, " ", 2)[0])
+		if perr == nil && !at.Before(since) && strings.Contains(l, "runner orphan sweep on reconnect") && strings.Contains(l, o.runnerID) {
+			passes = append(passes, l)
+		}
+	}
+	return passes, nil
+}
+
+// podGone is podState's answer for a pod the API server no longer has.
+const podGone = "gone"
+
+// podState is a runs-namespace pod's phase and reason, each container's readiness and restarts, and
+// its deletion mark, or podGone.
+func (o *orgEnv) podState(name string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	p, err := o.admin.CoreV1().Pods(o.runsNS).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return podGone
+	case err != nil:
+		return "unread (" + err.Error() + ")"
+	}
+	s := strings.TrimSpace(string(p.Status.Phase) + " " + p.Status.Reason)
+	for _, cs := range p.Status.ContainerStatuses {
+		s += fmt.Sprintf(", %s ready=%t restarts=%d", cs.Name, cs.Ready, cs.RestartCount)
+	}
+	if p.DeletionTimestamp != nil {
+		s += ", deleting since " + p.DeletionTimestamp.UTC().Format(time.RFC3339)
+	}
+	return s
 }
 
 // caseOrgSweepRollback: a run whose sandbox creation the org gave up on (runnerd went away mid-create)
@@ -930,6 +1074,7 @@ func TestK6Org(t *testing.T) {
 	kase("restart-fence-replay-reregister-sinks", caseOrgRestart)
 	// After every runnerd restart but the sweep case's: a READY sweeps the runs the org holds terminal,
 	// and the lapse run is one, so a restart inside its renew window would reclaim it before the refusal.
+	// The restart's own sweep can outlast its case; the setup waits it out (awaitReadySweepEnd).
 	o.lapseSetup(t)
 	kase("self-lapse-end-to-end", caseOrgSelfLapse)
 	kase("org-triggered-sweep-rollback", caseOrgSweepRollback)

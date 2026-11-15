@@ -364,8 +364,8 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// stream ends (client closed the channel) as well as when the parent
 	// connection ctx dies — the bridge's AfterFunc closes its exec session on
 	// either, so a parked io.Copy can never outlive its channel.
-	chCtx, chCancel := context.WithCancel(ctx)
-	defer chCancel()
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(nil)
 	// Backstop only: the client-disconnects-first path (reqs closes with no
 	// shell/exec/subsystem ever dispatched, or a still-running bridge is
 	// interrupted). The COMPLETION path closes channel itself, from inside the
@@ -504,8 +504,9 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// connection died). A bridge parked on a quiet exec would wait for the
 	// in-sandbox command forever; cancel the channel-scoped ctx so its
 	// AfterFunc closes the session and the bridge returns. A normally-finished
-	// bridge already closed the channel itself, making this a no-op.
-	chCancel()
+	// bridge already closed the channel itself, making this a no-op. The cause
+	// is the client's close (sshClientClosedFirst) unless chCtx already ended.
+	chCancel(errSSHChannelClosed)
 	if bridgeDone != nil {
 		<-bridgeDone
 	}
@@ -899,12 +900,12 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshExecArgv(command),
 		Env:  env,
 	})
 	if err != nil {
-		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": err.Error()})))
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
@@ -964,11 +965,11 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {
-		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 			fmt.Sprintf("127.0.0.1:%d", m.DestPort), "failure",
 			mustJSON(map[string]any{"port": m.DestPort, "error": err.Error()})))
 		_ = newCh.Reject(ssh.ConnectionFailed, sshExecStreamErrorMessage(err))
@@ -985,13 +986,15 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
+	var end bridgeEnd
+	exit, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noteBridgeEnd(ctx, sess, &end), false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its
 	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
 	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
+	extra := map[string]any{"port": m.DestPort, "bytes": bytesOut}
+	outcome := bridgeOutcome(exit, end, "the forward relay", extra)
 	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
-		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
-		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
+		fmt.Sprintf("127.0.0.1:%d", m.DestPort), outcome, mustJSON(extra)))
 }

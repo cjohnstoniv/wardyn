@@ -501,7 +501,9 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   // marker below or the background watch ends the pane. Deps deliberately
   // exclude `onDone` (B1, above) — `onDoneRef` carries it.
   const completeCapture = React.useCallback(() => {
-    if (completedRef.current) return;
+    // Cancelled (the door's Escape reaches cancel too): the door this pane served is closed, and onDone would
+    // close and complete whichever door is open by the time a confirmation lands.
+    if (completedRef.current || dismissedRef.current) return;
     completedRef.current = true;
     watchAbortRef.current?.abort();
     if (runId && !killedRef.current) {
@@ -524,6 +526,8 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       try {
         await modelProviderSignIn.captureSignIn(modelProvider, runId ?? "", t);
         if (runId) await runsApi.killRun(runId).catch(() => {});
+        // Cancelled while the token was stored: the same closed door as completeCapture's.
+        if (dismissedRef.current) return;
         setPhase("done");
         onDone();
       } catch (e) {

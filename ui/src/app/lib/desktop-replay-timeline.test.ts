@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesktopPlayback } from "./api/recordings";
 import type { AuditEvent } from "./types";
-import { advance, frameMs, gapAt, jumpTo, pct, replayActions, replayDuration, replayGaps } from "./desktop-replay-timeline";
+import { advance, frameMs, gapAt, jumpTo, pct, replayActions, replayDuration, replayGaps, seekKey } from "./desktop-replay-timeline";
 import { RECORDING_REPLAY as C } from "../components/wardyn/copy/recording-level";
 
 const START = "2026-10-20T10:40:00Z";
@@ -83,6 +83,33 @@ describe("desktop replay timeline", () => {
     expect(acts[1].detail).toBe("214 B · sha256 9f2c…a41e");
     expect(acts[0].detail).toBe("reason: you took over to sign in");
     expect(acts[2].detail).toBe("gap 2 min 14 s");
+  });
+
+  it("a reviewed download's ask moves no file: only its release, or a download with no review, says downloaded", () => {
+    const audit = [
+      row("q1", "desktop.file.transfer", 100, { actor_type: "human", data: { direction: "download", review: "requested", bytes: 84, sha256: "9f2c00000000a41e" } }),
+      row("q2", "desktop.file.transfer", 150, { actor_type: "human", outcome: "denied", data: { direction: "download", review: "requested", bytes: 300 } }),
+      row("d1", "desktop.file.transfer", 200, { actor_type: "human", data: { direction: "download", review: "released", bytes: 84, sha256: "9f2c00000000a41e" } }),
+      row("d2", "desktop.file.transfer", 250, { actor_type: "human", outcome: "denied", data: { direction: "download", review: "changed", bytes: 84 } }),
+      row("d3", "desktop.file.transfer", 300, { actor_type: "human", data: { direction: "download", bytes: 12 } }),
+    ];
+    expect(replayActions(pb(), 600_000, audit).map((a) => [a.id, a.text, a.blocked])).toEqual([
+      ["q1", C.ACT_REVIEW_ASKED, false],
+      ["q2", C.ACT_REVIEW_ASK_TRIED, true],
+      ["d1", C.ACT_DOWNLOAD, false],
+      ["d2", C.ACT_DOWNLOAD_TRIED, true],
+      ["d3", C.ACT_DOWNLOAD, false],
+    ]);
+  });
+
+  it("the seek control's keys: arrows step 5 s inside the recording, Home and End go to either end, other keys do nothing", () => {
+    expect(seekKey("ArrowRight", 10_000, 600_000)).toBe(15_000);
+    expect(seekKey("ArrowUp", 598_000, 600_000)).toBe(600_000);
+    expect(seekKey("ArrowLeft", 3_000, 600_000)).toBe(0);
+    expect(seekKey("ArrowDown", 10_000, 600_000)).toBe(5_000);
+    expect(seekKey("Home", 300_000, 600_000)).toBe(0);
+    expect(seekKey("End", 300_000, 600_000)).toBe(600_000);
+    expect(seekKey("a", 300_000, 600_000)).toBeUndefined();
   });
 
   it("jumps to the clicked action's moment, clamped to the recording", () => {

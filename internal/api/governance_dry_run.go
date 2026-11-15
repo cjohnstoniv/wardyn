@@ -7,8 +7,8 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -212,9 +212,7 @@ func moveTouched(before treeSnapshot, id, to uuid.UUID, shift legacyShift) []uui
 
 // strictJSON decodes raw into dst as decodeStrict decodes a body, returning the message it would.
 func strictJSON(raw []byte, dst any) string {
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(raw), dst, true); err != nil {
 		return "invalid JSON body: " + err.Error()
 	}
 	return ""

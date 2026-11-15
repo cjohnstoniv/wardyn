@@ -223,8 +223,8 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 }
 
 // ExpireOne mirrors approval.ExpireOne over the map: PENDING moves to EXPIRED
-// and is recorded; anything else (already decided, or absent) is a silent
-// no-op, matching the real FSM's idempotent treatment of the race.
+// and is recorded; a row already decided is left as it is and answers
+// ErrAlreadyDecided, as the real FSM does; an absent one is a no-op.
 func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -232,8 +232,11 @@ func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) 
 		return f.expireErr
 	}
 	ap, ok := f.byID[id]
-	if !ok || ap.State != types.ApprovalPending {
+	if !ok {
 		return nil
+	}
+	if ap.State != types.ApprovalPending {
+		return approval.ErrAlreadyDecided
 	}
 	ap.State = types.ApprovalExpired
 	ap.DecidedBy = "system"

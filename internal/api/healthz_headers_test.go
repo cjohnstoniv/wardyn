@@ -261,7 +261,7 @@ type blockingHeartbeatStore struct {
 
 func (s blockingHeartbeatStore) Ping(context.Context) error { return nil }
 
-func (s blockingHeartbeatStore) LatestAuditEventByAction(ctx context.Context, _ string) (types.AuditEvent, error) {
+func (s blockingHeartbeatStore) LatestOrganisationAuditEvent(ctx context.Context, _ string, _ types.ActorType, _ string) (types.AuditEvent, error) {
 	select {
 	case <-ctx.Done():
 		return types.AuditEvent{}, ctx.Err()

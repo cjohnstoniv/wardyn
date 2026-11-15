@@ -569,6 +569,20 @@ func TestHostRulesLeaveOtherHeadersAlone(t *testing.T) {
 	}
 }
 
+// A header the Connection header names is never forwarded, so the rules judge the request without it: an
+// override named there is dropped as the request arrives, and the host gets the request line the rules judged.
+func TestHostRulesJudgeARequestWithoutItsConnectionNamedHeaders(t *testing.T) {
+	raw := "GET http://" + hrHost + "/public/x HTTP/1.1\r\nHost: " + hrHost + "\r\n" +
+		"Connection: X-HTTP-Method-Override\r\nX-HTTP-Method-Override: DELETE\r\n\r\n"
+	status, cu, rows := plainHostRuleRequest(t, raw)
+	if status != http.StatusOK || !cu.reached {
+		t.Fatalf("GET /public/x with a Connection-named override = %d reached=%v, want it judged as the GET it is:\n%s", status, cu.reached, rows)
+	}
+	if got := cu.header.Get("X-HTTP-Method-Override"); got != "" {
+		t.Errorf("the host got X-HTTP-Method-Override %q, which the rules did not judge", got)
+	}
+}
+
 // A trailer the request declares is judged by its name, before any value arrives: a declared override is
 // refused like the header, and another trailer is not.
 func TestHostRulesRefuseDeclaredOverrideTrailers(t *testing.T) {

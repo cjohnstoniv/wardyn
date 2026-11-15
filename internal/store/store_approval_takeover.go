@@ -53,14 +53,20 @@ var ErrTakeoverNotHolder = errors.New("store: takeover is held by someone else")
 // HandBackApproval records that holder, the person with control of a human_takeover approval, handed
 // it back at `at`. Only an APPROVED row not yet handed back, held by holder, moves: one held by
 // someone else is ErrTakeoverNotHolder, any other ErrAlreadyDecided, an absent one ErrNotFound. The
-// holder is in the UPDATE, so a take over by someone else that lands first leaves the row open.
+// holder is in the UPDATE, so a take over by someone else that lands first leaves the row open. `at`
+// is an app-clock instant and is stored on the database's clock, like decided_at: the pause sweep
+// compares it with paused_at, which the database stamps.
 func (s PG) HandBackApproval(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
 	const q = `
 		UPDATE approvals SET handed_back_at = $2
 		WHERE id = $1 AND kind = 'human_takeover' AND state = 'APPROVED' AND handed_back_at IS NULL
 			AND takeover_holder = $3
 		RETURNING ` + approvalCols
-	ap, err := scanApproval(s.Pool.QueryRow(ctx, q, id, at, holder))
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return types.ApprovalRequest{}, err
+	}
+	ap, err := scanApproval(s.Pool.QueryRow(ctx, q, id, anchor.Translate(at), holder))
 	if !errors.Is(err, ErrNotFound) {
 		return ap, err
 	}

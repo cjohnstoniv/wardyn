@@ -34,8 +34,6 @@ type memberDriveStore struct {
 	winners map[string][]store.UserDriveWinner
 	profile *types.GovernanceUnit
 	now     time.Time
-	// starting is the owners with a run in STARTING (MemberDriveOwnerStarting).
-	starting map[string]bool
 	// begins counts tombstone writes (BeginMemberDriveDelete, either route).
 	begins int
 	// runs is what GetRun answers; a run not in it is gone.
@@ -131,10 +129,6 @@ func (s *memberDriveStore) BeginMemberDriveDelete(_ context.Context, owner strin
 
 func (s *memberDriveStore) BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error) {
 	return s.BeginMemberDriveDelete(ctx, "", id)
-}
-
-func (s *memberDriveStore) MemberDriveOwnerStarting(_ context.Context, owner string, _ time.Duration) (bool, error) {
-	return s.starting[owner], nil
 }
 
 func (s *memberDriveStore) AbortMemberDriveDelete(_ context.Context, id uuid.UUID, started time.Time) error {

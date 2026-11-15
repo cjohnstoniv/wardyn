@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -376,6 +378,79 @@ func TestFolderFate_RetainedWhileOwed(t *testing.T) {
 	cs.dataOut = types.TransferBlocked
 	if v := s.computerFolderRunView(context.Background(), vrun.ID); v == nil || v.Fate != nil {
 		t.Errorf("a folder whose data_out rule keeps its content in has fate %v, want none: nothing is owed", v)
+	}
+}
+
+// The run view leaves out given_up_audited, the server's note that the given_up audit row was written, and keeps
+// the rest of the given-up record; building the view leaves the stored record's flag as it was.
+func TestFolderView_LeavesOutGivenUpAudited(t *testing.T) {
+	s, cs, _, vrun := giveUpFixture(t)
+	at := time.Now().UTC()
+	n := 2
+	cs.smu.Lock()
+	cs.status.Resume = nil
+	cs.status.Back = &types.FolderPassRecord{At: at, Refused: []types.FolderRefusal{}, Error: "given up", GivenUpAt: &at,
+		GivenUpCount: &n, GivenUpPaths: []string{"a.txt"}, GivenUpAudited: true}
+	cs.smu.Unlock()
+	v := s.computerFolderRunView(context.Background(), vrun.ID)
+	if v == nil || v.Back == nil {
+		t.Fatalf("run view = %+v, want the given-up pass record", v)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"given_up_audited"`)) || !bytes.Contains(raw, []byte(`"given_up_count":2`)) {
+		t.Fatalf("run view JSON = %s; want given_up_count and no given_up_audited", raw)
+	}
+	cs.smu.Lock()
+	defer cs.smu.Unlock()
+	if !cs.status.Back.GivenUpAudited {
+		t.Fatal("building the view cleared the stored record's given_up_audited")
+	}
+}
+
+// folderPassView carries every json key of types.FolderPassRecord but given_up_audited, with the same values, so
+// a field added to the record and not to the view turns this red.
+func TestFolderPassView_CarriesEveryFieldButGivenUpAudited(t *testing.T) {
+	keys := func(v any) []string {
+		var out []string
+		rt := reflect.TypeOf(v)
+		for i := range rt.NumField() {
+			out = append(out, strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := slices.DeleteFunc(keys(types.FolderPassRecord{}), func(k string) bool { return k == "given_up_audited" })
+	if got := keys(folderPassView{}); !slices.Equal(got, want) {
+		t.Fatalf("folderPassView json keys = %v, want types.FolderPassRecord's but given_up_audited: %v", got, want)
+	}
+	at := time.Unix(100, 0).UTC()
+	n := 3
+	rec := types.FolderPassRecord{At: at, Files: 1, Bytes: 2, Refused: []types.FolderRefusal{{Path: "p", Reason: "r"}}, Error: "e",
+		GivenUpAt: &at, GivenUpCount: &n, GivenUpPaths: []string{"a"}, GivenUpPathsMore: 4, GivenUpAudited: true}
+	full, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, err := json.Marshal(newFolderPassView(&rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantMap, gotMap map[string]any
+	if err := json.Unmarshal(full, &wantMap); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(shown, &gotMap); err != nil {
+		t.Fatal(err)
+	}
+	delete(wantMap, "given_up_audited")
+	if !reflect.DeepEqual(gotMap, wantMap) {
+		t.Fatalf("view = %s, want %s without given_up_audited", shown, full)
+	}
+	if newFolderPassView(nil) != nil {
+		t.Fatal("a nil record gave a view")
 	}
 }
 

@@ -145,5 +145,5 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 ## Remove it
 
 1. Stop the Mac's runs, or wait for them to end.
-2. Run `wardyn-runnerd macos-vm remove`. It deletes the base and the downloaded image under `macos-vm.noindex/`. It does not touch the ledger files or the Time Machine exclusion.
+2. Run `wardyn-runnerd macos-vm remove`. It deletes the base and the downloaded image under `macos-vm.noindex/`, and with the base any old copy a failed update moved aside (`bases/0.update.old-<id>`). It does not touch the ledger files or the Time Machine exclusion.
 3. Unset `WARDYN_RUNNER_MACOS_VM` (or the `MacOSVM` preference) and restart the runner.

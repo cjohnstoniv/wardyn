@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -128,6 +129,31 @@ func escapeControls(s string) string {
 			b.WriteString(s[i : i+n])
 		}
 		i += n
+	}
+	return b.String()
+}
+
+// termLine is text another person or a file wrote, for one line of a table or report: escapeControls,
+// with line breaks and tabs escaped too, since one would start a row or a column the text did not have.
+// DEL, the text-direction marks and the Unicode line separators are escaped as well: a terminal that
+// lays out right-to-left text lets them reorder or split what the line shows.
+func termLine(s string) string {
+	var b strings.Builder
+	for _, r := range escapeControls(s) {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == 0x7f:
+			b.WriteString(`\x7f`)
+		case unicode.Is(unicode.Bidi_Control, r), r == 0x2028, r == 0x2029:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
 	}
 	return b.String()
 }

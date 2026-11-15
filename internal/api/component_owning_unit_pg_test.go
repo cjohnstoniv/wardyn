@@ -174,7 +174,7 @@ func TestComponentPinSurvivesDefinitionEdit(t *testing.T) {
 		t.Fatalf("after the pin: version %d name %q %v, want version %d and the unit's name", pinned.Version, pinned.OwningUnitName, err, c.Version)
 	}
 	pinned.Definition.Hosts = []string{"org-api-2.example"}
-	edited, err := e.pg.UpdateComponent(context.Background(), pinned)
+	edited, err := e.pg.UpdateComponent(context.Background(), pinned, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

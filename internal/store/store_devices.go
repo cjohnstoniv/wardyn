@@ -536,8 +536,9 @@ func FederatedDeviceID(ev types.AuditEvent) *uuid.UUID {
 }
 
 // federatedRowSQL is FederatedDeviceID's predicate over an audit_events row: true for a federated
-// row, false (never NULL) for the organisation's own.
-const federatedRowSQL = `COALESCE(starts_with(actor, 'device:' || (data->'device_origin'->>'device_id') || '/'), false)`
+// row, false (never NULL) for the organisation's own (db.FederatedRowSQL, shared with readers outside
+// this package).
+const federatedRowSQL = db.FederatedRowSQL
 
 // mergeDeviceOrigin folds one federated row's provenance into its data as a "device_origin" object:
 // which device forwarded it, its own local seq, the link it claimed, and the actor/source_ip it

@@ -45,7 +45,7 @@ func TestOperationsUpstreamProxyCheckNamesTheLaneThatIsCheckedWhere(t *testing.T
 	// (2) The secret lane's only check is at DISPATCH, and it degrades to direct
 	// egress with an audited reason rather than failing the run.
 	bedrock := upstreamDocSrc(t, "runs_bedrock.go")
-	for _, want := range []string{"func loadableUpstreamProxyURL(", `"unloadable-upstream-url"`} {
+	for _, want := range []string{"func loadableUpstreamProxyURL(", `"unloadable-upstream-url"`, `upstreamURLHostRefused = "upstream-url-host-refused"`} {
 		if !strings.Contains(bedrock, want) {
 			t.Fatalf("runs_bedrock.go no longer contains %q — the dispatch-time drop the runbook names has changed shape", want)
 		}
@@ -66,6 +66,7 @@ func TestOperationsUpstreamProxyCheckNamesTheLaneThatIsCheckedWhere(t *testing.T
 		"A URL held in a secret is checked at\nDISPATCH instead, because no write-time validator can see inside the secret",
 		"`unloadable-upstream-url`, a\n`run.upstream_proxy.resolve` failure",
 		"the run falls back to direct egress",
+		"it is delivered with the reason `upstream-url-host-refused`",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("docs/OPERATIONS.md's upstream-proxy paragraph no longer states: %q", want)

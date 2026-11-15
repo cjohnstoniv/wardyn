@@ -217,31 +217,33 @@ func TestLeqIsReflexiveAndTransitive(t *testing.T) {
 // that no row's expectation is read back from the code under test.
 func leqFixture() (types.RunPolicySpec, types.GovernanceLimits) {
 	ro := true
-	return types.RunPolicySpec{
-			AllowedDomains:      []string{"*.corp.example", "pypi.org"},
-			DeniedDomains:       []string{"evil.example"},
-			FirstUseApproval:    types.FirstUseDenyWithReview,
-			FirstUseHoldSeconds: 30,
-			MaxHolds:            16,
-			AllowedMethods:      []string{"GET", "POST"},
-			MinConfinementClass: types.CC2,
-			EligibleGrants:      leqBaseGrants(),
-			AutoStopAfterSec:    600,
-			WorkspaceMounts:     []types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &ro}},
-			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "corp/app", Target: "/w/app"}},
-			UIApps:              []types.UIApp{{Name: "docs", Port: 8000}},
-			Resources:           &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096, PidsLimit: 256, DiskMiB: 1024},
-			ToolRules:           []types.ToolRule{{Tool: "*", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}},
-			PushRules:           &types.PushRulesSpec{DenyPaths: []string{".github/**"}, MaxInspectPackMiB: 8, HoldSeconds: 60},
-		}, types.GovernanceLimits{
-			DenyInteractive:   true,
-			MaxConcurrentRuns: 4,
-			MaxCPUMillis:      4000,
-			AutonomyRubric:    &types.AutonomyRubric{EgressOpen: types.AutonomyL1},
-			RunLimits: types.RunLimits{
-				MaxEndAheadSec: 3600, DefaultEndSec: 600, MaxWaitSec: 300, PauseIdleAfterSec: 120,
-			},
-		}
+	spec := types.RunPolicySpec{
+		AllowedDomains:      []string{"*.corp.example", "pypi.org"},
+		DeniedDomains:       []string{"evil.example"},
+		FirstUseApproval:    types.FirstUseDenyWithReview,
+		FirstUseHoldSeconds: 30,
+		MaxHolds:            16,
+		AllowedMethods:      []string{"GET", "POST"},
+		MinConfinementClass: types.CC2,
+		EligibleGrants:      leqBaseGrants(),
+		AutoStopAfterSec:    600,
+		WorkspaceMounts:     []types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &ro}},
+		WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "corp/app", Target: "/w/app"}},
+		UIApps:              []types.UIApp{{Name: "docs", Port: 8000}},
+		Resources:           &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096, PidsLimit: 256, DiskMiB: 1024},
+		ToolRules:           []types.ToolRule{{Tool: "*", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}},
+		PushRules:           &types.PushRulesSpec{DenyPaths: []string{".github/**"}, MaxInspectPackMiB: 8, HoldSeconds: 60},
+	}
+	limits := types.GovernanceLimits{
+		DenyInteractive:   true,
+		MaxConcurrentRuns: 4,
+		MaxCPUMillis:      4000,
+		AutonomyRubric:    &types.AutonomyRubric{EgressOpen: types.AutonomyL1},
+		RunLimits: types.RunLimits{
+			MaxEndAheadSec: 3600, DefaultEndSec: 600, MaxWaitSec: 300, PauseIdleAfterSec: 120,
+		},
+	}
+	return spec, limits
 }
 
 func TestLeqFixtureIsWithinItself(t *testing.T) {

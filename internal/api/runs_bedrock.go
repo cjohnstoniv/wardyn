@@ -60,7 +60,9 @@ func mavenProxyOpts(proxyURL string) string {
 // store, an unresolvable secret, a non-http URL, or a URL the SIDECAR itself
 // would refuse (from EITHER source) all return ("", <reason>) — the caller
 // audits the reason and dispatches with direct egress instead of failing the
-// run. A resolved, loadable http URL returns (url, "").
+// run. A resolved, loadable http URL returns (url, ""). The one exception is a
+// URL refused for its host's spelling alone (loadableUpstreamProxyURL), which
+// returns (url, <reason>): it is delivered, and the run does not start.
 //
 // Scheme is restricted to http for BOTH sources because the sidecar's own
 // config validation (parseUpstreamProxy, internal/egress/proxy/upstream.go)
@@ -118,12 +120,25 @@ func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, ge
 // ValidNoProxyEntry pattern (site_config_noproxy.go) applied to the value
 // beside the list, and it is what keeps the authority half from drifting away
 // from the sidecar again.
+//
+// A URL refused for its host's spelling alone, such as http://010.0.0.1:3128,
+// stored before the write refused it or held in a secret, is the exception: it
+// names a real proxy, so dropping it would send the run's egress around the
+// proxy the operator named. It is delivered with its reason, the proxy's config
+// load refuses it and names the entry, and the run does not start.
 func loadableUpstreamProxyURL(raw string) (proxyURL, failReason string) {
+	if proxy.UpstreamProxyURLHostRefused(raw) {
+		return raw, upstreamURLHostRefused
+	}
 	if err := proxy.ValidUpstreamProxyURL(raw); err != nil {
 		return "", "unloadable-upstream-url"
 	}
 	return raw, ""
 }
+
+// upstreamURLHostRefused is the resolve reason of a URL refused for its host's spelling alone, which is
+// delivered so the run stops (loadableUpstreamProxyURL).
+const upstreamURLHostRefused = "upstream-url-host-refused"
 
 // normalizedHTTPProxyURL trims raw and reports (trimmed, true) when it parses
 // as an http-scheme URL, else ("", false). Shared by both resolveUpstreamProxyURL

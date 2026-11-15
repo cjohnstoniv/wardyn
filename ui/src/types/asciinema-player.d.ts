@@ -26,6 +26,8 @@ declare module "asciinema-player" {
     play(): Promise<void>;
     pause(): void;
     seek(pos: number | string): Promise<void>;
+    getCurrentTime(): number;
+    addEventListener(event: "play" | "playing" | "pause" | "ended", handler: () => void): void;
     [key: string]: unknown;
   }
   export function create(

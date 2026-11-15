@@ -405,6 +405,17 @@ func TestReviveRun_NotRunningReasonIsPinned(t *testing.T) {
 	}
 }
 
+// A run a suspension killed cannot be brought back by a revive, whoever asks after a reactivation: a
+// revive only replaces the proxy of a run still RUNNING, so a run it reaches was live, and made, before.
+func TestReviveRun_RefusesAKilledRun(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.state = types.RunKilled
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != "revive_not_running" {
+		t.Fatalf("revive of a killed run = %d %q, want 409 revive_not_running (body %s)", w.Code, errorReason(w), w.Body.String())
+	}
+}
+
 // TestReviveRun_Refusals: every refusal leaves the run lost with no proxy.
 func TestReviveRun_Refusals(t *testing.T) {
 	cases := map[string]struct {

@@ -142,6 +142,13 @@ describe("MyElevationRequests: each state", () => {
     expect(screen.getByText("Ended 5h ago")).toBeInTheDocument();
   });
 
+  it("an approved request held with no end reads Approved with who and when, never Ended", () => {
+    setup(list([row({ state: "applied", no_end: true, decided_by: "priya.nair", decided_at: aheadByHours(-0.5) })]));
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+    expect(screen.getByText("priya.nair · 30m ago")).toBeInTheDocument();
+    expect(screen.queryByText(/Ended/)).toBeNull();
+  });
+
   it("a denied request names the decider and their reason", () => {
     setup(list([row({ state: "rejected", decided_by: "priya.nair", reason: "Use the support runbook instead.", decided_at: aheadByHours(-2) })]));
     expect(screen.getByText("Denied")).toBeInTheDocument();
@@ -151,6 +158,18 @@ describe("MyElevationRequests: each state", () => {
   it("a denied request with no reason reads the decider and the time", () => {
     setup(list([row({ state: "rejected", decided_by: "priya.nair", decided_at: aheadByHours(-2) })]));
     expect(screen.getByText("priya.nair · 2h ago")).toBeInTheDocument();
+  });
+
+  it("a denied request with a reason whose decider is no longer named starts at the reason", () => {
+    setup(list([row({ state: "rejected", reason: "not now", decided_at: aheadByHours(-2) })]));
+    expect(screen.getByText("“not now” · 2h ago")).toBeInTheDocument();
+    expect(screen.queryByText(/^: /)).toBeNull();
+  });
+
+  it("a denied request whose decider is no longer named reads just the time", () => {
+    setup(list([row({ state: "rejected", decided_at: aheadByHours(-2) })]));
+    expect(screen.getByText("2h ago")).toBeInTheDocument();
+    expect(screen.queryByText(/^ · /)).toBeNull();
   });
 
   it("an expired request says nobody decided it", () => {

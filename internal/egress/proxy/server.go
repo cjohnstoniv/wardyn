@@ -53,6 +53,8 @@ type Server struct {
 	vm bool
 	// onListening, when set, runs once the main listener is bound (see OnListening).
 	onListening func()
+	// bound is the main listener's address, set just before onListening runs (see BoundAddr).
+	bound net.Addr
 	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
 	stopped chan struct{}
 	// live holds what a live egress edit needs: the client connections to drop and the report loop to replace.
@@ -154,6 +156,16 @@ func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
 	return client
 }
 
+// ErrUpstreamProxyHostRefused marks a server build refused because its upstream proxy's host is written in a
+// spelling the proxy refuses in every request. It is permanent: no retry builds the server until the URL is
+// rewritten. The error's own text is the host's refusal, which names the host and never the URL's user info.
+var ErrUpstreamProxyHostRefused = errors.New("the upstream proxy's host is written in a spelling the proxy refuses")
+
+// upstreamHostRefusal keeps the host's refusal text and is ErrUpstreamProxyHostRefused to errors.Is.
+type upstreamHostRefusal struct{ error }
+
+func (upstreamHostRefusal) Is(target error) bool { return target == ErrUpstreamProxyHostRefused }
+
 // upstreamProxyFor parses and validates the upstream/parent corp proxy
 // (optional) and registers any embedded credential in the mask registry so it
 // can never leak into a decision log or stdout. The credential is held
@@ -164,8 +176,21 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 		return nil, err
 	}
 	if up != nil {
+		// Config load holds this host to the spelling rule; this is the backstop for a Config whose URL was
+		// set after its load, as the via_org engine's is: the hop is dialed with no step 0 of its own.
+		if err := ValidConfigHost(up.host); err != nil {
+			return nil, upstreamHostRefusal{err}
+		}
 		for _, v := range up.maskValues() {
 			procMaskFor(maskKey, v)
+		}
+		// A run with no network dials nothing (literalIPGuard, noNetworkDial), so it has no upstream hop: no
+		// relaxation for newProxy to record and no route to keep. The URL can still arrive, from a Docker runner
+		// that adds its own upstream proxy to every run or from an older server; its credential is masked above,
+		// so this return stays below the mask loop.
+		if cfg.NoNetwork {
+			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy not used: this run has no network")
+			return nil, nil
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
@@ -352,7 +377,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: p,
+		Handler: p.countedHandler(),
 		// SECURITY: the agent-facing listener is the untrusted side of the
 		// boundary. With ReadTimeout 0 there is NO header deadline unless this
 		// is set, so a partial-header connection would pin a goroutine
@@ -448,6 +473,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	ln, err := s.listen(cmp.Or(s.http.Addr, ":http"))
 	if err == nil {
+		s.bound = ln.Addr()
 		if s.onListening != nil {
 			s.onListening()
 		}
@@ -462,14 +488,19 @@ func (s *Server) ListenAndServe() error {
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
 // the container's attach stream, which works on any engine, to know the agent may start. It means
 // "listening", nothing more. A proxy with a first-renewal gate (a self-lapsing one, Config self_lapse, or a
-// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal
-// (awaitOpen), so its marker already follows that renewal and the agent never starts behind a proxy that
-// will refuse it.
+// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal, and one
+// with a runner sink only after that sink's first grant (awaitOpen), so its marker already follows them and
+// the agent never starts behind a proxy that will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is
 // accepted. Call it before ListenAndServe.
 func (s *Server) OnListening(fn func()) { s.onListening = fn }
+
+// BoundAddr returns the main listener's address: for a listen address with port 0, the port the kernel chose
+// at the bind. It is set before the OnListening hook runs, so read it in the hook or after it fired; nil
+// before that.
+func (s *Server) BoundAddr() net.Addr { return s.bound }
 
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {
@@ -483,22 +514,34 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 	return &trackedListener{Listener: ln, set: &s.live}, nil
 }
 
-// awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
-// the runner started with FirstRenewGateEnv) off its listeners until its first renew: it refuses every
-// request until then, so it listens only once it serves, and a connect to it (the runner's readiness
-// probe) is proof of that for this proxy and an older one alike. False when Shutdown comes first, which a
-// lapse before that renew ends in too. A gate-less proxy goes on at once.
+// awaitOpen holds a proxy off its listeners until it serves: one with a first-renewal gate (a self-lapsing
+// one on the k8s runner, or a replacement the runner started with FirstRenewGateEnv) until its first renew,
+// and one whose decisions go to a runner sink until that sink's first grant, as it refuses every request
+// before either. So a connect to it (the runner's readiness probe) is proof that it serves, for this proxy
+// and an older one alike, and a proxy that never had a sink session served nothing, which is why settling
+// it owes no loss (runnerspool's Spool.SettleLoss). On a runner sink it then writes the upstream proxy
+// hop's row (auditUpstreamHop). False when Shutdown comes first, which a lapse before that renew ends in
+// too. A proxy with neither goes on at once.
 func (s *Server) awaitOpen() bool {
-	g := s.proxy.lapse
-	if g == nil {
-		return true
+	var renewed <-chan struct{}
+	if g := s.proxy.lapse; g != nil {
+		renewed = g.open
 	}
-	select {
-	case <-g.open:
-		return true
-	case <-s.stopped:
-		return false
+	granted := s.proxy.sinkGranted()
+	for _, open := range []<-chan struct{}{renewed, granted} {
+		if open == nil {
+			continue
+		}
+		select {
+		case <-open:
+		case <-s.stopped:
+			return false
+		}
 	}
+	if granted != nil {
+		s.proxy.auditUpstreamHop() // held back by newProxy until a session can carry it
+	}
+	return true
 }
 
 // watchShutdown arms s.stopped. net/http runs only the hooks registered before Shutdown, so this is
@@ -534,6 +577,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		defer cancel()
 	}
 	httpErr := s.http.Shutdown(httpCtx)
+	// http.Shutdown leaves hijacked tunnels open, and requests still running at its deadline: end them, so
+	// their last records are written while the sink can still carry them (a runner sink waits for them).
+	s.live.closeAll()
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it

@@ -16,14 +16,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 )
 
 // sweepCommittedMasks is the leader's half of SweepRunSecrets: it deletes the
 // committed per-run values and masking manifests of the runs that went cold, and
 // tombstones the credential values retired or expired past the grace. A follower
-// (lead false) does nothing.
+// (lead false) does nothing, and says so to sweep health (sweephealth.NotOwner):
+// the run_secret row is every replica's, and a follower's empty pass must not
+// read as the leader's success.
 func (s *Server) sweepCommittedMasks(ctx context.Context, lead bool, cold []uuid.UUID) error {
 	if !lead {
+		sweephealth.NotOwner(ctx)
 		return nil
 	}
 	err := s.cfg.MaskRegistry.PurgeRuns(ctx, cold)

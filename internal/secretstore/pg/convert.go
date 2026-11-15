@@ -25,7 +25,8 @@ import (
 // later-row or commit failure the rows it opened are returned with the error,
 // the failing row among them when its value was opened before it failed (a
 // row that will not decrypt was never opened), so the caller can record each
-// read although nothing was committed.
+// read. A later-row failure committed nothing; a commit failure wraps
+// ErrCommitOutcomeUnknown, since its reply can be lost after it landed.
 func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretstore.Row, error) {
 	if s.kek == nil {
 		return nil, fmt.Errorf("pg secretstore: convert: no local key is configured")
@@ -81,11 +82,16 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 				i, len(all), rowRef(e.ownedBy, e.name), err)
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return converted, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
+	if err := convertCommitResult(tx.Commit(ctx)); err != nil {
+		return converted, fmt.Errorf("pg secretstore: convert commit (%d rows): %w — start wardynd again (it converts whatever is still v0); if the commit landed, an older wardynd can no longer read these rows: %w", len(all), ErrCommitOutcomeUnknown, err)
 	}
 	return converted, nil
 }
+
+// convertCommitResult passes ConvertV0's COMMIT result through; a test replaces
+// it to return an error after a real commit, which is what a COMMIT whose
+// reply was lost looks like here.
+var convertCommitResult = func(err error) error { return err }
 
 // ErrV0BootKey is a pre-envelope boot key found while a platform key is
 // configured; ConvertV0 refuses it and commits nothing.

@@ -152,6 +152,50 @@ describe("Waiting on you — who gets the tab", () => {
     expect(waitingTab()).not.toBeInTheDocument();
   });
 
+  it("a probe that could not tell is asked again on the next poll, and its yes draws the tab", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    knowsMock.mockResolvedValueOnce(null as never);
+    mockWaiting = [others("w1")];
+    renderScreen();
+    await waitFor(() => expect(knowsMock).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(waitingTab()).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(waitingTab()).toBeInTheDocument());
+    expect(knowsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a late ask that could not tell does not take back a yes another ask got", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let late: (v: boolean | null) => void = () => {};
+    knowsMock.mockImplementationOnce(() => new Promise((r) => (late = r)) as never);
+    knowsMock.mockResolvedValueOnce(true);
+    mockWaiting = [others("w1")];
+    renderScreen();
+    await waitFor(() => expect(knowsMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(waitingTab()).toBeInTheDocument());
+    await act(async () => {
+      late(null);
+    });
+    expect(waitingTab()).toBeInTheDocument();
+  });
+
+  it("an older server's no is final: the poll does not ask again", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    mockKnows = false;
+    renderScreen();
+    await waitFor(() => expect(knowsMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(knowsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("no tab until a row carries requested_by; drawn after, and still drawn when a later read has none", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     mockWaiting = [egress("own1", { deciders: ["owner", "group:eng-leads"] })];

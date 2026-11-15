@@ -121,7 +121,7 @@ func TestEnsureDrivePVC_ManagedCreatesTheClaim(t *testing.T) {
 	cs := fake.NewClientset()
 	drive := testDriveMount()
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestEnsureDrivePVC_ManagedOmitsAnEmptyStorageClass(t *testing.T) {
 	drive := testDriveMount()
 	drive.StorageClass = ""
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v", err)
 	}
 	pvcs := createdPVCs(t, cs)
@@ -214,7 +214,7 @@ func TestEnsureDrivePVC_ManagedReusesAnExistingClaim(t *testing.T) {
 	drive := testDriveMount()
 	cs := fake.NewClientset(existingDriveClaim(drive))
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v", err)
 	}
 	if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
@@ -231,7 +231,7 @@ func TestEnsureDrivePVC_StaticShareIsNeverCreated(t *testing.T) {
 	drive.Backend = types.DriveBackendK8sPVCStatic
 	drive.Enforcement = types.StorageEnforcementExternal
 
-	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 	if !errors.Is(err, errDriveClaimNotProvisioned) {
 		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimNotProvisioned)", err)
 	}
@@ -261,7 +261,7 @@ func TestEnsureDrivePVC_ForbiddenNamesTheSwitch(t *testing.T) {
 			errors.New(`persistentvolumeclaims is forbidden: User "system:serviceaccount:wardyn:wardyn" cannot create resource`))
 	})
 
-	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 	if !errors.Is(err, errDrivePVCForbidden) {
 		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 	}
@@ -427,7 +427,7 @@ func TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace(t *testing.T) {
 				return true, nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName)
 			})
 
-			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 			switch {
 			case tc.wantIs == nil && err != nil:
 				t.Fatalf("ensureDrivePVC: %v, want a race lost to this member's OWN claim to be tolerated", err)
@@ -454,7 +454,7 @@ func TestEnsureDrivePVC_RefusesANonKubernetesBackend(t *testing.T) {
 		drive := testDriveMount()
 		drive.Backend = backend
 
-		err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+		_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 		if !errors.Is(err, errDriveBackendUnsupported) {
 			t.Errorf("%s: err = %v, want errors.Is(err, errDriveBackendUnsupported)", backend, err)
 		}
@@ -474,7 +474,7 @@ func TestEnsureDrivePVC_SurfacesANonNotFoundGetError(t *testing.T) {
 		return true, nil, apierrors.NewInternalError(errors.New("apiserver is having a day"))
 	})
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err == nil {
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err == nil {
 		t.Fatal("ensureDrivePVC: want an error when the claim lookup itself fails")
 	}
 	if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
@@ -670,7 +670,7 @@ func TestEnsureDrivePVC_RefusesAMountTheApiserverWould(t *testing.T) {
 			drive := testDriveMount()
 			tc.shape(drive)
 
-			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want errors.Is(err, %v)", err, tc.want)
 			}
@@ -705,7 +705,7 @@ func TestEnsureDrivePVC_RefusesAMountAwayFromTheDriveTarget(t *testing.T) {
 			drive := testDriveMount()
 			drive.Target = target
 
-			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 			if !errors.Is(err, errDriveTargetInvalid) {
 				t.Fatalf("err = %v, want errors.Is(err, errDriveTargetInvalid)", err)
 			}
@@ -731,7 +731,7 @@ func TestEnsureDrivePVC_ShareNeedsNoAllocation(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: drive.ObjectName, Namespace: testNamespace},
 	})
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v, want a share with no allocation to mount", err)
 	}
 }
@@ -769,7 +769,7 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 					errors.New(`persistentvolumeclaims is forbidden: User "system:serviceaccount:wardyn:wardyn" cannot get resource`))
 			})
 
-			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 			if !errors.Is(err, errDrivePVCForbidden) {
 				t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 			}
@@ -808,7 +808,7 @@ func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
 			errors.New("exceeded quota: storage-quota, requested: requests.storage=10Gi, used: requests.storage=95Gi, limited: requests.storage=100Gi"))
 	})
 
-	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 	if !errors.Is(err, errDrivePVCForbidden) {
 		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 	}
@@ -837,7 +837,7 @@ func TestEnsureDrivePVC_RefusesATerminatingClaim(t *testing.T) {
 	claim.Finalizers = []string{"kubernetes.io/pvc-protection"}
 	cs := fake.NewClientset(claim)
 
-	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 	if !errors.Is(err, errDriveClaimTerminating) {
 		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimTerminating)", err)
 	}
@@ -936,7 +936,7 @@ func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
 			drive := tc.drive()
 			cs := fake.NewClientset(tc.claim(drive))
 
-			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 			if !errors.Is(err, errDriveClaimForeign) {
 				t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
 			}
@@ -971,7 +971,7 @@ func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
 		Name: share.ObjectName, Namespace: testNamespace,
 		Labels: map[string]string{"app.kubernetes.io/managed-by": "corp-storage", "team": "eng"},
 	}}
-	if err := ensureDrivePVC(context.Background(), fake.NewClientset(admins), testNamespace, share); err != nil {
+	if _, err := ensureDrivePVC(context.Background(), fake.NewClientset(admins), testNamespace, share); err != nil {
 		t.Errorf("ensureDrivePVC over an administrator's own labelled share: %v, want it mounted", err)
 	}
 }
@@ -1015,7 +1015,7 @@ func TestDriveClaimDrift(t *testing.T) {
 			}
 			// Drift is a warning, never a refusal: the run still gets its data.
 			cs := fake.NewClientset(claim)
-			if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+			if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 				t.Errorf("ensureDrivePVC: %v, want a drifted claim mounted with a warning, not refused", err)
 			}
 		})
@@ -1138,7 +1138,7 @@ func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
 		claim.Labels[labelDriveSubject] = "2222222222222222bbbb"
 		cs := fake.NewClientset(claim)
 
-		err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+		_, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
 		if !errors.Is(err, errDriveClaimForeign) {
 			t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
 		}
@@ -1164,7 +1164,7 @@ func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
 		delete(claim.Labels, labelDriveSubject)
 		cs := fake.NewClientset(claim)
 
-		if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+		if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 			t.Fatalf("ensureDrivePVC: %v, want a pre-label claim to be reused", err)
 		}
 		if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
@@ -1209,7 +1209,7 @@ func TestClassesDeclaresDrivesAndBindsThem(t *testing.T) {
 	// …and the claim is true. A declaration nothing exercises is the half of the
 	// pair that rots.
 	cs.ClearActions()
-	if err := ensureDrivePVC(ctx, cs, testNamespace, testDriveMount()); err != nil {
+	if _, err := ensureDrivePVC(ctx, cs, testNamespace, testDriveMount()); err != nil {
 		t.Fatalf("Classes declares UserDrives, but ensureDrivePVC refused: %v", err)
 	}
 	if pvcs := createdPVCs(t, cs); len(pvcs) != 1 {

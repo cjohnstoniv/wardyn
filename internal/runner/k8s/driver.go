@@ -115,10 +115,20 @@ type Config struct {
 	// SandboxTemplate in each runs namespace whose prefixed annotations the agent pod takes; placement stays Wardyn's
 	// (agentsandbox_template.go). Empty takes none.
 	AgentSandboxTemplate string
+	// AgentSandboxKeep is WARDYN_K8S_AGENT_SANDBOX_KEEP (experimental, needs AgentSandbox): an ended interactive run whose
+	// work folder is a kept drive is kept and can be revived, and such a run reaches its proxy through its own Service
+	// (agentsandbox_keep.go).
+	AgentSandboxKeep bool
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.
 	AgentSandboxBeforeUngate func(ctx context.Context, namespace, pod string) error
+	// WarmPools is WARDYN_K8S_WARM_POOLS (experimental, server mode): idle placeholder pods that hold room on a node
+	// with a pool's image pulled. A run that fits a pool removes one and prefers its node (warm_pool.go).
+	WarmPools []WarmPool
+	// WarmPriorityClass is WARDYN_K8S_WARM_PRIORITY_CLASS: the PriorityClass placeholders take, so any run evicts
+	// them. Empty keeps the deployment placement's.
+	WarmPriorityClass string
 
 	// Runner mode (wardyn-runnerd, design K1 §3). Only runnerd sets these; with RunnerID empty every
 	// one is ignored and server mode is unchanged.
@@ -139,6 +149,10 @@ type Config struct {
 	// TrustedCAPEM is runnerd's corporate CA bundle, applied to the proxy config and the sandbox
 	// before pod construction (design K1 §5.2).
 	TrustedCAPEM string
+	// UpstreamProxyURL is runnerd's own corporate upstream proxy (--upstream-proxy), validated at boot.
+	// Runner mode makes it every run's upstream_proxy_url; the organisation never sends one to a runner.
+	// It may carry a credential, so it is never logged. Empty changes nothing.
+	UpstreamProxyURL string
 	// Arch is --arch (amd64 or arm64), merged into the node selector of every pod as
 	// kubernetes.io/arch (design K1 §6.1). Required in runner mode.
 	Arch string
@@ -197,6 +211,17 @@ type EvidenceStore interface {
 // runnerMode reports a Driver wardyn-runnerd built.
 func (d *Driver) runnerMode() bool { return d.cfg.RunnerID != "" }
 
+// runnerProxyKeys is the proxy config keys only a runner sets: self_lapse, the run's decision sink, the
+// hard deny and, when runnerd has one, its own upstream proxy, as on Docker. The organisation never
+// sends an upstream proxy to a runner.
+func (d *Driver) runnerProxyKeys(sink any) map[string]any {
+	keys := map[string]any{"self_lapse": true, "decision_sink": sink, "hard_deny": d.hardDeny}
+	if d.cfg.UpstreamProxyURL != "" {
+		keys["upstream_proxy_url"] = d.cfg.UpstreamProxyURL
+	}
+	return keys
+}
+
 func (c *Config) withDefaults() {
 	if c.StartTimeout <= 0 {
 		c.StartTimeout = runner.DefaultSandboxStartTimeout
@@ -242,6 +267,8 @@ type Driver struct {
 	netPolChanged atomic.Pointer[func()]
 	// stopRecheck stops the re-check loop and waits for it; nil until it starts.
 	stopRecheck func()
+
+	warm warmState // warm pool reconcile state (warm_reconcile.go)
 
 	// linuxVM is set by EnableLinuxVM; unset, every non-container kind is refused.
 	linuxVM atomic.Bool
@@ -299,6 +326,7 @@ func New(cfg Config) (*Driver, error) {
 		return nil, err
 	}
 	d.startCanaryRecheck()
+	d.startWarmPools()
 	return d, nil
 }
 

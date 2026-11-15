@@ -6,7 +6,7 @@
 // Only lazy policy consumers may import this module. The display emitter
 // (wardyn/yaml-block.tsx) stays free of this library: read-only surfaces such as
 // the run page load it without the parser.
-import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type CST, type Document } from "yaml";
+import { Composer, isAlias, isMap, isNode, isPair, isScalar, isSeq, LineCounter, Parser, visit, type CST, type Document, type YAMLMap } from "yaml";
 
 export type PolicySourceValue = null | boolean | number | string | PolicySourceValue[] | PolicySourceMapping;
 export type PolicySourceMapping = { [key: string]: PolicySourceValue };
@@ -178,6 +178,47 @@ function documentValue(document: Document, lines: LineCounter, source: string): 
   return { ok: true, value: document.toJS({ mapAsMap: false, maxAliasCount: 0 }) as PolicySourceMapping };
 }
 
+// The parser's own repeated-key check compares each key with every earlier key
+// of its map, so its cost grows with the square of the key count; this reads
+// each key once. Its words and its order are the parser's: a block map's key is
+// checked before its value is read, a flow map's after, and two keys repeat when
+// both are scalars whose values are ===, so NaN never repeats.
+const REPEATED_KEY = "DUPLICATE_KEY: Map keys must be unique";
+
+// Where the parser places a repeated key: the end of what its pair holds before the key, or with nothing
+// there, the end of the value before it. -1 when only the parser knows (an empty key has no source token).
+function repeatedKeyAt(map: YAMLMap, index: number): number {
+  const pair = map.items[index];
+  const start = (pair.srcToken as CST.CollectionItem | undefined)?.start;
+  if (!isNode(pair.key) || !pair.key.srcToken || !start) return -1;
+  if (start.length > 0) return start[start.length - 1].offset + start[start.length - 1].source.length;
+  const before = map.items[index - 1]?.value;
+  return isNode(before) && before.range ? before.range[2] : -1;
+}
+
+function firstRepeatedKey(node: unknown): number | undefined {
+  if (isSeq(node)) {
+    for (const item of node.items) {
+      const found = firstRepeatedKey(item);
+      if (found !== undefined) return found;
+    }
+  }
+  if (!isMap(node)) return undefined;
+  const seen = new Set<unknown>();
+  const repeats = (key: unknown): boolean => {
+    if (!isScalar(key) || Number.isNaN(key.value)) return false;
+    if (seen.has(key.value)) return true;
+    seen.add(key.value);
+    return false;
+  };
+  for (const [index, { key, value }] of node.items.entries()) {
+    const found = firstRepeatedKey(key) ?? (!node.flow && repeats(key) ? repeatedKeyAt(node, index) : undefined)
+      ?? firstRepeatedKey(value) ?? (node.flow && repeats(key) ? repeatedKeyAt(node, index) : undefined);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 function readSource(source: string):
   | { ok: true; document: Document; value: PolicySourceMapping }
   | PolicySourceError {
@@ -189,19 +230,28 @@ function readSource(source: string):
     if (directive) return failure(lines, directive.offset, "Directives are not allowed.");
     const problem = structureProblem(tokens, source);
     if (problem) return failure(lines, ...problem);
-    const documents = [...new Composer({
+    const compose = (uniqueKeys: boolean) => [...new Composer({
       version: "1.2",
       schema: "core",
       customTags: [],
-      uniqueKeys: true,
+      uniqueKeys,
       merge: false,
       intAsBigInt: true,
       keepSourceTokens: true,
       strict: true,
     }).compose(tokens, true, source.length)];
+    let documents = compose(false);
     if (documents.length !== 1) {
       const second = tokens.filter((token) => token.type === "document")[1];
       return failure(lines, second?.offset ?? 0, "MULTIPLE_DOCS: Policy source must contain one document.");
+    }
+    const repeated = firstRepeatedKey(documents[0].contents);
+    if (repeated !== undefined) {
+      // With no other error, the parser's first error would be this repeated key's, at the place
+      // repeatedKeyAt gives. With one, or with an empty key, only the parser knows what it reports, so
+      // it reads the text again with its own check.
+      if (documents[0].errors.length === 0 && repeated >= 0) return failure(lines, repeated, REPEATED_KEY);
+      documents = compose(true);
     }
     const document = documents[0];
     const issue = document.errors[0] ?? document.warnings[0];

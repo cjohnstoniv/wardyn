@@ -374,7 +374,7 @@ func TestPG_PrewrappedRunDoors(t *testing.T) {
 		t.Fatalf("resolved %q %v failed=%v, want %s [amd64]", image, arches, failed, readyRef)
 	}
 	ready, _ := e.st.GetBaseImageByRef(ctx, types.BaseImageKindPrewrapped, readyRef)
-	if err := e.st.DeleteBaseImage(ctx, ready.ID, false); err != nil {
+	if _, err := e.st.DeleteBaseImage(ctx, ready.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if run, err = e.st.GetRun(ctx, run.ID); err != nil || !slices.Equal(run.ImageArches, []string{"amd64"}) {

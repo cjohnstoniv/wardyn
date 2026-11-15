@@ -123,7 +123,13 @@ describe("ADO_PAT copy canon", () => {
   });
 
   it("superseded and expired tokens are never called revoked", () => {
-    expect(ADO_PAT.RUN_TOKEN_NOTE).toEqual({ renewed: "renewed", access_added: "access added", expired: "expired" });
+    expect(ADO_PAT.RUN_TOKEN_NOTE).toEqual({
+      renewed: "renewed",
+      access_added: "access added",
+      expired: "expired",
+      not_revoked: "not revoked",
+      revoke_pending: "revoke not confirmed",
+    });
   });
 });
 
@@ -157,7 +163,7 @@ describe("ADO_PAT remove canon", () => {
       "Your token for wardyn-live-test was removed from Wardyn. It isn't revoked in Azure DevOps.",
     );
     expect(ADO_PAT.OWN_REMOVE_FAILED_TOAST("wardyn-live-test")).toBe(
-      "Couldn't remove your token for wardyn-live-test. It's still stored in Wardyn. Try again.",
+      "Couldn't confirm your token for wardyn-live-test was removed from Wardyn. Reload the page to see whether it's still stored, then try again.",
     );
   });
 });

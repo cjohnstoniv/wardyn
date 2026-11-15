@@ -8,7 +8,7 @@
 // absent where CLI sign-in is not served.
 import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -100,6 +100,62 @@ describe("the card", () => {
     render(<SignedInClisCard />);
     await openCard();
     expect(row("s1").getByText("Admin access, ends in 42 min")).toBeVisible();
+  });
+
+  it("still drops the admin step-up when the clock was set back while its timer was out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() })];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText(/^Admin access/)).toBeVisible();
+      vi.setSystemTime(Date.now() - 5_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(row("s1").queryByText(/^Admin access/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts the admin step-up's minutes down as they pass", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() })];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText("Admin access, ends in 2 min")).toBeVisible();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      expect(row("s1").getByText("Admin access, ends in 1 min")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the admin step-up at the moment it ends, and shows none that has already ended", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [
+        session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() }),
+        session("s2", "wsl-dev", { admin_expires_at: new Date(Date.now() - 1_000).toISOString() }),
+      ];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText("Admin access, ends in 2 min")).toBeVisible();
+      expect(row("s2").queryByText(/^Admin access/)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+      expect(row("s1").queryByText(/^Admin access/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays when empty, says so and shows the command for this console's address", async () => {

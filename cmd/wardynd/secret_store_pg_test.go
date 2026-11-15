@@ -344,7 +344,7 @@ func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "WARDYN_AGE_KEY is unset, but 1 stored secrets") {
 				t.Fatalf("ephemeral boot over %s = %v, want the rule-14 refusal", label, err)
 			}
-			for _, want := range []string{"earlier ephemeral key", "unrecoverable", "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"} {
+			for _, want := range []string{"earlier ephemeral key", "unrecoverable", ephemeralKeyRecoverySQL} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal %q does not say %q", err, want)
 				}

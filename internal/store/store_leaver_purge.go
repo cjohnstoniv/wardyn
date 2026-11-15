@@ -33,6 +33,9 @@ const (
 type PendingLeaver struct {
 	ID     uuid.UUID
 	Purged bool
+	// DeactivatedAt is the identity's deactivated_at when it was listed: the suspension a resume of it
+	// belongs to (SuspendPlan.ResumeOf). Nil only for a purged identity with no deactivation recorded.
+	DeactivatedAt *time.Time
 }
 
 // PendingRefusalAudit is an identity and ledger kind that still owe a refusal row (JobStepRefusalAudit).
@@ -118,7 +121,7 @@ func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, e
 // not fill the batch ahead of newer leavers.
 func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error) {
 	return collect(ctx, s.Pool, "list", "pending leavers", `
-		SELECT i.id, i.purged_at IS NOT NULL
+		SELECT i.id, i.purged_at IS NOT NULL, i.deactivated_at
 		  FROM principal_identities i
 		 WHERE (i.purged_at IS NOT NULL OR i.deactivated_at IS NOT NULL)
 		   AND EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.state = 'pending'
@@ -128,7 +131,7 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 		 ORDER BY (SELECT COALESCE(MAX(j.attempts), 0) FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.state = 'pending'),
 		          i.created_at, i.id LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingLeaver, error) {
 		var p PendingLeaver
-		return p, r.Scan(&p.ID, &p.Purged)
+		return p, r.Scan(&p.ID, &p.Purged, &p.DeactivatedAt)
 	})
 }
 

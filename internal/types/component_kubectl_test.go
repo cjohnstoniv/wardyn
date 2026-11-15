@@ -78,6 +78,9 @@ func TestComponentCLI_KubectlShape(t *testing.T) {
 		"bad namespace":    {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a/b"} }), "namespaces[0]"},
 		"twice":            {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a", "a"} }), "listed twice"},
 		"access":           {row(func(k *types.CLIKubectl) { k.Access = "admin" }), "read, restart or write"},
+		"numeric host": {row(func(k *types.CLIKubectl) { k.Server = "https://134744072:6443" }),
+			`cli.kubectl.server: "134744072" is not a host name or an IP address in standard form`},
+		"octal host": {row(func(k *types.CLIKubectl) { k.Server = "https://010.0.0.1" }), "in standard form"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

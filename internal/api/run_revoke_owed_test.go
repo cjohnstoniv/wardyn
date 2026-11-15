@@ -701,7 +701,7 @@ func TestRevokeCascadeCallers_Frozen(t *testing.T) {
 		"run_queue_start.go:revokeKilledStart",
 		"run_revoke_queue.go:retryOwedRevoke",
 		"run_terminal_effects.go:finalizeRunEffects",
-		"runs_lifecycle.go:failAndRevoke",
+		"runs_lifecycle.go:failedRunEffects",
 		"sandbox_sweep.go:sweepTerminalSandboxRun",
 	}
 	found := map[string]bool{}

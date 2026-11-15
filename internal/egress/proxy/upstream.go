@@ -16,7 +16,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
+
+// auditUpstreamHop writes the one row that records the deliberate private-IP-guard relaxation for the
+// operator-configured upstream proxy hop; each real destination still gets its own decision. newProxy
+// writes it, except on a runner sink, where Server.awaitOpen writes it once the sink has granted credit:
+// written before that, no session carries it and it counts as a record the proxy lost.
+func (p *Proxy) auditUpstreamHop() {
+	if p.upstream == nil || p.sink == nil {
+		return
+	}
+	req := egress.Request{RunID: p.runID, Host: p.upstream.host, Port: p.upstream.port, Method: http.MethodConnect, Time: p.now()}
+	p.sink.emit(decisionLog(req, egress.Allow, egress.RuleSourceUpstreamProxy))
+}
 
 // upstreamConnectTimeout bounds the CONNECT handshake with the corporate
 // parent proxy (dial + reply). Matches the 15s dialer in newProxy: an

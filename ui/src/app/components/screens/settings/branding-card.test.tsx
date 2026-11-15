@@ -6,7 +6,7 @@
 import { STATES } from "../../wardyn/states";
 import { HttpError } from "../../../lib/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const getSettings = vi.fn();
@@ -213,6 +213,17 @@ describe("Branding card (#1125)", () => {
       org_name: "Example Corp", name_format: "prefix", primary: "#7c3aed", primary_text: "#ffffff",
       support_url: "https://status.example.com",
     });
+  });
+
+  it("is read-only while its save is in flight, so nothing typed then is replaced by what was sent", async () => {
+    await validDraft();
+    let answer: ((b: unknown) => void) | undefined;
+    save.mockReturnValue(new Promise((done) => (answer = done)));
+    await userEvent.click(saveButton());
+    expect(screen.getAllByLabelText(BRANDING.ORG_NAME_LABEL)[0]).toBeDisabled();
+    expect(screen.getByLabelText(BRANDING.DARK_LABEL)).toBeDisabled();
+    await act(async () => answer?.({ org_name: "Example Corp", name_format: "prefix", primary: "#7c3aed", primary_text: "#ffffff" }));
+    expect(screen.getAllByLabelText(BRANDING.ORG_NAME_LABEL)[0]).toBeEnabled();
   });
 
   it("seeds from the stored brand", async () => {

@@ -657,3 +657,205 @@ func TestADOClearsRestoresEachRuleToStrict(t *testing.T) {
 		}
 	})
 }
+
+// TestADOPushForwardIsProvedPerRef: a ref moves forward only when the history the
+// pack carries for that ref's own new commit names the tip it states, and only a
+// base that some ref's history names vouches for what the push leaves out. A
+// commit no ref in the push sets, or one another ref sets, proves neither. The
+// branches stand at a tip that changed a review path, as a reviewed push would.
+func TestADOPushForwardIsProvedPerRef(t *testing.T) {
+	type tips struct{ a, b, other string }
+	for _, tc := range []struct {
+		name string
+		// push commits in r.work and returns the commands (old, new, ref) and the
+		// revs whose objects the pack carries.
+		push     func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string)
+		wants    []string // nil: the push is forwarded
+		unwanted string
+	}{
+		{"a commit no ref sets, built on the tip, does not make a move forward", func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string) {
+			c, d := adoCommitOn(t, r, g.a, "", "lib/c.txt"), adoCommitOn(t, r, g.b, "", "lib/d.txt")
+			return [][3]string{{g.b, c, r.ref}}, c + "\n" + d + "\n^" + g.b
+		}, []string{adoWorkedOut, whyForced}, adoTouches},
+		{"a commit another ref sets does not make this ref's move forward", func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string) {
+			c, d := adoCommitOn(t, r, g.a, "", "lib/c.txt"), adoCommitOn(t, r, g.b, "", "lib/d.txt")
+			return [][3]string{{g.b, c, r.ref}, {g.b, d, g.other}}, c + "\n" + d + "\n^" + g.b
+		}, []string{adoWorkedOut, whyForced}, adoTouches},
+		{"a commit no ref sets vouches for nothing the push leaves out", func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string) {
+			c, d := adoCommitOn(t, r, g.b, g.a, "lib/c.txt"), adoCommitOn(t, r, g.a, "", "lib/d.txt")
+			return [][3]string{{g.b, c, r.ref}}, c + "\n" + d + "\n^" + g.b
+		}, []string{adoTouches, ".github/", whyChanged}, adoWorkedOut},
+		{"a forward move passes", func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string) {
+			c := adoCommitOn(t, r, g.b, "", "lib/c.txt")
+			return [][3]string{{g.b, c, r.ref}}, c + "\n^" + g.b
+		}, nil, ""},
+		{"two refs each moved forward pass", func(t *testing.T, r *adoPushRun, g tips) ([][3]string, string) {
+			c, d := adoCommitOn(t, r, g.b, "", "lib/c.txt"), adoCommitOn(t, r, g.b, "", "lib/d.txt")
+			return [][3]string{{g.b, c, r.ref}, {g.b, d, g.other}}, c + "\n" + d + "\n^" + g.b
+		}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newADOPushRun(t, adoReview(), true)
+			g := tips{a: gitOut(t, r.work, "rev-parse", "HEAD"), other: BranchNSPrefix(r.p.runID) + "other"}
+			r.record(t, map[string]string{".github/workflows/ci.yml": "on: reviewed\n"})
+			g.b = gitOut(t, r.work, "rev-parse", "HEAD")
+			runGit(t, r.work, "push", "-q", r.bare, "HEAD:"+g.other)
+			r.snapshot(t)
+			cmds, revs := tc.push(t, r, g)
+			rec := postEntraPush(t, r.p, adoHandPush(t, r, cmds, revs))
+			if tc.wants == nil {
+				r.wantPassed(t, rec)
+				r.finish(t)
+				return
+			}
+			r.wantHeld(t, rec, tc.wants, tc.unwanted)
+		})
+	}
+}
+
+// adoCommitOn commits one new file on parent in r.work, with .github as from
+// holds it when from is set, and returns the commit.
+func adoCommitOn(t *testing.T, r *adoPushRun, parent, from, file string) string {
+	t.Helper()
+	runGit(t, r.work, "checkout", "-q", "--detach", parent)
+	if from != "" {
+		runGit(t, r.work, "checkout", "-q", from, "--", ".github")
+	}
+	writeFiles(t, r.work, map[string]string{file: file + "\n"})
+	commitAll(t, r.work)
+	return gitOut(t, r.work, "rev-parse", "HEAD")
+}
+
+// adoHandPush is a receive-pack request with cmds (old, new, ref) and a pack of
+// the objects revs selects: a client the sandbox owns chooses both.
+func adoHandPush(t *testing.T, r *adoPushRun, cmds [][3]string, revs string) []byte {
+	t.Helper()
+	pk := exec.Command("git", "pack-objects", "--revs", "--stdout")
+	pk.Dir, pk.Env, pk.Stdin = r.work, gitEnv(), strings.NewReader(revs+"\n")
+	pack, err := pk.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req strings.Builder
+	for i, c := range cmds {
+		line := c[0] + " " + c[1] + " " + c[2]
+		if i == 0 {
+			line += "\x00report-status object-format=sha1"
+		}
+		req.WriteString(pkt(line + "\n"))
+	}
+	return append([]byte(req.String()+"0000"), pack...)
+}
+
+// A walk cut short proves nothing more, so every move reads as not forward.
+func TestFastForwardsReadsACutShortWalkAsNotForward(t *testing.T) {
+	cmds := []gitpack.Command{{Old: strings.Repeat("a", 40), New: strings.Repeat("b", 40), Ref: "refs/heads/x"}}
+	named := []map[string]bool{{cmds[0].Old: true, cmds[0].New: true}}
+	if !fastForwards(cmds, named, true) || fastForwards(cmds, named, false) {
+		t.Fatal("fastForwards: want forward with a whole walk and not forward with one cut short")
+	}
+}
+
+// A forward push whose walk was cut short is refused for that reason, not as a move other than forward.
+func TestADOPushCutShortWalkSaysSo(t *testing.T) {
+	prev := packReaches
+	t.Cleanup(func() { packReaches = prev })
+	packReaches = func(res gitpack.Result) ([]map[string]bool, bool) {
+		named, _ := res.Reaches()
+		return named, false
+	}
+	r := newADOPushRun(t, adoReview(), true)
+	r.record(t, map[string]string{"lib/b.txt": "b\n"})
+	r.snapshot(t)
+	rec := postEntraPush(t, r.p, r.record(t, map[string]string{"lib/c.txt": "c\n"}))
+	r.wantHeld(t, rec, []string{adoWorkedOut, whyCutShort}, "other than forward")
+}
+
+// TestADOPushKeepsWhatTheBranchTipHeld: a push that moves the run's branch must
+// leave it holding, at a review path, what the branch's tip holds there. A merge
+// naming an older commit of the branch as a parent, or a second branch the same
+// push creates on one, no longer brings that commit's version back without a
+// hold. Each push is a stock git client's. Building on an older commit and then
+// merging the tip back in leaves the tip's version, and passes.
+func TestADOPushKeepsWhatTheBranchTipHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// push builds on the branch's tip b over the older commit a and returns what git sent.
+		push     func(t *testing.T, r *adoPushRun, a, b string) []byte
+		wants    []string // nil: the push is forwarded
+		unwanted string
+		// broken, when set, names the tree whose listing the forge fails.
+		broken func(t *testing.T, r *adoPushRun, a string) string
+	}{
+		{"a merge whose other parent is an older commit of the branch is held", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			return r.gitPush(t, adoMergeWith(t, r, b, a)+":"+r.ref)
+		}, []string{adoTouches, ".github/workflows/ci.yml", whyTipChanged}, adoWorkedOut, nil},
+		{"a second branch the same push creates on an older commit is held", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			c, d := adoCommitOn(t, r, b, a, "lib/c.txt"), adoCommitOn(t, r, a, "", "lib/d.txt")
+			return r.gitPush(t, c+":"+r.ref, d+":"+BranchNSPrefix(r.p.runID)+"older")
+		}, []string{adoTouches, ".github/workflows/ci.yml", whyTipChanged}, adoWorkedOut, nil},
+		{"a comparison the forge cannot finish holds the push", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			return r.gitPush(t, adoMergeWith(t, r, b, a)+":"+r.ref)
+		}, []string{adoWorkedOut, ".github/", whyTipUnread}, adoTouches, func(t *testing.T, r *adoPushRun, a string) string {
+			return gitOut(t, r.work, "rev-parse", a+":.github")
+		}},
+		{"a push stating a tip the forge does not show is held", func(t *testing.T, r *adoPushRun, a, _ string) []byte {
+			c := adoCommitOn(t, r, a, "", "lib/c.txt")
+			return adoHandPush(t, r, [][3]string{{a, c, r.ref}}, c+"\n^"+a)
+		}, []string{adoWorkedOut, ".github/", whyNoTip}, adoTouches, nil},
+		{"a commit on the tip passes", func(t *testing.T, r *adoPushRun, _, b string) []byte {
+			return r.gitPush(t, adoCommitOn(t, r, b, "", "lib/c.txt")+":"+r.ref)
+		}, nil, "", nil},
+		{"a commit on an older base, merged with the tip, passes", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			adoCommitOn(t, r, a, "", "lib/e.txt")
+			runGit(t, r.work, "merge", "-q", "--no-edit", b)
+			return r.gitPush(t, "HEAD:"+r.ref)
+		}, nil, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newADOPushRun(t, adoReview(), true)
+			a := gitOut(t, r.work, "rev-parse", "HEAD")
+			r.record(t, map[string]string{".github/workflows/ci.yml": "on: reviewed\n"})
+			b := gitOut(t, r.work, "rev-parse", "HEAD")
+			r.snapshot(t)
+			if tc.broken != nil {
+				tree := "/trees/" + tc.broken(t, r, a)
+				fail := func(w http.ResponseWriter, req *http.Request) bool {
+					if !strings.HasSuffix(req.URL.Path, tree) {
+						return false
+					}
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					return true
+				}
+				r.rest.hook.Store(&fail)
+			}
+			rec := postEntraPush(t, r.p, tc.push(t, r, a, b))
+			if tc.wants == nil {
+				r.wantPassed(t, rec)
+				r.finish(t)
+				return
+			}
+			r.wantHeld(t, rec, tc.wants, tc.unwanted)
+		})
+	}
+}
+
+// gitPush pushes refspecs with a stock git client, no deltas as pushHead, and
+// returns the bytes it sent.
+func (r *adoPushRun) gitPush(t *testing.T, refspecs ...string) []byte {
+	t.Helper()
+	runGit(t, r.work, append([]string{"-c", "pack.window=0", "push", "-q", r.f.srv.URL + "/octocat/hello-world.git"}, refspecs...)...)
+	return r.f.pushBody()
+}
+
+// adoMergeWith commits, with git commit-tree, a merge of the branch's tip and an
+// older commit whose tree takes .github from the older one, as a person
+// resolving such a merge by hand would, and returns it.
+func adoMergeWith(t *testing.T, r *adoPushRun, tip, older string) string {
+	t.Helper()
+	runGit(t, r.work, "checkout", "-q", "--detach", tip)
+	runGit(t, r.work, "checkout", "-q", older, "--", ".github")
+	writeFiles(t, r.work, map[string]string{"lib/m.txt": "m\n"})
+	runGit(t, r.work, "add", "-A")
+	return gitOut(t, r.work, "commit-tree", gitOut(t, r.work, "write-tree"), "-p", tip, "-p", older, "-m", "merge")
+}

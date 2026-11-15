@@ -87,3 +87,71 @@ func TestPG_GroundtruthSensorsEmptyNode(t *testing.T) {
 		t.Fatalf("rows = %+v, want the one empty-node row", rows)
 	}
 }
+
+// The upsert keeps when a node's kernel event counts (observed_total plus dropped_unmapped) last rose,
+// in the same statement as the beat. /healthz on every replica reads it from the row, so it must move
+// only on a rise between two beats at most GroundtruthEvidenceWindow apart, and never on dropped_total,
+// which a lost heartbeat batch raises with no kernel event behind it.
+func TestPG_GroundtruthSensorsEvidenceAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	node := "node-evidence-" + uuid.NewString()
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	at := func(d time.Duration) *time.Time { v := t0.Add(d); return &v }
+
+	for _, step := range []struct {
+		name                        string
+		beat                        time.Duration
+		observed, dropped, unmapped uint64
+		want                        *time.Time
+	}{
+		{"first insert", 0, 5, 0, 1, nil},
+		{"equal counts", 30 * time.Second, 5, 0, 1, nil},
+		{"a rise within the window", time.Minute, 6, 0, 1, at(time.Minute)},
+		{"equal counts keep it", 90 * time.Second, 6, 0, 1, at(time.Minute)},
+		{"lower counts (an ingest restart) keep it", 2 * time.Minute, 0, 0, 0, at(time.Minute)},
+		{"only dropped_total rose: no move", 150 * time.Second, 0, 9, 0, at(time.Minute)},
+		{"only dropped_unmapped rose: move", 3 * time.Minute, 0, 9, 3, at(3 * time.Minute)},
+		{"a rise exactly the window apart", 3*time.Minute + store.GroundtruthEvidenceWindow, 1, 9, 3,
+			at(3*time.Minute + store.GroundtruthEvidenceWindow)},
+		{"a rise across a longer gap", 3*time.Minute + 2*store.GroundtruthEvidenceWindow + time.Second, 2, 9, 3, nil},
+		{"the next rise sets it again", 3*time.Minute + 2*store.GroundtruthEvidenceWindow + 31*time.Second, 3, 9, 3,
+			at(3*time.Minute + 2*store.GroundtruthEvidenceWindow + 31*time.Second)},
+	} {
+		if err := pg.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: node, LastBeat: t0.Add(step.beat),
+			ObservedTotal: step.observed, DroppedTotal: step.dropped, DroppedUnmapped: step.unmapped}); err != nil {
+			t.Fatalf("%s: upsert: %v", step.name, err)
+		}
+		got := groundtruthSensorRow(t, pg, node, t0)
+		if (got.EvidenceAt == nil) != (step.want == nil) || (got.EvidenceAt != nil && !got.EvidenceAt.Equal(*step.want)) {
+			t.Fatalf("%s: evidence_at = %v, want %v", step.name, got.EvidenceAt, step.want)
+		}
+	}
+
+	// A beat older than the stored one changes nothing, however much its counts rose.
+	before := groundtruthSensorRow(t, pg, node, t0)
+	if err := pg.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: node, LastBeat: t0.Add(time.Minute), ObservedTotal: 500}); err != nil {
+		t.Fatalf("older beat: upsert: %v", err)
+	}
+	if got := groundtruthSensorRow(t, pg, node, t0); !got.LastBeat.Equal(before.LastBeat) || got.ObservedTotal != before.ObservedTotal ||
+		got.EvidenceAt == nil || !got.EvidenceAt.Equal(*before.EvidenceAt) {
+		t.Fatalf("an older beat moved the row: %+v, want %+v", got, before)
+	}
+}
+
+// groundtruthSensorRow is node's row, heard from after since, or fails.
+func groundtruthSensorRow(t *testing.T, pg store.PG, node string, since time.Time) store.GroundtruthSensor {
+	t.Helper()
+	rows, err := pg.ListGroundtruthSensors(context.Background(), since.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, r := range rows {
+		if r.Node == node {
+			return r
+		}
+	}
+	t.Fatalf("no row for %s", node)
+	return store.GroundtruthSensor{}
+}

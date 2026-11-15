@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -108,6 +109,9 @@ func validateWorkspaceRequirementOn(key string, req types.WorkspaceRequirement, 
 	case "egress":
 		if !hostrules.ValidApprovedHost(rest) {
 			return fmt.Sprintf("requirement %q: invalid egress host (plain lowercase host, no scheme/port/wildcard)", key)
+		}
+		if err := proxy.ValidConfigHost(rest); err != nil {
+			return fmt.Sprintf("requirement %q: %s", key, err)
 		}
 	case "write":
 		// The text check comes first: it needs no workspace read, and onRunner is asked

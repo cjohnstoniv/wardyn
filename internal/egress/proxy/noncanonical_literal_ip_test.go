@@ -145,16 +145,21 @@ func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 		}
 	}
 
-	// NEGATIVE control — the guard must not over-deny. A non-canonical spelling
-	// of a PUBLIC address, and an ordinary hostname, stay reachable.
+	// NEGATIVE control — the blocked-range guard must not over-deny. The standard
+	// spelling of a PUBLIC address, and an ordinary hostname, stay reachable; a
+	// non-standard spelling of a PUBLIC address is refused by the spelling rule,
+	// not as a blocked range.
 	for _, host := range []string{
-		"134744072" /* 8.8.8.8 */, "0x8080808", /* 8.8.8.8 */
-		"2001:4860:4860::8888%eth0", // a PUBLIC address, zoned: still allowed
-		"::8.8.8.8",                 // IPv4-compatible spelling of a PUBLIC address: ::/96 is not denied wholesale
+		"::8.8.8.8", // IPv4-compatible spelling of a PUBLIC address: ::/96 is not denied wholesale
 		"api.example.com",
 	} {
 		if d, _, _ := p.evaluate(context.Background(), host, 443, http.MethodConnect, ""); d != egress.Allow {
 			t.Fatalf("evaluate(%q) = %v, want Allow: only BLOCKED addresses may be refused by this guard", host, d)
+		}
+	}
+	for _, host := range []string{"134744072" /* 8.8.8.8 */, "0x8080808" /* 8.8.8.8 */, "2001:4860:4860::8888%eth0"} {
+		if d, _, log := p.evaluate(context.Background(), host, 443, http.MethodConnect, ""); d != egress.Deny || log == nil || log.RuleSource != ruleSourceIPSpelling {
+			t.Fatalf("evaluate(%q) = %v %v, want the spelling refusal (%s), not a blocked range", host, d, log, ruleSourceIPSpelling)
 		}
 	}
 }

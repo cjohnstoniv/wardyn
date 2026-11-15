@@ -42,8 +42,12 @@ func TestOTLPSink_BearerSentOverHTTPSAndNeverInErrors(t *testing.T) {
 		t.Errorf("Authorization = %q, want the bearer", got)
 	}
 
-	srv.Close()
-	_, err = sink.post(context.Background(), body)
+	// A collector nothing listens at (port 1); the closed test server's port could be taken by another process.
+	dead, err := NewOTLPSink(OTLPConfig{Endpoint: "https://127.0.0.1:1?key=querysecret", BearerToken: token, BatchSize: 1, FlushInterval: "1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = dead.post(context.Background(), body)
 	if err == nil {
 		t.Fatal("post to a closed collector succeeded")
 	}

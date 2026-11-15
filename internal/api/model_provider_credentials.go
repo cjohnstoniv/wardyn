@@ -11,7 +11,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -252,7 +251,7 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &body, false); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
 		return
 	}
@@ -279,6 +278,7 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error {
 		return s.cfg.Secrets.For(owner).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte(value))
 	}); err != nil {
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), owner, providerSecretName(p.UID, providerKeyPart))
 		if errors.Is(err, secretstore.ErrUnavailable) {
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable
 			// store on save (review finding F7) — writeServerError's log line,

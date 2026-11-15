@@ -15,7 +15,7 @@ func init() {
 	secretstore.Register("pg", func(d secretstore.Deps) (secretstore.Store, error) {
 		// A configured external store is read-only here: rows still seal in
 		// Postgres (§2.2), under the key service when it writes, else local KEKs.
-		s := &Store{pool: d.Pool, ext: d.External, extTimeout: d.ExternalTimeout}
+		s := &Store{pool: d.Pool, ext: d.External, extTimeout: d.ExternalTimeout, cleanUpLimit: cleanUpCap(d.Pool)}
 		if d.AgeIdentity != nil || !d.KEKWrites {
 			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 				return nil, err
@@ -39,7 +39,7 @@ func RegisterExternal(name string) {
 		if d.External == nil || d.External.Name() != name {
 			return nil, fmt.Errorf("secret store %q is selected but not configured (see docs/ENV.md, %q)", name, name)
 		}
-		s := &Store{pool: d.Pool, ext: d.External, writeExt: true, extTimeout: d.ExternalTimeout}
+		s := &Store{pool: d.Pool, ext: d.External, writeExt: true, extTimeout: d.ExternalTimeout, cleanUpLimit: cleanUpCap(d.Pool)}
 		if d.AgeIdentity != nil {
 			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 				return nil, err

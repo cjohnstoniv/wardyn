@@ -6,6 +6,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -177,17 +178,33 @@ type recipeStub struct{ port string }
 func recipeStartStub(t *testing.T) recipeStub {
 	t.Helper()
 	bin := recipeStubBinary(t)
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	// The stub binds port 0 and logs the address it got, so no other process can hold its port first.
+	cmd := exec.Command(bin, "-addr", "0.0.0.0:0")
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := fmt.Sprint(ln.Addr().(*net.TCPAddr).Port)
-	_ = ln.Close()
-	cmd := exec.Command(bin, "-addr", "0.0.0.0:"+port)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	bound := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		for sc.Scan() {
+			if _, addr, ok := strings.Cut(sc.Text(), "gatewayfake listening on "); ok {
+				if _, p, err := net.SplitHostPort(addr); err == nil {
+					bound <- p
+				}
+			}
+		}
+	}()
+	var port string
+	select {
+	case port = <-bound:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the gateway stub never logged the port it listens on")
+	}
 	recipeWait(t, "http://127.0.0.1:"+port+"/healthz", 30*time.Second)
 	return recipeStub{port: port}
 }
@@ -231,11 +248,11 @@ func recipeStartFront(t *testing.T, gatewayAddr string) *recipeFront {
 	f := &recipeFront{}
 	rp := &httputil.ReverseProxy{
 		FlushInterval: -1,
-		Director: func(r *http.Request) {
+		Rewrite: func(pr *httputil.ProxyRequest) {
 			f.mu.Lock()
-			f.last, f.n = r.Header.Clone(), f.n+1
+			f.last, f.n = pr.In.Header.Clone(), f.n+1
 			f.mu.Unlock()
-			r.URL.Scheme, r.URL.Host, r.Host = "http", gatewayAddr, gatewayAddr
+			pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.Host = "http", gatewayAddr, gatewayAddr
 		},
 	}
 	f.srv = httptest.NewTLSServer(rp)

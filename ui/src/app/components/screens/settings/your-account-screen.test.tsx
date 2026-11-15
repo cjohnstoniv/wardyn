@@ -87,12 +87,14 @@ beforeEach(() => {
 });
 
 describe("YourAccountScreen", () => {
-  // UXA-2: getSetupStatus never rejects; an unreachable answer is made-up facts, so the page says it could not reach Wardyn.
-  it("an unreachable daemon shows Couldn't reach Wardyn with Retry, not the cards", async () => {
+  // UXA-2: getSetupStatus never rejects; a failed read is made-up facts, so the page says the check failed (a 5xx or
+  // a 404 is an answer, so never that Wardyn could not be reached).
+  it("a failed setup status read says the check failed, with Retry, not the cards", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true }));
     renderScreen();
-    expect(await screen.findByText("Couldn't reach Wardyn")).toBeInTheDocument();
-    expect(screen.getByText("Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load setup status")).toBeInTheDocument();
+    expect(screen.getByText("Wardyn's setup status couldn't be read, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
     expect(screen.queryByRole("heading", { name: startsWith("Your SSH keys") })).toBeNull();
     getSetupStatusMock.mockResolvedValue(baseStatus());
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));

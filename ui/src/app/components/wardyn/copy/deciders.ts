@@ -23,6 +23,8 @@ export const DECIDERS = {
   REMOVE_RULE: "Remove rule",
   SAVE: "Save deciders",
   DISCARD: "Discard",
+  // Beside the profile's Save while it waits on this section.
+  PROFILE_SAVE_HELD: "Save or discard the Deciders change above first.",
   ALWAYS_NOTE: "Security admins can always decide. They aren't listed.",
   WHO_OWNER: "The run's owner",
   WHO_ADMINS: "Admins of this unit",

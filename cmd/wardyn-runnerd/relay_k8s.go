@@ -6,6 +6,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -47,6 +48,8 @@ type k8sRelay struct {
 	fenced    map[uuid.UUID]bool
 	fencedIPs map[netip.Addr]map[uuid.UUID]bool
 	probe     chan netip.Addr // set during the boot source probe
+	waiting   int             // connections between admission to the lookup and their first byte
+	firstByte time.Duration   // relayFirstByteWait when zero; tests shorten it
 }
 
 type k8sRelayConn struct {
@@ -125,7 +128,10 @@ func remoteAddr(c net.Conn) netip.Addr {
 
 // forward admits c, registers it under its run and copies it. The fence check and the
 // registration happen under one mutex hold, so a connection racing a fence is either registered
-// first and then closed by it, or refused.
+// first and then closed by it, or refused. At most maxLocalRelays connections wait at once, from
+// before the run lookup until their first byte, and one window bounds the lookup and the first
+// byte together, so a stalled API server can neither pile connections up nor hold one longer than
+// a silent one.
 func (r *k8sRelay) forward(c net.Conn) {
 	src := remoteAddr(c)
 	r.mu.Lock()
@@ -138,12 +144,22 @@ func (r *k8sRelay) forward(c net.Conn) {
 		_ = c.Close()
 		return
 	}
+	if r.waiting >= maxLocalRelays {
+		r.mu.Unlock()
+		_ = c.Close()
+		return
+	}
+	r.waiting++
 	r.mu.Unlock()
-	run, ok, err := r.lookup(r.ctx, src)
+	deadline := time.Now().Add(cmp.Or(r.firstByte, relayFirstByteWait))
+	ctx, cancel := context.WithDeadline(r.ctx, deadline)
+	run, ok, err := r.lookup(ctx, src)
+	cancel()
 	r.mu.Lock()
 	peer := r.peer
 	ipFenced := len(r.fencedIPs[src]) > 0
 	if err != nil || !ok || peer == nil || r.closed || ipFenced || r.fenced[run] {
+		r.waiting--
 		r.mu.Unlock()
 		_ = c.Close()
 		return
@@ -156,7 +172,11 @@ func (r *k8sRelay) forward(c net.Conn) {
 		r.mu.Unlock()
 		_ = c.Close()
 	}()
-	if first, ok := readFirstByte(c, relayFirstByteWait); ok {
+	first, ok := readFirstByte(c, time.Until(deadline))
+	r.mu.Lock()
+	r.waiting--
+	r.mu.Unlock()
+	if ok {
 		relayCopy(r.ctx, peer, c, first)
 	}
 }

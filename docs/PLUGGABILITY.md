@@ -139,6 +139,7 @@
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
   - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
   - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - A gateway that asks for a client certificate also gets [one naming the run](operations/ai-gateway.md#the-runs-client-certificate).
   - The token format is `1`, and the key set's address is stable through 0.11.
   - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
@@ -157,9 +158,11 @@
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
 - Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
   - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
-  - Server mode only, no claims, warm pools, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Server mode only, no pause in place, and none of the upstream claims or warm pools. Tested with agent-sandbox v1.0.9 only.
+  - Experimental: with `k8s.agentSandbox.keep.enabled`, an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive is kept and can be revived ([keep and revive](operations/kubernetes-agent-sandbox.md#keep-and-revive)).
   - Experimental: `k8s.agentSandbox.template` names a platform-owned `SandboxTemplate`. Wardyn takes only its annotations under one prefix and refuses any other field, placement included, until the boot canary covers template placement. The extensions controller stays uninstalled.
   - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
+- Experimental, on both backends: Wardyn's own warm pools keep idle placeholder pods on nodes with a pool's image pulled ([Kubernetes: warm pools](operations/kubernetes-warm-pools.md)).
 - A cluster can run both now, each in its own namespace.
 
 ### Narrowing an organisation's access per person, machine and run

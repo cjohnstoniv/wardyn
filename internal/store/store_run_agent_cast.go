@@ -9,9 +9,41 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// SweepCursor is where an oldest-first sweep resumes: the last row of its previous page, in (stamp, id)
+// order. The sweep carries it from pass to pass, so rows that fail on every pass cannot hold its first page.
+type SweepCursor struct {
+	At time.Time
+	ID uuid.UUID
+}
+
+// scanSweepPage reads a page of (id, stamp) rows. The cursor is the last row's, and nil when the page was
+// short (or limit is not positive): the caller then starts again from the oldest. It closes rows.
+func scanSweepPage(rows pgx.Rows, limit int, what string) ([]uuid.UUID, *SweepCursor, error) {
+	defer rows.Close()
+	var ids []uuid.UUID
+	var last SweepCursor
+	for rows.Next() {
+		var id uuid.UUID
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, nil, fmt.Errorf("store: scan %s: %w", what, err)
+		}
+		ids = append(ids, id)
+		last = SweepCursor{At: at, ID: id}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: list %s: %w", what, err)
+	}
+	if limit <= 0 || len(ids) < limit {
+		return ids, nil, nil
+	}
+	return ids, &last, nil
+}
 
 // RunAgentCastStore keeps a macOS VM task run's agent output recording obligation
 // (agent_runs.agent_cast_owed_at): set when the run's agent output cast opens at dispatch, cleared
@@ -26,9 +58,11 @@ type RunAgentCastStore interface {
 	// ClearRunAgentCastOwed clears the obligation; recorded (a cast was stored) also clears
 	// runner_declined.
 	ClearRunAgentCastOwed(ctx context.Context, id uuid.UUID, recorded bool) error
-	// ListRunsAgentCastOwed returns the terminal runs that still owe their cast, last changed more
-	// than age ago, oldest obligation first.
-	ListRunsAgentCastOwed(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error)
+	// ListRunsAgentCastOwed returns up to limit terminal runs that still owe their cast, last changed more
+	// than age ago, oldest obligation first (the id breaks a tie), after the cursor when one is given. The
+	// returned cursor is the last row's, and nil when the page was short: the caller then starts again from
+	// the oldest.
+	ListRunsAgentCastOwed(ctx context.Context, age time.Duration, after *SweepCursor, limit int) ([]uuid.UUID, *SweepCursor, error)
 }
 
 // SetRunAgentCastOwed — see RunAgentCastStore.
@@ -58,26 +92,24 @@ func (s PG) ClearRunAgentCastOwed(ctx context.Context, id uuid.UUID, recorded bo
 }
 
 // ListRunsAgentCastOwed — see RunAgentCastStore.
-func (s PG) ListRunsAgentCastOwed(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error) {
+func (s PG) ListRunsAgentCastOwed(ctx context.Context, age time.Duration, after *SweepCursor, limit int) ([]uuid.UUID, *SweepCursor, error) {
 	nonTerminal := make([]string, len(types.NonTerminalRunStates))
 	for i, st := range types.NonTerminalRunStates {
 		nonTerminal[i] = string(st)
 	}
-	rows, err := s.Pool.Query(ctx, `
-		SELECT id FROM agent_runs
-		WHERE agent_cast_owed_at IS NOT NULL AND state <> ALL($1) AND updated_at < now() - make_interval(secs => $2)
-		ORDER BY agent_cast_owed_at LIMIT $3`, nonTerminal, age.Seconds(), limit)
+	const head = `SELECT id, agent_cast_owed_at FROM agent_runs
+		WHERE agent_cast_owed_at IS NOT NULL AND state <> ALL($1) AND updated_at < now() - make_interval(secs => $2)`
+	const tail = ` ORDER BY agent_cast_owed_at, id LIMIT `
+	var rows pgx.Rows
+	var err error
+	if after != nil {
+		rows, err = s.Pool.Query(ctx, head+` AND (agent_cast_owed_at, id) > ($3, $4)`+tail+`$5`,
+			nonTerminal, age.Seconds(), after.At, after.ID, limit)
+	} else {
+		rows, err = s.Pool.Query(ctx, head+tail+`$3`, nonTerminal, age.Seconds(), limit)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("store: list runs owing an agent cast: %w", err)
+		return nil, nil, fmt.Errorf("store: list runs owing an agent cast: %w", err)
 	}
-	defer rows.Close()
-	var out []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("store: scan a run owing an agent cast: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return scanSweepPage(rows, limit, "runs owing an agent cast")
 }

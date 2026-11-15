@@ -189,8 +189,8 @@ func run() error {
 
 	// Background loops: heartbeat, index refresh, stats.
 	go func() {
-		// Emit one immediately so /healthz flips to healthy as soon as the
-		// sensor is up and reachable, then on the interval. Each beat carries
+		// Emit one immediately so /healthz hears the sensor as soon as it is
+		// up and reachable, then on the interval. Each beat carries
 		// the current cumulative drop count so /healthz can surface the gap
 		// size. Runs in its own goroutine so this initial beat never blocks
 		// startup on a control-plane POST.

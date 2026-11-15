@@ -81,12 +81,20 @@ func (c *Client) DeletePreset(ctx context.Context, name string) error {
 // /api/v1/presets/{name}, and returns a fresh ListPresets. Nothing doc omits
 // is touched and nothing is deleted, and an unchanged preset keeps its
 // version, so `wardyn preset get > f && wardyn preset set f` is a no-op.
+// When a write fails, the presets stored before it are returned with the error.
 func (c *Client) ApplyPresets(ctx context.Context, doc PresetsDocument) (PresetsDocument, error) {
+	stored := PresetsDocument{Presets: []Preset{}}
 	for _, p := range doc.Presets {
 		req := PresetRequest{Description: p.Description, UserTypes: p.UserTypes, Request: p.Request}
-		if _, err := c.PutPreset(ctx, p.Name, req); err != nil {
-			return PresetsDocument{}, fmt.Errorf("apply preset %q: %w", p.Name, err)
+		saved, err := c.PutPreset(ctx, p.Name, req)
+		if err != nil {
+			return stored, fmt.Errorf("apply preset %q: %w", p.Name, err)
 		}
+		stored.Presets = append(stored.Presets, saved)
 	}
-	return c.ListPresets(ctx)
+	out, err := c.ListPresets(ctx)
+	if err != nil {
+		return stored, err
+	}
+	return out, nil
 }

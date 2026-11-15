@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -60,8 +61,15 @@ func lockFileHeld(ctx context.Context, path string, exclusive bool) (f *os.File,
 	}
 }
 
+// checkOwner refuses a file this user does not own. os gives a file's owner as *syscall.Stat_t; the Stat_t
+// of golang.org/x/sys/unix is another type, and asking for it passes every file. A file whose owner
+// cannot be read is refused too.
 func checkOwner(fi os.FileInfo) error {
-	if st, ok := fi.Sys().(*unix.Stat_t); ok && int(st.Uid) != os.Getuid() {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("its owner cannot be read")
+	}
+	if int(st.Uid) != os.Getuid() {
 		return errors.New("not owned by this user")
 	}
 	return nil

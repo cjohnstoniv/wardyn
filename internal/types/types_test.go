@@ -132,6 +132,7 @@ func TestActorTypeValues(t *testing.T) {
 		{"human", ActorHuman, "human"},
 		{"agent", ActorAgent, "agent"},
 		{"system", ActorSystem, "system"},
+		{"service", ActorService, "service"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,6 +140,20 @@ func TestActorTypeValues(t *testing.T) {
 				t.Errorf("ActorType %s = %q, want %q", tc.name, string(tc.got), tc.want)
 			}
 		})
+	}
+}
+
+// TestActorTypeValid pins the stored actor set (audit_events' actor_type CHECK): all four kinds, nothing else.
+func TestActorTypeValid(t *testing.T) {
+	for _, a := range []ActorType{ActorHuman, ActorAgent, ActorSystem, ActorService} {
+		if !a.Valid() {
+			t.Errorf("ActorType %q is refused, want accepted", a)
+		}
+	}
+	for _, a := range []ActorType{"", "device", "Service", "service:ci-bot", " human"} {
+		if a.Valid() {
+			t.Errorf("ActorType %q is accepted, want refused", a)
+		}
 	}
 }
 

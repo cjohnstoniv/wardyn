@@ -211,3 +211,37 @@ func TestNoNetwork_ConfigKey(t *testing.T) {
 		t.Fatal("no_network did not decode")
 	}
 }
+
+// TestNoNetwork_NoUpstreamHop: a run with no network has no upstream proxy hop, whoever put the URL in its config
+// (a Docker runner adds its own to every run, and an older server sends the organisation's). The URL's credential
+// is still masked, and NewServer leaves Proxy.upstream nil, so newProxy writes no builtin:upstream-proxy allow at
+// start. The same config without no_network keeps the hop.
+func TestNoNetwork_NoUpstreamHop(t *testing.T) {
+	const pass = "nn-hop-s3cret-4e7a19c2" // no other test's value: the mask registry is process-wide
+	upstream := "http://corpuser:" + pass + "@proxy.corp.example:8080"
+	if up, err := upstreamProxyFor(context.Background(), &Config{UpstreamProxyURL: upstream, NoNetwork: true}, uuid.Nil); err != nil || up != nil {
+		t.Fatalf("upstreamProxyFor with no network = %v, %v; want no hop and no error", up, err)
+	}
+	if masked := maskDecisionBytes([]byte(`{"upstream_pw":"` + pass + `"}`)); strings.Contains(string(masked), pass) {
+		t.Errorf("the dropped hop's credential is not masked: %s", masked)
+	}
+	for _, noNetwork := range []bool{true, false} {
+		cfg, err := LoadConfigBytes([]byte(`{"run_id":"` + uuid.NewString() + `","control_plane_url":"http://127.0.0.1:1","run_token":"tok","listen":"127.0.0.1:0",` +
+			`"policy":{"allowed_domains":[]},"upstream_proxy_url":"` + upstream + `","no_network":` + map[bool]string{true: "true", false: "false"}[noNetwork] + `}`))
+		if err != nil {
+			t.Fatalf("LoadConfigBytes (no_network %v): %v", noNetwork, err)
+		}
+		srv, err := NewServer(context.Background(), cfg, &http.Client{Timeout: time.Second}, io.Discard)
+		if err != nil {
+			t.Fatalf("NewServer (no_network %v): %v", noNetwork, err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = srv.Shutdown(ctx)
+		})
+		if hop := srv.proxy.upstream != nil; hop == noNetwork {
+			t.Errorf("no_network %v: Proxy.upstream set = %v, want %v", noNetwork, hop, !noNetwork)
+		}
+	}
+}

@@ -207,8 +207,8 @@ func (s *Server) maskDispatchValue(ctx context.Context, runID uuid.UUID, values 
 }
 
 // maskInjected registers values for runID in the shared masking registry,
-// committed before it returns. An error means they are not on record: the
-// caller must not hand them to the run.
+// committed before it returns. An error means the caller must not hand them
+// to the run; a value may still be on record.
 func (s *Server) maskInjected(runID uuid.UUID, values ...[]byte) error {
 	for _, v := range values {
 		if err := s.cfg.MaskRegistry.Add(runID, v); err != nil {

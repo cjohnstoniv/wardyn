@@ -56,13 +56,21 @@ source /usr/local/bin/agent-run-lib.sh
 wait_for_proxy
 
 # ── managed agent-side policy ────────────────────────────────────────────────
-# codex reads no managed-policy file — nothing in this image consults one — so
-# there is no agent-side half of a run's autonomy level to deliver here, and
-# inventing deny rules the CLI would not honour would be worse than saying so.
-# The level is enforced at the Wardyn boundary (the launch gate, the egress
-# proxy, the confinement class) and by nothing inside this container.  Said out
-# loud on every launch rather than left to be inferred from an absent file.
-echo "agent-run: no managed agent-side settings — codex reads no managed-policy file, so autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} is enforced at the Wardyn boundary and not inside this sandbox" >&2
+# Two things, kept apart.  A run's autonomy level has no agent-side half for
+# codex: codex has no managed settings that express it, and inventing deny rules
+# the CLI would not honour would be worse than saying so.  The level is enforced
+# at the Wardyn boundary (the launch gate, the egress proxy, the confinement
+# class) and by nothing inside this container.  Codex's own sandbox is
+# different: when the run's policy binds codex to it, dispatch sets
+# WARDYN_HARNESS_SANDBOX and delivers /etc/codex/requirements.toml, which codex
+# does read (see the launch below, which also refuses any other value of it).
+# Said out loud on every launch rather than left to be inferred from a file's
+# presence or absence.
+if [[ "${WARDYN_HARNESS_SANDBOX:-}" == read-only || "${WARDYN_HARNESS_SANDBOX:-}" == workspace-write ]]; then
+    echo "agent-run: managed requirements delivered — /etc/codex/requirements.toml binds codex to its own sandbox ($WARDYN_HARNESS_SANDBOX) and refuses its bypass flag; autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} has no codex setting and is enforced at the Wardyn boundary" >&2
+else
+    echo "agent-run: no managed agent-side settings — this run delivers none to codex, so autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} is enforced at the Wardyn boundary and not inside this sandbox" >&2
+fi
 
 # ── codex config ─────────────────────────────────────────────────────────────
 # codex_set_toml_key FILE KEY VALUE: make `KEY = "VALUE"` the one top-level line

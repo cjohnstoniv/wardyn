@@ -272,7 +272,11 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 
 // handleHandBackApproval is POST /approvals/{id}/hand-back: the person holding control gives it back
 // and the agent's `wardyn needs-you` returns. recording.resume (on a recorded run) then
-// takeover.close, the order the gap closes in.
+// takeover.close, the order the gap closes in. The hand back stamps the person's presence first, so a
+// sweep pass that listed the run as idle before it fails its mark and undoes its freeze. A run frozen
+// idle while the person held control is thawed by that stamp, or through approvalClosed when the stamp
+// could not thaw it (the run's lock in use, or an earlier failed thaw backing off); neither counts a
+// decision. The pause sweep's backstop reads handed_back_at for a hand back whose thaw did not run.
 func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) {
 	ap, run, ok := s.loadTakeover(w, r)
 	if !ok {
@@ -303,6 +307,8 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 	s.ResumeDesktopRecording(r.Context(), run, takeoverHold(got.ID))
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.close", got.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": got.ID, "held_ms": held})))
+	_ = s.markPresent(r.Context(), got.RunID, actorType, principal, "presence")
+	s.approvalClosed(r.Context(), got.RunID)
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: s.takeoverSurface(r.Context(), run)})
 }
 

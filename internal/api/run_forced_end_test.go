@@ -596,7 +596,7 @@ func TestForcedRetry_TwoReplicasOneSuccessRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, applied, err := pg.StopKeptRunForcedIf(ctx, id, types.RunStopped, run.LostAt, run.LostReason, run.EndsAt); err != nil || !applied {
+	if _, applied, err := pg.StopKeptRunForcedIf(ctx, id, types.RunStopped, run.LostAt, run.LostReason, run.EndsAt, true, 0); err != nil || !applied {
 		t.Fatalf("forced claim = %v, %v; want applied", applied, err)
 	}
 	marks, err := pg.ListForcedStops(ctx)

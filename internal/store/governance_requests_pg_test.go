@@ -9,6 +9,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +194,69 @@ func TestGovernanceRequestReads(t *testing.T) {
 		if c.ID == saved.ID {
 			t.Errorf("a request decided two days ago is still listed")
 		}
+	}
+}
+
+// TestPendingReadsReachPastTheBound: an older pending change behind more than the list bound of newer pending
+// ones is still read, by the pending changes list and by the request list, so a caller that filters by who may
+// see a change never loses an older one to newer ones it may not see. A pending request past its expiry on the
+// database clock, at its expiry included, is read once, as expired, inside the bound.
+func TestPendingReadsReachPastTheBound(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	prefix := "bound-" + uuid.NewString() + "-"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM governance_changes WHERE target_key LIKE $1`, prefix+"%")
+	})
+	// $5 places expires_at on the database clock, so live and lapsed do not depend on the app clock.
+	const seed = `INSERT INTO governance_changes (id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
+		proposed_by, proposed_at, expires_at)
+		SELECT gen_random_uuid(), $1::text, 'update', $2::text || g::text, '{}', '{}', '"b"', '"d"', 'seed', $3::timestamptz,
+			now() + $5::int * interval '1 second'
+		FROM generate_series(1, $4::int) g`
+	now := time.Now().UTC()
+	for _, s := range []struct {
+		key        string
+		proposed   time.Time
+		n, expires int
+	}{
+		{"old-", now.Add(-time.Hour), 1, 3600},
+		{"new-", now, store.MaxGovernanceChangeList + 1, 3600},
+		{"lapsed-", now.Add(-2 * time.Hour), store.MaxGovernanceChangeList + 1, -3600},
+		{"at-", now.Add(-2 * time.Hour), 1, 0},
+	} {
+		if _, err := pool.Exec(ctx, seed, types.GovernanceTargetElevation, prefix+s.key, s.proposed, s.n, s.expires); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(list []types.GovernanceChange, key, state string) int {
+		n := 0
+		for _, c := range list {
+			if strings.HasPrefix(c.TargetKey, prefix+key) && (state == "" || c.State == state) {
+				n++
+			}
+		}
+		return n
+	}
+	pending, err := st.ListGovernanceChanges(ctx, types.GovernanceChangePending)
+	if err != nil || count(pending, "old-1", "") != 1 {
+		t.Errorf("the pending changes list (%d rows, %v) misses the older pending change", len(pending), err)
+	}
+	if n := count(pending, "lapsed-", "") + count(pending, "at-", ""); n != 0 {
+		t.Errorf("the pending changes list holds %d changes past their expiry", n)
+	}
+	requests, err := st.ListGovernanceRequests(ctx, []string{types.GovernanceTargetElevation}, time.Now().UTC().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count(requests, "old-1", types.GovernanceChangePending) != 1 {
+		t.Errorf("the request list (%d rows) misses the older pending request", len(requests))
+	}
+	if n := count(requests, "at-1", types.GovernanceChangeExpired); n != 1 || count(requests, "at-1", "") != 1 {
+		t.Errorf("the request at its expiry is listed %d times as expired, want once", n)
+	}
+	if n, all := count(requests, "lapsed-", types.GovernanceChangeExpired), count(requests, "lapsed-", ""); n != all || all > store.MaxGovernanceChangeList {
+		t.Errorf("the request list holds %d lapsed requests, %d as expired; want every one expired and at most %d", all, n, store.MaxGovernanceChangeList)
 	}
 }

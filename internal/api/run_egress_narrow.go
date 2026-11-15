@@ -194,7 +194,7 @@ func (s *Server) readNarrowSnapshot(sctx context.Context, n runner.ProxyNarrower
 		return rd, unreadable("read the run's stored proxy config", err)
 	}
 	if rd.cfg, err = proxy.LoadConfigBytes(rd.stored); err != nil {
-		return rd, unreadable("decode the run's stored proxy config", err)
+		return rd, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
 	if rd.ps, _, err = gens.RunPolicyState(sctx, run.ID); err != nil {
 		return rd, unreadable("read the run's policy generation", err)
@@ -281,8 +281,9 @@ func listHosts(hosts []string) string {
 }
 
 // narrowDenies is the list the proxy will hold: the recorded one and the edit's hosts, normalized. An
-// edit that takes it past the proxy's bound is refused. Entries already passed the length check, so
-// the bound is the only error a validated edit can meet.
+// edit that takes it past the proxy's bound is refused. The edit's hosts passed the length check and
+// ValidDomainEntry, and the recorded ones passed the config load (readNarrowSnapshot), which refuses one
+// in a non-standard IP spelling as ValidDomainEntry now does, so the bound is the only error left here.
 func narrowDenies(cfg *proxy.Config, edit liveEgressEdit) ([]string, *reviveError) {
 	denies, err := proxy.NormalizeLiveDenies(slices.Concat(cfg.LiveDenies, edit.remove, edit.deny))
 	if err != nil {
@@ -399,7 +400,7 @@ func (ne *narrowEdit) write(ctx, sctx context.Context, policy types.RunPolicySpe
 // begin records the edit's pending start on token jti. A start that would not be confirmed (a legacy
 // mode) cannot carry an edit.
 func (ne *narrowEdit) begin(sctx context.Context, jti string) error {
-	start, err := ne.s.beginProxyStart(sctx, ne.run, ne.gen, jti)
+	start, err := ne.s.beginProxyStart(sctx, ne.run, ne.gen, jti, true)
 	if err != nil {
 		return err
 	}

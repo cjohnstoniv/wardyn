@@ -28,8 +28,8 @@ const keptEndHoldOffLimit = 5 * time.Minute
 
 // forceKeptStop is stopKeptRun's answer to a lock it found held (a refusal to take it is not that, and
 // does not reach here). Until the run's due end is keptEndHoldOffLimit past, it does nothing, and the next
-// pass retries the end. Whether the limit has passed is the database's answer (ForcedStopper's
-// KeptHoldOffPassed on now()), never this server's clock. The due end is read from the run's fresh row,
+// pass retries the end. Whether the limit has passed is the database's answer (the forced claim,
+// StopKeptRunForcedIf, compares it with now()), never this server's clock. The due end is read from the run's fresh row,
 // so neither a slow sweep, a chain of lock holders nor a restart moves it; only a change to the stored end
 // does (an extension, or a revive that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost.
 //
@@ -53,8 +53,8 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	}
 	// An end that cannot be kept (data says kept: false) is held off from its end, not from its keep grace.
 	// The hold-off is counted on the database's clock: the due end is the stored time it counts from (lost_at,
-	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and ForcedStopper
-	// asks the database whether that, plus keptEndHoldOffLimit, is past now().
+	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and the forced claim
+	// (StopKeptRunForcedIf) lands only when that, plus keptEndHoldOffLimit, is past now() in the same statement.
 	until, ok := s.keptUntil(cur)
 	from, fromLostAt := *cur.LostAt, true
 	switch {
@@ -63,18 +63,10 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	case cur.LostReason != types.LostEnded:
 		from, fromLostAt = *cur.EndsAt, false // keptUntil's ends_at branch
 	}
-	past, err := fs.KeptHoldOffPassed(ctx, run.ID, fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
-	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading a kept run's hold-off failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return
-	}
-	if !past {
-		return
-	}
 	// past_due_sec below is a report, not a decision: it may read this server's clock.
 	now := s.cfg.Now()
-	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt,
+		fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: forcing a kept run's end failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -336,7 +328,10 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 // A record the forced end left unsettled is settled before anything is stopped: owed (a resume) when the cut
 // is observed and the sandbox keepable, otherwise as not brought back. A final record (brought back or given
 // up) is left as it is (folderFinal). A run on a runner that is not here, and can come back, has nothing
-// settled, stopped or queued, and the mark waits for it.
+// settled, stopped, queued or given up, and the mark waits for it. Once its keep has run out, a copy back still
+// owed is given up first, before the settle and whatever the stop then does (giveUpForcedPastKeep): the tail
+// owner gives up a marked run only on a replica its runner is away from, so a stop that never succeeds would
+// otherwise show the changes as kept for good.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
@@ -360,6 +355,7 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 		return
 	}
+	settleAfterTeardown(ctx, func(sctx context.Context) { s.giveUpForcedPastKeep(sctx, run.ID) })
 	if !s.settleUnsettledForcedFolder(ctx, run) {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 		return
@@ -406,6 +402,22 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		}
 	}
 	if stopped {
+		// A copy back still owed is given up first, while the ref the give-up needs is set: once the ref is cleared
+		// no pass runs again, and the record would still show the changes as owed with no given_up row. Without the
+		// lock too: the give-up moves the record's generation on, so a pass still holding it writes nothing. A record
+		// not final yet keeps the ref and the mark for this tick. The next tick decides the sandbox again: while its
+		// cut is still not confirmed it stops again (a stop of a gone sandbox answers success) and tries the give-up
+		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record. A
+		// folder read that never answers is given up once the keep has run out (giveUpFolderStopped), so the stops
+		// end with the keep.
+		final, gerr := false, error(nil)
+		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderStopped(sctx, run) })
+		if !final {
+			slog.WarnContext(ctx, "wardynd: forced stop retry stopped a sandbox whose folder copy back could not be given up; its ref and mark stay",
+				slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+			return
+		}
 		// One success row per confirmed stop across replicas: only the clear that changed the row writes it,
 		// whatever the revoke does (the empty-ref clear that follows a failed revoke writes none). A store that
 		// is not Postgres has one writer, and counts as the one that cleared. A clear that errored writes none.
@@ -445,6 +457,24 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 	s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 }
 
+// giveUpForcedPastKeep gives up a marked run's owed copy back once its keep has run out, as the tail owner decides
+// and writes it (tailGiveUpOwed). Whether the keep has run out is the database's answer (RunDueFlags), asked first,
+// so inside the keep nothing more is read or logged; a read that fails is asked again on the next tick. It takes no
+// lock, since a holder that never lets go would block it for good: the statement moves the record's generation on,
+// so a pass still holding the record writes nothing. It stops nothing and leaves the mark alone. The statement
+// applies only to a record that is not final yet, and only an applied statement writes the audit row, so a give-up
+// raced by another replica or loop writes one row.
+func (s *Server) giveUpForcedPastKeep(ctx context.Context, id uuid.UUID) {
+	flags, ok := s.cfg.Store.(runDueReader)
+	if !ok {
+		return
+	}
+	if due, err := flags.RunDueFlags(ctx, id, s.pendingCap()); err != nil || !due.CapPassed {
+		return
+	}
+	s.tailGiveUpOwed(ctx, id)
+}
+
 // runnerGoneReason is why a failed stop of run's sandbox can never be confirmed, "" when it still can. It reads
 // the stop's error as the orchestrator gives it (Orchestrator.subForRef):
 //   - runner.ErrRunnerOffline (the runner is not registered, or its link is down) and runner.ErrPendingOnRunner (the
@@ -478,16 +508,19 @@ func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause
 }
 
 // settleUnsettledForcedFolder settles run's computer folder record when a forced end left it unsettled (its
-// process died between the claim and the settle), and leaves a settled record alone. It cuts the agent off first,
-// as the forced end does: owed (a resume) when that is observed and the sandbox keepable, otherwise as not
-// brought back. It reports false, having settled nothing, for a run on a runner that is not here and can come
-// back: the settle waits for the runner.
+// process died between the claim and the settle), and leaves a settled record alone, and a final one (folderFinal):
+// a give-up moves the generation on without settling it, and settleForcedFolder writes nothing over a final record,
+// so a given-up record is not cut a second time on each tick by the settle, nor held back from the stop by a cut
+// that is not observed.
+// It cuts the agent off first, as the forced end does: owed (a resume) when that is observed and the sandbox
+// keepable, otherwise as not brought back. It reports false, having settled nothing, for a run on a runner that is
+// not here and can come back: the settle waits for the runner.
 func (s *Server) settleUnsettledForcedFolder(ctx context.Context, run types.AgentRun) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return true
 	}
-	if rec, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || rec.Gen == rec.Settled {
+	if rec, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || rec.Gen == rec.Settled || folderFinal(rec) {
 		return true
 	}
 	if folder, _ := s.forcedFolder(ctx, run.ID); folder == nil {
@@ -511,7 +544,10 @@ func (s *Server) reviveExpiryDue(ctx context.Context, id uuid.UUID) *reviveError
 		// A failed read, or a run no longer lost, is the claim's to refuse (reasonReviveRunChanged).
 		return nil
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "read the database's clock", err))
+	}
 	until, ok := s.keptUntil(cur)
 	past := ok && !now.Before(until)
 	switch {

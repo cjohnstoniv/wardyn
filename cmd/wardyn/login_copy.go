@@ -23,6 +23,15 @@ const (
 	// A login that replaces this computer's sign-in could not sign the old one out (stderr; login succeeds).
 	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out in Settings → Signed-in CLIs"
 
+	// A login that moved the sign-in to the other store could not delete the old store's item (stderr; login
+	// succeeds): the keychain or the file's path, then the delete's error.
+	copyPreviousNotRemoved = "wardyn: signed in, but the previous sign-in is still stored in %s and could not be removed: %v"
+
+	// How a damaged item's read error ends (cli_session.go), and what replaces that ending in a line printed
+	// once the item is replaced or removed (readCause).
+	errDamagedAdvice = " is damaged: run `wardyn login` again"
+	copyWasDamaged   = " was damaged"
+
 	// A login whose write waited on another command's lock too long, and a step-up whose session changed.
 	errStoreBusy  = "another wardyn command held the CLI sign-in for %s too long; run `wardyn login` again"
 	errStepUpLost = "the CLI sign-in for %s changed while the browser was open: run `wardyn login --admin` again"
@@ -57,6 +66,9 @@ const (
 	errRenewBusy      = "another wardyn command is renewing the CLI sign-in for %s; retry in a moment"
 	errRenew          = "could not renew the CLI sign-in for %s: %v"
 	hintStoredRefused = "the CLI sign-in's token was refused: run `wardyn whoami`, or `wardyn login` to sign in again"
+
+	// A running command whose stored sign-in was signed out or replaced while it ran (errSessionChanged).
+	errSessionChangedText = "this computer's CLI sign-in changed while the command ran (signed out, or replaced by another `wardyn login`): the command stopped rather than go on under another sign-in or none; what it already sent stands (a started run keeps running); check `wardyn whoami` before you go on"
 
 	// whoami (board ATT1-Terminal frame 5).
 	copyRoleUser   = "user; admin commands need `wardyn login --admin`"

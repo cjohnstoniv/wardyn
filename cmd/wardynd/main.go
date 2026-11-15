@@ -42,7 +42,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
-	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // also registers the "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -62,6 +62,10 @@ const (
 // secretGatewayIdentityKey holds the keys that sign an AI gateway's run identity
 // token (internal/gatewayidentity): the current key and the previous one's public half.
 const secretGatewayIdentityKey = "wardyn-gateway-identity-key"
+
+// secretGatewayClientCA holds the CA that signs a run's AI gateway client certificate
+// (internal/gatewayidentity's Authority): its key, its certificate and the previous certificate.
+const secretGatewayClientCA = "wardyn-gateway-client-ca"
 
 // secretAuditReceiptKey holds the Ed25519 key that signs audit checkpoints (internal/auditsign): the current
 // key and every previous one's public half.
@@ -206,7 +210,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	// After the secret store's clean-ups: a boot step that fails right after a Put
+	// (a boot key, a device credential) exits here, and pool.Close alone would cut a
+	// clean-up that has not taken its connection. Once the shutdown sequence has
+	// waited for them, cleanUpWaitAfterServe sets the wait to none.
+	cleanUpWait := api.BackgroundShutdownBudget
+	defer func() { secretstorepg.CloseAfterCleanUps(pool, cleanUpWait) }()
 
 	// One instance per database, enforced at RUNTIME — the Helm chart's
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
@@ -397,6 +406,10 @@ func run() error {
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
+	// Nil unless WARDYN_AUDIT_SINKS has an otlp_metrics block; started after the workers below.
+	otlpMetrics := newOTLPMetrics(*f.auditSinks)
+	gatewayClientCA := bootKeys.gatewayClientCA()
+	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	srv := api.New(api.Config{
 		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
 		SweeperLease:         leader,
@@ -406,6 +419,7 @@ func run() error {
 		// Reads its row on first use, so an install with identity off has no key
 		// and takes no query per anonymous JWKS request past one each 30 seconds.
 		GatewayIdentity: bootKeys.gatewayIdentity(),
+		GatewayClientCA: gatewayClientCA,
 		Approvals:       approvals,
 		Broker:          brk,
 		// The wait ceiling a run's captured wait folds under; the approval
@@ -458,6 +472,9 @@ func run() error {
 		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
 		RecordingStore:       feats.recStore,
 		OIDC:                 feats.authn,
+
+		// The OTLP metrics push's failure count; nil (no series) with the push off.
+		OTLPPushConfig: api.OTLPPushConfig{OTLPMetricsPushFailures: otlpMetricsFailures(otlpMetrics)},
 
 		// The runner stream's anonymous in-flight bound per client address.
 		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
@@ -628,6 +645,8 @@ func run() error {
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
+	// OTLP metrics, off unless the sinks config has an otlp_metrics block; on every replica.
+	startOTLPMetrics(rootCtx, otlpMetrics, srv.MetricsText)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
@@ -640,7 +659,9 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	cleanUpsWaited, err := serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	cleanUpWait = cleanUpWaitAfterServe(cleanUpsWaited)
+	return err
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved

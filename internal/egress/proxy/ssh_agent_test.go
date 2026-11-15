@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -345,12 +344,7 @@ func TestSSHAgent_MintFailureAnswerHasNoTopology(t *testing.T) {
 	frame := binary.BigEndian.AppendUint32(nil, 1)
 	frame = append(frame, 11) // SSH_AGENTC_REQUEST_IDENTITIES
 	ipLiteral := regexp.MustCompile(`\d{1,3}(\.\d{1,3}){3}`)
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	refused := closed.Addr().String()
-	_ = closed.Close() // nothing listens here now
+	refused := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 	for _, tc := range []struct {
 		name string
 		opts func(*Options)

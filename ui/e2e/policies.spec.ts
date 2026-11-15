@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute, sidewaysScroll } from "./fixtures";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import { GIT_PAT_SCOPE, OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
@@ -148,6 +148,16 @@ test("the policy dialog keeps Cancel and Create on screen however tall the form 
   await dialog.getByLabel(SPEC_LABEL).focus();
   await page.keyboard.press("Control+End");
   await expect(create).toBeInViewport();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("nothing in the new-policy dialog scrolls sideways at 320, 375, 412 or 430 (D531)", async ({ page }) => {
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  for (const width of [320, 375, 412, 430]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect.poll(() => sidewaysScroll(dialog), { message: `${width}px` }).toEqual([]);
+  }
   await dialog.getByRole("button", { name: "Cancel" }).click();
 });
 

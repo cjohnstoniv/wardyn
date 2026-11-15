@@ -145,7 +145,8 @@ func Run(ctx context.Context, o RunOptions) error {
 }
 
 // lockDisks locks each disk drive for as long as this VM may have it attached, and makes a writable one
-// on its first run. Another run on this Mac that holds one stops this start. unlock releases them all.
+// on its first run. Another run on this Mac that holds one stops this start, and so does an image the
+// guest would format that the runner did not make new (CheckDiskImage). unlock releases them all.
 func (r *runner) lockDisks() (unlock func(), err error) {
 	var held []func()
 	unlock = func() {
@@ -165,6 +166,12 @@ func (r *runner) lockDisks() (unlock func(), err error) {
 				unlock()
 				return nil, err
 			}
+		}
+		// Under the lock this VM keeps, and before the VM is built: the guest formats a disk that starts
+		// with 4 KiB of zeros, and an existing drive damaged there must not be formatted.
+		if err := CheckDiskImage(d.Path); err != nil {
+			unlock()
+			return nil, fmt.Errorf("macvm: disk %s: %w", d.ID, err)
 		}
 		r.o.Log.Info("macvm: attaching a disk drive", "run_id", r.cfg.RunID, "id", d.ID, "read_only", d.ReadOnly)
 	}

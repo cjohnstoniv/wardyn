@@ -5,7 +5,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -54,9 +53,7 @@ func readAddOrgRunnerBody(w http.ResponseWriter, r *http.Request) (addOrgRunnerB
 		return req, false
 	}
 	if len(bytes.TrimSpace(raw)) > 0 {
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
+		if err := types.DecodeOneJSON(bytes.NewReader(raw), &req, true); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 			return req, false
 		}

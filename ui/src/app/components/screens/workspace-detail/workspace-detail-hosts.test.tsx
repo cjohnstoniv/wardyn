@@ -59,7 +59,7 @@ vi.mock("../../../lib/api/permissions", async () => {
 import { toast } from "sonner";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 import { WORKSPACE_HOSTS } from "../../wardyn/copy/workspace-hosts";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -340,6 +340,30 @@ describe("a stale host-list save", () => {
 // EFFECTIVE fold. A scan_seeded row is in neither: removing it would fire two
 // no-op writes and the row would come straight back.
 describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove path can reach it", () => {
+  it("the requirements clear after another person signed in still names the person who removed the host", async () => {
+    // The server then refuses it rather than clear the row as the next person.
+    const operatorSet = { level: "required" as const, provenance: "operator_set" as const };
+    getWorkspaceMock.mockResolvedValue(
+      ws({ approved_egress: ["registry.npmjs.org"], requirements: { "egress:registry.npmjs.org": operatorSet } }),
+    );
+    let landed!: (w: unknown) => void;
+    setApprovedEgressMock.mockImplementationOnce(() => new Promise((done) => (landed = done)));
+    setRequirementsMock.mockResolvedValue(ws({ approved_egress: [], requirements: {} }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
+    setExpectedPrincipal("a@example.com");
+    await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
+    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    landed(ws({ approved_egress: [], requirements: { "egress:registry.npmjs.org": operatorSet } }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][2]).toBe("a@example.com");
+    setExpectedPrincipal("");
+  });
+
   it("parks a scan_seeded-only row with a reason, and leaves an approved host live", async () => {
     getWorkspaceMock.mockResolvedValue(
       ws({

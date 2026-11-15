@@ -4,7 +4,7 @@
  */
 
 import type { Locator } from "@playwright/test";
-import { test, expect, asRealSecurityAdmin, expandCard, gotoConsole, navTo } from "./fixtures";
+import { test, expect, asRealSecurityAdmin, expandCard, gotoConsole, navTo, navToRoute, sidewaysScroll } from "./fixtures";
 import { BRANDING } from "../src/app/lib/branding-copy";
 import { COMPONENTS_ADMIN } from "../src/app/components/wardyn/copy/components-admin";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
@@ -12,6 +12,7 @@ import { PERM } from "../src/app/lib/permissions-copy";
 import { BASELINE } from "../src/app/lib/governance-copy";
 import { PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
 import { USER_TYPES as UT } from "../src/app/lib/user-types-copy";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 // #3064: every short form ends the same way, actions at the right end with the one primary last. The bars are read
 // by geometry (the button's right edge against its bar's), which is what a person sees.
@@ -103,5 +104,35 @@ test.describe("form action bars (#3064)", () => {
     const pad = await barEl.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
     const s = (await save.boundingBox())!;
     expect(Math.abs(bar.x + bar.width - pad - (s.x + s.width))).toBeLessThanOrEqual(1);
+  });
+});
+
+test.describe("phone widths (D528)", () => {
+  test("Component editor: neither the dialog nor a card or switch inside it scrolls sideways at 320, 375, 412 or 430", async ({ page }) => {
+    const component = {
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Contoso MCP",
+      version: 1,
+      created_at: aheadByHours(-24),
+      updated_at: aheadByHours(-24),
+      definition: {
+        hosts: ["mcp.contoso.example"],
+        mcp: { transport: "http", url: "https://mcp.contoso.example/mcp" },
+        secrets: [{ secret_name: "contoso-token", delivery: { mode: "header", host: "mcp.contoso.example" } }],
+      },
+    };
+    await page.route("**/api/v1/components", (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: [component] }) : route.fallback(),
+    );
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/components");
+    await page.getByRole("button", { name: COMPONENTS_ADMIN.EDIT_ARIA(component.name) }).click();
+    const dialog = page.getByRole("dialog", { name: COMPONENTS_ADMIN.EDITOR_EDIT });
+    await expect(dialog.getByTestId("component-secret-row")).toBeVisible();
+    for (const width of [320, 375, 412, 430]) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect.poll(() => sidewaysScroll(dialog), { message: `${width}px` }).toEqual([]);
+    }
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 });

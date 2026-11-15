@@ -44,11 +44,12 @@ func TestEstablishExec_BackgroundRunNeverAttaches(t *testing.T) {
 			attaches.Add(1)
 			return newFakeShellSession(), nil
 		}}
-		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: fr})
+		st, run := newSSHMemStore(), types.AgentRun{ID: uuid.New(), State: types.RunRunning, SandboxRef: "sbx-1", Experience: exp}
+		st.putRun(run)
+		srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: fr})
 		h := &attachHolder{}
 		h.writable.Store(true)
 		t.Cleanup(func() { _ = h.mux.Close() })
-		run := types.AgentRun{ID: uuid.New(), SandboxRef: "sbx-1", Experience: exp}
 		err := srv.establishExec(t.Context(), run, h)
 		return attaches.Load(), err
 	}

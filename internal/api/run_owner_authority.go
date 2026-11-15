@@ -607,7 +607,7 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 	if !remotePlacement(run.Placement) {
 		return s.refreshLocalDeploymentConfig(ctx, run, sc, cfg)
 	}
-	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil)
+	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil, upstreamNoHopReason(run))
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
 	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)

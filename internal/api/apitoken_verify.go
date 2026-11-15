@@ -7,10 +7,12 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -87,54 +89,36 @@ func (s *Server) verifyAPIToken(w http.ResponseWriter, r *http.Request, raw stri
 			return verifiedAPIToken{}, r, verdict
 		}
 	} else {
-		// A row minted for a reserved principal (before the sign-in callback
-		// refused one) would replay it as that identity (#1162). Audited and
-		// answered here: the fallback would only record invalid_admin_token.
-		if s.refuseReservedPrincipal(w, r, t.Principal, apiTokenReservedRefusal) {
+		// personTokenRefusal is the whole owner check; the admin-minted token inventory asks the same one, so
+		// the list can never call a token working that this refuses.
+		refusal, rerr := s.personTokenRefusal(r.Context(), t, s.cfg.Now().UTC())
+		if rerr != nil {
+			// A store FAILURE fails closed with the same 503 the lookup failure
+			// gives, and for the same reason — an unanswerable revocation check must
+			// never read as "not revoked". 503 rather than 500: the token may
+			// be perfectly good, this deployment simply cannot decide, and the SSO
+			// lane now answers the identical condition the identical way.
+			slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
+				"error", rerr, "path", r.URL.Path)
+			s.metrics.authStoreErrorInc()
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 			return verifiedAPIToken{}, r, tokenAnswered
 		}
-		// The same cutoff the session lane obeys, applied to the token's
-		// created_at. Without it POST /sessions/revoke was a race the sweep
-		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
-		// and a mint whose INSERT commits after that snapshot is never reachable
-		// by that revoke again — a token minted without an expiry never ages out, so the escaped row is
-		// a permanent credential. Closing it on the READ side rather than by
-		// locking the writer also removes the sweep's dependence on winning the
-		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
-		// show the row revoked), but a row it missed no longer authenticates.
-		//
-		// A token created at or before the cutoff is not a credential; one
-		// minted AFTER it is, which is correct — that is a new credential the
-		// principal minted from a session that itself cleared the cutoff.
-		//
-		// Refused rather than answered here, for the reason the not-found
-		// arm above is: unknown, revoked and cut-off collapse into one 401
-		// from one place, and no branch here becomes an existence oracle.
-		//
-		// A store FAILURE fails closed with the same 503 the lookup failure
-		// gives, and for the same reason — an unanswerable revocation check must
-		// never read as "not revoked". 503 rather than 500: the token may
-		// be perfectly good, this deployment simply cannot decide, and the SSO
-		// lane now answers the identical condition the identical way.
-		if s.cfg.SessionRevocations != nil {
-			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
-			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
-			if rerr != nil {
-				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
-					"error", rerr, "path", r.URL.Path)
-				s.metrics.authStoreErrorInc()
-				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
-				return verifiedAPIToken{}, r, tokenAnswered
-			}
-			if status != oidc.SessionLive {
-				if status == oidc.SessionDeactivated {
-					r = r.WithContext(oidc.WithSessionRejected(r.Context(), authFailedIdentityDeactivated))
-				}
-				return verifiedAPIToken{}, r, tokenRefused
-			}
-		}
-		if s.refuseStaleRoleStamp(w, r, t) {
+		switch refusal {
+		case personReserved:
+			// Audited and answered here: the fallback would only record invalid_admin_token.
+			s.refuseReservedPrincipal(w, r, t.Principal, apiTokenReservedRefusal)
+			return verifiedAPIToken{}, r, tokenAnswered
+		case personDeactivated:
+			r = r.WithContext(oidc.WithSessionRejected(r.Context(), authFailedIdentityDeactivated))
+			return verifiedAPIToken{}, r, tokenRefused
+		case personCutOff:
+			// Refused rather than answered here, for the reason the not-found
+			// arm above is: unknown, revoked and cut-off collapse into one 401
+			// from one place, and no branch here becomes an existence oracle.
+			return verifiedAPIToken{}, r, tokenRefused
+		case personStampStale:
+			s.answerStaleRoleStamp(w, r, t)
 			return verifiedAPIToken{}, r, tokenAnswered
 		}
 	}
@@ -149,4 +133,63 @@ func (s *Server) verifyAPIToken(w http.ResponseWriter, r *http.Request, raw stri
 		return verifiedAPIToken{}, r, tokenRefused
 	}
 	return v, r, tokenVerified
+}
+
+// personRefusal is personTokenRefusal's answer: why a person's token that is neither revoked nor expired is
+// refused for its owner, or personAccepted.
+type personRefusal int
+
+const (
+	personAccepted personRefusal = iota
+	// personReserved: the token's principal is reserved (isReservedPrincipal).
+	personReserved
+	// personDeactivated: the owner's identity is deactivated or purged.
+	personDeactivated
+	// personCutOff: a revocation cutoff on the owner came after the token was made.
+	personCutOff
+	// personStampStale: the token's role stamp is older than WARDYN_ROLE_STAMP_TTL (roleStampStale).
+	personStampStale
+)
+
+// personTokenRefusal is the owner check verifyAPIToken runs on a person's token, in its order, and the one
+// the admin-minted token inventory reads (markOwnerRefusals): one predicate, so the two cannot disagree.
+// It writes nothing; verifyAPIToken answers each refusal its own way. A store error is returned as is.
+func (s *Server) personTokenRefusal(ctx context.Context, t types.APIToken, now time.Time) (personRefusal, error) {
+	// A row minted for a reserved principal (before the sign-in callback
+	// refused one) would replay it as that identity (#1162).
+	if s.isReservedPrincipal(t.Principal) {
+		return personReserved, nil
+	}
+	// The same cutoff the session lane obeys, applied to the token's
+	// created_at. Without it POST /sessions/revoke was a race the sweep
+	// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
+	// and a mint whose INSERT commits after that snapshot is never reachable
+	// by that revoke again — a token minted without an expiry never ages out, so the escaped row is
+	// a permanent credential. Closing it on the READ side rather than by
+	// locking the writer also removes the sweep's dependence on winning the
+	// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
+	// show the row revoked), but a row it missed no longer authenticates.
+	//
+	// A token created at or before the cutoff is not a credential; one
+	// minted AFTER it is, which is correct — that is a new credential the
+	// principal minted from a session that itself cleared the cutoff.
+	if s.cfg.SessionRevocations != nil {
+		// The same read asks whether the owner's identity is deactivated (a token has no epoch of
+		// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
+		status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
+		if err != nil {
+			return personAccepted, err
+		}
+		switch status {
+		case oidc.SessionLive:
+		case oidc.SessionDeactivated:
+			return personDeactivated, nil
+		default:
+			return personCutOff, nil
+		}
+	}
+	if s.roleStampStale(t, now) {
+		return personStampStale, nil
+	}
+	return personAccepted, nil
 }

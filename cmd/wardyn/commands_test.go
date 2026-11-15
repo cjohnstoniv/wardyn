@@ -1732,8 +1732,8 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 
 	dir := t.TempDir()
 	file := dir + "/policy.json"
-	// A bare spec (no top-level "name"); --name must supply it.
-	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
+	// No top-level "name": --name must supply it. updated_at is the version the file was read at.
+	writeFile(t, file, `{"updated_at":"2026-11-13T03:00:00.123456Z","spec":{"min_confinement_class":"CC1"}}`)
 
 	polID := uuid.New()
 	root := rootCmd()
@@ -1754,6 +1754,9 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	if body["name"] != "renamed" {
 		t.Errorf("name = %v, want renamed (the --name override)", body["name"])
 	}
+	if body["expected_updated_at"] != "2026-11-13T03:00:00.123456Z" {
+		t.Errorf("expected_updated_at = %v, want the file's updated_at", body["expected_updated_at"])
+	}
 	// N1: pins the verb word itself — an id given must say "updated", never
 	// "created", independent of what the HTTP method/path assertions above
 	// already catch (those alone left `verb = "created"` on the id-given path
@@ -1763,6 +1766,28 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "created policy") {
 		t.Errorf("output = %q, must not say \"created policy\" when a policy-id was given", out.String())
+	}
+}
+
+// A replace from a file with no updated_at is refused before any request, so it cannot undo a save it
+// never saw; --overwrite reads the stored policy's updated_at and sends that instead.
+func TestPolicySetCmd_WithIDNeedsUpdatedAtOrOverwrite(t *testing.T) {
+	file := t.TempDir() + "/policy.json"
+	writeFile(t, file, `{"name":"x","spec":{"min_confinement_class":"CC1"}}`)
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: id, Name: "x", UpdatedAt: time.Date(2026, 11, 13, 3, 0, 0, 123456000, time.UTC)})
+	err := execCmd(t, "policy", "set", id.String(), "-f", file, "--url", srv.URL, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "--overwrite") || srv.last().method != "" {
+		t.Fatalf("err = %v, last request %q: want a local refusal naming --overwrite and no request", err, srv.last().method)
+	}
+	if err := execCmd(t, "policy", "set", id.String(), "-f", file, "--overwrite", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("--overwrite: %v", err)
+	}
+	got := srv.last()
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if got.method != http.MethodPut || body["expected_updated_at"] != "2026-11-13T03:00:00.123456Z" {
+		t.Errorf("--overwrite sent %s with expected_updated_at %v, want a PUT naming the stored updated_at", got.method, body["expected_updated_at"])
 	}
 }
 
@@ -2345,6 +2370,56 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	}
 	if !strings.Contains(out, "run.dispatch") || !strings.Contains(out, "run.complete") {
 		t.Errorf("run logs output = %q, want both the truncated page and the one after it", out)
+	}
+}
+
+// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped within one second, more than a page and
+// all within logTailMargin, against a server that applies since and offset as the real one does.
+// Each poll pages on by offset under one filter, so every event prints once; restarting from since
+// alone re-read the first page and stopped there.
+func TestLogsCmd_PagesADenseTrailByOffset(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	all := make([]types.AuditEvent, 0, 2501)
+	for range 2500 {
+		all = append(all, types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.decision", Outcome: "success"})
+	}
+	all = append(all, types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.complete", Outcome: "success"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+			return
+		}
+		var since time.Time
+		if v := r.URL.Query().Get("since"); v != "" {
+			since, _ = time.Parse(time.RFC3339, v)
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		var match []types.AuditEvent
+		for _, e := range all {
+			if !e.Time.Before(since) {
+				match = append(match, e)
+			}
+		}
+		page := match[min(offset, len(match)):]
+		if len(page) > 1000 {
+			page = page[:1000]
+			w.Header().Set("X-Wardyn-Truncated", "true")
+		}
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	t.Cleanup(srv.Close)
+	for _, follow := range []string{"--follow=false", "--follow=true"} {
+		out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+			root.SetArgs([]string{"run", "logs", runID.String(), follow, "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", follow, err)
+		}
+		if n, c := strings.Count(out, "egress.decision"), strings.Count(out, "run.complete"); n != 2500 || c != 1 {
+			t.Errorf("%s: printed %d of the 2500 events and run.complete %d times, want each once", follow, n, c)
+		}
 	}
 }
 

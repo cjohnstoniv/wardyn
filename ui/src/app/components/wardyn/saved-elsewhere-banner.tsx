@@ -35,6 +35,7 @@ export function SavedElsewhereBanner({
   documentText,
   onDiscard,
   reloaded = false,
+  disabled = false,
 }: {
   /** The WHOLE document as the editor currently holds it — what's shown here
    *  IS what Copy my changes puts on the clipboard (Q460-3), never a
@@ -43,6 +44,8 @@ export function SavedElsewhereBanner({
   onDiscard: () => void;
   /** The screen has already reloaded the saved version, so the words say what it shows instead of asking for a reload. */
   reloaded?: boolean;
+  /** Holds Discard while the screen cannot take a reload; Copy stays live. */
+  disabled?: boolean;
 }) {
   const { copied, copyAsync } = useCopyToClipboard();
   const textRef = React.useRef<HTMLPreElement>(null);
@@ -73,7 +76,7 @@ export function SavedElsewhereBanner({
             pressed first, and Discard is no longer its only exit. Never a
             "save over theirs" arm — a security document is never
             last-writer-wins from this banner. */}
-        <Button variant="ghost" size="sm" onClick={onDiscard}>
+        <Button variant="ghost" size="sm" onClick={onDiscard} disabled={disabled}>
           {reloaded ? PROVIDERS_EXTRA.DISCARD_RELOADED : PROVIDERS_EXTRA.DISCARD_AND_RELOAD}
         </Button>
       </div>

@@ -76,9 +76,11 @@ type RunOutputStore interface {
 	// DeleteRunOutputsOlderThan deletes final rows captured longer ago than age
 	// (the database's clock), returning how many went.
 	DeleteRunOutputsOlderThan(ctx context.Context, age time.Duration) (int, error)
-	// ListStalePendingRunOutputs returns the runs whose pending row was claimed
-	// longer ago than age and which are terminal, oldest first, at most limit.
-	ListStalePendingRunOutputs(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error)
+	// ListStalePendingRunOutputs returns up to limit runs whose pending row was claimed longer ago than age
+	// and which are terminal, oldest claim first (the run id breaks a tie), after the cursor when one is
+	// given. The returned cursor is the last row's, and nil when the page was short: the caller then starts
+	// again from the oldest.
+	ListStalePendingRunOutputs(ctx context.Context, age time.Duration, after *SweepCursor, limit int) ([]uuid.UUID, *SweepCursor, error)
 	// QueueRecordingRunOutput records recovery work after a committed upload.
 	// newRecording also invalidates a running claim; false is bounded read repair.
 	QueueRecordingRunOutput(ctx context.Context, runID uuid.UUID, retention, retryAfter time.Duration, newRecording bool) error
@@ -299,26 +301,24 @@ func (s PG) DeleteRunOutputsOlderThan(ctx context.Context, age time.Duration) (i
 }
 
 // ListStalePendingRunOutputs — see RunOutputStore.
-func (s PG) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error) {
+func (s PG) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, after *SweepCursor, limit int) ([]uuid.UUID, *SweepCursor, error) {
 	nonTerminal := make([]string, len(types.NonTerminalRunStates))
 	for i, st := range types.NonTerminalRunStates {
 		nonTerminal[i] = string(st)
 	}
-	rows, err := s.Pool.Query(ctx, `
-		SELECT o.run_id FROM run_outputs o JOIN agent_runs r ON r.id = o.run_id
-		WHERE o.captured_at IS NULL AND o.claimed_at < now() - make_interval(secs => $1) AND r.state <> ALL($2)
-		ORDER BY o.claimed_at LIMIT $3`, age.Seconds(), nonTerminal, limit)
+	const head = `SELECT o.run_id, o.claimed_at FROM run_outputs o JOIN agent_runs r ON r.id = o.run_id
+		WHERE o.captured_at IS NULL AND o.claimed_at < now() - make_interval(secs => $1) AND r.state <> ALL($2)`
+	const tail = ` ORDER BY o.claimed_at, o.run_id LIMIT `
+	var rows pgx.Rows
+	var err error
+	if after != nil {
+		rows, err = s.Pool.Query(ctx, head+` AND (o.claimed_at, o.run_id) > ($3, $4)`+tail+`$5`,
+			age.Seconds(), nonTerminal, after.At, after.ID, limit)
+	} else {
+		rows, err = s.Pool.Query(ctx, head+tail+`$3`, age.Seconds(), nonTerminal, limit)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("store: list stale pending run outputs: %w", err)
+		return nil, nil, fmt.Errorf("store: list stale pending run outputs: %w", err)
 	}
-	defer rows.Close()
-	var out []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("store: scan stale pending run output: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return scanSweepPage(rows, limit, "stale pending run outputs")
 }

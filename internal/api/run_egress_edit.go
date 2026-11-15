@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -51,6 +52,66 @@ var (
 	egressEditPoll = 500 * time.Millisecond
 	egressEditWait = proxyReportGrace + 15*time.Second
 )
+
+// A live egress edit has three ends, all counted from its first check (editCtx). Its request-bound calls end by
+// egressEditCallBudget, so the revive's claim lands by then. The readback wait ends by egressEditBudget, the
+// edit's deadline. Every window the edit opens past its request, and the tail of every run's end made under it,
+// ends by that deadline plus killCascadeTimeout, the edit's hard end. The census pin
+// (TestEgressEditBudget_CoversEveryWindowAfterTheClaim) checks that a revive's own windows fit before the call
+// budget, and that every window after a claim made by then closes before the hard end. Past the hard end only
+// calls that do not honour a done ctx remain. The longest chain of them is lock checks and releases, Docker's
+// sandbox stop, and the audit sinks' 2 s read for each of the two stop-failure rows: 458 s, stated as 8 minutes
+// (docs/operations/run-lifetime.md). A kept run's store of a renewed Azure sign-in (heldStoreCallBound) makes a
+// shorter chain. Variables so a test can shorten them.
+var (
+	egressEditCallBudget = 230 * time.Second
+	egressEditBudget     = 350 * time.Second
+)
+
+// editDeadlineKey carries a live egress edit's deadline on its ctx as a value: a call that must outlive the
+// request drops the request's cancellation, and its deadline with it (editDetached).
+type editDeadlineKey struct{}
+
+// withEditDeadline is ctx under a live egress edit whose deadline is dl.
+func withEditDeadline(ctx context.Context, dl time.Time) context.Context {
+	return context.WithValue(ctx, editDeadlineKey{}, dl)
+}
+
+// editDeadline is the deadline of the live egress edit ctx is under, if it is under one.
+func editDeadline(ctx context.Context) (time.Time, bool) {
+	dl, ok := ctx.Value(editDeadlineKey{}).(time.Time)
+	return dl, ok
+}
+
+// editCtx is the ctx a live egress edit runs on, from now: ctx's values and cancellation, ending
+// egressEditCallBudget from now, and carrying the edit's deadline (egressEditBudget from now) and its hard end,
+// that deadline plus killCascadeTimeout. The hard end rides as an end hold's deadline (withHoldDeadline), so the
+// tail of any run's end made under the edit stops there, whether that end took a hold of its own or none (a run
+// with no computer folder takes none, lockRunEnd): its fresh windows end there (teardownCtxWithin,
+// settleAfterTeardown), past it the sandbox is not stopped (finalizeRunEffects), and the tail owner finishes the
+// run. A hold taken under the edit nests in it (holdRunEnd): it takes no end-hold slot, since every end on the
+// edit's paths re-enters the run's lock the edit's caller already holds, and so takes no lock connection.
+func editCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	now := time.Now()
+	dl := now.Add(egressEditBudget)
+	ctx = withHoldDeadline(withEditDeadline(ctx, dl), dl.Add(killCascadeTimeout))
+	return context.WithDeadline(ctx, now.Add(egressEditCallBudget))
+}
+
+// editDetached is a window of d for a call an edit's answer waits on that must outlive the request: ctx's
+// values with none of its cancellation but a lost lock's (db.WithoutCancelUnlessLost), ending d from now.
+// Under an edit it ends by the edit's hard end when that comes first, and keeps the edit's end hold, so a
+// stop begun in it, nested or not, lets its tail run to the hard end, not to this window's end (editCtx).
+// Off an edit it is the plain window.
+func editDetached(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	fenced, release := db.WithoutCancelUnlessLost(ctx)
+	end := time.Now().Add(d)
+	if dl, ok := editDeadline(ctx); ok {
+		end = minTime(end, dl.Add(killCascadeTimeout))
+	}
+	out, cancel := context.WithDeadline(fenced, end)
+	return out, func() { cancel(); release() }
+}
 
 // maxEgressEditHosts bounds each list of one edit, as allowed_domains is bounded.
 const maxEgressEditHosts = types.MaxAllowedDomainsPerSpec
@@ -203,11 +264,18 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 // past the body check writes one run.egress.edit row.
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
-	res, rerr := s.editRunEgressOnce(r, run, edit)
+	// The edit's ends (editCtx). Its request-bound calls end by the first, as when its caller stops waiting, and
+	// the deadline and the hard end ride on the ctx to every window and run's end the answer waits on. The audit
+	// row stays on the request.
+	ectx, cancel := editCtx(r.Context())
+	defer cancel()
+	res, rerr := s.editRunEgressOnce(r.WithContext(ectx), run, edit)
+	fctx, cancelFate := editDetached(ectx, killCascadeTimeout)
+	defer cancelFate()
 	if res.inPlace != nil {
-		rerr = s.withNarrowFate(r.Context(), run, rerr)
+		rerr = s.withNarrowFate(fctx, run, rerr)
 	} else {
-		rerr = s.withRunFate(r.Context(), run, rerr)
+		rerr = s.withRunFate(fctx, run, rerr)
 	}
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
@@ -261,9 +329,16 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	case lost && res.generation < 1: // lost before a start was recorded: no start to fence a stop on
 		return egressEditResult{}, egressEditUnresolved(rerr.reason, nil)
 	}
-	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), egressEditWait)
+	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running. It ends by
+	// the edit's deadline, so a stop it leads to keeps its whole window, and that stop's tail runs to the hard
+	// end (editDetached).
+	ctx, cancel := editDetached(r.Context(), egressEditWait)
 	defer cancel()
+	if dl, ok := editDeadline(ctx); ok {
+		var endWait context.CancelFunc
+		ctx, endWait = context.WithDeadline(ctx, dl)
+		defer endWait()
+	}
 	if inPlace != nil {
 		ctx = withNarrowedStart(ctx)
 	}
@@ -370,9 +445,10 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 // A test hook.
 var egressEditSawUncontained = func() {}
 
-// stopCtx is a fresh bound for a stop the edit waits on: the readback wait may have run out.
+// stopCtx is a fresh bound for a stop the edit waits on, or a read after one: the readback wait may have run
+// out. Under an edit it ends by the edit's hard end (editDetached).
 func stopCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	return editDetached(ctx, killCascadeTimeout)
 }
 
 // containEditStart contains the failed start gen and answers by the result. done is false while the

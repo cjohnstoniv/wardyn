@@ -12,6 +12,10 @@
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
 #   - on with k8s.agentSandbox.template adds only get on that one sandboxtemplate and WARDYN_K8S_AGENT_SANDBOX_TEMPLATE;
 #     the template without the backend is refused;
+#   - keep off (k8s.agentSandbox.keep absent, null, false) renders the same bytes as on without it; keep on adds only the
+#     services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP, and the rest of the render is on's, document for document; keep on without the backend is refused;
+#   - keep on also renders two ValidatingAdmissionPolicies and two bindings, <fullname>-keep-service (Services only) and
+#     <fullname>-keep-endpoints (EndpointSlices only), selected on wardynd's identity; keep off, or the backend off, renders none;
 #   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -106,6 +110,75 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.te
 grep -q sandboxtemplates "$TMP/on.out" && die "on without a template: a sandboxtemplates rule rendered"
 ok "template: get on the one sandboxtemplate, WARDYN_K8S_AGENT_SANDBOX_TEMPLATE set"
 
+# Keep: off renders the same bytes as on without the key; on adds only its two rules and its env.
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=false >"$TMP/keep-false.out"
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep=null >"$TMP/keep-null.out"
+cmp -s "$TMP/on.out" "$TMP/keep-false.out" || die "keep.enabled=false renders differently from keep absent"
+cmp -s "$TMP/on.out" "$TMP/keep-null.out" || die "an explicit keep null renders differently from keep absent"
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true >"$TMP/keep.out"
+[[ "$(y -o=json -I=0 "$role | .rules[] | select(.resources[0] == \"services\")" "$TMP/keep.out")" == '{"apiGroups":[""],"resources":["services"],"verbs":["create","get","delete"]}' ]] \
+  || die "keep: the runner Role has no, or a wider, services rule"
+[[ "$(y -o=json -I=0 "$role | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/keep.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","delete","deletecollection"]}' ]] \
+  || die "keep: the runner Role has no, or a wider, endpointslices rule"
+[[ "$(y "$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/keep.out" | grep -vx 0 || true)" == 2 ]] \
+  || die "keep: not exactly the services and endpointslices rules"
+[[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP") | .value' "$TMP/keep.out")" == "true" ]] \
+  || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"
+grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP\|endpointslices' "$TMP/on.out" && die "on without keep: a keep marker rendered"
+# Whole documents: keep.out less its two rules, its env and its policy objects is on.out, so nothing else changed.
+y 'select(((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("keep-"))) | not)
+  | del(.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))
+  | del(.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP"))' "$TMP/keep.out" >"$TMP/keep-less.out"
+y '.' "$TMP/on.out" >"$TMP/on-whole.out"
+diff "$TMP/on-whole.out" "$TMP/keep-less.out" >"$TMP/keep-diff" || { cat "$TMP/keep-diff" >&2; die "keep: the render differs from on in more than its two rules, its env and its policy objects"; }
+ok "keep: off (absent, false, null) renders the same bytes; on adds services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP"
+
+# Keep's two admission policies: one per kind, each selected on wardynd's identity, Deny on the runs namespace.
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+  || die "keep: not exactly the policies r-wardyn-keep-service and r-wardyn-keep-endpoints"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+  || die "keep: not exactly the bindings r-wardyn-keep-service and r-wardyn-keep-endpoints"
+for n in keep-service keep-endpoints; do
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\") | .spec.matchConditions[0].expression" "$TMP/keep.out")" == "request.userInfo.username == 'system:serviceaccount:default:wardyn-byo'" ]] \
+    || die "keep: the $n match condition is not wardynd's authenticated identity"
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\") | .spec.policyName + \" \" + (.spec.validationActions | join(\",\"))" "$TMP/keep.out")" == "r-wardyn-$n Deny" ]] \
+    || die "keep: the $n binding is not Deny for its policy"
+done
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-service") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "services" ]] \
+  || die "keep: the keep-service policy does not match services only"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-endpoints") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "endpointslices" ]] \
+  || die "keep: the keep-endpoints policy does not match endpointslices only"
+# The whole-document compare above leaves these four documents out, so each is read field by field here: its
+# apiVersion, the number of keys at each level, and every value but the common labels.
+for n in keep-service keep-endpoints; do
+  case "$n" in
+    keep-service)
+      rule='{"apiGroups":[""],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["services"]}'
+      expr="object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
+      msg="wardynd may make only a run's own ClusterIP Service, with no selector and no external IPs" ;;
+    keep-endpoints)
+      rule='{"apiGroups":["discovery.k8s.io"],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["endpointslices"]}'
+      expr="has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')"
+      msg="wardynd may write EndpointSlices only for a run's own Service" ;;
+  esac
+  kp="select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\")"
+  kb="select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\")"
+  [[ "$(y "$kp | [.apiVersion, (. | length), (.metadata | length), .spec.failurePolicy, (.spec | length), (.spec.matchConstraints | length), (.spec.matchConstraints.resourceRules | length), (.spec.matchConditions | length), (.spec.matchConditions[0] | length), .spec.matchConditions[0].name, (.spec.validations | length), (.spec.validations[0] | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2,Fail,4,1,1,1,2,requested-by-wardynd,1,2" ]] \
+    || die "keep: the $n policy is not v1, fail-closed, with exactly one resource rule, one match condition and one validation"
+  [[ "$(y -o=json -I=0 "$kp | .spec.matchConstraints.resourceRules[0]" "$TMP/keep.out")" == "$rule" ]] \
+    || die "keep: the $n policy's resource rule is not exactly v1 CREATE and UPDATE on its one resource"
+  [[ "$(y "$kp | .spec.validations[0].expression" "$TMP/keep.out")" == "$expr" ]] || die "keep: the $n validation is not the expected expression"
+  [[ "$(y "$kp | .spec.validations[0].message" "$TMP/keep.out")" == "$msg" ]] || die "keep: the $n validation message changed"
+  [[ "$(y "$kb | [.apiVersion, (. | length), (.metadata | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2" ]] \
+    || die "keep: the $n binding is not v1 with only a name and labels"
+  [[ "$(y -o=json -I=0 "$kb | .spec" "$TMP/keep.out")" == "{\"policyName\":\"r-wardyn-$n\",\"validationActions\":[\"Deny\"],\"matchResources\":{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"wardyn-runs\"}}}}" ]] \
+    || die "keep: the $n binding is not exactly Deny for its policy on the runs namespace"
+done
+for f in on keep-false keep-null; do
+  if grep -q 'keep-service\|keep-endpoints' "$TMP/$f.out"; then die "keep policy rendered with keep off ($f)"; fi
+done
+ok "keep: two policies and two bindings, one kind each, on wardynd's identity; none with keep off"
+
 # Nothing else changed: the added lines are the rule, the verb, the env and the two policy objects.
 diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "delete", "deletecollection"\]' \
   | grep -v -e '^< *$' -e '^< # Source:' >"$TMP/removed" || true
@@ -193,6 +266,7 @@ ok "on: the controller identity values reach the match condition"
 refused "controller identity is wardynd's own ServiceAccount" "is wardynd's own ServiceAccount" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
   --set k8s.agentSandbox.controller.namespace=default --set k8s.agentSandbox.controller.serviceAccount=wardyn-byo -n default
 refused "controller identity with a quote in it" "must be Kubernetes names" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set "k8s.agentSandbox.controller.serviceAccount=x' || true || '"
+refused "keep without the backend" "k8s.agentSandbox.keep.enabled needs k8s.agentSandbox.enabled=true" -f "$ALLON" --set k8s.agentSandbox.keep.enabled=true
 refused "template without the backend" "k8s.agentSandbox.template needs k8s.agentSandbox.enabled=true" -f "$ALLON" --set k8s.agentSandbox.template=platform
 
 # A second render in the release namespace (no runsNamespace) binds that namespace.

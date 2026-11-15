@@ -127,7 +127,8 @@ func lockDisk(ctx context.Context, path string) (unlock func(), err error) {
 
 // MakeDiskImage creates the disk image at path, sparse, sizeBytes long, unless it is there already,
 // when it must be this user's own file. The caller holds its lock. A new image is all zero, which the
-// guest agent formats on its first attach.
+// guest agent formats on its first attach, and gets the mark (newDiskMark) without which the runner never
+// lets a guest see an image that starts with 4 KiB of zeros (CheckDiskImage).
 func MakeDiskImage(path string, sizeBytes int64) error {
 	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
@@ -154,10 +155,19 @@ func MakeDiskImage(path string, sizeBytes int64) error {
 		_ = os.Remove(path)
 		return fmt.Errorf("macvm: disk image of %d bytes: %w", sizeBytes, cmp.Or(err, errors.New("no size")))
 	}
-	return f.Close()
+	err = markNewDisk(path, f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(newDiskMark(path))
+		_ = os.Remove(path)
+		return fmt.Errorf("macvm: new disk image: %w", err)
+	}
+	return nil
 }
 
-// RemoveDiskImage deletes the disk image at path, then its lock file, under the lock: ErrDiskInUse
+// RemoveDiskImage deletes the mark of the disk image at path, the image, then its lock file, under the lock: ErrDiskInUse
 // while a run holds it, and false with no error when there is no image.
 func RemoveDiskImage(path string) (bool, error) {
 	unlock, err := LockDisk(path)
@@ -165,6 +175,11 @@ func RemoveDiskImage(path string) (bool, error) {
 		return false, err
 	}
 	defer unlock()
+	// The mark goes first: a stop between the two then leaves an image with no mark, which is refused if it
+	// is blank, and never a mark with no image, which would vouch for a later file given the same inode.
+	if err := UseUpNewDisk(path); err != nil {
+		return false, err
+	}
 	gone := true
 	switch err := os.Remove(path); {
 	case errors.Is(err, os.ErrNotExist):

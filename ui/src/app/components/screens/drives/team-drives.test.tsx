@@ -47,7 +47,7 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: vi.fn().mockResolvedValue(null) } };
 });
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 import type { UserDriveGrant, UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { DRIVES, DRIVES_TEAM_UNKNOWN, PERM } from "../../../lib/user-drives-copy";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -333,9 +333,10 @@ describe("Drive editor, Team drive", () => {
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
 
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
-    expect(createDriveMock).toHaveBeenCalledWith(expect.objectContaining({ name: "team-scratch", team: true, writable: false, reclaim: "retain" }));
+    expect(createDriveMock).toHaveBeenCalledWith(expect.objectContaining({ name: "team-scratch", team: true, writable: false, reclaim: "retain" }), "");
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject_type: "group", subject: "data-team", drive_id: "new1", additional: true, members_can_write: false }),
+      "",
     );
     // The drive is written first, so an allocation never names a drive that is not there yet.
     expect(createDriveMock.mock.invocationCallOrder[0]).toBeLessThan(upsertGrantMock.mock.invocationCallOrder[0]);
@@ -347,7 +348,7 @@ describe("Drive editor, Team drive", () => {
     await userEvent.click(screen.getByRole("switch", { name: DRIVES.FIELD_TEAM }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
-    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, reclaim: "retain" }), false);
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, reclaim: "retain" }), false, "");
   });
 
   it("Members can write is written to the drive and to every allocation, drive first", async () => {
@@ -357,10 +358,11 @@ describe("Drive editor, Team drive", () => {
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
 
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
-    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false);
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false, "");
     // Only the allocation that did not carry the bit is re-sent, with its priority kept.
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject: "platform-team", priority: 4, additional: true, members_can_write: true }),
+      "",
     );
     expect(updateDriveMock.mock.invocationCallOrder[0]).toBeLessThan(upsertGrantMock.mock.invocationCallOrder[0]);
   });
@@ -373,8 +375,8 @@ describe("Drive editor, Team drive", () => {
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
-    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ writable: false }), false);
-    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ members_can_write: false }));
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ writable: false }), false, "");
+    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ members_can_write: false }), "");
   });
 
   it("a cut grants page never turns a writable team drive read-only on save", async () => {
@@ -388,7 +390,7 @@ describe("Drive editor, Team drive", () => {
     expect(screen.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
-    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false);
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false, "");
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
@@ -399,7 +401,7 @@ describe("Drive editor, Team drive", () => {
     await userEvent.type(screen.getByLabelText(DRIVES.FIELD_SIZE), "0");
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
-    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false);
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false, "");
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
@@ -413,6 +415,7 @@ describe("Drive editor, Team drive", () => {
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject: "data-team", additional: true, priority: 0, enabled: true, members_can_write: true }),
+      "",
     );
   });
 
@@ -437,6 +440,7 @@ describe("Drive editor, Team drive", () => {
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject: "new-team", additional: true, priority: 0, enabled: true, members_can_write: false }),
+      "",
     );
     expect(deleteGrantMock).not.toHaveBeenCalled();
   });
@@ -479,8 +483,50 @@ describe("Drive editor, Team drive", () => {
     await openEdit("platform-ref");
     await userEvent.click(editor().getByRole("button", { name: `${PERM.REMOVE} platform-team` }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
-    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("g1"));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("g1", ""));
     expect(upsertGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a save whose drive write answers after another person signed in still allocates as the person who saved", async () => {
+    // Every later write names that person, so the server refuses them rather than allocate as the next person.
+    let saved!: (d: unknown) => void;
+    updateDriveMock.mockImplementationOnce(() => new Promise((done) => (saved = done)));
+    await renderScreen(snapshot());
+    await openEdit("platform-ref");
+    await userEvent.click(editor().getByRole("button", { name: `${PERM.REMOVE} platform-team` }));
+    await addGroup("data-team");
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    saved(drive());
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.anything(), false, "a@example.com");
+    expect(deleteGrantMock).toHaveBeenCalledWith("g1", "a@example.com");
+    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject: "data-team" }), "a@example.com");
+    setExpectedPrincipal("");
+  });
+
+  it("a save that reads the cut allocations page first still writes the drive as the person who saved", async () => {
+    // The read is out while another person signs in; the drive write after it names the first.
+    const all = [grant({ members_can_write: true }), grant({ id: "g8", subject: "qa" }), grant({ id: "g9", subject: "ops" })];
+    let held = false;
+    let listed!: (g: unknown) => void;
+    driveGrantsMock.mockImplementation(() => (held ? new Promise((done) => (listed = done)) : Promise.resolve(all)));
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    held = true;
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(listed).toBeDefined());
+    expect(updateDriveMock).not.toHaveBeenCalled();
+
+    setExpectedPrincipal("b@example.com");
+    listed(all);
+    await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.anything(), false, "a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("a group removed after its allocation was stored by a failed save is unallocated on the retry", async () => {
@@ -502,10 +548,10 @@ describe("Drive editor, Team drive", () => {
     await userEvent.click(editor().getByRole("button", { name: `${PERM.REMOVE} alpha` }));
     upsertGrantMock.mockImplementation(async (g: { subject: string }) => ({ grant: grant({ id: "gb", subject: g.subject, drive_id: "new1" }), replaced: false }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
-    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("ga"));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("ga", ""));
     // The drive is not created twice.
     expect(createDriveMock).toHaveBeenCalledTimes(1);
-    expect(updateDriveMock).toHaveBeenCalledWith("new1", expect.anything(), false);
+    expect(updateDriveMock).toHaveBeenCalledWith("new1", expect.anything(), false, "");
   });
 
   it("changing Team drive on an allocated drive meets the server's refusal, not the re-home confirm", async () => {

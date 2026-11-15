@@ -91,7 +91,8 @@ export const RECORDING_REPLAY = {
     `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no screen frames were kept. The action log kept going. The gap is marked in the audit log.`,
   GAP: (d: string) => `Gap ${d}`,
   // Pending the owner's approval of the copy: the recording hit its size cap or the stream stopped being followable.
-  STOPPED_AT: (time: string) => `Screen recording stopped at ${time}; the action log continues.`,
+  // The reason, when the recording carries one, is Wardyn's own sentence (Go: stopRefusedRecording's, in fixed words).
+  STOPPED_AT: (time: string, reason?: string) => `Screen recording stopped at ${time}; the action log continues.${reason ? ` ${reason}.` : ""}`,
   KEYSTROKES: "Keystrokes are never recorded.",
   LOG_TITLE: "Tamper-evident log",
   GAP_START: "Gap start",
@@ -137,9 +138,13 @@ export const RECORDING_REPLAY = {
   ACT_UPLOAD_TRIED: "tried to upload a file to the desktop",
   ACT_DOWNLOAD: "downloaded a file from the desktop",
   ACT_DOWNLOAD_TRIED: "tried to download a file from the desktop",
+  // Not on the boards: a reviewed download's ask, which moves no file.
+  ACT_REVIEW_ASKED: "asked to download a file from the desktop",
+  ACT_REVIEW_ASK_TRIED: "tried to ask to download a file from the desktop",
   // Not on the boards: the controls' names, and the chain check's other answers.
   PLAY: "Play",
   PAUSE: "Pause",
+  SEEK: "Playback position",
   CHAIN_CHECKING: "Checking the chain…",
   CHAIN_BROKEN: "Chain broken",
   CHAIN_BROKEN_BODY: (seq: number, reason: string) => `Entry ${seq.toLocaleString("en-US")} does not verify: ${reason}.`,

@@ -81,8 +81,6 @@ func (s *lifetimeCapRunStore) GetRun(_ context.Context, id uuid.UUID) (types.Age
 	return types.AgentRun{ID: id, State: types.RunRunning, UpdatedAt: time.Now().UTC(), LifetimeCapAt: &capAt}, nil
 }
 
-var lifetimeGracedDoors = map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
-
 func cappedDoorServer(t *testing.T, capAt time.Time) (*harness, *Server, uuid.UUID, uuid.UUID, string) {
 	t.Helper()
 	h := newHarness(t)
@@ -138,7 +136,7 @@ func TestInternalUploadGraceFromLifetimeCap(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, srv, runID, grantID, tok := cappedDoorServer(t, time.Now().UTC().Add(-age))
 			for _, d := range internalDoors(runID, grantID) {
-				if !lifetimeGracedDoors[d.name] {
+				if !tailGraceDoors[d.name] {
 					continue
 				}
 				w := do(t, srv, d.method, d.path, tok, d.body)

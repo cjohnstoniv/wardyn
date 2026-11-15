@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -213,15 +214,24 @@ type remoteSink struct {
 	res          map[uuid.UUID]spoolReservation
 	heldBytes    int64
 	refused      uint64
+	lost         uint64 // records the sink dropped that neither a full grant refused nor a held reservation counts (lostLocked)
 	draining     bool
 	drainStarted bool
 	lapsePending bool
 	tunnels      map[net.Conn]struct{}
 	stopped      bool // drained replied: no further records
 	drained      *SinkFrame
+	drainedOwed  bool // the drained reply, or its consumed raised since, is not yet written to the session
 	lapsed       *SinkFrame
 	closed       bool
 	conn         net.Conn
+	// inFlight counts the requests being served (enter): close waits for them, so none writes a record
+	// after the session that would carry it has ended.
+	inFlight int
+	// granted closes at the first grant (grantSeen): a proxy with a runner sink listens only after it
+	// (Server.awaitOpen), so one that never had a session served nothing.
+	granted   chan struct{}
+	grantSeen bool
 	// activityIgnore is Config.ActivityIgnoreHosts: allowed requests to these hosts carry no Activity flag.
 	activityIgnore []string
 }
@@ -236,7 +246,7 @@ func newRemoteSink(runID uuid.UUID, c DecisionSinkConfig) (*remoteSink, error) {
 		return nil, err
 	}
 	s := &remoteSink{runID: runID, addr: addr, key: c.Key, tls: sinkPinConfig(c.SPKISHA256), instance: hex.EncodeToString(inst[:]),
-		retry: time.Second, drainFor: 3 * time.Second, res: map[uuid.UUID]spoolReservation{}}
+		retry: time.Second, drainFor: 3 * time.Second, res: map[uuid.UUID]spoolReservation{}, granted: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	s.dial = func(ctx context.Context) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: s.tls}
@@ -257,11 +267,29 @@ func (s *remoteSink) fitsLocked(need int64) bool {
 // countRefusalLocked counts a want-of-credit refusal for Drops only when the
 // spool is genuinely full: a grant is held and exhausted, during an outage too
 // (§6.2: the write loop forwards the total on the reconnect). No grant yet, a
-// drain, a stop or a close refuses uncounted.
-func (s *remoteSink) countRefusalLocked() {
+// drain, a stop or a close refuses uncounted; a record emit drops then is lost
+// instead (lostLocked). It reports whether it counted.
+func (s *remoteSink) countRefusalLocked() bool {
 	if s.haveGrant && !s.draining && !s.stopped && !s.closed {
 		s.refused++
 		s.cond.Broadcast()
+		return true
+	}
+	return false
+}
+
+// lostLocked counts a record with no live reservation which the sink drops and
+// no held, exhausted grant refused: no grant yet, a drain, a stop, a close, or a
+// record that would not encode. It also counts an admitted record that would
+// not encode before the drained reply, whose reservation that reply no longer
+// holds. The drained reply's consumed carries it into the exact loss runnerd
+// settles, sent again for one lost after it (write, which close waits for);
+// one lost once the sink has closed reaches no reply.
+func (s *remoteSink) lostLocked() {
+	s.lost++
+	if s.drained != nil {
+		s.drained.Consumed++
+		s.drainedOwed = true
 	}
 }
 
@@ -324,11 +352,17 @@ func (s *remoteSink) emit(log egress.DecisionLog) {
 		Activity: admitted && egress.CountsAsActivityFor(log, s.activityIgnore)})
 	switch {
 	case err != nil || merr != nil || s.closed || s.stopped:
-		// Never counted: an admitted record here is already in the drained
-		// reply's consumed (the exact loss), and nothing else is a full spool.
+		// An admitted record here is already in the drained reply's consumed (the
+		// exact loss) once the sink stopped; before that its reservation is gone, so
+		// it is counted. Any other is counted, as no full spool refused it.
+		if !admitted || !s.stopped {
+			s.lostLocked()
+		}
 		slog.Warn("wardyn-proxy: decision not sent to the runner sink", slog.Bool("admitted", admitted))
 	case !admitted && !s.fitsLocked(int64(len(body))):
-		s.countRefusalLocked()
+		if !s.countRefusalLocked() {
+			s.lostLocked()
+		}
 	default:
 		s.lastSeq++
 		s.sinceBase += int64(len(body))
@@ -393,13 +427,50 @@ func (p *Proxy) trackTunnel(c net.Conn) func() {
 	return p.sink.remote.track(c)
 }
 
-// close flushes the unacked tail (and a queued lapsed frame) until ctx ends,
-// then ends the session for good.
+// enter counts a request being served until the returned func runs.
+func (s *remoteSink) enter() func() {
+	s.mu.Lock()
+	s.inFlight++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	}
+}
+
+// countedHandler is the Proxy as its Server's handler. On a runner sink each request is counted (enter)
+// while it is served, a terminated tunnel's inner requests within their CONNECT, so the sink closes only
+// once they have written their records.
+func (p *Proxy) countedHandler() http.Handler {
+	if p.sink == nil || p.sink.remote == nil {
+		return p
+	}
+	rs := p.sink.remote
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer rs.enter()()
+		p.ServeHTTP(w, r)
+	})
+}
+
+// sinkGranted closes at the runner sink's first grant; nil without a runner sink.
+func (p *Proxy) sinkGranted() <-chan struct{} {
+	if p.sink == nil || p.sink.remote == nil {
+		return nil
+	}
+	return p.sink.remote.granted
+}
+
+// close flushes the unacked tail (and a queued lapsed frame, and on a live
+// session a drained reply not yet written) and waits for the requests still
+// being served (enter) until ctx ends, then ends the session for good.
 func (s *remoteSink) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.draining = true
+	s.cond.Broadcast() // an admission waiting for credit refuses now, ending its request
 	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
-	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsePending || s.lapsed != nil) {
+	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsePending || s.lapsed != nil || s.live && s.drainedOwed || s.inFlight > 0) {
 		s.cond.Wait()
 	}
 	stop()
@@ -463,6 +534,7 @@ func (s *remoteSink) session() error {
 		return nil
 	}
 	s.gen, s.live, s.conn = acc.Gen, true, conn
+	s.drainedOwed = s.drained != nil // a new session is told again
 	s.usage.Store(acc.Usage)
 	s.dns.Store(acc.DNS)
 	s.ackLocked(acc.Seq)
@@ -511,6 +583,10 @@ func (s *remoteSink) read(conn net.Conn) error {
 					s.sinceBase += int64(len(r.body))
 				}
 			}
+			if !s.grantSeen {
+				s.grantSeen = true
+				close(s.granted)
+			}
 			s.cond.Broadcast()
 		case FrameDrain:
 			s.beginDrainLocked()
@@ -524,8 +600,8 @@ func (s *remoteSink) read(conn net.Conn) error {
 
 // drain closes the open tunnels, gives in-flight requests and closing tunnels
 // up to drainFor to emit their final decisions, then answers drained with the
-// last sequence and the credit consumed; reservations still held are the
-// exact loss.
+// last sequence and the credit consumed with the records lost (lostLocked);
+// reservations still held and those records are the exact loss.
 func (s *remoteSink) drain() {
 	s.mu.Lock()
 	for c := range s.tunnels {
@@ -538,17 +614,19 @@ func (s *remoteSink) drain() {
 	}
 	timer.Stop()
 	s.stopped = true
-	s.drained = &SinkFrame{T: FrameDrained, FinalSeq: s.lastSeq, Consumed: uint64(s.lastSeq) + uint64(len(s.res))}
+	s.drained = &SinkFrame{T: FrameDrained, FinalSeq: s.lastSeq, Consumed: uint64(s.lastSeq) + uint64(len(s.res)) + s.lost}
+	s.drainedOwed = true
 	s.cond.Broadcast()
 	s.mu.Unlock()
 }
 
 // write sends, in order, every unsent record, then the refused total, the
-// drained reply and the lapsed frame. A new session resends from the ack.
+// drained reply and the lapsed frame. A new session resends from the ack. The
+// drained reply goes again when a record lost after it raised its consumed.
 func (s *remoteSink) write(conn net.Conn, gen uint64) error {
 	sent := int64(-1)
 	var refusedSent uint64
-	drainedSent, lapsedSent := false, false
+	lapsedSent := false
 	for {
 		s.mu.Lock()
 		if sent < 0 {
@@ -568,7 +646,7 @@ func (s *remoteSink) write(conn net.Conn, gen uint64) error {
 			if s.refused != refusedSent {
 				out = append(out, SinkFrame{T: FrameRefused, Gen: gen, Total: s.refused})
 			}
-			if s.drained != nil && !drainedSent {
+			if s.drained != nil && s.drainedOwed {
 				d := *s.drained
 				d.Gen = gen
 				out = append(out, d)
@@ -595,7 +673,12 @@ func (s *remoteSink) write(conn net.Conn, gen uint64) error {
 			case FrameRefused:
 				refusedSent = refusedTotal
 			case FrameDrained:
-				drainedSent = true
+				s.mu.Lock()
+				if s.drained.Consumed == f.Consumed { // none lost while it was written
+					s.drainedOwed = false
+					s.cond.Broadcast()
+				}
+				s.mu.Unlock()
 			case FrameLapsed:
 				lapsedSent = true
 				s.mu.Lock()

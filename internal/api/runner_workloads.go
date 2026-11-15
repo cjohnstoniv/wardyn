@@ -266,6 +266,8 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 // carries none, records the launch refused workload_binding_inactive, and the current run keeps running.
 // The launch is claimed before the standing is read, so a standing that cannot be read launches nothing,
 // is the error and leaves the claim to lapse: the lapsed-launch sweep retries it once a claim, not every pass.
+// b is read again under the claim (bindingStanding), and the run is recorded only while b exists, so a launch
+// that waited past b's delete starts no run, and one whose b is deleted while its run starts records none.
 func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity,
 	wl store.Workload,
 ) (client.WorkloadLaunch, error) {
@@ -275,12 +277,12 @@ func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b 
 	}
 	live := false
 	if found {
-		if live, err = s.bindingLive(sr.Context(), b, si); err != nil {
+		if found, live, err = s.bindingStanding(sr.Context(), ws, b, si); err != nil {
 			return client.WorkloadLaunch{}, err
 		}
 	}
 	if live {
-		return s.launchClaimed(sr, ws, claimed)
+		return s.launchClaimed(sr, ws, claimed, &b.ID)
 	}
 	msg := workloadBindingInactiveMsg
 	if !found {

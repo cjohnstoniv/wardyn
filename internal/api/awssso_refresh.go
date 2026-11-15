@@ -241,6 +241,7 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 	if err := s.putOwned(ctx, scope.rowOwner(), func(ctx context.Context) error {
 		return st.Put(ctx, writeProbeSecretName, []byte("probe"))
 	}); err != nil {
+		s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", scope.rowOwner(), writeProbeSecretName)
 		return err
 	}
 	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
@@ -266,18 +267,31 @@ const awsSSOPersistBudget = 30 * time.Second
 // (secretstore.ErrRevisionChanged, never retried). The same holds for an erase
 // of the owner since that read (secretstore.ErrGenerationChanged).
 func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
+	// pctx is assigned once, from the parameter, so the secret-read audit guard can follow the re-read below to the
+	// caller's purpose. Only the write carries the compare-and-set's revision; a Get reads none.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()
+	storeCtx := pctx
 	if guarded {
-		ctx = secretstore.WithIfRevision(ctx, rev)
+		storeCtx = secretstore.WithIfRevision(pctx, rev)
 	}
+	lost := false
 	for attempts = 1; ; attempts++ {
-		err = s.storeAWSSSOBlob(ctx, scope, next)
+		err = s.storeAWSSSOBlob(storeCtx, scope, next)
+		// An earlier attempt whose reply was lost may have committed: the
+		// compare-and-set then refuses this renewal's own row, which is stored.
+		if lost && errors.Is(err, secretstore.ErrRevisionChanged) {
+			if stored, found, rerr := s.readAWSSSOBlob(pctx, scope); rerr == nil && found &&
+				stored.AccessToken == next.AccessToken && stored.RefreshToken == next.RefreshToken {
+				return attempts, nil
+			}
+		}
+		lost = lost || errors.Is(err, secretstore.ErrRowNotWritten)
 		if err == nil || secretstore.Superseded(err) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}
 		select {
-		case <-ctx.Done():
+		case <-pctx.Done():
 			return attempts, err
 		case <-time.After(awsSSOPersistRetryDelay):
 		}

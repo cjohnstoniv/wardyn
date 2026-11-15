@@ -42,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -869,7 +870,7 @@ func ledger(t *testing.T) []ledgerFile {
 			continue
 		}
 		lf := ledgerFile{Name: n, Mode: fi.Mode(), Tomb: strings.HasSuffix(n, ".tombstone"), ModTime: fi.ModTime()}
-		if st, ok := fi.Sys().(*unix.Stat_t); ok {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 			lf.UID = int(st.Uid)
 		}
 		if fi.Mode().IsRegular() && fi.Size() <= maxEntryFile {

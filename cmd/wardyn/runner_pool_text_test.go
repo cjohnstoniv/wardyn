@@ -378,3 +378,25 @@ func TestRunnerPoolListWarnsWhenTheServerTruncated(t *testing.T) {
 		t.Fatalf("list = %v, stderr %q, want the truncation named", err, stderr)
 	}
 }
+
+// A pool duration is whole seconds: a fraction is refused before any request, since dropping it after
+// the default-to-maximum check would save 1.9s:1.1s as 1s:1s.
+func TestPoolDurationFlagsTakeWholeSeconds(t *testing.T) {
+	id := uuid.New()
+	srv := newPoolRoutes(t, map[string]any{"POST /api/v1/me/runner-pools": sdk.RunnerPool{ID: id, Name: "P", Scope: sdk.RunnerPoolUser, Revision: 1}})
+	for _, v := range []string{"1.9s:1.1s", "1500ms:2s", "1s:1.5s"} {
+		_, err := execCmdCapture(t, "runner", "pool", "create", "--name", "P", "--background-lifetime", v, "--url", srv.URL, "--token", "t")
+		if err == nil || !strings.Contains(err.Error(), "is not a whole number of seconds") {
+			t.Errorf("--background-lifetime %s = %v, want it refused", v, err)
+		}
+	}
+	if len(srv.reqs) != 0 {
+		t.Fatalf("requests were sent: %d", len(srv.reqs))
+	}
+	if _, err := execCmdCapture(t, "runner", "pool", "create", "--name", "P", "--background-lifetime", "1000ms:1500s", "--url", srv.URL, "--token", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if body := string(srv.last().body); !strings.Contains(body, `"lifetime":{"default_sec":1,"max_sec":1500}`) {
+		t.Errorf("request body = %s, want the lifetime as 1s default and 1500s maximum", body)
+	}
+}

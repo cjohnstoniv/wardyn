@@ -137,7 +137,7 @@ func capRelay(t *testing.T, h *holdProxy, n int) (*Relay, *vmnettest.Guest, [4]b
 	old := firstWaitOther
 	t.Cleanup(func() { firstWaitOther = old })
 	firstWaitOther = 50 * time.Millisecond
-	rl, err := New(Config{Proxy: h.addr, maxOpaque: n})
+	rl, err := New(Config{Proxy: h.addr, maxOpaque: n, Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}

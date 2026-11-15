@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -51,12 +50,12 @@ func (f *fleetSnapshot) get(ctx context.Context, reader runCapacityReader, kind 
 // writeFleetGauges appends the fleet capacity families. On a refresh failure they are omitted,
 // never written as zero: a dead store must not scrape as an empty cluster (see handleMetrics's
 // store_up). There is no owner label on any family.
-func (s *Server) writeFleetGauges(r *http.Request, w io.Writer) {
+func (s *Server) writeFleetGauges(ctx context.Context, w io.Writer) {
 	reader, ok := s.cfg.Store.(runCapacityReader)
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
 	defer cancel()
 	c, ok := s.fleet.get(ctx, reader, s.cfg.RunnerTarget, s.remoteRunnerConfigured)
 	if !ok {

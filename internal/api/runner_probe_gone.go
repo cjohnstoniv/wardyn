@@ -42,7 +42,7 @@ func (s *Server) probeRunnerSandbox(ctx context.Context, run types.AgentRun, ref
 		st.State != types.RunStopped || st.ExitCode != nil {
 		return runnerProbeNone
 	}
-	issued, err := pg.RunnerProbeClock(ctx)
+	issued, err := pg.DatabaseNow(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: reading the clock for a runner sandbox check failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return runnerProbeNone

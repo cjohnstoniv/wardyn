@@ -190,7 +190,11 @@ func (la *localAttach) run(castTee io.Writer) string {
 	observer := !h.canWrite()
 	opts := s.attachOptionsFor(wa.run.ID, h, !observer)
 	gctx, cancel := context.WithTimeout(ctx, s.attachPrepareEvery())
-	sess, err := la.target.sub.LocalAttach(gctx, wa.run.SandboxRef, runner.LocalAttachRequest{Nonce: la.nonce, Options: opts, Tee: castTee != nil})
+	// A grant is a start under the run's start lock, on the run as it stands there (startFresh).
+	sess, err := startFresh(s, gctx, wa.run.ID, attachLiveRunWords, s.attachPrepareEvery(),
+		func(ctx context.Context, run types.AgentRun) (runner.LocalSession, error) {
+			return la.target.sub.LocalAttach(ctx, run.SandboxRef, runner.LocalAttachRequest{Nonce: la.nonce, Options: opts, Tee: castTee != nil})
+		}, func(sess runner.LocalSession) { _ = sess.Close() })
 	cancel()
 	if ctx.Err() != nil || h.evicted.Load() {
 		// Ended some other way (a client close, a take-over, an ender) while the grant was in flight.

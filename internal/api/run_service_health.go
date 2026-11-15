@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -218,6 +219,8 @@ func (s *Server) sweepServiceHealth(ctx context.Context) error {
 			for _, run := range led {
 				reads = append(reads, serviceRead{ctx: lctx, run: run})
 			}
+		} else {
+			sweephealth.NotOwner(ctx)
 		}
 	}
 	s.mirrorServiceRuns(st, reads)
@@ -279,7 +282,10 @@ func (s *Server) mirrorServiceRun(ctx context.Context, st store.ServiceRunStore,
 	if run.Service.ControlPlaneProbe() {
 		check = s.observeServiceProbe(ctx, run)
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // observed_at: the lease sweep's renewal reads it on the database's clock
+	if err != nil {
+		return // no observation written and no restart; the next sweep reads the clock again
+	}
 	next := serviceObservation(run, f, probe, now)
 	if run.Service.ControlPlaneProbe() {
 		var prev *types.RunServiceProbe

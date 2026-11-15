@@ -69,3 +69,13 @@ export const CONTAINMENT = {
   STATE_ACCEPTED: "Accepted by the runner",
   stateRefused: (reason: string) => `Refused by the runner: ${reason}`,
 } as const;
+
+// A kill or end of the run that its runner refused because it could not see the sandbox stop (a macOS VM
+// whose helper outlived its kill), shown held until the runner reports that it finished.
+export const TEARDOWN = {
+  heldTitle: (kind: "kill" | "end") => (kind === "kill" ? "Kill not finished on the runner" : "End not finished on the runner"),
+  heldBody: (kind: "kill" | "end") =>
+    `The runner could not see this run's sandbox stop, so it has not finished the ${kind} and keeps the sandbox and what it holds. It tries again on a later connection and reports here once the ${kind} has finished.`,
+  heldSince: (when: string) => `Held since ${when}.`,
+  cleared: (kind: "kill" | "end", when: string) => `The runner finished this run's ${kind} at ${when}.`,
+} as const;

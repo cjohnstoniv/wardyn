@@ -352,6 +352,32 @@ func TestLoadPolicySpecRejectsUnknownField(t *testing.T) {
 	}
 }
 
+// A policy file is one JSON object with no key written twice: a second object, text after the first,
+// or a repeated key fails the load, since a restriction would otherwise be ignored.
+func TestLoadPolicySpecRefusesAnAmbiguousFile(t *testing.T) {
+	const one = `{"min_confinement_class":"CC2","push_rules":{"max_file_size_mib":500}}`
+	for name, content := range map[string]string{
+		"second object": one + ` {"denied_domains":["example.com"]}`,
+		"trailing text": one + ` junk`,
+		"a key twice":   `{"min_confinement_class":"CC3","push_rules":{"max_file_size_mib":500},"min_confinement_class":"CC2"}`,
+	} {
+		path := filepath.Join(t.TempDir(), "policy.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadPolicySpec(path); err == nil {
+			t.Errorf("%s: loaded, want the file refused", name)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.WriteFile(path, []byte(one+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicySpec(path); err != nil {
+		t.Errorf("one object and a line break: %v", err)
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 // TestValidatePolicySpec_WorkspaceMounts asserts the policy-write-time half of

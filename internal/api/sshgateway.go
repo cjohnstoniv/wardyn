@@ -922,7 +922,7 @@ func (sl *sshChannelSlot) release() {
 // connection authenticated — auth checks OWNERSHIP, which is immutable, but
 // not liveness) and fails closed unless a Runner is wired AND the run is
 // RUNNING with a live sandbox — the same precondition handleAttachWS
-// enforces before every attach. The nil-Runner guard lives HERE, not in each
+// enforces before every attach. The nil-Runner guard lives in liveRunForExec, which this calls first, not in each
 // of the four callers (bridgeSSHShell/bridgeSSHExec/bridgeSSHSFTP/
 // handleSSHDirectTCPIP all call this first): under the supported `-runner
 // none` (headless) mode, s.cfg.Runner is a nil INTERFACE value, and calling
@@ -935,30 +935,59 @@ func (sl *sshChannelSlot) release() {
 // (sendChannelError on an already-accepted channel, NewChannel.Reject
 // otherwise).
 func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, string) {
-	if s.cfg.Runner == nil {
-		return types.AgentRun{}, "no runner configured; ssh unavailable"
-	}
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil {
-		return types.AgentRun{}, "run not found"
-	}
-	if run.State != types.RunRunning || run.SandboxRef == "" {
-		return types.AgentRun{}, "run is not RUNNING; ssh unavailable (state=" + string(run.State) + ")"
-	}
-	// A kept run is RUNNING with its agent stopped: nothing to attach to.
-	if runIsKept(run) {
-		return types.AgentRun{}, "run has ended; ssh unavailable"
+	run, msg := s.liveRunForExec(ctx, runID, sshLiveRunWords)
+	if msg != "" {
+		return types.AgentRun{}, msg
 	}
 	// sshAuth refuses a background task at the door; this is the fresh read
 	// every channel makes, so a connection opened before the run's shape was
-	// read, or a bridge called on its own, still refuses.
+	// read, or a bridge called on its own, still refuses. It comes before the
+	// thaw, so a refused channel never resumes a paused run.
 	if rf := backgroundOnlyRefusal(run, "SSH access"); rf != nil {
 		return types.AgentRun{}, rf.body.Error
 	}
-	// Every ssh channel execs into the sandbox, which the daemon refuses while
-	// it is paused: a person connecting is presence, so thaw it (run_pause.go).
-	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"); err != nil {
-		return types.AgentRun{}, "run is paused and could not be resumed; try again"
+	if msg := s.thawForCommand(ctx, run, principal); msg != "" {
+		return types.AgentRun{}, msg
 	}
 	return run, ""
+}
+
+// liveRunWords are one door's refusals for a run that cannot take an exec now; notRunning takes the run's state.
+type liveRunWords struct{ noRunner, notFound, notRunning, ended string }
+
+// sshLiveRunWords are an SSH channel's refusals, as the gateway has always written them.
+var sshLiveRunWords = liveRunWords{
+	noRunner:   "no runner configured; ssh unavailable",
+	notFound:   "run not found",
+	notRunning: "run is not RUNNING; ssh unavailable (state=%s)",
+	ended:      "run has ended; ssh unavailable",
+}
+
+// liveRunForExec is the fresh read every path that execs into a sandbox makes first (sshFreshRun, and
+// POST /runs/{id}/exec's execFreshRun): the run, refused in words' terms unless a Runner is wired and the run is
+// RUNNING with a sandbox and not kept. It holds the nil-Runner guard: under `-runner none` s.cfg.Runner is a nil
+// interface, and any method call on it panics. It does not refuse a background run: each caller decides that.
+func (s *Server) liveRunForExec(ctx context.Context, runID uuid.UUID, words liveRunWords) (types.AgentRun, string) {
+	if s.cfg.Runner == nil {
+		return types.AgentRun{}, words.noRunner
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return types.AgentRun{}, words.notFound
+	}
+	if run.State != types.RunRunning || run.SandboxRef == "" {
+		return types.AgentRun{}, fmt.Sprintf(words.notRunning, run.State)
+	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		return types.AgentRun{}, words.ended
+	}
+	return run, ""
+}
+
+// thawForCommand thaws run before an exec into it: "" when the exec may go on, else thawRefusal's words. Every
+// exec goes into the sandbox, which the daemon refuses while it is paused, and a person connecting is presence, so
+// a paused run is resumed (run_pause.go).
+func (s *Server) thawForCommand(ctx context.Context, run types.AgentRun, principal string) string {
+	return thawRefusal(s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"))
 }

@@ -83,8 +83,18 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 
 	// The scan's discoveries land on the SOURCE's own contract in the same
 	// fenced write — a repo source has no host write path, so its seed is
-	// profile-derived only (secrets + auto-allowed hosts).
-	src, err := s.cfg.Store.SetSourceScanResult(r.Context(), sourceID, mustJSON(profile), types.WorkspaceScanned, claims.RunID, seedSourceRequirements(types.SourceRepo, "", profile))
+	// profile-derived only (secrets + auto-allowed hosts). An incomplete scan
+	// keeps the rows an earlier scan seeded; when they cannot be read here, it
+	// leaves the contract as it is.
+	seed := seedSourceRequirements(types.SourceRepo, "", profile)
+	if profile.Incomplete {
+		if cur, gerr := s.cfg.Store.GetSource(r.Context(), sourceID); gerr != nil {
+			seed = nil
+		} else {
+			seed = types.KeepScanSeeded(seed, cur.Requirements)
+		}
+	}
+	src, err := s.cfg.Store.SetSourceScanResult(r.Context(), sourceID, mustJSON(profile), types.WorkspaceScanned, claims.RunID, seed)
 	if errors.Is(err, store.ErrNotFound) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "superseded scan upload (fence mismatch)"})))

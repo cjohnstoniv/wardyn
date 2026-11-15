@@ -221,6 +221,8 @@ func (s *Sealer) resealName(ctx context.Context, ev types.AuditEvent, pk []byte,
 
 // resealedSubject is the value stored for the person name a pending field waited for: their subject, or
 // the subject without a fresh key (ErasedValue when there is none) for a person erased while it waited.
+// A person an unbind left with no identity row while it waited is stored as the identity row that was
+// theirs when the row was written, so it reads as them and their erasure erases it.
 func (s *Sealer) resealedSubject(ctx context.Context, ev types.AuditEvent, name string) (string, error) {
 	principal, err := s.principalOf(ctx, name)
 	if err != nil {
@@ -241,6 +243,20 @@ func (s *Sealer) resealedSubject(ctx context.Context, ev types.AuditEvent, name 
 		name = ErasedValue
 	} else if id, ok, err = s.actorSubject(ctx, name); err != nil {
 		return "", err
+	} else if !ok {
+		if id, ok, err = s.Subjects.AuditSubjectReleased(ctx, principal, ev.Time); err != nil {
+			return "", err
+		}
+		// An erasure destroys the person's keys, then clears them from the binding history: one that did
+		// both since the check above left no binding to find, and the destroyed key says so.
+		if !ok && s.GoneSince != nil {
+			if gone, err = s.GoneSince(ctx, principal, ev.Time); err != nil {
+				return "", err
+			}
+			if gone {
+				name = ErasedValue
+			}
+		}
 	}
 	if ok {
 		name = SubjectActorPrefix + id
@@ -251,30 +267,31 @@ func (s *Sealer) resealedSubject(ctx context.Context, ev types.AuditEvent, name 
 // renderSubject is what a reader sees for a stored subject string (an actor or
 // a target): the person, ErasedValue once a key of theirs was destroyed after
 // the row was written, and the stored string for an id no identity row carries.
+// A row written at or before an unbind of the id's identity row is the released
+// person's: it reads as them, or ErasedValue once their key was destroyed after
+// it, their name was erased from the binding history, or a destruction under the
+// subject at or before the unbind came after it, whoever holds the row now. The
+// unbind's time is the database clock at its last statement, so a row sealed with
+// the subject before that statement is at or before it, within the writer's clock
+// skew; the next holder's rows follow their sign-in.
 func (s *Sealer) renderSubject(ctx context.Context, memo *keyMemo, stored string, at time.Time) (string, error) {
 	id := strings.TrimPrefix(stored, SubjectActorPrefix)
 	m, seen := memo.actors[id]
 	if !seen {
-		principal, found, err := s.Subjects.AuditPrincipalOf(ctx, id)
-		if err != nil {
+		var err error
+		if m, err = s.subjectMemo(ctx, id); err != nil {
 			return "", err
 		}
-		if found {
-			m.principal = principal
-			if m.destroyed, m.hasKey, err = s.Subjects.AuditKeyDestroyedAt(ctx, principal); err != nil {
-				return "", err
-			}
-			// An erasure also destroys under the subject itself, so a row written before it stays
-			// erased after the subject's identity row is bound to someone else.
-			gone, ok, err := s.Subjects.AuditKeyDestroyedAt(ctx, SubjectActorPrefix+id)
-			if err != nil {
-				return "", err
-			}
-			if ok && (!m.hasKey || gone.After(m.destroyed)) {
-				m.destroyed, m.hasKey = gone, true
-			}
-		}
 		memo.actors[id] = m
+	}
+	for _, e := range m.eras {
+		if at.After(e.until) {
+			continue
+		}
+		if e.principal == "" || (e.hasKey && e.destroyed.After(at)) || e.subjectGone.After(at) {
+			return ErasedValue, nil
+		}
+		return e.principal, nil
 	}
 	switch {
 	case m.principal == "":
@@ -283,6 +300,44 @@ func (s *Sealer) renderSubject(ctx context.Context, memo *keyMemo, stored string
 		return ErasedValue, nil
 	}
 	return m.principal, nil
+}
+
+// subjectMemo reads who id is: its identity row's earlier bindings, each with its
+// person's key destruction, and its current person.
+func (s *Sealer) subjectMemo(ctx context.Context, id string) (actorMemo, error) {
+	var m actorMemo
+	eras, err := s.Subjects.AuditSubjectEras(ctx, id)
+	if err != nil {
+		return m, err
+	}
+	for _, e := range eras {
+		em := eraMemo{actorMemo: actorMemo{principal: e.Principal}, until: e.Until, subjectGone: e.SubjectGone}
+		if e.Principal != "" {
+			if em.destroyed, em.hasKey, err = s.Subjects.AuditKeyDestroyedAt(ctx, e.Principal); err != nil {
+				return m, err
+			}
+		}
+		m.eras = append(m.eras, em)
+	}
+	principal, found, err := s.Subjects.AuditPrincipalOf(ctx, id)
+	if err != nil || !found {
+		return m, err
+	}
+	m.principal = principal
+	if m.destroyed, m.hasKey, err = s.Subjects.AuditKeyDestroyedAt(ctx, principal); err != nil {
+		return m, err
+	}
+	// An erasure also destroys under the subject itself, so a row written before it stays
+	// erased after the subject's identity row is bound to someone else by an unbind no
+	// binding history recorded.
+	gone, ok, err := s.Subjects.AuditKeyDestroyedAt(ctx, SubjectActorPrefix+id)
+	if err != nil {
+		return m, err
+	}
+	if ok && (!m.hasKey || gone.After(m.destroyed)) {
+		m.destroyed, m.hasKey = gone, true
+	}
+	return m, nil
 }
 
 // StoredActor implements ActorTranslator.

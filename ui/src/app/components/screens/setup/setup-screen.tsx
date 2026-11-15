@@ -31,7 +31,7 @@ import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { access as accessApi } from "../../../lib/api/access";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import type { AccessResponse } from "../../../lib/types";
 import type { AccessLoadState } from "./access-panel";
@@ -615,13 +615,14 @@ export function SetupScreen({
   const viewAccess = useViewAccess();
   const finishSwitchToUser = React.useCallback(async () => {
     // Awaited: a session-admin's switch reloads the page, which could cut the
-    // request short. completeOnboarding never rejects.
+    // request short. completeOnboarding never rejects. The switch names the person who clicked, not whoever signs in.
+    const person = getExpectedPrincipal();
     await setupApi.completeOnboarding();
     dismissSetup();
     await refreshShellStatus();
     if (viewAccess === "session-admin") {
       try {
-        await switchView("user", "/setup");
+        await switchView("user", "/setup", false, undefined, person);
         return;
       } catch {
         // Fall through to the interstitial.
@@ -655,7 +656,7 @@ export function SetupScreen({
     );
   }
 
-  // A manually-opened funnel against a daemon that didn't answer: say THAT,
+  // A manually-opened funnel whose setup status read failed: say THAT,
   // instead of rendering step bodies (no-runner danger card, "Needs setup"
   // badges) built from the synthetic fallback's made-up fields.
   if (status.unreachable) {
@@ -665,11 +666,11 @@ export function SetupScreen({
           Getting started
         </h1>
         <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">
-          <p className="text-sm text-foreground">Couldn&apos;t reach Wardyn.</p>
+          <p className="text-sm text-foreground">Couldn&apos;t load setup status.</p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            The setup status request didn&apos;t get an answer, so nothing on
-            this page would be accurate. Check that the Wardyn service is
-            running and reachable from this browser, then re-check.
+            The setup status request failed, so nothing on this page would be
+            accurate. Check that the Wardyn service is running and reachable
+            from this browser, then re-check.
           </p>
           <button
             className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"

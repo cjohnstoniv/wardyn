@@ -242,7 +242,7 @@ The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines allowed,
    ```
 4. Write the new key into the Secret, or into the Vault/CSI source it comes from, before you scale back up. Until the source holds the new key, every restart reads the retired one and fails closed.
 
-**Verify** the same way the restore runbook does: a row count proves nothing about decryptability, so launch a run against a workspace that depends on a stored secret and confirm it starts. Check the audit trail for the rotation itself:
+**Verify** the same way the restore runbook does: a row count proves nothing about decryptability, so launch a run against a workspace that depends on a stored secret and confirm it starts. Check the audit trail for the rotation itself (a rotation finished by hand from `<key-file>.new` has no such row):
 
 ```sh
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
@@ -253,9 +253,29 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 | --- | --- |
 | **Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until *you* delete it | Restoring it is only half an undo — the database is already re-encrypted, so `.bak` is usable **only** together with the Postgres dump from step 1 |
 | ↳ | Once the rotated deployment is confirmed working, delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
+| The rewrap returns an error, from a row or from its commit | `<key-file>.new` is kept. A commit error does not say whether the commit took effect, so the error prints the new key's fingerprint: run the check below |
+| ↳ | No `secret.rekey` row is written, then or after a recovery by hand. On Kubernetes, copy the file off the one-off pod before the pod ends |
 | A step after the commit fails (the key file could not be replaced) | The error says so and names `<key-file>.new`. That file holds the new identity, and at that point is the **only** key that reads the store — save it before doing anything else |
-| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. If the latest `secret.rekey` row (above) names the recipient `age-keygen -y <key-file>.new` prints, move it into place and set `WARDYN_AGE_KEY` to it; otherwise remove it and run again |
+| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. Run the check below on that file |
+| ↳ | A count above 0 means the earlier rotation landed: move the file into place and set `WARDYN_AGE_KEY` to it. The fingerprint it prints must match the one the error printed, if you have it |
+| ↳ | A count of 0, or `could not check, keep every key file`, proves nothing. Keep the file: move it aside under another name, keep it at mode `0600`, and run again. It decrypts nothing unless the store uses it |
 | Always | **Back the key up off-host.** Rotation re-encrypts what is there; it cannot recover a key you have already lost |
+
+Save the block below to a file and run it with `sh`, so your interactive shell does not change any of its characters.
+
+```sh
+staged=~/.wardyn/age.key.new   # the path the refusal names
+if pub=$(age-keygen -y "$staged") && [ -n "$pub" ] &&
+  sum=$(printf %s "$pub" | sha256sum) && fp=$(printf %s "$sum" | cut -c1-16) &&
+  [ ${#fp} -eq 16 ] && printf '%s\n' "$fp" | grep -qx '[0-9a-f]\{16\}' && echo "fingerprint: $fp" &&
+  n=$(docker exec -i wardyn-postgres psql -U wardyn -d wardyn -tAc \
+    "SELECT (SELECT count(*) FROM secrets WHERE kek_id LIKE '%:$fp') + (SELECT count(*) FROM principal_keys WHERE kek_id LIKE '%:$fp');") &&
+  case $n in '' | *[!0-9]*) false ;; esac; then
+  echo "rows under it: $n"
+else
+  echo "could not check, keep every key file"
+fi
+```
 
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
 - Rows sealed under Vault Transit (below) hold nothing under the age key either, and a rotation leaves them alone.
@@ -303,7 +323,7 @@ Read from agentgateway v1.7.0's source, not run:
 `wardynd -rotate-gateway-identity-key` is a **maintenance mode, not a server start**, with no environment pair.
 
 1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours: a replica left serving keeps signing with the key it loaded.
-2. Run the mode. It writes the new key, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+2. Run the mode. It writes the new key, then rotates the client certificate CA when one exists, writes a `secret.rekey` audit row for each and exits. With no key row it refuses, and it never makes a first key.
 3. Start `wardynd`, then restart each gateway.
 
 The old key stays published until 15 minutes after the rotation: the longest token lifetime, 10 minutes, plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
@@ -319,6 +339,25 @@ Signing moves to the new key at once, so a gateway that has not refetched answer
 - **The outage.** The rotation stops every replica, so a recovery is an outage. Gateway calls stay refused until the replicas are back and the gateways have reloaded.
 
 To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-identity-key`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `kid`, `replaced_kid`, `retired_previous`, and `previous_retire_at` on a planned rotation.
+
+## The AI gateway client certificate CA
+
+The CA that signs each run's gateway client certificate ([The run's client certificate](ai-gateway.md#the-runs-client-certificate)).
+
+| Part | What it is |
+|---|---|
+| Storage | One secret-store row, `wardyn-gateway-client-ca`, holding the CA's P-256 key, its certificate, and the previous certificate with its retire time. It is separate from `wardyn-gateway-identity-key`, so a gateway that trusts one trusts nothing the other signs. |
+| When it is made | At the save that first turns run identity on, beside the signing key; on an install whose signing key already exists, at the next start. Never on an install that has not turned identity on. |
+| Bundle | Anonymous `GET /.well-known/wardyn-experimental/gateway-client-ca.pem`, under `WARDYN_BASE_PATH` when set, gated like the key set. |
+
+- **A row that fails to decrypt or parse fails closed.** It is never made again, so certificate mints and the bundle answer 503 until a person restores the row. Tokens are not affected.
+- **Rotation.** `wardynd -rotate-gateway-identity-key` rotates this CA after the signing key, under the same steps. The old CA certificate stays in the bundle for 15 minutes; with `-retire-previous` it leaves at once.
+- **New certificates are refused until each gateway reloads the bundle.** From its next start wardynd signs every new certificate with the new CA. A gateway's trust store does not fetch a CA it lacks, so a gateway that requires the certificate refuses each one until it reloads the bundle. Step 3 of [Rotating the key](#rotating-the-key), restarting each gateway, ends that.
+- **With `-retire-previous`, a live run keeps its old certificate for up to 5 minutes.** Its proxy presents the old CA's certificate until its first new handshake after half-life, so a gateway that has reloaded refuses that run's new connections until then.
+- **An unreadable CA row stops the mode after the signing key is rotated.** The new signing key and its audit row are already written. Restore the CA row before you run the mode again. That run rotates the signing key again, and a second rotation inside 15 minutes removes the older key early ([Rotating the key](#rotating-the-key)).
+- **If the CA key is stolen.** A thief can sign a certificate naming any run, accepted by every gateway that trusts this bundle until the gateway refetches it after a `-retire-previous` rotation. A gateway that also checks the token still refuses a call that carries no token the signing key made.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-client-ca`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `serial`, `replaced_serial`, `retired_previous`, and `previous_retire_at` on a planned rotation.
 
 ## The audit receipt key
 
@@ -448,16 +487,23 @@ The two `auth/token/` paths are the client's own token upkeep (`token-file` auth
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run `wardynd -rewrap` again.
 
-**Rotating the Transit key.** Rotate in Vault, rewrap, then retire the old versions:
+**Rotating the Transit key.** Rotate in Vault, restart, rewrap, then retire the old versions:
 
-1. ```sh
+1. Rotate the key:
+   ```sh
    vault write -f transit/keys/wardyn/rotate
+   ```
+2. Restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed its row before the rotation can land under the older version, even after a `-rewrap` printed its retirement step.
+3. Rewrap:
+   ```sh
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret and principal key is wrapped under
-   transit:transit/wardyn version 2; raising the Transit key's
-   min_decryption_version to 2 now retires the older versions`
-2. ```sh
+   Expected output:
+   ```
+   every sealed secret and principal key is wrapped under transit:transit/wardyn version 2; if every wardynd process that was running when version 2 was made had exited before this run started, raising the Transit key's min_decryption_version to 2 now retires the older versions
+   ```
+4. Retire the older versions:
+   ```sh
    vault write transit/keys/wardyn/config min_decryption_version=2
    ```
 
@@ -538,10 +584,11 @@ Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek` and `
 **Rotating either key.**
 
 1. `az keyvault key rotate --vault-name <vault> --name wardyn-kek` (or `wardyn-kek-sig`). New writes name the new version at once, with no restart.
-2. Run `wardynd -rewrap`. Every row not at the latest versions is unwrapped and wrapped again, bound to its row.
-3. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an automatic rotation, during step 2 can leave a row on an older version. When a rotation lands mid-run, the command says so and prints no retirement step. Repeat until it reports 0.
-4. Disable every older version of both keys: `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
-5. Restart every replica, so none keeps an older signing version cached.
+2. Restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed its row before step 1 can land under the older version, even after a run reported 0.
+3. Run `wardynd -rewrap`. Every row not at the latest versions is unwrapped and wrapped again, bound to its row.
+4. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an automatic rotation, during step 3 can leave a row on an older version. When a rotation lands mid-run, the command says so and prints no retirement step. Repeat until it reports 0.
+5. Disable every older version of both keys: `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
+6. Restart every replica, so none keeps an older signing version cached.
 
 A row still wrapped under a disabled wrapping version is refused, naming the row, until that version is enabled again.
 
@@ -840,11 +887,12 @@ A background write by someone who has not signed in since a group changed (a tok
 
 **Rotating one domain's key.** `wardynd -rewrap` and `-rotate-age-key` read `WARDYN_KEY_DOMAINS_FILE` and build every domain's key.
 
-- Rotate domain A's key at its service, then run `wardynd -rewrap`: it moves only A's principal keys onto A's latest version and leaves B's `domain`, `kek_id` and bytes as they were.
+- Rotate domain A's key at its service. Then restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed a principal key or a row before the rotation can land under the older version, even after a run.
+- Then run `wardynd -rewrap`: it moves only A's principal keys onto A's latest version and leaves B's `domain`, `kek_id` and bytes as they were.
 - It prints a retirable version per domain, and the `secret.rewrap` row carries them as `domain_key_versions`:
 
 ```
-every principal key in key domain "acme" is wrapped under transit:transit/acme-keys version 2; raising the Transit key's min_decryption_version to 2 now retires the older versions
+every principal key in key domain "acme" is wrapped under transit:transit/acme-keys version 2; if every wardynd process that was running when version 2 was made had exited before this run started, raising the Transit key's min_decryption_version to 2 now retires the older versions
 ```
 
 A principal key never leaves its domain in a rewrap, and a live key naming an undeclared domain refuses the rewrap with nothing changed.
@@ -1014,6 +1062,9 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
 
 - It reads metadata only, deletes nothing, and exits non-zero when it finds either.
 - A crash between the two writes of a Put or a Delete is what produces one; neither leaks a value to anyone.
+- So can a shutdown or a burst of saves.
+- A save's clean-up of a value it replaced, or of its own value whose row was not written, is cut if it is still running when shutdown's wait ends. It is skipped while clean-ups already run on a quarter of the database pool's connections (rounded down, at least one). Either way the value is kept, and `wardynd -reconcile` lists it.
+- Beside a serving wardynd, one run can list a value without a pointer that a save has since put back. Before you remove a listed value, run `wardynd -reconcile` again and act only on a value both runs list.
 
 **Erasure horizon.** A removed credential is gone from Vault at once (all versions); what survives is your Vault storage's own snapshots and backups, under your retention. **Backup** in store mode is the Postgres dump plus your Vault's own backup — the dump alone holds pointers, not values.
 

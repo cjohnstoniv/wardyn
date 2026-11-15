@@ -7,7 +7,7 @@
 // the same split live-approvals-ado.test.tsx/live-approvals-reauth.test.tsx
 // already use, rather than growing live-approvals.test.tsx further.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import type { ApprovalRequest } from "../../lib/types";
 import { OperatorProvider } from "./operator-context";
 import { SECURITY_ONLY_REASON } from "./copy";
@@ -26,6 +26,7 @@ vi.mock("../../lib/api/approvals", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
+import { HttpError } from "../../lib/api/core";
 
 function pushRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return {
@@ -76,5 +77,39 @@ describe("LiveApprovals — a held push (#181)", () => {
     expect(within(card).queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: /^Deny$/ })).not.toBeInTheDocument();
     expect(within(card).getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+  });
+});
+
+// Someone else decided the request first: the server answers 409 approval_already_decided. The strip reads its list at
+// once, with the row busy until that read answers, instead of leaving a live row until the next poll.
+describe("LiveApprovals: a request the server says was already decided", () => {
+  const decided = () => new HttpError(409, "approval already decided", "approval_already_decided");
+  const egress = pushRow({ id: "egress-1", kind: "egress_domain", requested_scope: { host: "gone.example" } });
+
+  async function readAgainAfter(row: ApprovalRequest, buttons: () => HTMLElement[]) {
+    let answer: (rows: ApprovalRequest[]) => void = () => {};
+    listApprovalsMock.mockReset().mockResolvedValueOnce([row]).mockReturnValueOnce(new Promise((done) => (answer = done)));
+    approveMock.mockReset().mockRejectedValueOnce(decided());
+    render(<LiveApprovals runId="r1" />);
+    await screen.findByTestId("live-approvals");
+    buttons()[0].click();
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledTimes(2));
+    for (const b of buttons()) expect(b).toBeDisabled();
+    await act(async () => answer([]));
+    await waitFor(() => expect(screen.queryByTestId("live-approvals")).toBeNull());
+  }
+
+  it("a row's own Approve reads the list at once, and the row goes when that read answers", async () => {
+    await readAgainAfter(egress, () => {
+      const row = screen.getByTestId("live-approval-row");
+      return [within(row).getByRole("button", { name: "Approve" }), within(row).getByRole("button", { name: "Deny" })];
+    });
+  });
+
+  it("a push card's own Approve does the same", async () => {
+    await readAgainAfter(pushRow(), () => {
+      const card = screen.getByTestId("push-content-card");
+      return [within(card).getByRole("button", { name: /^Approve$/ }), within(card).getByRole("button", { name: /^Deny$/ })];
+    });
   });
 });

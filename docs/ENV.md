@@ -208,7 +208,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` | string | (unset) | the namespace of wardynd's own pods: with the labels below, the only peer a No network run's proxy pod may reach (`-tags k8s`). The chart sets it. [Details](#wardyn_k8s_control_plane_namespace) |
 | `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` | `k=v,k=v` | (unset) | wardynd's pod labels for that peer. The chart sets its selector labels and `app.kubernetes.io/component=control-plane`. Set both or neither. |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
+| `WARDYN_K8S_AGENT_SANDBOX_KEEP` | bool | off | experimental: on the agent-sandbox backend, keeps an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive, for revive (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.keep.enabled`. [Details](#wardyn_k8s_agent_sandbox_keep) |
 | `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
+| `WARDYN_K8S_WARM_POOLS` | JSON | empty | experimental: idle placeholder pods per pool that hold room on a node with the pool's image pulled; a run that fits a pool prefers that node (`-tags k8s`); server mode only. Chart: `k8s.warmPools`. [Details](#wardyn_k8s_warm_pools) |
+| `WARDYN_K8S_WARM_PRIORITY_CLASS` | string | empty | the PriorityClass warm placeholders take, so any run evicts them (`-tags k8s`). Chart: `k8s.warmPoolPriorityClass`. [Details](#wardyn_k8s_warm_pools) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -835,12 +838,25 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
 - Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
 
+### `WARDYN_K8S_AGENT_SANDBOX_KEEP`
+
+- Experimental, off by default (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Boot refuses it alone, under `wardyn-runnerd`, and when wardynd lacks a verb on `services` or `endpointslices.discovery.k8s.io` in a runs namespace.
+- A run that can be kept (interactive, with its work folder on a kept drive) gets a ClusterIP Service with no selector and an EndpointSlice Wardyn writes. Its agent's `wardyn-proxy` address and nameserver are the Service's, so a replaced proxy is reached without changing the agent pod.
+- Every other run is built as with the switch off.
+- Keep, revive and what turning keep on widens: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md#keep-and-revive).
 ### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
 
 - Experimental, empty by default (`-tags k8s`). The name of an agent-sandbox `SandboxTemplate` in each runs namespace. The agent pod takes only its annotations under `sandbox-template.wardyn.dev/`. Placement and runtime come only from `WARDYN_K8S_SANDBOX_PLACEMENT` and the confinement class, where the boot canary checks NetworkPolicy enforcement.
 - A template that sets any pod field (placement included) or other field, or changes an annotation Wardyn set, refuses the run before its `Sandbox` is created. Boot refuses a template that is missing, unreadable or refused, a name that is not a valid object name, and the variable without `WARDYN_K8S_AGENT_SANDBOX`.
 - Needs `get` on that one name of `sandboxtemplates.extensions.agents.x-k8s.io`. [A platform template](operations/kubernetes-agent-sandbox.md#a-platform-template).
 
+### `WARDYN_K8S_WARM_POOLS`
+
+- Experimental, empty by default (`-tags k8s`). A JSON array of pools: `name` (a DNS label, at most 30 characters), `image`, `class` (`CC1`, `CC2` or `CC3`), `cpu`, `memory` and `size` (0 to 20; at most 50 across all pools).
+- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials and, where the namespace enforces NetworkPolicy, no network. Each reserves `cpu` and `memory` plus a proxy's share.
+- A run whose image and class match a pool, and whose requests fit, removes one placeholder and prefers its node. The run's own pods are made fresh and checked as always.
+- Boot refuses a malformed value, a `CC2` or `CC3` pool whose RuntimeClass is not pinned, and any value under `wardyn-runnerd`. `WARDYN_K8S_WARM_PRIORITY_CLASS` names the PriorityClass placeholders take.
+- How placeholders are kept and claimed, and what they cost: [Kubernetes: warm pools](operations/kubernetes-warm-pools.md).
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
 - Where the `k8s` substrate puts every pod it creates: the agent pod, the proxy pod and the boot-time egress canary (`-tags k8s`).
@@ -1106,6 +1122,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
+- A member's folder scan opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one.
+- Where the server's user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why.
+- An operator's scan of a folder inside a member workspace root, from the library or from an operator's own workspace, is opened the same way and must resolve inside every member root that holds it. A folder reached through a link that leaves that root is refused (`workspace_source_mount_not_allowed`) and is onboarded by its real path instead.
+- A folder the server scans is also held to each member whose workspace attaches it. If none of that member's roots holds the folder any more, as after their roots were narrowed or removed, every scan of it is refused (`workspace_source_mount_not_allowed`).
+- An operator reads which workspace and whose, and the audit row names both; a member reads the same refusal with neither named. A member whose own roots no longer hold the folder reads only their own refusal.
+- The refusal clears once the folder is removed from that workspace, the workspace is deleted or reassigned to the operator, or that member's roots cover the folder again.
+- A folder reached through a link to a member root or a folder above it, an operator's link into a root, or another letter case on a Mac, is checked as that root's folder. It is named from that root and must resolve inside every member root that holds that name.
+- Two other names are held differently. A bind or second mount of a folder below a root is not that root: the scan follows the links in it and holds the folder where they reach a root. Where they reach none and no member's workspace attaches the folder, an operator's scan reads it by its path.
+- A person's own root inside another member root, reached through an operator's link inside the outer root or another letter case below it, is held to the outer root only. Of the two, only that root holds the folder's name.
+- A member must not be able to create, rename or replace a member root or any folder above it. One who can could turn the root into a link, then onboard and bind a folder it leads to by that folder's own path. With the root put back, their workspace then blocks every scan of that folder.
 - A source bound to the member's runner (`runner_id`) is checked here by its text alone, and by [its runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner) before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
@@ -2055,7 +2081,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Bool, default `false` (flag `-allow-ui-sandbox-shared-origin`).
 - With SSO configured and the UI-sandbox gateway on (`WARDYN_UI_SANDBOX_LISTEN`), boot is refused while `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` is unset; set this to `true` to accept that every run's apps share one origin.
 - Prefer the template: with the shared origin, a page one run serves can reach another run's app.
-- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`.
+- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`. Without SSO and with no template, the chart still renders and prints a warning unless that is set.
 
 ### `WARDYN_UI_SANDBOX_SESSION_TTL`
 
@@ -2233,7 +2259,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   "syslog":  {"network": "udp", "addr": "localhost:514"},
   "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
   "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
-  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
+  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100},
+  "otlp_metrics": {"endpoint": "https://otel.example.com:4318", "interval": "60s"}
 }
 ```
 
@@ -2269,6 +2296,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
 
 - Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
+
+#### OpenTelemetry metrics (`otlp_metrics`)
+
+- Not an audit sink: it sends no audit row. Each wardynd replica POSTs its `/metrics` series as OTLP/HTTP JSON to `<endpoint>/v1/metrics`; see [monitoring](operations/monitoring.md#opentelemetry-metrics).
+- The block is independent of `otlp`: set either one, or both with different endpoints.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | (required) | collector base URL, `http://` or `https://`; `/v1/metrics` is added to its path |
+| `bearer_token`, `headers`, `timeout` | as `otlp` | same meaning and limits |
+| `interval` | `60s` | how often the series are pushed; at least `1s` |
 
 #### Acknowledged delivery (`delivery: acknowledged`)
 
@@ -2444,7 +2482,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
 - It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
-- It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
+- It trusts what the CLI trusts: the system roots, and for the organisation's host the CAs `wardyn ca add` stored. It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle, which a runner trusts, would verify the server.
 - With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`

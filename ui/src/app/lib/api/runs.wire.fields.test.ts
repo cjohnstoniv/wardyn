@@ -33,6 +33,7 @@ import { TEMPLATE_REQUEST_FIELDS } from "../template-fields";
 import { intentToWire, POLICY_CARRIER } from "../../components/screens/new-run-flow/draft/intent-to-wire";
 import type { RunIntent } from "../../components/screens/new-run-flow/draft/run-intent";
 import { DISK_REASONS } from "../../components/screens/run-detail/macos-run-facts";
+import { FORCED_KEEP_PREFIX } from "../../components/wardyn/copy/runners";
 
 // Shared fetch stub.
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -298,10 +299,20 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(tsInterfaceKeys(runsTs, "RunDetailAgent").sort()).toEqual(goJSONTags(multiGo, "runDetailAgent").sort());
   });
 
-  it("RunComputerFolder and RunFolderPass's keys are exactly computerFolderRunView's and types.FolderPassRecord's json tags (GET /runs/{id} computer_folder)", () => {
+  it("RunComputerFolder and RunFolderPass's keys are exactly computerFolderRunView's and folderPassView's json tags (GET /runs/{id} computer_folder)", () => {
     const viewGo = readFileSync(join(root, "internal/api/run_computer_folder.go"), "utf8");
     expect(tsInterfaceKeys(runsFolderTs, "RunComputerFolder").sort()).toEqual(goJSONTags(viewGo, "computerFolderRunView").sort());
-    expect(tsInterfaceKeys(runsFolderTs, "RunFolderPass").sort()).toEqual(goJSONTags(typesGo, "FolderPassRecord").sort());
+    expect(tsInterfaceKeys(runsFolderTs, "RunFolderPass").sort()).toEqual(goJSONTags(viewGo, "folderPassView").sort());
+  });
+
+  it("FORCED_KEEP_PREFIX opens forcedKeptForCopyBack, the text a forced end records for a sandbox it kept for its copy back (run_kept_stop_forced.go)", () => {
+    const forcedGo = readFileSync(join(root, "internal/api/run_kept_stop_forced.go"), "utf8");
+    expect(forcedGo).toContain(`const forcedKeptForCopyBack = "${FORCED_KEEP_PREFIX}`);
+  });
+
+  it("folderPassNoTimeMsg opens with FORCED_KEEP_PREFIX, so the run page shows a copy back with no time left as kept (run_folder_pass_once.go)", () => {
+    const passGo = readFileSync(join(root, "internal/api/run_folder_pass_once.go"), "utf8");
+    expect(passGo).toContain(`const folderPassNoTimeMsg = "${FORCED_KEEP_PREFIX}: there was no time left to bring the changes back. Wardyn tries again on its next check."`);
   });
 
   it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {

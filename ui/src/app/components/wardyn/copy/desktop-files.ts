@@ -36,7 +36,7 @@ export const DESKTOP_FILES = {
   // Not on the boards: the upload-blocked twin of the board's download-blocked state, a failed
   // transfer, and an empty allowed folder.
   uploadBlocked: "Blocked: uploading files",
-  notSent: "Not sent",
+  uploadFailed: "Upload failed",
   downloadFailed: "Download failed",
   emptyFolder: "Nothing in the transfer folder yet.",
   // Downloads held for a person's yes (desktop.download: review).
@@ -53,6 +53,8 @@ export const DESKTOP_FILES = {
   expiredLine: (at: string) => `Nobody decided it in time · ${at}`,
   reviewFooter:
     "Downloads from this run wait for a person's yes, and each yes releases the file once. Every download is logged by size and hash.",
+  // A spent approval whose file did not come to this browser: the decision time is not when anything arrived.
+  approvalUsed: "Approval used; request another download",
   notAsked: "Not asked",
   requestsUnreadable: "Couldn't check this run's download requests.",
   retry: "Try again",

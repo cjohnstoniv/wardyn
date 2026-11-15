@@ -339,8 +339,9 @@ func (s *Server) scopedUnitBuild(ctx context.Context, q store.Querier, id uuid.U
 
 // deleteUnitInScope is a unit admin's unit delete: a unit strictly below one they govern, re-checked
 // under the graph lock the delete takes, and applied directly, since the store refuses a unit that
-// still has members or units below it and an empty unit binds nobody. Its grants go with it.
-func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// still has members or units below it and an empty unit binds nobody. Its grants go with it. A prune's
+// under is checked after the scope, under the same lock.
+func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	if !s.requireUnitsInScope(w, r, "governance.unit", true, id) {
 		return
@@ -354,6 +355,9 @@ func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uu
 		if err := s.requireUnitScopeQ(ctx, q, true, id); err != nil {
 			return err
 		}
+		if err := s.requireUnderQ(ctx, q, under, id); err != nil {
+			return err
+		}
 		row, err := store.GetGovernanceUnitQ(ctx, q, id, true)
 		if err != nil {
 			return err
@@ -361,7 +365,7 @@ func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uu
 		name = row.Name
 		return store.DeleteGovernanceUnitQ(ctx, q, id)
 	})
-	if s.answerOutsideScope(w, r, "governance.unit", err) || s.writeUnitDeleteError(w, r, err) {
+	if s.answerOutsideScope(w, r, "governance.unit", err) || answerNotUnder(w, err) || s.writeUnitDeleteError(w, r, err) {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -467,8 +471,9 @@ func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a 
 // deleteMembershipInScope is a unit admin's membership delete: the membership is in a unit they govern
 // and its subject keeps another membership in their units, both read under the locks the delete takes.
 // It applies directly (the person keeps every other context, so nothing they could reach widens),
-// except a legacy row whose delete would let another legacy row take over (H3), which is held.
-func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// except a legacy row whose delete would let another legacy row take over (H3), which is held. A
+// prune's under is checked after the scope, under the same locks.
+func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	var removed types.GovernanceMembership
 	var keepsIn []uuid.UUID
@@ -478,6 +483,9 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		if err := s.requireUnitScopeQ(ctx, q, false, row.UnitID); err != nil {
+			return err
+		}
+		if err := s.requireUnderQ(ctx, q, under, row.UnitID); err != nil {
 			return err
 		}
 		all, err := store.ListGovernanceMembershipsQ(ctx, q)
@@ -510,7 +518,7 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 		return store.DeleteGovernanceMembershipQ(ctx, q, id)
 	})
 	if errors.Is(err, errHoldForApproval) {
-		s.holdMembershipDelete(w, r, id, keepsIn)
+		s.holdMembershipDelete(w, r, id, keepsIn, under)
 		return
 	}
 	if s.answerOutsideScope(w, r, "governance.membership", err) || writeMembershipTreeError(w, r, "delete governance assignment", err) {

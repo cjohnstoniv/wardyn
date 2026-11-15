@@ -232,7 +232,7 @@ func TestRunSSH_Config(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "Host wardyn-a1b2c3d4\n  HostName wardyn.example.com\n  Port 2222\n  User " + testRunID + "\n"
+	want := "Host wardyn-" + testRunID + "\n  HostName wardyn.example.com\n  Port 2222\n  User " + testRunID + "\n"
 	if out.String() != want {
 		t.Errorf("--config output =\n%q\nwant\n%q", out.String(), want)
 	}
@@ -256,19 +256,35 @@ func TestRunSSH_ConfigDefaultPort(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// shortRunID: mirrors the console's Host label (run.id.replace(/^run_/, "").slice(0,8)).
+// sshHostAlias: the Host name a run is saved under, the console's label too.
 // --------------------------------------------------------------------------
 
-func TestShortRunID(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"run_abcdefgh12345", "abcdefgh"},
-		{"abcdefgh12345", "abcdefgh"},
-		{"short", "short"},
-		{"run_ab", "ab"},
+// TestSSHHostAlias: the alias is "wardyn-" and the whole canonical id, whichever UUID form was typed, so
+// two runs whose ids start alike never share an alias, and saving the second one's block keeps the first's.
+func TestSSHHostAlias(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{testRunID, "wardyn-" + testRunID},
+		{strings.ToUpper(testRunID), "wardyn-" + testRunID},
+		{"{" + testRunID + "}", "wardyn-" + testRunID},
+		{"urn:uuid:" + testRunID, "wardyn-" + testRunID},
+		{strings.ReplaceAll(testRunID, "-", ""), "wardyn-" + testRunID},
+	} {
+		if got := sshHostAlias(tc.in); got != tc.want {
+			t.Errorf("sshHostAlias(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
-	for _, tc := range tests {
-		if got := shortRunID(tc.in); got != tc.want {
-			t.Errorf("shortRunID(%q) = %q, want %q", tc.in, got, tc.want)
+	other := "a1b2c3d4-0000-4000-8000-000000000001"
+	gw := sshGateway{host: "gw.example.com", port: "2222"}
+	path := filepath.Join(t.TempDir(), "ssh_config")
+	for _, id := range []string{testRunID, other} {
+		if err := upsertSSHHost(path, sshConfigBlock(gw, id, "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := os.ReadFile(path)
+	for _, id := range []string{testRunID, other} {
+		if !strings.Contains(string(got), "Host wardyn-"+id+"\n  HostName gw.example.com\n  Port 2222\n  User "+id+"\n") {
+			t.Errorf("ssh_config = %q, want a block for run %s that the other run's block did not replace", got, id)
 		}
 	}
 }
@@ -458,7 +474,7 @@ func TestRunSSH_ProxyCommandPrintConfigJSON(t *testing.T) {
 	}
 
 	out, err = runSSHWith(t, proxyHealthz, "--config")
-	wantConfig := "Host wardyn-a1b2c3d4\n  HostName ssh.example.com\n  Port 2222\n  User " + testRunID +
+	wantConfig := "Host wardyn-" + testRunID + "\n  HostName ssh.example.com\n  Port 2222\n  User " + testRunID +
 		"\n  ProxyCommand " + testProxyCommand + "\n"
 	if err != nil || out != wantConfig {
 		t.Fatalf("--config =\n%q (%v)\nwant\n%q", out, err, wantConfig)

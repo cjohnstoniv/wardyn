@@ -40,6 +40,7 @@
 | After an upgrade, `wardyn-runnerd doctor` says "waiting for the proxy image; next try at <time>" | The proxy image could not be pulled (not published, no access, or network); the log says. It retries after about 15 s, 30 s, 1 and 2 minutes, then every 5 |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)) |
 | A macOS VM run stops at the login window: "the Mac guest never reached the agent's desktop: still at the login window" | The setup-assistant-quit switch signs the agent user out on macOS 26.6.2. Run `sudo rm -f /Library/Wardyn/setup-assistant-quit` in `edit-base`'s admin Terminal. This release's guest agent ignores the switch; a base with tools older than this release still acts on it. |
+| A macOS VM run on a base with `/Library/Wardyn/carry-before-login` fails with "the macOS VM stopped while booting" | The hold's restart did not bring the guest back. On a test base, remove the two items from its list. On Standard, `edit-base` and the tools update can stop the same way; if they do, prepare Standard again |
 
 The runner drawer shows most of these from fixed codes and numbers the runner reports. Whether someone is logged in goes only as yes or no, and no user or account name is sent. In an error, the runner's home folder shows as `~`.
 
@@ -61,6 +62,9 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 | A prepare run with sudo from Terminal reaching the signed-in desktop's window | Nothing today: setup by hand refuses root. Allowing root would need this |
 | A macOS 26 Mac boots its installed guest into Setup Assistant with no start options | The macOS 26 prepare |
 | Whether per-host settings files copied into a run's new machine identity at boot, when the guest agent starts, keep Setup Assistant's Apple Account pane closed | The setup-assistant-carry switch, off by default. Without it the pane can stay up in a run's window |
+| With no `autoLoginUser`, a macOS guest stays at the login window, and loginwindow reads it only as the boot starts | The sign-in hold's order: the carry runs before `agent` is signed in. Whether the carried files keep the pane closed is the row above |
+| A restart started inside a macOS guest (`shutdown -r now`) restarts the VM in place, without ending the run or the `edit-base` window | The sign-in hold, off by default. If the VM stops instead, each run on a base with `/Library/Wardyn/carry-before-login` fails as stopped while booting |
+| `defaults write` of `autoLoginUser` reaches the disk before a restart started right after it | The sign-in hold. A restart that loses it is retried, at most 3 in a row |
 | `systemsetup -setremotelogin off` runs over SSH without Full Disk Access | Stage 1's Remote Login step. A refusal fails it and publishes no base |
 | A macOS 26 guest's agent reaches the runner over the virtual socket | Every run on a macOS 26 base |
 | A rebooted or reset guest sends a new DHCP request | The same-boot half of the Remote Login proof |

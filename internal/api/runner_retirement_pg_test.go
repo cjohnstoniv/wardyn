@@ -231,3 +231,62 @@ func TestPG_Retirement_OldRunnerNeverGetsRetireRun(t *testing.T) {
 	f.produce(t)
 	f.waitRow(t, "queued retire_run", `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1 AND kind = 'retire_run'`, run.ID, 1)
 }
+
+// Through the real producer and the PENDING source, a run's computer folder holds its retirement: no kill while its
+// copy back is owed, a kill once it is settled, that kill held back from the runner's next PENDING page while the
+// sandbox is kept again, with nothing more queued, and handed over once the copy back settles.
+func TestPG_Retirement_KeptFolderHoldsTheKill(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	f.sub.goneIsStopped.Store(true)
+	run := f.localRun(t, 0)
+	f.srv.recordRunnerOutputWatermark(f.ctx, run, false)
+	f.placed(t, &run)
+	f.running(t, &run, nil)
+	f.spoolOne(t, run)
+	// The run ends with its ref still set, as a run kept for its copy back does, and its record says status.
+	folder := func(status string) {
+		t.Helper()
+		if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET state = 'COMPLETED', ended_at = COALESCE(ended_at, now()),
+			local_folder = $2::jsonb, local_folder_seeded_at = now(), local_folder_status = $3::jsonb WHERE id = $1`,
+			run.ID, `{"name":"proj","runner_id":"`+f.rn.ID.String()+`","path":"/home/p/proj","direction":"both"}`, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delivered := func() bool {
+		t.Helper()
+		page, err := f.srv.PendingFromRunner(f.ctx, f.rn.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range page {
+			if a.RunID == run.ID && a.Kind == types.RunnerActionKill {
+				return true
+			}
+		}
+		return false
+	}
+	seed := `"seed":{"at":"2026-11-13T00:00:00Z","files":1,"bytes":1,"refused":[]}`
+
+	folder(`{` + seed + `,"gen":1,"settled":1}`)
+	f.produce(t)
+	f.actions(t, run, "no kill while the copy back is owed", 0)
+
+	folder(`{` + seed + `,"back":{"at":"2026-11-13T00:01:00Z","files":3,"bytes":10,"refused":[]},"gen":2,"settled":2}`)
+	f.produce(t)
+	f.waitRow(t, "queued kill", `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1 AND kind = 'kill' AND applied_at IS NULL`, run.ID, 1)
+	if !delivered() {
+		t.Fatal("PENDING does not hand over the kill of a run whose copy back settled")
+	}
+
+	folder(`{` + seed + `,"back":{"at":"2026-11-13T00:02:00Z","files":2,"bytes":5,"refused":[],"error":"cut short"},"resume":{"stalled":0},"gen":3,"settled":3}`)
+	if delivered() {
+		t.Fatal("PENDING hands over the kill of a run whose sandbox is kept for its copy back")
+	}
+	f.produce(t)
+	f.actions(t, run, "nothing more queued while the sandbox is kept", 1)
+
+	folder(`{` + seed + `,"back":{"at":"2026-11-13T00:03:00Z","files":2,"bytes":5,"refused":[]},"gen":4,"settled":4}`)
+	if !delivered() {
+		t.Fatal("PENDING does not hand over the kill once the copy back settled")
+	}
+}

@@ -90,6 +90,8 @@ export function UnitDeciders({
   unitNames = {},
   disabled,
   onChanged = () => {},
+  profileSaving = false,
+  onDirtyChange,
 }: {
   /** The profile being edited, or null for one not saved yet. */
   profile: GovernanceUnit | null;
@@ -99,8 +101,12 @@ export function UnitDeciders({
   supported?: boolean;
   unitNames?: Record<string, string>;
   disabled: boolean;
-  /** The save landed or was held: the screen reloads its snapshot. */
-  onChanged?: () => void;
+  /** The save landed or was held: the screen reloads its snapshot. A returned promise settles when that reload has landed. */
+  onChanged?: () => void | Promise<unknown>;
+  /** The profile's own save is out; its answer closes the editor, so the section is read-only meanwhile. */
+  profileSaving?: boolean;
+  /** Whether the draft holds rules not saved here: the profile's Save closes the editor and would drop them. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const entry = profile ? deciders.find((d) => d.unit_id === profile.id) : undefined;
   const stored = entry?.rules ?? [];
@@ -109,6 +115,7 @@ export function UnitDeciders({
   const [editing, setEditing] = React.useState<number | null>(null);
   const [refusal, setRefusal] = React.useState<Refusal | null>(null);
   const [held, setHeld] = React.useState(false);
+  const heldDraft = React.useRef("");
   const [saving, setSaving] = React.useState(false);
   // A reload that brings different stored rules starts the draft over from them.
   React.useEffect(() => {
@@ -120,6 +127,13 @@ export function UnitDeciders({
 
   const dirty = JSON.stringify(draft) !== storedKey;
   useUnsavedGuard("unit-deciders", dirty, () => JSON.stringify(draft));
+  // A draft the server held for a second person is already sent: closing the editor loses nothing, unless it was
+  // edited since.
+  const unsent = dirty && !(held && JSON.stringify(draft) === heldDraft.current);
+  React.useEffect(() => {
+    onDirtyChange?.(unsent);
+  }, [unsent, onDirtyChange]);
+  const frozen = saving || profileSaving;
 
   const locker = profile ? lockedBy(profile, profiles) : null;
   const canEdit = supported && profile !== null && !disabled && !locker;
@@ -150,11 +164,13 @@ export function UnitDeciders({
     try {
       await putUnitDeciders(profile.id, draft);
       toast.success(DECIDERS.SAVED);
-      onChanged();
+      // The reload puts the stored rules back in the draft: the section stays read-only until it has landed.
+      await onChanged();
     } catch (e) {
       if (e instanceof PendingChangeError) {
+        heldDraft.current = JSON.stringify(draft);
         setHeld(true);
-        onChanged();
+        void onChanged();
       } else if (e instanceof HttpError) {
         const named = e.status === 409 ? null : /rules\[(\d+)\]/.exec(e.message);
         const at = named ? Number(named[1]) : null;
@@ -221,94 +237,99 @@ export function UnitDeciders({
         <p className="mt-3 text-xs text-muted-foreground">{DECIDERS.NEW_PROFILE}</p>
       ) : (
         <>
-          {showEmpty ? (
-            <div className="mt-3">
-              <EmptyState
-                icon={ScrollText}
-                size="compact"
-                title={DECIDERS.EMPTY_TITLE}
-                description={DECIDERS.EMPTY_BODY}
-                action={
-                  canEdit ? (
-                    <Button type="button" variant="outline" size="sm" onClick={add}>
-                      <Plus className="size-4" aria-hidden="true" />
-                      {DECIDERS.ADD}
-                    </Button>
-                  ) : undefined
-                }
-              />
-            </div>
-          ) : (
-            (draft.length > 0 || rows.length > 0) && (
-              <ul className="mt-3 rounded-lg border border-border">
-                {draft.map((rule, i) =>
-                  canEdit && editing === i ? (
-                    <li key={i} className="border-b border-border p-3 last:border-b-0">
-                      <DeciderRuleEditor
-                        index={i}
-                        rule={rule}
-                        draft={draft}
-                        refusal={refusal?.index === i ? <RefusalNote body={refusal.body} mono={refusal.mono} /> : undefined}
-                        onChange={(next) => setDraft(draft.map((r, j) => (j === i ? next : r)))}
-                        onDone={() => setEditing(null)}
-                        onRemove={() => {
-                          setDraft(draft.filter((_, j) => j !== i));
-                          setEditing(null);
-                        }}
-                      />
-                    </li>
-                  ) : (
-                    <RuleRow key={i} kinds={rule.kinds} who={rule.who} facts={factLine(rule)} met={metLines(rule)}>
-                      {canEdit && (
-                        <>
-                          <Button type="button" variant="outline" size="sm" onClick={() => setEditing(i)}>
-                            {DECIDERS.EDIT}
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>
-                            {DECIDERS.REMOVE}
-                          </Button>
-                        </>
-                      )}
-                    </RuleRow>
-                  ),
-                )}
-                {rows.map((r) => (
-                  <RuleRow key={`${r.unitId}#${r.kinds[0]}`} kinds={r.kinds} who={r.rule?.who ?? []} facts={r.rule ? factLine(r.rule) : undefined}>
-                    <span className="text-xs text-muted-foreground">{unitNames[r.unitId] ? DECIDERS.FROM(unitNames[r.unitId]) : DECIDERS.FROM_ABOVE}</span>
-                  </RuleRow>
-                ))}
-              </ul>
-            )
-          )}
-
-          {canEdit && draft.length === 0 && rows.length > 0 && (
-            <div className="mt-3 flex flex-col items-start gap-1">
-              <Button type="button" variant="outline" size="sm" onClick={add}>
-                {DECIDERS.SET_HERE}
-              </Button>
-              {firstSource && <p className="text-xs text-muted-foreground">{DECIDERS.INHERITED_HELPER(firstSource)}</p>}
-            </div>
-          )}
-
-          {canEdit && (draft.length > 0 || stored.length > 0) && (
-            <div className="mt-3 flex flex-col items-start gap-2">
-              {draft.length > 0 && (
-                <Button type="button" variant="outline" size="sm" onClick={add}>
-                  <Plus className="size-4" aria-hidden="true" />
-                  {DECIDERS.ADD}
-                </Button>
-              )}
-              <p className="text-xs text-muted-foreground">{DECIDERS.ALWAYS_NOTE}</p>
-              <div className="flex items-center gap-2">
-                <Button type="button" size="sm" disabled={!dirty || invalid || saving} onClick={() => void save()}>
-                  {DECIDERS.SAVE}
-                </Button>
-                <Button type="button" variant="outline" size="sm" disabled={!dirty || saving} onClick={discard}>
-                  {DECIDERS.DISCARD}
-                </Button>
+          {/* Read-only while the save is in flight: the reload after it puts the stored rules back in the draft, so an
+              edit made meanwhile would be dropped. */}
+          <fieldset disabled={frozen} className="m-0 min-w-0 border-0 p-0">
+            {showEmpty ? (
+              <div className="mt-3">
+                <EmptyState
+                  icon={ScrollText}
+                  size="compact"
+                  title={DECIDERS.EMPTY_TITLE}
+                  description={DECIDERS.EMPTY_BODY}
+                  action={
+                    canEdit ? (
+                      <Button type="button" variant="outline" size="sm" onClick={add}>
+                        <Plus className="size-4" aria-hidden="true" />
+                        {DECIDERS.ADD}
+                      </Button>
+                    ) : undefined
+                  }
+                />
               </div>
-            </div>
-          )}
+            ) : (
+              (draft.length > 0 || rows.length > 0) && (
+                <ul className="mt-3 rounded-lg border border-border">
+                  {draft.map((rule, i) =>
+                    canEdit && editing === i ? (
+                      <li key={i} className="border-b border-border p-3 last:border-b-0">
+                        <DeciderRuleEditor
+                          index={i}
+                          rule={rule}
+                          draft={draft}
+                          refusal={refusal?.index === i ? <RefusalNote body={refusal.body} mono={refusal.mono} /> : undefined}
+                          disabled={frozen}
+                          onChange={(next) => setDraft(draft.map((r, j) => (j === i ? next : r)))}
+                          onDone={() => setEditing(null)}
+                          onRemove={() => {
+                            setDraft(draft.filter((_, j) => j !== i));
+                            setEditing(null);
+                          }}
+                        />
+                      </li>
+                    ) : (
+                      <RuleRow key={i} kinds={rule.kinds} who={rule.who} facts={factLine(rule)} met={metLines(rule)}>
+                        {canEdit && (
+                          <>
+                            <Button type="button" variant="outline" size="sm" onClick={() => setEditing(i)}>
+                              {DECIDERS.EDIT}
+                            </Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>
+                              {DECIDERS.REMOVE}
+                            </Button>
+                          </>
+                        )}
+                      </RuleRow>
+                    ),
+                  )}
+                  {rows.map((r) => (
+                    <RuleRow key={`${r.unitId}#${r.kinds[0]}`} kinds={r.kinds} who={r.rule?.who ?? []} facts={r.rule ? factLine(r.rule) : undefined}>
+                      <span className="text-xs text-muted-foreground">{unitNames[r.unitId] ? DECIDERS.FROM(unitNames[r.unitId]) : DECIDERS.FROM_ABOVE}</span>
+                    </RuleRow>
+                  ))}
+                </ul>
+              )
+            )}
+
+            {canEdit && draft.length === 0 && rows.length > 0 && (
+              <div className="mt-3 flex flex-col items-start gap-1">
+                <Button type="button" variant="outline" size="sm" onClick={add}>
+                  {DECIDERS.SET_HERE}
+                </Button>
+                {firstSource && <p className="text-xs text-muted-foreground">{DECIDERS.INHERITED_HELPER(firstSource)}</p>}
+              </div>
+            )}
+
+            {canEdit && (draft.length > 0 || stored.length > 0) && (
+              <div className="mt-3 flex flex-col items-start gap-2">
+                {draft.length > 0 && (
+                  <Button type="button" variant="outline" size="sm" onClick={add}>
+                    <Plus className="size-4" aria-hidden="true" />
+                    {DECIDERS.ADD}
+                  </Button>
+                )}
+                <p className="text-xs text-muted-foreground">{DECIDERS.ALWAYS_NOTE}</p>
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" disabled={!dirty || invalid || saving} onClick={() => void save()}>
+                    {DECIDERS.SAVE}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" disabled={!dirty || saving} onClick={discard}>
+                    {DECIDERS.DISCARD}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </fieldset>
           {footerNote}
           {held && <SubmittedNote />}
         </>

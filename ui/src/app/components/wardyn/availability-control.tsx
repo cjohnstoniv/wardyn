@@ -25,7 +25,7 @@
 // carry it; this file adds no client-side filtering of its own.
 import * as React from "react";
 import { Loader2, X } from "lucide-react";
-import { PendingChangeError } from "../../lib/api/core";
+import { getExpectedPrincipal, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { getErrorMessage } from "../../lib/format";
 import { AVAILABILITY } from "../../lib/availability-copy";
@@ -213,9 +213,10 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
         }}
         onAdd={(subject_type, subject) =>
           run("add", async () => {
-            await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" });
+            const person = getExpectedPrincipal();
+            await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" }, person);
             if (pendingOnly && !view.restricted) {
-              setView(await api.putAvailability(kind, value, true));
+              setView(await api.putAvailability(kind, value, true, person));
               setPendingOnly(false);
               return;
             }
@@ -277,12 +278,14 @@ export function AvailabilityDraft({
 
 // writeAvailability writes a creation form's choice once the resource has its
 // value, in the mock's order: the list, then Only these. Throws the first
-// refusal; what landed before it stays.
-export async function writeAvailability(kind: string, value: string, draft: AvailabilityDraftValue): Promise<void> {
+// refusal; what landed before it stays. `person` is getExpectedPrincipal() as
+// read before the form's first request, so every write names the person who
+// saved, never whoever signed in while the resource was being created.
+export async function writeAvailability(kind: string, value: string, draft: AvailabilityDraftValue, person: string): Promise<void> {
   for (const a of draft.audiences) {
-    await api.upsertGrant({ subject_type: a.subject_type, subject: a.subject, capability: kind, value, effect: "allow" });
+    await api.upsertGrant({ subject_type: a.subject_type, subject: a.subject, capability: kind, value, effect: "allow" }, person);
   }
-  if (draft.restricted) await api.putAvailability(kind, value, true);
+  if (draft.restricted) await api.putAvailability(kind, value, true, person);
 }
 
 function AvailabilityFields({

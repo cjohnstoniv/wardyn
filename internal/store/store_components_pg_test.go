@@ -101,7 +101,7 @@ func TestPG_Components_CreateUpdateVersion(t *testing.T) {
 	next.Name = "Stripe (live)"
 	next.Definition = types.ComponentDefinition{Config: map[string]string{"A": "b"}}
 	next.CreatedBy = "ignored-on-update"
-	up, err := st.UpdateComponent(ctx, next)
+	up, err := st.UpdateComponent(ctx, next, 0)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -113,20 +113,20 @@ func TestPG_Components_CreateUpdateVersion(t *testing.T) {
 		!reflect.DeepEqual(up.Definition.Config, map[string]string{"A": "b"}) {
 		t.Fatalf("updated definition = %#v, want empty hosts, no secrets and the new config", up.Definition)
 	}
-	if up, err = st.UpdateComponent(ctx, next); err != nil || up.Version != 3 {
+	if up, err = st.UpdateComponent(ctx, next, 0); err != nil || up.Version != 3 {
 		t.Fatalf("second update = version %d, %v; want 3 (every update moves the version)", up.Version, err)
 	}
 
 	// Another owner cannot reach the row, and a rename onto a taken name is a conflict; neither moves it.
 	foreign := next
 	foreign.Owner = bob
-	if _, err := st.UpdateComponent(ctx, foreign); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.UpdateComponent(ctx, foreign, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("update as another owner: err = %v, want ErrNotFound", err)
 	}
 	newComponent(t, st, alice, "Taken")
 	clash := next
 	clash.Name = "Taken"
-	if _, err := st.UpdateComponent(ctx, clash); !errors.Is(err, store.ErrConflict) {
+	if _, err := st.UpdateComponent(ctx, clash, 0); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("rename onto a taken name: err = %v, want ErrConflict", err)
 	}
 	if got, err := st.GetComponent(ctx, c.ID, alice); err != nil || got.Version != 3 || got.Name != "Stripe (live)" {
@@ -134,8 +134,38 @@ func TestPG_Components_CreateUpdateVersion(t *testing.T) {
 	}
 	missing := next
 	missing.ID = uuid.New()
-	if _, err := st.UpdateComponent(ctx, missing); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.UpdateComponent(ctx, missing, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("update of an absent id: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestPG_Components_UpdateAtTheVersionRead: a write that names the version its
+// caller read lands only while the row is still there, so an editor opened
+// before another save cannot write back what that save removed.
+func TestPG_Components_UpdateAtTheVersionRead(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	owner := "alice-" + uuid.NewString()
+	c := newComponent(t, st, owner, "Stripe")
+
+	narrowed := c
+	narrowed.Definition = types.ComponentDefinition{Hosts: []string{"api.example.com"}}
+	if up, err := st.UpdateComponent(ctx, narrowed, 1); err != nil || up.Version != 2 {
+		t.Fatalf("update at the version read = %+v, %v; want version 2", up, err)
+	}
+	stale := c
+	stale.Name = "Stripe (renamed)"
+	if _, err := st.UpdateComponent(ctx, stale, 1); !errors.Is(err, store.ErrComponentStale) {
+		t.Fatalf("update at a version since moved: err = %v, want ErrComponentStale", err)
+	}
+	got, err := st.GetComponent(ctx, c.ID, owner)
+	if err != nil || got.Version != 2 || got.Name != "Stripe" || !reflect.DeepEqual(got.Definition.Hosts, []string{"api.example.com"}) || got.Definition.Secrets != nil {
+		t.Fatalf("after the stale write: %+v, %v; want version 2 as narrowed, untouched", got, err)
+	}
+	gone := c
+	gone.ID = uuid.New()
+	if _, err := st.UpdateComponent(ctx, gone, 1); !errors.Is(err, store.ErrComponentStale) {
+		t.Fatalf("update at a version of an absent row: err = %v, want ErrComponentStale", err)
 	}
 }
 
@@ -432,7 +462,7 @@ func TestPG_Components_ConcurrentCreateAndUpdate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var up types.Component
-			up, errs[i] = st.UpdateComponent(ctx, winner)
+			up, errs[i] = st.UpdateComponent(ctx, winner, 0)
 			versions[i] = up.Version
 		}()
 	}

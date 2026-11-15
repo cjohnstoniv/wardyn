@@ -39,7 +39,8 @@ type MemberDriveList struct {
 
 // MemberDriveDeleteResult is DELETE /api/v1/drives/member/{id}'s answer: the
 // same facts its drive.member.delete audit row carries. Outcome is deleted or
-// already_absent.
+// already_absent, or for a Mac disk image deferred (202: the delete waits for
+// the Mac) or record_only (the Mac is no longer registered and keeps the image).
 type MemberDriveDeleteResult struct {
 	Drive   string             `json:"drive"`
 	DriveID uuid.UUID          `json:"drive_id"`

@@ -482,6 +482,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
+	// The workspace image this launch selects stays held until its dispatch returns (runner.HoldImages).
+	ctx, releaseImages := runner.HoldImages(ctx)
+	defer releaseImages()
 	// The acting principal's ceiling, resolved FIRST — before the
 	// import-step CAS claim below, so a refusal costs no state and needs no
 	// abort().

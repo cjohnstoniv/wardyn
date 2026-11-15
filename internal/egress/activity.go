@@ -9,7 +9,8 @@ import "github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 const RuleSourceApprovals = "brokered:approvals"
 
 // RuleSourceUpstreamProxy is the rule source of the one allow row a proxy writes when it starts with an
-// upstream proxy: it records the private-IP guard's relaxation for that hop, not a request.
+// upstream proxy: it records the private-IP guard's relaxation for that hop, not a request. A run with no
+// network has no upstream hop, so its proxy never writes it.
 const RuleSourceUpstreamProxy string = "builtin:upstream-proxy"
 
 // CountsAsActivity reports whether a decision is the run doing something, and so moves the idle clock and

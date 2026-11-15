@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -245,6 +247,66 @@ func TestMacDisksRefusals(t *testing.T) {
 		if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{drive}); err == nil {
 			t.Errorf("%s: the disk was attached", name)
 		}
+	}
+}
+
+// An existing image the guest would format but this Mac did not make new (it starts with 4 KiB of zeros and
+// has no mark, or it is shorter than 4 KiB) is refused before the run starts, in one sentence that names the
+// drive, says it was not formatted, and says how to start again. The image is not written to.
+func TestMacDiskDrivesRefuseABlankImageThisMacDidNotMakeNew(t *testing.T) {
+	const refused = "Notes: Wardyn did not format this disk drive, so any files it holds are still in its image. The image on this Mac "
+	const restart = ". To start again with an empty drive, delete this drive and create a new one; deleting it asks this Mac to delete the image."
+	for name, c := range map[string]struct {
+		body []byte
+		want string
+	}{
+		"4 KiB of zeros and no mark": {make([]byte, 2<<20), refused +
+			"starts with 4 KiB of zeros, where a formatted drive keeps its partition map, and this Mac has no record that the runner made it new" + restart},
+		"shorter than 4 KiB": {[]byte("files"), refused + "is 5 bytes long, shorter than the 4 KiB a formatted drive starts with" + restart},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMacRig(t)
+			img, _ := r.c.Layout.DriveImage(testDiskObject)
+			if err := os.MkdirAll(filepath.Dir(img), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(img, c.body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)}); err == nil || err.Error() != c.want {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if b, err := os.ReadFile(img); err != nil || string(b) != string(c.body) {
+				t.Fatalf("the refused image changed: %v", err)
+			}
+		})
+	}
+}
+
+// A run's new disk drive: the helper makes the image with its mark, the guest has the drive mounted, and the
+// run uses the mark up. So after that run, the image still starting with 4 KiB of zeros (this fake guest never
+// formats it, which is how a drive damaged there looks) is refused for the next run, not formatted.
+func TestAMacRunUsesUpItsNewDrivesMark(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	spec := macSpec()
+	spec.Drives = []types.DriveMount{testDiskDrive(runner.DriveTarget)}
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(img); err != nil {
+		t.Fatalf("the run made no image: %v", err)
+	}
+	if _, err := os.Stat(img + ".new"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the new drive's mark outlived the guest's mount: %v", err)
+	}
+	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)})
+	if err == nil || !strings.HasPrefix(err.Error(), "Notes: Wardyn did not format this disk drive") {
+		t.Fatalf("the next run of the blank image = %v", err)
 	}
 }
 

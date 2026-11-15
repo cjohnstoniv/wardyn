@@ -77,7 +77,10 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	out.Configured = true
-	out.PurgeAfterSeconds = int64(s.cfg.SCIM.PurgeAfter / time.Second)
+	// SweepSCIMPurge purges for any delay above zero, so one under a second reads as one second, never as 0.
+	if d := s.cfg.SCIM.PurgeAfter; d > 0 {
+		out.PurgeAfterSeconds = max(1, int64(d/time.Second))
+	}
 	out.KeepWorkspaces = s.cfg.SCIM.KeepWorkspaces
 
 	labels := map[uuid.UUID]string{}

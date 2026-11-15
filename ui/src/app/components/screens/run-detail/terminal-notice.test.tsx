@@ -8,6 +8,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { health } from "../../../lib/api/health";
+import { runs } from "../../../lib/api/runs";
 import type { RunDetail, RunOutput } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeMacOSVMRun, makeRun } from "../../../../test/factories";
@@ -18,7 +19,14 @@ import { TerminalPane } from "./terminal-notice";
 
 vi.mock("../../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 
-vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
+// The last keepsIn the pane handed the terminal.
+const attach = vi.hoisted(() => ({ keepsIn: undefined as boolean | "unreadable" | undefined }));
+vi.mock("../../attach-terminal", () => ({
+  AttachTerminal: (p: { keepsIn?: boolean | "unreadable" }) => {
+    attach.keepsIn = p.keepsIn;
+    return null;
+  },
+}));
 vi.mock("../../../lib/api/runner-pools", () => ({
   runnerPools: { list: () => Promise.resolve({ pools: [{ id: "pool-1", name: "CI jobs", slots: { max: 40 } }] }) },
 }));
@@ -43,6 +51,8 @@ const notKept = () => getOutput.mockRejectedValue(new HttpError(409, "refused", 
 beforeEach(() => {
   getOutput.mockReset();
   notKept();
+  // The run's data_out read stays out unless a test answers it.
+  vi.spyOn(runs, "getPolicy").mockReturnValue(new Promise(() => {}));
 });
 
 function pane(recState: "idle" | "loading" | "error" | "ready", recordingDisabled = false, onGoRecording = vi.fn()) {
@@ -424,5 +434,37 @@ describe("TerminalPane — a macOS VM run's setup", () => {
   it("has no strip once setup is done", () => {
     live();
     expect(screen.queryByTestId("macos-setting-up")).toBeNull();
+  });
+});
+
+describe("TerminalPane — the terminal's data_out rule", () => {
+  function attachable() {
+    attach.keepsIn = undefined;
+    render(
+      <OperatorProvider operator principal="me">
+        <TerminalPane run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: true })} terminal recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} onGoOutput={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+  }
+
+  it("a failed read of the rule turns the terminal's copying off as unreadable, not as a run that keeps its content in", async () => {
+    vi.mocked(runs.getPolicy).mockRejectedValue(new Error("boom"));
+    attachable();
+    await waitFor(() => expect(attach.keepsIn).toBe("unreadable"));
+    expect(runs.getPolicy).toHaveBeenCalledWith("run-1");
+  });
+
+  it.each(["review", "blocked"] as const)("a %s rule tells the terminal the run keeps its content in", async (data_out) => {
+    vi.mocked(runs.getPolicy).mockResolvedValue({ state: "recorded", spec: { data_out } } as Awaited<ReturnType<typeof runs.getPolicy>>);
+    attachable();
+    await waitFor(() => expect(attach.keepsIn).toBe(true));
+  });
+
+  it("an allowed rule leaves the terminal's copying on", async () => {
+    vi.mocked(runs.getPolicy).mockResolvedValue({ state: "recorded", spec: { data_out: "allowed" } } as Awaited<ReturnType<typeof runs.getPolicy>>);
+    attachable();
+    await waitFor(() => expect(attach.keepsIn).toBe(false));
+    await act(async () => {});
+    expect(attach.keepsIn).toBe(false);
   });
 });

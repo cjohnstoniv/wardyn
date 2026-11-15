@@ -138,6 +138,9 @@ const (
 	subDockerNetworkPrefix = "wardyn-cl-677-net-"
 	subDockerCPHostPrefix  = "wardyn-cl-677-cp-"
 	subDockerVendorHost    = "host.docker.internal"
+	// subDockerProxyPort is the proxy's listen port inside its own container; the host side is published
+	// on a port Docker picks (runSubDockerProxy).
+	subDockerProxyPort = 3128
 )
 
 // buildProxyImage builds the REAL wardyn-proxy image from THIS worktree's own
@@ -333,13 +336,13 @@ func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin, netName, cpHost
 }
 
 // startSubfakeVendor runs a SEPARATE subfake instance (a different container,
-// off the proxy's own subnet) with its :8443 published to 0.0.0.0:port on
-// the host, serving TLS for subDockerVendorHost — the real proxy container
-// reaches it back at that name, landing on the published port. Its grant id
-// is a random one no proxy ever asks it to resolve; its only real job is
-// recording the Authorization header of whatever the proxy forwards to it
-// (the vendor leg). Returns the container id and the CA PEM for
-// ProxyConfig.TrustedCAPEM.
+// off the proxy's own subnet) with its :8443 published to 0.0.0.0 on a host
+// port Docker picks, serving TLS for subDockerVendorHost — the real proxy
+// container reaches it back at that name, landing on the published port. Its
+// grant id is a random one no proxy ever asks it to resolve; its only real job
+// is recording the Authorization header of whatever the proxy forwards to it
+// (the vendor leg). Returns the container id, the CA PEM for
+// ProxyConfig.TrustedCAPEM and the published host port.
 //
 // 0.0.0.0, not 127.0.0.1 (F1, found on hosted CI run 36389795298): the proxy
 // container reaches this port via its ExtraHosts "host-gateway" entry
@@ -354,7 +357,7 @@ func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin, netName, cpHost
 // address as HostIP). 0.0.0.0 is the one binding proven to work in both real
 // environments; the published port lives only for one subtest's duration and
 // is torn down in t.Cleanup below.
-func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port int) (id, caPEM string) {
+func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string) (id, caPEM string, port int) {
 	t.Helper()
 	certPEM, keyPEM, caPEM := subfakeCert(t, subDockerVendorHost)
 	name := "wardyn-cl-677-subfake-vendor-" + uuid.NewString()[:8]
@@ -380,7 +383,7 @@ func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: network.PortMap{pp: []network.PortBinding{
-				{HostIP: netip.IPv4Unspecified(), HostPort: strconv.Itoa(port)},
+				{HostIP: netip.IPv4Unspecified()}, // no host port: Docker picks one at its bind
 			}},
 		},
 	})
@@ -398,19 +401,38 @@ func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port
 	if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start vendor subfake: %v", err)
 	}
-	return created.ID, caPEM
+	return created.ID, caPEM, publishedPort(ctx, t, cli, created.ID, pp)
+}
+
+// publishedPort is the host port Docker chose for the container's port p, published with no host port so
+// the port is picked at Docker's own bind and no other process can hold it first.
+func publishedPort(ctx context.Context, t *testing.T, cli *dockerclient.Client, id string, p network.Port) int {
+	t.Helper()
+	insp, err := cli.ContainerInspect(ctx, id, dockerclient.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect %s: %v", id, err)
+	}
+	if insp.Container.NetworkSettings != nil {
+		for _, b := range insp.Container.NetworkSettings.Ports[p] {
+			if n, err := strconv.Atoi(b.HostPort); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	t.Fatalf("container %s publishes no host port for %s", id, p)
+	return 0
 }
 
 // runSubDockerProxy starts the REAL wardyn-proxy image (this worktree's own
 // uniquely tagged build, image) as a bare container on netName (so it reaches
-// the control-plane subfake by its alias), publishing its listen port to
-// 127.0.0.1:port on the host so this test's own "sandbox" client can dial it
-// directly. Named wardyn-cl-677-* per the lane's fixture-naming rule.
+// the control-plane subfake by its alias), publishing its listen port (port,
+// inside the container) to a 127.0.0.1 host port Docker picks, which it
+// returns, so this test's own "sandbox" client can dial it directly. Named wardyn-cl-677-* per the lane's fixture-naming rule.
 // ExtraHosts maps subDockerVendorHost to the host gateway explicitly: Docker
 // Desktop provides that DNS entry built in, but a native-Linux Docker engine
 // does not, and the vendor leg (a different, non-aliased address — see the
 // file doc comment) needs it either way.
-func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, netName, image string, runID uuid.UUID, cfgJSON []byte, port int) string {
+func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, netName, image string, runID uuid.UUID, cfgJSON []byte, port int) (id string, hostPort int) {
 	t.Helper()
 	name := "wardyn-cl-677-proxy-" + runID.String()[:8]
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -429,7 +451,7 @@ func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, netName, image st
 		HostConfig: &container.HostConfig{
 			NetworkMode: container.NetworkMode(netName), // reaches cpHost by alias
 			PortBindings: network.PortMap{pp: []network.PortBinding{
-				{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: strconv.Itoa(port)},
+				{HostIP: netip.MustParseAddr("127.0.0.1")}, // no host port: Docker picks one at its bind
 			}},
 			ExtraHosts: []string{subDockerVendorHost + ":host-gateway"},
 		},
@@ -448,7 +470,7 @@ func runSubDockerProxy(t *testing.T, cli *dockerclient.Client, netName, image st
 	if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start proxy container: %v", err)
 	}
-	return created.ID
+	return created.ID, publishedPort(ctx, t, cli, created.ID, pp)
 }
 
 // containerLogs returns id's combined stdout+stderr, for assertions and
@@ -618,7 +640,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 		{"bob's own real Postgres-stored token reaches the fake vendor, never alice's or the operator's", dockerBob, subOtherToken},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vendorPort := freeLoopbackPort(t)
+			vendorID, vendorCAPEM, vendorPort := startSubfakeVendor(t, cli, subfakeBin)
 			pp := p
 			pp.BaseURL = fmt.Sprintf("https://%s:%d", subDockerVendorHost, vendorPort)
 			st, plan, ok := subDockerDispatch(h, pp, tc.owner)
@@ -660,9 +682,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			// comment for why) whose only job is recording what the proxy
 			// forwards to it.
 			cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, netName, cpHost, st.grants[0].ID, "Authorization", resolved.Value, false)
-			vendorID, vendorCAPEM := startSubfakeVendor(t, cli, subfakeBin, vendorPort)
 
-			port := freeLoopbackPort(t)
 			raw, err := runner.BuildProxyConfig(st.run.ID, runner.ProxyConfig{
 				RunToken:          runToken,
 				ControlPlaneURL:   fmt.Sprintf("https://%s:8443", cpHost),
@@ -675,11 +695,11 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 				MITMHosts:         plan.bedrockMITMHosts,
 				MITMLLM:           true,
 				TrustedCAPEM:      vendorCAPEM,
-			}, port)
+			}, subDockerProxyPort)
 			if err != nil {
 				t.Fatalf("BuildProxyConfig: %v", err)
 			}
-			proxyID := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, port)
+			proxyID, port := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, subDockerProxyPort)
 
 			resp, err := sendThroughDockerProxy(t, port, plan.mitmCACertPEM, vendorPort)
 			if err != nil {
@@ -724,7 +744,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 	})
 
 	t.Run("a grant recording the wrong owner is refused by subfake, and the real proxy container never forwards it", func(t *testing.T) {
-		vendorPort := freeLoopbackPort(t)
+		vendorID, vendorCAPEM, vendorPort := startSubfakeVendor(t, cli, subfakeBin)
 		pp := p
 		pp.BaseURL = fmt.Sprintf("https://%s:%d", subDockerVendorHost, vendorPort)
 		st, plan, ok := subDockerDispatch(h, pp, subOwner)
@@ -737,9 +757,7 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			SecretName: plan.injections[0].Rule.SecretName, Format: "Bearer %s",
 		}}
 		cpID, cpCAPEM := startSubfakeCP(t, cli, subfakeBin, netName, cpHost, st.grants[0].ID, "Authorization", "Bearer "+subOwnerToken, true /* refuse */)
-		vendorID, vendorCAPEM := startSubfakeVendor(t, cli, subfakeBin, vendorPort)
 
-		port := freeLoopbackPort(t)
 		raw, err := runner.BuildProxyConfig(st.run.ID, runner.ProxyConfig{
 			RunToken:          runToken,
 			ControlPlaneURL:   fmt.Sprintf("https://%s:8443", cpHost),
@@ -752,11 +770,11 @@ func TestProviderSubscriptionDocker_PerPersonCaptureAndRunIsolation(t *testing.T
 			MITMHosts:         plan.bedrockMITMHosts,
 			MITMLLM:           true,
 			TrustedCAPEM:      vendorCAPEM,
-		}, port)
+		}, subDockerProxyPort)
 		if err != nil {
 			t.Fatalf("BuildProxyConfig: %v", err)
 		}
-		proxyID := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, port)
+		proxyID, port := runSubDockerProxy(t, cli, netName, proxyImage, st.run.ID, raw, subDockerProxyPort)
 
 		// A refused resolve fails the proxy's startup (it exits), so the
 		// container may already be gone by the time we can dial it — either

@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { getErrorMessage } from "../../../../lib/format";
-import { useUnsavedGuard } from "../../../../lib/use-unsaved-guard";
+import { useRequestLeave, useUnsavedGuard } from "../../../../lib/use-unsaved-guard";
 import type { RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
 import { POOL_DRAWER, POOL_FORM, POOLS } from "../../../wardyn/copy/runner-pools";
 import { Field } from "../../../wardyn/form-primitives";
@@ -119,7 +119,11 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
     void load();
   }, [load]);
 
-  const back = () => navigate(mine ? "/account#my-runner" : "/admin/runners?tab=pools");
+  const requestLeave = useRequestLeave();
+  // A save leaves directly. Back and Cancel ask first while edits are not saved: the shared guard sees link clicks and
+  // the browser's Back, not this screen's own navigate.
+  const leave = () => navigate(mine ? "/account#my-runner" : "/admin/runners?tab=pools");
+  const back = () => requestLeave(leave);
   const set = (patch: Partial<FormValues>) => setValues((v) => ({ ...v, ...patch }));
   const patchRt = (k: "bg" | "it") => (patch: Partial<RtValues>) => setValues((v) => ({ ...v, [k]: { ...v[k], ...patch } }));
 
@@ -147,7 +151,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
       else if (mine) await runnerPools.updateMine(pool.id, { revision: pool.revision, name, limits });
       else await runnerPools.update(pool.id, { revision: pool.revision, name, limits });
       toast.success(pool ? POOL_FORM.SAVED(name) : POOL_FORM.CREATED(name));
-      void back();
+      void leave();
     } catch (e) {
       setTop(getErrorMessage(e));
       setStale(e instanceof HttpError && e.status === 409 && e.reason === STALE);

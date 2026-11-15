@@ -8,8 +8,8 @@
 // door's answer to the draft whole, so nothing the editor held is dropped.
 
 import * as React from "react";
-import { setup } from "../../../../lib/api/setup";
 import { parsePolicySource } from "../../../../lib/policy-document";
+import { loadRoster } from "../steps/harnesses/roster";
 import type { SetupHarnessTool } from "../../../../lib/types/setup";
 import type { TemplateDocument } from "../../../../lib/types/templates";
 import { Button } from "../../../ui/button";
@@ -23,6 +23,7 @@ import { StepShell, useAnnounce } from "../steps/step-shell";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { importRunDocument, type ImportDocument } from "./import-door";
+import { withLegacyRunModeInCarriers } from "./legacy-run-mode";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
 
@@ -32,7 +33,9 @@ export interface DocumentDeps {
   loadHarnesses: () => Promise<SetupHarnessTool[]>;
 }
 
-const defaultLoadHarnesses = async () => (await setup.getSetupStatus()).harnesses ?? [];
+// The checked loader: a setup status that could not be read rejects here, so the example button stays off with
+// no reason, and never claims there is no harness to choose.
+const defaultLoadHarnesses = async () => (await loadRoster()).harnesses;
 
 const EDITOR_ID = "run-document";
 const STATUS_ID = `${EDITOR_ID}-status`;
@@ -150,7 +153,8 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const proceed = async (to: NewRunLocation) => {
     const document = await validate();
     if (!document) return;
-    dispatch({ type: "commitDoc", intent: document.intent as RunIntent });
+    // A document in the older run-mode fields is committed in the carriers when it says the same run there.
+    dispatch({ type: "commitDoc", intent: withLegacyRunModeInCarriers(document.intent as RunIntent) });
     go(to);
   };
 

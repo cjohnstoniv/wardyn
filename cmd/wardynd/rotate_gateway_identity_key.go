@@ -14,10 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -41,7 +43,8 @@ var errRetireAlone = errors.New("refusing to run: -retire-previous is a mode of 
 
 // rotateGatewayIdentityKeyMode is `wardynd -rotate-gateway-identity-key`: a
 // maintenance mode that replaces the key an AI gateway's run identity token is
-// signed with, writes a secret.rekey row and exits. It never opens a listener.
+// signed with and the CA a run's gateway client certificate is signed with,
+// writes a secret.rekey row for each and exits. It never opens a listener.
 //
 // Every replica must be stopped: a serving one keeps signing with the key it
 // loaded. Without WARDYN_HA the single-instance lock shows a serving daemon and
@@ -51,7 +54,10 @@ func rotateGatewayIdentityKeyMode(f *bootFlags) error {
 		return errRetireAlone
 	}
 	return withRotationStore(f, "-rotate-gateway-identity-key", *f.rotateAuditReceiptKey, func(ctx context.Context, secrets bootKeyStore, rec audit.Recorder) error {
-		return secrets.rotateGatewayIdentity(ctx, rec, *f.retirePrevious, time.Now())
+		if err := secrets.rotateGatewayIdentity(ctx, rec, *f.retirePrevious, time.Now()); err != nil {
+			return err
+		}
+		return secrets.rotateGatewayClientCA(ctx, rec, *f.retirePrevious, time.Now())
 	})
 }
 
@@ -83,7 +89,8 @@ func withRotationStore(f *bootFlags, mode string, other bool, rotate func(ctx co
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer pool.Close()
+	// The rotation exits right after its Put, so the pool closes after the Put's clean-up.
+	defer secretstorepg.CloseAfterCleanUps(pool, api.BackgroundShutdownBudget)
 
 	// Each lock on a session of its own, as claimSingleInstance holds it: the mode's work below asks
 	// this pool for connections while both are held, and a hold on a pooled connection is the nested
@@ -177,6 +184,63 @@ func (secrets bootKeyStore) rotateGatewayIdentity(ctx context.Context, rec audit
 	slog.Info("wardynd: AI gateway identity key rotated. Start wardynd, then restart each gateway: a gateway reads the key set when it loads its config and does not start if that read fails.",
 		slog.String("kid", rotated.KeyID()),
 		slog.String("replaced_kid", old.KeyID()),
+		slog.Bool("retired_previous", retirePrevious),
+	)
+	return nil
+}
+
+// rotateGatewayClientCA writes the client CA row that follows the stored one and
+// its audit row, after rotateGatewayIdentity. No row is not a refusal: the
+// signing key was rotated, and an install whose CA was never made has nothing
+// more to rotate. A row that cannot be read or parsed is a refusal, and nothing
+// is written over it. The audit row names the CA certificates' serials, which
+// are public.
+func (secrets bootKeyStore) rotateGatewayClientCA(ctx context.Context, rec audit.Recorder, retirePrevious bool, now time.Time) error {
+	raw, ok, err := loadBootKey(ctx, secrets, secretGatewayClientCA, func([]byte) bool { return true })
+	if err != nil {
+		return fmt.Errorf("refusing to rotate the client CA: %w", err)
+	}
+	if !ok {
+		slog.Info("wardynd: no AI gateway client certificate CA is stored, so only the signing key was rotated")
+		return nil
+	}
+	old, err := gatewayidentity.NewAuthority(raw)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate the client CA: %w", err)
+	}
+	next, err := gatewayidentity.RotateAuthority(raw, retirePrevious, now)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate the client CA: %w", err)
+	}
+	rotated, err := gatewayidentity.NewAuthority(next)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate the client CA: %w", err)
+	}
+	if err := secrets.Put(ctx, secretGatewayClientCA, next); err != nil {
+		return fmt.Errorf("store the rotated client CA: %w", err)
+	}
+
+	fields := map[string]any{"serial": rotated.Serial(), "replaced_serial": old.Serial(), "retired_previous": retirePrevious}
+	if !retirePrevious {
+		fields["previous_retire_at"] = rotated.RetireAt()
+	}
+	data, _ := json.Marshal(fields)
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      now.UTC(),
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/rotate-gateway-identity-key",
+		Action:    "secret.rekey",
+		Target:    secretGatewayClientCA,
+		Outcome:   "success",
+		Data:      json.RawMessage(data),
+	}
+	if err := rec.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+	slog.Info("wardynd: AI gateway client certificate CA rotated. A gateway that checks client certificates must fetch the new bundle before it accepts a certificate the new CA signs.",
+		slog.String("serial", rotated.Serial()),
+		slog.String("replaced_serial", old.Serial()),
 		slog.Bool("retired_previous", retirePrevious),
 	)
 	return nil

@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -28,6 +29,9 @@ func runnerListCmd(client clientFn) *cobra.Command {
 	var state string
 	var limit, offset int
 	cmd := &cobra.Command{Use: "list", Short: "List your own runners, or with --all every person's", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if offset < 0 {
+			return errors.New("--offset is a whole number, 0 or more")
+		}
 		var fetch func(...sdk.ListOpts) ([]sdk.RunnerView, bool, error)
 		switch {
 		case all:

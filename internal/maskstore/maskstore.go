@@ -23,6 +23,7 @@
 package maskstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -146,9 +147,9 @@ func (s *Store) commit(ctx context.Context, fn func(tx pgx.Tx, gen int64) error)
 }
 
 // PutRun commits value as run runID's, sealed under the run owner's key (the
-// owner its manifest names). A run with no manifest was dispatched before
-// manifests existed: it is kept in this process only, as it stays uncovered. A
-// fenced run refuses.
+// owner its manifest names), and puts it in this process's cache (publishRun).
+// A run with no manifest was dispatched before manifests existed: it is kept in
+// this process only, as it stays uncovered. A fenced run refuses.
 func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
@@ -157,6 +158,7 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 	err := s.pool.QueryRow(ctx, `SELECT owner, fenced_at IS NOT NULL FROM run_mask_manifest WHERE run_id=$1`, runID).Scan(&owner, &fenced)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
+		s.reg.AddLocal(runID, value)
 		return nil
 	case err != nil:
 		return fmt.Errorf("maskstore: read the run's manifest: %w", err)
@@ -175,7 +177,7 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 	var existing uuid.UUID
 	err = s.pool.QueryRow(ctx, `SELECT id FROM mask_values WHERE bucket=$1 AND digest=$2 AND NOT tombstone`, bucketRun, row.digest).Scan(&existing)
 	if err == nil {
-		return nil // another replica committed this value already: its row is the record
+		return s.publishRun(ctx, runID, row.digest, value, nil) // another replica committed this value already: its row is the record
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("maskstore: look for the value: %w", err)
@@ -203,12 +205,44 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 	if err != nil {
 		return err
 	}
+	afterRunCommit()
 	if !inserted {
-		return nil // a racing replica's row won: it is the record, and the next read applies it
+		return s.publishRun(ctx, runID, row.digest, value, nil) // a racing replica's row won: it is the record, and the next read applies it
 	}
-	s.note(&ref{id: row.id, gen: gen, bucket: bucketRun, runID: runID, value: append([]byte(nil), value...), current: true})
-	return nil
+	return s.publishRun(ctx, runID, row.digest, value, &ref{id: row.id, gen: gen, bucket: bucketRun, runID: runID, value: append([]byte(nil), value...), current: true})
 }
+
+// afterRunCommit runs between PutRun's commit and its publishRun; a variable so a test can hold a
+// registration there while an erasure runs.
+var afterRunCommit = func() {}
+
+// beforeRunFenceRead gives the context publishRun reads the run's fence again with, after it cached the
+// value; a variable so a test can act there and fail the read.
+var beforeRunFenceRead = func(ctx context.Context) context.Context { return ctx }
+
+// publishRun puts a committed per-run value in this process's cache (rf, when this process wrote the
+// row, and the registry), then reads the run's fence and the row again (settle). An erasure or purge that
+// tombstoned the row before the value was cached found nothing here to drop, and no later read of the
+// table applies a tombstone twice, so a row gone or a run fenced by now takes the value back out and
+// refuses as a fenced run does; one that comes later finds the value here and drops it. Only what this
+// call added is taken out: a copy the registry already held is the other writer's to drop. A read that
+// fails takes nothing out yet: the row is committed, another registration of the value may already have
+// found it cached and returned, and this process's read of the table may have moved past the row. The
+// value and this process's ref stay pending, the call reports the error, and the next read of the table,
+// or the next registration of the value, reads the fence again.
+func (s *Store) publishRun(ctx context.Context, runID uuid.UUID, digest, value []byte, rf *ref) error {
+	if rf != nil {
+		s.note(rf)
+	}
+	p := &pendingRun{runID: runID, digest: digest, value: bytes.Clone(value), rf: rf, added: s.reg.AddLocal(runID, value)}
+	s.sync.mu.Lock()
+	s.sync.pending = append(s.sync.pending, p)
+	s.sync.mu.Unlock()
+	return s.settle(beforeRunFenceRead(ctx), p)
+}
+
+// CachesRunValues marks PutRun as the one that puts a value in the registry (secretmask.Backend).
+func (s *Store) CachesRunValues() {}
 
 // PutGlobal commits values as credential (owner, name)'s current values. An
 // operator-namespace credential (owner "") has no subject key and is kept in

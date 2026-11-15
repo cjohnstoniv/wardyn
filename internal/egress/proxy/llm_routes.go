@@ -145,6 +145,11 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	if p.llmHostDenied(w, r, host, port) {
 		return
 	}
+	// A route's host and port is sent only what a route covers (gatewayOffRouteRefused): refused before
+	// the model gates and before the credential is resolved, which can hold for a fresh sign-in.
+	if p.gatewayOffRouteRefused(w, r, host, port, "/"+rest, ruleSourceLLM) {
+		return
+	}
 	// A local model server's gate runs before anything else (local_model.go);
 	// one with no auth configured is served with no credential at all.
 	lm := p.localModelAt(host, port)

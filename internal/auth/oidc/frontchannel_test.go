@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,21 +17,29 @@ import (
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// memSIDs is the sid -> person store in memory, keyed issuer + " " + sid.
-type memSIDs map[string]string
+// memSIDs is the sid -> person store in memory, keyed issuer + " " + sid; each record moves the
+// row's version, as a write moves the stored row's.
+type memSIDs map[string]memSID
+
+type memSID struct {
+	sub     string
+	version int
+}
 
 func (m memSIDs) RecordOIDCSessionSID(_ context.Context, issuer, sid, sub string, _ time.Time) error {
-	m[issuer+" "+sid] = sub
+	m[issuer+" "+sid] = memSID{sub: sub, version: m[issuer+" "+sid].version + 1}
 	return nil
 }
 
-func (m memSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
-	sub, ok := m[issuer+" "+sid]
-	return sub, ok, nil
+func (m memSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, string, bool, error) {
+	row, ok := m[issuer+" "+sid]
+	return row.sub, strconv.Itoa(row.version), ok, nil
 }
 
-func (m memSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid string) error {
-	delete(m, issuer+" "+sid)
+func (m memSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid, version string) error {
+	if strconv.Itoa(m[issuer+" "+sid].version) == version {
+		delete(m, issuer+" "+sid)
+	}
 	return nil
 }
 
@@ -198,5 +207,37 @@ func TestFrontchannelLogoutKeepsTheRowForAsLongAsTheSessionLives(t *testing.T) {
 				t.Errorf("sid row kept until %s, %s after sign-in; want at least %s", got.Format(time.RFC3339), got.Sub(start).Round(time.Minute), tc.wantAtLeast)
 			}
 		})
+	}
+}
+
+// recordDuringCut is a sign-in under the same provider session landing between a logout's cut and its
+// forget: it records the sid again as the cut runs.
+type recordDuringCut struct {
+	*cutLedger
+	sids memSIDs
+	iss  string
+}
+
+func (r recordDuringCut) CutSessions(ctx context.Context, sub string) error {
+	err := r.cutLedger.CutSessions(ctx, sub)
+	_ = r.sids.RecordOIDCSessionSID(ctx, r.iss, "idp-session-7", sub, time.Now().Add(time.Hour))
+	return err
+}
+
+// A sign-in that records the sid after the logout's cut keeps its row: the logout deletes only the row
+// version it read, so the provider's next logout of that sid still finds the newer session.
+func TestFrontchannelLogoutSparesASidRowRecordedAfterItsCut(t *testing.T) {
+	env := newIdPEnv(t)
+	sids := memSIDs{}
+	rev := recordDuringCut{cutLedger: &cutLedger{seq: 10}, sids: sids, iss: env.httpSrv.URL}
+	auth := frontchannelAuth(t, env, rev, sids, true)
+	signedInWithSID(t, env, auth, "idp-session-7")
+
+	q := url.Values{"iss": {env.httpSrv.URL}, "sid": {"idp-session-7"}}
+	if w := getFrontchannel(auth.FrontchannelLogoutHandler(nil), q); w.Code != http.StatusOK {
+		t.Fatalf("logout = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if rev.cutCalls != 1 || len(sids) != 1 || sids[env.httpSrv.URL+" idp-session-7"].sub != "pairwise-1" {
+		t.Fatalf("cuts %d, sid rows %v; want one cut and the row the later sign-in recorded kept", rev.cutCalls, sids)
 	}
 }

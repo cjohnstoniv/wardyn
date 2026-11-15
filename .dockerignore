@@ -36,5 +36,8 @@ local/
 .env.local
 **/.env.local
 **/.env.*.local
+# A rewrite stopped between mktemp and mv leaves .env.XXXXXX beside the env file.
+.env.??????
+**/.env.??????
 examples/composer-configs/anthropic-api.json
 examples/composer-configs/openai-api.json

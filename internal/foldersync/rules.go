@@ -158,7 +158,7 @@ func syncCheckLocal(root *os.Root, rel string) error {
 			return err
 		}
 		cur = path.Join(cur, seg)
-		fi, err := root.Lstat(cur)
+		fi, err := lstatIn(root, cur)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -352,7 +352,7 @@ func (st *State) install(file string, note *dirNote) error {
 	}
 	if _, err := f.Write(b); err != nil {
 		_ = f.Close()
-		_ = root.Remove(name)
+		_ = removeIn(root, name)
 		return err
 	}
 	_, err = installDurable(root, note, f, name, InstallReplace, base)

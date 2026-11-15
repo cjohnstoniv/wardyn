@@ -246,7 +246,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
         person("gone@corp.example", { deactivated_at: "2026-10-01T00:00:00Z" }),
       ],
     });
-    putEnforcementMock.mockResolvedValue({ egress_host: true });
+    putEnforcementMock.mockResolvedValue({ enforcement: { egress_host: true }, etag: null });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 
@@ -264,8 +264,34 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await waitFor(() =>
       expect(putEnforcementMock).toHaveBeenCalledWith(
         Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "egress_host"])),
+        undefined,
       ),
     );
+  });
+
+  // Two admins load the same map. A turns egress_host on; this page, still holding the old map, turns
+  // feature on. Its PUT carries the old ETag, the server answers 412, and the page reloads, so confirming
+  // again writes feature on beside A's egress_host instead of switching it back off.
+  it("sends the loaded map's ETag, and a 412 reloads so the retry keeps the other admin's switch", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {}, etag: '"e1"' });
+    putEnforcementMock.mockRejectedValueOnce(new HttpError(412, "stale", "capability_enforcement_stale"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.feature.unenforced);
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: { egress_host: true }, etag: '"e2"' });
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.feature.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    const stale = Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "feature"]));
+    await waitFor(() => expect(putEnforcementMock).toHaveBeenCalledWith(stale, '"e1"'));
+    await screen.findByText(KIND.egress_host.enforced);
+    putEnforcementMock.mockResolvedValue({ enforcement: { egress_host: true, feature: true }, etag: '"e3"' });
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    const merged = Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "feature" || k === "egress_host"]));
+    await waitFor(() => expect(putEnforcementMock).toHaveBeenLastCalledWith(merged, '"e2"'));
   });
 
   it("turning a kind on with nothing granted repeats the lockout warning in the dialog", async () => {

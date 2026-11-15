@@ -20,13 +20,24 @@ type GroundtruthSensor struct {
 	DroppedTotal    uint64
 	DroppedUnmapped uint64
 	ObservedByKind  map[string]uint64 // nil when the sensor sends no breakdown
+	// EvidenceAt is when a beat last carried kernel event counts that rose, nil until one has (see
+	// UpsertGroundtruthSensor). It is written by the upsert, never by the caller.
+	EvidenceAt *time.Time
 }
+
+// GroundtruthEvidenceWindow is how far apart two beats may be for a rise in their counts to set
+// EvidenceAt, and how old EvidenceAt may be before /healthz reads the sensor as quiet.
+const GroundtruthEvidenceWindow = 15 * time.Minute
 
 // GroundtruthSensorStore keeps each node sensor's latest heartbeat, so the health read can judge
 // every node rather than only the newest beat.
 type GroundtruthSensorStore interface {
 	// UpsertGroundtruthSensor writes g as its node's row. A beat older than the stored one leaves the
 	// row as it is, so two replicas taking beats out of order never move a node back in time.
+	// EvidenceAt moves in the same statement, from the stored row: to g's time when observed_total
+	// plus dropped_unmapped rose and the stored beat is at most GroundtruthEvidenceWindow older; to
+	// nil when they rose across a longer gap; unchanged when they did not rise. A first row has none.
+	// dropped_total is left out: a lost heartbeat batch raises it with no kernel event behind it.
 	UpsertGroundtruthSensor(ctx context.Context, g GroundtruthSensor) error
 	// ListGroundtruthSensors returns the nodes heard from after since, newest beat first, at most
 	// maxGroundtruthSensors of them.
@@ -57,9 +68,16 @@ func (s PG) UpsertGroundtruthSensor(ctx context.Context, g GroundtruthSensor) er
 			observed_total = EXCLUDED.observed_total,
 			dropped_total = EXCLUDED.dropped_total,
 			dropped_unmapped = EXCLUDED.dropped_unmapped,
-			observed_by_kind = EXCLUDED.observed_by_kind
+			observed_by_kind = EXCLUDED.observed_by_kind,
+			evidence_at = CASE
+				WHEN EXCLUDED.observed_total::numeric + EXCLUDED.dropped_unmapped
+					<= groundtruth_sensors.observed_total::numeric + groundtruth_sensors.dropped_unmapped
+					THEN groundtruth_sensors.evidence_at
+				WHEN EXCLUDED.last_beat - groundtruth_sensors.last_beat <= $7::interval THEN EXCLUDED.last_beat
+				ELSE NULL END
 		WHERE groundtruth_sensors.last_beat <= EXCLUDED.last_beat`,
-		g.Node, g.LastBeat, clampInt64(g.ObservedTotal), clampInt64(g.DroppedTotal), clampInt64(g.DroppedUnmapped), kinds)
+		g.Node, g.LastBeat, clampInt64(g.ObservedTotal), clampInt64(g.DroppedTotal), clampInt64(g.DroppedUnmapped), kinds,
+		GroundtruthEvidenceWindow.String())
 	if err != nil {
 		return fmt.Errorf("store: upsert groundtruth sensor: %w", err)
 	}
@@ -69,7 +87,7 @@ func (s PG) UpsertGroundtruthSensor(ctx context.Context, g GroundtruthSensor) er
 // ListGroundtruthSensors implements GroundtruthSensorStore.
 func (s PG) ListGroundtruthSensors(ctx context.Context, since time.Time) ([]GroundtruthSensor, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT node, last_beat, observed_total, dropped_total, dropped_unmapped, observed_by_kind
+		SELECT node, last_beat, observed_total, dropped_total, dropped_unmapped, observed_by_kind, evidence_at
 		FROM groundtruth_sensors WHERE last_beat > $1
 		ORDER BY last_beat DESC, node LIMIT $2`, since, maxGroundtruthSensors)
 	if err != nil {
@@ -81,7 +99,7 @@ func (s PG) ListGroundtruthSensors(ctx context.Context, since time.Time) ([]Grou
 		var g GroundtruthSensor
 		var observed, dropped, unmapped int64
 		var kinds []byte
-		if err := rows.Scan(&g.Node, &g.LastBeat, &observed, &dropped, &unmapped, &kinds); err != nil {
+		if err := rows.Scan(&g.Node, &g.LastBeat, &observed, &dropped, &unmapped, &kinds, &g.EvidenceAt); err != nil {
 			return nil, fmt.Errorf("store: scan groundtruth sensor: %w", err)
 		}
 		g.ObservedTotal, g.DroppedTotal, g.DroppedUnmapped = uint64(max(observed, 0)), uint64(max(dropped, 0)), uint64(max(unmapped, 0))

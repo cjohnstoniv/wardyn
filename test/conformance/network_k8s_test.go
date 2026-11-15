@@ -268,7 +268,9 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 	// The stand-in for Wardyn, on two ports, and a Service in front of it on one.
 	standLabels := map[string]string{standInLabelKey: standInLabelValue}
 	standIP, _ := startControlPod(t, ctx, cs, ns, agentImage, serve+" && httpd -p 8081 -h /tmp/www || exit 1\necho done=1\nexec sleep 3600\n", standLabels)
-	svc, err := cs.CoreV1().Services(ns).Create(ctx, &corev1.Service{
+	restCfg, _ := k8sTestClient(t)
+	admin := conformanceAdmin(t, restCfg)
+	svc, err := admin.CoreV1().Services(ns).Create(ctx, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "wardyn-conformance-standin-" + uuid.NewString()[:8], Namespace: ns},
 		Spec: corev1.ServiceSpec{
 			Selector: standLabels,
@@ -279,7 +281,7 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 		t.Fatalf("create the stand-in's Service: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = cs.CoreV1().Services(ns).Delete(context.Background(), svc.Name, metav1.DeleteOptions{})
+		_ = admin.CoreV1().Services(ns).Delete(context.Background(), svc.Name, metav1.DeleteOptions{})
 	})
 	svcIP := svc.Spec.ClusterIP
 	if svcIP == "" {

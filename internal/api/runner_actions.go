@@ -256,7 +256,7 @@ func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, sessio
 	case runnerwire.EventSpool:
 		err = s.DecisionIngestFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventPosture:
-		err = s.PostureFromRunner(ctx, runnerID, ev)
+		err = s.PostureFromRunner(ctx, runnerID, remote.EventSession(ctx), ev)
 	case runnerwire.EventResidentErase:
 		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventWorkload:

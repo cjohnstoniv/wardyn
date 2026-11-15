@@ -569,7 +569,8 @@ func writeKeptFolder(t *testing.T, r *macRig, rec macvm.KeptRecord) string {
 }
 
 // The sweep deletes, with no network, an expired machine and one another registration of this Mac made;
-// a current machine stays, and so does an expired one a boot holds.
+// a current machine stays, and so does an expired one a boot holds. An expired machine's old generation
+// that an update moved aside goes with it; a current machine's stays.
 func TestKeptMachineSweepDeletesExpiredAndForeign(t *testing.T) {
 	r, _ := newKeptRig(t)
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
@@ -582,12 +583,22 @@ func TestKeptMachineSweepDeletesExpiredAndForeign(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
+	for _, dir := range []string{expired, current} {
+		if err := os.MkdirAll(dir+".update.old-"+uuid.NewString(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := r.d.SweepKeptMachines(); err != nil {
 		t.Fatal(err)
 	}
 	for dir, want := range map[string]bool{expired: false, foreign: false, current: true, held: true} {
 		if _, err := os.Lstat(dir); (err == nil) != want {
 			t.Errorf("%s present=%v after the sweep, want %v", dir, err == nil, want)
+		}
+	}
+	for dir, want := range map[string]int{expired: 0, current: 1} {
+		if old, _ := filepath.Glob(dir + ".update.old-*"); len(old) != want {
+			t.Errorf("%s old generations after the sweep %v, want %d", dir, old, want)
 		}
 	}
 }
@@ -1358,7 +1369,8 @@ func TestKeptStopWaitsForABriefHolder(t *testing.T) {
 }
 
 // A folder a create left with no record (its helper stopped between the clone and the record) is removed
-// by the sweep once it is old, unless a create still reserves it or holds its lock.
+// by the sweep once it is old, unless a create still reserves it or holds its lock. An old generation an
+// update moved aside beside it stays: it is the person's disk when the update's new copy had no record.
 func TestKeptSweepRemovesAFolderWithNoRecord(t *testing.T) {
 	r, _ := newKeptRig(t)
 	old := time.Now().Add(-time.Hour)
@@ -1376,6 +1388,10 @@ func TestKeptSweepRemovesAFolderWithNoRecord(t *testing.T) {
 		return dir
 	}
 	debris, reserved, held := folder(), folder(), folder()
+	aside := debris + ".update.old-" + uuid.NewString()
+	if err := os.MkdirAll(aside, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(reserved+keptReserveSuffix, []byte(`{"bytes":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1391,7 +1407,7 @@ func TestKeptSweepRemovesAFolderWithNoRecord(t *testing.T) {
 	if err := r.d.SweepKeptMachines(); err != nil {
 		t.Fatal(err)
 	}
-	for dir, want := range map[string]bool{debris: false, reserved: true, held: true, fresh: true} {
+	for dir, want := range map[string]bool{debris: false, reserved: true, held: true, fresh: true, aside: true} {
 		if keptExists(dir) != want {
 			t.Errorf("%s present=%v after the sweep, want %v", dir, keptExists(dir), want)
 		}

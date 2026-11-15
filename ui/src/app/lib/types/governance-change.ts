@@ -34,6 +34,10 @@ export interface GovernanceChange {
   // GET /governance/changes/{id}: who could decide it, the proposer left out (changeApprover,
   // internal/api/governance_unit_admin.go).
   approvers?: GovernanceChangeApprover[];
+  // POST /governance/changes/{id}/approve only: the change is applied, but it could not revoke every API token
+  // that may still hold the role it took away; detail is the server's remedy.
+  tokens_revocation_failed?: boolean;
+  detail?: string;
 }
 
 // types.ChangeNote (internal/types/governance_change_note.go).

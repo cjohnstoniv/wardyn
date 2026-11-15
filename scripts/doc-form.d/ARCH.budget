@@ -20,7 +20,7 @@ SECURITY.md=1340 share=15
 PROVENANCE.md=802 share=23
 # 0.9.4 L8: docs/DATA-FLOW.md 1421 adds 221 over 1200: rows for notifications, key services, Azure DevOps and the demo player.
 # 0.9.6: docs/DATA-FLOW.md 1461 adds 40: casts hold terminal output only, and the note on casts made before 0.9.6.
-docs/DATA-FLOW.md=1447 share=35 # -14 (front-door docs): section references become links and the audit-sink row names the OTLP sink; measured.
+docs/DATA-FLOW.md=1483 share=35 # 1483 measured (+36: OTLP metrics push: the otlp_metrics block); earlier: -14 (front-door docs): section references become links and the audit-sink row names the OTLP sink; measured.
 # threatmodel/AGENT-THREAT-MODEL.md 2305 adds 31 over 2274: 0.9 final docs pass, measured: the ownership row for a developer's own runner.
 # 0.9.4 L8: threatmodel/AGENT-THREAT-MODEL.md 2346 adds 41 over 2305: categories 6 and 14 corrected.
 threatmodel/AGENT-THREAT-MODEL.md=2350 share=35 # 2350 measured (+14 over 2336): the signed audit checkpoint docs, receipts, policy stamp and metrics; earlier: 2336 measured (network, actor and VM limit lines, offset by cutting restated-list notes)

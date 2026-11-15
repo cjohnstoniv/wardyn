@@ -11,15 +11,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -62,12 +65,66 @@ func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.
 	}
 	rec := recording.NewRFBRecorder(s.cfg.Now)
 	stored := s.trackDesktopRecording(run, sess, rec)
-	return recording.ReadSideConn(conn, rec, func() {
+	return &recordedConn{Conn: recording.ReadSideConn(conn, rec, func() {
 		stored()
 		if closed != nil {
 			closed()
 		}
-	})
+	}), rec: rec}
+}
+
+// recordedConn is a desktop app connection recordDesktopConn records, with its recorder, so the filter that
+// goes on at the connection's upgrade (uiFilterUpgrade) can stop that recording when it refuses the stream.
+type recordedConn struct {
+	net.Conn
+	rec *recording.RFBRecorder
+}
+
+type desktopConnKey struct{}
+
+// desktopConnTrace has r note the recorder of the connection it goes out on (httptrace's GotConn), for
+// desktopConnRecorder. A pooled connection was dialed for an earlier request, so only the request can say
+// which connection, and so which recording, its upgrade is.
+func desktopConnTrace(r *http.Request) *http.Request {
+	got := new(atomic.Pointer[recording.RFBRecorder])
+	ctx := httptrace.WithClientTrace(r.Context(), &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		var rec *recording.RFBRecorder // nil: the connection is not recorded
+		if c, ok := i.Conn.(*recordedConn); ok {
+			rec = c.rec
+		}
+		got.Store(rec)
+	}})
+	return r.WithContext(context.WithValue(ctx, desktopConnKey{}, got))
+}
+
+// desktopConnRecorder is the recorder of the connection r went out on (desktopConnTrace), or nil when that
+// connection is not recorded.
+func desktopConnRecorder(r *http.Request) *recording.RFBRecorder {
+	if got, ok := r.Context().Value(desktopConnKey{}).(*atomic.Pointer[recording.RFBRecorder]); ok {
+		return got.Load()
+	}
+	return nil
+}
+
+// stopRefusedRecording ends rec with a stop mark when the relay's filter refused the stream, saying why in fixed
+// words: a pixel format the replay cannot read (rfbfilter.PixelFormatError) or what else it refused
+// (rfbfilter.Refusal). The stored recording then says where it stopped and why, and its desktop.recording.write
+// row carries stopped_ms, rather than the frames just ending. A refusal before the relay has read RFB from the
+// desktop has no such words and stops it without a reason: that recording keeps no frame, so nothing is stored,
+// unless the desktop sent its handshake ahead of the browser, as in one base64 text frame. rec is nil on a
+// connection that is not recorded.
+func stopRefusedRecording(rec *recording.RFBRecorder, err error) {
+	var pf *rfbfilter.PixelFormatError
+	var refusal *rfbfilter.Refusal
+	switch {
+	case rec == nil:
+	case errors.As(err, &pf):
+		rec.Stop(desktopStopPixels + pf.Refused())
+	case errors.As(err, &refusal):
+		rec.Stop(desktopStopRefused + refusal.Kind)
+	default:
+		rec.Stop("")
+	}
 }
 
 // recordsDesktopApp is whether recordDesktopConn records sess's connections on run.
@@ -76,8 +133,9 @@ func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
 }
 
 // watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted
-// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or,
-// on a Linux VM, its sign-in row marks a pause, and either read failing refuses the connection (503).
+// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or
+// desktop sign-in or, on a Linux VM, its sign-in row marks a pause, and any read failing refuses the
+// connection (503).
 // The watch starts now, before the dial, so a pause or take over on another replica during the dial is
 // held within the same bound. stop ends it, once the connection's recording is stored; it is a no-op
 // for any other connection.
@@ -96,12 +154,13 @@ func (s *Server) watchDesktopApp(ctx context.Context, run types.AgentRun, sess u
 
 // recordVMDisplay is recordDesktopConn on a Linux VM's display, framed as the clipboard filter reads it
 // (wsFramed): the same rules, pauses and stored recording, with the viewer's side never read.
-func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.ReadWriteCloser) io.ReadWriteCloser {
+// rec is its recorder, nil when the display is not recorded.
+func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.ReadWriteCloser) (_ io.ReadWriteCloser, rec *recording.RFBRecorder) {
 	if !s.desktopRecorded(run) {
-		return display
+		return display, nil
 	}
-	rec := recording.NewRFBFrameRecorder(s.cfg.Now)
-	return recording.ReadSide(display, rec, s.trackDesktopRecording(run, sess, rec))
+	rec = recording.NewRFBFrameRecorder(s.cfg.Now)
+	return recording.ReadSide(display, rec, s.trackDesktopRecording(run, sess, rec)), rec
 }
 
 // trackDesktopRecording is the hook both desktop relays share: rec joins the run's live recordings,
@@ -134,6 +193,13 @@ const (
 	desktopPauseUnread   = "Wardyn could not read whether you had taken over"
 )
 
+// desktopStopPixels starts the stop reason of a recording whose relay refused a pixel format; the format follows.
+// desktopStopRefused starts it for any other refusal; what the relay refused follows (rfbfilter.Refusal's Kind).
+const (
+	desktopStopPixels  = "Wardyn refused a pixel format the replay cannot read: "
+	desktopStopRefused = "Wardyn refused "
+)
+
 // saveDesktopRecording stores a closed connection's recording and writes desktop.recording.write.
 // A connection that carried no RFB frames (a static file, or one that never upgraded) stores nothing.
 func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, sess uiSession, session string, rec *recording.RFBRecorder) {
@@ -150,12 +216,13 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
 	}
-	// A recorder that met a message it could not follow stopped keeping frames: the stored cast is
-	// shorter than the session, so the write row says where it ends rather than reading as complete.
+	// A recorder that met a message it could not follow, or whose relay refused the stream (Stop), stopped
+	// keeping frames: the stored cast is shorter than the session, so the write row says where it ends rather
+	// than reading as complete.
 	if stopped := rec.StoppedMS(); stopped > 0 {
 		data["stopped_ms"] = stopped
-		slog.WarnContext(ctx, "wardynd: desktop recording stopped early at a message it could not follow",
-			"run_id", run.ID, "session", session, "stopped_ms", stopped)
+		slog.WarnContext(ctx, "wardynd: desktop recording stopped early",
+			"run_id", run.ID, "session", session, "stopped_ms", stopped, "stop_reason", rec.StopReason())
 	}
 	s.auditUISession(sess, "desktop.recording.write", key, outcome, data)
 }
@@ -321,9 +388,14 @@ func (s *Server) resumeDesktopHold(ctx context.Context, run types.AgentRun, hold
 // over's hand back tells the other replicas in its own recording_gap notice (recordingGap). ended,
 // when set, is whether the run was over when the sign-in ended, carried in the notice
 // (recordingGapNotice.RunEnded) so the replica holding the pause writes what this one knew; unset,
-// each replica reads it from the run (desktopPauseOver).
+// each replica reads it from the run (desktopPauseOver). The notice goes out whether or not the hold was
+// held here: the replica that began a sign-in holds it, and so does every replica whose desktop watch read it
+// open (vmSignInWatch.sync). It is one try and may be lost: a container sign-in's hold is also ended by the
+// holding replica's desktop watch, which reads the sign-in's row on each open desktop stream and before it
+// admits the next.
 func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) {
-	if !s.resumeDesktopHold(ctx, run, hold, ended) && s.desktopRecorded(run) {
+	s.resumeDesktopHold(ctx, run, hold, ended)
+	if s.desktopRecorded(run) {
 		s.publishNotice(livebus.KindRecordingGap, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: ended})
 	}
 }
@@ -371,6 +443,12 @@ func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
 		}
 	}
 	return out
+}
+
+// signinHolds lists the desktop sign-in holds on run's open gap here. A sign-in holds the recording by
+// its bare id (handleBeginDesktopSignin); every other hold's id carries a prefix, so it is never a UUID.
+func (d *desktopRecordings) signinHolds(run uuid.UUID) []string {
+	return slices.DeleteFunc(d.heldWith(run, ""), func(h string) bool { return uuid.Validate(h) != nil })
 }
 
 // auditDesktopResume writes desktop.recording.resume for gap p, ending now. A gap closed once the run

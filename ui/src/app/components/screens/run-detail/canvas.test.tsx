@@ -645,7 +645,7 @@ describe("RunCanvas — a save that merely FAILED is not a deployment that canno
     putLayout.mockResolvedValue({ preset: "live", layout: [] });
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.layoutRetry }));
     await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
-    expect(putLayout.mock.calls[1]).toEqual(["live", []]);
+    expect(putLayout.mock.calls[1]).toEqual(["live", [], "admin@example.com"]);
     await waitFor(() => expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeNull());
   });
 

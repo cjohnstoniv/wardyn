@@ -73,9 +73,12 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun) {
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // every decision below is about times the database stamped or compares
+	if err != nil {
+		return // nothing is killed, ended, stopped, warned or renewed; the next sweep reads the clock again
+	}
 	if reason, due := lifetimeEndDue(run, now); due {
-		s.killRunAtLifetime(ctx, run, reason)
+		s.killRunAtLifetime(ctx, run, reason, now)
 		return
 	}
 	run, renewing := s.renewServiceLease(ctx, leaser, run, now)
@@ -217,7 +220,7 @@ func lifetimeStatusDetail(reason types.RunEndReason) string { return "lifetime: 
 // and broker credentials revoked. A sandbox on an offline self-hosted runner
 // is a pending kill, applied when the runner reconnects; the run is KILLED at
 // the org at once either way.
-func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason) {
+func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason, now time.Time) {
 	updater, ok := s.cfg.Store.(runStateDetailUpdater)
 	if !ok {
 		return
@@ -225,7 +228,9 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	// Once claimed, the teardown must finish whatever the sweep's own bound says.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) {
+		return updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), now)
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -255,7 +260,7 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 // unresolved for the re-assert to retry (#1060), never a teardown on the same
 // failing daemon.
 func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) {
-	applied, err := leaser.MarkRunEnded(ctx, run.ID, now)
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) { return leaser.MarkRunEnded(ctx, run.ID, now) })
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run ended failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -364,11 +369,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 	if !ok {
 		return "", runner.ErrEndUnsupported
 	}
-	err = ender.EndSandbox(ctx, run.SandboxRef)
-	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-		return err.Error(), nil
-	}
-	return "", err
+	return runner.SplitAWSCacheWipe(ender.EndSandbox(ctx, run.SandboxRef))
 }
 
 // noteContainmentFailure records that a kept run's stop failed with err
@@ -376,7 +377,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 // re-assert, and true means this process had not yet seen the failure, so the
 // caller audits it. A failed write is retried by the next pass's re-assert.
 func (s *Server) noteContainmentFailure(ctx context.Context, leaser store.RunLeaser, runID uuid.UUID, err error) bool {
-	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error(), s.cfg.Now()); serr != nil {
+	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error()); serr != nil {
 		slog.WarnContext(ctx, "wardynd: recording a kept run's unresolved containment failed",
 			slog.String("run_id", runID.String()), slog.Any("err", serr))
 	}
@@ -464,7 +465,12 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 	}
 	defer unlock()
 	ctx = lctx
-	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	// Bounded, and settled like a held state write: a dispatch that resumes the run's kept machine stops it on a
+	// context with no deadline.
+	applied, err := heldWrite(ctx, func(ctx context.Context) (bool, error) {
+		return leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	})
+	applied, err = s.settleRunWrite(ctx, run.ID, types.RunRunning, terminal, applied, err)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

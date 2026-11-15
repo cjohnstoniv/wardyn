@@ -19,6 +19,10 @@ export const STATES = {
   ERROR_DEFAULT: "Wardyn isn't answering. Try again.",
   // Wardyn answered, but with a failure it gave no sentence for.
   ERROR_ANSWERED: "Couldn't load this. Try again.",
+  // Wardyn answered with a body that does not parse.
+  ANSWER_UNREADABLE: "Wardyn's answer couldn't be read.",
+  // Appended to a site's "Wardyn couldn't ..." sentence for a 5xx only: a 403 or another 4xx will not pass.
+  TRY_AGAIN: "Try again.",
   RETRY: "Retry",
 } as const;
 
@@ -29,9 +33,20 @@ export const STALE_NOTE = "Couldn't refresh. Showing the last list that loaded."
  *  a handler name like "list", so it does not count); the neutral ERROR_ANSWERED for any other answered HTTP failure;
  *  undefined for no answer at all (network, timeout), so the caller shows the "isn't answering" default. */
 export function failureSentence(e: unknown): string | undefined {
+  // res.json() throws a SyntaxError on a body that does not parse: an answer, not an outage.
+  if (e instanceof SyntaxError) return STATES.ANSWER_UNREADABLE;
   // A request that ran out of time got no answer: wfetch turns it into an HttpError with this status and no reason.
   if (!(e instanceof HttpError) || e.status === TIMEOUT_STATUS) return undefined;
   return e.reason && e.reason !== "internal_error" ? e.message : STATES.ERROR_ANSWERED;
+}
+
+/** The sentence for a failed call Wardyn answered: the server's own when it named one, else the site's
+ *  "Wardyn couldn't <verb> <object>." (`couldnt`), with Try again for a 5xx. Undefined when nothing answered (a network
+ *  error, a timeout), so the site keeps its own "isn't answering" text. */
+export function answeredSentence(e: unknown, couldnt: string): string | undefined {
+  if (e instanceof SyntaxError) return STATES.ANSWER_UNREADABLE;
+  if (!(e instanceof HttpError) || e.status === TIMEOUT_STATUS) return undefined;
+  return (e.said ?? e.message) || (e.status >= 500 ? `${couldnt} ${STATES.TRY_AGAIN}` : couldnt);
 }
 
 export function StaleNote({ onRetry }: { onRetry: () => void }) {

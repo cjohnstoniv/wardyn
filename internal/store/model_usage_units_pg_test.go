@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -129,5 +130,30 @@ func TestModelUsageForUnitsPG(t *testing.T) {
 	}
 	if edge, err := reader.UnitModelUsage(ctx, units, since, now.Add(-time.Hour)); err != nil || len(edge[u2].Groups) != 0 {
 		t.Errorf("a window ending at a run's creation time = %v (%v), want that run left out (until is exclusive)", edge, err)
+	}
+}
+
+// A unit whose calls add up past an int64 reads them as not counted, instead of failing the whole read.
+func TestModelUsageForUnitsPastInt64PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	unit := uuid.New()
+	now := time.Now().UTC().Truncate(time.Second)
+	r := newRun(types.RunRunning)
+	r.UnitID = &unit
+	id := persistRun(t, ctx, pool, r).ID
+	for _, in := range []int64{math.MaxInt64, 1} {
+		u := egress.ModelUsage{CallID: uuid.New(), Vendor: "anthropic", Host: "api.anthropic.com", Model: "claude-x", Input: in, Output: 1, State: "counted"}
+		if _, err := pg.InsertModelUsage(ctx, id, u, now, ""); err != nil {
+			t.Fatalf("insert usage: %v", err)
+		}
+	}
+	got, err := pg.UnitModelUsage(ctx, []uuid.UUID{unit}, now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil || len(got[unit].Groups) != 1 {
+		t.Fatalf("UnitModelUsage = %v, %v", got, err)
+	}
+	if g := got[unit].Groups[0]; g.Input != 0 || g.Output != 0 || g.Calls != 2 || g.UncountedCalls != 2 || g.UncountedReasons[store.UncountedReasonOutOfRange] != 2 {
+		t.Errorf("unit claude-x = %+v, want 2 calls not counted", g)
 	}
 }

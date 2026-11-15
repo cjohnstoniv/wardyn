@@ -44,7 +44,15 @@ const adoSharedRetireMarker = "ado_shared_credential_retire"
 // exported first. A boot sweep rather than a migration because SQL cannot
 // delete a store-mode secret's value. A store, marker or site config that cannot
 // answer refuses boot rather than leave a retired credential in place.
+//
+// Under WARDYN_HA several replicas boot at once and each serves once its own
+// sweep returns, so a replica that read the marker pending and deleted after
+// another had finished would delete a token a person saved in between. The
+// marker row stays locked from that read until it is set, so a second boot
+// waits and then finds the sweep done. The lock is a transaction on a session
+// of its own, not a pooled one: the sweep uses the pool while it is held.
 func sweepRetiredADOSharedCredentials(ctx context.Context, pool *pgxpool.Pool, st secretstore.Store, sc types.SiteConfig, rec audit.Recorder) error {
+	// A boot that finds the sweep done, as every boot after the first does, takes no lock.
 	var pending bool
 	err := pool.QueryRow(ctx, `SELECT done_at IS NULL FROM boot_once WHERE name = $1`, adoSharedRetireMarker).Scan(&pending)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -56,14 +64,40 @@ func sweepRetiredADOSharedCredentials(ctx context.Context, pool *pgxpool.Pool, s
 	if !pending {
 		return nil
 	}
+	conn, err := pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	if err != nil {
+		return fmt.Errorf("refusing to start: connect to lock the Azure DevOps credential sweep marker: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // best-effort; closing the session ends the lock
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("refusing to start: lock the Azure DevOps credential sweep marker: %w", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	// Read again under the lock: another boot may have finished the sweep while this one waited.
+	err = tx.QueryRow(ctx, `SELECT done_at IS NULL FROM boot_once WHERE name = $1 FOR UPDATE`, adoSharedRetireMarker).Scan(&pending)
+	if err != nil {
+		return fmt.Errorf("refusing to start: read the Azure DevOps credential sweep marker: %w", err)
+	}
+	if !pending {
+		return nil
+	}
+	afterADOSweepPendingRead()
 	if err := deleteRetiredADOSharedCredentials(ctx, st, sc, rec); err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `UPDATE boot_once SET done_at = now() WHERE name = $1 AND done_at IS NULL`, adoSharedRetireMarker); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE boot_once SET done_at = now() WHERE name = $1`, adoSharedRetireMarker); err != nil {
+		return fmt.Errorf("refusing to start: mark the Azure DevOps credential sweep done: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("refusing to start: mark the Azure DevOps credential sweep done: %w", err)
 	}
 	return nil
 }
+
+// afterADOSweepPendingRead runs once a boot has read the marker pending, with
+// the marker locked; a test holds one boot there.
+var afterADOSweepPendingRead = func() {}
 
 func deleteRetiredADOSharedCredentials(ctx context.Context, st secretstore.Store, sc types.SiteConfig, rec audit.Recorder) error {
 	names, skipped := api.RetiredADOSharedSecretNames(sc)

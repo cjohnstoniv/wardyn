@@ -17,7 +17,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -56,6 +55,7 @@ func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 // pending, the queue an approver works. ?approver=security narrows to the changes only a security admin
 // may decide. A change of a kind the caller may not approve is not listed.
 func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Request) {
+	r = withDeciderMemo(r) // the deciders rules are read once for the whole queue, not once per change
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		state = types.GovernanceChangePending
@@ -75,18 +75,28 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "list governance changes", err)
 		return
 	}
-	// The store reads one row past MaxGovernanceChangeList and the visibility filter below runs after
-	// that limit, so a longer read means older changes are hidden from this caller: trim and say so
-	// (the header the other capped lists set). A list of exactly the bound is complete.
-	if len(all) > store.MaxGovernanceChangeList {
-		all = all[:store.MaxGovernanceChangeList]
-		w.Header().Set("X-Wardyn-Truncated", "true")
+	// The pending queue is read whole, so the bound is applied to what this caller may see: an older
+	// change they may decide is never hidden behind newer ones they may not. Any other state is read to
+	// one row past MaxGovernanceChangeList, so a longer read means older changes may be hidden from this
+	// caller. Either way a cut list says so (the header the other capped lists set), and a list of
+	// exactly the bound is complete.
+	truncated := false
+	if state != types.GovernanceChangePending && len(all) > store.MaxGovernanceChangeList {
+		all, truncated = all[:store.MaxGovernanceChangeList], true
 	}
-	out := make([]types.GovernanceChange, 0, len(all))
+	out := make([]types.GovernanceChange, 0, min(len(all), store.MaxGovernanceChangeList))
 	for _, ch := range all {
-		if s.canSeeGovernanceChange(r, ch) && (approver == "" || s.securityOnlyChange(r, ch)) {
-			out = append(out, s.changeForRead(r, ch))
+		if !s.canSeeGovernanceChange(r, ch) || (approver != "" && !s.securityOnlyChange(r, ch)) {
+			continue
 		}
+		if len(out) == store.MaxGovernanceChangeList {
+			truncated = true
+			break
+		}
+		out = append(out, s.changeForRead(r, ch))
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -143,9 +153,7 @@ func (s *Server) readRejectReason(w http.ResponseWriter, r *http.Request) (strin
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(body), &req, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return "", false
 	}
@@ -164,12 +172,26 @@ func (s *Server) readRejectReason(w http.ResponseWriter, r *http.Request) (strin
 // sameGovernanceHuman reports whether the approver is the person who proposed the change: the same
 // principal, or the same non-empty email once case-folded. requireSecondHuman compares the principal
 // only; here one person holding two principals (an SSO session and an API token, or two identity
-// provider subjects with one mailbox) must not count as two humans.
+// provider subjects with one mailbox) must not count as two humans. It is the conservative test and
+// serves refusals only: an email that sign-in does not vouch for is reason enough to refuse a second
+// approval, never evidence that the caller owns the change (ownsGovernanceChange decides that).
 func sameGovernanceHuman(ch types.GovernanceChange, principal, email string) bool {
 	if principal != "" && principal == ch.ProposedBy {
 		return true
 	}
 	return email != "" && ch.ProposedByEmail != "" && strings.EqualFold(email, ch.ProposedByEmail)
+}
+
+// ownsGovernanceChange reports whether the caller holds the rights a proposer has over their own
+// change: read it, write its note, withdraw it. That is the same principal (an SSO session and the API
+// tokens it mints carry one), or the same non-empty email once case-folded only when sign-in vouches
+// for every caller's email (emailTrusted). An email sign-in does not vouch for can be anyone's claim,
+// so matching it would hand one principal's change to another, an admin of an unrelated unit included.
+func (s *Server) ownsGovernanceChange(ch types.GovernanceChange, principal, email string) bool {
+	if principal != "" && principal == ch.ProposedBy {
+		return true
+	}
+	return s.emailTrusted() && email != "" && ch.ProposedByEmail != "" && strings.EqualFold(email, ch.ProposedByEmail)
 }
 
 // secondApproverSentence is the refusal of a proposer approving their own change. With the switch off a
@@ -333,7 +355,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	actorType, principal := actorFromRequest(r)
 	email := oidcEmailFromContext(ctx)
 	allowed := bypass || kind.approver.allowed(s, r)
-	withdraw := !allowed && !approve && sameGovernanceHuman(head, principal, email)
+	withdraw := !allowed && !approve && s.ownsGovernanceChange(head, principal, email)
 	if !allowed && !withdraw {
 		s.denyApprover(kind).write(w, r)
 		return
@@ -360,7 +382,15 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason)
+	if s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason) {
+		// An approved role-mapping change whose revocation failed says so, as the direct write does.
+		writeJSON(w, http.StatusOK, struct {
+			types.GovernanceChange
+			TokensRevocationFailed bool   `json:"tokens_revocation_failed"`
+			Detail                 string `json:"detail"`
+		}{s.changeForRead(r, out), true, roleTokensNotReached})
+		return
+	}
 	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
 }
 
@@ -375,7 +405,7 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 			if _, err := s.recheckLiveToken(ctx, q); err != nil {
 				return err
 			}
-			if !sameGovernanceHuman(ch, principal, email) {
+			if !s.ownsGovernanceChange(ch, principal, email) {
 				return s.denyApprover(kind)
 			}
 			return nil
@@ -405,9 +435,10 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 // auditDecision records a committed decision: an approval writes the target's own row, as a direct
 // write would have, plus governance.change.approve (and the bypass row when the admin token spent
 // one); a reject writes governance.change.reject, marked withdrawn when the proposer made it, and a
-// request kind's own reject row after it.
+// request kind's own reject row after it. It reports whether the applied change's after-commit work
+// failed to revoke the tokens it demoted (a role mapping's tokens_revocation_failed).
 func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, applied govApplied, approve, bypass bool,
-	actorType types.ActorType, principal, email, reason string) {
+	actorType types.ActorType, principal, email, reason string) (tokensNotRevoked bool) {
 	ctx := r.Context()
 	data := map[string]any{"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy}
 	if approve {
@@ -427,6 +458,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 			// A change a unit admin may decide records who made it, in which scope it was approved, and by whom.
 			tdata["actor"], tdata["approver"], tdata["unit_scope"] = out.ProposedBy, principal, s.auditUnitScope(ctx, units[0], strict)
 		}
+		tokensNotRevoked = tdata["tokens_revocation_failed"] == true
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.approve", out.ID.String(), "success", mustJSON(data)))
 		if bypass {
@@ -436,7 +468,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 		if reason != "" {
 			data["reason"] = reason
 		}
-		withdrawn := sameGovernanceHuman(out, principal, email)
+		withdrawn := s.ownsGovernanceChange(out, principal, email)
 		if withdrawn {
 			data["withdrawn"] = true // the proposer rejected their own change
 		}
@@ -445,6 +477,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, kind.rejectAction, out.ID.String(), "success", mustJSON(s.requestRejectData(ctx, out, withdrawn))))
 		}
 	}
+	return tokensNotRevoked
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit

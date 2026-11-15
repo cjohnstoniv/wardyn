@@ -23,7 +23,7 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 	if fromState == types.RunQueued {
 		return s.LeaveRunQueue(ctx, id, toState, nil)
 	}
-	tag, err := s.Pool.Exec(ctx,
+	tag, err := s.execRunWrite(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN COALESCE(ended_at, now()) ELSE ended_at END
 		 WHERE id=$2 AND state=$3`,
 		string(toState), id, string(fromState), toState.IsTerminal(),
@@ -48,7 +48,7 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 	if fromState == types.RunQueued {
 		return false, errQueuedLeave
 	}
-	tag, err := s.Pool.Exec(ctx,
+	tag, err := s.execRunWrite(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
 		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND lost_at IS NULL AND NOT (`+openHoldSQL+`)`,
 		string(toState), id, string(fromState), notAfter, toState.IsTerminal(),
@@ -70,7 +70,7 @@ func (s PG) UpdateRunStateIfCreatedBefore(ctx context.Context, id uuid.UUID, fro
 	if fromState == types.RunQueued {
 		return false, errQueuedLeave
 	}
-	tag, err := s.Pool.Exec(ctx,
+	tag, err := s.execRunWrite(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
 		 WHERE id=$2 AND state=$3 AND COALESCE(admitted_at, created_at) <= $4 AND `+HoldsSandboxSQL,
 		string(toState), id, string(fromState), createdNotAfter, toState.IsTerminal(),

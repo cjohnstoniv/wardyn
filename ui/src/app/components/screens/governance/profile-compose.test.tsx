@@ -70,9 +70,22 @@ const BASE = row({
   effective: { ceiling: SPEC, limits: { deny_interactive: true } },
 });
 
+// The Default unit's effective ceiling: what a profile on the deployment base inherits.
+const DEPLOYMENT: RunPolicySpec = { ...SPEC, allowed_domains: ["*"], allowed_methods: ["GET", "POST"] };
+
 function renderEditor(profile: GovernanceUnit | null, profiles: GovernanceUnit[] = [BASE]) {
   const onSaved = vi.fn();
-  render(<ProfileEditor profile={profile} profiles={profiles} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
+  render(
+    <ProfileEditor
+      profile={profile}
+      profiles={profiles}
+      deploymentCeiling={DEPLOYMENT}
+      disabled={false}
+      onCancel={vi.fn()}
+      onSaved={onSaved}
+      onSubmitted={vi.fn()}
+    />,
+  );
   return { onSaved };
 }
 
@@ -90,7 +103,8 @@ const pickBase = async (name: string) => {
 beforeEach(() => {
   for (const m of [createProfileMock, updateProfileMock, getDefaultPolicyMock, getSetupStatusMock]) m.mockReset();
   getSetupStatusMock.mockResolvedValue(baseStatus());
-  getDefaultPolicyMock.mockResolvedValue({ ...SPEC, allowed_domains: ["*"], allowed_methods: ["GET", "POST"] });
+  // The editor's own ceiling, narrower than the deployment's: a profile on the deployment base never inherits it.
+  getDefaultPolicyMock.mockResolvedValue({ ...SPEC, allowed_domains: ["mine.corp"], allowed_methods: ["GET"] });
   createProfileMock.mockResolvedValue({ profile: BASE, warnings: [] });
   updateProfileMock.mockResolvedValue({ profile: BASE, warnings: [] });
 });
@@ -133,12 +147,14 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     );
   });
 
-  it("on the deployment base: the inherited value is the deployment's, and parent_id is null", async () => {
+  it("on the deployment base: the inherited value is the Default unit's, never the editor's own ceiling, and parent_id is null", async () => {
     renderEditor(null);
     typeValue(GOV.FIELD_NAME, "Division");
     await pickBase(GOV.BASE_DEPLOYMENT);
 
     expect((await screen.findAllByText(GOV.OVERLAY_INHERITED("*"))).length).toBeGreaterThan(0);
+    expect(screen.queryByText(GOV.OVERLAY_INHERITED("mine.corp"))).toBeNull();
+    expect(getDefaultPolicyMock).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("switch", { name: `allowed_methods ${GOV.OVERLAY_NARROW}` }));
     // Seeded from what is inherited, never an empty list.
     expect(screen.getByLabelText("allowed_methods")).toHaveValue("GET\nPOST");

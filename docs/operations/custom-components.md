@@ -62,6 +62,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - Every save answers `requirements[]`: one row per secret the component names, `present` or `missing`, with the fix `add_secret` for a missing one. It lists names and verdicts only, never a header or config value, and never refuses a save.
 - A person's component is looked up in their own namespace; an organisation's `shared` secret in the operator's.
 - A person holds at most 32 saved components, the organisation 256.
+- A `PUT` with `expected_version`, the version its caller read, replaces the row only at that version, else `409` `component_version_conflict` with nothing changed, CLI sign-ins included. The console sends it on every edit.
 
 **One credential per host.**
 

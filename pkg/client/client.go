@@ -37,7 +37,7 @@
 //     sign-in and credential doors are NOT wrapped
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
-//     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
+//     CreateMyDrive, DeleteMyDrive, DeleteMyDriveResult (/api/v1/me/drives)
 //   - machines (/api/v1/me/machines):    ListMyMachines, DeleteMyMachine — the caller's own kept macOS machines;
 //     ListKeptMachines, DeleteKeptMachine (/api/v1/machines/kept, super admin) — everyone's
 //   - walls (/api/v1/me/walls):          GetMyWalls, PutMyWalls, ClearMyWalls — the caller's own narrow-only walls
@@ -83,7 +83,7 @@
 //     with MoveToken (POST /api/v1/tokens/{id}/move), and the caller's own tokens CreateAPIToken (a signed-in session only) and
 //     RevokeAPIToken (/api/v1/me/tokens)
 //   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
-//     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
+//     WorkloadHistory, WorkloadHistoryPage, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin),
 //     SetComponentOwningUnit (security tier) — and, on
@@ -144,6 +144,8 @@
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller
+//   - /.well-known/wardyn-experimental/gateway-client-ca.pem — the CA bundle a
+//     gateway that checks client certificates trusts; a gateway reads it too
 //   - the console SPA at /   — static assets
 //
 // (The AI Run Composer's /runs/compose* used to be listed here; those routes

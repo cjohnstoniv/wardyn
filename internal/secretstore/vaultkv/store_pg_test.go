@@ -234,6 +234,7 @@ func TestStoreMode_PutWritesTheStoreBeforeTheRow(t *testing.T) {
 	if err := s.Put(ctx, "boom", []byte("v")); err == nil || !strings.Contains(err.Error(), "removed again") {
 		t.Fatalf("Put with the row refused = %v; want the value removed again", err)
 	}
+	secretstorepg.WaitForCleanUps(t.Context())
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.kv["ns1/operator/boom"]; ok {

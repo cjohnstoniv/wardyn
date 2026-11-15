@@ -81,7 +81,7 @@ func TestDriveOpenCommandReadyLineAndStdinStop(t *testing.T) {
 	const object = "wardyn-drive-a"
 	img, _ := layout.DriveImage(object)
 	_ = os.MkdirAll(filepath.Dir(img), 0o700)
-	_ = os.WriteFile(img, []byte("x"), 0o600)
+	_ = os.WriteFile(img, []byte(strings.Repeat("x", 4096)), 0o600) // a formatted drive as far as the helper reads one: 4 KiB that do not start with zeros
 
 	eng := &macvmtest.Engine{}
 	d, _, errb := testDeps(eng)

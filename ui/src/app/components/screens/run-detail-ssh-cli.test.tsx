@@ -24,7 +24,7 @@ vi.mock("../../lib/api/runs", () => ({
 import { ConnectSSHCard } from "./run-detail-ssh";
 import { INSTALL_DOCS_URL } from "./run-detail/get-the-cli";
 import { OperatorProvider } from "../wardyn/operator-context";
-import { RUN_CLI } from "../wardyn/copy";
+import { RUN_CLI, RUN_SSH } from "../wardyn/copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 const OWNER = "alice@example.com";
@@ -209,6 +209,25 @@ describe("The SSH lane is demoted", () => {
     const after = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     expect(after(screen.getByText(RUN_CLI.GET_TITLE), lane)).toBe(true);
     expect(after(lane, screen.getByText("UI apps"))).toBe(true);
+  });
+
+  // The Host alias is wardyn- and the whole run id, 43 characters, wider than the card's text column at 390 px.
+  // jsdom does not lay out, so this pins the classes that let it wrap: break-all on the two inline alias spans
+  // (the "then run ssh" sentence and the VS Code line), and the config block's own horizontal scroll.
+  it("lets the 43-character Host alias wrap on a 390 px phone", async () => {
+    const proxy = "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h";
+    const ssh = { enabled: true, advertise_addr: "ssh.example.com:2222", proxy_command: proxy };
+    healthMock.mockResolvedValue({ status: "ok", version: "0.10.0", ssh });
+    renderCard();
+    await screen.findByText(RUN_SSH.PROXY_NOTE);
+    const alias = `wardyn-${run.id}`;
+    expect(alias).toHaveLength(43);
+    expect(screen.getByText(`ssh ${alias}`)).toHaveClass("font-mono", "break-all");
+    const vscode = screen.getAllByText(alias).filter((el) => el.tagName === "SPAN");
+    expect(vscode).toHaveLength(1);
+    expect(vscode[0]).toHaveClass("font-mono", "break-all");
+    expect(screen.getByText("~/.ssh/config")).not.toHaveClass("break-all");
+    expect(screen.getByText(`Host ${alias}`, { exact: false }).closest("pre")).toHaveClass("overflow-x-auto");
   });
 
   it("keeps the OFF sentence inside the fold", async () => {

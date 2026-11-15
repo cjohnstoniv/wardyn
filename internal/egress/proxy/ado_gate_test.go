@@ -165,6 +165,19 @@ func TestADOGate_MethodOverrideCannotSmuggleAWrite(t *testing.T) {
 	}
 }
 
+// A header the Connection header names is never forwarded, so the gate judges
+// the request without it. The run holds code_write, has no host rule for the
+// host and no git_push_any_branch, and the ?filter= ref is its own. An
+// X-HTTP-Method-Override named there made this POST an Update Ref of that ref,
+// while the POST sent upstream moved the ref its body names, main.
+func TestADOGate_ConnectionNamedOverrideIsJudgedAsTheForwardedPost(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	target := "/acme/proj/_apis/git/repositories/app/refs?filter=heads/wardyn/" + h.p.runID.String() + "/safe&api-version=7.1"
+	body := `[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `","newObjectId":"` + strings.Repeat("a", 40) + `"}]`
+	hdr := map[string]string{"X-HTTP-Method-Override": http.MethodPatch, "Connection": "X-HTTP-Method-Override"}
+	h.mustRefuse(t, h.do(t, http.MethodPost, target, body, hdr), "may push only to its own branch")
+}
+
 // The classifier's evasion cases, end to end: every one is refused even when
 // the run holds every grantable capability, so only the evasion guard can be
 // what refuses it.

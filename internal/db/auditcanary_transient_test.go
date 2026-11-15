@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -39,5 +40,20 @@ func TestAuditCanaryTransient(t *testing.T) {
 				t.Fatalf("= %v, want an error wrapping %v: a real canary failure must refuse the boot", got, c.err)
 			}
 		})
+	}
+}
+
+// TestAuditCanaryAppendError pins who a failed canary append blames: a trigger of the operator's whose function sets
+// no search_path when there is one, else the chain trigger, and the cause is wrapped either way.
+func TestAuditCanaryAppendError(t *testing.T) {
+	cause := &pgconn.PgError{Code: "42P01"}
+	got := auditCanaryAppendError([]string{"outbox_t (ops.outbox_fn)", "meta_t (ops.meta_fn)"}, cause)
+	if !errors.Is(got, cause) || !strings.Contains(got.Error(), "(outbox_t (ops.outbox_fn), meta_t (ops.meta_fn))") ||
+		strings.Contains(got.Error(), "chain trigger is catalogued") {
+		t.Fatalf("with pathless triggers = %v; want them named, the chain trigger not blamed, the cause wrapped", got)
+	}
+	got = auditCanaryAppendError(nil, cause)
+	if !errors.Is(got, cause) || !strings.Contains(got.Error(), "chain trigger is catalogued and enabled but not working") {
+		t.Fatalf("with none = %v; want the chain trigger named and the cause wrapped", got)
 	}
 }

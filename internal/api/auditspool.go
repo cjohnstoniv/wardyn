@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -62,6 +63,8 @@ type AuditSpool struct {
 	// rather than a per-scrape recount of the file, because /metrics must not
 	// queue behind a drain pass - see Lines().
 	lines atomic.Int64
+	// appends counts the Appends that put bytes in the spool since it was opened (Appends).
+	appends atomic.Int64
 	// consumed is the byte offset of the first un-replayed line: everything
 	// before it is already in the durable store and is waiting only to be
 	// reclaimed. Drain advances it instead of rewriting the whole file on every
@@ -88,6 +91,9 @@ type AuditSpool struct {
 	retireFailed bool
 	// retireBlocked counts the passes retireFailed has held back since the last probe pass.
 	retireBlocked int
+	// noted is the event noteRunEventSetAside last wrote its note for, so a line whose move keeps failing
+	// is noted once rather than on every pass. Guarded by mu.
+	noted uuid.UUID
 }
 
 // spoolPoisonAttempts is how many consecutive Drain attempts one line gets
@@ -145,6 +151,13 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 		return nil, err
 	}
 	a := &AuditSpool{f: f, path: path}
+	// The open may have just created the spool, and Append syncs the file, not
+	// the directory entry that names it. A failure is said, not refused: a spool
+	// is still better than none.
+	if err := a.syncDir(); err != nil {
+		slog.Warn("wardynd: audit spool directory not synced; a host crash may lose a newly created spool",
+			slog.String("path", path), slog.Any("err", err))
+	}
 	// The cursor and both counters describe state ON DISK that outlives this
 	// process, so they are read back rather than started at zero. For the
 	// quarantine that keeps the only scrape signal of a permanently incomplete
@@ -230,6 +243,7 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 		// line (a tail with no newline is a line), and the separator only
 		// terminates it.
 		a.lines.Add(1)
+		a.appends.Add(1)
 	}
 	return werr
 }
@@ -423,7 +437,11 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		// Only ever reached when something was actually blocked behind it. A
 		// suspect at the very END of the spool blocks nothing, cannot be proven
 		// against a live store, and is simply retried next tick.
-		if qerr := a.quarantineLine(ctx, lines[suspectIdx], suspect, replayErr); qerr != nil {
+		if nerr := a.noteRunEventSetAside(passCtx, rec, suspect); nerr != nil {
+			// The store refused the note as well: nothing moves, as in an outage.
+			replayErr = nerr
+			a.poisonProven = true
+		} else if qerr := a.quarantineLine(ctx, lines[suspectIdx], suspect, replayErr); qerr != nil {
 			// Moving it aside failed (read-only or full disk). Leaving it in
 			// place is the only honest option left: the alternative is dropping
 			// an audit event to unblock the queue.
@@ -614,7 +632,39 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	_ = a.f.Close()
 	a.f = tf
 	a.consumed = 0
+	// Before a.mu is released, so no Append is acknowledged into the new file
+	// while a host crash could still bring the old one back. Not returned: the
+	// rename and the swap are done, and the caller would read an error as a
+	// compaction that did not happen. The next compaction or quarantine syncs the
+	// same directory again.
+	if err := a.syncDir(); err != nil {
+		slog.Warn("wardynd: audit spool directory not synced after compaction; a host crash may lose events spooled since",
+			slog.String("path", a.path), slog.Any("err", err))
+	}
 	return nil
+}
+
+// fsyncSpoolDir fsyncs a directory. A variable, so a test can fail it.
+var fsyncSpoolDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// syncDir makes a file created or renamed in the spool's directory survive a
+// host crash: a file's own sync makes its bytes durable, not the directory
+// entry that names it. A filesystem that offers no directory sync (EINVAL,
+// ENOTSUP or EOPNOTSUPP, as some network and FUSE filesystems answer) is not an
+// error, since there is nothing more to ask of it.
+func (a *AuditSpool) syncDir() error {
+	err := fsyncSpoolDir(filepath.Dir(a.path))
+	if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) {
+		return nil
+	}
+	return err
 }
 
 // spoolCopyChunk is the buffer a rewrite and the volume probe move the spool through, so their
@@ -700,10 +750,12 @@ func (a *AuditSpool) strikeLine(line []byte) int {
 // places at once rather than in none at any instant. Verbatim, so the file is a
 // valid JSONL spool an operator can move back once the cause is fixed; the
 // reason lives in the log line and the /metrics counter, not the payload.
-// Deliberately NOT recorded as an audit event through rec: the store just
-// refused a write from this spool, and a report written through the failing path
-// into the log it is about is the worst of both. The signals are the log line
-// below, wardyn_audit_spool_quarantined_total, and the file itself.
+// The move is not recorded as an audit event through rec: the store just refused
+// a write from this spool, and a report written through the failing path into the
+// log it is about is the worst of both. The signals are the log line below,
+// wardyn_audit_spool_quarantined_total, and the file itself. The one row Drain
+// does write first is the run's note (noteRunEventSetAside), and Drain keeps the
+// line when the store refuses that too.
 //
 // Caller must hold a.mu (Drain does).
 func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.AuditEvent, cause error) error {
@@ -721,6 +773,11 @@ func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.A
 	}
 	if err := qf.Close(); err != nil {
 		return fmt.Errorf("close audit spool quarantine: %w", err)
+	}
+	// The first move creates the file, and Drain gives the line up as soon as
+	// this returns, so the file's name must be durable before then too.
+	if err := a.syncDir(); err != nil {
+		return fmt.Errorf("sync audit spool directory: %w", err)
 	}
 	a.quarantined.Add(1)
 	// The event's identifying fields, never its data payload: this line is
@@ -771,6 +828,16 @@ func (a *AuditSpool) Lines() int {
 		return 0
 	}
 	return int(n)
+}
+
+// Appends is how many events this spool has taken since it was opened. A reader of the audit store that
+// finds Lines at 0 before its read and Appends unchanged after it knows that no event of this replica
+// was waiting in the spool while it read. A nil spool reports 0.
+func (a *AuditSpool) Appends() int64 {
+	if a == nil {
+		return 0
+	}
+	return a.appends.Load()
 }
 
 // TornDrops reports how many spool lines Drain has dropped as unparseable (a

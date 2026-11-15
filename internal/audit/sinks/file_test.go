@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
@@ -216,5 +218,86 @@ func TestFileSink_RotationShiftsAndDropsOldest(t *testing.T) {
 				t.Errorf("%s still holds shift.0, which should have fallen past Keep=%d", filepath.Base(f), keep)
 			}
 		}
+	}
+}
+
+// A rotation that cannot move the old files out of the way used to be ignored:
+// the active file was reopened and the event appended past MaxBytes, reported as
+// written. A non-empty directory in the .Keep slot fails its removal whatever
+// the user, root included. The event is refused, a smaller one that still fits
+// is appended to the reopened file, and the next rotation after the slot is
+// cleared works.
+func TestFileSink_FailedRotationIsReportedAndRetried(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	blocker := path + ".2"
+	if err := os.MkdirAll(filepath.Join(blocker, "in-the-way"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sinks.NewFileSink(sinks.FileConfig{Path: path, MaxBytes: 1024, Keep: 2})
+	if err != nil {
+		t.Fatalf("NewFileSink: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	big := strings.Repeat("b", 1000)
+	if err := s.Emit(ctx, makeEvent("first")); err != nil {
+		t.Fatalf("Emit first: %v", err)
+	}
+	err = s.Emit(ctx, makeEvent(big))
+	if err == nil || !strings.Contains(err.Error(), "rotate") {
+		t.Fatalf("Emit past MaxBytes with the .2 slot blocked = %v, want a rotate error", err)
+	}
+	if err := s.Emit(ctx, makeEvent("small")); err != nil {
+		t.Fatalf("Emit of an event that still fits after the failed rotation: %v", err)
+	}
+	if got := actionsIn(t, path); len(got) != 2 || got[0] != "first" || got[1] != "small" {
+		t.Fatalf("active file holds %v, want [first small]: the refused event must not be appended", got)
+	}
+
+	if err := os.RemoveAll(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Emit(ctx, makeEvent(big)); err != nil {
+		t.Fatalf("Emit once the slot is clear: %v", err)
+	}
+	if got := actionsIn(t, path+".1"); len(got) != 2 || got[0] != "first" || got[1] != "small" {
+		t.Errorf("audit.log.1 holds %v, want [first small]", got)
+	}
+	if got := actionsIn(t, path); len(got) != 1 || got[0] != big {
+		t.Errorf("active file holds %d events, want only the retried one", len(got))
+	}
+}
+
+// A log file that is writable in a directory that is not: renaming it to .1
+// fails. Root ignores the mode, and Windows has no such directory mode, so both
+// skip.
+func TestFileSink_RenameFailureIsReported(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop a rename here")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	s, err := sinks.NewFileSink(sinks.FileConfig{Path: path, MaxBytes: 1, Keep: 1})
+	if err != nil {
+		t.Fatalf("NewFileSink: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	err = s.Emit(context.Background(), makeEvent("refused"))
+	if err == nil || !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("Emit with an unrenamable log = %v, want a rename error", err)
+	}
+	if got := actionsIn(t, path); got != nil {
+		t.Errorf("active file holds %v, want nothing: the event must not be appended past MaxBytes", got)
 	}
 }

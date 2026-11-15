@@ -587,8 +587,12 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 		// Detached from the lock's context, which is cancelled when the lock is
 		// lost: the token is already redeemed, so the store is attempted either
 		// way, and the compare-and-set is what keeps a holder that lost its lock
-		// from overwriting a newer pair.
-		pctx := context.WithoutCancel(ctx)
+		// from overwriting a newer pair. Bounded by heldStoreCallBound, so a
+		// stalled secret store cannot hold the sign-in lock, or a run's lock
+		// held around it, for as long as it stalls. A store cut by that bound
+		// is a failed store: the caller is served from memory.
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), heldStoreCallBound)
+		defer cancel()
 		if guarded {
 			pctx = secretstore.WithIfRevision(pctx, rev)
 		}

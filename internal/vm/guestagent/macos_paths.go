@@ -45,7 +45,7 @@ const (
 	// MacRunDir is the guest's counterpart of the Linux /run/wardyn, where a delivered secret lands: a
 	// macOS guest has no /run (its system volume is sealed).
 	MacRunDir = "/var/run/wardyn"
-	// MacSessionEnvDir holds a run's settings file and its three status files, beside the pairing key in the
+	// MacSessionEnvDir holds a run's settings file and its four status files, beside the pairing key in the
 	// directory stage 1 makes root:wheel 0755, so the root-only write walk (walkDir) passes every parent.
 	// Not MacRunDir: a stock guest has /private/var/run as root:daemon 0775, which the walk refuses, so no
 	// file was written there. A boot does not clear it as it does /var/run; the boot scrub does.
@@ -67,6 +67,15 @@ const (
 	// MacHostPrefsSwitchPath turns the carry on: it runs only on a base that has this regular file.
 	// /Library/Wardyn is root's, so only an administrator makes it.
 	MacHostPrefsSwitchPath = "/Library/Wardyn/setup-assistant-carry"
+	// MacLoginHoldSwitchPath, beside MacHostPrefsSwitchPath, holds the agent's sign-in at boot until the
+	// carry has run (LoginHold). The carry's switch alone never turns it on.
+	MacLoginHoldSwitchPath = "/Library/Wardyn/carry-before-login"
+	// MacLoginHoldRecordPath is root's note, kept on the disk, of the last hold: its path, its restarts in
+	// a row and the carry's line, for the boot after the restart.
+	MacLoginHoldRecordPath = "/Library/Wardyn/login-hold.json"
+	// MacLoginHoldStatusPath says what this boot's hold did: one login_hold= line with the path, a reason,
+	// the restarts, whether the agent signed in, whether auto-login is left off, and a Unix time.
+	MacLoginHoldStatusPath = MacSessionEnvDir + "/login-hold.status"
 	// MacZshEnvPath is the system-wide zsh file that carries the hook, /etc/zshenv spelled through /private
 	// as /etc is a link too.
 	MacZshEnvPath = "/private/etc/zshenv"

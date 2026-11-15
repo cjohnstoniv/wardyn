@@ -506,10 +506,33 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 		return s.uiDenyReassert(sess, reasonRunUnreadable,
 			http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
+	// The run's own state too, which uiDial reads on every new connection: a pooled connection never reaches
+	// uiDial again, so without this a run that stopped, or that an outage kept with its agent still up, went on
+	// being served on it. It is bounded by the same interval as the human's re-check. An inbound call reads the
+	// run's state on every call instead (admitInbound), and records its own deny. A desktop stream reads it as
+	// it opens and at each re-check (desktopRunCheck) and closes with the code that tells its viewer the run
+	// ended; refused here, before the upgrade, the viewer would retry instead.
+	if !sess.Inbound && !sess.Desktop {
+		if de := uiRunGone(run); de != nil {
+			return de
+		}
+	}
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return de
 	}
 	s.markUIReasserted(sess, now, gen)
+	return nil
+}
+
+// uiRunGone refuses a UI request to a run whose UI apps are gone: one not RUNNING or with no sandbox, or a
+// kept run (runIsKept), which is RUNNING with its agent stopped.
+func uiRunGone(run types.AgentRun) *uiDialError {
+	if run.State != types.RunRunning || run.SandboxRef == "" {
+		return &uiDialError{status: http.StatusConflict, reason: reasonUIGatewayNotRunning, msg: "run is not RUNNING; the UI app is gone (state=" + string(run.State) + ")"}
+	}
+	if runIsKept(run) {
+		return &uiDialError{status: http.StatusConflict, reason: reasonUIGatewayRunKept, msg: "run has ended; the UI app is gone"}
+	}
 	return nil
 }
 

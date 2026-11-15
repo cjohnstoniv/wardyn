@@ -14,12 +14,13 @@ import (
 )
 
 // The promotion stamps admitted_at at the database's now and the pool caps the run two hours on, so the
-// cap is passed only when the server's clock has moved on: the test moves it.
+// cap is passed only when the database's clock has moved on: the test moves only that one, so the check
+// fails if the start reads the server's clock.
 func TestQueuedRunPastLifetimeCapNotStarted(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Busy", 1)
 	waiting, occupant := e.waitingPerson(pool, "")
-	e.srv.cfg.Now = func() time.Time { return time.Now().UTC().Add(3 * time.Hour) }
+	moveDBClock(t, e.srv, func() time.Time { return time.Now().UTC().Add(3 * time.Hour) }) // the server's clock stays
 	e.free(occupant)
 	e.ended(waiting.ID, queueStartRecheck{
 		reason: string(types.RunEndMaxLifetimeReached), sent: types.RunEndMaxLifetimeReached.Sentence(),

@@ -561,6 +561,40 @@ func TestUIGateway_PooledConnectionIsReassertedOnAnInterval(t *testing.T) {
 	}
 }
 
+// A pooled connection never reaches uiDial again, so the request-path re-assert also reads the run's own
+// state: a run kept by an outage (its agent, and so the UI app, still up behind the cut proxy) or ended is
+// refused on that same warm connection once the interval has passed, without a dial.
+func TestUIGateway_PooledConnectionToAKeptOrEndedRunIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		end    func(run *types.AgentRun)
+		reason string
+	}{
+		"kept":  {func(run *types.AgentRun) { at := time.Now(); run.LostAt = &at }, reasonUIGatewayRunKept},
+		"ended": {func(run *types.AgentRun) { run.State = types.RunCompleted }, reasonUIGatewayNotRunning},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newUIHarness(t, okBackend()) // keep-alive: the relay connection is POOLED
+			var dials int32
+			countingSocat(h, &dials)
+			cookie := h.openSession()
+			path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+			if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+				t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
+			}
+			tc.end(&h.run)
+			h.store.putRun(h.run)
+			h.clock.advance(uiReassertInterval + time.Second)
+			rec := uiGet(h, path, cookie)
+			if rec.Code != http.StatusConflict || respondedReason(t, rec) != tc.reason {
+				t.Fatalf("a %s run on a warm pooled connection: %d %s, want 409 %s", name, rec.Code, rec.Body.String(), tc.reason)
+			}
+			if got := atomic.LoadInt32(&dials); got != 1 {
+				t.Fatalf("%d dials, want the first only", got)
+			}
+		})
+	}
+}
+
 // TestUIGateway_ReassertIsDebouncedPerSession: the re-assert costs one GetRun
 // plus one revocation lookup, so it must not run per request. One request per
 // millisecond over a window must ask the revocation store once, not once each.

@@ -661,7 +661,12 @@ func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Cla
 		return s.cfg.Secrets.For(sn.OwnerSubject).Put(ctx, adoOwnPATSecretName(sn.ProviderRowID), raw)
 	}); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not record that Azure DevOps refused an own token", slog.String("row", sn.ProviderRowID), slog.Any("err", err))
-		return
+		s.auditRowNotWritten(ctx, err, types.ActorAgent, claims.SPIFFEID, sn.OwnerSubject, adoOwnPATSecretName(sn.ProviderRowID))
+		// A stamp that may have landed is never tried again (RefusedAt stops
+		// every later one above), so the refusal's row is written now.
+		if !errors.Is(err, secretstore.ErrRowNotWritten) {
+			return
+		}
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, adoPATAuditOwnStore,
 		adoOwnPATSecretName(sn.ProviderRowID), "failure", mustJSON(map[string]any{

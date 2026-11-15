@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The forced end's hold-off is counted on the database's clock (ForcedStopper's KeptHoldOffPassed), so this
+// The forced end's hold-off is counted on the database's clock (the forced claim's own statement), so this
 // server's clock, ahead of it or behind it, changes no decision: a kept run 1 minute inside the hold-off is
 // not forced and one 1 minute past it is, whatever the server's clock says. Before, the server's own clock
 // decided: +2 minutes forced the run inside the hold-off, and -2 minutes left the one past it unforced.

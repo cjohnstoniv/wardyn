@@ -6,6 +6,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -482,4 +483,180 @@ func TestConfiguredSpoolRefusesADirectoryRunnerdDidNotPrepare(t *testing.T) {
 		t.Fatalf("a prepared spool: %v", err)
 	}
 	_ = s.close(context.Background())
+}
+
+// The spool takes nothing once the sink has closed. What it can no longer hold is counted into one
+// egress:dropped-decisions-<n> row it keeps for wardyn-runnerd to replay: a record emitted while close waits on
+// an admitted append, in place of its request's reservation, and an admitted request whose first record has
+// not come. A request whose first record landed is not counted, and a record emitted after close is dropped
+// without a panic.
+func TestLocalSinkCountsWhatTheSpoolCanNoLongerTakeIntoOneSummary(t *testing.T) {
+	ctx := context.Background()
+	dir, id := filepath.Join(t.TempDir(), "spool"), uuid.New()
+	s, err := newLocalDecisionSink(dir, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve := func() uuid.UUID {
+		t.Helper()
+		r, err := s.reserve(ctx, spoolRecordEnvelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	req := func(host string, r uuid.UUID) egress.Request {
+		return egress.Request{RunID: id, Host: host, Method: "GET", Path: "/", Time: time.Now(), AuditReservation: r}
+	}
+	landed, late, open := reserve(), reserve(), reserve()
+	s.emit(decisionLog(req("landed.test", landed), egress.Allow, "policy:allowed"))
+
+	s.appending.Add(1) // an admitted append still running, which close waits for
+	closed := make(chan error, 1)
+	go func() { closed <- s.close(ctx) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if s.mu.TryLock() {
+			done := s.closed
+			s.mu.Unlock()
+			if done {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("close never started")
+		}
+	}
+	s.emit(decisionLog(req("late.test", late), egress.Allow, "policy:allowed"))
+	s.emit(decisionLog(req("denied.test", uuid.Nil), egress.Deny, "policy:denied"))
+	s.appending.Done()
+	if err := <-closed; err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s.emit(decisionLog(req("open.test", open), egress.Allow, "policy:allowed"))
+
+	runnerd, err := runnerspool.Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runnerd.Close()
+	rows, err := runnerd.After(ctx, 0, 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("spooled %d rows, %v; want the landed record and one summary", len(rows), err)
+	}
+	if got := rows[0].Decision.Request.Host; got != "landed.test" {
+		t.Errorf("first row is %q, want the record that landed before close", got)
+	}
+	if sum := rows[1].Decision; sum.Decision != egress.Deny || sum.RuleSource != "egress:dropped-decisions-3" || sum.Request.RunID != id {
+		t.Errorf("summary = %+v; want a deny counting the two records emitted while closing and the request still open", sum)
+	}
+}
+
+// A summary the spool refuses is close's error, not lost in silence.
+func TestLocalSinkCloseReturnsASummaryTheSpoolRefused(t *testing.T) {
+	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.reserve(context.Background(), spoolRecordEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	s.spoolRunID = uuid.New() // a summary naming another run, which the spool refuses
+	if err := s.close(context.Background()); err == nil {
+		t.Fatal("close returned nil for a summary the spool refused")
+	}
+}
+
+// setSpoolFill writes the spool manifest's record count and bytes, as a spool that holds them would show.
+func setSpoolFill(t *testing.T, dir string, last, bytes int64) {
+	t.Helper()
+	state := filepath.Join(dir, "state.json")
+	b, err := os.ReadFile(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["last"], m["bytes"] = last, bytes
+	if b, err = json.Marshal(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Admission leaves the spool's last record slot and its loss reserve to the close summary, so the summary
+// lands as itself. runnerspool counts a record that finds no room as a refused admission (builtin:spool-full),
+// and the decisions the summary stands for would then read as requests never sent.
+func TestLocalSinkKeepsRoomForItsCloseSummary(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		last, bytes int64
+	}{
+		{"last record slot", runnerspool.MaxRecords - 1, 0},
+		{"loss reserve", 0, runnerspool.MaxBytes - runnerspool.LossReserveBytes - spoolRecordEnvelope + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, id := filepath.Join(t.TempDir(), "spool"), uuid.New()
+			s, err := newLocalDecisionSink(dir, id, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setSpoolFill(t, dir, tc.last, tc.bytes)
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			_, err = s.reserve(ctx, spoolRecordEnvelope)
+			cancel()
+			if !errors.Is(err, runnerspool.ErrFull) {
+				t.Fatalf("reserve = %v; want the spool full while only the summary's room is left", err)
+			}
+			s.dropped.Add(1)
+			if err := s.close(context.Background()); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			runnerd, err := runnerspool.Open(dir, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runnerd.Close()
+			depth, _, drops, err := runnerd.Stats(context.Background())
+			if err != nil || depth != int(tc.last)+1 || drops != 1 {
+				t.Fatalf("spool holds %d records and %d refusals, %v; want the summary in the last slot and only the refused admission counted", depth, drops, err)
+			}
+		})
+	}
+}
+
+// A summary that finds no room is not appended: the spool would count it as a refused admission. It is
+// close's error.
+func TestLocalSinkNeverCountsItsCloseSummaryAsARefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		last, bytes int64
+	}{
+		{"no record slot", runnerspool.MaxRecords, 0},
+		{"room for the record but not its spool row", 0, runnerspool.MaxBytes - 300},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, id := filepath.Join(t.TempDir(), "spool"), uuid.New()
+			s, err := newLocalDecisionSink(dir, id, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setSpoolFill(t, dir, tc.last, tc.bytes)
+			s.dropped.Add(1)
+			if err := s.close(context.Background()); !errors.Is(err, runnerspool.ErrFull) {
+				t.Fatalf("close = %v; want the summary refused for room", err)
+			}
+			runnerd, err := runnerspool.Open(dir, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runnerd.Close()
+			if depth, _, drops, err := runnerd.Stats(context.Background()); err != nil || depth != int(tc.last) || drops != 0 {
+				t.Fatalf("spool holds %d records and %d refusals, %v; want the summary neither kept nor counted", depth, drops, err)
+			}
+		})
+	}
 }

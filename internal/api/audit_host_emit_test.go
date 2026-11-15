@@ -73,7 +73,7 @@ func TestAuditHostDetail_PolicyAndPresetWritesWithoutMountSources(t *testing.T) 
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if w := do(t, srv, http.MethodPut, "/api/v1/policies/"+created.ID.String(), adminToken, `{"name":"prod","spec":`+spec("/workspace/b")+`}`); w.Code != http.StatusOK {
+	if w := do(t, srv, http.MethodPut, "/api/v1/policies/"+created.ID.String(), adminToken, policyPut("prod", created.UpdatedAt, spec("/workspace/b"))); w.Code != http.StatusOK {
 		t.Fatalf("update = %d %s", w.Code, w.Body.String())
 	}
 	if w := do(t, srv, http.MethodDelete, "/api/v1/policies/"+created.ID.String(), adminToken, ""); w.Code != http.StatusNoContent {

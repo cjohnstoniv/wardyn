@@ -262,7 +262,8 @@ func TestBodyDeadlineRearmCallers(t *testing.T) {
 	want := []string{
 		"aws_sigv4.go:serveAWSSigV4", "azure_arm_door.go:serveAzureARM", "gateway_identity.go:attachGatewayIdentity",
 		"kube_api_door.go:serveKubeAPI", "mitm.go:rearmBodyDeadline", "mitm.go:serveAdmittedMITMRequest",
-		"mitm.go:serveMITMRequest", "via_org.go:ServeBroker",
+		"mitm.go:serveMITMRequest", "via_org.go:ServeBroker", "via_org.go:ServeInjected",
+		"via_org.go:interruptBodyReadOnCancel",
 	}
 	// rc holds a ResponseController when it is NewResponseController's result, chained or kept in a
 	// variable; a deadline set through either is the handler's own.

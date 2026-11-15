@@ -55,7 +55,8 @@ type GovernanceLimits struct {
 	// LocalSelfDefinedComponents permits a local run to carry a component its launcher defined.
 	// Omitted or false refuses it; runner-reported confinement is not platform attestation.
 	LocalSelfDefinedComponents bool `json:"local_self_defined_components,omitempty"`
-	// DenyTaskModeExec refuses task_mode=exec for a member under this profile.
+	// DenyTaskModeExec refuses task_mode=exec and an interactive run's shell startup command for a member under
+	// this profile, and a command sent through POST /runs/{id}/exec into a background run launched under it.
 	DenyTaskModeExec bool `json:"deny_task_mode_exec,omitempty"`
 	// DenyInteractive refuses an interactive run under this profile.
 	// Evaluated against POST-COERCION interactivity, since omitting the

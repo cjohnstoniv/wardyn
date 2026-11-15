@@ -786,6 +786,8 @@ func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
 			harnessCredSecretName(awsSSOProvider), `{"reason":"row","secret_owner":"bob"}`},
 		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{}, awsSSOBlob{}) },
 			harnessCredSecretName(awsSSOProvider), `{"reason":"row"}`},
+		{func() error { return srv.probeSecretWrite(ctx, awsSSOScope{perUser: true, owner: "bob"}) },
+			writeProbeSecretName, `{"reason":"row","secret_owner":"bob"}`},
 	} {
 		if err := c.write(); !errors.Is(err, secretstore.ErrRowNotWritten) {
 			t.Fatalf("%s: write = %v; want ErrRowNotWritten", c.target, err)

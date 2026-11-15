@@ -220,6 +220,11 @@ uiSandbox:
   port: 8081
   advertiseURL: https://wardyn-ui.example.com
   originTemplate: https://run-{run}.ui.example.com
+  ingress:
+    enabled: true
+    tls:
+      - hosts: ["wardyn-ui.example.com", "*.ui.example.com"]
+        secretName: wardyn-ui-sandbox-tls
 
 # Corporate CA trust, the "other side" of ITS off-by-default switch. It is a
 # FIVE-object surface — a ConfigMap, a checksum pod annotation,

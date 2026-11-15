@@ -414,3 +414,41 @@ func TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap(t *te
 		t.Fatalf("%d rows left after the refused delete; want one", len(left))
 	}
 }
+
+// apiTokensDownPG is the store whose API tokens cannot be listed, the way an outage would leave it
+// after a held role-mapping change has committed.
+type apiTokensDownPG struct{ store.PG }
+
+func (apiTokensDownPG) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return nil, errors.New("store unavailable")
+}
+
+// TestPG_GovernanceChanges_ApprovedRoleMappingDeleteSaysWhenTheTokensWereNotReached: approving a held
+// delete that takes a role away, when the demoted tokens cannot be revoked, answers the change with
+// tokens_revocation_failed and the remedy, as the direct delete does; one that reaches them answers
+// the change alone.
+func TestPG_GovernanceChanges_ApprovedRoleMappingDeleteSaysWhenTheTokensWereNotReached(t *testing.T) {
+	e := newRoleMapEnv(t, true, govRoleMapChart)
+	type answer struct {
+		ID     uuid.UUID `json:"id"`
+		Failed *bool     `json:"tokens_revocation_failed"`
+		Detail string    `json:"detail"`
+	}
+	approve := func(srv *Server) answer {
+		t.Helper()
+		ops := e.seedMapping("ops-admins", oidc.RoleAdmin)
+		ch := e.pending(e.call(e.proposer, http.MethodDelete, "/api/v1/access/mappings/"+ops.ID.String(), ""))
+		w := doSSO(t, srv, http.MethodPost, approvePath(ch.ID), e.approver, "")
+		var got answer
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.ID != ch.ID || len(e.mappings()) != 0 {
+			t.Fatalf("approving the held delete = %d %s, rows %v", w.Code, w.Body, e.mappings())
+		}
+		return got
+	}
+	if got := approve(e.otherServer(func(c *Config) { c.Store = apiTokensDownPG{e.pg} })); got.Failed == nil || !*got.Failed || got.Detail != roleTokensNotReached {
+		t.Errorf("approval with the tokens unreachable = %+v, want tokens_revocation_failed and the remedy", got)
+	}
+	if got := approve(e.srv); got.Failed != nil || got.Detail != "" {
+		t.Errorf("approval that reached the tokens = %+v, want the change alone", got)
+	}
+}

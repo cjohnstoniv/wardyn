@@ -7,6 +7,7 @@ package store_test
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,6 +53,43 @@ func TestPG_ModelUsageDuplicateCallIsStoredOnce(t *testing.T) {
 	}
 	if len(sum.Groups) != 1 || sum.Groups[0].Calls != 1 || sum.Groups[0].Input != 10 || sum.Groups[0].Output != 5 {
 		t.Fatalf("a retried record counted twice: %+v", sum.Groups)
+	}
+}
+
+// Two calls of one run whose sum is max-1 or max read exactly. Past an int64 they read as two calls not counted,
+// instead of failing the read. The read checks the stored rows, so rows stored before the check read the same way.
+func TestPG_ModelUsageSumAtTheInt64Edge(t *testing.T) {
+	_, st, _, _, _ := spoolPGFixture(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		first int64
+		over  bool
+	}{
+		{"max-1", math.MaxInt64 - 2, false},
+		{"max", math.MaxInt64 - 1, false},
+		{"max+1", math.MaxInt64, true},
+	} {
+		run, err := st.CreateRun(ctx, newRun(types.RunRunning))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range []egress.ModelUsage{usageCall("api.anthropic.com", "claude-x", tc.first, 1), usageCall("api.anthropic.com", "claude-x", 1, 1)} {
+			if _, err := st.InsertModelUsage(ctx, run.ID, u, time.Now(), ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sum, err := st.RunModelUsage(ctx, run.ID)
+		if err != nil || len(sum.Groups) != 1 {
+			t.Fatalf("%s: %+v, %v", tc.name, sum, err)
+		}
+		g := sum.Groups[0]
+		if !tc.over && (g.Input != tc.first+1 || g.Output != 2 || g.Calls != 2 || g.UncountedCalls != 0) {
+			t.Errorf("%s: %+v, want the exact sum over 2 counted calls", tc.name, g)
+		}
+		if tc.over && (g.Input != 0 || g.Output != 0 || g.Calls != 2 || g.UncountedCalls != 2 || g.UncountedReasons[store.UncountedReasonOutOfRange] != 2) {
+			t.Errorf("%s: %+v, want 2 calls not counted, %s", tc.name, g, store.UncountedReasonOutOfRange)
+		}
 	}
 }
 

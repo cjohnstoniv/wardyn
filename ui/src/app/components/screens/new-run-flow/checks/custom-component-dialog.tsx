@@ -37,6 +37,7 @@ import {
   requestOf,
   settingField,
   validateDraft,
+  withStored,
   type ComponentDraft,
   type FormErrors,
 } from "./custom-component-form-model";
@@ -133,7 +134,11 @@ export function CustomComponentDialog({
     }
     setSaving(true);
     try {
-      const result = component ? await api.updateMine(component.id, req) : await api.saveMine(req);
+      // An edit keeps what this form has no control for (an MCP server's address and transport), and names the
+      // version it opened, so a save from another tab since is refused rather than written back.
+      const result = component
+        ? await api.updateMine(component.id, { ...withStored(req, component, ""), expected_version: component.version })
+        : await api.saveMine(req);
       onSaved?.(result);
       if (context === "run") onAttach?.({ id: result.id });
       if ((result.requirements ?? []).some((r) => r.status === "missing")) setSaved(result);
@@ -207,6 +212,7 @@ export function CustomComponentDialog({
                 { value: "save", label: T.KEEP_SAVE },
               ]}
               onChange={setKeep}
+              disabled={saving}
             />
           </Field>
         )}
@@ -216,6 +222,7 @@ export function CustomComponentDialog({
           <Input
             id="ccd-name"
             autoFocus
+            disabled={saving}
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             autoComplete="off"
@@ -228,6 +235,7 @@ export function CustomComponentDialog({
           <Textarea
             id="ccd-hosts"
             rows={3}
+            disabled={saving}
             value={draft.hosts}
             onChange={(e) => setDraft({ ...draft, hosts: e.target.value })}
             className="font-mono"
@@ -237,7 +245,7 @@ export function CustomComponentDialog({
         </Field>
         <FieldError id="ccd-hosts" text={errors.hosts} />
 
-        <fieldset className="space-y-3">
+        <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS}</legend>
           <p className="text-xs text-muted-foreground">{T.SECRETS_HINT}</p>
           {draft.secrets.map((s, i) => (
@@ -258,7 +266,7 @@ export function CustomComponentDialog({
           </Button>
         </fieldset>
 
-        <fieldset className="space-y-3">
+        <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SETTINGS}</legend>
           <p className="text-xs text-muted-foreground">{T.SETTINGS_HINT}</p>
           {draft.settings.map((s, i) => (

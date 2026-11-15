@@ -176,7 +176,7 @@ function ReadinessRow({
       </div>
       <div className="flex flex-wrap gap-2">
         {unreachable ? (
-          <Chip tone="neutral">Couldn&apos;t reach Wardyn</Chip>
+          <Chip tone="neutral">Couldn&apos;t check</Chip>
         ) : (
           <>
         {chip(

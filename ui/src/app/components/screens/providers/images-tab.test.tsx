@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 
 const listMock = vi.fn();
@@ -162,6 +162,32 @@ describe("ImagesTab", () => {
       "restrict image ghcr.io/acme/dev-toolbox:1.4 true",
     ]);
     expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a list written after another person signed in still names the person who added the image", async () => {
+    // The person is read before the add: read after it, the list would go out as the next person.
+    listMock.mockResolvedValue(cat([]));
+    let added!: (e: unknown) => void;
+    addMock.mockImplementation(() => new Promise((done) => (added = done)));
+    upsertGrantMock.mockResolvedValue(undefined);
+    putAvailabilityMock.mockResolvedValue(undefined);
+    render(<ImagesTab />);
+    await userEvent.click(await screen.findByRole("button", { name: IMAGES.ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), "ghcr.io/acme/dev-toolbox:1.4");
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA }));
+    await waitFor(() => expect(addMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    added(entry("b9", "dev-toolbox", "ghcr.io/acme/dev-toolbox:1.4"));
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
+    expect(putAvailabilityMock.mock.calls[0][3]).toBe("a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("Only these with nobody listed disables Add image, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {

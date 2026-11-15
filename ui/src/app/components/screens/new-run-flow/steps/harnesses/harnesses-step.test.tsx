@@ -332,3 +332,88 @@ describe("Harnesses step: Environment and Application", () => {
     expect(intentNow().tools?.map((t) => t.id)).toEqual(tools);
   });
 });
+
+// A switch to Interactive holds the text it had no place for beside the draft; the harness the person starts takes it.
+describe("Harnesses step: text a switch to Interactive held", () => {
+  const HeldProbe = () => <p data-testid="held">{JSON.stringify(useNewRunDraft().guided.heldText ?? null)}</p>;
+  const heldNow = () => JSON.parse(screen.getByTestId("held").textContent ?? "null");
+  function showHeld(intent: RunIntent, heldText: Record<string, string>) {
+    function SeededHeld({ children }: { children: React.ReactNode }) {
+      const dispatch = useNewRunDispatch();
+      const [ready, setReady] = React.useState(false);
+      React.useEffect(() => {
+        dispatch({ type: "seed", origin: { kind: "composer" }, intent });
+        dispatch({ type: "guided", patch: { heldText } });
+        setReady(true);
+      }, [dispatch]);
+      return ready ? children : null;
+    }
+    render(
+      <MemoryRouter>
+        <NewRunDraftProvider owner="alice">
+          <SeededHeld>
+            <HarnessesStep location={{ screen: "step", step: "harnesses" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: async () => ROSTER }} />
+            <Probe />
+            <HeldProbe />
+          </SeededHeld>
+        </NewRunDraftProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("the first harness added starts the run with a task written before any harness, once", async () => {
+    const user = userEvent.setup();
+    showHeld(INTERACTIVE, { "": "fix it" });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_HARNESS }));
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code", prompt: "fix it" });
+    expect(heldNow()).toBeNull();
+    const start = screen.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS });
+    await user.click(start);
+    await user.click(start);
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code" });
+  });
+
+  it("a harness added beside the started one starts nothing, and switched on takes the text held for it", async () => {
+    const user = userEvent.setup();
+    showHeld({ ...INTERACTIVE, tools: [harness("claude-code")], startup: { kind: "harness", tool: "claude-code" } }, { "codex-cli": "review" });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code", "codex-cli"]);
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code" });
+    expect(heldNow()).toEqual({ "codex-cli": "review" });
+    await user.click(screen.getAllByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })[1]);
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "codex-cli", prompt: "review" });
+    expect(heldNow()).toBeNull();
+  });
+
+  it("a VM starts no harness, and Your own tools takes no first message: the text stays held", async () => {
+    const user = userEvent.setup();
+    showHeld({ ...INTERACTIVE, machine_kind: "linux_vm" }, { "": "fix it" });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_HARNESS }));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(intentNow().startup).toBeUndefined();
+    expect(heldNow()).toEqual({ "": "fix it" });
+    cleanup();
+    showHeld({ ...INTERACTIVE, tools: [harness("none")] }, { "": "fix it" });
+    await user.click(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS }));
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "none" });
+    expect(heldNow()).toEqual({ "": "fix it" });
+  });
+
+  // The card keeps its text on a swap (swapHarness), so what a switch to Interactive held for its harness follows it.
+  it("a swap moves the text held for the card's harness to the new one", async () => {
+    showHeld({ ...INTERACTIVE, machine_kind: "linux_vm", tools: [harness("codex-cli")] }, { "codex-cli": "fix it" });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Claude Code" })).toBeEnabled());
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) }), "claude-code");
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(heldNow()).toEqual({ "claude-code": "fix it" });
+  });
+
+  // A switch back to Autonomous leaves the fact in place: a harness added there starts nothing, as the server refuses a start on a background task.
+  it("an Autonomous run starts no harness, whatever is held", async () => {
+    const user = userEvent.setup();
+    showHeld({ ...AUTONOMOUS, workload: { kind: "agent_task", task: "fix it" } }, { "": "fix it" });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_HARNESS }));
+    expect(intentNow()).toEqual({ ...AUTONOMOUS, tools: [harness("claude-code")], workload: { kind: "agent_task", agent: "claude-code", task: "fix it" } });
+    expect(heldNow()).toEqual({ "": "fix it" });
+  });
+});

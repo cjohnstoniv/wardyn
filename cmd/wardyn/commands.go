@@ -351,6 +351,9 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if errors.Is(err, errSessionChanged) {
+				return err // the command's sign-in changed: no later poll is sent, so none can succeed
+			}
 			if context.Cause(waitCtx) == errWaitTimeout {
 				return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
 			}
@@ -864,24 +867,28 @@ only at the end.`,
 				if since := tail.sinceFilter(); !since.IsZero() {
 					f.Since = since.UTC().Format(time.RFC3339)
 				}
-				page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f)
-				if err != nil {
-					return err
-				}
-				var newEvents []types.AuditEvent
-				newEvents, tail = tail.filter(page)
-				for _, e := range newEvents {
-					fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
+				// A truncated page is the server's per-run cap (1000 events), not the end of the trail:
+				// page on under the same filter (Offset += the page's length) until the end is reached.
+				// The next poll's Since moves only then; restarting from Since alone re-reads the same
+				// page whenever its events fall within logTailMargin of each other.
+				fresh := 0
+				for offset := 0; ; {
+					page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f, sdk.ListOpts{Offset: offset})
+					if err != nil {
+						return err
+					}
+					var newEvents []types.AuditEvent
+					newEvents, tail = tail.filter(page)
+					for _, e := range newEvents {
+						fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
+					}
+					fresh += len(newEvents)
+					if !truncated || len(page) == 0 {
+						break
+					}
+					offset += len(page)
 				}
 				if !follow {
-					// A truncated page is the server's per-run cap (1000
-					// events), not the end of the trail. --follow recovers from
-					// it for free on its next poll, since `since` has advanced;
-					// one-shot mode has to take that next page itself or it
-					// silently prints a cut-off log.
-					if truncated && len(newEvents) > 0 {
-						continue
-					}
 					return nil
 				}
 				run, err := c.GetRun(cmd.Context(), id)
@@ -889,7 +896,7 @@ only at the end.`,
 					return err
 				}
 				if run.State.IsTerminal() {
-					if drains >= 2 || (drains > 0 && len(newEvents) == 0) {
+					if drains >= 2 || (drains > 0 && fresh == 0) {
 						return nil
 					}
 					drains++

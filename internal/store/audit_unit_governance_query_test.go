@@ -37,7 +37,8 @@ func TestUnitAuditQueryFeedReadsGovernanceArm(t *testing.T) {
 		t.Errorf("$3 = %v, want the unit ids as text", args[2])
 	}
 	for _, frag := range []string{"run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))", "run_id IS NULL AND action = ANY($2)",
-		"target = ANY($3)", "data->>'unit_id' = ANY($3)", "jsonb_typeof(data->'units') = 'array' AND data->'units' ?| $3", "$4"} {
+		"target = ANY($3)", "data->>'unit_id' = ANY($3)", "jsonb_typeof(data->'units') = 'array' AND data->'units' ?| $3", "$4",
+		"action = ANY($2) AND NOT " + federatedRowSQL} {
 		if !strings.Contains(q, frag) {
 			t.Errorf("feed query lacks %q:\n%s", frag, q)
 		}

@@ -57,7 +57,8 @@ func TestPolicies_CRUD(t *testing.T) {
 
 	// Update: strengthen the policy to CC3 and add a domain.
 	updated, err := h.sdk.UpdatePolicy(ctx, created.ID, client.PolicyRequest{
-		Name: name,
+		Name:              name,
+		ExpectedUpdatedAt: &created.UpdatedAt,
 		Spec: types.RunPolicySpec{
 			AllowedDomains:      []string{"api.anthropic.com", "github.com"},
 			MinConfinementClass: types.CC3,

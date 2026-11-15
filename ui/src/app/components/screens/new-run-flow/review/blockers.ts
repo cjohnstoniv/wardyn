@@ -29,6 +29,7 @@ import {
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
+import { harnessIds } from "../lenses/lens-keys";
 import { setupDoor } from "../lenses/tools-lens";
 import { APP_PROBLEM_CODES, type AppProblemCode, type StepIssue, type StepIssueCode } from "../lenses/step-issues";
 import { appIssueText } from "../steps/run/app-issue-text";
@@ -85,11 +86,23 @@ const fieldLabel = (field: string): string => {
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
+/**
+ * Where a draft in the run-mode fields says what an older field said (run-mode-map.ts). Guided setup writes only
+ * these, and the server refuses the older field beside them, so a need that names one is met here.
+ */
+const CARRIED: Record<string, (i: RunIntent) => boolean> = {
+  interactive: (i) => i.experience !== undefined,
+  task_mode: (i) => i.experience === "interactive" || i.workload !== undefined,
+  interactive_start: (i) => i.experience !== undefined,
+  agent: (i) => harnessIds(i).length > 0,
+  task: (i) => Boolean((i.workload?.task ?? i.workload?.command ?? i.startup?.prompt ?? i.startup?.command)?.trim()),
+};
+
 /** True when the draft now specifies the field a template left for the person to set. */
 export function specifies(intent: RunIntent, field: string): boolean {
   const record = intent as Record<string, unknown>;
   const policy = field.startsWith("inline_policy.") ? (intent.inline_policy as Record<string, unknown> | undefined) : undefined;
-  return (policy ? policy[field.slice("inline_policy.".length)] : record[field]) !== undefined;
+  return (policy ? policy[field.slice("inline_policy.".length)] : record[field]) !== undefined || Boolean(CARRIED[field]?.(intent));
 }
 
 export interface BlockerInput {

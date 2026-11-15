@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
@@ -91,9 +92,44 @@ func swapBase(ctx context.Context, nb, base string) error {
 	// holds anything else, the old generation is swapped back.
 	if err := checkBaseFiles(base); err != nil {
 		if berr := swapFn(nb, base); berr != nil {
-			return fmt.Errorf("%w; swapping the old base back failed too: %v", err, berr)
+			return fmt.Errorf("%w; swapping the old base back failed too: %v; %s", err, berr, keepOldGeneration(nb, "base"))
 		}
 		return fmt.Errorf("%w; the old base was kept", err)
+	}
+	return nil
+}
+
+// keepOldGeneration moves the staging dir nb, which holds the old generation after an exchange whose swap
+// back failed, to a name beside it that neither the update's clean-up (beginUpdate's done and its sweep)
+// nor runnerd's start-up sweep deletes, and says where the old generation is.
+func keepOldGeneration(nb, what string) string {
+	kept := nb + oldGenerationSuffix + uuid.NewString()
+	if err := os.Rename(nb, kept); err != nil {
+		return fmt.Sprintf("moving the old %s aside failed too (%v), so the update's clean-up deletes it", what, err)
+	}
+	return fmt.Sprintf("the old %s is kept at %s", what, kept)
+}
+
+// oldGenerationSuffix is what keepOldGeneration adds to a staging dir's name: <dir>.update.old-<id>.
+const oldGenerationSuffix = ".old-"
+
+// RemoveOldGenerations deletes the old generations of dir (a base or a kept machine's folder) that
+// keepOldGeneration moved aside, so a kept machine's delete and expiry take its old disks with it.
+func RemoveOldGenerations(dir string) error {
+	parent, prefix := filepath.Dir(dir), filepath.Base(dir)+".update"+oldGenerationSuffix
+	des, err := os.ReadDir(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, de := range des {
+		if strings.HasPrefix(de.Name(), prefix) {
+			if err := os.RemoveAll(filepath.Join(parent, de.Name())); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -213,7 +249,7 @@ func swapKept(nb, dir string) error {
 	}
 	if err := checkKeptFiles(dir); err != nil {
 		if berr := swapFn(nb, dir); berr != nil {
-			return fmt.Errorf("%w; swapping the old kept machine back failed too: %v", err, berr)
+			return fmt.Errorf("%w; swapping the old kept machine back failed too: %v; %s", err, berr, keepOldGeneration(nb, "kept machine"))
 		}
 		return fmt.Errorf("%w; the old kept machine was kept", err)
 	}

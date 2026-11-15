@@ -210,7 +210,11 @@ export function ComponentsScreen() {
       {editing && (
         <ComponentEditor
           component={editing.component}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            // A save refused because the row changed is followed by a close: the next open reads the saved row.
+            load();
+          }}
           onSaved={(id, created) => {
             setEditing(null);
             toast.success(T.SAVED_TOAST);

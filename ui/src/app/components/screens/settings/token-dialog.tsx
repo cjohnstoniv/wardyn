@@ -25,7 +25,7 @@ import { HttpError } from "../../../lib/api/core";
 import type { ApiToken } from "../../../lib/types/service-identities";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { Field, fieldHintId } from "../../wardyn/form-primitives";
-import { STATES } from "../../wardyn/states";
+import { answeredSentence, STATES } from "../../wardyn/states";
 import { dayOf, inWords, lifetimeWords, ROLE_WORDS, TOKEN_DIALOG as T } from "../../wardyn/copy/service-tokens";
 
 const DAY = 86_400;
@@ -148,7 +148,8 @@ export function TokenDialog(props: TokenDialogProps) {
       let final = false;
       if (e instanceof HttpError) final = await onRefused(e);
       setRefusal({
-        text: known ? e.message : STATES.ERROR_DEFAULT,
+        // No answer keeps its own sentence (wfetch's deadline message, or the default).
+        text: answeredSentence(e, T.CREATE_FAILED) ?? (e instanceof HttpError ? e.message : STATES.ERROR_DEFAULT),
         nameInvalid: known && e.reason === NAME_INVALID_REASON,
         final,
       });

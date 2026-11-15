@@ -5,8 +5,8 @@
 
 // KM-4: Your settings, Your kept machines. Each test names the board frame it draws.
 import { STATES } from "../../wardyn/states";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
@@ -51,6 +51,8 @@ const mount = async () => {
   return screen.getByTestId("kept-machines-card");
 };
 const rowOf = (card: HTMLElement, name: string) => within(card).getByText(name).closest("li") as HTMLElement;
+
+afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   toastSuccess.mockClear();
@@ -183,6 +185,97 @@ describe("Your kept machines", () => {
     expect(await within(card).findByRole("alert")).toHaveTextContent(T.DELETE_UNCONFIRMED);
     await waitFor(() => expect(within(rowOf(card, "dev")).getByText(T.CHIP_DELETING)).toBeInTheDocument());
     expect(within(rowOf(card, "dev")).queryByText(/offline/)).toBeNull();
+  });
+
+  it("a machine being deleted is read again every 10 seconds until it is gone; a failed read keeps the last good list", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    listMock.mockResolvedValueOnce(reply([dev(), dev({ id: "m-old", name: "old", state: "deleting", delete_started_at: aheadByHours(-1) })]));
+    const card = await mount();
+    expect(within(rowOf(card, "old")).getByText(T.CHIP_DELETING)).toBeInTheDocument();
+
+    listMock.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(within(card).getByText("old")).toBeInTheDocument();
+    expect(within(card).queryByText(T.LOAD_FAILED)).toBeNull();
+
+    listMock.mockResolvedValueOnce(reply([dev()]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(within(card).queryByText("old")).toBeNull());
+
+    // Only kept machines now: nothing is read again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(listMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("a poll that started before a delete's reload and lands after it does not replace the newer list or stop polling", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const user = userEvent.setup();
+    const card = await mount();
+    let late: (v: MyMachines) => void = () => {};
+    listMock.mockImplementationOnce(() => new Promise((r) => (late = r)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listMock).toHaveBeenCalledTimes(2);
+
+    deleteMock.mockResolvedValue(dev({ state: "deleting" }));
+    listMock.mockResolvedValueOnce(reply([dev({ state: "deleting", delete_reason: "person" }), review()]));
+    await user.click(within(card).getByRole("button", { name: `${T.DELETE} dev` }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.DELETE }));
+    await waitFor(() => expect(within(rowOf(card, "dev")).getByText(T.CHIP_DELETING)).toBeInTheDocument());
+
+    await act(async () => {
+      late(reply([dev(), review({ state: "kept", run_id: undefined })]));
+    });
+    expect(within(rowOf(card, "dev")).getByText(T.CHIP_DELETING)).toBeInTheDocument();
+    listMock.mockResolvedValueOnce(reply([review()]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listMock).toHaveBeenCalledTimes(4);
+  });
+
+  // A delete's reload that is still in flight when a poll started after it lands: the poll's list is the newer read.
+  const slowReloadBeforeANewerPoll = async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const user = userEvent.setup();
+    const card = await mount();
+    let reload: { ok: (v: MyMachines) => void; fail: (e: unknown) => void } = { ok: () => {}, fail: () => {} };
+    listMock.mockImplementationOnce(() => new Promise((ok, fail) => (reload = { ok, fail })));
+    await user.click(within(card).getByRole("button", { name: `${T.DELETE} dev` }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.DELETE }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    listMock.mockResolvedValueOnce(reply([review()]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(within(card).queryByText("dev")).toBeNull());
+    return { card, reload };
+  };
+
+  it("a delete's reload that lands after a newer poll does not replace the poll's list", async () => {
+    const { card, reload } = await slowReloadBeforeANewerPoll();
+    await act(async () => {
+      reload.ok(reply([dev(), review()]));
+    });
+    expect(within(card).queryByText("dev")).toBeNull();
+    expect(within(card).getByText("design-review")).toBeInTheDocument();
+  });
+
+  it("a delete's reload that fails after a newer poll answered leaves the poll's list and no error", async () => {
+    const { card, reload } = await slowReloadBeforeANewerPoll();
+    await act(async () => {
+      reload.fail(new Error("offline"));
+    });
+    expect(within(card).queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+    expect(within(card).getByText("design-review")).toBeInTheDocument();
   });
 
   it("km4-empty: the switch on and nothing kept shows None and the sentence that says how to keep one", async () => {

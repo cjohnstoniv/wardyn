@@ -399,8 +399,8 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 // SSO provider, reusing awsSSOCredentialState/modelAccessAction/
 // modelAccessDeadline — modelaccess.go's own vocabulary — over the
 // provider-scoped read providerBedrockRefusal already reads from at dispatch.
-// A session the provider's own account/role pin no longer allows grades
-// expired_signin: a live,
+// A session the provider's own account/role pin, access portal or region no
+// longer allows grades expired_signin: a live,
 // renewable session for the WRONG identity is not "live" from this person's
 // seat, and dispatch would refuse it (mpBRPinned) the instant they tried.
 func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
@@ -438,6 +438,15 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 		row.State = modelAccessExpiredSignin
 		row.Deadline = ""
 		row.Action = providerAccessPortalAction
+		return
+	}
+	// And after the portal, dispatch's refusal of a session for another region than the
+	// provider's (mpBRNotSignedIn), which no sign-in stores: only a new sign-in serves. A
+	// provider with no region is refused for that instead, which no sign-in repairs.
+	if p.Bedrock.Region != "" && blob.Region != p.Bedrock.Region {
+		row.State = modelAccessExpiredSignin
+		row.Deadline = ""
+		row.Action = modelAccessSignInAction
 	}
 }
 

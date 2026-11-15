@@ -67,16 +67,22 @@ command -v jq >/dev/null 2>&1 || die "jq not found"
 # ── dedicated stack identity — NEVER the operator's/another job's stack ──────
 PROJECT="${WARDYN_NS:-wardyn-ssh-e2e-$$}"
 COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
-API_PORT="${WARDYN_UP_PORT:-$(pick_free_port)}"
-PG_PORT="${WARDYN_PG_PORT:-$(pick_free_port)}"
-SSH_PORT="${WARDYN_SSH_PORT:-$(pick_free_port)}"
-UI_SANDBOX_PORT="${WARDYN_UI_SANDBOX_PORT:-$(pick_free_port)}"
-# The registry sidecar publishes a host port too, and nothing overrode it: on
-# a shared daemon this stack collided with the operator's own `wardyn-registry`
-# on the 5010 default and `compose up` died with "port is already allocated"
-# before wardynd ever started (observed live). Namespaced like the other three
-# — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
-REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port)}"
+# pick_stack_ports [TAKEN...] — the stack's published host ports: the caller's own, else picked, never
+# one of TAKEN or one picked for another port here. Called again before the bring-up's one retry.
+pick_stack_ports() {
+  API_PORT="${WARDYN_UP_PORT:-$(pick_free_port "$@")}"
+  PG_PORT="${WARDYN_PG_PORT:-$(pick_free_port "$@" "${API_PORT}")}"
+  SSH_PORT="${WARDYN_SSH_PORT:-$(pick_free_port "$@" "${API_PORT}" "${PG_PORT}")}"
+  UI_SANDBOX_PORT="${WARDYN_UI_SANDBOX_PORT:-$(pick_free_port "$@" "${API_PORT}" "${PG_PORT}" "${SSH_PORT}")}"
+  # The registry sidecar publishes a host port too, and nothing overrode it: on
+  # a shared daemon this stack collided with the operator's own `wardyn-registry`
+  # on the 5010 default and `compose up` died with "port is already allocated"
+  # before wardynd ever started (observed live). Namespaced like the other three
+  # — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
+  REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port "$@" "${API_PORT}" "${PG_PORT}" "${SSH_PORT}" "${UI_SANDBOX_PORT}")}"
+  BASE="http://127.0.0.1:${API_PORT}"
+}
+pick_stack_ports
 
 # Project-unique agent image tag/repo (NOT the shared wardyn/agent-*:local
 # convention every other e2e script trusts): on a box where wardyn_pick_docker_host
@@ -112,7 +118,6 @@ compose() {
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
 }
 
-BASE="http://127.0.0.1:${API_PORT}"
 ADMIN_TOKEN="demo-admin-token" # compose's own default (WARDYN_LOCAL_MODE left off)
 TMPDIR="$(mktemp -d /tmp/wardyn-e2e-ssh.XXXXXX)"
 FAILED=0
@@ -175,8 +180,16 @@ docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
   docker build -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" "${ROOT}"
 
 # ── bring up the dedicated stack ─────────────────────────────────────────────
+# A picked port is free until Docker publishes it, so another process can take it first and `compose up`
+# fails; retry once on new ports, as run-ui-e2e.sh does for its backend.
 log "bringing up ${PROJECT} (api :${API_PORT}, pg :${PG_PORT}, ssh :${SSH_PORT})"
-compose up -d postgres wardynd || die "compose up failed for ${PROJECT}"
+if ! compose up -d postgres wardynd; then
+  log "compose up failed for ${PROJECT}; retrying once on new ports"
+  compose down --volumes >/dev/null 2>&1 || true
+  pick_stack_ports "${API_PORT}" "${PG_PORT}" "${SSH_PORT}" "${UI_SANDBOX_PORT}" "${REGISTRY_PORT}"
+  log "bringing up ${PROJECT} (api :${API_PORT}, pg :${PG_PORT}, ssh :${SSH_PORT})"
+  compose up -d postgres wardynd || die "compose up failed for ${PROJECT} (twice)"
+fi
 log "created compose container IDs: $(compose ps -aq | tr '\n' ' ')"
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
 # Retry a few times (own curl, own connection each attempt) rather than trusting
@@ -270,6 +283,41 @@ if [[ "${WARDYN_E2E_SSH_EDITORS:-}" == "1" ]]; then
 fi
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8)
+
+# open_forward PORT_VAR PID_VAR SOCKET LOG — an ssh master (control socket SOCKET) holding a -L forward
+# from a picked local port on 127.0.0.1 to the sandbox's 127.0.0.1:9191; sets PORT_VAR and PID_VAR. ssh
+# cannot choose the local port itself, and a picked one is free until ssh binds it. The forward names
+# 127.0.0.1: with no address ssh listens on 127.0.0.1 and ::1 and takes either one as the forward, so a
+# port another process held on 127.0.0.1 alone left ssh serving ::1 while the probes reached that
+# process. With the one address and ExitOnForwardFailure a lost race makes ssh exit, and ssh opens its
+# control socket only after it has set up the forward, so `-O check` answering means ssh holds the
+# port. A master that exits first is started again on another port, up to three starts. PID_VAR is the
+# running master from its start (teardown stops it) and is empty when no start came up.
+open_forward() {
+  local port_var="$1" pid_var="$2" sock="$3" log="$4" port pid taken="" try
+  for try in 1 2 3; do
+    # shellcheck disable=SC2086 # one word per port
+    port="$(pick_free_port ${taken})"
+    ssh -M -N -S "${sock}" -o ExitOnForwardFailure=yes -L "127.0.0.1:${port}:127.0.0.1:9191" \
+      "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" >"${log}" 2>&1 &
+    pid=$!
+    printf -v "${pid_var}" '%s' "${pid}"
+    for _ in $(seq 1 100); do
+      if ssh -S "${sock}" -O check -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" >/dev/null 2>&1; then
+        printf -v "${port_var}" '%s' "${port}"
+        return 0
+      fi
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill "${pid}" >/dev/null 2>&1 || true
+    wait "${pid}" 2>/dev/null || true
+    printf -v "${pid_var}" ''
+    log "ssh -L on local port ${port} did not come up (start ${try} of 3): $(tr '\n' ' ' <"${log}")"
+    taken+=" ${port}"
+  done
+  return 1
+}
 ssh_run() { ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "$@"; }
 
 # ── 3. exec exit-code propagation ────────────────────────────────────────────
@@ -304,14 +352,8 @@ fi
 # the launching `sh -c` returns immediately instead of blocking on a still-open
 # pipe (see internal/api/sshgateway_channels.go's ExecStream contract).
 ssh_run "nohup socat TCP-LISTEN:9191,reuseaddr,fork EXEC:'/bin/cat' >/tmp/e2e-socat.log 2>&1 </dev/null & sleep 1; echo listener-started"
-FWD_LOCAL_PORT="$(pick_free_port)"
-ssh -N -L "${FWD_LOCAL_PORT}:127.0.0.1:9191" "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" &
-FWD_PID=$!
 fwd_up=0
-for _ in $(seq 1 15); do
-  (exec 9<>"/dev/tcp/127.0.0.1/${FWD_LOCAL_PORT}") 2>/dev/null && { fwd_up=1; exec 9>&- 9<&-; break; }
-  sleep 1
-done
+open_forward FWD_LOCAL_PORT FWD_PID "${TMPDIR}/forward.sock" "${TMPDIR}/forward.log" && fwd_up=1
 if [[ "${fwd_up}" -eq 1 ]]; then
   exec 9<>"/dev/tcp/127.0.0.1/${FWD_LOCAL_PORT}"
   printf 'wardyn-forward-probe\n' >&9
@@ -590,17 +632,8 @@ exec 5>&- 5<&-
 # A multiplexed transport must survive key removal while both kinds of NEW
 # channel fail. ProxyCommand=false forbids ssh from hiding failure by reconnecting.
 CONTROL_SOCKET="${TMPDIR}/offboarding.sock"
-REVOKE_FORWARD_PORT="$(pick_free_port)"
-ssh -M -N -S "${CONTROL_SOCKET}" -L "${REVOKE_FORWARD_PORT}:127.0.0.1:9191" \
-  "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" \
-  >"${TMPDIR}/offboarding-master.log" 2>&1 &
-MASTER_PID=$!
-master_ready=0
-for _ in $(seq 1 20); do
-  ssh -S "${CONTROL_SOCKET}" -O check -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" >/dev/null 2>&1 && { master_ready=1; break; }
-  sleep 0.1
-done
-[[ "${master_ready}" == "1" ]] || die "offboarding SSH transport did not start"
+open_forward REVOKE_FORWARD_PORT MASTER_PID "${CONTROL_SOCKET}" "${TMPDIR}/offboarding-master.log" \
+  || die "offboarding SSH transport did not start"
 multiplex_ssh() {
   ssh -S "${CONTROL_SOCKET}" -o ProxyCommand=false "${SSH_OPTS[@]}" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "$@"
 }

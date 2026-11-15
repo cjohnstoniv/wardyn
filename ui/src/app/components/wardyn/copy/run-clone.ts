@@ -83,6 +83,10 @@ export const NO_BARRIER = {
     "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
   // The reader who cannot fix it: who can, and no dead-end control.
   BANNER_MEMBER: "Ask a Wardyn admin to set one up.",
+  // The setup status read failed: the made-up stand-in has no classes, which is not a host without a barrier.
+  UNCHECKED: "Couldn't check this host's barrier.",
+  // The same failed read, on the first-run board's barrier row.
+  UNCHECKED_ROW: "Couldn't check.",
   SETUP_COMMAND: "wardyn setup status",
   // #3342: not the Host card's "Re-check host"; two buttons on one page must not share a name.
   RECHECK: "Re-check barrier",

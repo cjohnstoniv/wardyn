@@ -60,13 +60,15 @@ export const approvals = {
 
   // Whether the server knows the decidable_by filter. A server that does answers any value but "me" with 400
   // invalid_decidable_by; an older one ignores the parameter and answers the plain list, which must not be read as
-  // "waiting on you". Anything else is not a yes.
-  async knowsDecidableBy(): Promise<boolean> {
+  // "waiting on you". Any other 400 is a no too. Every other failure (a 5xx, a dropped connection) answers nothing
+  // about the server, so it is null: unknown, and the caller asks again.
+  async knowsDecidableBy(): Promise<boolean | null> {
     try {
       await asJson<unknown>(await wfetch("/approvals?decidable_by=x", { method: "GET" }));
       return false;
     } catch (err) {
-      return err instanceof HttpError && err.status === 400 && err.reason === "invalid_decidable_by";
+      if (!(err instanceof HttpError) || err.status !== 400) return null;
+      return err.reason === "invalid_decidable_by";
     }
   },
 

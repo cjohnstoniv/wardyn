@@ -249,7 +249,7 @@ func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string
 	if _, ok := ctx.Value(auditActorCtxKey{}).(auditActor); !ok {
 		return personRevocation{}, errors.New("revoke person credentials: audit actor required")
 	}
-	if err := s.cfg.SessionRevocations.RevokeSub(ctx, principal); err != nil {
+	if err := s.cutSub(ctx, principal); err != nil {
 		return personRevocation{}, err
 	}
 	res, err := s.revokeCredentials(ctx, principal, resolveKeys)
@@ -272,7 +272,7 @@ func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string
 		// The subject's own cutoff first, so a service token whose mint is past its late check of the
 		// sponsor and not yet inserted is ended too; the sweep below only sees tokens already there.
 		if subject != res.KeyPrincipal {
-			serr = errors.Join(serr, s.cfg.SessionRevocations.RevokeSub(ctx, subject))
+			serr = errors.Join(serr, s.cutSub(ctx, subject))
 		}
 		n, kerr := s.revokeSponsoredTokens(ctx, subject)
 		res.Tokens += n
@@ -322,7 +322,7 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string, resolv
 	// SSH keys have no email column. Preserve the named cutoff for sessions and
 	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
 	if principal != "" && keyPrincipal != "" && keyPrincipal != principal {
-		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(ctx, keyPrincipal))
+		keyErr = errors.Join(keyErr, s.cutSub(ctx, keyPrincipal))
 	}
 	if res.Refusal != "" {
 		res.KeyUnresolved = res.KeyReason == reasonOwnerUnresolved
@@ -389,11 +389,20 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 	if err != nil {
 		return 0, err
 	}
+	ids := make([]uuid.UUID, 0, len(toks))
+	for _, t := range toks {
+		ids = append(ids, t.ID)
+	}
+	// A suspension tail leaves the tokens a reactivated person made after its deactivation (withSuspensionBound).
+	spared, err := tokensMadeAfterBound(ctx, s.cfg.Store, ids)
+	if err != nil {
+		return 0, err
+	}
 	now := time.Now().UTC()
 	n := 0
 	ended := map[uuid.UUID]bool{} // the CLI sessions this sweep has ended
 	for _, t := range toks {
-		if t.RevokedAt != nil || (match != nil && !match(t)) {
+		if t.RevokedAt != nil || spared[t.ID] || (match != nil && !match(t)) {
 			continue
 		}
 		revoked := t

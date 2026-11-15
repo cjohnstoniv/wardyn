@@ -329,8 +329,12 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	if err != nil {
 		return "", "", fmt.Errorf("docker: create proxy: %w", err)
 	}
+	// The rollback has a bound of its own: a revive reaches it under the run's lock (ReplaceProxy), and a remove
+	// that never answers would hold that lock with it.
 	remove := func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
+		rctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_, _ = d.cli.ContainerRemove(rctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 	}
 	// Connect the proxy to the control-plane-facing network so it can reach
 	// the control plane. This network is the ONLY route off the per-run
@@ -366,11 +370,16 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		waitErr = d.watchProxyExit(ctx, resp.ID)
 	}
 	if err := waitErr; err != nil {
+		var notReady *proxyNotReadyError
+		if errors.As(err, &notReady) {
+			notReady.waits = proxyWaitsFor(d.runnerMode(), slices.Contains(env, proxy.FirstRenewGateEnv+"=1"))
+		}
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, "", err
 	}
-	// Opened only once the proxy is ready: a replacement that waits for its first token renewal serves
-	// nothing before that, and a refused one never gets its local models.
+	// Opened only once the proxy is ready: a replacement that waits for its first token renewal, and a
+	// runner's proxy that waits for its decision sink's first grant, serve nothing before that, and a
+	// refused one never gets its local models.
 	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
 		remove()
 		return "", "", err
@@ -453,15 +462,35 @@ func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id str
 	return json.Marshal(data)
 }
 
-// proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as.
-// The failure reason shows in the console, so it reuses the exit-at-config-load text until new copy is
-// settled for this case, although such a proxy has not exited.
-const proxyNotReadyMessage = "docker: proxy exited at config load"
+// proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as. It
+// has not exited: a proxy that exits first is a proxyConfigLoadError.
+const proxyNotReadyMessage = "docker: the proxy is running but has not said it is listening"
 
-// proxyNotReadyError is a proxy that was still running when the ready bound ran out.
-type proxyNotReadyError struct{ tail string }
+// proxyNotReadyError is a proxy that was still running when the ready bound ran out. waits names what it
+// may still be waiting for before it listens (proxyWaitsFor), "" when the runner knows of nothing.
+type proxyNotReadyError struct{ tail, waits string }
 
-func (e *proxyNotReadyError) Error() string { return proxyNotReadyMessage + ": " + e.tail }
+func (e *proxyNotReadyError) Error() string {
+	if e.waits == "" {
+		return proxyNotReadyMessage + ": " + e.tail
+	}
+	return proxyNotReadyMessage + "; it may be waiting for " + e.waits + ": " + e.tail
+}
+
+// proxyWaitsFor is what a started proxy waits for before it listens: a runner's proxy (sink) for
+// wardyn-runnerd's decision sink to grant it credit, and a replacement (renew, FirstRenewGateEnv) for its
+// first run-token renewal.
+func proxyWaitsFor(sink, renew bool) string {
+	switch {
+	case sink && renew:
+		return "its first run-token renewal with the organisation, or for wardyn-runnerd's decision sink"
+	case sink:
+		return "wardyn-runnerd's decision sink"
+	case renew:
+		return "its first run-token renewal with the organisation"
+	}
+	return ""
+}
 
 // awaitProxyReady reads the proxy's stdout from att until proxy.ReadyMarker, for at most
 // d.proxyReadyBound(). A proxy that exits first ends the stream; its exit code and log tail come back

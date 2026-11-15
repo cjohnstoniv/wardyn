@@ -40,13 +40,21 @@ const meResponse = {
   role: "user",
   email: "",
 };
-// What GET /me answers next: a body, or a status with none (a 5xx reads as unreachable).
-let answer: { body?: object; status: number } = { body: meResponse, status: 200 };
-vi.mock("../../lib/api/core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../lib/api/core")>()),
-  wfetch: vi.fn(() => Promise.resolve(new Response(JSON.stringify(answer.body ?? {}), { status: answer.status }))),
-  setToken: vi.fn(),
-}));
+// What GET /me answers next: a body (`raw` for one that is not JSON), or a status with none; status 0 is no answer
+// at all (wfetch's deadline).
+let answer: { body?: object; raw?: string; status: number } = { body: meResponse, status: 200 };
+vi.mock("../../lib/api/core", async (importOriginal) => {
+  const core = await importOriginal<typeof import("../../lib/api/core")>();
+  return {
+    ...core,
+    wfetch: vi.fn(() =>
+      answer.status === core.TIMEOUT_STATUS
+        ? Promise.reject(new core.HttpError(core.TIMEOUT_STATUS, "Could not reach the control plane."))
+        : Promise.resolve(new Response(answer.raw ?? JSON.stringify(answer.body ?? {}), { status: answer.status })),
+    ),
+    setToken: vi.fn(),
+  };
+});
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 
 function renderDialog(reauthOverrides: Partial<Reauth> = {}) {
@@ -132,6 +140,17 @@ describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(reloadAs).toHaveBeenCalled());
+  });
+
+  it("a token check Wardyn answered with a 5xx says the check failed, never that Wardyn isn't answering", async () => {
+    const user = userEvent.setup();
+    answer = { status: 503 };
+    renderDialog();
+    setField(screen.getByLabelText(TOKEN_LABEL), "a-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(REAUTH_DIALOG.CHECK_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.UNREACHABLE)).toBeNull();
+    answer = { body: meResponse, status: 200 };
   });
 });
 
@@ -500,7 +519,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     expect(document.getElementById("main-content")).toHaveFocus();
   });
 
-  it("a refused window offers the sign-in in a new tab; an outage reads as one and waiting resumes after it", async () => {
+  it("a refused window offers the sign-in in a new tab; a failed check says so and waiting resumes after it", async () => {
     answer = { status: 503 };
     startRenewal({ popup: null });
     expect(screen.getByText(REAUTH_DIALOG.POPUP_BLOCKED)).toBeInTheDocument();
@@ -510,11 +529,28 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
 
     fireEvent.click(link);
     await poll();
-    expect(screen.getByText(REAUTH_DIALOG.UNREACHABLE)).toBeInTheDocument();
+    expect(screen.getByText(REAUTH_DIALOG.CHECK_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.UNREACHABLE)).toBeNull();
     answer = { body: alice(), status: 200 };
     await poll();
     expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeInTheDocument();
+  });
+
+  // Only no answer at all says Wardyn isn't answering; an answer says the check failed, in its own words if it has them.
+  it.each([
+    ["no answer", { status: 0 }, REAUTH_DIALOG.UNREACHABLE],
+    ["a 403", { status: 403 }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 404", { status: 404 }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 2xx body that does not parse", { status: 200, raw: "<html>" }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 500 that names only its handler", { status: 500, body: { error: "read session", reason: "internal_error" } }, REAUTH_DIALOG.CHECK_FAILED],
+    ["a 503 that names its cause", { status: 503, body: { error: "The session store is restarting." } }, "The session store is restarting."],
+  ])("%s while waiting on the sign-in window", async (_name, failure, sentence) => {
+    answer = failure;
+    startRenewal({ popup: null });
+    fireEvent.click(screen.getByRole("link", { name: REAUTH_DIALOG.POPUP_FALLBACK }));
+    await poll();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
   });
 
   // A sign-in this flow started can still complete after the page stops

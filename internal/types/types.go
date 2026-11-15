@@ -126,6 +126,16 @@ const (
 	ActorService ActorType = "service"
 )
 
+// Valid reports whether a is an actor type audit_events stores (its actor_type CHECK constraint). A new
+// ActorType constant is added here too; the device audit ingest admits exactly this set.
+func (a ActorType) Valid() bool {
+	switch a {
+	case ActorHuman, ActorAgent, ActorSystem, ActorService:
+		return true
+	}
+	return false
+}
+
 // AgentRun is one governed execution of a coding agent on behalf of a human, with its own identity
 // (SPIFFE ID), credential grants, and audit trail.
 type AgentRun struct {
@@ -317,6 +327,10 @@ type AgentRun struct {
 	// transaction when set. Never on the wire and never read back onto a listed run: the creator reads it by
 	// run id. On a created run it is set only when the store kept it.
 	LaunchIntent json.RawMessage `json:"-"`
+	// CapInputs are what the create decided EndsAt and LifetimeCapAt from, carried to the insert, which decides
+	// them again once created_at is on the database's clock (RunCapInputs). Never stored or on the wire; nil on
+	// a run read back.
+	CapInputs *RunCapInputs `json:"-"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.
@@ -684,6 +698,10 @@ type APIToken struct {
 	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
 	// a token that has a move row (#1508); empty on any other token.
 	ServiceIdentity string `json:"service_identity,omitempty"`
+	// OwnerRefused marks a live token in the admin-minted inventory that apiTokenAuth refuses for its
+	// owner: a reserved principal, a deactivated or purged owner, a revocation cutoff on its owner after it
+	// was made, or a role stamp older than WARDYN_ROLE_STAMP_TTL. False on any other row.
+	OwnerRefused bool `json:"owner_refused,omitempty"`
 	// Inbound marks a token of APITokenKindInbound: it calls the inbound ports that name its principal as a
 	// caller, through the app gateway, and authenticates nothing on the API. Read from Kind.
 	Inbound bool   `json:"inbound,omitempty"`

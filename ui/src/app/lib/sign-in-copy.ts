@@ -41,6 +41,9 @@ export const SIGNIN = {
     "Paste the admin token this Wardyn was started with — your Wardyn admin has it.",
   TOKEN_REJECTED: "That admin token was rejected. Check the value and try again.",
   UNREACHABLE_ERROR: "Wardyn isn't answering. Try again.",
+  // Wardyn answered the token check with a failure it named no sentence for: a 5xx, then a 403 or another 4xx.
+  CHECK_FAILED: "Wardyn couldn't check your sign-in. Try again.",
+  CHECK_FAILED_FINAL: "Wardyn couldn't check your sign-in.",
 
   // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
   // redirects a user-actionable login denial to "/?auth_error=<code>"

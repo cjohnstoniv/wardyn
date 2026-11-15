@@ -265,7 +265,7 @@ func TestHandlePutSiteConfig_SignInHelpAudited(t *testing.T) {
 // healthzHelpStore answers the two reads /healthz makes.
 type healthzHelpStore struct{ fakeSiteConfigStore }
 
-func (*healthzHelpStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (*healthzHelpStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return types.AuditEvent{}, store.ErrNotFound
 }
 

@@ -77,11 +77,12 @@ FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
 PROVIDER_ID="ci-model-fake"
 MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
-# A live egress edit answers once its proxy has confirmed the narrowed policy, or after a failed edit's
-# stop and run-fate read. Worst branch, for a run with no computer folder (this run has none): a refused
-# delivery whose undo fails, the 75 s readback wait runs out, then the abandoned start's stop with its
-# finalize tail and the fate read: 425 s. 425 s plus 10%, rounded up to a multiple of 10.
-PATCH_MAX_TIME=470
+# A live egress edit answers within one total on every branch, with or without a computer folder: its
+# request calls end by 230 s (egressEditCallBudget), its readback wait by 350 s (egressEditBudget), and every
+# window and run's end it opens by 380 s, its hard end. Past that the longest chain is lock checks and
+# releases, Docker's 60 s sandbox stop and the audit sinks' 2 s read for each of two failure rows: 458 s,
+# stated as 8 minutes (docs/operations/run-lifetime.md). 480 s plus 10%, rounded up to a multiple of 10.
+PATCH_MAX_TIME=530
 RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -218,9 +219,8 @@ jq -e --arg h "${FAKE_BEDROCK_HOST}" 'any(.[]; .action == "egress.allow" and .da
 check "the proxy let a model call through to the fake" $?
 
 step "reading the fake's counter (/_seen)"
-PF_PORT="$(pick_free_port)"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}-bedrock" "${PF_PORT}:8091" >/dev/null 2>&1 &
-PF_PID=$!
+port_forward PF_PID PF_PORT "${TMPDIR}/pf-bedrock.log" --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}-bedrock" :8091 \
+  || die "the port-forward to the fake named no local port: $(cat "${TMPDIR}/pf-bedrock.log")"
 seen=""
 for _ in $(seq 1 15); do
   seen="$(curl -sf --max-time 3 "http://127.0.0.1:${PF_PORT}/_seen" 2>/dev/null)" && break

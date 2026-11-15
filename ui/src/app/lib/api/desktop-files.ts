@@ -27,11 +27,12 @@ export const desktopFiles = {
   async list(runId: string, signal?: AbortSignal): Promise<DesktopFilesView> {
     return asJson<DesktopFilesView>(await wfetch(base(runId), { method: "GET", signal }));
   },
-  // The body is the file itself; the server refuses one over its limit before anything is sent.
-  async upload(runId: string, file: File): Promise<DesktopTransfer> {
+  // The body is the file itself; the server refuses one over its limit before anything is sent. `person`: a file
+  // after the first names the person the upload began under (core.ts WfetchInit.asPerson).
+  async upload(runId: string, file: File, person?: string): Promise<DesktopTransfer> {
     const res = await wfetch(`${base(runId)}/${encodeURIComponent(file.name)}`, {
       method: "PUT",
-      asPerson: true,
+      asPerson: person ?? true,
       body: file,
       headers: { "Content-Type": "application/octet-stream" },
     });

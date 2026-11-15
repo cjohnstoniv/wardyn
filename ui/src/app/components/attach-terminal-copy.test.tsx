@@ -9,6 +9,7 @@
  * grid, and the toast is what the user sees. Covers what the gate's own unit
  * test cannot: which socket is the writer, and what drops an offer.
  */
+import * as React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -63,6 +64,7 @@ class FakeWebSocket {
 }
 
 import { AttachTerminal } from "./attach-terminal";
+import { CopyOfferToast } from "./attach-terminal-copy-offer";
 import { TERMINAL_COPY } from "./wardyn/copy";
 import { OFFER_TTL_MS } from "./attach-terminal-clipboard";
 import { DATA_OUT_RUN } from "./wardyn/copy/data-out-run";
@@ -368,6 +370,19 @@ describe("AttachTerminal on a run that keeps its content in", () => {
     expect(view.container.querySelector(".xterm")).not.toBeNull();
   });
 
+  it("says the rule could not be read, never that the run keeps its content in, and still makes no copy offer", async () => {
+    const view = render(<AttachTerminal runId="run_1" keepsIn="unreadable" />);
+    expect(note()?.textContent).toBe(DATA_OUT_RUN.TERMINAL_UNREAD);
+    expect(view.container.textContent).not.toContain(DATA_OUT_RUN.TERMINAL);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(modeFrame(false)));
+    await out(ws, "hello world\r\nsecond line\r\n");
+    dragHello(view.container.querySelector(".xterm-screen") as HTMLElement);
+    await out(ws, tmuxCopy("hello"));
+    expect(toast()).toBeNull();
+  });
+
   it("draws no line without it", async () => {
     render(<AttachTerminal runId="run_1" />);
     expect(note()).toBeNull();
@@ -381,6 +396,64 @@ describe("AttachTerminal on a run that keeps its content in", () => {
     await out(ws, "hello world\r\nsecond line\r\n");
     dragHello(view.container.querySelector(".xterm-screen") as HTMLElement);
     await out(ws, tmuxCopy("hello"));
+    expect(toast()).toBeNull();
+  });
+
+  // The rule is read after the terminal mounts, so an offer can already be up, and held, when it arrives.
+  it("drops an offer already up, even a held one, when the rule arrives", async () => {
+    const { ws, grid, view } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    const card = toast() as HTMLElement;
+    fireEvent.pointerEnter(card);
+    act(() => card.focus());
+    view.rerender(<AttachTerminal runId="run_1" keepsIn />);
+    expect(note()).not.toBeNull();
+    expect(toast()).toBeNull();
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("an offer card copies nothing once the rule keeps content in: button, card chord or terminal chord", async () => {
+    const onDone = vi.fn();
+    const copyRef: { current: (() => void) | null } = { current: null };
+    const offer = { id: 1, text: "hello", lineBreaks: 0, invisible: 0, chars: 5 };
+    render(<CopyOfferToast offer={offer} onDone={onDone} onHold={() => {}} copyRef={copyRef} keepsIn={() => true} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: TERMINAL_COPY.COPY }));
+    });
+    await act(async () => {
+      fireEvent.keyDown(toast()!, { key: "c", ctrlKey: true });
+    });
+    await act(async () => {
+      copyRef.current?.();
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(3);
+  });
+
+  // The offer is dropped in an effect, one step after the render that learns the rule: a Copy can land in between.
+  it("a Copy that lands before the offer is dropped copies nothing", async () => {
+    function Page({ keepsIn }: { keepsIn?: boolean }) {
+      React.useLayoutEffect(() => {
+        if (keepsIn) screen.getByRole("button", { name: TERMINAL_COPY.COPY }).click();
+      }, [keepsIn]);
+      return <AttachTerminal runId="run_1" keepsIn={keepsIn} />;
+    }
+    const view = render(<Page />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(modeFrame(false)));
+    await out(ws, "hello world\r\nsecond line\r\n");
+    dragHello(view.container.querySelector(".xterm-screen") as HTMLElement);
+    await out(ws, tmuxCopy("hello"));
+    expect(toast()).not.toBeNull();
+    view.rerender(<Page keepsIn />);
+    await act(async () => {});
+    expect(writeText).not.toHaveBeenCalled();
     expect(toast()).toBeNull();
   });
 });

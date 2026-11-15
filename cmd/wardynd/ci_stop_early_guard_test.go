@@ -31,6 +31,7 @@ type ciWorkflow struct {
 			Run             string    `yaml:"run"`
 			If              string    `yaml:"if"`
 			ContinueOnError yaml.Node `yaml:"continue-on-error"`
+			TimeoutMinutes  int       `yaml:"timeout-minutes"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
@@ -143,7 +144,8 @@ func TestCIStopEarlyJobsFireOnlyOnCheapDeterministicGates(t *testing.T) {
 // TestCIGoLintRunsGuardsFirstAndGatesBuild pins the lint job: it keeps the
 // check name `go (lint)`, runs the whole-tree guard list before `make lint`, and
 // `build` (a required context) needs it, so splitting it out of the `go` matrix
-// dropped no gate.
+// dropped no gate. The guard step keeps its own time limits, so a stuck package
+// fails by name inside the job's limit instead of the job being cancelled.
 func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
 	wf, raw := loadCIWorkflow(t)
 	lint, ok := wf.Jobs["go-lint"]
@@ -165,9 +167,12 @@ func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
 	for i, st := range lint.Steps {
 		if strings.Contains(st.Run, "candidate-tests.py guards") {
 			guard = i
-			if !strings.Contains(st.Run, "go test -count=1 -run") || !strings.Contains(st.Run, "exit \"$rc\"") ||
+			if !strings.Contains(st.Run, "go test -count=1 -timeout 8m -run") || !strings.Contains(st.Run, "exit \"$rc\"") ||
 				!strings.Contains(st.Run, "|| rc=1") {
-				t.Errorf("the guard step no longer runs each package, records each red in rc and fails on any:\n%s", st.Run)
+				t.Errorf("the guard step no longer runs each package under an 8m test timeout, records each red in rc and fails on any:\n%s", st.Run)
+			}
+			if st.TimeoutMinutes != 20 {
+				t.Errorf("the guard step has timeout-minutes %d, want 20: without it an overrun runs into the job's limit and the job is cancelled with no log", st.TimeoutMinutes)
 			}
 		}
 		if st.Run == "make build tidy-check lint" {

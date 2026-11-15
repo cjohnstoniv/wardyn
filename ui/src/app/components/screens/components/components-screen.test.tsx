@@ -220,6 +220,24 @@ describe("editor", () => {
     ]);
   });
 
+  it("an edit names the version it opened; a row saved since is refused, and closing reads the list again", async () => {
+    const msg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
+    putMock.mockRejectedValue(new HttpError(409, msg, "component_version_conflict"));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.clear(within(dialog).getByLabelText("Name"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Payments v2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save component" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(msg);
+    expect(putMock.mock.calls[0][1].expected_version).toBe(1);
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Payments v2");
+    listMock.mockResolvedValue([comp({ name: "Payments (renamed)", version: 2 })]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Payments (renamed)")).toBeInTheDocument();
+  });
+
   it("a refusal shows the server's sentence as sent and keeps the dialog", async () => {
     const msg = 'invalid component: definition.secrets[0]: the organisation has no secret named "x"';
     putMock.mockRejectedValue(new HttpError(422, msg));

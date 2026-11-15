@@ -4,17 +4,27 @@
  */
 
 // The toast a takeover request raises offers Open run (a background run's too), and a hold on the person's own run
-// raises "<run> is waiting for approval: <host>" with Review.
+// raises "<run> is waiting for approval: <host>" with Review. A notice belongs to the person signed in when it was
+// read: a read that answers after a sign-out or an unconfirmed auth change shows nothing, and signing out closes them.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
 
-const { listApprovals, getRun, toast } = vi.hoisted(() => ({ listApprovals: vi.fn(), getRun: vi.fn(), toast: vi.fn() }));
+const { listApprovals, getRun, toast, auth } = vi.hoisted(() => ({
+  listApprovals: vi.fn(),
+  getRun: vi.fn(),
+  toast: Object.assign(vi.fn(), { dismiss: vi.fn() }),
+  auth: { generation: 0 },
+}));
 vi.mock("sonner", () => ({ toast }));
 vi.mock("../../lib/api/approvals", () => ({ approvals: { listApprovals } }));
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun } }));
-vi.mock("./operator-context", () => ({ usePrincipal: () => "dev-sub" }));
+vi.mock("../../lib/api/core", async (original) => ({
+  ...(await original<typeof import("../../lib/api/core")>()),
+  getAuthGeneration: () => auth.generation,
+}));
+vi.mock("./operator-context", () => ({ useRequestIdentity: () => ({ principal: "dev-sub", authGeneration: 0 }) }));
 
 import { NeedsYouNotices } from "./needs-you-notices";
 import { NEEDS_YOU } from "./copy/needs-you";
@@ -30,6 +40,7 @@ const ap = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  auth.generation = 0;
   window.sessionStorage.clear();
   listApprovals.mockResolvedValue([ap]);
 });
@@ -104,6 +115,64 @@ describe("NeedsYouNotices", () => {
       expect(toast).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("a run read that answers after sign-out raises nothing", async () => {
+    let answer: (run: Partial<RunDetail>) => void = () => undefined;
+    getRun.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const { unmount } = render(
+      <MemoryRouter>
+        <NeedsYouNotices />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getRun).toHaveBeenCalled());
+    unmount();
+    await act(async () => answer({ id: "run-1" }));
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("a run read that answers after an auth change not yet confirmed as the same person raises nothing", async () => {
+    let answer: (run: Partial<RunDetail>) => void = () => undefined;
+    getRun.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    render(
+      <MemoryRouter>
+        <NeedsYouNotices />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getRun).toHaveBeenCalled());
+    auth.generation = 1;
+    await act(async () => answer({ id: "run-1" }));
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("signing out closes this person's notices, the browser one too, and no other toast", async () => {
+    const close = vi.fn();
+    vi.stubGlobal(
+      "Notification",
+      Object.assign(
+        function FakeNotification() {
+          return { close };
+        },
+        { permission: "granted" },
+      ),
+    );
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    try {
+      getRun.mockResolvedValue({ id: "run-1" });
+      const { unmount } = render(
+        <MemoryRouter>
+          <NeedsYouNotices />
+        </MemoryRouter>,
+      );
+      await waitFor(() => expect(toast).toHaveBeenCalled());
+      expect(toast.dismiss).not.toHaveBeenCalled();
+      unmount();
+      expect(toast.dismiss.mock.calls).toEqual([["needs-you-ap-1"]]);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      delete (document as { hidden?: boolean }).hidden;
     }
   });
 });

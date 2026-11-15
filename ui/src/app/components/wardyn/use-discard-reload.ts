@@ -17,7 +17,18 @@ import { useRequestIdentity } from "./operator-context";
  */
 export function useDiscardReload(load: () => void): () => void {
   const { principal, operatorResolved } = useRequestIdentity();
+  // A caller closed while /me was out (an editor's Cancel) is not reloaded: its load would act on what is open now.
+  const mounted = React.useRef(false);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   return React.useCallback(() => {
+    const reload = () => {
+      if (mounted.current) load();
+    };
     void health
       .whoami()
       .then((me) => {
@@ -30,8 +41,8 @@ export function useDiscardReload(load: () => void): () => void {
           else window.location.assign(appURL(`${routerPath()}${search}`));
           return;
         }
-        load();
+        reload();
       })
-      .catch(load);
+      .catch(reload);
   }, [load, principal, operatorResolved]);
 }

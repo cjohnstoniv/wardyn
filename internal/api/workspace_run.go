@@ -405,13 +405,57 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		return // a newer recording superseded this run, or already finalized
 	}
 
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
-	if err != nil {
-		return // transient store failure: leave `recording`; a later reconcile retries
+	// An audit event whose store write failed waits in this replica's spool until the drain lands it, and a
+	// capture read before then misses it: a deny among them would leave the replay stamped clean, and a
+	// second finalization is refused. So the capture is taken only while the spool holds nothing and takes
+	// nothing during the read; otherwise the entry stays `recording` and a later reconcile (a workspace
+	// read's repair, a kill, a restart) takes it once the spool has drained.
+	spooled := s.cfg.AuditSpool.Appends()
+	if s.cfg.AuditSpool.Lines() > 0 {
+		return
 	}
-	obs := recordmode.Capture(events, res.Confined, s.kernelWindow(ctx, run))
+	seq, ok := s.recordEvidenceSeq(ctx, runID, res.Confined)
+	if !ok {
+		return // no position to check a confined verdict against later (recordEvidenceSeq): leave `recording`
+	}
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
+	if err != nil || s.cfg.AuditSpool.Appends() != spooled {
+		return // a transient store failure, or an event spooled meanwhile: leave `recording`; a later reconcile retries
+	}
 	now := s.cfg.Now().UTC()
 	res.FinishedAt = &now
+	res = s.takeRecordCapture(ctx, run, res, events, seq)
+	obs := *res.Observations
+	// Compare-and-set on `recording`: idempotent across the watcher/kill/boot/
+	// read-repair triggers, and a capture that lost to a concurrent finalizer
+	// (or a superseding re-record) writes and audits nothing.
+	_, applied, perr := s.putRecordResult(ctx, ws.ID, taskKey, res, recordStatusRecording)
+	if perr != nil || !applied {
+		return
+	}
+	// Release the serial import-step slot — conditional, so a step that was
+	// concurrently launched and now owns the pointer is never clobbered.
+	_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
+	// Counts-only audit — observations stay in the workspace row, never in audit.
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.record",
+		ws.ID.String(), outcomeBool(res.Status == recordStatusRecorded), mustJSON(map[string]any{
+			"task": taskKey, "mode": res.Mode, "domains": len(obs.Domains),
+			"minted_grants": len(obs.MintedGrantIDs), "anomalies": len(obs.Anomalies),
+			"kernel_sensor_blind": res.KernelSensorBlind,
+		})))
+}
+
+// takeRecordCapture is res with the capture of run's audit events taken: observations, caveats, status and,
+// for a confined entry, the clean verdict, read through evidenceSeq (recordEvidenceSeq). The first capture
+// and recheckCleanReplays both take it here, so a verdict taken again is the one a first capture of the
+// same trail would give. A confined run whose trail notes an event set aside by an audit spool
+// (auditSpoolQuarantineAction), holds the egress proxy's summary of decisions it dropped
+// (runDecisionsDropped), its runner's report of decisions its spool lost (runDecisionsLost) or refused for
+// room (runSpoolWasFull), or a refused post to the decision door (runDecisionPostRefused), is a failed
+// capture: what it is missing could have been a deny.
+func (s *Server) takeRecordCapture(ctx context.Context, run types.AgentRun, res RecordTaskResult, events []types.AuditEvent, evidenceSeq int64) RecordTaskResult {
+	res.Clean, res.Caught, res.FailureHint, res.SecretNamesMinted, res.EvidenceSeq = nil, 0, "", nil, evidenceSeq
+	obs := recordmode.Capture(events, res.Confined, s.kernelWindow(ctx, run))
 	res.Observations = &obs
 	res.KernelSensorBlind = run.ConfinementClass == types.CC3
 	res.Caveats = []string{recordMaskingCaveat}
@@ -448,7 +492,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		}
 	} else {
 		res.Status = recordStatusRecorded
-		res.SecretNamesMinted = s.mintedSecretNames(ctx, runID, obs.MintedGrantIDs)
+		res.SecretNamesMinted = s.mintedSecretNames(ctx, run.ID, obs.MintedGrantIDs)
 		// Clean/Caught are a CONFINED-replay verdict only (Workstream B): an
 		// open recording has nothing to be "clean" against, so it gets neither
 		// stamp — Clean stays nil (unknown/not-applicable), Caught stays 0.
@@ -464,23 +508,18 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 			res.Clean = &clean
 		}
 	}
-	// Compare-and-set on `recording`: idempotent across the watcher/kill/boot/
-	// read-repair triggers, and a capture that lost to a concurrent finalizer
-	// (or a superseding re-record) writes and audits nothing.
-	_, applied, perr := s.putRecordResult(ctx, ws.ID, taskKey, res, recordStatusRecording)
-	if perr != nil || !applied {
-		return
+	if res.Confined && runEventSetAside(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordEvidenceSetAsideHint, nil, 0
+	} else if res.Confined && runDecisionsDropped(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordDecisionsDroppedHint, nil, 0
+	} else if res.Confined && runDecisionsLost(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordDecisionsLostHint, nil, 0
+	} else if res.Confined && runSpoolWasFull(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordSpoolFullHint, nil, 0
+	} else if res.Confined && runDecisionPostRefused(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordDecisionRefusedHint, nil, 0
 	}
-	// Release the serial import-step slot — conditional, so a step that was
-	// concurrently launched and now owns the pointer is never clobbered.
-	_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
-	// Counts-only audit — observations stay in the workspace row, never in audit.
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.record",
-		ws.ID.String(), outcomeBool(res.Status == recordStatusRecorded), mustJSON(map[string]any{
-			"task": taskKey, "mode": res.Mode, "domains": len(obs.Domains),
-			"minted_grants": len(obs.MintedGrantIDs), "anomalies": len(obs.Anomalies),
-			"kernel_sensor_blind": res.KernelSensorBlind,
-		})))
+	return res
 }
 
 // outcomeBool renders a bool as the audit outcome string convention

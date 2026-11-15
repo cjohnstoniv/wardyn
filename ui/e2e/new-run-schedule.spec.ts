@@ -197,7 +197,7 @@ test.describe("New Run: Schedule for later", () => {
     const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
     await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill("nightly");
     await expect(dialog.getByText(NR_LAUNCH.CHECKED_JUST_NOW)).toBeVisible();
-    await expect(dialog.getByRole("alert").filter({ hasText: NR_RUN.START_FAR(scheduleDaysAhead()) })).toBeVisible();
+    await expect(dialog.getByRole("status").filter({ hasText: NR_RUN.START_FAR(scheduleDaysAhead()) })).toBeVisible();
     await expect(dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
   });
 

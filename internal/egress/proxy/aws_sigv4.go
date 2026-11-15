@@ -392,21 +392,34 @@ func awsQueryActions(raw string) ([]string, bool) {
 	return out, true
 }
 
+// awsSigV4GatewayRefused answers a request to a gateway host off the gateway's port or path, and
+// reports whether it did; route is the identity route the request signs on, or nil for a host AWS
+// serves itself. A terminated tunnel runs it first (gatewayOffRouteRefusedInTunnel), so no gate can
+// hold such a call for a person, and the door runs it again.
+func (p *Proxy) awsSigV4GatewayRefused(w http.ResponseWriter, r *http.Request, host string, port int) (route *GatewayIdentityRoute, refused bool) {
+	scope := p.sigv4.scopes[hostKey(host)]
+	if scope.signHost == "" {
+		return nil, false
+	}
+	if port != scope.port {
+		p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPort,
+			fmt.Sprintf("this run sends to this gateway only on port %d", scope.port))
+		return nil, true
+	}
+	if route = p.awsSigV4GatewayRoute(r, host, port, scope); route == nil {
+		p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPath,
+			"this run sends to this gateway only under its own path, with no dot segments")
+		return nil, true
+	}
+	return route, false
+}
+
 // serveAWSSigV4 is the door: admit, hash, obtain the role credentials, forward re-signed.
 func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host string, port int) {
 	scope := p.sigv4.scopes[hostKey(host)]
-	var route *GatewayIdentityRoute
-	if scope.signHost != "" {
-		if port != scope.port {
-			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPort,
-				fmt.Sprintf("this run sends to this gateway only on port %d", scope.port))
-			return
-		}
-		if route = p.awsSigV4GatewayRoute(r, host, port, scope); route == nil {
-			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPath,
-				"this run sends to this gateway only under its own path, with no dot segments")
-			return
-		}
+	route, refused := p.awsSigV4GatewayRefused(w, r, host, port)
+	if refused {
+		return
 	}
 	plan, ref := admitAWSSigV4(r, scope)
 	if ref != nil {

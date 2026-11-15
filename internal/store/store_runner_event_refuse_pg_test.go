@@ -5,7 +5,9 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -326,4 +330,62 @@ func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextSpoolCursor(t *testing.T) {
 	if seq, at := cursor(run.ID); seq != 2 || at != second {
 		t.Fatalf("next record refused: cursor %d %q, want 2 %q", seq, at, second)
 	}
+}
+
+// Refused spool records keep ingest's replay window: past runnerspool.ReplayBatch refusals with their audit rows
+// suppressed, the cursor holds only the last ReplayBatch hashes; a refused record retried inside the window moves
+// nothing on either path, one evicted from it is refused as ingest refuses it, and the next record is taken.
+func TestPG_RefusedSpoolRecordsKeepTheReplayWindow(t *testing.T) {
+	pool, st, rn, run, _ := spoolPGFixture(t)
+	ctx := t.Context()
+	n := runnerspool.ReplayBatch + 5
+	decisions := make([]egress.Decision, n+1)
+	for i := range decisions {
+		decisions[i] = egress.Allow
+	}
+	rows := spoolRecords(t, run.ID, decisions...)
+	refuse := func(row runnerspool.Record) {
+		t.Helper()
+		sp := store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: row.SpoolID, Seq: row.Seq, Hash: row.Hash}
+		r := store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalShape, RunID: &run.ID, Spool: &sp}
+		if _, err := st.RefuseRunnerEvent(ctx, rn.ID, r, prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	window := func(want int) {
+		t.Helper()
+		var last int64
+		var b []byte
+		if err := pool.QueryRow(ctx, `SELECT last_seq, recent_hashes FROM runner_spool_cursors WHERE run_id=$1`, run.ID).Scan(&last, &b); err != nil {
+			t.Fatal(err)
+		}
+		var hashes map[string]string
+		if err := json.Unmarshal(b, &hashes); err != nil {
+			t.Fatal(err)
+		}
+		if last != int64(want) || len(hashes) != runnerspool.ReplayBatch {
+			t.Fatalf("cursor at %d holds %d hashes, want %d holding %d", last, len(hashes), want, runnerspool.ReplayBatch)
+		}
+		for _, row := range rows[want-runnerspool.ReplayBatch : want] {
+			if hashes[strconv.FormatInt(row.Seq, 10)] != row.Hash {
+				t.Fatalf("the hash of record %d left the window early", row.Seq)
+			}
+		}
+	}
+	for _, row := range rows[:n] {
+		refuse(row)
+	}
+	window(n)
+	refuse(rows[n-1])
+	window(n)
+	if first, err := st.IngestRunnerDecision(ctx, rn.ID, rows[n-1], prepareSpoolTest); err != nil || first {
+		t.Fatalf("refused record replayed through ingest = %v %v, want a duplicate", first, err)
+	}
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, rows[0], prepareSpoolTest); !errors.Is(err, store.ErrRunnerSpoolRefused) {
+		t.Fatalf("record evicted from the window = %v, want refused", err)
+	}
+	if first, err := st.IngestRunnerDecision(ctx, rn.ID, rows[n], prepareSpoolTest); err != nil || !first {
+		t.Fatalf("record after the refusals = %v %v, want taken", first, err)
+	}
+	window(n + 1)
 }

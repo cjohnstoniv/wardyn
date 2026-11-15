@@ -125,11 +125,11 @@ func (s *interleaveStore) AdvanceRunPolicyGeneration(ctx context.Context, id uui
 	return gen, err
 }
 
-func (s *interleaveStore) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string) (store.ProxyStart, error) {
+func (s *interleaveStore) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string, inPlace bool) (store.ProxyStart, error) {
 	if s.failBegin {
 		return store.ProxyStart{}, errors.New("begin proxy start: connection reset")
 	}
-	return s.readbackStore.BeginProxyStart(ctx, runID, gen, jti, mode)
+	return s.readbackStore.BeginProxyStart(ctx, runID, gen, jti, mode, inPlace)
 }
 
 // MarkRunRevived also clears the agent's stop mark, as the PG claim (markRunRevived) does, and refuses a

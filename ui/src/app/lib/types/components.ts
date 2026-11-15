@@ -170,6 +170,8 @@ export type ComponentBuiltin = "github" | "azure_devops";
 export interface ComponentRequest {
   name: string;
   definition: ComponentDefinition;
+  // On a PUT, the version the editor opened: a row saved since answers 409 component_version_conflict.
+  expected_version?: number;
 }
 
 /** One thing a saved component still needs before a run can use it. */
@@ -229,6 +231,7 @@ export interface CLIView {
 
 /** The non-secret face of an MCP server row. */
 export interface MCPView {
+  // A remote server's origin as the server shows it to a granted person; "" for a local one.
   url: string;
   transport: string;
 }

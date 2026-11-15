@@ -1,0 +1,68 @@
+{{/*
+Optional Ingress for the UI-sandbox gateway's `ui` port, kept apart from
+ingress.* on purpose: the gateway serves the sandbox's own pages, so it refuses
+a host ingress.hosts routes for the console. It routes the gateway's own host
+(uiSandbox.advertiseURL) and, with uiSandbox.originTemplate, the one wildcard
+host every run's origin falls under (https://run-{run}.ui.example.com gives
+*.ui.example.com). Off by default. The wildcard DNS record and certificate stay
+the operator's: tls names the secret, the chart never makes one.
+*/}}
+{{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ing := $ui.ingress | default dict -}}
+{{- if and $ui.enabled $ing.enabled -}}
+{{- $adv := urlParse (required "wardyn: uiSandbox.ingress needs uiSandbox.advertiseURL, the gateway's own host" $ui.advertiseURL) -}}
+{{- if not $adv.hostname -}}
+{{- fail "wardyn: uiSandbox.ingress needs uiSandbox.advertiseURL as a full URL with a scheme and a host (e.g. https://wardyn-ui.example.com): without a host the Ingress rule would match every host" -}}
+{{- end -}}
+{{- $hosts := list $adv.hostname -}}
+{{- with $ui.originTemplate -}}
+{{- $labels := splitList "." (splitList ":" (splitList "/" (. | trimPrefix "https://" | trimPrefix "http://") | first) | first) -}}
+{{- if or (lt (len $labels) 3) (not (contains "{run}" (first $labels))) (contains "{run}" (rest $labels | join ".")) -}}
+{{- fail "wardyn: uiSandbox.ingress needs {run} inside the first host label of uiSandbox.originTemplate and nowhere else (e.g. https://run-{run}.ui.example.com), so one wildcard host (*.ui.example.com) covers every run" -}}
+{{- end -}}
+{{- $hosts = append $hosts (printf "*.%s" (rest $labels | join ".")) -}}
+{{- end -}}
+{{- $console := .Values.ingress | default dict -}}
+{{- if $console.enabled -}}
+{{- range ($console.hosts | default list) -}}
+{{- $c := .host | default "" | lower -}}
+{{- range $hosts -}}
+{{- $h := . | lower -}}
+{{- if or (eq $h $c) (and (hasPrefix "*." $h) (hasSuffix (trimPrefix "*" $h) $c) (not (contains "." (trimSuffix (trimPrefix "*" $h) $c)))) -}}
+{{- fail (printf "wardyn: uiSandbox.ingress host %s also routes the console host %s from ingress.hosts. The gateway serves the sandbox's own pages, so it needs a host of its own" $h $c) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wardyn.fullname" . }}-ui
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+  {{- with $ing.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $ing.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $ing.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range ($hosts | uniq) }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wardyn.fullname" $ }}
+                port:
+                  name: ui
+    {{- end }}
+{{- end -}}

@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -41,6 +43,13 @@ func defaultPortForScheme(scheme string) int {
 // servePlain is the plain lane's entry; a host covered by the run's ADO grant is refused
 // here, before evaluation or injection, since this lane skips the REST gate (refuseADOPlain).
 func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
+	// A host name on the wire is ASCII: a client sends an international name in its xn-- form. The
+	// transport maps any other spelling to an ASCII name before it pools a connection, names the TLS
+	// server and offers a certificate, so the request would go to a host this lane never judged.
+	if r.URL != nil && strings.ContainsFunc(r.URL.Host, func(c rune) bool { return c >= 0x80 }) {
+		http.Error(w, "the request's host name is not ASCII; send an international name in its xn-- form", http.StatusBadRequest)
+		return
+	}
 	if p.refuseADOPlain(w, r) || p.refuseAzurePlain(w, r) || p.refusePATAPIPlain(w, r) || p.refuseGitHubAPIPlain(w, r) ||
 		p.refuseAzureARMPlain(w, r) || p.refuseAWSSigV4Plain(w, r) || p.refuseKubeAPIPlain(w, r) {
 		return
@@ -131,6 +140,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
 	// RequestURI must be empty for client requests.
 	outReq.RequestURI = ""
+	// The transport pools and dials by this address, so it is the judged host and port and never
+	// another spelling of them. An empty port ("host:") is judged as port 0, and left as written it
+	// would ride a connection a signed call left open to the scheme's default port.
+	outReq.URL.Host = upstreamURLHost(host, port, defaultPortForScheme(r.URL.Scheme))
 	if bodyOverride != nil {
 		// Forward the buffered, re-readable body; bytes are unchanged so ContentLength still matches.
 		outReq.Body = io.NopCloser(bodyOverride)
@@ -138,6 +151,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	removeHopByHop(outReq.Header)
 	p.stripGatewayHeaders(outReq.Header)
 	p.stripGatewayHeaders(outReq.Trailer) // r.Clone keeps the sandbox's trailers
+	if rt := p.gatewayRouteFor(host, port, r.URL.Path); rt != nil {
+		p.forwardPlainGatewayRoute(w, r, outReq, rt, host, port, log)
+		return
+	}
 
 	// Credential injection: plain HTTP only, exact-allow host only, and only on a transport
 	// that may carry the credential — see injectableTransport.
@@ -159,9 +176,57 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	p.relay(w, resp)
 }
 
+// forwardPlainGatewayRoute is the plain lane's tail for a request a configured identity route
+// covers, the same the brokered and terminated lanes give it (forwardInspectedLLM): the run's
+// token and a fresh call id go on, or nothing is sent, and the answer is always scrubbed. A route
+// configured to sign never sends unsigned, since a lenient gateway would take the call as
+// anonymous. The request goes out in the scheme those lanes use (upstreamSchemeFor), not the one
+// the sandbox picked, so the token never rides cleartext to a TLS gateway.
+func (p *Proxy) forwardPlainGatewayRoute(w http.ResponseWriter, r, outReq *http.Request, rt *GatewayIdentityRoute, host string, port int, log *egress.DecisionLog) {
+	ruleSource := ""
+	if log != nil {
+		ruleSource = log.RuleSource
+	}
+	// The authority is the judged host and port in the outgoing scheme's own form, as
+	// forwardInspectedLLM builds it. The transport pools, remembers HTTP/2 and offers a client
+	// certificate by this address, and the scheme the sandbox picked may imply another port.
+	scheme, defaultPort := p.upstreamSchemeFor(host, port)
+	outReq.URL.Scheme, outReq.URL.Host = scheme, upstreamURLHost(host, port, defaultPort)
+	outReq.Host = outReq.URL.Host
+	p.applyInjection(outReq, host, port)
+	callID := uuid.NewString()
+	if !p.attachGatewayIdentity(w, r, outReq.Header, rt, host, port, ruleSource, callID) {
+		return
+	}
+	outReq.Header.Set(gatewayCallIDHeader, callID)
+	if log != nil {
+		log.GatewayCallID = callID
+	}
+	resp, err := p.roundTripUpstream(outReq)
+	if err != nil {
+		p.failUpstream(w, err, log, host, "upstream error")
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if log != nil {
+		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
+		p.emitDialledAllow(*log, host)
+	}
+	p.relayGatewayRoute(w, r, host, port, resp, ruleSource, outReq.Header.Get(gatewayIdentityHeader), callID)
+}
+
 // plainRefusedAfterPolicy is handlePlain's refusals once the policy allows the host, and reports whether
 // it answered. The request it returns is the one to forward (hostRuleRefused).
 func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) (*http.Request, bool) {
+	ruleSource := ""
+	if log != nil {
+		ruleSource = log.RuleSource
+	}
+	// A route's host and port is sent only what a route covers (gatewayOffRouteRefused), and this
+	// runs before a hold can ask anyone about a call that will not be sent.
+	if p.gatewayOffRouteRefused(w, r, host, port, r.URL.Path, ruleSource) {
+		return r, true
+	}
 	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
 	r, refused := p.hostRuleRefused(w, r, host, port)
 	if refused {

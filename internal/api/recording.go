@@ -102,19 +102,25 @@ var recordingUploadReadWindow = 60 * time.Second
 
 // readWindow arms the connection's read deadline at the body's first Read. A
 // store that queues saves reads only once it has admitted one, so queue time is
-// not charged.
+// not charged. A save that ends before its first Read arms it as it ends (storeUpload).
 type readWindow struct {
 	io.ReadCloser
 	rc    *http.ResponseController
 	armed bool
 }
 
+// arm sets the read deadline once; later calls keep the first deadline.
+func (b *readWindow) arm() error {
+	if b.armed {
+		return nil
+	}
+	b.armed = true
+	return b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow))
+}
+
 func (b *readWindow) Read(p []byte) (int, error) {
-	if !b.armed {
-		b.armed = true
-		if err := b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow)); err != nil {
-			return 0, err
-		}
+	if err := b.arm(); err != nil {
+		return 0, err
 	}
 	return b.ReadCloser.Read(p)
 }
@@ -132,7 +138,8 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	// log is cut at the masked limit with the server's marker and answered 2xx, and when masking lengthens it
 	// so the masked output reaches the limit before the raw stream passes the upload cap, the raw overrun is
 	// never read and the cut log is stored all the same.
-	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
+	window := &readWindow{ReadCloser: r.Body, rc: rc}
+	limited := http.MaxBytesReader(w, window, maxRecordingUploadBytes)
 
 	// PRIMARY masking point: read the upload body through a MaskingWriter so
 	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
@@ -156,10 +163,34 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	if run.CreatedBy != "" && !run.OperatorOwned {
 		ctx = recording.WithAdmissionGroup(ctx, "owner:"+run.CreatedBy)
 	}
+	var err error
 	if part == 1 {
-		return s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+		err = s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+	} else {
+		err = s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
 	}
-	return s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
+	err = refusalBeforeErasure(err, body)
+	// A save that failed before its first Read (a store failure, or a run whose masking cover was gone at
+	// the first Read) left the body unread, and net/http reads up to 256 KiB more of it before it writes the
+	// answer. The same window bounds that read. Its error is not checked: this connection took a deadline above.
+	_ = window.arm()
+	return err
+}
+
+// refusalBeforeErasure keeps the size and masking refusals ahead of an erased run's 410, the route's
+// documented refusal order. The file store (recording.FSStore) refuses an erased run before it reads any
+// of the body, so the rest of the body is read here, into nothing, and an upload over the cap, or for
+// a run its masking no longer covers, answers as it would have. Any other read failure leaves the erasure as the answer.
+func refusalBeforeErasure(err error, body io.Reader) error {
+	if !errors.Is(err, recording.ErrErased) {
+		return err
+	}
+	_, rerr := io.Copy(io.Discard, body)
+	var maxErr *http.MaxBytesError
+	if errors.As(rerr, &maxErr) || errors.Is(rerr, errMaskUncovered) {
+		return rerr
+	}
+	return err
 }
 
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from

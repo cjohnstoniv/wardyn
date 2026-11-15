@@ -289,7 +289,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body providerSignInCapture
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, 16<<10), &body, false); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
 		return
 	}
@@ -342,6 +342,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, name, raw) }); err != nil {
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), owner, name)
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}

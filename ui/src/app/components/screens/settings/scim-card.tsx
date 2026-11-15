@@ -15,7 +15,7 @@
 import * as React from "react";
 import { scim as scimApi } from "../../../lib/api/scim";
 import { appURL } from "../../../lib/base-path";
-import { absoluteTime, relativeTime } from "../../../lib/format";
+import { absoluteTime, formatDuration, relativeTime } from "../../../lib/format";
 import { SCIM, SCIM_LIST_CAP, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
 import type { SCIMStatus } from "../../../lib/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
@@ -56,8 +56,10 @@ function List({ title, empty, children }: { title: string; empty: string | null;
   );
 }
 
+// The delay is any duration the operator set, and stored credentials are erased when it ends: it reads in the
+// largest whole unit that states it exactly, never rounded up to more time than there is.
 const purgeDelay = (seconds: number) =>
-  seconds > 0 ? SCIM.PURGE_DAYS(Math.max(1, Math.round(seconds / 86400))) : <span className="text-muted-foreground">{SCIM.PURGE_OFF}</span>;
+  seconds > 0 ? SCIM.PURGE_DAYS(formatDuration(seconds * 1000, "words")) : <span className="text-muted-foreground">{SCIM.PURGE_OFF}</span>;
 
 function Facts({ s }: { s: SCIMStatus }) {
   const token = s.last_token_slot === "primary" ? SCIM.TOKEN_PRIMARY : s.last_token_slot === "next" ? SCIM.TOKEN_NEXT : SCIM.TOKEN_NONE;

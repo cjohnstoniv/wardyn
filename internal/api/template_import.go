@@ -5,9 +5,9 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -26,9 +26,7 @@ func (s *Server) handleImportTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req client.TemplateImportRequest
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(body), &req, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return
 	}

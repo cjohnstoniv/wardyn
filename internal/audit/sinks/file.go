@@ -124,6 +124,9 @@ func (s *FileSink) openFile() error {
 
 // rotate renames the active file to <path>.1, shifts older rotated files up,
 // removes any beyond Keep, then opens a fresh active file. Caller must hold mu.
+// Only an absent file is skipped. Any other failure is returned with the active
+// file reopened as it was, so the event is refused rather than appended past
+// MaxBytes, and the next Emit tries the rotation again.
 func (s *FileSink) rotate() error {
 	if s.file != nil {
 		if err := s.file.Close(); err != nil {
@@ -131,7 +134,14 @@ func (s *FileSink) rotate() error {
 		}
 		s.file = nil
 	}
+	if err := s.shift(); err != nil {
+		return errors.Join(err, s.openFile())
+	}
+	return s.openFile()
+}
 
+// shift moves each rotated file one slot older and the active file to <path>.1.
+func (s *FileSink) shift() error {
 	// Shift rotated files: .N-1 → .N (drop if N > Keep), then .1 → .2, etc.
 	for i := s.cfg.Keep; i >= 1; i-- {
 		older := rotatedName(s.cfg.Path, i)
@@ -139,15 +149,24 @@ func (s *FileSink) rotate() error {
 		if i-1 == 0 {
 			newer = s.cfg.Path
 		}
-		// The .Keep slot falls off the end; os.Remove discards the absent-path error.
+		// The .Keep slot falls off the end.
 		if i == s.cfg.Keep {
-			_ = os.Remove(older)
+			if err := os.Remove(older); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
-		if _, err := os.Lstat(newer); err == nil {
-			_ = os.Rename(newer, older)
+		_, err := os.Lstat(newer)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(newer, older); err != nil {
+			return err
 		}
 	}
-	return s.openFile()
+	return nil
 }
 
 // rotatedName returns the path for the i-th rotated file.

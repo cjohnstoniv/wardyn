@@ -13,4 +13,7 @@ export const CANCEL_NOT_STARTED = {
   KEEP: "Keep run",
   DONE: (name: string) => `Cancelled ${name}`,
   FAILED: (name: string) => `Couldn't cancel ${name}`,
+  // The run started before the cancel reached it, or while its confirm was open: nothing was ended.
+  STARTED: (name: string) => `Not cancelled: ${name} has started`,
+  STARTED_NEXT: "To stop it, choose End run on its page.",
 } as const;

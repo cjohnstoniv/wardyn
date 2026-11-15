@@ -69,10 +69,10 @@ type recordStore struct {
 	saved         json.RawMessage // current record_results blob (per-key upserts land here)
 	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
 	clearedActive bool            // ClearWorkspaceActiveRun called
-	// heartbeat backs LatestAuditEventByAction — reconcileRecordRun's
+	// heartbeat backs LatestOrganisationAuditEvent — reconcileRecordRun's
 	// ebpfGroundtruthCaveat call reads this to
 	// stamp the sensor's coverage state onto the capture. nil (the default)
-	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
+	// means "no heartbeat on record" (ErrNotFound), same as a host with no sensor.
 	heartbeat *types.AuditEvent
 	// mergeErr, when set, is what MergeWorkspaceRequirements returns instead
 	// of applying `add` — the seam for a store error on the widening after
@@ -88,16 +88,28 @@ func (s *recordStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-// LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
+// LatestOrganisationAuditEvent backs ebpfGroundtruthCaveat's heartbeat lookup.
 // Every recordStore-based test now exercises this (reconcileRecordRun calls
-// it unconditionally on every capture) — default to "no heartbeat ever" so
+// it unconditionally on every capture) — default to "no heartbeat on record" so
 // the many existing tests that don't care about sensor health stay
 // unaffected; a test that DOES sets s.heartbeat first.
-func (s *recordStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *recordStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	if s.heartbeat != nil {
 		return *s.heartbeat, nil
 	}
 	return types.AuditEvent{}, store.ErrNotFound
+}
+
+// The heartbeat is also its sensor's node row, with counts that rose on it.
+func (*recordStore) UpsertGroundtruthSensor(context.Context, store.GroundtruthSensor) error {
+	return nil
+}
+
+func (s *recordStore) ListGroundtruthSensors(_ context.Context, since time.Time) ([]store.GroundtruthSensor, error) {
+	if s.heartbeat == nil {
+		return nil, nil
+	}
+	return beatAsNodeRow(*s.heartbeat, since), nil
 }
 
 func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {

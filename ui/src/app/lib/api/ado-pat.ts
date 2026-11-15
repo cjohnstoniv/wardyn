@@ -58,10 +58,14 @@ export const adoPat = {
 
   // DELETE /api/v1/scm/azure-devops/connection (handleADODisconnect): forgets
   // this person's stored sign-in and revokes the tokens of their runs in
-  // progress. 204.
-  async disconnect(): Promise<void> {
+  // progress. 204; 200 with tokens_revocation_failed and a detail when a token
+  // it tried to revoke may still work (the sign-in is gone either way).
+  async disconnect(): Promise<{ tokensRevocationFailed?: boolean; detail?: string }> {
     const res = await wfetch("/scm/azure-devops/connection", { method: "DELETE" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
+    if (res.status === 204) return {};
+    const body = await asJson<{ tokens_revocation_failed?: boolean; detail?: string }>(res);
+    return { tokensRevocationFailed: body.tokens_revocation_failed, detail: body.detail };
   },
 
   // GET /api/v1/runs/{id}/ado-tokens (handleListRunADOTokens): every token the run

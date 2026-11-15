@@ -258,10 +258,11 @@ type Proxy struct {
 	localModels map[string]*localModel
 	// allowedModels is Config.AllowedModels and BedrockRoutes compiled (allowed_models.go). Nil == off.
 	allowedModels *modelLimit
-	// gatewayRoutes is Options.GatewayIdentity and gatewayHolders each route
-	// provider's token (gateway_identity.go). Empty == off.
+	// gatewayRoutes is Options.GatewayIdentity, gatewayHolders each route's token (gateway_identity.go)
+	// and gatewayCert the run's client certificate (gateway_client_cert.go). Empty and nil == off.
 	gatewayRoutes  []GatewayIdentityRoute
 	gatewayHolders map[string]*gatewayTokenHolder
+	gatewayCert    *gatewayCertHolder
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -429,7 +430,6 @@ func newProxy(opts Options) *Proxy {
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		gatewayRoutes:        opts.GatewayIdentity,
-		gatewayHolders:       map[string]*gatewayTokenHolder{},
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
@@ -508,9 +508,7 @@ func newProxy(opts Options) *Proxy {
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
-	for _, rt := range opts.GatewayIdentity {
-		p.gatewayHolders[rt.holderKey()] = &gatewayTokenHolder{providerID: rt.ProviderID, mcpKey: rt.MCPKey, audience: rt.Audience, timeout: 15 * time.Second}
-	}
+	p.gatewayHolders, p.gatewayCert = newGatewayHolders(opts.RunID, opts.GatewayIdentity)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
@@ -535,24 +533,14 @@ func newProxy(opts Options) *Proxy {
 	// resolve at the token-expiry boundary is not failed closed early.
 	p.localClient = &http.Client{Transport: p.controlTransport, Timeout: controlPlaneCallTimeout}
 
-	// Audit the deliberate private-IP-guard relaxation for the operator-
-	// configured upstream proxy hop (one record per run; each real destination
-	// still gets its own per-request decision).
-	if p.upstream != nil && p.sink != nil {
-		req := egress.Request{
-			RunID:  p.runID,
-			Host:   p.upstream.host,
-			Port:   p.upstream.port,
-			Method: http.MethodConnect,
-			Time:   now(),
-		}
-		p.sink.emit(decisionLog(req, egress.Allow, egress.RuleSourceUpstreamProxy))
+	// The upstream proxy hop's row (auditUpstreamHop); on a runner sink it waits for the first grant.
+	if p.sink == nil || p.sink.remote == nil {
+		p.auditUpstreamHop()
 	}
 	return p
 }
 
-// ServeHTTP routes between CONNECT tunneling, brokered LOCAL routes, and
-// plain-HTTP forwarding.
+// ServeHTTP routes between CONNECT tunneling, brokered LOCAL routes, and plain-HTTP forwarding.
 //
 // The local brokered routes (/wardyn/...) are reachable ONLY via
 // origin-form requests addressed to the proxy listener itself — i.e. the
@@ -564,6 +552,7 @@ func newProxy(opts Options) *Proxy {
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = trackNetworkBody(r)
+	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
 		refuseClosed(w)

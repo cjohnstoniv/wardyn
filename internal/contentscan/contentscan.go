@@ -332,12 +332,14 @@ func (e *Engine) Mode() Mode {
 }
 
 // sanitizeFieldPath is the single content-free guarantee for a Finding's
-// FieldPath: masks well-known secret FORMATS (maskFormats) and the
-// operator-declared corpus (maskCorpus) so NO detector can carry a raw
-// secret, used as an agent-controlled JSON key, into the append-only audit.
-// Both masks run on the whole path, BEFORE it is cut to length. Idempotent.
+// FieldPath: masks well-known secret FORMATS (maskFormats), the
+// operator-declared corpus (maskCorpus) and personal-data formats (maskPII)
+// so NO detector can carry a raw secret or PII value, used as an
+// agent-controlled JSON key, into the append-only audit. Every mask runs on
+// the whole path, BEFORE it is cut to length, and maskPII after maskCorpus so
+// a corpus value is masked whole. Idempotent.
 func (e *Engine) sanitizeFieldPath(path string) string {
-	return truncateFieldPath(maskCorpus(maskFormats(path), e.corpus))
+	return truncateFieldPath(maskPII(maskCorpus(maskFormats(path), e.corpus)))
 }
 
 // capFindings enforces the per-request findings cap on res, in place. vetted
@@ -415,9 +417,9 @@ func (e *Engine) ScanRequestContext(ctx context.Context, channel Channel, body [
 		return Result{Scanned: false}, body, nil
 	}
 	// CENTRAL content-free chokepoint: EVERY finding's FieldPath, whichever
-	// detector produced it, is masked here for well-known secret formats and
-	// the operator corpus, so a secret used as a JSON key never rides into
-	// the audit. Deferred so no return path can bypass it.
+	// detector produced it, is masked here for well-known secret formats, the
+	// operator corpus and PII formats, so a secret or PII value used as a JSON
+	// key never rides into the audit. Deferred so no return path can bypass it.
 	defer func() {
 		for i := range res.Findings {
 			res.Findings[i].FieldPath = e.sanitizeFieldPath(res.Findings[i].FieldPath)

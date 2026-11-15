@@ -484,7 +484,7 @@ func putBody(body io.Reader, n int64, uploadURL, runToken string, plainLog bool)
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		err := fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 		switch resp.StatusCode {
-		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 			return retryableError{err}
 		}
 		return err
@@ -508,8 +508,9 @@ var (
 )
 
 // retryableError is a PUT that may pass on another attempt: one that got no
-// answer, or a gateway's or an unavailable server's. Any other refusal
-// (recording off, a terminal run, a body over the cap) answers the same again.
+// answer, a server error (the recording store's own failure is answered as one),
+// or a gateway's or an unavailable server's. Any other refusal (recording off, a
+// terminal run, a body over the cap) answers the same again.
 type retryableError struct{ error }
 
 func (e retryableError) Unwrap() error { return e.error }

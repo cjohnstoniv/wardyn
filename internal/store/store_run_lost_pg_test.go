@@ -158,3 +158,33 @@ func TestPG_RunTokenLineage(t *testing.T) {
 		t.Errorf("the kept proxy's renewal after a restore = %v, %v; want it recorded", ok, err)
 	}
 }
+
+// TestPG_RenewalStampRefusesAnEndedRun: a run that ended after a renewal read it is not stamped; the
+// refusal names its state, and token_renewed_at keeps the last stamp. Catches a stamp, and so a token,
+// landing after the run's end.
+func TestPG_RenewalStampRefusesAnEndedRun(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, run)
+
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-1", "jti-dispatch"); err != nil || !ok {
+		t.Fatalf("renewal of a running run = %v, %v; want it recorded", ok, err)
+	}
+	before, err := pg.RunTokenRenewedAt(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'STOPPED' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-2", "jti-1")
+	var ended store.RunTokenRunEndedError
+	if ok || !errors.As(err, &ended) || ended.State != types.RunStopped {
+		t.Fatalf("renewal of a stopped run = %v, %v; want RunTokenRunEndedError{STOPPED}", ok, err)
+	}
+	if after, err := pg.RunTokenRenewedAt(ctx, run.ID); err != nil || !after.Equal(before) {
+		t.Errorf("token_renewed_at = %v (%v), want it kept at %v", after, err, before)
+	}
+}

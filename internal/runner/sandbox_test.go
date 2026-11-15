@@ -431,3 +431,19 @@ func TestKeptDespiteAWSCacheWipe(t *testing.T) {
 		t.Fatalf("nil answered %v", err)
 	}
 }
+
+// The control plane reads an end whose AWS cache wipe failed as a finished end and keeps the words; an end
+// that left more than the wipe (the warning only as words beside it) is a failure with no words.
+func TestSplitAWSCacheWipe(t *testing.T) {
+	wipe := fmt.Errorf("%w: container is paused", ErrAWSCacheWipeFailed)
+	if words, err := SplitAWSCacheWipe(wipe); err != nil || words != wipe.Error() {
+		t.Fatalf("a wipe failure = %q, %v; want its words and nil", words, err)
+	}
+	left := errors.Join(errors.New(wipe.Error()), errors.New("a share would not go"))
+	if words, err := SplitAWSCacheWipe(left); words != "" || err != left {
+		t.Fatalf("a wipe warning beside a share left = %q, %v; want no words and the error", words, err)
+	}
+	if words, err := SplitAWSCacheWipe(nil); words != "" || err != nil {
+		t.Fatalf("nil = %q, %v", words, err)
+	}
+}

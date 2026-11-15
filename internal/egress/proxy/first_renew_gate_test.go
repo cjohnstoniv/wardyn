@@ -63,32 +63,12 @@ func newRenewPlane(t *testing.T, status int, hold bool) *renewPlane {
 	return rp
 }
 
-// freeAddr is a loopback address nothing listens on yet.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func isListening(addr string, within time.Duration) bool {
-	for end := time.Now().Add(within); ; time.Sleep(10 * time.Millisecond) {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			_ = c.Close()
-			return true
-		}
-		if time.Now().After(end) {
-			return false
-		}
-	}
-}
-
+// sidecar is a started server-mode proxy. Its listener is on 127.0.0.1:0, so the port is chosen when it
+// binds: a port picked and freed beforehand could be taken by another process while the gate held the bind,
+// and a dial would then reach that process. Whether it bound is read from OnListening, which runs right
+// after the bind, never from a dial.
 type sidecar struct {
 	srv       *Server
-	addr      string
 	clock     *fakeBoot
 	listening atomic.Bool // OnListening ran
 }
@@ -102,8 +82,8 @@ func startSidecar(t *testing.T, cp string, controlPlane, flag bool) *sidecar {
 	} else {
 		t.Setenv(FirstRenewGateEnv, "")
 	}
-	sc := &sidecar{addr: freeAddr(t), clock: &fakeBoot{}}
-	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: sc.addr, DecisionBufferSize: defaultBufferSize,
+	sc := &sidecar{clock: &fakeBoot{}}
+	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: "127.0.0.1:0", DecisionBufferSize: defaultBufferSize,
 		Policy: types.RunPolicySpec{AllowAllEgress: true}}
 	if controlPlane {
 		cfg.ControlPlaneURL = cp
@@ -143,15 +123,50 @@ func TestSidecar_ClosedUntilFirstRenew(t *testing.T) {
 	if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() > 0 }) {
 		t.Fatal("the sidecar never asked for its first renewal")
 	}
-	if isListening(sc.addr, 300*time.Millisecond) || sc.listening.Load() {
+	if gateEventually(300*time.Millisecond, sc.listening.Load) {
 		t.Fatal("the sidecar bound its port before its first renewal answered")
 	}
 	close(rp.release)
-	if !isListening(sc.addr, 5*time.Second) || !gateEventually(5*time.Second, sc.listening.Load) {
+	if !gateEventually(5*time.Second, sc.listening.Load) {
 		t.Fatal("the sidecar never served after its first renewal landed")
 	}
 	if !sc.srv.proxy.lapse.serving() {
 		t.Fatal("the gate is not open after the first renewal")
+	}
+}
+
+// TestSidecar_ClosedNeverBinds: while its gate is closed a sidecar does not try to bind its port, so a
+// connect to that port (a runner's readiness probe) cannot reach it before its first renewal. The test
+// holds the port itself, so no other process can take it and an early bind fails at once.
+func TestSidecar_ClosedNeverBinds(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	rp := newRenewPlane(t, http.StatusOK, true)
+	t.Setenv(FirstRenewGateEnv, "1")
+	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: held.Addr().String(), DecisionBufferSize: defaultBufferSize,
+		ControlPlaneURL: rp.srv.URL, Policy: types.RunPolicySpec{AllowAllEgress: true}}
+	srv, err := newServer(context.Background(), cfg, http.DefaultClient, io.Discard, serverHooks{lapseClock: &fakeBoot{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		close(rp.release)
+	})
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe() }()
+	if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() > 0 }) {
+		t.Fatal("the sidecar never asked for its first renewal")
+	}
+	select {
+	case err := <-served:
+		t.Fatalf("the sidecar tried to bind its port before its first renewal answered: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
@@ -183,7 +198,7 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 			if g.reason != want || g.serving() {
 				t.Fatalf("reason %q serving %v; want %q, closed", g.reason, g.serving(), want)
 			}
-			if isListening(sc.addr, 300*time.Millisecond) || sc.listening.Load() {
+			if gateEventually(300*time.Millisecond, sc.listening.Load) {
 				t.Fatal("a sidecar whose renewal was refused bound its port")
 			}
 		})
@@ -222,7 +237,7 @@ func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 	t.Run("through the server", func(t *testing.T) {
 		rp := newRenewPlane(t, http.StatusOK, false)
 		sc := startSidecar(t, rp.srv.URL, true, true)
-		if !isListening(sc.addr, 5*time.Second) {
+		if !gateEventually(5*time.Second, sc.listening.Load) {
 			t.Fatal("the sidecar never served")
 		}
 		rp.status.Store(http.StatusServiceUnavailable)
@@ -298,7 +313,7 @@ func TestSidecar_NoControlPlaneNoGate(t *testing.T) {
 	if sc.srv.proxy.lapse != nil {
 		t.Fatal("a sidecar with no control plane has a gate")
 	}
-	if !isListening(sc.addr, 5*time.Second) || !gateEventually(5*time.Second, sc.listening.Load) {
+	if !gateEventually(5*time.Second, sc.listening.Load) {
 		t.Fatal("a sidecar with no control plane did not bind")
 	}
 }
@@ -311,11 +326,11 @@ func TestSidecar_OneRefusalThenAnswerOpensQuickly(t *testing.T) {
 	if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() >= 1 }) {
 		t.Fatal("the sidecar never asked for its renewal")
 	}
-	if isListening(sc.addr, 100*time.Millisecond) {
+	if gateEventually(100*time.Millisecond, sc.listening.Load) {
 		t.Fatal("the sidecar bound after a refusal")
 	}
 	rp.status.Store(http.StatusOK)
-	if !isListening(sc.addr, 10*time.Second) || !gateEventually(time.Second, sc.listening.Load) {
+	if !gateEventually(10*time.Second, sc.listening.Load) {
 		t.Fatal("the sidecar did not open within ten seconds of the renewal answering")
 	}
 }
@@ -328,7 +343,7 @@ func TestSidecar_FlagUnsetServesAtOnce(t *testing.T) {
 	if sc.srv.proxy.lapse != nil {
 		t.Fatal("a sidecar without the flag has a gate")
 	}
-	if !isListening(sc.addr, 5*time.Second) || !gateEventually(5*time.Second, sc.listening.Load) {
+	if !gateEventually(5*time.Second, sc.listening.Load) {
 		t.Fatal("a sidecar without the flag did not bind at once")
 	}
 	close(rp.release)
@@ -341,7 +356,7 @@ func TestSidecar_HungFirstRenewThenAnswerOpensQuickly(t *testing.T) {
 	rp := newRenewPlane(t, http.StatusOK, false)
 	rp.hangFirst.Store(true)
 	sc := startSidecar(t, rp.srv.URL, true, true)
-	if !isListening(sc.addr, 10*time.Second) || !gateEventually(time.Second, sc.listening.Load) {
+	if !gateEventually(10*time.Second, sc.listening.Load) {
 		t.Fatalf("the sidecar did not open within ten seconds after a hung first renewal (%d tries)", rp.renews.Load())
 	}
 }

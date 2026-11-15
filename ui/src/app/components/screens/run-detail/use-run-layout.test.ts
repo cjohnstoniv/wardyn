@@ -9,6 +9,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { RunLayoutWidget } from "../../../lib/api/run-layout";
 import { useRunLayout } from "./use-run-layout";
+import { setExpectedPrincipal } from "../../../lib/api/core";
 import { DESKTOP_REMOVED, SERVICE_REMOVED } from "./widget-registry";
 
 const getLayout = vi.fn();
@@ -85,7 +86,7 @@ describe("useRunLayout: the Service panel on a service run", () => {
   it("Reset clears the marker with the rest of the saved layout", async () => {
     const { result } = await loaded([...SAVED, SERVICE_REMOVED], true);
     act(() => result.current.reset());
-    expect(putLayout).toHaveBeenCalledWith("live", []);
+    expect(putLayout).toHaveBeenCalledWith("live", [], "");
     expect(ids(result.current.layout)).toContain("service");
   });
 });
@@ -260,6 +261,54 @@ describe("useRunLayout: write ordering and retry", () => {
     expect(putLayout.mock.calls.map((c) => c[1])).toEqual([A, []]);
   });
 
+  it("a layout queued behind a slow write still goes out as the person who arranged it", async () => {
+    // The server then refuses it rather than store it as the preference of whoever signed in since.
+    const { result } = await loaded(SAVED, false);
+    const first = deferred();
+    putLayout.mockReturnValueOnce(first.promise);
+    setExpectedPrincipal("a@example.com");
+    act(() => result.current.apply(A));
+    let flushed!: Promise<unknown>;
+    act(() => void (flushed = result.current.save()));
+    act(() => result.current.reset());
+
+    setExpectedPrincipal("b@example.com");
+    await act(async () => {
+      first.resolve({ preset: "live", layout: A });
+      await flushed;
+    });
+    await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
+    expect(putLayout.mock.calls.map((c) => c[2])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
+  });
+
+  // The pause after a drag ends, or the page is left first, only after someone else signed in: the write still names
+  // the person who dragged, so the server refuses it rather than store it as the next person's preference.
+  it("a layout that waits out the pause after a drag goes out as the person who arranged it", async () => {
+    const { result } = await loaded(SAVED, false);
+    vi.useFakeTimers();
+    try {
+      setExpectedPrincipal("a@example.com");
+      act(() => result.current.apply(A));
+      setExpectedPrincipal("b@example.com");
+      act(() => void vi.advanceTimersByTime(5000));
+    } finally {
+      vi.useRealTimers();
+      setExpectedPrincipal("");
+    }
+    expect(putLayout.mock.calls.map((c) => c[2])).toEqual(["a@example.com"]);
+  });
+
+  it("a layout still in that pause when the page is left goes out as the person who arranged it", async () => {
+    const { result, unmount } = await loaded(SAVED, false);
+    setExpectedPrincipal("a@example.com");
+    act(() => result.current.apply(A));
+    setExpectedPrincipal("b@example.com");
+    unmount();
+    setExpectedPrincipal("");
+    expect(putLayout.mock.calls.map((c) => c[2])).toEqual(["a@example.com"]);
+  });
+
   it("Retry repeats the failed write for its own preset after the preset has switched", async () => {
     getLayout.mockResolvedValue({ preset: "live", layout: SAVED });
     const hook = renderHook(({ p }: { p: "live" | "finished" }) => useRunLayout(p), { initialProps: { p: "live" } });
@@ -278,7 +327,7 @@ describe("useRunLayout: write ordering and retry", () => {
     putLayout.mockResolvedValue({ preset: "live", layout: [] });
     act(() => hook.result.current.retry());
     await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
-    expect(putLayout.mock.calls[1]).toEqual(["live", []]);
+    expect(putLayout.mock.calls[1]).toEqual(["live", [], ""]);
     await waitFor(() => expect(hook.result.current.status).not.toBe("failed"));
   });
 });

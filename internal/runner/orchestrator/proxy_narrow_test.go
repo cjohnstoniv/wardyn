@@ -59,3 +59,30 @@ func TestProxyNarrower_ForwardsAndNotOffered(t *testing.T) {
 		t.Fatalf("NarrowProxy on a substrate that does not narrow: %+v, %v; want ErrNarrowNotOffered", st, err)
 	}
 }
+
+// failingRefStore answers every ref lookup with an error, as a store that is down.
+type failingRefStore struct{ fakeRefStore }
+
+func (*failingRefStore) GetRef(context.Context, string) (string, bool, error) {
+	return "", false, errors.New("ref store down")
+}
+
+// A ref no substrate is tracked for, beside two local substrates, answers ErrNarrowNotOffered and probes
+// nothing, so an edit takes the revive path. A failed ref lookup is not that answer: the owner is unknown,
+// so the edit must answer retryable, not replace the proxy. Catches the route error answered as an
+// unreadable proxy, and a lookup failure answered as "not offered".
+func TestProxyNarrower_UnroutableRefIsNotOffered(t *testing.T) {
+	ctx := context.Background()
+	sub := &narrowingSubstrate{fakeSubstrate: &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}}}
+	plain := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}
+	if _, err := New(sub, plain).ProxyNarrowState(ctx, "wardyn-agent-unknown"); !errors.Is(err, runner.ErrNarrowNotOffered) {
+		t.Fatalf("ProxyNarrowState for an untracked ref: %v; want ErrNarrowNotOffered", err)
+	}
+	_, err := New(sub, plain).WithRefStore(&failingRefStore{}).ProxyNarrowState(ctx, "wardyn-agent-unknown")
+	if err == nil || errors.Is(err, runner.ErrNarrowNotOffered) {
+		t.Fatalf("ProxyNarrowState with a failed ref lookup: %v; want an error that is not ErrNarrowNotOffered", err)
+	}
+	if len(sub.probed) != 0 {
+		t.Errorf("probed %v, want no call", sub.probed)
+	}
+}

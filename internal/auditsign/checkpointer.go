@@ -55,8 +55,9 @@ var ErrExists = errors.New("an audit checkpoint already covers that range")
 type Store interface {
 	// ChainHead is the newest chained row's seq and row_hash ("" while no row is hashed).
 	ChainHead(ctx context.Context) (seq int64, rowHash string, err error)
-	// Range returns the rows above afterSeq, oldest first, at most max, re-hashed and walked from afterHash;
-	// a broken chain is a *ChainBreak. highWater is the newest seq.
+	// Range returns the rows above afterSeq, oldest first, at most max, re-hashed and walked from afterHash, or
+	// from the tail of an attested retention drop that removed rows above afterSeq; a broken chain is a
+	// *ChainBreak. highWater is the newest seq.
 	Range(ctx context.Context, afterSeq int64, afterHash string, max int) (rows []Row, highWater int64, err error)
 	Insert(ctx context.Context, cp Checkpoint) (existing Checkpoint, err error)
 	// Latest is the stored checkpoint with the highest seq_hi.

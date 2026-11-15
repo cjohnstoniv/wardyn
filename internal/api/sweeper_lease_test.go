@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -273,5 +274,41 @@ func TestSweepRunSecrets_RunsOnAFollower(t *testing.T) {
 	}
 	if snap := reg.Snapshot(cold.ID); len(snap) != 0 {
 		t.Errorf("the follower's registry still holds %d secret(s) of a cold terminal run", len(snap))
+	}
+}
+
+// Every replica ticks run_secret into one shared row, but only the leader sweeps
+// the committed rows: a follower's pass is an attempt, never a success, so it
+// cannot keep a failing leader's sweep from reading stale.
+func TestSweepRunSecrets_OnlyTheLeaderRecordsSuccess(t *testing.T) {
+	for _, c := range []struct {
+		replica string
+		lead    bool
+	}{{"follower", false}, {"leader", true}} {
+		t.Run(c.replica, func(t *testing.T) {
+			cfg := baseTestConfig(newHarness(t), &sweepStore{})
+			cfg.MaskRegistry = secretmask.NewRegistry()
+			cfg.SweeperLease = &fakeLease{lead: c.lead, termCtx: context.Background(), current: func(int64) bool { return true }}
+			srv := New(cfg)
+			ticks := sweephealth.NewMemStore()
+			err := sweephealth.New(ticks, c.replica, nil).Tick(context.Background(), sweephealth.RunSecret, func(ctx context.Context) error {
+				_, err := srv.SweepRunSecrets(ctx)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("SweepRunSecrets: %v", err)
+			}
+			got, err := ticks.Ticks(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tk := got[sweephealth.RunSecret]
+			if tk.AttemptedAt.IsZero() {
+				t.Error("no attempt recorded")
+			}
+			if succeeded := !tk.SucceededAt.IsZero(); succeeded != c.lead {
+				t.Errorf("the %s's pass recorded success=%v, want %v", c.replica, succeeded, c.lead)
+			}
+		})
 	}
 }

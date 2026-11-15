@@ -11,6 +11,7 @@ package main
 // would make both flaky. Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
 
 // rotateDatabase creates and migrates a fresh database on the WARDYN_TEST_PG
@@ -408,5 +410,216 @@ func TestRotateAgeKeyMode_FromAMountedKeyFile(t *testing.T) {
 	raw, err := booted.Get(secretstore.WithPurpose(context.Background(), secretstore.PurposeBoot), secretSigningKey)
 	if err != nil || string(raw) != before[storeRow{"", secretSigningKey}] {
 		t.Fatalf("the boot on the rotated key read the signing key as (%d bytes, %v), want the key it had before", len(raw), err)
+	}
+}
+
+// TestRotateAgeKeyMode_KeepsTheStagedKeyWhenTheCommitReplyIsLost: a COMMIT that
+// lands but whose reply is lost is an error to the rotation while the store
+// already answers to the new key alone. The staged key must survive and open
+// every row, the key file must be untouched, and the error must name the file
+// and the kek_id ending whose rows prove the rotation landed.
+func TestRotateAgeKeyMode_KeepsTheStagedKeyWhenTheCommitReplyIsLost(t *testing.T) {
+	dsn, pool := rotateDatabase(t)
+	oldID := newIdentity(t)
+	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
+
+	keyPath := t.TempDir() + "/age.key"
+	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the current key file: %v", err)
+	}
+	lost := errors.New("injected: the commit's reply was lost")
+	prev := rekeyStore
+	t.Cleanup(func() { rekeyStore = prev })
+	rekeyStore = func(ctx context.Context, p *pgxpool.Pool, from, to, platform age.Identity) (int, error) {
+		if _, err := prev(ctx, p, from, to, platform); err != nil {
+			t.Errorf("the real rekey failed before the injected error: %v", err)
+		}
+		return 0, lost
+	}
+
+	err := rotateAgeKeyMode(rekeyFlags(dsn, "pg", oldID.String()), keyPath)
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want the injected commit error", err)
+	}
+	staged := keyPath + ".new"
+	stagedKey, rerr := readAgeKeyFile(staged)
+	if rerr != nil || stagedKey == "" {
+		t.Fatalf("the staged key did not survive the commit error (%q, %v); it is the only key that reads the store", stagedKey, rerr)
+	}
+	newID, perr := age.ParseX25519Identity(stagedKey)
+	if perr != nil {
+		t.Fatalf("parse the staged key: %v", perr)
+	}
+	assertEveryRowReadsUnder(t, pool, before, newID, oldID)
+	if got, gerr := readAgeKeyFile(keyPath); gerr != nil || got != oldID.String() {
+		t.Errorf("the key file changed although the rotation failed: %q, %v", got, gerr)
+	}
+	suffix := ":" + kekFingerprint(newID)
+	for _, want := range []string{staged, "ONLY key", suffix} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+	if moved := rowsUnderKeySuffix(t, pool, suffix); moved == 0 {
+		t.Errorf("no row's kek_id ends in %q; the check the error names would miss the committed rotation", suffix)
+	}
+}
+
+// rowsUnderKeySuffix counts the secrets and principal_keys rows whose kek_id
+// ends in suffix: the check the rotation's error and the runbook name.
+func rowsUnderKeySuffix(t *testing.T, pool *pgxpool.Pool, suffix string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT (SELECT count(*) FROM secrets WHERE kek_id LIKE '%' || $1::text) + (SELECT count(*) FROM principal_keys WHERE kek_id LIKE '%' || $1::text)`, suffix,
+	).Scan(&n); err != nil {
+		t.Fatalf("count the rows under %q: %v", suffix, err)
+	}
+	return n
+}
+
+// TestRotateAgeKeyMode_KeepsTheStagedKeyWhenTheCommitLandsAfterTheError: a
+// COMMIT error does not say whether the commit will land, so this pin lands it
+// after the error returned, and a look at the rows in between finds none under
+// the new key. The staged key must survive that look and a refused re-run, and
+// neither message may say to discard it: once the commit lands it is the only
+// key that opens the store.
+func TestRotateAgeKeyMode_KeepsTheStagedKeyWhenTheCommitLandsAfterTheError(t *testing.T) {
+	dsn, pool := rotateDatabase(t)
+	oldID := newIdentity(t)
+	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
+
+	keyPath := t.TempDir() + "/age.key"
+	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the current key file: %v", err)
+	}
+	lost := errors.New("injected: the commit's reply was lost")
+	var inFlight age.Identity
+	prev := rekeyStore
+	t.Cleanup(func() { rekeyStore = prev })
+	rekeyStore = func(_ context.Context, _ *pgxpool.Pool, _, to, _ age.Identity) (int, error) {
+		inFlight = to // the rewrap has not landed when the error returns
+		return 0, lost
+	}
+
+	err := rotateAgeKeyMode(rekeyFlags(dsn, "pg", oldID.String()), keyPath)
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want the injected commit error", err)
+	}
+	staged := keyPath + ".new"
+	stagedKey, rerr := readAgeKeyFile(staged)
+	if rerr != nil || stagedKey == "" {
+		t.Fatalf("the staged key did not survive the commit error (%q, %v)", stagedKey, rerr)
+	}
+	newID, perr := age.ParseX25519Identity(stagedKey)
+	if perr != nil {
+		t.Fatalf("parse the staged key: %v", perr)
+	}
+	suffix := ":" + kekFingerprint(newID)
+	if n := rowsUnderKeySuffix(t, pool, suffix); n != 0 {
+		t.Fatalf("%d rows are under the new key before its commit landed, want 0", n)
+	}
+	rerun := rotateAgeKeyMode(rekeyFlags(dsn, "pg", oldID.String()), keyPath)
+	if rerun == nil {
+		t.Fatalf("a re-run beside the staged key was not refused")
+	}
+	for _, e := range []error{err, rerun} {
+		msg := strings.ToLower(e.Error())
+		if !strings.Contains(msg, "move it aside") || !strings.Contains(msg, "0600") || strings.Contains(msg, "remove") || strings.Contains(msg, "delete") {
+			t.Errorf("error %q must say to move the staged key aside at mode 0600, never to remove or delete it", e)
+		}
+	}
+	if got, gerr := readAgeKeyFile(staged); gerr != nil || got != stagedKey {
+		t.Fatalf("the staged key did not survive a zero-row look and a refused re-run (%q, %v)", got, gerr)
+	}
+
+	if _, cerr := prev(context.Background(), pool, oldID, inFlight, nil); cerr != nil {
+		t.Fatalf("land the delayed commit: %v", cerr)
+	}
+	assertEveryRowReadsUnder(t, pool, before, newID, oldID)
+	if rowsUnderKeySuffix(t, pool, suffix) == 0 {
+		t.Errorf("no row's kek_id ends in %q after the delayed commit landed", suffix)
+	}
+}
+
+// TestRotateAgeKeyMode_FindsALandedRotationThroughPrincipalKeysAlone: a store
+// whose only rows under the age key are principal keys (the default domain, no
+// row of secrets) answers the check after a COMMIT whose reply was lost through
+// principal_keys alone. The staged key must survive and open the principal key
+// the old key no longer opens, and its fingerprint must find that row.
+func TestRotateAgeKeyMode_FindsALandedRotationThroughPrincipalKeysAlone(t *testing.T) {
+	dsn, pool := rotateDatabase(t)
+	ctx := context.Background()
+	oldID := newIdentity(t)
+	oldStore, err := secretstorepg.New(pool, oldID)
+	if err != nil {
+		t.Fatalf("secretstorepg.New: %v", err)
+	}
+	v, key, err := oldStore.SubjectKeys().Current(ctx, "alice", subjectkey.PurposeCred)
+	if err != nil {
+		t.Fatalf("create alice's principal key in the default domain: %v", err)
+	}
+	secretRows := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets`).Scan(&n); err != nil {
+			t.Fatalf("count secrets: %v", err)
+		}
+		return n
+	}
+	if n := secretRows(); n != 0 {
+		t.Fatalf("%d rows of secrets, want none: only principal_keys may answer the check", n)
+	}
+
+	keyPath := t.TempDir() + "/age.key"
+	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the current key file: %v", err)
+	}
+	lost := errors.New("injected: the commit's reply was lost")
+	prev := rekeyStore
+	t.Cleanup(func() { rekeyStore = prev })
+	rekeyStore = func(ctx context.Context, p *pgxpool.Pool, from, to, platform age.Identity) (int, error) {
+		if _, err := prev(ctx, p, from, to, platform); err != nil {
+			t.Errorf("the real rekey failed before the injected error: %v", err)
+		}
+		return 0, lost
+	}
+
+	err = rotateAgeKeyMode(rekeyFlags(dsn, "pg", oldID.String()), keyPath)
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want the injected commit error", err)
+	}
+	stagedKey, rerr := readAgeKeyFile(keyPath + ".new")
+	if rerr != nil || stagedKey == "" {
+		t.Fatalf("the staged key did not survive the commit error (%q, %v); it is the only key that opens the principal key", stagedKey, rerr)
+	}
+	newID, perr := age.ParseX25519Identity(stagedKey)
+	if perr != nil {
+		t.Fatalf("parse the staged key: %v", perr)
+	}
+	suffix := ":" + kekFingerprint(newID)
+	if !strings.Contains(err.Error(), suffix) {
+		t.Errorf("error %q does not name %q", err, suffix)
+	}
+	if n := secretRows(); n != 0 {
+		t.Fatalf("%d rows of secrets after the rotation, want none", n)
+	}
+	if n := rowsUnderKeySuffix(t, pool, suffix); n != 1 {
+		t.Errorf("%d rows under %q, want the one principal key: the check must count principal_keys", n, suffix)
+	}
+	newStore, err := secretstorepg.New(pool, newID)
+	if err != nil {
+		t.Fatalf("secretstorepg.New(new): %v", err)
+	}
+	if got, err := newStore.SubjectKeys().Key(ctx, "alice", subjectkey.PurposeCred, v); err != nil || !bytes.Equal(got, key) {
+		t.Errorf("the staged key opens alice's principal key as (%d bytes, %v), want the key it held before", len(got), err)
+	}
+	cold, err := secretstorepg.New(pool, oldID)
+	if err != nil {
+		t.Fatalf("secretstorepg.New(old): %v", err)
+	}
+	if _, err := cold.SubjectKeys().Key(ctx, "alice", subjectkey.PurposeCred, v); err == nil {
+		t.Errorf("the old key still opens alice's principal key; the rotation did not move it")
 	}
 }

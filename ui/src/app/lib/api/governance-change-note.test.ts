@@ -57,4 +57,12 @@ describe("change note client", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/governance/changes?approver=security");
     expect(fetchMock.mock.calls[1][0]).not.toContain("?");
   });
+
+  it("listChanges marks the list truncated only when the server sends X-Wardyn-Truncated", async () => {
+    const cut = json([CHANGE]);
+    cut.headers.set("X-Wardyn-Truncated", "true");
+    fetchMock.mockResolvedValueOnce(cut).mockResolvedValueOnce(json([CHANGE]));
+    expect((await governance.listChanges()).truncated).toBe(true);
+    expect((await governance.listChanges()).truncated).toBeUndefined();
+  });
 });

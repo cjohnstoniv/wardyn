@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -203,10 +202,9 @@ func TestToolgateCredential_HandStartedTakesMissingCredentialHold(t *testing.T) 
 	c := credentialSandbox(t)
 	var raised atomic.Int32
 	cp := httptestApprovalsServer(t, &raised)
-	port := freeLoopbackPort(t)
 	pc := c.spec.ProxyConfig
 	pc.ControlPlaneURL = cp
-	raw, err := runner.BuildProxyConfig(c.spec.RunID, pc, port)
+	raw, err := runner.BuildProxyConfig(c.spec.RunID, pc, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,23 +212,18 @@ func TestToolgateCredential_HandStartedTakesMissingCredentialHold(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Listen = "127.0.0.1:0"
 	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
 	if err != nil {
 		t.Fatalf("proxy: %v", err)
 	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(sctx)
-	})
+	addr := serveTestSidecar(t, psrv)
 	// What wardyn-toolgate sends: a Bearer only when it was given a credential.
 	raise := func(cred string) (int, string) {
 		t.Helper()
 		var resp *http.Response
 		for range 50 {
-			req, _ := http.NewRequest(http.MethodPost, "http://"+cfg.Listen+"/wardyn/v1/approvals",
+			req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/wardyn/v1/approvals",
 				strings.NewReader(`{"kind":"tool_call","payload":{"tool":"Read","cmd":"x"}}`))
 			if cred != "" {
 				req.Header.Set("Authorization", "Bearer "+cred)

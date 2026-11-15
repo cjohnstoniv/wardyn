@@ -221,6 +221,24 @@ func FoldWorkspaceContract(
 	return out
 }
 
+// KeepScanSeeded adds to seed, the rows a new scan found, every scan_seeded row
+// of prior, the source's rows before it: a scan that did not read its whole
+// tree never drops or weakens a row an earlier scan seeded. A row both hold
+// takes the stronger level (rule 5). Rows an operator set are not copied; the
+// store keeps those itself. seed must not be nil.
+func KeepScanSeeded(seed, prior map[string]WorkspaceRequirement) map[string]WorkspaceRequirement {
+	for key, row := range prior {
+		if row.Provenance != "scan_seeded" {
+			continue
+		}
+		if have, seen := seed[key]; seen {
+			row = mergeRequirement(have, row)
+		}
+		seed[key] = row
+	}
+	return seed
+}
+
 // mergeRequirement is rule 5: strongest level, weakest provenance.
 func mergeRequirement(a, b WorkspaceRequirement) WorkspaceRequirement {
 	out := a

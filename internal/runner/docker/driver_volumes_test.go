@@ -167,7 +167,7 @@ func TestDriveMount_ManagedIsExactlyOneMount(t *testing.T) {
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
 	drive := dockerVolumeDrive()
 
-	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
+	got, _, err := d.driveMount(context.Background(), drive, true)
 	if err != nil {
 		t.Fatalf("driveMount for a managed drive: %v", err)
 	}
@@ -205,13 +205,13 @@ func TestEnsureDriveVolume_IdempotentByName(t *testing.T) {
 	f := newFakeDocker()
 	drive := dockerVolumeDrive()
 
-	if err := ensureDriveVolume(context.Background(), f, drive); err != nil {
+	if _, err := ensureDriveVolume(context.Background(), f, drive); err != nil {
 		t.Fatalf("first ensureDriveVolume: %v", err)
 	}
 	if f.volumeCreates != 1 {
 		t.Fatalf("first call made %d VolumeCreate calls, want 1", f.volumeCreates)
 	}
-	if err := ensureDriveVolume(context.Background(), f, drive); err != nil {
+	if _, err := ensureDriveVolume(context.Background(), f, drive); err != nil {
 		t.Fatalf("second ensureDriveVolume: %v", err)
 	}
 	if f.volumeCreates != 1 {
@@ -239,7 +239,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 
 	t.Run("foreign-driver", func(t *testing.T) {
 		f := seed(client.VolumeCreateOptions{Name: "wardyn-drive-alice", Driver: "some-csi-plugin"})
-		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 		if err == nil {
 			t.Fatal("a same-named volume on a FOREIGN driver must be refused, not adopted as a managed drive")
 		}
@@ -257,7 +257,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 			Driver:     "local",
 			DriverOpts: map[string]string{"type": "cifs", "device": "//nas.corp/share", "o": "username=svc,password=hunter2"},
 		})
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
 			t.Fatal("a same-named volume carrying DRIVER OPTIONS must be refused — adopting it would mount an operator's share on a credential Wardyn never chose")
 		}
 	})
@@ -274,7 +274,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 			Driver: "local",
 			Labels: map[string]string{labelManaged: "true", labelDrive: other.String(), labelDriveHome: "alice"},
 		})
-		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 		if err == nil {
 			t.Fatal("a volume labelled with ANOTHER drive's id must be refused, not adopted")
 		}
@@ -300,7 +300,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 				labelDriveSubject: types.DriveSubjectHash("alice@acquired.example"),
 			},
 		})
-		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 		if err == nil {
 			t.Fatal("a volume allocated to ANOTHER principal was adopted — that is one person's files handed to another")
 		}
@@ -325,7 +325,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 				labelDriveSubject: types.DriveSubjectHash(driveSubject),
 			},
 		})
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a Wardyn-shaped volume must be REUSED, not refused: %v", err)
 		}
 		if f.volumeCreates != 0 {
@@ -343,7 +343,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 			Driver: "local",
 			Labels: map[string]string{labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice"},
 		})
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a volume predating the subject label must still be adopted: %v", err)
 		}
 	})
@@ -356,7 +356,7 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 	// drive, which is a collision, not an absence.
 	t.Run("label-less-is-adopted", func(t *testing.T) {
 		f := seed(client.VolumeCreateOptions{Name: "wardyn-drive-alice", Driver: "local"})
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a label-less Wardyn-shaped volume must be adopted (the hand-restore path): %v", err)
 		}
 	})
@@ -439,7 +439,7 @@ func TestEnsureDriveVolume_AdoptionRulesComposeOnBothArms(t *testing.T) {
 							// comes back against somebody else's volume.
 							f.volumeInspectMissesExisting = raced
 
-							err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+							_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 							if (err == nil) != wantAdopt {
 								t.Errorf("ensureDriveVolume = %v, want adopt=%v", err, wantAdopt)
 							}
@@ -482,7 +482,7 @@ func TestEnsureDriveVolume_CreateThenVerify(t *testing.T) {
 	t.Run("another-drives-volume", func(t *testing.T) {
 		other := uuid.MustParse("99999999-8888-7777-6666-555555555555")
 		f := seedRaced(map[string]string{labelManaged: "true", labelDrive: other.String(), labelDriveHome: "alice"}, "local", nil)
-		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 		if err == nil {
 			t.Fatal("a create that lost the race adopted ANOTHER drive's volume — the create's result must run the same checks the inspect does")
 		}
@@ -496,7 +496,7 @@ func TestEnsureDriveVolume_CreateThenVerify(t *testing.T) {
 			labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice",
 			labelDriveSubject: types.DriveSubjectHash("alice@acquired.example"),
 		}, "local", nil)
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
 			t.Fatal("a create that lost the race adopted ANOTHER principal's volume")
 		}
 	})
@@ -506,7 +506,7 @@ func TestEnsureDriveVolume_CreateThenVerify(t *testing.T) {
 	// arrived a moment after it.
 	t.Run("options-bearing", func(t *testing.T) {
 		f := seedRaced(nil, "local", map[string]string{"type": "cifs", "o": "username=svc,password=hunter2"})
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
 			t.Fatal("a create that lost the race adopted an OPTIONS-BEARING volume — the share credential guardrail has a first-run hole")
 		}
 	})
@@ -515,7 +515,7 @@ func TestEnsureDriveVolume_CreateThenVerify(t *testing.T) {
 	// verify passes and the ordinary first run is untouched.
 	t.Run("the-winner-is-unaffected", func(t *testing.T) {
 		f := newFakeDocker()
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("an uncontended first run was refused by its own create: %v", err)
 		}
 		if f.volumeCreates != 1 {
@@ -553,7 +553,7 @@ func TestEnsureDriveVolume_FailsClosed(t *testing.T) {
 	t.Run("inspect-error", func(t *testing.T) {
 		f := newFakeDocker()
 		f.failVolumeInspect = true
-		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		_, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
 		if err == nil {
 			t.Fatal("an unreadable daemon must fail closed, got nil")
 		}
@@ -564,7 +564,7 @@ func TestEnsureDriveVolume_FailsClosed(t *testing.T) {
 	t.Run("create-error", func(t *testing.T) {
 		f := newFakeDocker()
 		f.failVolumeCreate = true
-		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+		if _, err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
 			t.Fatal("a refused VolumeCreate must fail closed, got nil")
 		}
 	})
@@ -572,7 +572,7 @@ func TestEnsureDriveVolume_FailsClosed(t *testing.T) {
 		f := newFakeDocker()
 		drive := dockerVolumeDrive()
 		drive.ObjectName = ""
-		err := ensureDriveVolume(context.Background(), f, drive)
+		_, err := ensureDriveVolume(context.Background(), f, drive)
 		if err == nil {
 			t.Fatal("an empty object name must fail closed (it would create an anonymous volume), got nil")
 		}

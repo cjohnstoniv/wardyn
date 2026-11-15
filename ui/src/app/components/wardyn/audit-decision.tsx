@@ -140,7 +140,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // A run's walls or wall preset refuse every push (push_rules.deny_all): additive to the five labels above, which stay as shipped.
   if (source === PUSH_DENY_ALL_SOURCE) return { label: "Refused: every push", tone: "danger" };
   // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
-  // refusal: recorded once per run, at proxy construction, to audit the
+  // refusal: recorded once per proxy, as it starts, to audit the
   // deliberate SSRF-guard relaxation for the operator's own configured
   // upstream hop — never a per-request decision. Named BEFORE the generic
   // builtin:* bucket below (which is refusals only), so it cannot fall into

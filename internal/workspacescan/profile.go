@@ -118,7 +118,12 @@ type ScanFacts struct {
 	HasDevcontainer     bool                 `json:"has_devcontainer,omitempty"`
 	HasDockerfile       bool                 `json:"has_dockerfile,omitempty"`
 	UnrecognizedSamples []UnrecognizedSample `json:"unrecognized_samples,omitempty"`
-	Truncated           bool                 `json:"truncated,omitempty"`
+	// Truncated: the scan stopped at one of its budgets, on files, lines or keys read, or on
+	// manifests, samples, secret names or hosts collected. It lowers confidence only.
+	Truncated bool `json:"truncated,omitempty"`
+	// Unread: the scan could not read an entry, or read a file only up to its read cap. It makes
+	// the profile Incomplete.
+	Unread bool `json:"unread,omitempty"`
 
 	// Content-lane evidence: names/keys/hosts only, via anchored capture
 	// groups — no file value ever lands here. UNTRUSTED until DeriveProfile
@@ -181,6 +186,13 @@ type WorkspaceProfile struct {
 	// build input changes even if the detected profile is unchanged. Empty
 	// when no build-input files are present.
 	ContextHash string `json:"context_hash,omitempty"`
+	// Incomplete is set when the scan could not read an entry, read a file only up to its read
+	// limit, or cut a list at its cap. Confidence is then low, and a source scan keeps the
+	// requirement rows an earlier scan found (types.KeepScanSeeded). A scan budget alone
+	// (ScanFacts.Truncated) lowers confidence and leaves Incomplete unset.
+	Incomplete bool `json:"incomplete,omitempty"`
+	// RequiredSecretsOmitted counts the valid secret names left out past the RequiredSecrets cap.
+	RequiredSecretsOmitted int `json:"required_secrets_omitted,omitempty"`
 	// Confidence is one of ConfidenceHigh/Medium/Low.
 	Confidence  string `json:"confidence"`
 	NeedsReview bool   `json:"needs_review,omitempty"`

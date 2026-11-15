@@ -130,7 +130,7 @@ func TestPG_QueuePolicyEditedWhileWaiting(t *testing.T) {
 	occupant := e.occupy(pool)
 	unedited := e.queuedLaunch(nil, pool, extra)
 	edited := e.queuedLaunch(nil, pool, extra)
-	if _, err := e.pg.UpdatePolicy(context.Background(), policy.ID, "reviewed", types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}); err != nil {
+	if _, err := e.pg.UpdatePolicy(context.Background(), policy.ID, policy.UpdatedAt, "reviewed", types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}); err != nil {
 		t.Fatal(err)
 	}
 	e.free(occupant)

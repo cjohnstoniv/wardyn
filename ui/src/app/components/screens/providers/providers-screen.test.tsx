@@ -7,7 +7,7 @@
 // the TIER, not the network), fetch-failed (distinct from empty), the legacy
 // banner (zero rows), populated, and exactly ONE teal button at a time.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
@@ -254,6 +254,21 @@ describe("ProvidersScreen", () => {
     await screen.findByTestId("provider-row-github");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
+  });
+
+  it("the Git and Storage tabs are read-only while their save is in flight, so a limit typed then is not lost", async () => {
+    const doc = { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] };
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: doc, etag: '"e3"' });
+    let answer: ((v: unknown) => void) | undefined;
+    putWorkspaceProvidersMock.mockReturnValue(new Promise((done) => (answer = done)));
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    expect(within(row).getByRole("textbox")).toBeDisabled();
+    await userEvent.click(screen.getByRole("tab", { name: PROVIDERS.STORAGE_TAB }));
+    expect(screen.getByLabelText(PROVIDERS.FIELD_MAX_DISK)).toBeDisabled();
+    await act(async () => answer?.({ providers: doc, etag: '"e4"', sourcesNoLongerAdmitted: 0 }));
+    expect(screen.getByLabelText(PROVIDERS.FIELD_MAX_DISK)).toBeEnabled();
   });
 
   // #3329: an edit made between the saved toast and the screen adopting the PUT response was overwritten by it.
@@ -506,6 +521,28 @@ describe("ProvidersScreen", () => {
     await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: the tabs are read-only until the reload lands, so an edit typed then is not replaced", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
+    let me: ((v: unknown) => void) | undefined;
+    whoamiMock.mockReturnValue(new Promise((done) => (me = done)));
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    // A second click starts no second reload, whose earlier answer would end the read-only window.
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    expect(within(row).getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await act(async () => me?.(null));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(screen.getByTestId("provider-row-github")).getByRole("textbox")).toBeEnabled());
   });
 
   it("Discard mine and reload: no answer from /me reloads only the providers", async () => {

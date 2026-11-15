@@ -486,6 +486,13 @@ func TestBackgroundOnlyRefusal(t *testing.T) {
 // declared function's body, by name, for the door table's guard.
 func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 	t.Helper()
+	return funcBodies(t, false)
+}
+
+// funcBodies is every function body in the package's non-test files, by name; qualified keys a method by its receiver
+// type too (localAttach.run), for a name more than one type uses.
+func funcBodies(t *testing.T, qualified bool) map[string]*ast.BlockStmt {
+	t.Helper()
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -502,7 +509,17 @@ func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 		}
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil {
-				out[fn.Name.Name] = fn.Body
+				key := fn.Name.Name
+				if qualified && fn.Recv != nil && len(fn.Recv.List) == 1 {
+					recv := fn.Recv.List[0].Type
+					if star, ok := recv.(*ast.StarExpr); ok {
+						recv = star.X
+					}
+					if id, ok := recv.(*ast.Ident); ok {
+						key = id.Name + "." + key
+					}
+				}
+				out[key] = fn.Body
 			}
 		}
 	}
@@ -690,6 +707,91 @@ func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
 		}
 		if slices.Contains(door.Routes, "POST /runs/{id}/desktop/watch-ticket") != (door.Door == "desktop") {
 			t.Errorf("the watch's route and door %q disagree", door.Door)
+		}
+	}
+}
+
+// TestBackgroundExecIsTheDoorsThirdException holds the contract's third exception to the code: POST /runs/{id}/exec
+// stays the SSH access door's route; liveRunForExec, the fresh read without the background refusal, is called only
+// by sshFreshRun, which then refuses a background run, by execFreshRun, which only handleRunExec calls, and by
+// startFresh; and handleRunExec keeps the governance door, the data_out rule and the channel cap. startFresh re-reads
+// the run under its start lock; each of its callers has already made its door's background decision (SSH, attach and
+// sign-in refuse a background run; the UI gateway admits one only for its watch and inbound exceptions), and a run's
+// experience never changes after create. An SSH bridge switched to execFreshRun or liveRunForExec, or a new door
+// through startFresh, execFresh or a fenced execSFTPServer, reds here.
+func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
+	bodies := backgroundDoorBodies(t)
+	calls := func(body *ast.BlockStmt, name string) bool {
+		found := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+					found = true
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	callers := func(name string) []string {
+		var out []string
+		for sym, body := range bodies {
+			if calls(body, name) {
+				out = append(out, sym)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	for name, want := range map[string][]string{
+		"liveRunForExec": {"execFreshRun", "sshFreshRun", "startFresh"},
+		"execFreshRun":   {"handleRunExec"},
+	} {
+		if got := callers(name); !slices.Equal(got, want) {
+			t.Errorf("%s is called by %v, want %v", name, got, want)
+		}
+	}
+	// The doors through startFresh, keyed by receiver too: three methods in the package are named run. refers counts
+	// any use of the name, so a generic instantiation (startFresh[T]) or a function value is a caller too.
+	refers := func(body *ast.BlockStmt, name string) bool {
+		found := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+			return !found
+		})
+		return found
+	}
+	qualified := funcBodies(t, true)
+	for name, want := range map[string][]string{
+		"startFresh": {"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.sandboxExec", "localAttach.run"},
+		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced.
+		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
+		"execSFTPServer": {"Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.computerFolderPass"},
+	} {
+		var got []string
+		for sym, body := range qualified {
+			if refers(body, name) {
+				got = append(got, sym)
+			}
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s is used by %v, want %v", name, got, want)
+		}
+	}
+	for _, name := range []string{"refuseExecGovernance", "refuseExecDataOut", "sshAcquireSession"} {
+		if !calls(bodies["handleRunExec"], name) {
+			t.Errorf("handleRunExec no longer calls %s", name)
+		}
+	}
+	if !callsBackgroundPredicate(bodies["sshFreshRun"]) || callsBackgroundPredicate(bodies["execFreshRun"]) {
+		t.Error("sshFreshRun must refuse a background run and execFreshRun must not")
+	}
+	for _, door := range backgroundDoors {
+		if slices.Contains(door.Routes, "POST /runs/{id}/exec") != (door.Door == "SSH access") {
+			t.Errorf("the exec route and door %q disagree", door.Door)
 		}
 	}
 }

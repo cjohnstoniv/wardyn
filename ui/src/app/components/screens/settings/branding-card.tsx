@@ -286,7 +286,9 @@ export function BrandingCard() {
         </div>
       ) : (
         <div className="mt-4 grid gap-6 md:grid-cols-2">
-          <div className="space-y-4">
+          {/* Read-only while a save or remove is in flight: its answer becomes the form, so an edit made
+              meanwhile would be dropped. */}
+          <fieldset disabled={saving || removing} className="m-0 min-w-0 space-y-4 border-0 p-0">
             <Field label={BRANDING.ORG_NAME_LABEL} htmlFor="brand-org">
               <Input id="brand-org" value={draft.orgName} maxLength={64} aria-describedby={nameBad ? "brand-org-needed" : undefined} onChange={(e) => set({ orgName: e.target.value })} />
             </Field>
@@ -375,7 +377,7 @@ export function BrandingCard() {
               )}
               <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
             </div>
-          </div>
+          </fieldset>
           <div className="space-y-3">
             <div className="text-sm font-medium text-foreground">{BRANDING.PREVIEW_TITLE}</div>
             <div data-testid="branding-preview" className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">

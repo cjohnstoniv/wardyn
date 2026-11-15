@@ -213,6 +213,39 @@ func TestPersonalWallsRoutes(t *testing.T) {
 	}
 }
 
+// A request body is one JSON value with no key written twice: a second value, text after the first,
+// or a repeated key is refused before anything is stored. Decode stops after the first value, so
+// `{} {"spec":...}` would otherwise read as an empty document, and it keeps the last of a repeated
+// key, so the value written first would be dropped; either replaces the stored walls.
+func TestPersonalWallsPutRefusesAnAmbiguousBody(t *testing.T) {
+	srv, st, _ := uvServer(t)
+	member := ssoSession(t, wallsSub, "walls@corp.example", oidc.RoleUser)
+	key := wallsSub + "|" + types.PersonalWallsPrefKey
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/walls", member, `{"spec":{"denied_domains":["evil.example"]}}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", w.Code, w.Body)
+	}
+	stored := string(st.prefs[key])
+	for _, body := range []string{
+		`{} {"spec":{"denied_domains":["example.com"]}}`,
+		`{"spec":{"denied_domains":["example.com"]}} {}`,
+		`{"spec":{"denied_domains":["example.com"]}} junk`,
+		`{"spec":{"denied_domains":[],"denied_domains":["example.com"]}}`,
+		`{"spec":{},"spec":{"denied_domains":["example.com"]}}`,
+	} {
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/me/walls", member, body)
+		if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonInvalidRequestBody {
+			t.Errorf("PUT %s = %d %s, want 400 %s", body, w.Code, w.Body, reasonInvalidRequestBody)
+		}
+	}
+	if got := string(st.prefs[key]); got != stored {
+		t.Errorf("stored walls = %s, want them unchanged: %s", got, stored)
+	}
+	// White space after the value is still one value.
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/walls", member, "{\"spec\":{\"denied_domains\":[\"example.com\"]}}\n\n"); w.Code != http.StatusOK {
+		t.Errorf("PUT with trailing line breaks = %d %s", w.Code, w.Body)
+	}
+}
+
 // TestPersonalWallsRunStep: the step meets the launching person's walls into the run's policy, drops
 // the credentials they keep out, records each knob as theirs and names it; a caller who is no person,
 // and a person with none, is untouched; walls that cannot be read refuse the run.

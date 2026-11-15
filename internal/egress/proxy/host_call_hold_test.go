@@ -486,6 +486,7 @@ func TestHostCallRememberedKeysAreBounded(t *testing.T) {
 	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}})
 	cp := newHCCP(t, p)
 	cp.newState = types.ApprovalApproved
+	hostCallSecond = time.Second // every call is decided at its first poll; a 90 ms window refuses a raise a loaded machine stalls
 	for i := range maxMCPCallKeys {
 		if rec, sent := hcSend(p, "POST", fmt.Sprintf("http://%s/k/%d", hrHost, i)); !sent {
 			t.Fatalf("call %d refused: %d %v", i, rec.Code, rec.Header())

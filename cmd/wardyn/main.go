@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -64,7 +65,7 @@ func main() {
 // any failure to reach the daemon deserves the same "is wardynd running?" nudge.
 func dialHint(err error) string {
 	var ue *url.Error
-	if errors.As(err, &ue) {
+	if errors.As(err, &ue) && !errors.As(err, new(*sessionRefusal)) {
 		// `wardyn setup` is deliberately NOT named here: it's a subcommand group
 		// (status/wall/vault/...), so a bare `wardyn setup` prints help and exits
 		// 0 rather than starting wardynd — a dead-end recovery step. (Its RunE,
@@ -94,7 +95,7 @@ var urlFromDefault bool
 // organisation because none was set. A URL the person named gets none, as a typed API error does.
 func noOrgHint(err error, fromDefault bool) string {
 	var ue *url.Error
-	if !fromDefault || !errors.As(err, &ue) {
+	if !fromDefault || !errors.As(err, &ue) || errors.As(err, new(*sessionRefusal)) {
 		return ""
 	}
 	return "no organisation set: run `wardyn login <url>` with your organisation's address"
@@ -164,6 +165,9 @@ func exitCodeFor(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
 		return ee.code
+	}
+	if errors.As(err, new(*sessionRefusal)) {
+		return 1 // refused here before the request left, not a network failure
 	}
 	var ae *sdk.APIError
 	if errors.As(err, &ae) {
@@ -242,20 +246,32 @@ const tokenFromLogin = "wardyn login"
 // --token, WARDYN_ADMIN_TOKEN and WARDYN_TOKEN all name none.
 type sessionState struct {
 	once sync.Once
-	mu   sync.Mutex // guards s and err after resolve, for bearer
+	mu   sync.Mutex // guards s, err and refused after resolve, for bearer
 	s    storedSession
 	err  error
+	// pin is the session the command started with, set once by resolve and never changed by a renewal.
+	pin uuid.UUID
+	// refused is set once the stored sign-in is another session, or none: every later request is refused.
+	refused error
 }
 
 // resolve loads the stored sign-in for serverURL: the item is looked up by that URL alone, so it is only
-// ever sent to the organisation it was made for.
-func (st *sessionState) resolve(serverURL string) {
+// ever sent to the organisation it was made for. A renewal cut short by ctx still leaves the item it read
+// and its session as the command's, so a later request renews it.
+func (st *sessionState) resolve(ctx context.Context, serverURL string) {
 	st.once.Do(func() {
 		origin, err := cliprofile.Normalize(serverURL)
 		if err != nil {
 			return
 		}
-		st.s, st.err = loadSession(context.Background(), origin)
+		st.s, st.err = loadSession(ctx, origin, uuid.Nil)
+		if st.s.kind != "" {
+			st.pin = st.s.item.SessionID
+		}
+		if st.pin == uuid.Nil {
+			// An item with no session id cannot be told from a later sign-in, so it is not used.
+			st.s.kind = ""
+		}
 	})
 }
 
@@ -263,27 +279,46 @@ func (st *sessionState) resolve(serverURL string) {
 func (st *sessionState) reset() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.once, st.s, st.err = sync.Once{}, storedSession{}, nil
+	st.once, st.s, st.err, st.pin, st.refused = sync.Once{}, storedSession{}, nil, uuid.Nil, nil
 }
 
 // bearer is the stored sign-in's bearer for the next request. The cached token is sent while it is outside
 // the renewal margin; inside it, loadSession reads the item again and renews it under the lock. An admin
 // step-up is never renewed: once it is spent, the ordinary access token is sent. A sign-in that has ended
-// stays ended, and one that is no longer stored sends no bearer. origin is the sign-in's organisation,
-// "" when none is stored.
-func (st *sessionState) bearer(ctx context.Context) (token, origin string) {
+// stays ended. origin is the sign-in's organisation, "" when none was stored as the command started. A
+// renewal keeps the session the command started with (pin): once that session is signed out or replaced,
+// err is a *sessionRefusal wrapping errSessionChanged for this and every later request, and the
+// replacement's token is never used. A store that cannot be read refuses this request only. A renewal cut
+// short by ctx returns ctx's error for this request only, so it is not sent, and nothing is stored or latched.
+func (st *sessionState) bearer(ctx context.Context) (token, origin string, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if st.refused != nil {
+		return "", st.s.origin, st.refused // the sign-in changed: nothing is read or sent again
+	}
 	if st.s.kind == "" {
-		return "", ""
+		return "", "", nil
 	}
 	if tok, kind := st.s.item.bearer(cliNow()); tok != "" {
 		st.s.token, st.s.tokenKind = tok, kind
-		return tok, st.s.origin
+		return tok, st.s.origin, nil
 	}
-	st.s, st.err = loadSession(ctx, st.s.origin)
+	s, err := loadSession(ctx, st.s.origin, st.pin)
+	switch {
+	case errors.Is(err, errSessionChanged):
+		st.refused = &sessionRefusal{err}
+		return "", st.s.origin, st.refused
+	case err != nil && ctx.Err() != nil:
+		// The request's own context ended while it waited for the renewal lock or for the refresh: refuse it
+		// rather than send it with no bearer, and keep the state so a later request tries the renewal again.
+		return "", st.s.origin, ctx.Err()
+	case err != nil && (s.kind == "" || s.item.SessionID != st.pin):
+		// The stored sign-in could not be read: keep the one the command holds and send nothing this time.
+		return "", st.s.origin, &sessionRefusal{fmt.Errorf(errRenew, st.s.origin, err)}
+	}
+	st.s, st.err = s, err
 	authHintFor.session = st.err
-	return st.s.token, st.s.origin
+	return st.s.token, st.s.origin, nil
 }
 
 func rootCmd() *cobra.Command {
@@ -345,9 +380,14 @@ func rootCmd() *cobra.Command {
 	client := func() *sdk.Client {
 		t, hc := token, orgClient(serverURL, 30*time.Second)
 		if t == "" {
-			sess.resolve(serverURL)
+			// The root's context never ends, unless the command put its own deadline there before this call
+			// (run wait-ready): then a wait for another command's renewal ends with that deadline.
+			ctx := root.Context()
+			sess.resolve(ctx, serverURL)
 			var origin string
-			if t, origin = sess.bearer(context.Background()); t != "" && authHintFor.tokenFrom != tokenFromLogin {
+			// A changed or unreadable sign-in leaves t empty and origin set: sessionTransport then refuses
+			// the requests made through this client's HTTP client while it stays so.
+			if t, origin, _ = sess.bearer(ctx); t != "" && authHintFor.tokenFrom != tokenFromLogin {
 				authHintFor.tokenFrom = tokenFromLogin
 				warnPlaintextToken(root.ErrOrStderr(), serverURL, t)
 			}

@@ -72,7 +72,9 @@ func proposeImageRequest(s *Server, w http.ResponseWriter, r *http.Request, body
 			}
 			actorType, actor := actorFromRequest(r)
 			s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "governance.image_request.request", saved.ID.String(), "success", mustJSON(data)))
-			view := s.requestViewOf(r, saved, "image", types.DeciderKindImage, imageRequestView(s, ctx, saved), map[uuid.UUID]string{unit.ID: unit.Name})
+			// A pending request reads nothing back: its fields are the payload just written.
+			f := requestFields{unitID: &unit.ID, image: ref}
+			view := s.requestViewOf(r, saved, "image", types.DeciderKindImage, f, map[uuid.UUID]string{unit.ID: unit.Name})
 			writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": view.GovernanceChange, "request": view})
 		},
 	})
@@ -268,10 +270,10 @@ func applyImageRequestChange(s *Server, r *http.Request, q store.Querier, ch typ
 
 // imageRequestView is an image request's own fields of a request view: the image and the unit the offer
 // was read on.
-func imageRequestView(_ *Server, _ context.Context, ch types.GovernanceChange) requestFields {
+func imageRequestView(_ *Server, _ context.Context, ch types.GovernanceChange) (requestFields, error) {
 	var p imageRequestPayload
 	if json.Unmarshal(ch.Payload, &p) != nil {
-		return requestFields{}
+		return requestFields{}, nil
 	}
-	return requestFields{unitID: &p.UnitID, image: p.Image}
+	return requestFields{unitID: &p.UnitID, image: p.Image}, nil
 }

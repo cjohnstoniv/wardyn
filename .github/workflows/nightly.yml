@@ -168,7 +168,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -240,7 +240,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -273,14 +273,49 @@ jobs:
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # The -tags docker ./internal/api/ test compile for TestInternalHostsOnRunnerDocker needs about 21-22 GB at
+      # its peak, even with two workers (measured in CI), against this runner's 16 GB; the runner was shut
+      # down in the prebuild below. Extra swap lets the peak page out, as in ci.yml's go job.
+      - name: Add swap for the api compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # The package is compiled here first with one worker, so the step below finds it in the build cache, and
+      # memory and disk are printed around it. vmstat writes to the step log every 15 s.
+      - name: Prebuild the docker-tagged api test binary with one worker
+        env:
+          GOMAXPROCS: "2"
+          # The api compile peaked at 15.4-15.6 GB of the runner's 16 GB, here beside the agent images in
+          # docker. A soft heap limit has the compiler collect harder near it, and one worker keeps a second
+          # compile or link from running beside it.
+          GOMEMLIMIT: "10GiB"
+        run: |
+          free -m; df -h /
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -tags docker -p 1 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+          cat "$RUNNER_TEMP/api.time"
+          echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          rm -f "$RUNNER_TEMP/api-docker.test"
+          free -m; df -h /
       - name: Docker conformance at CC2 (runsc)
         env:
           WARDYN_TEST_DOCKER: "1"
           WARDYN_TEST_REQUIRE_CLASS: CC2
         shell: bash # pipefail — see the e2e-live job above
+        # vmstat writes to the step log itself, every 15 s, so a runner lost mid-step still leaves its last numbers.
         run: |
           mkdir -p test/reports/e2e
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
           make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
+          free -m; df -h /
       - name: Live task e2e with CC2 required (oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -519,11 +554,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -595,11 +630,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -719,6 +754,9 @@ jobs:
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
+          # the internal/api test compile peaked at 15.4-15.6 GB of a 16 GB runner elsewhere; a soft heap limit
+          # has each compile collect harder near it
+          GOMEMLIMIT: "10GiB"
           # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
           WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
         shell: bash
@@ -737,7 +775,12 @@ jobs:
               echo "MON   containers=$(docker ps -q | wc -l) $(docker ps --format '{{.Image}}' | sort | uniq -c | sort -rn | head -4 | tr -s ' ' | tr '\n' ';')"
             done ) &
           ( tail -n0 -F test/reports/go/docker/test-output.json 2>/dev/null | jq -r --unbuffered 'select(.Action=="pass" or .Action=="fail" or .Action=="skip" or .Action=="run") | select((.Test==null and .Action!="run") or (.Test!=null and (.Test|contains("/")|not) and (.Action=="run" or .Action=="fail"))) | "PROGRESS \(.Action) \(.Package|sub("^github.com/cjohnstoniv/wardyn/";"")) \(.Test // "") \(.Elapsed // "")"' ) &
-          ./scripts/test-report.sh docker -tags docker "${pkgs[@]}"
+          # The largest single process's peak and the suite's wall go to the log and a notice, pass or fail.
+          rc=0
+          /usr/bin/time -v -o "$RUNNER_TEMP/suite.time" ./scripts/test-report.sh docker -tags docker "${pkgs[@]}" || rc=$?
+          cat "$RUNNER_TEMP/suite.time"
+          echo "::notice title=docker-tagged suite::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/suite.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          exit "$rc"
       - name: Kernel memory messages (docker-tagged)
         if: always()
         run: sudo dmesg | grep -iE 'oom|out of memory|killed process' | tail -20 || true
@@ -796,6 +839,16 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: docker
+      # This job compiles the -tags docker ./internal/api/ tests, which need more memory at their peak than the
+      # hosted runner has; extra swap lets the peak page out, as in the gvisor-cc2-live job.
+      - name: Add swap for the api compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
@@ -811,6 +864,8 @@ jobs:
         env:
           WARDYN_TEST_DOCKER: "1"
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          # the internal/api test compile peaked at 15.4-15.6 GB of a 16 GB runner; a soft heap limit lowers it
+          GOMEMLIMIT: "10GiB"
         shell: bash
         run: |
           mkdir -p test/reports/go
@@ -1081,7 +1136,7 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         if: github.event_name == 'workflow_dispatch' && inputs.publish
         with:
           registry: ghcr.io
@@ -1263,7 +1318,7 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1425,7 +1480,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1433,11 +1488,11 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1609,7 +1664,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1617,11 +1672,11 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1705,7 +1760,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1789,11 +1844,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1916,11 +1971,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Kubernetes runner kind conformance (${{ matrix.kubelet }}, ${{ matrix.suite }} suite)
@@ -1992,11 +2047,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: WardynWorkload end to end (kind v1.35.0, Dex sign-ins)
@@ -2100,11 +2155,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: unit
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Build the agent images the quickstart cluster needs
@@ -2174,11 +2229,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -2255,11 +2310,11 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -2395,11 +2450,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: unit
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Vault + OpenBao dev servers
@@ -2450,11 +2505,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: WARDYN_DAEMON_PROXY_SECRET on kind, defaultMode 0440 + 0400
@@ -2571,6 +2626,8 @@ jobs:
       - name: Octopus scratch merge + stacked-base retarget check
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          # the check compiles internal/api's tests once per merge tree; the same soft heap limit as the prebuilds
+          GOMEMLIMIT: "10GiB"
         run: ./scripts/nightly-migration-merge-check.sh --check-only "$RUNNER_TEMP/prs.json"
 
   # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes
@@ -2746,7 +2803,8 @@ jobs:
   kind-node-restart:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # The test's go test -timeout 41m, plus the 25 minutes of cluster setup the job kept beside its old 15m.
+    timeout-minutes: 66
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -2785,7 +2843,7 @@ jobs:
       - name: Build the conformance agent image (busybox + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-node-restart
           config: deploy/kind/conformance-kind-config.yaml
@@ -2821,11 +2879,129 @@ jobs:
           WARDYN_TEST_K8S_NODE_RESTART: wardyn-node-restart
         # `shell: bash` runs with pipefail, so tee does not hide a red test (see the note at the top of the jobs).
         shell: bash
-        run: go test -tags k8s -count=1 -timeout 15m -v -run '^TestK8sNodeRestartKeepsLiveDenies$' ./test/conformance/ 2>&1 | tee node-restart.log
+        run: go test -tags k8s -count=1 -timeout 41m -v -run '^TestK8sNodeRestartKeepsLiveDenies$' ./test/conformance/ 2>&1 | tee node-restart.log
       - name: Print the case the run took
         if: always()
         run: |
-          grep -E 'node-restart: list (kept|lost)' node-restart.log || echo "no case line, so the test did not reach its verdict"
+          grep -E 'node-restart: (list (kept|lost)|agent-side check from the agent stand-in)' node-restart.log || echo "no case line, so the test did not reach its verdict"
+
+  # Keep and revive on the agent-sandbox backend, through the API as a signed-in person
+  # (scripts/kind-agent-sandbox-keep-walk.sh, ui/e2e/walk/agent-sandbox-keep.spec.ts): an interactive run
+  # with a kept work folder ends, reads as kept with its agent pod held and no node, is extended and revived,
+  # and reads its file back; a run that is not kept is torn down at its end. The driver pins and the
+  # conformance cases never drive that path through wardynd's own routes.
+  #
+  # The cluster is made here on Kubernetes v1.30.0, the version the backend's docs name (the same node
+  # image and kind release as ci.yml's conformance-k8s-agent-sandbox), with the quickstart's own kind config
+  # and ports; `make kind-quickstart` reuses a cluster that already exists. Then the same Dex overlay as
+  # kind-sso-walk. The script installs the controller by its pins and upgrades the release itself.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh), kept out of
+  # notify-new-lanes' needs and release.yml's watched= until two scheduled runs in a row are green.
+  # `if: inputs.scope != 'candidate'` keeps train-gate's candidate dispatch from running it.
+  kind-agent-sandbox-keep-walk:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    # 60 before the kept run lived 600 s instead of 240 s: its end wait grows by 360 s, so 60 + 6 = 66.
+    timeout-minutes: 66
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build the agent images the SSO overlay needs (agent-aws-sso + the rest of agent-images-core)
+        run: make agent-images
+      # The quickstart's kind config with the SSO recipe's host ports, as deploy/kind/quickstart.sh renders it.
+      - name: Render the quickstart kind config (SSO recipe's ports)
+        run: |
+          sed -e 's/hostPort: 8080$/hostPort: 8280/' -e 's/hostPort: 2222$/hostPort: 2322/' \
+            deploy/kind/quickstart-kind-config.yaml > "$RUNNER_TEMP/quickstart-kind-config.yaml"
+          grep -c 'hostPort: 8280' "$RUNNER_TEMP/quickstart-kind-config.yaml"
+          grep -c 'hostPort: 2322' "$RUNNER_TEMP/quickstart-kind-config.yaml"
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+          cluster_name: wardyn-quickstart
+          config: ${{ runner.temp }}/quickstart-kind-config.yaml
+          wait: 90s
+      - name: Bring up the kind quickstart cluster (reuses the cluster above; SSO recipe's ports)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-quickstart
+      - name: Add the SSO overlay (Dex + the fake AWS endpoints)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-sso
+      - name: Keep and revive walk (controller, upgrade, member session through the API)
+        env:
+          WARDYN_TEST_K8S: "1"
+          # This runner's wardyn-quickstart cluster was created above and belongs to nothing else: safe to
+          # change. See scripts/kind-agent-sandbox-keep-walk.sh's own guard.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
+          WARDYN_KIND_AGENT_SANDBOX_KEEP_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-agent-sandbox-keep
+        shell: bash
+        run: |
+          set +e   # capture the real exit code below instead of failing the step on it
+          mkdir -p test/reports/e2e
+          ./scripts/kind-agent-sandbox-keep-walk.sh 2>&1 | tee test/reports/e2e/kind-agent-sandbox-keep-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      # Asserts on the walk's own exit code (77 is common.sh's skip_lane: opted out, proved nothing) and
+      # that it reached its closing PASS line, as kind-survival-walk's does.
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-agent-sandbox-keep-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-agent-sandbox-keep-walk.sh self-skipped (exit 77): WARDYN_TEST_K8S or WARDYN_ACK_SHARED_QUICKSTART did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-agent-sandbox-keep-walk.sh exited ${WALK_EXIT:-<unset>}: see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-agent-sandbox-keep-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kind-agent-sandbox-keep-walk-results
+          path: |
+            test/reports/e2e/kind-agent-sandbox-keep-walk.log
+            test/reports/e2e/kind-agent-sandbox-keep/**
+          if-no-files-found: error
 
   # ai-gateway-kind is outside notify-new-lanes (scripts/test-repo-guards.sh, NOTIFY_EXEMPT), so a
   # scheduled red reaches someone through this job instead.

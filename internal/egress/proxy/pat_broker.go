@@ -116,6 +116,11 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		p.denyAttributed(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
+	// Git never carries the run's identity, so a host an identity route has is sent none: refused here,
+	// before the push rules can read the forge or hold the push and before a credential is resolved.
+	if p.gatewayUnsignedRefused(w, r, host, 443, ruleSourcePATDenied) {
+		return
+	}
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the
 	// two pack endpoints, nothing else, or this broker becomes a credentialed
 	// proxy to the whole forge. The forge path is arbitrarily deep (gitlab
@@ -134,9 +139,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A host the run's Azure DevOps Entra grant covers takes that lane instead
-	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths.
+	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths. The
+	// lane is handed the grant's key (hostKey), never the request's spelling of
+	// it: the entry's push rules, the audit rows and the upstream URL all read
+	// the host, and another spelling of it would be held to the base rules.
 	if adoLane {
-		p.serveADOGit(w, r, host, rest, verb, ado)
+		p.serveADOGit(w, r, hostKey(host), rest, verb, ado)
 		return
 	}
 	if !patGitPath(grant.scope().Forge, rest, verb) {

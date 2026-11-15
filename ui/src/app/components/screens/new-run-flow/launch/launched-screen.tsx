@@ -11,6 +11,8 @@
 import * as React from "react";
 import { Check } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { toast } from "sonner";
+import { isKillStartedRefusal } from "../../../../lib/api/kill-started";
 import { runs } from "../../../../lib/api/runs";
 import { getErrorMessage } from "../../../../lib/format";
 import { runHeadline } from "../../../../lib/types/runs";
@@ -28,6 +30,8 @@ import { useLaunchedRun } from "./use-launched-run";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import { signInBody, startsLine } from "../../run-detail/scheduled-lines";
 import { scheduledWait } from "../../runs/scheduled-state";
+import { CANCEL_NOT_STARTED } from "../../../wardyn/copy/cancel-not-started";
+import { toastRunName } from "../../../wardyn/copy/run-lifetime";
 
 /** The create this person just made for this run, or none: another person's, or another run's, is never shown. */
 function createdFor(state: unknown, principal: string, runId: string): LaunchedRun | undefined {
@@ -49,6 +53,9 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   const heading = React.useRef<HTMLHeadingElement>(null);
   const [killing, setKilling] = React.useState<string | null>(null);
   const [killFailed, setKillFailed] = React.useState("");
+  // Which confirm was opened: it keeps its question while it is open, so a read that finds the run started cannot turn
+  // a cancel that said nothing was set up into an End run under the press.
+  const [killNotStarted, setKillNotStarted] = React.useState(false);
 
   // The create is done with the draft: what was typed does not come back.
   const owner = draft.owner;
@@ -116,14 +123,19 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   // carrying the create's copy there would show a second sentence that can differ once the wait has changed.
   const carried = created?.warnings ?? [];
   const launchWarnings = created?.state === "QUEUED" && created.queue && !scheduledWait(created) ? carried.slice(0, -1) : carried;
-  const kill = async (id: string) => {
+  // notStarted is the confirm's own mode when it was opened: a cancel that said nothing was set up asks the server to
+  // end the run only while it has not started, and a run that started since this screen last read it is left running.
+  const kill = async (id: string, notStarted: boolean) => {
     setKilling(null);
     setKillFailed("");
     try {
-      await runs.killRun(id);
+      await (notStarted ? runs.killRun(id, { notStarted: true }) : runs.killRun(id));
       reload();
     } catch (e) {
-      setKillFailed(getErrorMessage(e));
+      if (isKillStartedRefusal(e)) {
+        toast.info(CANCEL_NOT_STARTED.STARTED(toastRunName(run)), { description: CANCEL_NOT_STARTED.STARTED_NEXT });
+        reload();
+      } else setKillFailed(getErrorMessage(e));
     }
   };
 
@@ -175,7 +187,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
               </div>
             </dl>
           )}
-          <Button type="button" variant="outline" className="col-span-full border-danger/30 bg-danger-subtle text-danger hover:bg-danger-subtle hover:text-danger dark:border-danger/30 dark:bg-danger-subtle dark:hover:bg-danger-subtle" onClick={() => setKilling(run.id)}>
+          <Button type="button" variant="outline" className="col-span-full border-danger/30 bg-danger-subtle text-danger hover:bg-danger-subtle hover:text-danger dark:border-danger/30 dark:bg-danger-subtle dark:hover:bg-danger-subtle" onClick={() => { setKillNotStarted(!!scheduled); setKilling(run.id); }}>
             {NR_LAUNCH.CANCEL_RUN}
           </Button>
         </div>
@@ -193,7 +205,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
           {NR_LAUNCH.VIEW_RUN}
         </Link>
       </div>
-      <KillRunDialog runId={killing} title={run.title?.trim() || run.task} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id)} notStarted={!!scheduled} />
+      <KillRunDialog runId={killing} title={run.title?.trim() || run.task} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id, killNotStarted)} notStarted={killNotStarted} />
     </section>
   );
 }

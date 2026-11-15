@@ -247,6 +247,15 @@ func (n *proxyOnlyNet) dial(ctx context.Context, network, addr string) (net.Conn
 	return (&net.Dialer{Resolver: n.resolver}).DialContext(ctx, network, addr)
 }
 
+// ownResolverDial is the production dialer with a resolver of its own. A Dialer with no Resolver reads
+// net.DefaultResolver on every dial, and a report dial a test leaves behind would race
+// TestRelayDNSAuditDialsOnlyTheProxy's swap of that global.
+func ownResolverDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := proxyDialer()
+	d.Resolver = &net.Resolver{}
+	return d.DialContext(ctx, network, addr)
+}
+
 // Nothing on the VM DNS path dials anywhere but the run's proxy, and nothing
 // in the process resolves a name: the relay answers from its table alone.
 func TestRelayDNSAuditDialsOnlyTheProxy(t *testing.T) {

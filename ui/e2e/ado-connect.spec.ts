@@ -390,9 +390,11 @@ test.describe("New Run, a row that creates a token for each run", () => {
 });
 
 test.describe("the run page", () => {
-  test("lists each token oldest first from the daemon: renewed, revoked with its reason, and a revoke that failed (Credentials widget)", async ({ page }) => {
+  test("lists each token oldest first from the daemon: renewed, access added, and a revoke that failed, never drawn as revoked (Credentials widget)", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     const t = (h: number, m: number) => new Date(2000, 8, 29, h, m);
+    // The page reads the browser's clock, so a token that still works expires after now.
+    const works = new Date(aheadByHours(8));
     clearRunTokens(runId);
     try {
       seedRunTokens(runId, [
@@ -400,8 +402,8 @@ test.describe("the run page", () => {
         { createdAt: t(9, 2), validTo: t(17, 2), revokedAt: t(17, 2), reason: "expired" },
         // Replaced by a wider token: access was added.
         { createdAt: t(15, 2), validTo: t(23, 2), revokedAt: t(23, 2), reason: "expired" },
-        // Ended with its run, and Azure DevOps refused the revoke: it lives to 23:30 on its own.
-        { createdAt: t(16, 0), validTo: t(23, 30), revokedAt: t(16, 40), reason: "run_end", lastError: "revoke refused", scope: "vso.code vso.project vso.code_write" },
+        // Ended with its run, and Azure DevOps refused the revoke: it lives to its expiry on its own.
+        { createdAt: t(16, 0), validTo: works, revokedAt: t(16, 40), reason: "run_end", lastError: "revoke refused", scope: "vso.code vso.project vso.code_write" },
       ]);
       await gotoConsole(page);
       await navToRoute(page, `/runs/${runId}`);
@@ -410,8 +412,24 @@ test.describe("the run page", () => {
       const lines = tokens.locator("p:not([role=alert])");
       await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created ${clock(t(9, 2))} · expires ${clock(t(17, 2))} (renewed)`);
       await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created ${clock(t(15, 2))} · expires ${clock(t(23, 2))} (access added)`);
-      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(t(23, 30))} · revoked ${clock(t(16, 40))} (run ended)`);
-      await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(t(23, 30))));
+      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(works)} (not revoked)`);
+      await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(works)));
+    } finally {
+      clearRunTokens(runId);
+    }
+  });
+
+  test("a token whose revoke was refused reads (expired) once its expiry has passed, and asks for no revoke by hand", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const t = (h: number, m: number) => new Date(2000, 8, 29, h, m);
+    clearRunTokens(runId);
+    try {
+      seedRunTokens(runId, [{ createdAt: t(16, 0), validTo: t(23, 30), revokedAt: t(16, 40), reason: "run_end", lastError: "revoke refused" }]);
+      await gotoConsole(page);
+      await navToRoute(page, `/runs/${runId}`);
+      const tokens = page.getByTestId("ado-run-tokens");
+      await expect(tokens.locator("p:not([role=alert])").nth(0)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(t(23, 30))} (expired)`);
+      await expect(tokens.getByRole("alert")).toHaveCount(0);
     } finally {
       clearRunTokens(runId);
     }
@@ -511,7 +529,8 @@ test.describe("no horizontal scroll at 390px", () => {
     await spliceAccess(page, () => ({ default_profile: ["code_read"], ...access }));
     clearRunTokens(runId);
     seedRunTokens(runId, [
-      { createdAt: new Date(2000, 8, 29, 9, 2), validTo: new Date(2000, 8, 29, 17, 2), revokedAt: new Date(2000, 8, 29, 9, 41), reason: "run_end", lastError: "revoke refused" },
+      // A refused token that still works, so the run page draws its widest state: the warning.
+      { createdAt: new Date(2000, 8, 29, 9, 2), validTo: new Date(aheadByHours(8)), revokedAt: new Date(2000, 8, 29, 9, 41), reason: "run_end", lastError: "revoke refused" },
     ]);
     // The sidebar is collapsed at this width, so go straight to each page.
     await page.goto("/account");
@@ -534,7 +553,7 @@ test.describe("no horizontal scroll at 390px", () => {
     expect(await noHorizontalScroll(page)).toBe(true);
 
     await page.goto(`/runs/${runId}`);
-    await expect(page.getByTestId("ado-run-tokens")).toBeVisible();
+    await expect(page.getByTestId("ado-run-tokens").getByRole("alert")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
     clearRunTokens(runId);
   });

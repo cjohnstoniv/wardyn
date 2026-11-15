@@ -17,12 +17,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // FileName is the profile's name inside Dir.
 const FileName = "cli.json"
+
+// lockName is the file every profile update holds a lock on. It is not the CLI's sign-in lock: login and
+// logout update the profile while holding that one, and a second lock on the same file would wait on itself.
+const lockName = FileName + ".lock"
+
+// lockWait is how long an update waits for another command's update before it gives up.
+const lockWait = 10 * time.Second
+
+// beforeStore runs inside an update, after its read and before its write; a test runs another update there.
+var beforeStore = func() {}
 
 type profile struct {
 	URL          string `json:"url"`
@@ -72,9 +84,10 @@ func ReadArtifactBase(dir string) (string, error) {
 // Write sets dir's organisation URL to u and keeps the artifact base. A profile that cannot be parsed is
 // replaced: there is nothing in it to keep.
 func Write(dir, u string) error {
-	p, _ := load(dir)
-	p.URL = u
-	return store(dir, p)
+	return update(dir, func(p *profile, _ error) error {
+		p.URL = u
+		return nil
+	})
 }
 
 // WriteArtifactBase sets dir's artifact base to base, normalised like the URL and https only, and keeps
@@ -84,9 +97,10 @@ func WriteArtifactBase(dir, base string) error {
 	if err != nil {
 		return err
 	}
-	p, _ := load(dir)
-	p.ArtifactBase = b
-	return store(dir, p)
+	return update(dir, func(p *profile, _ error) error {
+		p.ArtifactBase = b
+		return nil
+	})
 }
 
 // ReadSessionStore is the store holding the CLI sign-in for origin (a Normalize URL), or "" for none.
@@ -98,18 +112,49 @@ func ReadSessionStore(dir, origin string) (string, error) {
 // WriteSessionStore records that kind holds origin's CLI sign-in, or with kind "" that none does, and
 // keeps every other field.
 func WriteSessionStore(dir, origin, kind string) error {
-	p, err := load(dir)
+	return update(dir, func(p *profile, err error) error {
+		if err != nil {
+			return err
+		}
+		if kind == "" {
+			delete(p.Sessions, origin)
+		} else {
+			if p.Sessions == nil {
+				p.Sessions = map[string]string{}
+			}
+			p.Sessions[origin] = kind
+		}
+		return nil
+	})
+}
+
+// update is one read-modify-write of dir's profile under lockName, so two commands' updates never
+// interleave and neither writes back a field the other just changed. change gets the profile as read now
+// and the error reading it. The lock is held only here and nothing here takes another one.
+func update(dir string, change func(p *profile, loadErr error) error) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	// Read-write like the sign-in lock: an exclusive lock on a network filesystem needs a writable descriptor.
+	f, err := os.OpenFile(filepath.Join(dir, lockName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	if kind == "" {
-		delete(p.Sessions, origin)
-	} else {
-		if p.Sessions == nil {
-			p.Sessions = map[string]string{}
+	defer f.Close()
+	for deadline := time.Now().Add(lockWait); ; time.Sleep(25 * time.Millisecond) {
+		err := filelock.TryLock(f)
+		if err == nil {
+			break
 		}
-		p.Sessions[origin] = kind
+		if !errors.Is(err, filelock.ErrLocked) || time.Now().After(deadline) {
+			return fmt.Errorf("%s: %w", f.Name(), err)
+		}
 	}
+	p, err := load(dir)
+	if err := change(&p, err); err != nil {
+		return err
+	}
+	beforeStore()
 	return store(dir, p)
 }
 

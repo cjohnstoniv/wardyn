@@ -204,14 +204,14 @@ func TestPG_AuditDDLProtectedIgnoresPgWriteAllData(t *testing.T) {
 	assertRefused(t, wad, `UPDATE audit_events SET outcome = 'success'`)
 	assertRefused(t, wad, `DELETE FROM audit_events`)
 
-	got, err := AuditDDLProtected(ctx, wad)
+	routes, err := AuditDDLBypassRoutes(ctx, wad)
 	if err != nil {
-		t.Fatalf("AuditDDLProtected: %v", err)
+		t.Fatalf("AuditDDLBypassRoutes: %v", err)
 	}
-	if !got {
+	if got := routesBeyondPublicCreate(t, pool, routes); len(got) != 0 {
 		t.Errorf("a pg_write_all_data member is reported NOT protected; the append-only triggers demonstrably still "+
 			"refuse its UPDATE and DELETE, so widening the predicate to cover it would be a claim WEAKER than the "+
-			"enforcing setup — the opposite error, and just as dishonest (got protected=%v)", got)
+			"enforcing setup — the opposite error, and just as dishonest (got routes %v)", got)
 	}
 }
 

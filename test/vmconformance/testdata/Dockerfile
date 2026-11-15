@@ -1,7 +1,7 @@
 # The VM conformance suite's images (test/vmconformance): the hermetic origin
 # and the QEMU guest (an Alpine virt kernel and a busybox initramfs whose /init
 # runs vmprobe). Built by the suite itself from the repository root.
-FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
+FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 ARG GOPROXY=
 ENV GOPROXY=${GOPROXY}

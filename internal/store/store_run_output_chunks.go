@@ -33,6 +33,8 @@ type RunOutputChunkStore interface {
 	// chunk, then deletes the oldest chunks until what is left is the fewest that still hold
 	// keep bytes. It reports false, and writes nothing, once the run's final row exists: a
 	// writer that was slower than the finisher never recreates what the final row replaced.
+	// A chunk it writes comes with the run's pending row, in the same transaction, when the run
+	// has no row yet: every stored chunk has the row that recovery and retention go by.
 	AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int) (bool, error)
 	// ReadRunOutputChunks returns the last limit bytes of runID's chunks.
 	ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int) (RunOutputChunks, error)
@@ -61,6 +63,10 @@ func (s PG) AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica s
 		}
 		if wrote = tag.RowsAffected() == 1; !wrote {
 			return nil
+		}
+		// The owed row InsertPendingRunOutput writes, for a run whose dispatch-time insert failed.
+		if _, err = tx.Exec(ctx, `INSERT INTO run_outputs (run_id, source) VALUES ($1, 'stdout') ON CONFLICT (run_id) DO NOTHING`, runID); err != nil {
+			return err
 		}
 		_, err = tx.Exec(ctx, `
 			DELETE FROM run_output_chunks WHERE run_id = $1 AND seq < COALESCE((

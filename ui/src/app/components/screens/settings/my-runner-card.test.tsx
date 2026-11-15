@@ -394,6 +394,9 @@ describe("My runner card: a waiting runner and the claim", () => {
     expect(field).toHaveFocus();
     const submit = within(dialog).getByRole("button", { name: "Claim runner" });
     expect(submit).toBeDisabled();
+    expect(field).toBeRequired();
+    await user.keyboard("{Enter}");
+    expect(claimMock).not.toHaveBeenCalled();
     setField(field, `  ${FULL}  `);
     await user.click(submit);
     await waitFor(() => expect(claimMock).toHaveBeenCalledWith("r-mbp", FULL));

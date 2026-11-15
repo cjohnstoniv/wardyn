@@ -10,7 +10,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -24,9 +23,9 @@ import (
 // may decide.
 const governanceApproverSecurity = "security"
 
-// handlePutGovernanceChangeNote sets the note of a pending change. Only the proposer may (the same
-// person test the decision uses, so one human holding two principals is still one), and only while the
-// change is pending. A change the caller may not see answers the hidden 404, as a read does.
+// handlePutGovernanceChangeNote sets the note of a pending change. Only the proposer may (the owner test
+// a withdrawal uses, ownsGovernanceChange), and only while the change is pending. A change the caller may
+// not see answers the hidden 404, as a read does.
 func (s *Server) handlePutGovernanceChangeNote(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "governance change")
 	if !ok {
@@ -45,7 +44,7 @@ func (s *Server) handlePutGovernanceChangeNote(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
-	if !sameGovernanceHuman(ch, principal, oidcEmailFromContext(ctx)) {
+	if !s.ownsGovernanceChange(ch, principal, oidcEmailFromContext(ctx)) {
 		writeErrorReason(w, http.StatusForbidden, reasonGovernanceChangeNoteProposerOnly,
 			"only the person who proposed a change may write its note")
 		return
@@ -58,9 +57,7 @@ func (s *Server) handlePutGovernanceChangeNote(w http.ResponseWriter, r *http.Re
 		Reason string `json:"reason"`
 		Ticket string `json:"ticket"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(body), &req, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return
 	}

@@ -53,9 +53,10 @@ export const runLayout = {
   // unknown widget id or an out-of-range position. `layout: []` is the RESET:
   // it clears the saved row's contents so the next GET falls through to the
   // situational default (there is no DELETE route).
-  async putLayout(preset: RunLayoutPreset, layout: RunLayoutWidget[]): Promise<RunLayoutResponse> {
+  // `person`: the person who arranged the layout; a write queued behind another goes out later (use-run-layout.ts).
+  async putLayout(preset: RunLayoutPreset, layout: RunLayoutWidget[], person?: string): Promise<RunLayoutResponse> {
     const res = await wfetch("/me/run-layout", {
-      method: "PUT", asPerson: true,
+      method: "PUT", asPerson: person ?? true,
       body: JSON.stringify({ preset, layout }),
     });
     return asJson<RunLayoutResponse>(res);

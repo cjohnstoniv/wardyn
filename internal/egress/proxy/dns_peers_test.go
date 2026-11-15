@@ -17,24 +17,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// freeDNSAddr is a loopback address whose port is free for both UDP and TCP.
-func freeDNSAddr(t *testing.T) string {
+// listenDNSOnFreePort starts s's DNS listener on a loopback port free for both UDP and TCP and returns
+// its address. ListenDNS takes one port for both, so it cannot be port 0: a probe picks the port and
+// frees it before ListenDNS binds it. Another process can take it in between; ListenDNS then returns
+// the bind's error, and another port is tried.
+func listenDNSOnFreePort(ctx context.Context, t *testing.T, s *Server) string {
 	t.Helper()
+	var err error
 	for range 50 {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
 			t.Fatal(err)
 		}
 		addr := ln.Addr().String()
 		_ = ln.Close()
-		pc, err := net.ListenPacket("udp", addr)
-		if err != nil {
-			continue
+		if err = s.ListenDNS(ctx, addr); err == nil {
+			return addr
 		}
-		_ = pc.Close()
-		return addr
 	}
-	t.Fatal("no loopback port free for both UDP and TCP")
+	t.Fatalf("ListenDNS on a free loopback port: %v", err)
 	return ""
 }
 
@@ -55,10 +56,7 @@ func TestListenDNSServesOnlyAllowedPeers(t *testing.T) {
 			p, buf := newRuleTestProxy(t, types.RunPolicySpec{}, "127.0.0.1:1", true, "", nil)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			addr := freeDNSAddr(t)
-			if err := (&Server{proxy: p, allowedPeers: tc.peers}).ListenDNS(ctx, addr); err != nil {
-				t.Fatal(err)
-			}
+			addr := listenDNSOnFreePort(ctx, t, &Server{proxy: p, allowedPeers: tc.peers})
 
 			c, err := net.Dial("udp", addr)
 			if err != nil {

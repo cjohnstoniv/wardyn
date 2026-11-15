@@ -338,7 +338,7 @@ func classifySecretKind(name string) string {
 // detectContent dispatches a walked file to its content detector(s); a
 // non-target file just costs a few string checks. rel is slash-separated and
 // pathSafe-checked.
-func detectContent(rel, name, path string, st *collectState) {
+func detectContent(rel, name string, path scanFile, st *collectState) {
 	facts := st.facts
 	switch {
 	case isDotenvTemplate(name):
@@ -486,15 +486,19 @@ func isDockerfile(name string) bool {
 }
 
 // eachLine opens path and calls fn for each line, bounded by maxDetectLines
-// and the package's 1 MiB read cap. Errors fail safe to "no lines". fn
-// returns false to stop early (per-file key cap hit).
-func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
-	f, err := gitremote.OpenRegular(path)
+// and the package's 1 MiB read cap. Errors fail safe to "no lines". A file it
+// could not open, or read only up to the read cap, marks the scan Unread; the
+// line and key budgets, and an overlong line, mark it Truncated. fn returns
+// false to stop early (per-file key cap hit).
+func eachLine(path scanFile, facts *ScanFacts, fn func(line string) bool) {
+	f, err := path.open()
 	if err != nil {
+		facts.Unread = true
 		return
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(io.LimitReader(f, maxFileBytes))
+	limited := &io.LimitedReader{R: f, N: maxFileBytes}
+	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 64*1024), 64*1024)
 	lines := 0
 	for sc.Scan() {
@@ -514,6 +518,16 @@ func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
 	if sc.Err() != nil {
 		facts.Truncated = true
 	}
+	// The read cap ends the reader like EOF: a file read to the cap is whole only when no byte follows.
+	if limited.N == 0 && moreBytes(f) {
+		facts.Unread = true
+	}
+}
+
+// moreBytes reports whether one more byte can be read from r.
+func moreBytes(r io.Reader) bool {
+	_, err := io.ReadFull(r, make([]byte, 1))
+	return err == nil
 }
 
 // keyBudget caps the number of keys a detectXxx scanner captures per file,
@@ -538,7 +552,7 @@ func addNeed(facts *ScanFacts, name, kind string, optional bool) bool {
 	return true
 }
 
-func detectDotenvTemplate(path string, facts *ScanFacts) {
+func detectDotenvTemplate(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		idx := dotenvKeyRE.FindStringSubmatchIndex(line)
@@ -556,13 +570,23 @@ func detectDotenvTemplate(path string, facts *ScanFacts) {
 		// captured.
 		optional := commented
 		if !commented {
-			optional = strings.TrimSpace(line[idx[1]:]) != ""
+			optional = !emptyValue(line[idx[1]:])
 		}
 		return addNeed(facts, key, classifySecretKind(key), optional)
 	})
 }
 
-func detectPlaceholders(path string, facts *ScanFacts) {
+// emptyValue reports whether a template line's right side holds no value: nothing, an empty string
+// in double or single quotes, or only a comment. It looks at the bytes and keeps none of them.
+func emptyValue(rhs string) bool {
+	rhs = strings.TrimSpace(rhs)
+	if strings.HasPrefix(rhs, `""`) || strings.HasPrefix(rhs, "''") {
+		rhs = strings.TrimSpace(rhs[2:])
+	}
+	return rhs == "" || strings.HasPrefix(rhs, "#")
+}
+
+func detectPlaceholders(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range placeholderRE.FindAllStringSubmatch(line, -1) {
@@ -578,12 +602,13 @@ func detectPlaceholders(path string, facts *ScanFacts) {
 	})
 }
 
-func detectCompose(path string, facts *ScanFacts) {
+func detectCompose(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		if m := composeImageRE.FindStringSubmatch(line); m != nil {
 			if svc, ok := serviceByImagePrefix[imageBaseName(m[1])]; ok {
-				if len(facts.ServicesFound) < maxServices*collectSlack {
+				// One entry per service: repeats must not use up the room a later service needs.
+				if !slices.Contains(facts.ServicesFound, svc) && len(facts.ServicesFound) < maxServices*collectSlack {
 					facts.ServicesFound = append(facts.ServicesFound, svc)
 				}
 			}
@@ -619,7 +644,7 @@ func imageBaseName(ref string) string {
 // detectSealedSecret extracts the KEY names under spec.encryptedData of a
 // kubeseal SealedSecret manifest. The values are ciphertext (and never
 // captured regardless). Keys are deploy-time needs: kind "deploy", optional.
-func detectSealedSecret(path string, facts *ScanFacts) {
+func detectSealedSecret(path scanFile, facts *ScanFacts) {
 	inBlock := false
 	blockIndent := -1
 	var kb keyBudget
@@ -656,7 +681,7 @@ func detectSealedSecret(path string, facts *ScanFacts) {
 // detectDockerfileFrom records base-image registry hosts as SUGGESTED egress
 // only — a content-derived host must never auto-widen an allowlist. Skips
 // multi-stage `FROM <alias>` lines via the stage-alias set.
-func detectDockerfileFrom(path string, facts *ScanFacts) {
+func detectDockerfileFrom(path scanFile, facts *ScanFacts) {
 	stages := map[string]struct{}{}
 	eachLine(path, facts, func(line string) bool {
 		m := dockerFromRE.FindStringSubmatch(line)
@@ -684,17 +709,25 @@ func detectDockerfileFrom(path string, facts *ScanFacts) {
 	})
 }
 
+// addSuggestedHost keeps one entry per host, so repeats do not use up the room
+// a later host needs; a host past that room marks the scan Truncated.
 func addSuggestedHost(facts *ScanFacts, host string) {
-	if len(facts.SuggestedEgress) < maxSuggested*collectSlack {
-		facts.SuggestedEgress = append(facts.SuggestedEgress, strings.ToLower(host))
+	host = strings.ToLower(host)
+	if slices.Contains(facts.SuggestedEgress, host) {
+		return
 	}
+	if len(facts.SuggestedEgress) >= maxSuggested*collectSlack {
+		facts.Truncated = true
+		return
+	}
+	facts.SuggestedEgress = append(facts.SuggestedEgress, host)
 }
 
 // detectEnvAccess extracts env-var NAMES read from source code. Code refs are
 // lower-confidence than a declared config key (a fallback may exist), so they
 // are advisory (kind "code", optional): they enrich the needs panel but never
 // a required-secret row.
-func detectEnvAccess(path string, facts *ScanFacts) {
+func detectEnvAccess(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range envAccessRE.FindAllStringSubmatch(line, -1) {
@@ -719,7 +752,7 @@ func detectEnvAccess(path string, facts *ScanFacts) {
 // detectSecretRef extracts k8s Secret DATA KEYS from secretKeyRef/secretRef
 // blocks (multi-line or inline flow YAML): the `key:` value is the need name;
 // the Secret's `name:` is deliberately not captured. Deploy-time, optional.
-func detectSecretRef(path string, facts *ScanFacts) {
+func detectSecretRef(path scanFile, facts *ScanFacts) {
 	armed := false // saw a secretKeyRef/secretRef token; next key: is a data key
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
@@ -756,7 +789,7 @@ func detectSecretRef(path string, facts *ScanFacts) {
 // detectCISecrets extracts `secrets.NAME` refs from a GitHub Actions workflow,
 // kind "ci", optional — never a dev-required row. Dedupe keeps a real config
 // detector's stronger classification if the same name appears there too.
-func detectCISecrets(path string, facts *ScanFacts) {
+func detectCISecrets(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range ciSecretRE.FindAllStringSubmatch(line, -1) {
@@ -777,7 +810,7 @@ func detectCISecrets(path string, facts *ScanFacts) {
 // detectMavenRepos extracts artifact-repository URLs from a pom.xml — SUGGESTED
 // egress only, scoped to <repository>/<pluginRepository> elements so pom
 // license/SCM/project/organization <url>s never leak in.
-func detectMavenRepos(path string, facts *ScanFacts) {
+func detectMavenRepos(path scanFile, facts *ScanFacts) {
 	depth := 0 // >0 while inside a <repository>/<pluginRepository> element
 	eachLine(path, facts, func(line string) bool {
 		l := strings.ToLower(line)
@@ -803,7 +836,7 @@ func detectMavenRepos(path string, facts *ScanFacts) {
 // detectGradleRepos extracts maven { url '...' } repository hosts from a Gradle
 // build/settings file, SUGGESTED egress only. Gradle repo blocks have no
 // license-URL noise, so a plain `url "http..."` match is safe enough.
-func detectGradleRepos(path string, facts *ScanFacts) {
+func detectGradleRepos(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range gradleRepoURLRE.FindAllStringSubmatch(line, -1) {
 			if h := hostrules.HostOf(m[1]); h != "" {
@@ -816,7 +849,7 @@ func detectGradleRepos(path string, facts *ScanFacts) {
 
 // detectHeap records the largest build-heap ceiling seen, normalized to MiB.
 // Advisory only.
-func detectHeap(path string, facts *ScanFacts) {
+func detectHeap(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range heapXmxRE.FindAllStringSubmatch(line, -1) {
 			if mib := xmxToMiB(m[1], m[2]); mib > facts.BuildMemoryMiB {
@@ -835,7 +868,7 @@ func detectHeap(path string, facts *ScanFacts) {
 // detectLeaks runs the leaked-value catalog over a file's content: it reads
 // VALUES to recognize a secret-shaped token but records only path/kind/line,
 // never the matched bytes.
-func detectLeaks(rel, path string, facts *ScanFacts) {
+func detectLeaks(rel string, path scanFile, facts *ScanFacts) {
 	line := 0
 	eachLine(path, facts, func(text string) bool {
 		line++
@@ -862,8 +895,8 @@ var makeTargetRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*:`)
 
 // detectPackageJSON records which conventional script KEYS a package.json
 // declares, never the bodies. Parse failure is safe (no keys recorded).
-func detectPackageJSON(path string, facts *ScanFacts) {
-	f, err := gitremote.OpenRegular(path)
+func detectPackageJSON(path scanFile, facts *ScanFacts) {
+	f, err := path.open()
 	if err != nil {
 		return
 	}
@@ -887,7 +920,7 @@ func detectPackageJSON(path string, facts *ScanFacts) {
 
 // detectMakefile records which conventional TARGETS a Makefile defines —
 // names only, never recipe bodies.
-func detectMakefile(path string, facts *ScanFacts) {
+func detectMakefile(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		if m := makeTargetRE.FindStringSubmatch(line); m != nil {
 			t := m[1]
@@ -1047,34 +1080,38 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 	return out
 }
 
-// xmxToMiB converts a -Xmx numeric+unit to MiB (k/m/g), bounded.
+// xmxToMiB converts a -Xmx numeric+unit to MiB (k/m/g), bounded. The number
+// is capped in its own unit, at the same ceiling, so a k value is divided
+// before the cap applies, not after.
 func xmxToMiB(numStr, unit string) int {
-	n := atoiBounded(numStr)
 	switch strings.ToLower(unit) {
 	case "k":
-		return n / 1024
+		return atoiCapped(numStr, maxBuildMemMiB*1024) / 1024
 	case "g":
-		if n > maxBuildMemMiB/1024 {
-			return maxBuildMemMiB
-		}
-		return n * 1024
+		return atoiCapped(numStr, maxBuildMemMiB/1024) * 1024
 	default: // m
-		return n
+		return atoiCapped(numStr, maxBuildMemMiB)
 	}
 }
 
-// atoiBounded parses a non-negative int (untrusted input), capping at
-// maxBuildMemMiB and failing safe to 0 on overflow/garbage.
-func atoiBounded(s string) int {
+// atoiBounded parses a non-negative MiB count (untrusted input), capping at
+// maxBuildMemMiB and failing safe to 0 on garbage.
+func atoiBounded(s string) int { return atoiCapped(s, maxBuildMemMiB) }
+
+// atoiCapped parses a non-negative int (untrusted input), returning max for
+// anything larger and 0 on garbage. It checks before each step, so no number
+// of digits overflows an int.
+func atoiCapped(s string, max int) int {
 	n := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return 0
 		}
-		n = n*10 + int(c-'0')
-		if n > maxBuildMemMiB {
-			return maxBuildMemMiB
+		d := int(c - '0')
+		if n > (max-d)/10 {
+			return max
 		}
+		n = n*10 + d
 	}
 	return n
 }
@@ -1084,7 +1121,8 @@ func atoiBounded(s string) int {
 // validateSecretNeeds drops non-conforming names, coerces unknown kinds to
 // "generic", dedupes by name (required beats optional; a real config kind
 // beats a weak ci/code/generic sighting), caps and sorts for determinism.
-func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
+// omitted counts the valid names the cap left out.
+func validateSecretNeeds(raw []SecretNeed) (out []SecretNeed, omitted int) {
 	byName := make(map[string]SecretNeed, len(raw))
 	for _, n := range raw {
 		name := strings.TrimSpace(n.Name)
@@ -1119,7 +1157,7 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 		byName[name] = SecretNeed{Name: name, Kind: kind, Optional: n.Optional}
 	}
 	if len(byName) == 0 {
-		return nil
+		return nil, 0
 	}
 	// Priority cap: credential-DECLARING secrets rank ahead of advisory code/CI
 	// references, so source-grep noise can never evict a real credential.
@@ -1132,17 +1170,13 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 			strong = append(strong, s)
 		}
 	}
-	out := strong
+	out = append(strong, weak...)
 	if len(out) > maxSecretNeeds {
+		omitted = len(out) - maxSecretNeeds
 		out = out[:maxSecretNeeds]
-	} else if room := maxSecretNeeds - len(out); room > 0 && len(weak) > 0 {
-		if len(weak) > room {
-			weak = weak[:room]
-		}
-		out = append(out, weak...)
 	}
 	slices.SortFunc(out, func(a, b SecretNeed) int { return strings.Compare(a.Name, b.Name) })
-	return out
+	return out, omitted
 }
 
 // validateServices keeps only ids from the fixed service map, plus those
@@ -1173,8 +1207,8 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 }
 
 // validateSuggestedHosts normalizes/validates hosts, drops ones already in
-// the filename-keyed allowed set, and caps + sorts.
-func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []string {
+// the filename-keyed allowed set, and caps + sorts; cut reports a cap drop.
+func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) (out []string, cut bool) {
 	set := map[string]struct{}{}
 	for _, h := range raw {
 		host := hostrules.HostOf(h) // normalize + validate; "" if invalid
@@ -1186,15 +1220,16 @@ func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []s
 		}
 		set[host] = struct{}{}
 	}
-	out := gitremote.ToSorted(set)
+	out = gitremote.ToSorted(set)
 	if len(out) > maxSuggested {
-		out = out[:maxSuggested]
+		return out[:maxSuggested], true
 	}
-	return out
+	return out, false
 }
 
-// validateSecretFilePaths keeps pathSafe, bounded-length relative paths.
-func validateSecretFilePaths(raw []string) []string {
+// validateSecretFilePaths keeps pathSafe, bounded-length relative paths;
+// cut reports a cap drop.
+func validateSecretFilePaths(raw []string) (out []string, cut bool) {
 	set := map[string]struct{}{}
 	for _, p := range raw {
 		if p == "" || len(p) > maxSecretPathLn || !pathSafe(p) || strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
@@ -1202,11 +1237,11 @@ func validateSecretFilePaths(raw []string) []string {
 		}
 		set[p] = struct{}{}
 	}
-	out := gitremote.ToSorted(set)
+	out = gitremote.ToSorted(set)
 	if len(out) > maxSecretFiles {
-		out = out[:maxSecretFiles]
+		return out[:maxSecretFiles], true
 	}
-	return out
+	return out, false
 }
 
 // validateBuildMemoryMiB bounds an untrusted build heap to a sane ceiling

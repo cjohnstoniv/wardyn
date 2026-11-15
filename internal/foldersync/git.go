@@ -130,11 +130,7 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
 		return fmt.Errorf("send the git bundle: %w", err)
 	}
-	b := shellQuote(remote)
-	out, err := sandboxGit(c, "set -eu; cd "+shellQuote(sy.Opts.Remote)+"; "+
-		"if [ -e .git ]; then git fetch -q --no-tags "+b+" "+shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch)+"; echo existing; "+
-		"else git init -q --template= && git fetch -q --no-tags "+b+" "+shellQuote("+refs/heads/"+branch+":refs/heads/"+branch)+
-		" && git symbolic-ref HEAD "+shellQuote("refs/heads/"+branch)+" && git reset -q; echo fresh; fi; rm -f "+b)
+	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch))
 	if err != nil {
 		return err
 	}
@@ -150,6 +146,84 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	return nil
 }
 
+// sendGitIncomplete marks a .git a send is still setting up: it is made before
+// git init writes anything and removed after the last step.
+const sendGitIncomplete = ".git/wardyn-setup-incomplete"
+
+// The sandbox's own words, on stderr, for a .git a send or pull leaves alone.
+const (
+	gitDanglingLink = ".git in the synced directory is a link to something that does not exist; it is left as it is: remove it or point it at a repository"
+	gitUnfinished   = "this send did not finish setting up the repository in the synced directory; it is kept, and the next --git carries on with it if no other send has finished it"
+	gitPullNothing  = "the repository in the synced directory is not finished and has no commits to bring back; send with --git to finish it"
+)
+
+// sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
+// dir's repository, or sets one up. Setting up runs in an if condition, so a
+// failed step fails the send (set -e ignores a failure inside an AND-list).
+//
+// No send removes a .git or anything in one but the marker: another send, or
+// the sandbox's own git, may still be writing it. A send claims a .git it made
+// or found empty with the marker, and every send that finds the marker
+// repeats the steps, each safe to run again or beside another send: init
+// again, the bundle's objects, HEAD to the branch, the branch, the index.
+// The branch is written only by update-ref, forward and from the value just
+// read; the index step (idx) is git reset with a path, which moves no ref
+// (with no path, reset writes HEAD's branch back to the commit it read when
+// it started, taking a commit the sandbox made meanwhile off its branch).
+// A HEAD with commits the laptop's branch lacks, a detached one (only the
+// sandbox detaches HEAD), or a <branch> with such commits while HEAD is on
+// another branch, is the sandbox's: HEAD and every branch are kept, the
+// laptop's branch goes to refs/remotes/laptop/<branch>, and the index is
+// built only if there is none (and HEAD has a commit to build it from).
+// A send that took <branch> for the sandbox's reads HEAD again first and
+// fails if it moved: a newer send writes HEAD, then <branch>.
+// HEAD is otherwise written only when it is on another branch; if that branch
+// got a commit meanwhile, HEAD goes back to it with its index, and the send
+// fails: the next one finds the commit as the sandbox's work. A send that
+// moves the branch puts the marker back before the index step: another send
+// may have finished and removed it. idx runs again, twice at most, when HEAD
+// moved while it ran; a reset that fails fails the send, and so does a HEAD
+// no longer on the branch once the index is built.
+// GIT_DIR keeps git from walking up into a parent repository when .git is
+// not one.
+func sendGitScript(dir, bundle, branch string) string {
+	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
+	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
+	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
+		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
+		"{ [ \"$(git rev-parse -q --verify HEAD)\" = \"$c\" ] || { [ \"${1:-0}\" -lt 2 ] && idx $((${1:-0}+1)); }; }; }; " +
+		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 1; fi; " +
+		"mkdir .git 2>/dev/null || :; " +
+		"if [ ! -L .git ] && { [ -d " + m + " ] || { [ -z \"$(ls -A .git 2>/dev/null)\" ] && mkdir " + m + " 2>/dev/null; } || [ -d " + m + " ]; }; then " +
+		"if git init -q --template= && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
+		"git fetch -q --no-tags " + b + " " + ref + " && git cat-file -e \"$t^{commit}\" && " +
+		"s= && if { h=$(git rev-parse -q --verify 'HEAD^{commit}') && { ! git merge-base --is-ancestor \"$h\" \"$t\" || ! git symbolic-ref -q HEAD >/dev/null; }; } || " +
+		"{ p=$(git symbolic-ref -q HEAD) && [ \"$p\" != " + ref + " ] && o=$(git rev-parse -q --verify " + ref + ") && ! git merge-base --is-ancestor \"$o\" \"$t\" && s=$p; }; then " +
+		"{ [ -z \"$s\" ] || [ \"$(git symbolic-ref -q HEAD)\" = \"$s\" ]; } && git update-ref " + laptop + " \"$t\" && { [ -e .git/index ] || [ -z \"$h\" ] || idx; } && out=existing; " +
+		"else p=$(git symbolic-ref -q HEAD) && { [ \"$p\" = " + ref + " ] || { git symbolic-ref HEAD " + ref + " && " +
+		"{ [ \"$(git rev-parse -q --verify \"$p\" || :)\" = \"$h\" ] || { git symbolic-ref HEAD \"$p\" && idx; false; }; }; }; } && " +
+		"o=$(git rev-parse -q --verify " + ref + " || :) && " +
+		"{ [ -z \"$o\" ] || git merge-base --is-ancestor \"$o\" \"$t\"; } && git update-ref " + ref + " \"$t\" \"$o\" && " +
+		"{ [ \"$o\" = \"$t\" ] || mkdir " + m + " 2>/dev/null || :; } && idx && [ \"$(git symbolic-ref -q HEAD)\" = " + ref + " ] && out=fresh; fi && " +
+		"{ rmdir " + m + " 2>/dev/null || [ ! -d " + m + " ]; }; then echo \"$out\"; " +
+		"else echo " + shellQuote(gitUnfinished) + " >&2; exit 1; fi; " +
+		"else git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
+}
+
+// pullGitScript is the sandbox side of PullCommits: it bundles the commits on
+// dir's HEAD past base into bundle and prints how many. An empty .git is no
+// repository. One a send has not finished is pulled from once its HEAD has a
+// commit; until then there is nothing to bring back, and it says so.
+func pullGitScript(dir, base, bundle string) string {
+	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
+		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 3; fi; " +
+		"[ -n \"$(ls -A .git 2>/dev/null)\" ] || { echo 'no git repository in the synced directory; send one with --git' >&2; exit 3; }; " +
+		"if [ ! -L .git ] && [ -d " + shellQuote(sendGitIncomplete) + " ] && ! git rev-parse -q --verify 'HEAD^{commit}' >/dev/null; then echo " + shellQuote(gitPullNothing) + " >&2; exit 3; fi; " +
+		"range=HEAD; if [ -n '" + base + "' ] && git cat-file -e '" + base + "^{commit}' 2>/dev/null; then range='HEAD ^" + base + "'; fi; " +
+		"n=$(git rev-list --count $range); if [ \"$n\" = 0 ]; then echo 0; exit 0; fi; " +
+		"mkdir -p " + shellQuote(path.Dir(bundle)) + "; git bundle create -q " + shellQuote(bundle) + " $range; echo \"$n\""
+}
+
 // pullCommits brings the sandbox's commits past what --git last sent back as a
 // bundle, checks it, and fetches it into wardyn/sync-<run> on this computer.
 // The working tree and every other branch are left alone.
@@ -159,11 +233,7 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 		base = sy.State.GitSent.Commit
 	}
 	remote := syncGitBundlePath(runID, "sandbox")
-	out, err := sandboxGit(c, "set -eu; cd "+shellQuote(sy.Opts.Remote)+"; "+
-		"[ -e .git ] || { echo 'no git repository in the synced directory; send one with --git' >&2; exit 3; }; "+
-		"range=HEAD; if [ -n '"+base+"' ] && git cat-file -e '"+base+"^{commit}' 2>/dev/null; then range='HEAD ^"+base+"'; fi; "+
-		"n=$(git rev-list --count $range); if [ \"$n\" = 0 ]; then echo 0; exit 0; fi; "+
-		"mkdir -p "+shellQuote(syncGitDir)+"; git bundle create -q "+shellQuote(remote)+" $range; echo \"$n\"")
+	out, err := sandboxGit(c, pullGitScript(sy.Opts.Remote, base, remote))
 	if err != nil {
 		return err
 	}
@@ -185,7 +255,7 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 	if _, err := laptopGit(ctx, root, "bundle", "verify", "-q", tmp.Name()); err != nil {
 		return err
 	}
-	branch := "wardyn/sync-" + runID[:8]
+	branch := reviewBranch(runID)
 	if _, err := laptopGit(ctx, root, pullCommitsFetch(tmp.Name(), branch)...); err != nil {
 		return err
 	}
@@ -236,6 +306,10 @@ func (sy *Syncer) DownloadFile(src, dst string) error {
 	}
 	return err
 }
+
+// reviewBranch is the laptop branch --pull-commits fetches a run's commits into. It holds the run's whole
+// id, so two runs synced into one repository whose ids start alike never write to the same branch.
+func reviewBranch(runID string) string { return "wardyn/sync-" + runID }
 
 // pullCommitsFetch is the laptop fetch of a sandbox bundle into branch: every
 // object checked, no tags, and no submodule the bundle names fetched.

@@ -155,12 +155,14 @@ func (c *Client) applyUnitAdmins(ctx context.Context, plan adminPlan, admins map
 	return nil
 }
 
-// pruneUnitAdmins revokes every grant on the server the document's admins do not name. It stops at
-// the first revoke the server holds (recorded in res.Pending) and reports skipped.
-func (c *Client) pruneUnitAdmins(ctx context.Context, plan adminPlan, admins map[string][]GovernanceAdminSubject, res *GovernanceApplyResult) (skipped bool, err error) {
+// pruneUnitAdmins revokes every grant on the server the document's admins do not name, each with
+// underQuery (pruneAll). It stops at the first revoke the server holds (recorded in res.Pending) and
+// reports skipped.
+func (c *Client) pruneUnitAdmins(ctx context.Context, plan adminPlan, admins map[string][]GovernanceAdminSubject, underQuery string,
+	res *GovernanceApplyResult) (skipped bool, err error) {
 	for _, g := range unitAdminsToPrune(plan, admins) {
 		name := membershipUnitName(g.UnitID, nil, plan.currentIDToName)
-		pending, err := c.RevokeUnitAdmin(ctx, g.UnitID, g.ID)
+		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+g.UnitID.String()+"/admins/"+g.ID.String()+underQuery, nil, nil)
 		if err != nil {
 			err = fmt.Errorf("prune unit admin (%s %q) on %q: %w", g.SubjectType, g.Subject, name, err)
 		}

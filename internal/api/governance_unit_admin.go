@@ -78,7 +78,7 @@ func (s *Server) handleGrantUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == govQueue {
-		s.holdUnitAdmin(w, r, "create", p)
+		s.holdUnitAdmin(w, r, "create", p, nil)
 		return
 	}
 	var saved types.GovernanceUnitAdmin
@@ -115,6 +115,10 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUnitsInScope(w, r, "governance.unit_admin", true, unit) {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
@@ -129,12 +133,15 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == govQueue {
-		s.holdUnitAdmin(w, r, "delete", unitAdminPayload{ID: cur.ID, UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject})
+		s.holdUnitAdmin(w, r, "delete", unitAdminPayload{ID: cur.ID, UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject}, under)
 		return
 	}
 	var removed types.GovernanceUnitAdmin
 	err = s.writeGovernance(r.Context(), func(q store.Querier) (err error) {
 		if err := lockUnitAdminKey(r.Context(), q, unitAdminPayload{UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject}); err != nil {
+			return err
+		}
+		if err := s.requireUnderQ(r.Context(), q, under, unit); err != nil {
 			return err
 		}
 		removed, err = store.RevokeUnitAdminQ(r.Context(), q, unit, id)
@@ -199,8 +206,10 @@ type unitAdminDiffView struct {
 	Subject     string                      `json:"subject"`
 }
 
-// holdUnitAdmin stores a grant (op create) or revoke (op delete) as a pending change.
-func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string, p unitAdminPayload) {
+// holdUnitAdmin stores a grant (op create) or revoke (op delete) as a pending change. A prune's under on
+// a revoke is checked here; the base then holds the unit's chain (underBase), so a later move makes the
+// change stale.
+func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string, p unitAdminPayload, under *uuid.UUID) {
 	ctx := r.Context()
 	var base any
 	var cur *types.GovernanceUnitAdmin
@@ -210,11 +219,18 @@ func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string
 		if err != nil {
 			return err
 		}
+		chain, err := s.underChainQ(ctx, q, under, p.UnitID)
+		if err != nil {
+			return err
+		}
 		unitName = row.Name
 		base, cur, err = unitAdminState(ctx, q, p, false)
+		base = underBase(base, chain)
 		return err
 	})
 	switch {
+	case answerNotUnder(w, err):
+		return
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance unit not found")
 		return
@@ -257,8 +273,8 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 	if err != nil {
 		return govApplied{}, err
 	}
-	if computeETag(base) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
+	if err := heldBaseStale(ctx, q, ch, base, p.UnitID); err != nil {
+		return govApplied{}, err
 	}
 	_, approver := actorFromRequest(r)
 	if ch.Op == "delete" {

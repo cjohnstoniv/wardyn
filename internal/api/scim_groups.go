@@ -317,8 +317,12 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		j, ok := jobByKey(jobs, step, g.ID.String())
 		return ok && !j.Done
 	}
+	// A completion names the row this removal read (store.JobKey.ID). The person added back and removed again
+	// opens a newer removal that replaces the rows, and this one's completion then lands on nothing
+	// (store.ErrSuperseded) rather than marking the newer removal's step done before its sweep has run.
 	finish := func(step string, runErr error, detail map[string]int) error {
-		key := store.JobKey{Step: step, Target: g.ID.String()}
+		j, _ := jobByKey(jobs, step, g.ID.String())
+		key := store.JobKey{Step: step, Target: g.ID.String(), ID: j.ID}
 		if runErr != nil {
 			return errors.Join(runErr, st.FailDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, runErr))
 		}
@@ -361,6 +365,10 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		}
 		errs = append(errs, finish(store.GroupStepSessions, cutErr, map[string]int{"sessions_cut": len(cuts)}))
 	}
+	// A newer removal replaced this one's rows: it cuts, revokes and writes its own row, so this one stops.
+	if superseded(ctx, errors.Join(errs...), identityID, slog.String("group", g.ID.String())) {
+		return nil
+	}
 	if pending(store.GroupStepTokens) {
 		revoked, revokeErr := 0, error(nil)
 		match := groupSnapshotMatch(g.ExternalID)
@@ -375,17 +383,20 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		}
 		errs = append(errs, finish(store.GroupStepTokens, revokeErr, map[string]int{"tokens_revoked": revoked}))
 	}
-	if err := errors.Join(errs...); err != nil {
+	if err := errors.Join(errs...); err != nil || !pending(store.GroupStepAudit) {
+		return unlessSuperseded(ctx, err, identityID, slog.String("group", g.ID.String()))
+	}
+	latest, err := st.ListDeprovisionJobs(ctx, identityID, store.JobKindGroupRemove)
+	if err != nil {
 		return err
 	}
-	if !pending(store.GroupStepAudit) {
+	// The row counts this removal's own steps only: rows a newer removal put in their place are its to count.
+	was, _ := jobByKey(jobs, store.GroupStepAudit, g.ID.String())
+	if cur, _ := jobByKey(latest, store.GroupStepAudit, g.ID.String()); cur.ID != was.ID {
 		return nil
 	}
-	if jobs, err = st.ListDeprovisionJobs(ctx, identityID, store.JobKindGroupRemove); err != nil {
-		return err
-	}
 	counts := map[string]int{}
-	for _, j := range jobs {
+	for _, j := range latest {
 		if j.Target == g.ID.String() {
 			for k, v := range j.Detail {
 				counts[k] += v
@@ -396,7 +407,27 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		"slot": slot, "group": g.ID.String(), "group_external_id": g.ExternalID,
 		"sessions_cut": counts["sessions_cut"], "tokens_revoked": counts["tokens_revoked"],
 	}))
-	return finish(store.GroupStepAudit, s.recordAuditStrict(ctx, ev), nil)
+	return unlessSuperseded(ctx, finish(store.GroupStepAudit, s.recordAuditStrict(ctx, ev), nil), identityID, slog.String("group", g.ID.String()))
+}
+
+// superseded says whether err holds store.ErrSuperseded: a newer removal or suspension replaced the one this
+// work was bound to and does the work itself, so this one stops and answers nil. err can join a real failure
+// with that refusal, and the nil answer drops it, so err is logged with the identity and attrs.
+func superseded(ctx context.Context, err error, identity uuid.UUID, attrs ...slog.Attr) bool {
+	if !errors.Is(err, store.ErrSuperseded) {
+		return false
+	}
+	attrs = append(attrs, slog.String("identity", identity.String()), slog.Any("err", err))
+	slog.LogAttrs(ctx, slog.LevelWarn, "api: leaver work stopped for a newer occurrence; its errors are not in the answer", attrs...)
+	return true
+}
+
+// unlessSuperseded is err, or nil when it is superseded (which logs it).
+func unlessSuperseded(ctx context.Context, err error, identity uuid.UUID, attrs ...slog.Attr) error {
+	if superseded(ctx, err, identity, attrs...) {
+		return nil
+	}
+	return err
 }
 
 // groupSnapshotMatch selects the tokens a removal from the group with this external id affects: those

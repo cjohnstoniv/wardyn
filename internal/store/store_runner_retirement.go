@@ -233,6 +233,34 @@ func readRetirementTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (runnerRe
 	return t, nil
 }
 
+// retirementFolderKeepSQL is true for a run (r, its agent_runs row) whose sandbox retirement must not kill, as it is
+// kept for its computer folder's copy back (the server's keepsSandboxForFolder, read from the same columns): while
+// the run still holds its sandbox ref, a record holding a resume, folder settings that do not read as an object, or
+// a folder copied back both ways through a runner and seeded, on a run that was not killed, whose copy back was not
+// given up and either has no back that reads as one (it has not run) or is at a generation past the settled one (a
+// pass sent and not answered). A run with no ref is never kept: every ref clear follows a confirmed stop or kill,
+// and once the ref is gone nothing resumes or gives up its record (the tail owner and the give-up read only runs
+// that hold one), so a resume left behind would hold the retirement open for good. It reads the stored JSON with
+// no casts, so no record can fail the statement, and an answer it cannot give (NULL) keeps the sandbox.
+const retirementFolderKeepSQL = `COALESCE((r.sandbox_ref <> '' AND (COALESCE(r.local_folder_status->'resume', 'null'::jsonb) <> 'null'::jsonb
+		OR (r.local_folder IS NOT NULL AND (jsonb_typeof(r.local_folder) <> 'object'
+			OR (r.state <> 'KILLED' AND COALESCE(r.local_folder->>'direction', '') = 'both' AND COALESCE(r.local_folder->>'runner_id', '') <> ''
+				AND r.local_folder_seeded_at IS NOT NULL
+				AND COALESCE(jsonb_typeof(r.local_folder_status->'back'->'given_up_at'), 'null') <> 'string'
+				AND (COALESCE(jsonb_typeof(r.local_folder_status->'back'), 'null') <> 'object'
+					OR COALESCE(r.local_folder_status->'gen', '0'::jsonb) <> COALESCE(r.local_folder_status->'settled', '0'::jsonb))))))), true)`
+
+// retirementFolderKeptTx is retirementFolderKeepSQL for runID, read in tx. Its caller holds the run's row lock
+// (lockRunnerActionRun), and every write of a run's folder record, ref or state updates that row, so none commits
+// between this read and what the caller queues after it. A read that fails answers kept, with its error.
+func retirementFolderKeptTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (bool, error) {
+	var kept bool
+	if err := tx.QueryRow(ctx, `SELECT `+retirementFolderKeepSQL+` FROM agent_runs r WHERE r.id = $1`, runID).Scan(&kept); err != nil {
+		return true, fmt.Errorf("store: read run folder keep: %w", err)
+	}
+	return kept, nil
+}
+
 // RunnerRetirementCandidate is one run the retirement producer may advance,
 // with the runner that holds it.
 type RunnerRetirementCandidate struct {
@@ -244,7 +272,9 @@ type RunnerRetirementCandidate struct {
 // retire_run (retire_capable), a watermark row, a spool cursor, and a snapshot
 // still open or none yet with a live ref. A closed snapshot makes a run
 // permanently ineligible. A run whose obligation has an action still waiting
-// for the runner is left out until the runner answers it.
+// for the runner is left out until the runner answers it, and so is a run
+// whose sandbox is kept for its computer folder's copy back
+// (retirementFolderKeepSQL).
 func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementCandidate, error) {
 	return collect(ctx, s.Pool, "list", "runner retirement candidates", `WITH open_set AS (
 			SELECT run_id FROM runner_retirements WHERE state IN ('kill', 'retire')
@@ -260,6 +290,7 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 		LEFT JOIN runner_retirements t ON t.run_id = r.id
 		WHERE NOT (r.state = ANY($1)) AND (t.state IN ('kill', 'retire') OR (t.run_id IS NULL AND r.sandbox_ref <> ''))
 			AND NOT EXISTS (SELECT 1 FROM runner_pending_actions p WHERE p.run_id = r.id AND p.obligation_id = t.obligation_id AND p.applied_at IS NULL)
+			AND NOT `+retirementFolderKeepSQL+`
 		ORDER BY r.id`, []any{nonTerminalStates()}, func(row pgx.Row) (RunnerRetirementCandidate, error) {
 		var c RunnerRetirementCandidate
 		return c, row.Scan(&c.RunID, &c.RunnerID)
@@ -274,10 +305,15 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 //     with a receipt computed now, recorded as runner.retire;
 //   - the latest action deferred: queue a fresh-ID successor in the same phase
 //     (a retire_run with a recomputed receipt), or abandon the obligation once
-//     RetirementSuccessorBound successors were spent.
+//     RetirementSuccessorBound successors were spent;
+//   - kill, its latest kill refused: queue a fresh-ID successor kill, within
+//     that bound, when the run's teardown hold cleared after the refusal, or
+//     else close the obligation as refused once the runner's state pages
+//     are all in.
 //
 // Anything else (an action still open, another obligation fencing the run, a
-// run not terminal or not eligible, a closed snapshot) is RetirementIdle.
+// run not terminal or not eligible, a sandbox kept for its computer folder's
+// copy back, a closed snapshot) is RetirementIdle.
 func (s PG) AdvanceRunnerRetirement(ctx context.Context, runID uuid.UUID,
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (string, error) {
 	if prepare == nil {
@@ -316,6 +352,11 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 	if !run.State.IsTerminal() || !eligible {
 		return RetirementIdle, nil
 	}
+	// A sandbox kept for its computer folder's copy back is never killed. The keep is read again here, under the
+	// run's row lock, so a run kept since the producer listed it gets nothing opened or queued.
+	if kept, err := retirementFolderKeptTx(ctx, tx, run.ID); err != nil || kept {
+		return RetirementIdle, err
+	}
 	t, err := openRetirementTx(ctx, tx, run)
 	if errors.Is(err, ErrNotFound) || (err == nil && !t.open()) {
 		return RetirementIdle, nil
@@ -329,6 +370,15 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 		return RetirementIdle, err
 	}
 	if fenced {
+		return RetirementIdle, nil
+	}
+	// A kill or end the runner could not see finish holds the run: a kill queued now would only be refused
+	// again. The snapshot waits until the runner reports the hold finished.
+	var held bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`, run.ID).Scan(&held); err != nil {
+		return RetirementIdle, err
+	}
+	if held {
 		return RetirementIdle, nil
 	}
 	tip, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions
@@ -357,6 +407,13 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 			return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
 		}
 		return RetirementSuccessor, queueRetireTx(ctx, tx, owner, t, &tip.ID, prepare)
+	case tip.Outcome == types.RunnerActionRefused && tip.Kind == types.RunnerActionKill:
+		// A kill refused while the runner held the run goes again once the runner reports the hold finished
+		// after that refusal, on the runner's clock, as the orphan sweep reads it. Any other refusal is final,
+		// but only once the runner's state pages are all in: the refusal is recorded before its session's
+		// pages, which carry the hold. Until then, or while a hold they brought is open, the snapshot waits.
+		// One statement, so a hold the pages brought is never missed.
+		return advanceRefusedKillTx(ctx, tx, owner, run, t, tip, prepare)
 	case tip.Outcome == types.RunnerActionSuccess && t.state == "kill":
 		// The retire_run is the kill's success successor: never queued beside
 		// a kill, so it always meets a containment the runner settled.
@@ -367,6 +424,33 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 		return RetirementRetire, queueRetireTx(ctx, tx, owner, t, nil, prepare)
 	}
 	return RetirementIdle, nil
+}
+
+// advanceRefusedKillTx is advanceRetirementTx's step for a retirement whose latest kill the runner refused.
+func advanceRefusedKillTx(ctx context.Context, tx pgx.Tx, owner string, run types.AgentRun, t runnerRetirement,
+	tip types.RunnerPendingAction, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (string, error) {
+	var cleared, paged bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at > $2),
+		EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $3 AND complete)
+		AND NOT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`,
+		run.ID, tip.ObservedAt, t.runnerID).Scan(&cleared, &paged); err != nil {
+		return RetirementIdle, err
+	}
+	if !cleared && !paged {
+		return RetirementIdle, nil
+	}
+	if !cleared {
+		_, err := closeRetirementTx(ctx, tx, run.ID, "refused", RetirementRunnerRefused)
+		return RetirementIdle, err
+	}
+	if t.successors >= RetirementSuccessorBound {
+		return RetirementAbandoned, abandonRetirementTx(ctx, tx, t, RetirementDeferredExhausted, prepare)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runner_retirements SET successors = successors + 1 WHERE run_id = $1`, run.ID); err != nil {
+		return RetirementIdle, err
+	}
+	// A refused action is never marked superseded (runner_pending_actions_chain); supersedes links it.
+	return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
 }
 
 // insertRetirementActionTx queues one action of t's obligation, bound to the
@@ -542,7 +626,8 @@ func retirementBindsResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendi
 // settleRetirementResultTx applies a recorded result to its retirement
 // obligation, if it has one: a success settles the phase's earlier deferred
 // actions ('chain'), and a retire_run success settles the obligation; a
-// refusal in either phase closes it as refused, with no successor.
+// refused retire_run closes it as refused, with no successor. A refused kill
+// leaves it open for advanceRetirementTx, which reads the run's teardown hold.
 func settleRetirementResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, outcome string) error {
 	if retirementPhase(a.Kind) == "" || a.Asserted {
 		return nil
@@ -573,7 +658,9 @@ func settleRetirementResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPend
 		if err := settle(false); err != nil {
 			return err
 		}
-		_, err = closeRetirementTx(ctx, tx, a.RunID, "refused", RetirementRunnerRefused)
+		if a.Kind == types.RunnerActionRetire {
+			_, err = closeRetirementTx(ctx, tx, a.RunID, "refused", RetirementRunnerRefused)
+		}
 	}
 	return err
 }

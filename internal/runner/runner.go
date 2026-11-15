@@ -512,6 +512,16 @@ func KeptDespiteAWSCacheWipe(ctx context.Context, ref string, err error) error {
 	return err
 }
 
+// SplitAWSCacheWipe is the control plane's reading of an end it asked for: an ErrAWSCacheWipeFailed end
+// succeeded, so its words come back as wipeFailed (for the run.ended row) and the error as nil; any other
+// answer comes back as it was.
+func SplitAWSCacheWipe(err error) (wipeFailed string, _ error) {
+	if errors.Is(err, ErrAWSCacheWipeFailed) {
+		return err.Error(), nil
+	}
+	return "", err
+}
+
 // AWSProfileRecordEnv is the sandbox env var carrying the ~/.aws files Wardyn stages for an AWS
 // sign-in lane; a sandbox that has it is one whose AWS caches a kept end wipes.
 const AWSProfileRecordEnv = "WARDYN_AWS_SSO_CONFIG_B64"

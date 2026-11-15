@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const previewGovernanceMock = vi.fn();
+const upsertAssignmentMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -21,6 +22,7 @@ vi.mock("../../../lib/api/governance", async () => {
     governance: {
       ...actual.governance,
       previewGovernance: (...a: unknown[]) => previewGovernanceMock(...a),
+      upsertAssignment: (...a: unknown[]) => upsertAssignmentMock(...a),
     },
   };
 });
@@ -37,6 +39,7 @@ vi.mock("../../../lib/api/user-types", () => ({
 }));
 
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { PERM } from "../../../lib/permissions-copy";
 import { PREVIEW } from "../../../lib/people-access-copy";
 import { AssignmentsBlock } from "./assignments";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
@@ -77,6 +80,21 @@ describe("AssignmentsBlock — the add-a-grant row", () => {
     await screen.findByLabelText(PREVIEW.FIELD_CLAIMS);
     expect(container.querySelector('[class~="xl:grid-cols-[auto_1fr_1fr]"]')).not.toBeNull();
     expect(container.querySelector('[class*="lg:grid-cols-"]')).toBeNull();
+  });
+
+  it("is read-only while the assignment is being written, so a subject typed then is not cleared by its answer", async () => {
+    upsertAssignmentMock.mockReturnValue(new Promise(() => {}));
+    renderBlock();
+    const who = await screen.findByRole("textbox", { name: PERM.FIELD_WHO });
+    await userEvent.type(who, "platform-team");
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE }));
+    await userEvent.click(await screen.findByRole("option", { name: "Platform" }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
+    expect(upsertAssignmentMock).toHaveBeenCalled();
+    expect(who).toBeDisabled();
+    expect(screen.getByRole("button", { name: PERM.SUBJECT_USER })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE })).toBeDisabled();
+    expect(screen.getByLabelText(GOV.FIELD_PRIORITY)).toBeDisabled();
   });
 });
 

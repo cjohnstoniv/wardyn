@@ -102,7 +102,11 @@ export function YourWallsCard() {
       )}
       {state === "ready" && (
         <div className="flex flex-col gap-[18px]">
-          <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
+          {/* Read-only while a save or remove is in flight: its answer replaces the form, so an edit made
+              meanwhile would be dropped while the card says Saved. */}
+          <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+            <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
+          </fieldset>
           {refusal && (
             <p role="alert" className="text-sm text-danger">
               {refusal.message}

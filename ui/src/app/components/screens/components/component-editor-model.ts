@@ -131,9 +131,9 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
 // refuses it on a person's server and on one that runs in the sandbox (types.validateGatewayAudience).
 export const audienceEditable = (c: Component | null): boolean => !!c && !c.owner && c.definition.mcp?.transport === "http";
 
-// The org editor edits no CLI card and no MCP field but the audience, and a save replaces the whole
-// definition, so the stored CLI card and MCP server go back as they were, the server with the audience
-// as edited: an empty one sends none.
+// Neither editor (the org one, and a person's form) edits a CLI card or an MCP field but the org editor's
+// audience, and a save replaces the whole definition, so the stored CLI card and MCP server go back as they
+// were, the server with the audience as edited: an empty one sends none.
 export function withStored(req: ComponentRequest, c: Component | null, audience: string): ComponentRequest {
   const { cli, mcp: stored } = c?.definition ?? {};
   const definition = { ...req.definition, ...(cli && { cli }) };

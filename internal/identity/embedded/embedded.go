@@ -238,8 +238,9 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		if errors.Is(err, jwt.ErrExpired) {
 			if runID, rerr := p.runIDFromActor(claims.Act.Sub); rerr == nil {
 				return nil, &identity.ExpiredTokenError{
-					RunID: runID,
-					Err:   fmt.Errorf("embedded identity: validate claims: %w", err),
+					RunID:  runID,
+					Expiry: claims.Expiry.Time(),
+					Err:    fmt.Errorf("embedded identity: validate claims: %w", err),
 				}
 			}
 		}
@@ -256,9 +257,6 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 	if err != nil {
 		return nil, fmt.Errorf("embedded identity: revocation check failed (failing closed): %w", err)
 	}
-	if revoked {
-		return nil, fmt.Errorf("embedded identity: token jti %s (run %s) is revoked", claims.ID, runID)
-	}
 
 	out := &identity.Claims{
 		SPIFFEID:      claims.Act.Sub,
@@ -274,6 +272,10 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 	}
 	if claims.Expiry != nil {
 		out.Expiry = claims.Expiry.Time()
+	}
+	if revoked {
+		return nil, &identity.RevokedTokenError{Claims: out,
+			Err: fmt.Errorf("embedded identity: token jti %s (run %s) is revoked", claims.ID, runID)}
 	}
 	return out, nil
 }

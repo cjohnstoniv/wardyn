@@ -115,15 +115,25 @@ var errRunnerRevokeUnavailable = errors.New(msgRunnerRevokeUnavailable)
 // pending actions. After that commit: the runs waiting in a pool's queue for
 // this runner alone are ended too (queued, how many), runner.revoke is audited,
 // the session is closed (Hub.Revoke takes the session slot, so never under a
-// database lock), and each killed run gets the kill cascade. A result naming the
-// runner means the revoke committed, even when err reports an incomplete cascade.
+// database lock), and each killed run gets the kill cascade. Every live run's start
+// lock is held around the revoke's write alone (fenceRunsStarts), so no command
+// starts in a run between its last read and the KILLED the revoke writes; a list
+// that fails leaves the write unfenced, logged. A result naming the runner means
+// the revoke committed, even when err reports an incomplete cascade.
 func (s *Server) revokeRunner(ctx context.Context, id uuid.UUID, actorType types.ActorType, by, reason string) (rev store.RunnerRevocation, queued int, err error) {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return store.RunnerRevocation{}, 0, errRunnerRevokeUnavailable
 	}
 	s.unrouteRunner(id)
+	live, lerr := st.ListLiveRunnerRuns(ctx, id)
+	if lerr != nil {
+		slog.WarnContext(ctx, "wardynd: could not list a revoked runner's runs; revoking without fencing their command starts",
+			slog.String("runner_id", id.String()), slog.Any("err", lerr))
+	}
+	release := s.fenceRunsStarts(ctx, live)
 	rev, err = st.RevokeRunner(ctx, id, s.cfg.Now(), by, reason)
+	release()
 	if err != nil {
 		if cur, gerr := st.GetRunner(context.WithoutCancel(ctx), id); gerr == nil && cur.State == types.RunnerClaimed {
 			s.runnerEndpoint(id)

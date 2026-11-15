@@ -174,6 +174,13 @@ func (r *runner) initDriveGuest(ctx context.Context) (stop func()) {
 		if err == nil {
 			_, err = c.Init(wait, r.o.drive.init)
 		}
+		for _, d := range r.cfg.Disks {
+			// The guest has the drive mounted, so it holds a volume: a new drive's mark is used up before
+			// anything is written back to it.
+			if err == nil {
+				err = UseUpNewDisk(d.Path)
+			}
+		}
 		switch {
 		case err == nil:
 			r.o.drive.ready(DriveOpenReady{AgentSock: sock, Target: DriveOpenTarget})

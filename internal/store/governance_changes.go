@@ -34,7 +34,8 @@ const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff
 	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket`
 
 // MaxGovernanceChangeList bounds one list read; the newest changes come first. The store reads one
-// row past it, so a caller can tell a list that was cut from one that ends exactly at the bound.
+// row past it, so a caller can tell a list that was cut from one that ends exactly at the bound. The
+// pending list is not bounded here: see ListGovernanceChanges.
 const MaxGovernanceChangeList = 500
 
 // ErrGovernanceChangePending is a proposal's refusal when a live change already holds the target: ID is
@@ -219,8 +220,10 @@ func (s PG) pendingRefusal(ctx context.Context, ch types.GovernanceChange) error
 	return &ErrGovernanceChangePending{ID: id}
 }
 
-// ListGovernanceChanges returns changes newest first, at most MaxGovernanceChangeList+1 of them. state narrows to one state ("" is every state);
-// a pending row past its expiry reads as expired.
+// ListGovernanceChanges returns changes newest first. state narrows to one state ("" is every state);
+// a pending row past its expiry reads as expired. The pending list is every pending change, which
+// governance_changes_one_pending bounds to one per target, so a caller that filters it by who may see
+// a change misses none; any other state returns at most MaxGovernanceChangeList+1.
 func (s PG) ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error) {
 	q := `SELECT ` + governanceChangeColsRead + ` FROM governance_changes`
 	var args []any
@@ -228,7 +231,10 @@ func (s PG) ListGovernanceChanges(ctx context.Context, state string) ([]types.Go
 		q = `SELECT * FROM (` + q + `) c WHERE c.state = $1`
 		args = append(args, state)
 	}
-	q += fmt.Sprintf(` ORDER BY proposed_at DESC, id LIMIT %d`, MaxGovernanceChangeList+1)
+	q += ` ORDER BY proposed_at DESC, id`
+	if state != types.GovernanceChangePending {
+		q += fmt.Sprintf(` LIMIT %d`, MaxGovernanceChangeList+1)
+	}
 	return collect(ctx, s.Pool, "list", "governance changes", q, args, scanGovernanceChange)
 }
 

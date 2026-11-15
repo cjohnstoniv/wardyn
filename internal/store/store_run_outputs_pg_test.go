@@ -4,8 +4,10 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -122,7 +124,7 @@ func TestPG_RunOutputs_RetentionAndStalePending(t *testing.T) {
 	exec(`INSERT INTO run_outputs (run_id, source, captured_at) VALUES ($1, 'stdout', now() - interval '31 days'), ($2, 'stdout', now() - interval '1 day')`, old, recent)
 	exec(`INSERT INTO run_outputs (run_id, source, claimed_at) VALUES ($1, 'stdout', now() - interval '6 minutes'), ($2, 'stdout', now() - interval '1 minute'), ($3, 'stdout', now() - interval '6 minutes')`, stale, fresh, live)
 
-	ids, err := pg.ListStalePendingRunOutputs(ctx, 5*time.Minute, 10)
+	ids, _, err := pg.ListStalePendingRunOutputs(ctx, 5*time.Minute, nil, 10)
 	if err != nil || len(ids) != 1 || ids[0] != stale {
 		t.Fatalf("stale pending = %v, %v; want only the terminal run's stale row", ids, err)
 	}
@@ -134,5 +136,55 @@ func TestPG_RunOutputs_RetentionAndStalePending(t *testing.T) {
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM run_outputs`).Scan(&left)
 	if left != 4 {
 		t.Fatalf("%d rows left, want 4 (the recent final row and the three pending ones)", left)
+	}
+}
+
+// More than a page of terminal runs' stale pending rows that stay pending, as rows whose resolve fails on
+// every pass do: a cursor walk reaches every one, oldest claim first with the run id breaking a tie, leaves
+// out a fresh claim, and ends on a short page with a nil cursor, so the next walk starts again from the oldest.
+func TestPG_ListStalePendingRunOutputsCursor(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	pending := func(id uuid.UUID, minutes int) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `INSERT INTO run_outputs (run_id, source, claimed_at)
+			VALUES ($1, 'stdout', now() - make_interval(mins => $2))`, id, minutes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var want []uuid.UUID
+	for _, minutes := range []int{60, 50, 50, 40, 30} {
+		id := persistRun(t, ctx, pool, newRun(types.RunFailed)).ID
+		pending(id, minutes)
+		want = append(want, id)
+	}
+	// One statement sets the tie: now() is per statement, so two pending() calls never give an equal claim.
+	if _, err := pool.Exec(ctx, `UPDATE run_outputs SET claimed_at = now() - interval '50 minutes' WHERE run_id IN ($1, $2)`, want[1], want[2]); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(want[2][:], want[1][:]) < 0 { // the two 50-minute claims: the run id orders them
+		want[1], want[2] = want[2], want[1]
+	}
+	pending(persistRun(t, ctx, pool, newRun(types.RunFailed)).ID, 1) // claimed a minute ago: not stale
+
+	var walked []uuid.UUID
+	var after *store.SweepCursor
+	for i := 0; i < 5; i++ {
+		page, next, err := pg.ListStalePendingRunOutputs(ctx, 5*time.Minute, after, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		walked = append(walked, page...)
+		if next == nil {
+			break
+		}
+		after = next
+	}
+	if !slices.Equal(walked, want) {
+		t.Fatalf("a cursor walk of pages of 2 = %v, want %v", walked, want)
+	}
+	if first, _, err := pg.ListStalePendingRunOutputs(ctx, 5*time.Minute, nil, 2); err != nil || len(first) != 2 || first[0] != want[0] {
+		t.Fatalf("a walk from no cursor = %v, %v; want it to start again at the oldest", first, err)
 	}
 }

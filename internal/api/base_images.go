@@ -494,8 +494,18 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "check base image use", err)
 		return
 	}
-	if err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force); err != nil {
+	// The audit row names what the store's detach changed, not this listing: a workspace that
+	// pointed at the image after it is detached too. The listing names who uses it for the 409.
+	detached, err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force)
+	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
+			if force {
+				// A workspace pointed at the image while the forced delete ran: the store rolled its
+				// detach back. The listing above predates that workspace and force is already set.
+				writeErrorReason(w, http.StatusConflict, reasonBaseImageInUse,
+					"A workspace started using this base image during the delete, so it was not deleted. Try again.")
+				return
+			}
 			writeErrorReason(w, http.StatusConflict, reasonBaseImageInUse, fmt.Sprintf(
 				"base image is used by %d workspace(s): %s — repoint them first, or pass ?force=1 (they fall back to the derived recommended build)",
 				len(names), strings.Join(names, ", ")))
@@ -510,7 +520,7 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"base_image.delete", id.String(), "success", mustJSON(map[string]any{
-			"detached_from": names, "forced": force,
+			"detached_from": detached, "forced": force,
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }

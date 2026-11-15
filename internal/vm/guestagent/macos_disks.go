@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -147,7 +146,8 @@ func (m MacDisks) device(ctx context.Context, d Disk) (string, error) {
 }
 
 // blank reports whether the disk's first 4 KiB are all zero: an image the runner just made, which
-// holds no partition map yet.
+// holds no partition map yet. A disk whose first 4 KiB cannot all be read is an error, never blank: a
+// short read, or none, proves nothing about the rest.
 func (m MacDisks) blank(dev string) (bool, error) {
 	f, err := os.Open(filepath.Join(cmp.Or(m.Dev, "/dev"), "r"+dev))
 	if err != nil {
@@ -155,11 +155,10 @@ func (m MacDisks) blank(dev string) (bool, error) {
 	}
 	defer f.Close()
 	head := make([]byte, 4096)
-	n, err := io.ReadFull(f, head)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("disk %s: %w", dev, err)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false, fmt.Errorf("disk %s: its first 4 KiB could not be read, so it was not formatted: %w", dev, err)
 	}
-	return bytes.Count(head[:n], []byte{0}) == n, nil
+	return bytes.Count(head, []byte{0}) == len(head), nil
 }
 
 // volume is the device identifier (diskNsM) of the volume macOS mounted at /Volumes/<label>, read

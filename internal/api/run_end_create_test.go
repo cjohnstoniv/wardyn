@@ -341,3 +341,56 @@ func TestPlanEnd_PastLifetimeCapRefuses(t *testing.T) {
 		t.Fatalf("a later end past the lifetime cap = %+v, want the handler's own 409 %s", p, reasonRunEndWaitMaxLifetime)
 	}
 }
+
+// TestCreateEnd_NamesTheElevationThatBoundTheEnd: an end the insert stored at an elevation's cap was bound by
+// the elevation, whether the ask was inside the pool's maximum or the pool cut it first, and the asked end
+// was cut: the run.create row and the 201's sentence say so. A default end cut the same way names the
+// elevation and stays uncapped, as no end was asked for; an end inside the elevation's cap stays as decided.
+func TestCreateEnd_NamesTheElevationThatBoundTheEnd(t *testing.T) {
+	at := time.Now().UTC().Add(time.Hour)
+	later := at.Add(time.Hour)
+	cut := types.AgentRun{CreatedAt: at.Add(-time.Hour), EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}
+	inside := types.AgentRun{EndsAt: &at, LifetimeCapAt: &later, LifetimeCapSource: types.LimitSourceElevation}
+	sentence := "the end you asked for is past what your elevation allows, so the run ends at " + at.Format(time.RFC3339) + " instead"
+	for _, c := range []struct {
+		name string
+		end  createEnd
+	}{
+		{"an ask inside the pool's maximum", createEnd{askedSec: 7200, pool: "P"}},
+		{"an ask the pool cut first", createEnd{askedSec: 10800, capped: true, source: types.LimitSourcePool, pool: "P"}},
+	} {
+		a, w := c.end.audit(cut), c.end.warnings(cut)
+		if a["capped"] != true || a["source"] != "your elevation" || a["asked_sec"] != c.end.askedSec || len(w) != 1 || w[0] != sentence {
+			t.Errorf("%s, stored at the elevation's cap: end %v, warnings %q; want it capped by your elevation and %q", c.name, a, w, sentence)
+		}
+	}
+	byDefault := createEnd{source: types.LimitSourcePool, pool: "P"}
+	if a, w := byDefault.audit(cut), byDefault.warnings(cut); a["capped"] != false || a["source"] != "your elevation" || w != nil {
+		t.Errorf("a default end stored at the elevation's cap: end %v, warnings %q; want your elevation, uncapped and no sentence", a, w)
+	}
+	asked := createEnd{askedSec: 3600, pool: "P"}
+	if a, w := asked.audit(inside), asked.warnings(inside); a["capped"] != false || a["source"] != nil || w != nil {
+		t.Errorf("an end inside the elevation's cap: end %v, warnings %q; want it as decided", a, w)
+	}
+	// An ask that ends exactly at the elevation's cap fits: nothing was cut, also when the stored instants
+	// carry only microseconds and the run's creation carried nanoseconds.
+	created := at.Add(-time.Hour).Add(123456789 * time.Nanosecond)
+	exact := (created.Add(time.Hour)).Truncate(time.Microsecond)
+	for _, c := range []struct {
+		name string
+		run  types.AgentRun
+	}{
+		{"an ask exactly at the elevation", types.AgentRun{CreatedAt: at.Add(-time.Hour), EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}},
+		{"a read-back row at the microsecond", types.AgentRun{CreatedAt: created, EndsAt: &exact, LifetimeCapAt: &exact, LifetimeCapSource: types.LimitSourceElevation}},
+	} {
+		if a, w := asked.audit(c.run), asked.warnings(c.run); a["capped"] != false || a["source"] != nil || w != nil {
+			t.Errorf("%s: end %v, warnings %q; want it as asked, uncapped and no sentence", c.name, a, w)
+		}
+	}
+	// One microsecond past the stored end is cut, inside one millisecond.
+	end := at.Truncate(time.Second).Add(500 * time.Microsecond)
+	over := types.AgentRun{CreatedAt: end.Add(time.Microsecond - time.Hour), EndsAt: &end, LifetimeCapAt: &end, LifetimeCapSource: types.LimitSourceElevation}
+	if a, w := asked.audit(over), asked.warnings(over); a["capped"] != true || a["source"] != "your elevation" || len(w) != 1 {
+		t.Errorf("an ask one microsecond past the elevation: end %v, warnings %q; want it capped by your elevation", a, w)
+	}
+}

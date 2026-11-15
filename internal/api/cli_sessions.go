@@ -53,10 +53,12 @@ func cliIdentityRequest(r *http.Request, id store.CLIIdentity) *http.Request {
 
 // mintCLIToken is the CLI's one path into the mint core: prepareMint from id's snapshot (the
 // per-person cap, the snapshot, the late revocation re-check), then the CLI kind and session. It
-// returns the request that carries the snapshot, for the store write's identity guard.
+// returns the request that carries the snapshot, for the store write's identity guard, and the
+// per-person cap, which that write counts again under the person's cap lock.
 func (s *Server) mintCLIToken(w http.ResponseWriter, r *http.Request, id store.CLIIdentity, authorizedAt time.Time,
 	kind, machine string, session uuid.UUID, life time.Duration) (types.APIToken, *http.Request, bool) {
 	r = cliIdentityRequest(r, id)
+	r = r.WithContext(store.WithAdmissionCap(r.Context(), apiTokenMaxPerPrincipal))
 	name := "CLI: " + machine
 	if kind == types.APITokenKindCLIAdmin {
 		name = "CLI admin: " + machine

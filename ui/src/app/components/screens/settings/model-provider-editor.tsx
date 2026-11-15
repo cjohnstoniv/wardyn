@@ -19,7 +19,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
@@ -142,9 +142,19 @@ export function ModelProviderEditor({
   // The field the server's refusal named ("oidc.issuer"): outlined beside the alert.
   const [refusedAt, setRefusedAt] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
-  const discard = useDiscardReload(onSaved);
+  // Discard reads /me and then closes this editor to read the list again: the fields stay read-only until it does.
+  const [reloading, setReloading] = React.useState(false);
+  const discardReload = useDiscardReload(onSaved);
+  const discard = () => {
+    if (reloading) return; // the reload is already out
+    setReloading(true);
+    discardReload();
+  };
   const [confirm, setConfirm] = React.useState<Confirm>(null);
-  const { disabled: busy, showSpinner } = useDeferredBusy(saving);
+  // A new provider's Save is two writes, and `saving` covers only the first: this covers both, so the form is
+  // read-only until the second answers and a refused one finds the draft as it was sent.
+  const [submitting, setSubmitting] = React.useState(false);
+  const { disabled: busy, showSpinner } = useDeferredBusy(saving || submitting);
 
   const stored = list.providers.providers ?? [];
   const title = editing ? editing.name || MODEL_PROVIDERS.KIND[editing.kind] : MODEL_PROVIDERS.ADD_CTA;
@@ -179,13 +189,14 @@ export function ModelProviderEditor({
   const candidate = () => providerFrom(draft!, editing, stored.map((p) => p.id));
 
   const save = async () => {
+    const person = getExpectedPrincipal();
     const next = candidate();
     const rows = editing ? stored.map((p) => (p.id === editing.id ? next : p)) : [...stored, next];
     const snap = await write(rows);
     if (!snap) return;
     if (!editing) {
       try {
-        await writeAvailability("model_provider", next.id, audience);
+        await writeAvailability("model_provider", next.id, audience, person);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
@@ -205,6 +216,15 @@ export function ModelProviderEditor({
     onSaved();
   };
 
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await save();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const remove = async () => {
     if (await write(stored.filter((p) => p.id !== editing?.id))) onSaved();
   };
@@ -218,7 +238,7 @@ export function ModelProviderEditor({
       setConfirm("address");
       return;
     }
-    void save();
+    void submit();
   };
 
   // A sign-in change on its own says what it deletes in its own words; with another address change beside it
@@ -278,18 +298,20 @@ export function ModelProviderEditor({
                 <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
-            <ProviderFields
-              draft={draft}
-              setDraft={setDraft}
-              harnesses={harnesses}
-              refused={refused}
-              refusedAt={refusedAt}
-              editing={editing}
-              people={n}
-              gatewayIssuer={list.gatewayIssuer}
-              gatewayJwksPath={list.gatewayJwksPath}
-              ssoGateway={list.gatewayIdentityBedrockSso === true}
-            />
+            <fieldset disabled={busy || reloading} className="m-0 min-w-0 space-y-4 border-0 p-0">
+              <ProviderFields
+                draft={draft}
+                setDraft={setDraft}
+                harnesses={harnesses}
+                refused={refused}
+                refusedAt={refusedAt}
+                editing={editing}
+                people={n}
+                gatewayIssuer={list.gatewayIssuer}
+                gatewayJwksPath={list.gatewayJwksPath}
+                ssoGateway={list.gatewayIdentityBedrockSso === true}
+              />
+            </fieldset>
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
             <div className="border-t border-border pt-4">
@@ -304,7 +326,7 @@ export function ModelProviderEditor({
                 <AvailabilityDraft
                   draft={audience}
                   onChange={setAudience}
-                  disabled={busy}
+                  disabled={busy || reloading}
                   onlyHint={AVAILABILITY.MODEL_PROVIDER_ONLY_HINT}
                   note={AVAILABILITY.MODEL_PROVIDER_NOTE}
                 />
@@ -320,14 +342,14 @@ export function ModelProviderEditor({
             {/* Sticky: on a phone the sign-in fields make this dialog scroll, and Save must stay in reach. */}
             <div data-testid="provider-editor-footer" className={`${INLINE_ACTIONS} ${STICKY_FOOTER}`}>
               {editing && (
-                <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy} onClick={() => setConfirm("remove")}>
+                <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy || reloading} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}
                 </Button>
               )}
               <Button type="button" variant="ghost" onClick={close}>
                 {PROVIDER_EDITOR.CANCEL}
               </Button>
-              <Button type="submit" disabled={busy || audience.pending}>
+              <Button type="submit" disabled={busy || reloading || audience.pending}>
                 {showSpinner && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
                 {PROVIDER_EDITOR.SAVE}
               </Button>

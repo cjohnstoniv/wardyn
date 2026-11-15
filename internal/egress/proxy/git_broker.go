@@ -139,6 +139,11 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		p.denyAttributed(w, "repository not granted to this run", http.StatusForbidden)
 		return
 	}
+	// Git never carries the run's identity, so a host an identity route has is sent none: refused here,
+	// before the push rules can read the forge or hold the push and before a token is minted.
+	if p.gatewayUnsignedRefused(w, r, githubHost, 443, ruleSourceGit) {
+		return
+	}
 	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		http.Error(w, "unsupported git request", http.StatusForbidden)

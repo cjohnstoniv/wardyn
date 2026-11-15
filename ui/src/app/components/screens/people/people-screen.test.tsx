@@ -6,7 +6,7 @@
 // 0.8.6 ppl-p2: the admin People page (mock M12). The strings are written out, not read from the copy
 // module, so a drift in people.ts fails this suite.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { PersonSummary } from "../../../lib/types";
@@ -192,17 +192,25 @@ describe("the people table", () => {
   });
 
   it("keeps the same rows mounted while a re-read is in flight, so the opener a drawer returns focus to survives", async () => {
-    renderScreen();
+    const user = userEvent.setup();
+    listMock.mockResolvedValueOnce({ people: ROWS, next_cursor: "c1" });
+    renderScreen({ operator: false });
     const opener = await screen.findByRole("button", { name: "ana@example.com" });
     let answer!: (page: { people: PersonSummary[] }) => void;
     listMock.mockReturnValueOnce(new Promise((done) => { answer = done; }));
-    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
-    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
+    await user.click(opener);
+    const drawer = await screen.findByRole("dialog");
+    await user.click(within(drawer).getByRole("button", { name: "Remove all" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove all" }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     expect(opener.isConnected).toBe(true);
-    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    // The old cursor went with the re-read: Load more would otherwise supersede it and append to the stale page.
+    expect(screen.queryByRole("button", { name: "Load more", hidden: true })).toBeNull();
+    // The open drawer hides the table from the accessibility tree; the row is still the one that opened it.
+    expect(screen.getByRole("button", { name: "ana@example.com", hidden: true })).toBe(opener);
     answer({ people: [ROWS[0]] });
     await waitFor(() => expect(screen.queryByText("new@example.com")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    expect(screen.getByRole("button", { name: "ana@example.com", hidden: true })).toBe(opener);
   });
 
   it("pages: Load more appends the next page by cursor", async () => {
@@ -244,6 +252,39 @@ describe("the people table", () => {
     expect(await screen.findByRole("button", { name: P.LOADING_MORE })).toBeDisabled();
     finish({ people: [ROWS[1]] });
     expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+  });
+
+  it("a state filter drops the old rows and cursor, and offers no Load more until its own first page lands", async () => {
+    let answer: ((page: { people: PersonSummary[]; next_cursor?: string }) => void) | undefined;
+    listMock
+      .mockResolvedValueOnce({ people: [ROWS[0], ROWS[1]], next_cursor: "c1" })
+      .mockReturnValueOnce(new Promise((done) => (answer = done)));
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deactivated" }));
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ state: "deactivated", cursor: undefined })));
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(screen.queryByText("ana@example.com")).toBeNull();
+    await act(async () => answer?.({ people: [ROWS[2]], next_cursor: "d1" }));
+    expect(screen.getByText("left@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ state: "deactivated", cursor: "d1" }));
+  });
+
+  it("a new search drops the old rows and cursor, and offers no Load more until its own first page lands", async () => {
+    let answer: ((page: { people: PersonSummary[] }) => void) | undefined;
+    listMock.mockResolvedValueOnce({ people: [ROWS[0], ROWS[1]], next_cursor: "c1" }).mockReturnValueOnce(new Promise((done) => (answer = done)));
+    renderScreen();
+    await screen.findByRole("button", { name: "Load more" });
+    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana", cursor: undefined })));
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(screen.queryByText("new@example.com")).toBeNull();
+    await act(async () => answer?.({ people: [ROWS[0]] }));
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
   });
 });
 
@@ -345,11 +386,20 @@ describe("the person drawer", () => {
 
   // #1815: the token read used to swallow its rejection, so the section showed the count with no
   // names under it — indistinguishable from a person who holds none, with no way back.
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't load this person's tokens."],
+  ])("a token read that fails with %s says so", async (_name, error, text) => {
+    tokensMock.mockRejectedValueOnce(error);
+    const { drawer } = await openAna();
+    expect(await within(drawer).findByText(text)).toBeInTheDocument();
+  });
+
   it("says the token read failed instead of showing an empty list, and Retry refetches", async () => {
-    tokensMock.mockRejectedValueOnce(new HttpError(503, "tokens store down"));
+    tokensMock.mockRejectedValueOnce(Object.assign(new HttpError(503, "Service Unavailable"), { said: "" }));
     const { user, drawer } = await openAna();
     expect(await within(drawer).findByRole("button", { name: /retry/i })).toBeInTheDocument();
-    expect(within(drawer).getByText("Wardyn isn't answering. Try again.")).toBeInTheDocument();
+    expect(within(drawer).getByText("Wardyn couldn't load this person's tokens. Try again.")).toBeInTheDocument();
     expect(within(drawer).queryByText("ci-bot")).toBeNull();
     await user.click(within(drawer).getByRole("button", { name: /retry/i }));
     expect(await within(drawer).findByText("ci-bot")).toBeInTheDocument();

@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,6 +48,32 @@ type ModelUsageGroup struct {
 	PartialCalls        int64
 	UncountedReasons    map[string]int64
 }
+
+// UncountedReasonOutOfRange is the uncounted reason of the calls of a group whose token counts add up past an
+// int64: no exact figure exists to show, so the calls are shown as not counted instead of a cut or wrapped one.
+const UncountedReasonOutOfRange = "count_out_of_range"
+
+// Uncounted is g with every call it counted moved to not counted, reason UncountedReasonOutOfRange, and no
+// tokens. g's reasons map is copied, not changed.
+func (g ModelUsageGroup) Uncounted() ModelUsageGroup {
+	reasons := make(map[string]int64, len(g.UncountedReasons)+1)
+	maps.Copy(reasons, g.UncountedReasons)
+	if n := g.Calls - g.UncountedCalls; n > 0 {
+		reasons[UncountedReasonOutOfRange] += n
+	}
+	return ModelUsageGroup{Vendor: g.Vendor, Host: g.Host, Model: g.Model, Calls: g.Calls, UncountedCalls: g.Calls, UncountedReasons: reasons}
+}
+
+// usageSumsSQL is a group's five token sums over the rows aliased u, then whether any of them is past bigint.
+// Postgres adds bigint as numeric, exactly, and casting a larger sum back fails the whole read: each sum is cut to
+// bigint before its cast, and a group past it is read as Uncounted, never with the cut figure.
+const usageSumsSQL = `LEAST(COALESCE(sum(u.input_tokens),0), 9223372036854775807)::bigint,
+		LEAST(COALESCE(sum(u.output_tokens),0), 9223372036854775807)::bigint,
+		LEAST(COALESCE(sum(u.cache_read_tokens),0), 9223372036854775807)::bigint,
+		LEAST(COALESCE(sum(u.cache_write_tokens),0), 9223372036854775807)::bigint,
+		LEAST(COALESCE(sum(u.reasoning_tokens),0), 9223372036854775807)::bigint,
+		GREATEST(COALESCE(sum(u.input_tokens),0), COALESCE(sum(u.output_tokens),0), COALESCE(sum(u.cache_read_tokens),0),
+			COALESCE(sum(u.cache_write_tokens),0), COALESCE(sum(u.reasoning_tokens),0)) > 9223372036854775807`
 
 // ModelUsageSummary is a run's usage rows grouped, and the time of the newest row (nil with none).
 type ModelUsageSummary struct {
@@ -124,12 +151,9 @@ func (s PG) InsertModelUsage(ctx context.Context, runID uuid.UUID, u egress.Mode
 
 func (s PG) RunModelUsage(ctx context.Context, runID uuid.UUID) (ModelUsageSummary, error) {
 	var out ModelUsageSummary
-	rows, err := s.Pool.Query(ctx, `SELECT vendor, host, model,
-			COALESCE(sum(input_tokens),0)::bigint, COALESCE(sum(output_tokens),0)::bigint,
-			COALESCE(sum(cache_read_tokens),0)::bigint, COALESCE(sum(cache_write_tokens),0)::bigint,
-			COALESCE(sum(reasoning_tokens),0)::bigint,
-			count(*), count(*) FILTER (WHERE state='uncounted'), count(*) FILTER (WHERE state='partial'), max(at)
-		FROM run_model_usage WHERE run_id=$1 GROUP BY vendor, host, model ORDER BY vendor, host, model`, runID)
+	rows, err := s.Pool.Query(ctx, `SELECT u.vendor, u.host, u.model, `+usageSumsSQL+`,
+			count(*), count(*) FILTER (WHERE u.state='uncounted'), count(*) FILTER (WHERE u.state='partial'), max(u.at)
+		FROM run_model_usage u WHERE u.run_id=$1 GROUP BY u.vendor, u.host, u.model ORDER BY u.vendor, u.host, u.model`, runID)
 	if err != nil {
 		return out, fmt.Errorf("store: read model usage: %w", err)
 	}
@@ -137,9 +161,13 @@ func (s PG) RunModelUsage(ctx context.Context, runID uuid.UUID) (ModelUsageSumma
 	for rows.Next() {
 		var g ModelUsageGroup
 		var newest time.Time
-		if err := rows.Scan(&g.Vendor, &g.Host, &g.Model, &g.Input, &g.Output, &g.CacheRead, &g.CacheWrite, &g.Reasoning,
+		var over bool
+		if err := rows.Scan(&g.Vendor, &g.Host, &g.Model, &g.Input, &g.Output, &g.CacheRead, &g.CacheWrite, &g.Reasoning, &over,
 			&g.Calls, &g.UncountedCalls, &g.PartialCalls, &newest); err != nil {
 			return out, fmt.Errorf("store: scan model usage: %w", err)
+		}
+		if over {
+			g = g.Uncounted()
 		}
 		if out.UpdatedAt == nil || newest.After(*out.UpdatedAt) {
 			t := newest

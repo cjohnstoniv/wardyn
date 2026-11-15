@@ -174,171 +174,175 @@ export function EnvelopeCard({
 
   return (
     <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
-      <div className="px-6 pt-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-sm font-medium text-foreground">{ENVELOPE.TITLE}</h2>
-            <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{ENVELOPE.LEAD}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{ENVELOPE.HELP}</p>
-          </div>
-          {/* With none, the empty state carries the one Set an envelope. */}
-          {envelopes.length > 0 && (
-            <Button variant="outline" size="sm" onClick={openSet}>
-              {ENVELOPE.SET}
-            </Button>
-          )}
-        </div>
-        {submitted && <SubmittedNote />}
-      </div>
-      <div className="mt-4">
-        {envelopes.length === 0 ? (
-          <EmptyState
-            size="compact"
-            icon={Layers}
-            title={ENVELOPE.EMPTY_TITLE}
-            description={ENVELOPE.EMPTY_BODY}
-            action={
-              <Button variant="outline" onClick={openSet}>
+      {/* Read-only while a save is in flight: its answer closes the form, which would otherwise be another one opened
+          meanwhile, and an edit made meanwhile would be dropped. */}
+      <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+        <div className="px-6 pt-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-sm font-medium text-foreground">{ENVELOPE.TITLE}</h2>
+              <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{ENVELOPE.LEAD}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{ENVELOPE.HELP}</p>
+            </div>
+            {/* With none, the empty state carries the one Set an envelope. */}
+            {envelopes.length > 0 && (
+              <Button variant="outline" size="sm" onClick={openSet}>
                 {ENVELOPE.SET}
               </Button>
-            }
-          />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>{ENVELOPE.COL_PLATFORM}</TableHead>
-                <TableHead>{ENVELOPE.COL_GROUPS}</TableHead>
-                <TableHead>{ENVELOPE.COL_SET_BY}</TableHead>
-                <TableHead className="w-[200px]">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {envelopes.map((e) => (
-                <TableRow key={e.unit_id}>
-                  <TableCell className="font-medium">{nameOf(e.unit_id)}</TableCell>
-                  <TableCell>
-                    <Groups groups={e.approved_groups} />
-                  </TableCell>
-                  <TableCell>
-                    <SetBy who={e.set_by} at={e.set_at} />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="outline" size="sm" aria-label={`${ENVELOPE.EDIT} ${nameOf(e.unit_id)}`} onClick={() => openEdit(e)}>
-                        {ENVELOPE.EDIT}
-                      </Button>
-                      <Button variant="ghost" size="sm" aria-label={`${ENVELOPE.REMOVE} ${nameOf(e.unit_id)}`} onClick={() => setRemoving(e.unit_id)}>
-                        {ENVELOPE.REMOVE}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </div>
-
-      {form && (
-        <div className="space-y-4 border-t border-border px-6 py-5">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">
-              {form.kind === "set" ? ENVELOPE.SET : ENVELOPE.EDIT_TITLE(nameOf(form.unitId))}
-            </h3>
-            {form.kind === "edit" && <p className="mt-1 max-w-[82ch] text-xs text-muted-foreground">{ENVELOPE.EDIT_LEAD}</p>}
+            )}
           </div>
-
-          {form.kind === "set" ? (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="envelope-root">{ENVELOPE.ROOT_LABEL}</Label>
-                <Select value={root} onValueChange={setRoot}>
-                  <SelectTrigger id="envelope-root" className="max-w-[28rem]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {freeProfiles.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">{ENVELOPE.ROOT_HINT}</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="envelope-groups">{ENVELOPE.GROUPS_LABEL}</Label>
-                <Textarea
-                  id="envelope-groups"
-                  className="max-w-[28rem] font-mono"
-                  value={text}
-                  autoComplete="off"
-                  onChange={(e) => setText(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">{ENVELOPE.GROUPS_HINT}</p>
-              </div>
-            </>
-          ) : (
-            <>
-              <ul className="space-y-1">
-                {draft.map((g, i) => (
-                  <li key={g} className="flex flex-wrap items-center gap-2 py-1">
-                    <Chip>{POOL_DRAWER.SUBJECT.group}</Chip>
-                    <Mono className="break-all">{g}</Mono>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={POOL_DRAWER.REMOVE_SUBJECT(g)}
-                      onClick={() => setDraft(draft.filter((_, j) => j !== i))}
-                    >
-                      {POOL_DRAWER.REMOVE}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-              <div className="grid grid-cols-[1fr_auto] items-end gap-3 max-sm:grid-cols-1">
-                <div className="space-y-1.5">
-                  <Label htmlFor="envelope-add">{ENVELOPE.ADD_LABEL}</Label>
-                  <Input
-                    id="envelope-add"
-                    value={name}
-                    placeholder={ENVELOPE.ADD_PLACEHOLDER}
-                    autoComplete="off"
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addToList();
-                      }
-                    }}
-                  />
-                </div>
-                <Button variant="outline" onClick={addToList}>
-                  {POOL_DRAWER.ADD_TO_LIST}
-                </Button>
-              </div>
-            </>
-          )}
-
-          {error && (
-            <Note tone="red" role="alert">
-              <b className="font-semibold">{ENVELOPE.REFUSED_TITLE}</b>
-              <Mono className="text-inherit">{error}</Mono>
-            </Note>
-          )}
-          <div className={INLINE_ACTIONS}>
-            <Button variant="ghost" onClick={closeForm}>
-              {ENVELOPE.CANCEL}
-            </Button>
-            <Button disabled={busy || (form.kind === "set" && !root)} onClick={() => void save()}>
-              {form.kind === "set" ? ENVELOPE.SAVE_ENVELOPE : ENVELOPE.SAVE_GROUPS}
-            </Button>
-          </div>
+          {submitted && <SubmittedNote />}
         </div>
-      )}
+        <div className="mt-4">
+          {envelopes.length === 0 ? (
+            <EmptyState
+              size="compact"
+              icon={Layers}
+              title={ENVELOPE.EMPTY_TITLE}
+              description={ENVELOPE.EMPTY_BODY}
+              action={
+                <Button variant="outline" onClick={openSet}>
+                  {ENVELOPE.SET}
+                </Button>
+              }
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>{ENVELOPE.COL_PLATFORM}</TableHead>
+                  <TableHead>{ENVELOPE.COL_GROUPS}</TableHead>
+                  <TableHead>{ENVELOPE.COL_SET_BY}</TableHead>
+                  <TableHead className="w-[200px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {envelopes.map((e) => (
+                  <TableRow key={e.unit_id}>
+                    <TableCell className="font-medium">{nameOf(e.unit_id)}</TableCell>
+                    <TableCell>
+                      <Groups groups={e.approved_groups} />
+                    </TableCell>
+                    <TableCell>
+                      <SetBy who={e.set_by} at={e.set_at} />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button variant="outline" size="sm" aria-label={`${ENVELOPE.EDIT} ${nameOf(e.unit_id)}`} onClick={() => openEdit(e)}>
+                          {ENVELOPE.EDIT}
+                        </Button>
+                        <Button variant="ghost" size="sm" aria-label={`${ENVELOPE.REMOVE} ${nameOf(e.unit_id)}`} onClick={() => setRemoving(e.unit_id)}>
+                          {ENVELOPE.REMOVE}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+
+        {form && (
+          <div className="space-y-4 border-t border-border px-6 py-5">
+            <div>
+              <h3 className="text-sm font-medium text-foreground">
+                {form.kind === "set" ? ENVELOPE.SET : ENVELOPE.EDIT_TITLE(nameOf(form.unitId))}
+              </h3>
+              {form.kind === "edit" && <p className="mt-1 max-w-[82ch] text-xs text-muted-foreground">{ENVELOPE.EDIT_LEAD}</p>}
+            </div>
+
+            {form.kind === "set" ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="envelope-root">{ENVELOPE.ROOT_LABEL}</Label>
+                  <Select value={root} onValueChange={setRoot} disabled={busy}>
+                    <SelectTrigger id="envelope-root" className="max-w-[28rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {freeProfiles.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{ENVELOPE.ROOT_HINT}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="envelope-groups">{ENVELOPE.GROUPS_LABEL}</Label>
+                  <Textarea
+                    id="envelope-groups"
+                    className="max-w-[28rem] font-mono"
+                    value={text}
+                    autoComplete="off"
+                    onChange={(e) => setText(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">{ENVELOPE.GROUPS_HINT}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <ul className="space-y-1">
+                  {draft.map((g, i) => (
+                    <li key={g} className="flex flex-wrap items-center gap-2 py-1">
+                      <Chip>{POOL_DRAWER.SUBJECT.group}</Chip>
+                      <Mono className="break-all">{g}</Mono>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={POOL_DRAWER.REMOVE_SUBJECT(g)}
+                        onClick={() => setDraft(draft.filter((_, j) => j !== i))}
+                      >
+                        {POOL_DRAWER.REMOVE}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-3 max-sm:grid-cols-1">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="envelope-add">{ENVELOPE.ADD_LABEL}</Label>
+                    <Input
+                      id="envelope-add"
+                      value={name}
+                      placeholder={ENVELOPE.ADD_PLACEHOLDER}
+                      autoComplete="off"
+                      onChange={(e) => setName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addToList();
+                        }
+                      }}
+                    />
+                  </div>
+                  <Button variant="outline" onClick={addToList}>
+                    {POOL_DRAWER.ADD_TO_LIST}
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {error && (
+              <Note tone="red" role="alert">
+                <b className="font-semibold">{ENVELOPE.REFUSED_TITLE}</b>
+                <Mono className="text-inherit">{error}</Mono>
+              </Note>
+            )}
+            <div className={INLINE_ACTIONS}>
+              <Button variant="ghost" onClick={closeForm}>
+                {ENVELOPE.CANCEL}
+              </Button>
+              <Button disabled={busy || (form.kind === "set" && !root)} onClick={() => void save()}>
+                {form.kind === "set" ? ENVELOPE.SAVE_ENVELOPE : ENVELOPE.SAVE_GROUPS}
+              </Button>
+            </div>
+          </div>
+        )}
+      </fieldset>
 
       <ConfirmDialog
         open={removing !== null}

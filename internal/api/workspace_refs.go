@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -321,6 +323,48 @@ func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.Work
 		return fmt.Errorf("member workspace mount: %w", err)
 	}
 	return nil
+}
+
+// openScanSource is userMountAllowed for a host-side read of src at every scan
+// door: it is checked and opened in one step (runner's OpenScanSource, opening
+// with no link followed from the top of the volume), held to the roots of every
+// member whose workspace attaches the row, since each of them reads what the
+// scan finds, and the caller reads it only through the handle and closes it.
+// owner is the scanned workspace's member owner, "" at an operator's door. A
+// nil handle with no error is a folder that no member root holds and no
+// member's workspace attaches, read by its path. A workspace list that cannot
+// be read is errScanHoldersUnread: no holder can be named, so nothing is read.
+func (s *Server) openScanSource(ctx context.Context, owner string, src types.Source) (*os.Root, error) {
+	all, err := s.listWorkspaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errScanHoldersUnread, err)
+	}
+	var holders []runner.ScanHolder
+	for _, ws := range all {
+		if ws.OwnedBy != "" && slices.ContainsFunc(ws.Attachments, func(a types.WorkspaceAttachment) bool { return a.SourceID != nil && *a.SourceID == src.ID }) {
+			holders = append(holders, runner.ScanHolder{Owner: ws.OwnedBy, Workspace: ws.Name})
+		}
+	}
+	dir, err := s.cfg.UserMounts.OpenScanSource(owner, src.Locator, holders, foldersync.OpenFromTop)
+	if err != nil {
+		return nil, fmt.Errorf("member workspace mount: %w", err)
+	}
+	return dir, nil
+}
+
+// errScanHoldersUnread is openScanSource's failed read of the workspaces that attach a folder.
+var errScanHoldersUnread = errors.New("list the workspaces that attach the folder")
+
+// scanRefusalFor is an openScanSource refusal as r's caller reads it. A member
+// is told that a workspace whose owner's roots no longer hold the folder blocks
+// the scan, never its name or owner: another member's workspace answers them a
+// 404 everywhere else. The audit row keeps the named sentence for an operator.
+func (s *Server) scanRefusalFor(r *http.Request, err error) string {
+	var stale *runner.StaleWorkspaceError
+	if errors.As(err, &stale) && !s.isOperator(r.Context()) {
+		return "member workspace mount: " + stale.Unnamed()
+	}
+	return err.Error()
 }
 
 // sourceRefusal is validateWorkspaceSources' (status, reason, error) answer as

@@ -33,10 +33,11 @@ var ipLiteralSpellings = []struct{ name, authority string }{
 	{"v4-mapped v6", "[::ffff:8.8.8.8]"},
 }
 
-// ipLiteralRefused reports whether rows hold the deny a literal earns: policy:ip-literal, or the
-// blocked-range deny a link-local address already gets.
+// ipLiteralRefused reports whether rows hold the deny a literal earns: policy:ip-literal, the
+// non-standard-spelling deny every run applies, or the blocked-range deny a link-local address gets.
 func ipLiteralRefused(rows string) bool {
 	return strings.Contains(rows, `"rule_source":"`+ruleSourceIPLiteral+`"`) ||
+		strings.Contains(rows, `"rule_source":"`+ruleSourceIPSpelling+`"`) ||
 		strings.Contains(rows, `"rule_source":"builtin:private-ip"`)
 }
 
@@ -80,9 +81,9 @@ func TestRefuseIPLiterals_ExactListedAndOff(t *testing.T) {
 	if d, src := eval(on, "8.8.8.8"); d != egress.Allow {
 		t.Errorf("an exactly listed literal = %s %s, want allow", d, src)
 	}
-	for _, host := range []string{"0x08080808", "134744072", "8.8.4.4"} {
-		if d, src := eval(on, host); d != egress.Deny || src != ruleSourceIPLiteral {
-			t.Errorf("%s with only 8.8.8.8 listed = %s %s, want deny %s", host, d, src, ruleSourceIPLiteral)
+	for host, want := range map[string]string{"0x08080808": ruleSourceIPSpelling, "134744072": ruleSourceIPSpelling, "8.8.4.4": ruleSourceIPLiteral} {
+		if d, src := eval(on, host); d != egress.Deny || src != want {
+			t.Errorf("%s with only 8.8.8.8 listed = %s %s, want deny %s", host, d, src, want)
 		}
 	}
 	if d, src := eval(on, "public.test"); d != egress.Allow {

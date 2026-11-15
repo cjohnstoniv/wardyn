@@ -20,6 +20,8 @@ export interface GovernanceRequest extends GovernanceChange {
   duration?: string;
   // An applied elevation's end.
   ends_at?: string;
+  // An applied elevation whose membership is held with no end (a unit admin made it permanent).
+  no_end?: boolean;
   image?: string;
   mine: boolean;
   decidable: boolean;

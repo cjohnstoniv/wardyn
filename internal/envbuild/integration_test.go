@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -134,32 +133,36 @@ func serveGitDaemon(t *testing.T, repoDir string) string {
 	base := filepath.Dir(repoDir)
 	repoName := filepath.Base(repoDir)
 
+	// The test holds a port-0 listener and runs git daemon in inetd mode on each connection, so the port is
+	// bound once, by the kernel's choice, and never free for another process to take before a later bind.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("pick port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close() // hand the port to git daemon
-
-	cmd := exec.Command("git", "daemon",
-		"--reuseaddr", "--listen=127.0.0.1", "--port="+strconv.Itoa(port),
-		"--base-path="+base, "--export-all", base)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start git daemon: %v", err)
-	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
-
-	// Give the daemon a moment to bind.
-	url := "git://127.0.0.1:" + strconv.Itoa(port) + "/" + repoName
-	for i := 0; i < 50; i++ {
-		c, derr := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 100*time.Millisecond)
-		if derr == nil {
-			_ = c.Close()
-			break
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveGitConn(c.(*net.TCPConn), base)
 		}
-		time.Sleep(100 * time.Millisecond)
+	}()
+	return "git://" + ln.Addr().String() + "/" + repoName
+}
+
+// serveGitConn runs one git daemon in inetd mode with the connection as its stdin and stdout.
+func serveGitConn(c *net.TCPConn, base string) {
+	defer c.Close()
+	f, err := c.File()
+	if err != nil {
+		return
 	}
-	return url
+	defer f.Close()
+	cmd := exec.Command("git", "daemon", "--inetd", "--base-path="+base, "--export-all", base)
+	cmd.Stdin, cmd.Stdout = f, f
+	_ = cmd.Run()
 }
 
 func initFixtureRepo(t *testing.T) string {

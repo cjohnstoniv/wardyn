@@ -476,7 +476,9 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdatePolicy validates the spec and replaces an existing policy's name
-// and spec. Returns 404 when the policy is unknown, 400 on an invalid body/spec.
+// and spec. Returns 404 when the policy is unknown, 400 on an invalid body/spec,
+// 400 policy_revision_required on a missing expected_updated_at, and 409
+// policy_stale when the policy was saved after that updated_at.
 func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "policy")
 	if !ok {
@@ -497,7 +499,8 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The audit row records the policy as it was and as it is: a spec names secrets, never their values
-	// (secretRefsOf). The read and the write are not one step; /policies writes are single-human.
+	// (secretRefsOf). The read and the write are not one step, but the write lands only while updated_at
+	// is still the one the caller read, and every write moves it, so a landed write replaced prev.
 	prev, err := s.cfg.Store.GetPolicy(r.Context(), id)
 	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
@@ -506,8 +509,18 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read policy", err)
 		return
 	}
-	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, req.Name, req.Spec)
+	// The whole spec is replaced, so a save from an older copy would put back what a later save
+	// removed; the caller names the updated_at it read, and a stale one is refused below.
+	if req.ExpectedUpdatedAt == nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonPolicyRevisionRequired, "This save needs the policy's current revision (updated_at). Reload the policy, or update the CLI or SDK, and save again.")
+		return
+	}
+	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, *req.ExpectedUpdatedAt, req.Name, req.Spec)
 	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
+		return
+	}
+	if errors.Is(err, store.ErrPolicyStale) {
+		writeErrorReason(w, http.StatusConflict, reasonPolicyStale, "Someone saved this policy since you opened it. Reload it, then apply your edit again.")
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {

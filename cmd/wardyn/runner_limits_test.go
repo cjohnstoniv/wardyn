@@ -321,3 +321,21 @@ func TestRunnerListResourceColumns(t *testing.T) {
 		t.Errorf("--json = %v, requests %v\n%s", err, *paths, out)
 	}
 }
+
+// A limits file is one JSON block with no key written twice: reading the first block alone, or the
+// last of a repeated key, would send limits without what the rest of the file names.
+func TestReadPoolLimitsRefusesAnAmbiguousFile(t *testing.T) {
+	const one = `{"background":{},"barriers":["CC3"]}`
+	for name, body := range map[string]string{
+		"second block":  `{"background":{},"barriers":[]} ` + one,
+		"trailing text": one + ` junk`,
+		"a key twice":   `{"background":{},"barriers":["CC3"],"barriers":[]}`,
+	} {
+		if l, err := readPoolLimits(writeTemplateFile(t, "limits.json", body)); err == nil {
+			t.Errorf("%s: read as %+v, want the file refused", name, l)
+		}
+	}
+	if _, err := readPoolLimits(writeTemplateFile(t, "limits.json", one+"\n")); err != nil {
+		t.Errorf("one block and a line break: %v", err)
+	}
+}

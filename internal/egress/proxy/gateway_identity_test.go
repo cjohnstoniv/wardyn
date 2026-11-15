@@ -687,7 +687,8 @@ func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwoTokens(t *testing.T) {
 }
 
 // A 3xx goes back to the sandbox, not followed, and its target never sees the token: not
-// another host, not another port, not a path outside the prefix. A Location echoing it is masked.
+// another host, not another port. A Location echoing it is masked. A path outside the prefix at
+// the route's own host and port is not sent at all (TestGatewayIdentity_RouteHostSendsOnlyWhatARouteCovers).
 func TestGatewayIdentity_RedirectsNeverCarryIt(t *testing.T) {
 	for lane := range map[string]bool{"brokered": true, "mitm": true} {
 		t.Run(lane, func(t *testing.T) {
@@ -713,9 +714,6 @@ func TestGatewayIdentity_RedirectsNeverCarryIt(t *testing.T) {
 			}{
 				{"another host", gwidOther, "https://" + gwidOther + "/landing", 443, g.other},
 				{"another port", gwidHost, "https://" + gwidHost + ":8443/v1/messages", 8443, g.other},
-				{"outside the prefix", gwidHost, "https://" + gwidHost + "/other", 443, g.gw},
-				{"a prefix look-alike", gwidHost, "https://" + gwidHost + "/v1evil/x", 443, g.gw},
-				{"a dot segment out of the prefix", gwidHost, "https://" + gwidHost + "/v1/../other", 443, g.gw},
 			} {
 				hits := follow.up.count()
 				out := httptest.NewRecorder()
@@ -938,8 +936,8 @@ func TestGatewayIdentity_RangeDroppedOnRoute(t *testing.T) {
 	}
 	g := newGwidRig(t, gwidRoutes(), false)
 	rec := httptest.NewRecorder()
-	g.p.serveMITMRequest(rec, withRange(httptest.NewRequest(http.MethodGet, "https://"+gwidHost+"/other", nil), "bytes=0-1"), gwidHost, 443)
-	if got := g.gw.last(t).Header.Get("Range"); got != "bytes=0-1" {
+	g.p.serveMITMRequest(rec, withRange(httptest.NewRequest(http.MethodGet, "https://"+gwidOther+"/other", nil), "bytes=0-1"), gwidOther, 443)
+	if got := g.other.last(t).Header.Get("Range"); got != "bytes=0-1" {
 		t.Errorf("off the route, Range = %q, want it kept", got)
 	}
 	off := newGwidRig(t, nil, false)
@@ -1181,9 +1179,10 @@ func TestGatewayIdentity_CutStaysOnTheRoute(t *testing.T) {
 	start := g.lastMinted(t)[:30]
 	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, start) }
 	rec := httptest.NewRecorder()
-	g.p.serveMITMRequest(rec, httptest.NewRequest(http.MethodGet, "https://"+gwidHost+"/other", nil), gwidHost, 443)
+	g.other.respond = g.gw.respond
+	g.p.serveMITMRequest(rec, httptest.NewRequest(http.MethodGet, "https://"+gwidOther+"/other", nil), gwidOther, 443)
 	if rec.Body.String() != start {
-		t.Errorf("off the prefix: %q, want the bytes as sent", rec.Body)
+		t.Errorf("off the route's host: %q, want the bytes as sent", rec.Body)
 	}
 	off := newGwidRig(t, nil, false)
 	off.gw.respond = g.gw.respond

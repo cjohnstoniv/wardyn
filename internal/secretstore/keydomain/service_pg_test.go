@@ -13,9 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
@@ -428,5 +430,48 @@ func TestRecordLoginGroups_WaitsForAnAssignmentWrite(t *testing.T) {
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM key_domain_login_groups WHERE principal = 'gina' AND groups = '["eng"]'::jsonb`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("the login's groups were not written: %d rows, %v", n, err)
+	}
+}
+
+// appendAudit appends one audit row the way every writer does: under the chain lock, through audit_append.
+func appendAudit(t *testing.T, pool *pgxpool.Pool, at time.Time, actor, action, data string) {
+	t.Helper()
+	ctx := t.Context()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		uuid.New(), at, nil, "human", actor, action, "", "success", "", []byte(data)); err != nil {
+		t.Fatalf("append %s by %s: %v", action, actor, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A laptop's forwarded assignment row, stored as device ingest stores it (a "device:<id>/" actor and the
+// same device in data.device_origin), neither raises the key-domain change count nor names the latest
+// change; the organisation's own row still does both.
+func TestService_ChangesSinceCountsOnlyTheOrganisationsOwnRows(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a"})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	since := now.Add(-time.Hour)
+	dev := uuid.NewString()
+	appendAudit(t, pool, now, "device:"+dev+"/admin@corp.example", "key_domain.assignment.set",
+		`{"device_origin":{"device_id":"`+dev+`"}}`)
+	if c, err := s.ChangesSince(t.Context(), since); err != nil || c.Count != 0 {
+		t.Fatalf("with only a forwarded row: %+v, %v; want no change", c, err)
+	}
+	appendAudit(t, pool, now.Add(-time.Minute), "admin@corp.example", "key_domain.assignment.set", `{}`)
+	c, err := s.ChangesSince(t.Context(), since)
+	if err != nil || c.Count != 1 || c.LatestBy != "admin@corp.example" || !c.Latest.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("with the organisation's row older than the forwarded one: %+v, %v; want 1 change by admin@corp.example at %s",
+			c, err, now.Add(-time.Minute))
 	}
 }

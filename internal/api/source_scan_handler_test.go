@@ -30,6 +30,13 @@ type scanSourceStore struct {
 	fresh    types.Workspace
 	freshErr error
 	statuses map[uuid.UUID]types.WorkspaceStatus
+	// workspaces and wsListErr answer ListWorkspaces: the workspaces that attach a scanned folder.
+	workspaces []types.Workspace
+	wsListErr  error
+}
+
+func (s *scanSourceStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return s.workspaces, s.wsListErr
 }
 
 func (s *scanSourceStore) GetSource(_ context.Context, id uuid.UUID) (types.Source, error) {

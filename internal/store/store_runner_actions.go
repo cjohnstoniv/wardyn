@@ -261,12 +261,16 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 	// The runner's answer to this exact binding already settles a re-assert of
 	// it (the lease sweep queues a kept run's stop every pass), so it is
 	// returned, not repeated. A deferred answer is no answer, and one before a
-	// successful recover_containment stopped what the recovery reopened.
+	// successful recover_containment stopped what the recovery reopened. Nor is a
+	// kill the runner refused that its teardown hold (run_teardown_holds) reports
+	// finished after, on the runner's clock: queued again, the runner applies it.
 	done, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions t
 		WHERE t.run_id = $1 AND t.kind = $2 AND t.ref = $3 AND t.applied_at IS NOT NULL AND t.outcome <> 'deferred'
 		AND t.execution_generation IS NOT DISTINCT FROM $4 AND t.containment_lost_at IS NOT DISTINCT FROM $5
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
 			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		AND NOT (t.kind = 'kill' AND t.outcome = 'refused' AND EXISTS (SELECT 1 FROM run_teardown_holds h
+			WHERE h.run_id = t.run_id AND h.cleared_at > t.observed_at))
 		ORDER BY t.queue_seq DESC LIMIT 1`, a.RunID, string(a.Kind), a.Ref, generationArg, a.LostAt))
 	if err == nil && sameRunnerAction(done, a) {
 		return done, false, nil
@@ -286,10 +290,18 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 
 // ListPendingRunnerActions is the runner's PENDING payload: at most one page of
 // its oldest open bound actions, and whether more remain. A row from before the
-// binding is never delivered; it keeps fencing its run instead.
+// binding is never delivered; it keeps fencing its run instead. A retirement's
+// kill is held back while its run's sandbox is kept for its computer folder's
+// copy back (retirementFolderKeepSQL), and handed over once that keep ends: a
+// kill queued before the keep began is not delivered under it. The runner
+// applies what it is handed without asking again, so a keep that begins after
+// this read does not stop a kill it already returned.
 func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, bool, error) {
-	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions
-		WHERE runner_id = $1 AND applied_at IS NULL AND settled_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
+	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions a
+		WHERE a.runner_id = $1 AND a.applied_at IS NULL AND a.settled_at IS NULL AND a.binding_version = 1
+			AND NOT (a.kind = 'kill' AND EXISTS (SELECT 1 FROM runner_retirements t JOIN agent_runs r ON r.id = t.run_id
+				WHERE t.run_id = a.run_id AND t.obligation_id = a.obligation_id AND t.state = 'kill' AND ` + retirementFolderKeepSQL + `))
+		ORDER BY a.queue_seq LIMIT $2`
 	page, err := collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID, runnerActionPageLimit + 1}, scanAction)
 	if err != nil || len(page) <= runnerActionPageLimit {
 		return page, false, err

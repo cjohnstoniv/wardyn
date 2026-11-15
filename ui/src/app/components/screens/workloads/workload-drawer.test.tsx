@@ -20,6 +20,8 @@ const history = vi.fn();
 vi.mock("../../../lib/api/workloads", () => ({
   workloads: { restart: vi.fn(), remove: vi.fn(), history: (name: string, owner?: string) => history(name, owner) },
 }));
+const toasts = vi.hoisted(() => ({ plain: vi.fn(), success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: Object.assign(toasts.plain, { success: toasts.success, error: toasts.error }) }));
 
 const RUN = "7c41e0a9-0000-0000-0000-000000000000";
 const DIGEST = "9f1c4e5d2b7a3c8e0f6a1b9d4c7e2a5b8f3d6c9e1a4b7d0f3c6e9a2b5d8a07b";
@@ -92,6 +94,36 @@ describe("WorkloadDrawer restart", () => {
     open(workload({ can_restart: true }));
     await screen.findByText(/started/);
     expect(screen.getByRole("button", { name: new RegExp(W.RESTART) })).toBeInTheDocument();
+  });
+
+  // An operator restarting another person's workload starts nothing: the server records it for the owner's next apply.
+  it("a restart that started no run shows the server's sentence, never that it restarted", async () => {
+    const sentence = "The restart is recorded: the owner's next apply starts the new run.";
+    vi.mocked(workloads.restart).mockResolvedValue({ launch: { state: "none", message: sentence } } as never);
+    open(workload({ owner: "dana@acme.example" }));
+    await screen.findByText(/started/);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(W.RESTART) }));
+    await waitFor(() => expect(toasts.plain).toHaveBeenCalledWith(sentence));
+    expect(workloads.restart).toHaveBeenCalledWith("billing-api", "dana@acme.example");
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("a restart that started no run and carried no sentence says nothing started", async () => {
+    vi.mocked(workloads.restart).mockResolvedValue({ launch: { state: "none" } } as never);
+    open(workload());
+    await screen.findByText(/started/);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(W.RESTART) }));
+    await waitFor(() => expect(toasts.plain).toHaveBeenCalledWith(W.RESTART_NOT_STARTED("billing-api")));
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("a launched restart says it restarted", async () => {
+    vi.mocked(workloads.restart).mockResolvedValue({ launch: { state: "launched", run_id: RUN } } as never);
+    open(workload());
+    await screen.findByText(/started/);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(W.RESTART) }));
+    await waitFor(() => expect(toasts.success).toHaveBeenCalledWith(W.RESTARTED("billing-api")));
+    expect(toasts.plain).not.toHaveBeenCalled();
   });
 
   it("hides Restart from a reader the server would refuse it to, and keeps Delete", async () => {

@@ -265,6 +265,57 @@ func TestVerifyRevokedJTI(t *testing.T) {
 	}
 }
 
+// A revoked token is still refused, but its refusal carries the claims it verified with, so the API can take a
+// run's last reports after the run ended; a revocation-store error carries none.
+func TestVerifyRevokedTokenCarriesItsClaims(t *testing.T) {
+	ctx := context.Background()
+	revocations := identitytest.NewMemRevocationStore()
+	p := newProvider(t, revocations, &recordingRecorder{})
+	runID := uuid.New()
+	id, err := p.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	if err := p.RevokeRun(ctx, runID); err != nil {
+		t.Fatalf("RevokeRun: %v", err)
+	}
+	claims, err := p.Verify(ctx, id.Token, testAudience)
+	var revoked *identity.RevokedTokenError
+	if claims != nil || !errors.As(err, &revoked) || revoked.Claims == nil || revoked.Claims.RunID != runID ||
+		revoked.Claims.JTI != id.JTI || revoked.Claims.Audience != testAudience {
+		t.Fatalf("Verify of a revoked token = %+v, %v; want nil claims and a RevokedTokenError naming the run and jti", claims, err)
+	}
+	if !strings.Contains(err.Error(), "revoked") {
+		t.Errorf("err = %v, want it to say revoked", err)
+	}
+
+	// Revocation must be the token's only defect: a revoked token that is also for another audience, signed
+	// by another key, or expired keeps that refusal and carries no claims.
+	if _, err := p.Verify(ctx, id.Token, "some-other-aud"); err == nil || errors.As(err, &revoked) {
+		t.Errorf("revoked and for another audience: err = %v; want a refusal that is not a RevokedTokenError", err)
+	}
+	foreign := newProvider(t, revocations, &recordingRecorder{}) // another key over the same revocations
+	if _, err := foreign.Verify(ctx, id.Token, testAudience); err == nil || errors.As(err, &revoked) {
+		t.Errorf("revoked and signed by another key: err = %v; want a refusal that is not a RevokedTokenError", err)
+	}
+	p.now = func() time.Time { return time.Now().Add(-2 * time.Hour) }
+	stale, err := p.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	p.now = time.Now
+	var expired *identity.ExpiredTokenError
+	if _, err := p.Verify(ctx, stale.Token, testAudience); !errors.As(err, &expired) || errors.As(err, &revoked) {
+		t.Errorf("revoked and expired: err = %v; want an ExpiredTokenError, never a RevokedTokenError", err)
+	}
+
+	broken := newProvider(t, erroringStore{}, &recordingRecorder{})
+	id, _ = broken.MintRunIdentity(ctx, runID, "alice", "", testAudience, false)
+	if _, err := broken.Verify(ctx, id.Token, testAudience); err == nil || errors.As(err, &revoked) {
+		t.Fatalf("Verify over a failing revocation store err = %v; want an ordinary error, never a RevokedTokenError", err)
+	}
+}
+
 func TestRevokeRunCascade(t *testing.T) {
 	ctx := context.Background()
 	store := identitytest.NewMemRevocationStore()

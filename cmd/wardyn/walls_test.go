@@ -262,6 +262,40 @@ func TestWallsSetRefusesAFileItCannotHold(t *testing.T) {
 	}
 }
 
+// The whole walls document is replaced, so a second YAML document, or text after the first that does
+// not parse, is refused before any request: reading only the first would drop the limits after it.
+func TestWallsSetRefusesMoreThanOneDocument(t *testing.T) {
+	srv, st := newWallsServer(t)
+	st.spec = json.RawMessage(`{"allowed_domains":[]}`)
+	for name, doc := range map[string]string{
+		"second document":          "auto_stop_after_sec: 600\n---\nallowed_domains: []\n",
+		"empty second document":    "auto_stop_after_sec: 600\n---\n",
+		"text that does not parse": "auto_stop_after_sec: 600\n---\n: : [\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := execCmdStdin(t, doc, "walls", "set", "-f", "-", "--url", srv.URL, "--token", "tok")
+			if err == nil || !strings.Contains(err.Error(), "the walls file does not parse") {
+				t.Fatalf("err = %v, want the walls file refused", err)
+			}
+		})
+	}
+	// The same reader serves a wall preset.
+	err := execCmdStdin(t, "denied_domains: [evil.example]\n---\n{}\n", "walls", "presets", "set", "mine", "-f", "-", "--url", srv.URL, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "exactly one document") {
+		t.Errorf("walls presets set = %v, want the one-document refusal", err)
+	}
+	if len(st.methods) != 0 || string(st.spec) != `{"allowed_domains":[]}` {
+		t.Fatalf("requests %v, stored %s: want none sent and the stored walls kept", st.methods, st.spec)
+	}
+	// A document closed with the end marker is one document.
+	if err := execCmdStdin(t, "auto_stop_after_sec: 600\n...\n", "walls", "set", "-f", "-", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("one document with its end marker: %v", err)
+	}
+	if string(st.spec) != `{"auto_stop_after_sec":600}` {
+		t.Errorf("stored spec = %s", st.spec)
+	}
+}
+
 func TestWallsClear(t *testing.T) {
 	srv, st := newWallsServer(t)
 	st.spec = json.RawMessage(`{"denied_domains":["evil.example"]}`)

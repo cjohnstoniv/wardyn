@@ -108,14 +108,32 @@ describe("ApiTokensCard", () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  it("shows nothing where the api_token feature is not granted", async () => {
+  // Losing the feature takes away minting only: the server lists and revokes a person's own tokens without it,
+  // so a listed token keeps its Revoke and only Mint goes.
+  const noFeature = () => {
     const base = route;
     route = (m, p, b) =>
       p.startsWith("/api/v1/me/capabilities")
         ? json({ grants: [], enforcement: { feature: true }, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 })
         : base(m, p, b);
+  };
+
+  it("without the api_token feature, still lists the tokens with Revoke and hides only Mint", async () => {
+    noFeature();
+    mount(false);
+    await waitFor(() => expect(sent()).toContain("GET /api/v1/me/capabilities"));
+    await openCard();
+    expect(await screen.findByRole("table", { name: O.TABLE_LABEL })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: O.REVOKE_LABEL("laptop-cli") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: T.MINT })).not.toBeInTheDocument();
+  });
+
+  it("shows nothing with neither the api_token feature nor a token to list", async () => {
+    tokens = [];
+    noFeature();
     const { container } = mount(false);
     await waitFor(() => expect(sent()).toContain("GET /api/v1/me/capabilities"));
+    await waitFor(() => expect(sent()).toContain("GET /api/v1/me/tokens"));
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 

@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -49,7 +48,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body mintRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil || body.GrantID == uuid.Nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxSidecarBody), &body, false); err != nil || body.GrantID == uuid.Nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}
@@ -534,10 +533,17 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return
 	}
-	if pastLifetimeCap(run, s.cfg.Now().UTC()) {
-		s.auditRenewDenied(r, claims, "run_past_lifetime")
-		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
-		return
+	if run.LifetimeCapAt != nil {
+		now, err := s.dbNow(r.Context()) // lifetime_cap_at is the database's stamp
+		if err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewReadFailed, loggedMsg(r.Context(), "read the database's clock", err))
+			return
+		}
+		if pastLifetimeCap(run, now) {
+			s.auditRenewDenied(r, claims, "run_past_lifetime")
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
+			return
+		}
 	}
 	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
 	// it one, with a token of its own. Nothing may carry its identity forward.
@@ -595,9 +601,23 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// lost since that read is refused.
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
 		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID, id.JTI, claims.JTI)
+		var ended store.RunTokenRunEndedError
+		if errors.As(serr, &ended) {
+			// The run ended after the read above: answer as its terminal arm does, with no token.
+			s.auditRenewDenied(r, claims, "run_terminal:"+string(ended.State))
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+			return
+		}
 		if errors.Is(serr, store.ErrRunTokenLineage) {
 			// A revive replaced this token's proxy: retryable, so a proxy the revive kept renews
 			// again once its lineage is handed back, and a replaced one is gone by then.
+			// An end that committed while the stamp waited on the run's row reads here as a lineage miss: the
+			// stamp's own reads could not see it. A fresh read tells the two apart.
+			if cur, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr == nil && isTerminalRunState(cur.State) {
+				s.auditRenewDenied(r, claims, "run_terminal:"+string(cur.State))
+				writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+				return
+			}
 			s.auditRenewDenied(r, claims, "token_lineage_retired")
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, "the run's token was retired by a revive; retry the renewal")
 			return

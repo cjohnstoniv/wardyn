@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -64,6 +65,9 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 	// (POST /runs refuses before its identity mint, refuseRunCapFull).
 	if errors.Is(err, store.ErrRunCapReached) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+		return
+	}
+	if writeCapReached(w, err) {
 		return
 	}
 	if writeHostCapacityRefusal(w, r, err) {
@@ -129,4 +133,24 @@ func writeHostCapacityRefusal(w http.ResponseWriter, r *http.Request, err error)
 func loggedMsg(ctx context.Context, msg string, err error) string {
 	slog.ErrorContext(ctx, "api: "+msg, slog.Any("err", err))
 	return msg
+}
+
+// writeCapReached writes the quota refusal for a capped insert the store refused at its cap, the
+// sentence the route's own pre-check gives, and reports whether err was one. The store's count is
+// the one two writers that both passed the pre-check cannot both pass (store.WithAdmissionCap).
+func writeCapReached(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, store.ErrApprovalRunCap):
+		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached,
+			"this run has raised too many approvals; no more will be accepted")
+	case errors.Is(err, store.ErrAPITokenCap):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenCapReached,
+			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
+	case errors.Is(err, store.ErrSSHKeyCap):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyCapReached,
+			fmt.Sprintf("too many registered keys (max %d) — remove one first", sshMaxKeysPerPrincipal))
+	default:
+		return false
+	}
+	return true
 }

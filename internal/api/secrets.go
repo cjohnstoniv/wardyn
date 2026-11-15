@@ -54,6 +54,8 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-internal-ca":       true,
 	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
 	"wardyn-gateway-identity-key": true,
+	// The AI gateway client certificate CA (cmd/wardynd's gatewayClientCA).
+	"wardyn-gateway-client-ca": true,
 	// The audit checkpoint signing key (cmd/wardynd's loadOrCreateAuditReceiptKey):
 	// overwriting it would orphan every checkpoint already sent off-box.
 	"wardyn-audit-receipt-key": true,
@@ -282,7 +284,7 @@ func (s *Server) putSecretFor(w http.ResponseWriter, r *http.Request, name, owne
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil || body.Value == "" {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &body, false); err != nil || body.Value == "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonSecretBodyInvalid, `body must be {"value":"<non-empty secret>"}`)
 		return
 	}
@@ -303,9 +305,12 @@ func (s *Server) putSecretFor(w http.ResponseWriter, r *http.Request, name, owne
 	if !s.admitSecretCount(w, r, owner, name) {
 		return
 	}
-	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error {
+	if err := s.putOwned(secretCreateOnly(r.Context(), r), owner, func(ctx context.Context) error {
 		return s.cfg.Secrets.For(owner).Put(ctx, name, []byte(body.Value))
 	}); err != nil {
+		if refuseSecretExists(w, err) {
+			return
+		}
 		if errors.Is(err, secretstore.ErrRowNotWritten) {
 			// Rule 18: the value reached the external store but its row did not,
 			// so the store may already serve it behind this failure.

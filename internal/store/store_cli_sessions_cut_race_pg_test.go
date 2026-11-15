@@ -105,16 +105,7 @@ func (h *stmtHold) free() { h.freed.Do(func() { close(h.freeCh) }) }
 // (after CreateCLISession's revocation-order lock and cut check), and the hold.
 func heldStore(t *testing.T, pool *pgxpool.Pool) (store.PG, *stmtHold) {
 	t.Helper()
-	h := &stmtHold{match: "INSERT INTO cli_sessions", held: make(chan struct{}), freeCh: make(chan struct{})}
-	cfg := pool.Config()
-	cfg.ConnConfig.Tracer = h
-	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(p.Close)
-	t.Cleanup(h.free) // runs first: a failed test never leaves the held statement waiting
-	return store.NewPG(p), h
+	return heldStoreAt(t, pool, "INSERT INTO cli_sessions")
 }
 
 // waitHeld waits for h's statement to be reached.
@@ -123,7 +114,7 @@ func waitHeld(ctx context.Context, t *testing.T, h *stmtHold) {
 	select {
 	case <-h.held:
 	case <-ctx.Done():
-		t.Fatal("CreateCLISession never reached its insert")
+		t.Fatal("the held statement was never reached")
 	}
 }
 
@@ -134,7 +125,7 @@ func waitLockWaiters(ctx context.Context, t *testing.T, pool *pgxpool.Pool, even
 	for {
 		for _, ch := range early {
 			if len(ch) > 0 {
-				t.Fatalf("a write finished while CreateCLISession held its transaction open: %v", <-ch)
+				t.Fatalf("a write finished while the held statement kept its transaction open: %v", <-ch)
 			}
 		}
 		var got int

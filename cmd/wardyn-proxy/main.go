@@ -177,7 +177,8 @@ func main() {
 	}
 
 	// The runner holds the agent back until the marker appears: it prints only once :3128 is bound, which for
-	// a self-lapsing proxy is after its first renew. The log line is printed with it, so it is true when read.
+	// a self-lapsing proxy is after its first renew, and for one with a decision sink after that sink's first
+	// grant. The log line is printed with it, so it is true when read.
 	srv.OnListening(func() {
 		// The narrowing socket listens before the ready marker and the boot report go out.
 		if liveDenyDir != "" {

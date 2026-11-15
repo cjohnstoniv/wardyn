@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -222,48 +223,85 @@ func TestListAllAPITokens_MintedForOthersFilterRunsInTheStore(t *testing.T) {
 	}
 }
 
-// deactivatedOwners is the owner check with a fixed set of deactivated principals.
-type deactivatedOwners map[string]bool
+// ownerStatus is the owner check with a fixed answer per principal; one not named is live. cutAt holds a
+// principal's revocation cutoff: a token of theirs made at or before it reads cut off, one made after it
+// reads live, so the answer is per token, as the real check's is.
+type ownerStatus struct {
+	status map[string]oidc.SessionStatus
+	cutAt  map[string]time.Time
+}
 
-func (deactivatedOwners) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
+func (ownerStatus) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }
-func (deactivatedOwners) RevokeSub(context.Context, string) error { return nil }
-func (deactivatedOwners) RevokeAll(context.Context) error         { return nil }
-func (d deactivatedOwners) SessionStatus(_ context.Context, sub, _ string, _ oidc.Issue, _ int64) (oidc.SessionStatus, error) {
-	if d[sub] {
-		return oidc.SessionDeactivated, nil
+func (ownerStatus) RevokeSub(context.Context, string) error { return nil }
+func (ownerStatus) RevokeAll(context.Context) error         { return nil }
+func (o ownerStatus) SessionStatus(_ context.Context, sub, _ string, iss oidc.Issue, _ int64) (oidc.SessionStatus, error) {
+	if at, ok := o.cutAt[sub]; ok && !iss.At.After(at) {
+		return oidc.SessionRevoked, nil
 	}
-	return oidc.SessionLive, nil
+	return o.status[sub], nil
 }
 
-// The admin-minted inventory is the "still work" list: a token whose owner is deactivated is refused by
-// authentication, so it is not in it.
-func TestListAllAPITokens_MintedForOthersDropsDeactivatedOwners(t *testing.T) {
+// The admin-minted inventory is the "still work" list: a token authentication refuses for its owner is not
+// in it, and with include_revoked it is listed with owner_refused. Each row's mark must equal what
+// authentication answers for that token's own bearer, across every arm of the owner check: a deactivated
+// owner, a cutoff (one owner, one token made before it and one after), a reserved principal and a stale
+// role stamp.
+func TestListAllAPITokens_MintedForOthersMarksWhatAuthenticationRefuses(t *testing.T) {
 	h := newHarness(t)
 	st := newTokenMemStore()
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = newAccessAuth(t, map[string]string{"sec@corp.example": oidc.RoleSecurityAdmin}, oidc.RoleUser, nil, nil)
-	cfg.SessionRevocations = deactivatedOwners{"gone": true}
+	now := time.Now().UTC()
+	cfg.SessionRevocations = ownerStatus{
+		status: map[string]oidc.SessionStatus{"gone": oidc.SessionDeactivated},
+		cutAt:  map[string]time.Time{"cut": now.Add(-time.Hour)},
+	}
+	cfg.RoleStampTTL = time.Hour
 	srv := New(cfg)
 	sec := accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
-	now := time.Now().UTC()
-	seed := func(principal string) types.APIToken {
+	raws := map[uuid.UUID]string{}
+	seed := func(principal string, created, stamped time.Time) types.APIToken {
 		t.Helper()
-		created, err := st.CreateAPIToken(context.Background(), types.APIToken{ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, Name: "n", MintedBy: "admin-1", CreatedAt: now}, "wdn_"+uuid.NewString())
+		raw := "wdn_" + uuid.NewString()
+		row, err := st.CreateAPIToken(context.Background(), types.APIToken{ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, Name: "n", MintedBy: "admin-1", CreatedAt: created, IdentityStampedAt: &stamped}, raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return created
+		raws[row.ID] = raw
+		return row
 	}
-	live, gone := seed("pat"), seed("gone")
+	live := seed("pat", now, now)
+	cutAfter := seed("cut", now, now)
+	refused := []types.APIToken{
+		seed("gone", now, now),
+		seed("cut", now.Add(-2*time.Hour), now),
+		seed("device:kiosk", now, now),
+		seed("stale", now, now.Add(-2*time.Hour)),
+	}
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true", sec, "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), live.ID.String()) || strings.Contains(w.Body.String(), gone.ID.String()) {
-		t.Fatalf("inventory = %d %s, want the live owner's token and not the deactivated owner's", w.Code, w.Body.String())
+	var rows []types.APIToken
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); w.Code != http.StatusOK || err != nil || len(rows) != 2 {
+		t.Fatalf("inventory = %d %s (%v), want only the two tokens that authenticate", w.Code, w.Body.String(), err)
 	}
-	// include_revoked keeps finished rows visible whoever owns them: the deactivated owner's token stays.
+	for _, row := range rows {
+		if row.ID != live.ID && row.ID != cutAfter.ID {
+			t.Errorf("inventory lists the token of %s made %v, which authentication refuses", row.Principal, row.CreatedAt)
+		}
+	}
 	w = doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true&include_revoked=true", sec, "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), live.ID.String()) || !strings.Contains(w.Body.String(), gone.ID.String()) {
-		t.Fatalf("include_revoked inventory = %d %s, want both owners' tokens", w.Code, w.Body.String())
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); w.Code != http.StatusOK || err != nil || len(rows) != 2+len(refused) {
+		t.Fatalf("include_revoked inventory = %d %s (%v), want all six tokens", w.Code, w.Body.String(), err)
+	}
+	for _, row := range rows {
+		var authenticated bool
+		next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { authenticated = true })
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		r.Header.Set("Authorization", "Bearer "+raws[row.ID])
+		srv.apiTokenAuth(next, http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), r)
+		if row.OwnerRefused == authenticated {
+			t.Errorf("token of %s made %v: owner_refused = %v and authentication accepted = %v, want one of them", row.Principal, row.CreatedAt, row.OwnerRefused, authenticated)
+		}
 	}
 }

@@ -42,7 +42,7 @@ import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } fr
 import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import { useShellSetupStatus } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, isAlreadyDecided } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
@@ -374,6 +374,8 @@ export function LiveApprovals({
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(e),
       });
+      // Someone else decided it first: the row is stale, so the list is read at once, with the row busy until it answers.
+      if (isAlreadyDecided(e)) await refresh();
     } finally {
       setBusy(null);
     }
@@ -393,6 +395,7 @@ export function LiveApprovals({
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
+      if (isAlreadyDecided(e)) await refresh();
     } finally {
       setBusy(null);
       setBusyAction(null);

@@ -472,3 +472,62 @@ func TestSyslogSink_CancelledContextCountsADrop(t *testing.T) {
 		t.Errorf("Drops() = %d, want 1: the cancelled event vanished uncounted", got)
 	}
 }
+
+// blockedWriter counts the writes that reach it and holds each until release closes.
+type blockedWriter struct {
+	release chan struct{}
+	calls   atomic.Int64
+}
+
+func (w *blockedWriter) Info(string) error { w.calls.Add(1); <-w.release; return nil }
+func (w *blockedWriter) Close() error      { return nil }
+
+// A collector that stopped reading keeps one write blocked under log/syslog's lock. Each later timeout used
+// to start another write, which queued on that lock holding its message, so an outage kept one blocked write
+// per event however small the queue. Now one write stays pending, the events behind it are counted as drops
+// without being started, and the events after the collector recovers are written.
+func TestSyslogSink_OneWriteInFlightAgainstABlockedCollector(t *testing.T) {
+	prev := setSyslogWriteTimeout(10 * time.Millisecond)
+	t.Cleanup(func() { setSyslogWriteTimeout(prev) })
+
+	w := &blockedWriter{release: make(chan struct{})}
+	s := newSyslogSinkWith(w, "tcp", "collector.invalid:514")
+	const events = 20
+	for i := 0; i < events; i++ {
+		if err := s.Emit(context.Background(), makeSyslogEvent("syslog.blocked")); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Drops() < events && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := s.Drops(); got != events {
+		t.Fatalf("Drops() = %d, want all %d events counted while the collector is blocked", got, events)
+	}
+	if got := w.calls.Load(); got != 1 {
+		t.Fatalf("%d writes reached the blocked collector, want 1: a timeout must not start another", got)
+	}
+
+	// The collector recovers. A long bound, so a slow scheduler cannot turn this write into a timeout.
+	setSyslogWriteTimeout(10 * time.Second)
+	close(w.release)
+	for i := 0; i < 2; i++ {
+		if err := s.Emit(context.Background(), makeSyslogEvent("syslog.recovered")); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for w.calls.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := w.calls.Load(); got != 3 {
+		t.Fatalf("%d writes reached the collector, want 3: the events after it recovered were not both written", got)
+	}
+	if got := s.Drops(); got != events {
+		t.Errorf("Drops() = %d after recovery, want still %d", got, events)
+	}
+}

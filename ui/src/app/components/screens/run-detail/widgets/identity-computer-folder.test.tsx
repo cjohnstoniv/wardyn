@@ -9,7 +9,7 @@ import { shortTime } from "../../../../lib/format";
 import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunComputerFolder, RunDetail } from "../../../../lib/types";
 import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
-import { ComputerFolderRows } from "./identity-computer-folder";
+import { ComputerFolderRows, computerFolderSettling } from "./identity-computer-folder";
 
 const AT = aheadByHours(-1);
 const FOLDER: RunComputerFolder = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both", state: "waiting" };
@@ -61,6 +61,36 @@ describe("Folders from your computer", () => {
   it("says when the changes could not come back", () => {
     show("COMPLETED", { ...FOLDER, state: "synced", seed: { at: AT, files: 1, bytes: 1, refused: [] }, back: { at: AT, files: 0, bytes: 0, refused: [], error: "laptop-7f2 is offline" } });
     expect(screen.getByRole("alert")).toHaveTextContent(C.BACK_FAILED("laptop-7f2 is offline"));
+  });
+
+  describe("a back error that opens with the kept-for-copy-back words", () => {
+    const keptWith = (error: string) =>
+      show("FAILED", {
+        ...FOLDER, state: "synced", fate: "retained", sandbox_copy: "kept",
+        seed: { at: AT, files: 1, bytes: 1, refused: [] },
+        back: { at: AT, files: 0, bytes: 0, refused: [], error },
+      });
+
+    it.each([
+      // forcedKeptForCopyBack, internal/api/run_kept_stop_forced.go
+      "Kept for its copy back: the run was ended past its end while another operation held it or too many runs were ending at once",
+      "Kept for its copy back: test reason.",
+      // folderPassNoTimeMsg, internal/api/run_folder_pass_once.go
+      "Kept for its copy back: there was no time left to bring the changes back. Wardyn tries again on its next check.",
+    ])("shows the record's own words, muted, not as an alert: %s", (error) => {
+      keptWith(error);
+      const p = screen.getByText(error);
+      expect(p).toHaveClass("text-muted-foreground");
+      expect(p).not.toHaveAttribute("role");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText(/could not come back/)).toBeNull();
+      expect(screen.getByText(C.NOT_BACK)).toBeInTheDocument();
+    });
+
+    it("an error without that prefix is still an alert saying the changes could not come back", () => {
+      keptWith("laptop-7f2 is offline");
+      expect(screen.getByRole("alert")).toHaveTextContent("The changes could not come back: laptop-7f2 is offline");
+    });
   });
 
   describe("what became of the sandbox copy", () => {
@@ -176,5 +206,35 @@ describe("Folders from your computer", () => {
       expect(box.className).toMatch(/overflow-y-auto/);
       expect(box).toHaveAttribute("tabindex", "0");
     });
+  });
+});
+
+describe("computerFolderSettling", () => {
+  const run = (state: string, folder?: Partial<RunComputerFolder>) =>
+    ({ id: "r1", state, computer_folder: folder && { ...FOLDER, state: "synced", ...folder } }) as unknown as RunDetail;
+
+  it("is unsettled while an ended run's changes are kept, or given up with the sandbox copy not confirmed deleted", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "retained", sandbox_copy: "kept" }))).toBe("unsettled");
+    expect(computerFolderSettling(run("FAILED", { fate: "given_up", sandbox_copy: "kept" }))).toBe("unsettled");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "given_up" }))).toBe("unsettled");
+  });
+
+  it("is stopping while nothing is left to copy back and the sandbox copy is still reported kept", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete", sandbox_copy: "kept" }))).toBe("stopping");
+    expect(computerFolderSettling(run("COMPLETED", { sandbox_copy: "kept" }))).toBe("stopping");
+  });
+
+  it("is settled only on a confirmed deletion", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "given_up", sandbox_copy: "deleted" }))).toBe("settled");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete", sandbox_copy: "deleted" }))).toBe("settled");
+    expect(computerFolderSettling(run("COMPLETED", { sandbox_copy: "deleted" }))).toBe("settled");
+  });
+
+  it("is unknown with neither a fate nor a sandbox copy, and says nothing of a live run", () => {
+    expect(computerFolderSettling(run("COMPLETED", {}))).toBe("unknown");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete" }))).toBe("unknown");
+    expect(computerFolderSettling(run("COMPLETED"))).toBe("unknown");
+    expect(computerFolderSettling(run("RUNNING", { fate: "retained" }))).toBeNull();
+    expect(computerFolderSettling(null)).toBeNull();
   });
 });

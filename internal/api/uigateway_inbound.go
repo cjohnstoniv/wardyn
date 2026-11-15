@@ -39,6 +39,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -932,10 +933,43 @@ func uiCallerHeaders(h http.Header, sess uiSession) {
 }
 
 // uiExecFailure is a failed relay or launcher exec as the caller sees it: a runner that is offline is 503
-// runner_offline (the run is fine; retry once it reconnects), anything else a 502 under reason.
+// runner_offline (the run is fine; retry once it reconnects), a start refused at its last read is answered as
+// uiDial's first read answers that run (uiRunRefusal), a start lock that cannot be taken is the lock's 503, the
+// start fence's other refusals say what they are in their fixed words, and anything else is a 502 under reason.
 func uiExecFailure(ctx context.Context, reason, action string, err error) error {
-	if errors.Is(err, runner.ErrRunnerOffline) {
+	var refused startRefused
+	switch {
+	case errors.Is(err, runner.ErrRunnerOffline):
 		return uiFail(ctx, http.StatusServiceUnavailable, string(placement.ReasonRunnerOffline), uiRunnerOfflineMsg)
+	case errors.As(err, &refused):
+		return uiRunRefusal(ctx, string(refused))
+	case db.LockRefused(err):
+		return uiFail(ctx, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	case errors.Is(err, errStartTooSlow):
+		return uiFail(ctx, http.StatusBadGateway, reason, startTooSlowMsg)
+	case errors.Is(err, errStartLockLost):
+		return uiFail(ctx, http.StatusBadGateway, reason, startLockLostMsg)
 	}
 	return uiFail(ctx, http.StatusBadGateway, reason, uiExecFailMsg(ctx, action, err))
+}
+
+// uiLiveRunWords are a UI app's refusals at a start's last read (startFresh), as uiDial's first read writes them.
+var uiLiveRunWords = liveRunWords{
+	noRunner:   "no runner configured; UI apps unavailable",
+	notFound:   "run not found",
+	notRunning: "run is not RUNNING; the UI app is gone (state=%s)",
+	ended:      "run has ended; the UI app is gone",
+}
+
+// uiRunRefusal answers msg, one of uiLiveRunWords, with the status and reason uiDial's first read gives it.
+func uiRunRefusal(ctx context.Context, msg string) error {
+	switch msg {
+	case uiLiveRunWords.noRunner:
+		return uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, msg)
+	case uiLiveRunWords.notFound:
+		return uiFail(ctx, http.StatusNotFound, reasonRunNotFound, msg)
+	case uiLiveRunWords.ended:
+		return uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, msg)
+	}
+	return uiFail(ctx, http.StatusConflict, reasonUIGatewayNotRunning, msg)
 }

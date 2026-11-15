@@ -185,18 +185,28 @@ func (s *Server) handleDeleteGovernanceMembership(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	if s.isUnitAdminCaller(r.Context()) {
-		s.deleteMembershipInScope(w, r, id)
+		s.deleteMembershipInScope(w, r, id, under)
 		return
 	}
 	if mode == govQueue {
 		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
-		s.holdMembershipDelete(w, r, id, nil)
+		s.holdMembershipDelete(w, r, id, nil, under)
 		return
 	}
 	// The audit names the row the delete removed, not one read beside it.
-	removed, err := s.cfg.Store.DeleteGovernanceMembership(r.Context(), id)
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
+	var removed types.GovernanceMembership
+	var err error
+	if under != nil {
+		removed, err = s.deleteMembershipUnder(r.Context(), id, *under)
+	} else {
+		removed, err = s.cfg.Store.DeleteGovernanceMembership(r.Context(), id)
+	}
+	if answerNotUnder(w, err) || notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
 		return
 	}
 	if err != nil {

@@ -24,6 +24,26 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 	return p != nil && p.Scope == types.WallPresetScopeBuiltin && p.ID == types.WallPresetNoNetwork
 }
 
+// The reasons a run has no upstream proxy hop whatever the site configures, as its run.upstream_proxy.resolve
+// row names them.
+const (
+	upstreamNoHopNoNetwork = "no-network"         // the run dials nothing, so a hop would carry nothing
+	upstreamNoHopNotSent   = "not-sent-to-runner" // a person's runner is never sent the organisation's upstream
+)
+
+// upstreamNoHopReason is why run has no upstream proxy hop, or "" when the site's hop applies. No network wins:
+// its proxy refuses every request on any runner. A run on a person's runner is never sent the organisation's
+// upstream (placement.Table: UpstreamProxyURL is RuleNotSent); the runner's own upstream, if any, is its own.
+func upstreamNoHopReason(run types.AgentRun) string {
+	switch {
+	case noNetworkPreset(run.WallPreset):
+		return upstreamNoHopNoNetwork
+	case !remotePlacement(run.Placement):
+		return upstreamNoHopNotSent
+	}
+	return ""
+}
+
 // noNetworkSkipsCredential is r, marked (withNoCredentialCheck) when the launch has the No network preset.
 // The provider is still chosen and judged, but the caller's model credential is read for a chosen provider
 // only, and stepNoNetwork refuses every chosen provider, the primary's and each extra harness's alike

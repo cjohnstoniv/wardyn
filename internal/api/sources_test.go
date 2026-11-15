@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The tier-1 library endpoints. The properties worth pinning at the API layer:
@@ -25,9 +27,11 @@ type sourcesEndpointFake struct {
 	store.Store
 	lib      sourceLibraryFake
 	attached []string // WorkspacesAttaching answer
-	notFound bool     // DeleteSource answer for a genuinely-absent id
-	deleted  *uuid.UUID
-	detached bool
+	// lateAttach attaches after the handler's listing: a forced DeleteSource detaches these too.
+	lateAttach []string
+	notFound   bool // DeleteSource answer for a genuinely-absent id
+	deleted    *uuid.UUID
+	detached   bool
 }
 
 func (s *sourcesEndpointFake) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
@@ -63,17 +67,20 @@ func (s *sourcesEndpointFake) UpdateSourceConfig(_ context.Context, id uuid.UUID
 	}
 	return types.Source{}, store.ErrNotFound
 }
-func (s *sourcesEndpointFake) DeleteSource(_ context.Context, id uuid.UUID, detach bool) error {
+func (s *sourcesEndpointFake) DeleteSource(_ context.Context, id uuid.UUID, detach bool) ([]string, error) {
 	if s.notFound {
-		return store.ErrNotFound
+		return nil, store.ErrNotFound
 	}
 	if !detach && len(s.attached) > 0 {
 		// Mirrors the real store's atomic NOT EXISTS guard: a non-force
 		// delete while something is attached never reaches the delete.
-		return store.ErrConflict
+		return nil, store.ErrConflict
 	}
 	s.deleted, s.detached = &id, detach
-	return nil
+	if !detach {
+		return []string{}, nil
+	}
+	return append(append([]string{}, s.attached...), s.lateAttach...), nil
 }
 
 func TestSources_UpsertByCanonicalIdentity(t *testing.T) {
@@ -156,6 +163,30 @@ func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
 	}
 }
 
+// The SDK's source write against the handler, on an identity hit: no requirements keeps the stored
+// contract, and an empty map clears it.
+func TestSources_SDKKeepsOrClearsTheContractOnIdentityHit(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	c := &client.Client{BaseURL: ts.URL, Token: adminToken, HTTPClient: ts.Client()}
+	ctx := context.Background()
+	req := client.SourceRequest{Kind: types.SourceLocalDir, Locator: "/home/me/payments",
+		Requirements: map[string]types.WorkspaceRequirement{"secret:deploy-key": {Level: "required", Provenance: "operator_set"}}}
+	if _, err := c.CreateSource(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Requirements = nil
+	if kept, err := c.CreateSource(ctx, req); err != nil || len(kept.Requirements) != 1 {
+		t.Fatalf("re-add with no requirements = %v, %v; want the stored contract kept", kept.Requirements, err)
+	}
+	req.Requirements = map[string]types.WorkspaceRequirement{}
+	if cleared, err := c.CreateSource(ctx, req); err != nil || len(cleared.Requirements) != 0 {
+		t.Fatalf("re-add with an empty map = %v, %v; want the contract cleared", cleared.Requirements, err)
+	}
+}
+
 // A missing --locator must report the locator error, not the
 // derived-name symptom — Name is empty only because it derives from an empty
 // locator, so the locator-specific message has to win.
@@ -216,6 +247,34 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 	}
 	if fake.deleted == nil || !fake.detached {
 		t.Error("force=1 must detach-and-delete")
+	}
+}
+
+// TestSources_ForcedDeleteNamesWhatTheDetachChanged: a workspace that attaches between the
+// handler's listing and the forced detach is detached too, so the response and the audit row name
+// it, from the store's detach, not from the listing.
+func TestSources_ForcedDeleteNamesWhatTheDetachChanged(t *testing.T) {
+	h := newHarness(t)
+	fake := &sourcesEndpointFake{attached: []string{"payments-ws"}, lateAttach: []string{"late-ws"}}
+	srv := New(baseTestConfig(h, fake))
+	id := uuid.New()
+
+	w := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String()+"?force=1", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("forced: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		DetachedFrom []string `json:"detached_from"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(body.DetachedFrom, ",") != "payments-ws,late-ws" {
+		t.Errorf("detached_from = %v, want [payments-ws late-ws]", body.DetachedFrom)
+	}
+	evs := auditActions(h, "source.delete")
+	if len(evs) != 1 || !strings.Contains(string(evs[0].Data), "late-ws") {
+		t.Errorf("source.delete audit = %+v, want one row naming late-ws", evs)
 	}
 }
 

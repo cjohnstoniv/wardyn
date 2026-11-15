@@ -375,6 +375,11 @@ func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
 // runner wired, online, as the daemon has it.
 func (e crEnv) placeRunsOnTheRunner(t *testing.T) {
 	t.Helper()
+	// A run launched before this, with no runner wired, stays PENDING, but its launch ends in the background
+	// and reads the wiring there (finishCreateRunLaunch). Joined first, so that launch never reads the runner
+	// wired below: it would dispatch that run to an orchestrator with none of the deployment's own executors,
+	// and the run would end FAILED.
+	e.h.srv.WaitBackground()
 	ctx := context.Background()
 	site, err := e.st.GetSiteConfig(ctx)
 	if err != nil {

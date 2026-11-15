@@ -115,6 +115,7 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 			cfg.ServerName, _, _ = net.SplitHostPort(addr)
 		}
 		cfg.NextProtos = []string{"h2", "http/1.1"}
+		p.offerGatewayClientCert(cfg, addr)
 		tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 		if err != nil {
 			return nil, err
@@ -135,9 +136,14 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	// serves peers that never negotiate it.
 	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
+		//lint:ignore SA1019 see h2Fallback
 		TLSClientConfig: base.Clone(),
+		//lint:ignore SA1019 see h2Fallback
 		IdleConnTimeout: 60 * time.Second,
+		//lint:ignore SA1019 see h2Fallback
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+			cfg = cfg.Clone()
+			p.offerGatewayClientCert(cfg, addr)
 			tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 			if err != nil {
 				return nil, err // never a typed-nil *tls.Conn inside net.Conn

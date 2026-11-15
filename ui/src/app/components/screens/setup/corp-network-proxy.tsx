@@ -15,6 +15,8 @@ import { ChevronDown, Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import type { HostProxyDetection, HostProxySetting, SetupCheck, SiteConfig } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../../lib/secret-refusals";
+import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { T } from "../../../lib/integrations";
 import { Button } from "../../ui/button";
@@ -25,7 +27,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SITE } from "../../wardyn/copy";
-import { AddSecretDialog } from "../secrets";
+import { AddSecretDialog, SecretOverwriteWarning } from "../secrets";
 import type { ProbeUiState } from "./corp-network-egress";
 import { ProxyTestBlock } from "./corp-network-proxy-probe";
 
@@ -279,6 +281,11 @@ export function HostProxyTab({
   const [disclosureOpen, setDisclosureOpen] = React.useState(false);
   const [secretName, setSecretName] = React.useState("upstream-proxy-url");
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
+  // The secret name a save found already stored: the next Save replaces it only once the person has seen the warning.
+  const [takenName, setTakenName] = React.useState("");
+  // The secret's own PUT, which `saving` (the site-config write) does not cover: a second click while it is in
+  // flight would send a second create-only PUT, answered "already exists" for the secret the first one just stored.
+  const [storing, setStoring] = React.useState(false);
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
@@ -323,13 +330,29 @@ export function HostProxyTab({
     }
   };
 
+  // Create-only until the person has seen the overwrite warning for this name: the name may already hold an
+  // unrelated secret, and a plain PUT would replace it without a word. Only an administrator edits this, so the
+  // secret goes to the shared namespace by that route, which a role change since refuses rather than moves.
   const saveAsSecret = async (rawUrl: string, name: string) => {
+    setStoring(true);
     try {
-      await secretsApi.setSecret(name, rawUrl);
+      await storeAsSecret(rawUrl, name);
+    } finally {
+      setStoring(false);
+    }
+  };
+  const storeAsSecret = async (rawUrl: string, name: string) => {
+    try {
+      await secretsApi.setSecret(name, rawUrl, { scope: "shared", createOnly: takenName !== name });
     } catch (e) {
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
+        setTakenName(name);
+        return;
+      }
       toast.error("Failed to store the proxy credential", { description: getErrorMessage(e) });
       return;
     }
+    setTakenName("");
     if (
       await mutate(
         { ...(siteConfig ?? {}), upstream_proxy_secret_ref: name, upstream_proxy_url: undefined },
@@ -475,8 +498,14 @@ export function HostProxyTab({
                   </Chip>
                   <p className="text-meta text-muted-foreground">{T.WRITE_ONLY}</p>
                 </div>
-                <Button size="sm" disabled={!canEdit || saving} onClick={() => saveAsSecret(url, secretName)}>
-                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
+                {takenName === secretName && <SecretOverwriteWarning name={secretName} />}
+                <Button
+                  size="sm"
+                  disabled={!canEdit || saving || storing}
+                  variant={takenName === secretName ? "destructive" : "default"}
+                  onClick={() => saveAsSecret(url, secretName)}
+                >
+                  {saving || storing ? <Loader2 className="size-3.5 animate-spin" /> : takenName === secretName ? "Overwrite secret" : "Save"}
                 </Button>
               </>
             ) : (
@@ -596,6 +625,7 @@ export function HostProxyTab({
         // silently clobbers whatever that secret already held, no different
         // from every other AddSecretDialog caller that does pass this.
         existingNames={secretNames}
+        scope="shared"
         onSaved={(name) => {
           setAddSecretOpen(false);
           void saveSecretRef(name);

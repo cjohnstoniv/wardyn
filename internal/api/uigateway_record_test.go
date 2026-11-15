@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -198,6 +200,28 @@ func TestDesktopRecording_OnlyScreenActionsDesktops(t *testing.T) {
 	} {
 		if got := tc.srv.recordDesktopConn(tc.run, uiSession{Run: tc.run.ID, App: tc.app}, relay, nil); got != relay {
 			t.Errorf("%s: the connection was wrapped", tc.name)
+		}
+	}
+}
+
+// TestStopRefusedRecording: every refusal stops a recorded connection's recording, with its fixed words, a pixel
+// format's naming the format, or with none for a refusal before the desktop's first message; an unrecorded
+// connection (no recorder) is left alone.
+func TestStopRefusedRecording(t *testing.T) {
+	stopRefusedRecording(nil, &rfbfilter.Refusal{Kind: "a message from the browser that it cannot follow", Err: errors.New("rfb relay: client message type 7")})
+	for _, tc := range []struct {
+		err    error
+		reason string
+	}{
+		{&rfbfilter.Refusal{Kind: "a message from the desktop that it cannot follow", Err: errors.New("rfb relay: rectangle encoding 5")},
+			"Wardyn refused a message from the desktop that it cannot follow"},
+		{&rfbfilter.PixelFormatError{Pixels: [13]byte{8, 8, 0, 1, 0, 7, 0, 7, 0, 3, 5, 2, 0}}, desktopStopPixels +
+			"8 bits per pixel, depth 8, little-endian true colour, maxima of 7, 7 and 3 and shifts of 5, 2 and 0 for red, green and blue"},
+		{rfbfilter.ErrNotRFB, ""},
+	} {
+		rec := recording.NewRFBFrameRecorder(time.Now)
+		if stopRefusedRecording(rec, tc.err); rec.StopReason() != tc.reason || rec.StoppedMS() == 0 {
+			t.Fatalf("%v: stop mark at %d ms for %q, want one for %q", tc.err, rec.StoppedMS(), rec.StopReason(), tc.reason)
 		}
 	}
 }

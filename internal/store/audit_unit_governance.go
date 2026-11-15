@@ -29,8 +29,10 @@ const unitRunRowsClause = "run_id IN (SELECT id FROM agent_runs WHERE unit_id = 
 
 // unitGovernanceArmClause is the rows with no run that are listed governance rows naming a unit of $3
 // (the unit ids as text): by target, by data.unit_id, or inside data.units when that is an array. The
-// array test keeps a scalar units value from matching as a one-item array.
-const unitGovernanceArmClause = `(run_id IS NULL AND action = ANY($2)
+// array test keeps a scalar units value from matching as a one-item array. Only this organisation's own
+// rows: an enrolled laptop may forward any action naming any unit, and the view leaves the forwarding
+// device out, so its row would read as a security admin's write.
+const unitGovernanceArmClause = `(run_id IS NULL AND action = ANY($2) AND NOT ` + federatedRowSQL + `
 	AND (target = ANY($3) OR data->>'unit_id' = ANY($3)
 		OR (jsonb_typeof(data->'units') = 'array' AND data->'units' ?| $3)))`
 

@@ -33,18 +33,27 @@ func serviceIdentityViewOf(si types.ServiceIdentity) *serviceIdentityDiffView {
 }
 
 // serviceIdentityBase is the state a held sponsor change is reviewed against: the identity's creation
-// (a retired and recreated name differs), its retirement and its sponsor, with the time it was set.
+// (a retired and recreated name differs), its retirement, its sponsor with the time it was set, and the
+// suspension and description the held PATCH can also write, so a suspension or edit made after the
+// proposal makes the change stale instead of being undone by it.
 type serviceIdentityBase struct {
 	Name         string     `json:"name"`
 	CreatedAt    time.Time  `json:"created_at"`
 	Sponsor      string     `json:"sponsor"`
 	SponsorSince time.Time  `json:"sponsor_since"`
 	RetiredAt    *time.Time `json:"retired_at,omitempty"`
+	SuspendedAt  *time.Time `json:"suspended_at,omitempty"`
+	Description  string     `json:"description,omitempty"`
 }
 
 func serviceIdentityBaseOf(si types.ServiceIdentity) serviceIdentityBase {
-	return serviceIdentityBase{Name: si.Name, CreatedAt: si.CreatedAt.UTC(), Sponsor: si.Sponsor,
-		SponsorSince: si.SponsorSince.UTC(), RetiredAt: si.RetiredAt}
+	b := serviceIdentityBase{Name: si.Name, CreatedAt: si.CreatedAt.UTC(), Sponsor: si.Sponsor,
+		SponsorSince: si.SponsorSince.UTC(), RetiredAt: si.RetiredAt, Description: si.Description}
+	if si.SuspendedAt != nil {
+		at := si.SuspendedAt.UTC()
+		b.SuspendedAt = &at
+	}
+	return b
 }
 
 // serviceIdentityAbsent is a held create's base state: the name was free when it was proposed.
@@ -97,8 +106,8 @@ func serviceIdentityChangeOf(req updateServiceIdentityRequest, by string) store.
 
 // applyServiceIdentityChange applies a held create or sponsor change inside the decision transaction.
 // A create applies only while the name is free, the sponsor bound and active and the type defined; a
-// sponsor change only while the identity is the one reviewed: not retired, not recreated, its sponsor
-// unchanged. Anything else is store.ErrGovernanceChangeStale.
+// sponsor change only while the identity is the one reviewed: not retired, not recreated, its sponsor,
+// suspension and description unchanged. Anything else is store.ErrGovernanceChangeStale.
 func applyServiceIdentityChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	if err := store.LockGovernanceTarget(ctx, q, govKindServiceIdentity, ch.TargetKey); err != nil {

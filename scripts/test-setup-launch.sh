@@ -116,4 +116,17 @@ rm -rf "${wr}"
 grep -B4 'env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT' "${SETUP_SH}" | grep 'workspaces_root_too_broad "${_eff_root}"' >/dev/null \
   || fail "setup.sh remembers WARDYN_WORKSPACES_ROOT without checking a root from the environment or .env"
 
+# 7) prepare_host_log: a rerun keeps the running daemon's log and leaves it owner-only; a missing log is
+#    created 0600. setup.sh calls it, and empties the log nowhere else before its already-running check.
+lf="${dir}/host-wardynd.log"
+printf 'started\nerror: earlier\n' > "${lf}"; chmod 644 "${lf}"
+prepare_host_log "${lf}"
+[ "$(cat "${lf}")" = "$(printf 'started\nerror: earlier')" ] || fail "prepare_host_log emptied the log of a wardynd a rerun leaves running"
+[ "$(stat -c %a "${lf}" 2>/dev/null || stat -f %Lp "${lf}")" = 600 ] || fail "prepare_host_log left the log readable by others"
+rm -f "${lf}"; prepare_host_log "${lf}"
+[ -f "${lf}" ] && [ "$(stat -c %a "${lf}" 2>/dev/null || stat -f %Lp "${lf}")" = 600 ] || fail "prepare_host_log did not create the log 0600"
+grep -q 'prepare_host_log "$LOGFILE"' "${SETUP_SH}" || fail "setup.sh no longer prepares its log with prepare_host_log"
+sed -n '/^# Already running?/q;p' "${SETUP_SH}" | grep -E ':[[:space:]]*>[[:space:]]*"\$LOGFILE"' >/dev/null \
+  && fail "setup.sh empties its log before the already-running check"
+
 echo "test-setup-launch: self-test PASS"

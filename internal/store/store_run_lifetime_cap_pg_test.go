@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -42,7 +43,10 @@ func TestPG_RunLifetimeCap_RoundTrips(t *testing.T) {
 		t.Fatalf("filtered list = %d rows, %v", len(listed), err)
 	}
 	for name, run := range map[string]types.AgentRun{"create": created, "get": got, "list": listed[0]} {
-		if run.EndsAt == nil || !run.EndsAt.Equal(end) || run.LifetimeCapAt == nil || !run.LifetimeCapAt.Equal(capAt) || run.LifetimeCapSource != types.LimitSourceDeployment {
+		// The store re-anchors the end and the cap on the database's clock, keeping their spans from created_at
+		// (stampRunTimes); each column rounds to a microsecond on its own, hence the tolerance.
+		if !spanFrom(run.CreatedAt, run.EndsAt, end.Sub(r.CreatedAt)) || !spanFrom(run.CreatedAt, run.LifetimeCapAt, capAt.Sub(r.CreatedAt)) ||
+			run.LifetimeCapSource != types.LimitSourceDeployment {
 			t.Errorf("%s: ends %v, cap %v (%q); want %v, %v (deployment)", name, run.EndsAt, run.LifetimeCapAt, run.LifetimeCapSource, end, capAt)
 		}
 	}
@@ -139,5 +143,78 @@ func TestPG_ListRunsFiltered_NoEndLeavesOutLeaseEndedRuns(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != live.ID {
 		t.Errorf("no_end filter returned %d rows %v; want only the run whose lease has not ended", len(got), got)
+	}
+}
+
+// spanFrom reports whether at is span after from, to within the two microseconds two columns' own rounding allows.
+func spanFrom(from time.Time, at *time.Time, span time.Duration) bool {
+	return at != nil && (at.Sub(from)-span).Abs() <= 2*time.Microsecond
+}
+
+// A new run's created_at, ends_at and lifetime_cap_at are on the database's clock whatever the replica's: with
+// store.PG's app clock 2 minutes ahead of Postgres and 2 minutes behind it, created_at lands inside the database's
+// own readings around the create (less 30 s for the app reading taken before them), and the end and the cap sit at
+// their spans from it. A cap an elevation set is the elevation's end, kept as given; an end inside it keeps its
+// span, and an end the api cut to it is stored as the cap exactly. Before, all three were the app clock's, 2
+// minutes off every reader's now(); without the cut rule, the cut end at +2 minutes landed 2 minutes short of the
+// cap.
+func TestPG_CreateRun_StampsAreTheDatabasesClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	for _, skew := range []time.Duration{2 * time.Minute, -2 * time.Minute} {
+		pg := store.NewPG(pool)
+		pg.Now = func() time.Time { return time.Now().Add(skew) }
+		for _, c := range []struct {
+			name     string
+			elevated bool
+			endIn    time.Duration // the asked end from CreatedAt; 0 is the end cut to the cap
+		}{
+			{"deployment cap", false, time.Hour},
+			{"elevation cap, end inside it", true, 10 * time.Minute},
+			{"elevation cap, end cut to it", true, 0},
+		} {
+			t.Run(fmt.Sprintf("%s, app clock %v", c.name, skew), func(t *testing.T) {
+				r := newFilterRun("stamp-"+uuid.NewString(), types.RunRunning)
+				r.CreatedAt = pg.Now().UTC()
+				end, capAt, source := r.CreatedAt.Add(c.endIn), r.CreatedAt.Add(2*time.Hour), types.LimitSourceDeployment
+				if c.elevated {
+					capAt, source = time.Now().UTC().Add(30*time.Minute).Truncate(time.Microsecond), types.LimitSourceElevation
+				}
+				if c.endIn == 0 {
+					end = capAt
+				}
+				r.EndsAt, r.LifetimeCapAt, r.LifetimeCapSource = &end, &capAt, source
+				before, err := pg.DatabaseNow(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				created, err := pg.CreateRun(ctx, r)
+				if err != nil {
+					t.Fatalf("create: %v", err)
+				}
+				t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, r.ID) })
+				after, err := pg.DatabaseNow(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if created.CreatedAt.Before(before.Add(-30*time.Second)) || created.CreatedAt.After(after) {
+					t.Fatalf("created_at = %v, want inside the database's [%v, %v]", created.CreatedAt, before, after)
+				}
+				switch {
+				case c.elevated && c.endIn == 0:
+					if created.LifetimeCapAt == nil || !created.LifetimeCapAt.Equal(capAt) || created.EndsAt == nil || !created.EndsAt.Equal(capAt) {
+						t.Fatalf("cap %v, end %v; want both at the elevation's end %v", created.LifetimeCapAt, created.EndsAt, capAt)
+					}
+				case c.elevated:
+					if created.LifetimeCapAt == nil || !created.LifetimeCapAt.Equal(capAt) || !spanFrom(created.CreatedAt, created.EndsAt, c.endIn) {
+						t.Fatalf("cap %v, end %v; want the cap at %v and the end %v after created_at %v", created.LifetimeCapAt, created.EndsAt, capAt, c.endIn, created.CreatedAt)
+					}
+				default:
+					if !spanFrom(created.CreatedAt, created.EndsAt, time.Hour) || !spanFrom(created.CreatedAt, created.LifetimeCapAt, 2*time.Hour) {
+						t.Fatalf("end %v, cap %v; want 1 h and 2 h after created_at %v", created.EndsAt, created.LifetimeCapAt, created.CreatedAt)
+					}
+				}
+			})
+		}
 	}
 }

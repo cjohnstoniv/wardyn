@@ -307,7 +307,7 @@ type governanceCeiling struct {
 	Unit     *ResolvedUnit
 	Warnings []string
 	// ContextExpiresAt is the picked membership's end when it is an elevation; nil otherwise. A run
-	// launched here is capped at it (capAtElevation).
+	// launched here is capped at it (captureRunLimits).
 	ContextExpiresAt *time.Time
 	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
 	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it

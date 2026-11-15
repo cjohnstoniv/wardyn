@@ -83,6 +83,11 @@ export const DESKTOP = {
   reconnecting: "Reconnecting to the desktop",
   reconnectingBody: "The connection dropped. This tab reconnects on its own.",
   stillTrying: (reason: string) => `Still trying. The gateway said: ${reason}`,
+  // The viewer could not go on with what the desktop sent, so it stops until the person tries again.
+  failedTitle: "This viewer can't show the desktop",
+  failedBody: "It stopped trying to reconnect.",
+  failedReason: (reason: string) => `Reason: ${reason}`,
+  tryAgain: "Try again",
   noClipboard: "Copy and paste don't reach this desktop yet. Use Files or the terminal to move text.",
   // A macOS VM desktop: the viewer cannot tell whether the run declared a UI app, so no Files there.
   noClipboardMac: "Copy and paste don't reach this desktop yet. Use the terminal to move text.",

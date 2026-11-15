@@ -49,9 +49,13 @@ type Claims struct {
 // NOT an authorization result: Verify still returns nil claims with it, and callers must
 // keep failing closed. A provider that can't resolve the run id returns an ordinary error
 // instead, so the fallback is silence, not a row keyed to the wrong run.
+//
+// Expiry is the token's own expiry claim (zero when it had none), so a caller can tell a
+// token that lapsed just now from one that lapsed long ago.
 type ExpiredTokenError struct {
-	RunID uuid.UUID
-	Err   error
+	RunID  uuid.UUID
+	Expiry time.Time
+	Err    error
 }
 
 func (e *ExpiredTokenError) Error() string {
@@ -59,6 +63,22 @@ func (e *ExpiredTokenError) Error() string {
 }
 
 func (e *ExpiredTokenError) Unwrap() error { return e.Err }
+
+// RevokedTokenError is the typed refusal for a presented token whose ONLY defect is
+// revocation: signature, audience and expiry were good. It carries the token's claims so the
+// API's internal-auth boundary can still take a run's last egress reports after the run ended
+// and its identity was revoked (internal/api's verifyRunToken), and nothing else.
+//
+// NOT an authorization result: Verify still returns nil claims with it, and every other
+// caller keeps failing closed. A revocation-store error is an ordinary error, never this.
+type RevokedTokenError struct {
+	Claims *Claims
+	Err    error
+}
+
+func (e *RevokedTokenError) Error() string { return e.Err.Error() }
+
+func (e *RevokedTokenError) Unwrap() error { return e.Err }
 
 // RunIdentity is what a provider mints at sandbox start.
 type RunIdentity struct {

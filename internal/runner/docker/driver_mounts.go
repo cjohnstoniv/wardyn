@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/volume"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -114,6 +114,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 	// drives at one target would hide one of them, so a repeated target is
 	// refused here as well as at the control plane.
 	seen := map[string]bool{}
+	var judged []judgedVolume
 	for i := range spec.Drives {
 		drive := &spec.Drives[i]
 		if seen[drive.Target] {
@@ -121,11 +122,25 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 				runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid)
 		}
 		seen[drive.Target] = true
-		driveMounts, err := d.driveMount(ctx, drive, spec.RunID, spec.Image, rroSupported)
+		driveMounts, vol, err := d.driveMount(ctx, drive, rroSupported)
 		if err != nil {
 			return nil, err
 		}
+		if vol != nil {
+			judged = append(judged, judgedVolume{drive: drive, vol: *vol})
+		}
 		mounts = append(mounts, driveMounts...)
+	}
+	// Held from here to the run's teardown, the caller's rollback removing the hold of a create that fails.
+	if err := d.pinDriveVolumes(ctx, spec.RunID, judged); err != nil {
+		return nil, err
+	}
+	// SECURITY: seeded only once held, so a seed's mount finds the volume the hold checked: a volume another
+	// person's run made under the name after the check is refused by the hold before any seed writes into it.
+	for _, v := range judged {
+		if err := d.seedDriveVolume(ctx, spec.RunID, spec.Image, v.drive); err != nil {
+			return nil, err
+		}
 	}
 	return mounts, nil
 }
@@ -185,9 +200,13 @@ func (d *Driver) memberBindLimits(spec runner.SandboxSpec, m runner.Mount) (*run
 // A Kubernetes backend is an error, never a skip: types.ValidateUserDrive
 // refuses it on a Docker deployment at the write boundary, so reaching here
 // means the deployment's runner target changed under a stored row.
-func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID uuid.UUID, image string, rroSupported bool) ([]mount.Mount, error) {
+//
+// A docker_volume drive also returns the volume it judged, for the run's hold
+// (pinDriveVolumes); every other backend returns nil. Its seed is agentMounts'
+// to make, once the volume is held (seedDriveVolume).
+func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSupported bool) ([]mount.Mount, *volume.Volume, error) {
 	if drive == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// A drive binds at a derived drive path or not at all (runner.
 	// ValidateDriveTarget): a DriveMount addressed to /home/agent/.claude,
@@ -198,7 +217,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 	// drive.ObjectName: this refusal becomes the run's failure_hint verbatim,
 	// and on a SHARE the object name is the operator's absolute share path.
 	if err := runner.ValidateDriveTarget(drive); err != nil {
-		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
+		return nil, nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
 			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, err)
 	}
 	// Still checked as a path via ValidateTarget (never ValidateAuthoredTarget,
@@ -207,38 +226,37 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 	// if DriveTarget were ever edited somewhere no mount may land, this
 	// refuses rather than binding a member's storage there.
 	if err := runner.ValidateTarget(drive.Target); err != nil {
-		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w", runner.DriveSubject(drive), drive.Target, err)
+		return nil, nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w", runner.DriveSubject(drive), drive.Target, err)
 	}
 	switch drive.Backend {
 	case types.DriveBackendDockerVolume:
 		// Target only, checked above: a named volume is Docker-managed, not a
 		// host path, so there's no source to deny.
-		if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
-			return nil, err
+		vol, err := ensureDriveVolume(ctx, d.cli, drive)
+		if err != nil {
+			return nil, nil, err
 		}
-		// A volume at a derived path is seeded first (seedDriveVolume): a
-		// person's from the image's own drive directory, a team volume with
-		// nothing from the image. A team volume's final mount carries NoCopy
-		// too (teamDriveVolumeOptions), so no allocation, read-only or
-		// writable, copies the run's image into what the group shares.
-		if drive.Target != runner.DriveTarget {
-			if err := d.seedDriveVolume(ctx, runID, image, drive); err != nil {
-				return nil, err
-			}
+		// A team volume's final mount carries NoCopy, like its seed's
+		// (teamDriveVolumeOptions), so no allocation, read-only or writable,
+		// copies the run's image into what the group shares. Its labels are
+		// this drive's, for a volume it makes once the hold is gone.
+		opts := &mount.VolumeOptions{Labels: driveVolumeLabels(drive)}
+		if team := teamDriveVolumeOptions(drive); team != nil {
+			opts.NoCopy = team.NoCopy
 		}
 		return []mount.Mount{{
 			Type:          mount.TypeVolume,
 			Source:        drive.ObjectName,
 			Target:        drive.Target,
 			ReadOnly:      drive.ReadOnly,
-			VolumeOptions: teamDriveVolumeOptions(drive),
-		}}, nil
+			VolumeOptions: opts,
+		}}, &vol, nil
 
 	case types.DriveBackendHostPath:
 		// The SHARE bind, converted here only. Every check on its source is hostPathDriveReal's, which a
 		// macOS VM's shared folder runs too.
 		if _, err := d.hostPathDriveReal(drive); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		return []mount.Mount{{
 			Type:        mount.TypeBind,
@@ -246,12 +264,12 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 			Target:      drive.Target,
 			ReadOnly:    drive.ReadOnly,
 			BindOptions: driveBindOptions(drive, drive.ReadOnly, rroSupported),
-		}}, nil
+		}}, nil, nil
 
 	default:
 		// The SUBJECT again, not the object name: a member reading their own
 		// failure hint has no use for it.
-		return nil, fmt.Errorf("docker: user drive (%s) has backend %q, which this runner cannot mount "+
+		return nil, nil, fmt.Errorf("docker: user drive (%s) has backend %q, which this runner cannot mount "+
 			"(the docker runner mounts %q and %q; a Kubernetes-backed drive belongs to a Kubernetes deployment)",
 			runner.DriveSubject(drive), drive.Backend, types.DriveBackendDockerVolume, types.DriveBackendHostPath)
 	}

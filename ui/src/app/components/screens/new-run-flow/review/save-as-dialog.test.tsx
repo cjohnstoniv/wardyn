@@ -11,6 +11,7 @@ import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refu
 import type { Template, TemplatePublish, TemplateSaveRequest } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
 import { TemplateSaveError } from "./save-as-dialog.api";
+import { setExpectedPrincipal } from "../../../../lib/api/core";
 import { SAVE_AS_COPY, SaveAsDialog, type SaveAsDialogProps } from "./save-as-dialog";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 
@@ -27,7 +28,7 @@ const SEAM_COPY = { ...SAVE_AS_COPY, nothingPicked: "Fixture: pick a part.", own
 const SAVED = { id: "t1" } as Template;
 
 function setup(over: Partial<SaveAsDialogProps> = {}) {
-  const save = vi.fn<(r: TemplateSaveRequest) => Promise<Template>>().mockResolvedValue(SAVED);
+  const save = vi.fn<(r: TemplateSaveRequest, person?: string) => Promise<Template>>().mockResolvedValue(SAVED);
   const props: SaveAsDialogProps = {
     open: true, onOpenChange: vi.fn(), kind: "template", intent: INTENT, hasBlockers: false, publish: MEMBER, save, onSaved: vi.fn(), ...over,
   };
@@ -39,6 +40,33 @@ const saveButton = (kind = "template") => screen.getByRole("button", { name: SAV
 const sent = (save: ReturnType<typeof setup>["save"], call = 0) => save.mock.calls[call][0];
 
 describe("SaveAsDialog", () => {
+  // The seed leaves a harness start out of a VM draft: the dialog says a template of it has neither that start nor its
+  // first message, while the draft still has no place for them.
+  it("says a harness start the draft was opened without is not saved, only while it has no place in the draft", () => {
+    const vm = { shape: "agent_task", experience: "interactive", machine_kind: "linux_vm" } as RunIntent;
+    const shown = (over: Partial<SaveAsDialogProps>) => {
+      setup({ intent: vm, startLeftOut: true, ...over });
+      const there = screen.queryByText(NR_SAVE.START_NOT_SAVED) !== null;
+      cleanup();
+      return there;
+    };
+    expect(SAVE_AS_COPY.startNotSaved).toBe(NR_SAVE.START_NOT_SAVED);
+    expect(shown({})).toBe(true);
+    expect(shown({ intent: { ...vm, machine_kind: "macos_vm", experience: undefined } })).toBe(true);
+    expect(shown({ startLeftOut: undefined })).toBe(false);
+    expect(shown({ kind: "policy" })).toBe(false);
+    expect(shown({ intent: { ...vm, machine_kind: undefined } })).toBe(false);
+    expect(shown({ intent: { ...vm, startup: { kind: "command", command: "make dev" } } })).toBe(false);
+    // Autonomous has no start either: it is told too, until its task carries a message, which is saved.
+    expect(shown({ intent: { ...vm, experience: "background" } })).toBe(true);
+    expect(shown({ intent: { ...vm, experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: " " } } })).toBe(true);
+    expect(shown({ intent: { ...vm, experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix it" } } })).toBe(false);
+    // A harness's own task is saved too: the first message of a start in a second harness becomes one.
+    const second = (task: string) => ({ ...vm, experience: "background" as const, tools: [{ id: "claude-code", kind: "harness" as const }, { id: "codex-cli", kind: "harness" as const, task }] });
+    expect(shown({ intent: second("fix it") })).toBe(false);
+    expect(shown({ intent: second(" ") })).toBe(true);
+  });
+
   it("opens with the focus on Name (U20)", async () => {
     setup();
     await waitFor(() => expect(screen.getByLabelText("Name")).toHaveFocus());
@@ -180,6 +208,26 @@ describe("SaveAsDialog", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(sent(save, 0).document.needs_setup).toBeUndefined();
     expect(sent(save, 1).document.needs_setup).toEqual([{ field: "agent" }]);
+  });
+
+  it("the save sent again after another person signed in still names the person who clicked", async () => {
+    // The server then refuses it rather than save the template as the next person.
+    const { user, save } = setup({ intent: { model_provider: "p", experience: "background" } as unknown as RunIntent });
+    const path = "intent.model_provider";
+    let refuse!: (e: unknown) => void;
+    save.mockImplementationOnce(() => new Promise((_, fail) => (refuse = fail)));
+    await user.click(screen.getByLabelText(SAVE_AS_COPY.subset));
+    setField(screen.getByLabelText("Name"), "Dep");
+    setExpectedPrincipal("a@example.com");
+    await user.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    refuse(new TemplateSaveError(422, TEMPLATE_REFUSAL.DEPENDENCY_MISSING(path, "agent"), TEMPLATE_REASON.DEPENDENCY_MISSING,
+      [{ path, reason: TEMPLATE_REASON.DEPENDENCY_MISSING, message: TEMPLATE_REFUSAL.DEPENDENCY_MISSING(path, "agent") }]));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls.map((c) => c[1])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
   });
 
   describe("kind policy", () => {

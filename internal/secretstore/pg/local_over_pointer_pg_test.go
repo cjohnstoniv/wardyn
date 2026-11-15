@@ -17,6 +17,7 @@ func TestLocalPutOverAPointerRemovesTheOldValue(t *testing.T) {
 
 	local := mixedStore(t, pool, id, false, vault, false)
 	mustPut(t, local, "bob", "rotated", "fresh-pat")
+	WaitForCleanUps(t.Context())
 	if got := rowOf(t, pool, "bob", "rotated"); got.version != 1 {
 		t.Fatalf("the replaced row = %+v, want a local v1 row", got)
 	}

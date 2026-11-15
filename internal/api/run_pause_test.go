@@ -46,13 +46,14 @@ func (s *pauseStore) NotePauseSettle(_ context.Context, id uuid.UUID, after time
 	return due, nil
 }
 
-func (s *pauseStore) DuePauseSettles(context.Context) ([]store.PauseSettle, error) {
+func (s *pauseStore) DuePauseSettles(_ context.Context, lookFor time.Duration) ([]store.PauseSettle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.PauseSettle
+	now := time.Now()
 	for id, due := range s.settles {
-		if !due.After(time.Now()) {
-			out = append(out, store.PauseSettle{RunID: id, DueAt: due})
+		if !due.After(now) {
+			out = append(out, store.PauseSettle{RunID: id, DueAt: due, Last: !due.Add(lookFor).After(now)})
 		}
 	}
 	return out, nil
@@ -67,6 +68,26 @@ func (s *pauseStore) ClearPauseSettle(_ context.Context, id uuid.UUID, due time.
 	return nil
 }
 
+func (s *pauseStore) NotePauseIntent(_ context.Context, id uuid.UUID, after time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if due, ok := s.settles[id]; ok {
+		return due, false, nil
+	}
+	if s.settles == nil {
+		s.settles = map[uuid.UUID]time.Time{}
+	}
+	due := time.Now().Add(after)
+	s.settles[id] = due
+	return due, true, nil
+}
+
+func (s *pauseStore) PauseSettleFor(_ context.Context, id uuid.UUID) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settles[id], nil
+}
+
 // owing is how many runs have a settle recorded.
 func (s *pauseStore) owing() int {
 	s.mu.Lock()
@@ -74,12 +95,16 @@ func (s *pauseStore) owing() int {
 	return len(s.settles)
 }
 
-// settleDue makes every recorded settle due: the compensation's deadline has passed.
-func (s *pauseStore) settleDue() {
+// settleDue makes every recorded settle due and past its late look (pauseLateSettleAfter), so the next settle is its
+// last: the compensation's deadline has passed, and so has the time a cut call has to land.
+func (s *pauseStore) settleDue() { s.dueSince(pauseLateSettleAfter + time.Second) }
+
+// dueSince makes every recorded settle due since ago.
+func (s *pauseStore) dueSince(ago time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.settles {
-		s.settles[id] = time.Now().Add(-time.Second)
+		s.settles[id] = time.Now().Add(-ago)
 	}
 }
 

@@ -60,12 +60,14 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
+    let maskTries = 0;
     const tick = async () => {
       try {
         const o = await runOutput.get(runId);
         if (cancelled) return;
         hadRead.current = true;
         failures = 0;
+        maskTries = 0;
         setOut(o);
         setReadLive(live);
         setRefusal(null);
@@ -96,6 +98,13 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
         const again = (r === "not_kept" && (live || justEnded)) || (r === "interactive" && stopped && justEnded);
         setSaving(again);
         if (again) timer = setTimeout(tick, POLL_MS);
+        // The server could not prove the run's secrets masked just now: a passing
+        // state, so the refusal stays on screen and is read again a few times,
+        // backing off. Retry asks again after that.
+        if (r === "mask" && maskTries < MAX_BLIPS) {
+          maskTries += 1;
+          timer = setTimeout(tick, Math.min(POLL_MS * 2 ** maskTries, MAX_BACKOFF_MS));
+        }
       }
     };
     void tick();

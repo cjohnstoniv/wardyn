@@ -25,8 +25,13 @@ import (
 // before it stopped.
 type partialScanStore struct {
 	store.Store
-	sources map[uuid.UUID]types.Source
-	scanned []uuid.UUID // ids that reached a successful SetSourceScanResultUnfenced(..., WorkspaceScanned, ...)
+	sources    map[uuid.UUID]types.Source
+	scanned    []uuid.UUID       // ids that reached a successful SetSourceScanResultUnfenced(..., WorkspaceScanned, ...)
+	workspaces []types.Workspace // the ListWorkspaces answer: the workspaces that attach a scanned folder
+}
+
+func (s *partialScanStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return s.workspaces, nil
 }
 
 func (s *partialScanStore) GetSourcesByIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {

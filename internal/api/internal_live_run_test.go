@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -137,11 +138,16 @@ func TestInternalAuth_RenewRunNotFoundReasonIsPinned(t *testing.T) {
 	}
 }
 
+// tailGraceDoors are the internalDoors rows terminalGraceRoutes lets a run that is over reach inside its grace.
+var tailGraceDoors = map[string]bool{"decisions": true, "recording upload": true, "recording part upload": true,
+	"scan-result upload": true, "sso-token upload": true}
+
 // TestInternalAuth_TailUploadsLandInsideTheGrace is the asserted exemption.
 // wardyn-rec, wardyn-scan and wardyn-aws-sso all PUT their artifact as the run
-// finishes, racing the completion watcher that flips the state — so a gate with
-// no grace would discard exactly the recordings and scan facts the run existed
-// to produce. Every OTHER door stays shut in the same window.
+// finishes, and the egress proxy posts its last decisions as it drains, racing
+// the completion watcher that flips the state — so a gate with no grace would
+// discard exactly the recordings, scan facts and decisions the run existed to
+// produce. Every OTHER door stays shut in the same window.
 func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 	h := newHarness(t)
 	runID, grantID := uuid.New(), uuid.New()
@@ -153,11 +159,10 @@ func TestInternalAuth_TailUploadsLandInsideTheGrace(t *testing.T) {
 	srv := New(cfg)
 	tok := h.mintRunToken(t, runID)
 
-	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, d := range internalDoors(runID, grantID) {
 		t.Run(d.name, func(t *testing.T) {
 			w := do(t, srv, d.method, d.path, tok, d.body)
-			if graced[d.name] {
+			if tailGraceDoors[d.name] {
 				if w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "terminal") {
 					t.Fatalf("a tail upload inside the grace was refused: %s", w.Body.String())
 				}
@@ -201,7 +206,6 @@ func (s keptRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, e
 // tail uploads alone keep their grace, counted from the mark, and lose it
 // after. UpdatedAt is fresh on purpose: the grace must not be measured from it.
 func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
-	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, reason := range []types.LostReason{types.LostEnded, types.LostReboot, types.LostOutage} {
 		for _, age := range []time.Duration{time.Second, terminalUploadGrace + time.Minute} {
 			h := newHarness(t)
@@ -218,7 +222,7 @@ func TestInternalAuth_KeptRunIsRefusedAtEveryDoor(t *testing.T) {
 				t.Run(string(reason)+"/"+age.String()+"/"+d.name, func(t *testing.T) {
 					w := do(t, srv, d.method, d.path, tok, d.body)
 					refused := w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "lost")
-					if graced[d.name] && inGrace {
+					if tailGraceDoors[d.name] && inGrace {
 						if refused {
 							t.Fatalf("a tail upload inside the grace was refused: %s", w.Body.String())
 						}
@@ -250,11 +254,10 @@ func TestInternalAuth_KeptThenTerminalRunIsRefusedAsTerminal(t *testing.T) {
 	srv := New(cfg)
 	tok := h.mintRunToken(t, runID)
 
-	graced := map[string]bool{"recording upload": true, "recording part upload": true, "scan-result upload": true, "sso-token upload": true}
 	for _, d := range internalDoors(runID, grantID) {
 		t.Run(d.name, func(t *testing.T) {
 			w := do(t, srv, d.method, d.path, tok, d.body)
-			if graced[d.name] {
+			if tailGraceDoors[d.name] {
 				if w.Code == http.StatusForbidden && (strings.Contains(w.Body.String(), "run is terminal") || strings.Contains(w.Body.String(), "run is lost")) {
 					t.Fatalf("a tail upload inside the terminal grace was refused by the gate: %s", w.Body.String())
 				}
@@ -313,6 +316,9 @@ func TestInternalUploadWithinGrace(t *testing.T) {
 		"a run row with no terminal timestamp":  {"/api/v1/internal/recordings/x", types.AgentRun{}, false},
 		"a terminal timestamp in the future":    {"/api/v1/internal/recordings/x", types.AgentRun{UpdatedAt: now.Add(time.Hour)}, false},
 		"a scan result just after the run ends": {"/api/v1/internal/scan-results/x", types.AgentRun{UpdatedAt: now}, true},
+		"a decision just after the run ended":   {"/api/v1/internal/decisions", types.AgentRun{UpdatedAt: now.Add(-time.Second)}, true},
+		"a decision long after the run ended":   {"/api/v1/internal/decisions", types.AgentRun{UpdatedAt: now.Add(-2 * terminalUploadGrace)}, false},
+		"a sandbox path naming the door":        {"/api/v1/internal/via-org/g/api/v1/internal/decisions", types.AgentRun{UpdatedAt: now}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := internalUploadWithinGrace(tc.path, tc.run, now); got != tc.want {
@@ -361,5 +367,250 @@ func TestInternalAuth_NoStoreAdmits(t *testing.T) {
 		`{"request":{"host":"api.anthropic.com","method":"POST"},"decision":"allow"}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("code = %d, want 202; a store-less embedding must keep its internal surface; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestRunIsOver: each arm refuseTerminalRun refuses on is a run that is over, and a running run, or one whose cap
+// is still ahead, is not.
+func TestRunIsOver(t *testing.T) {
+	now := time.Now().UTC()
+	past, ahead := now.Add(-time.Second), now.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		run  types.AgentRun
+		want bool
+	}{
+		"terminal":            {types.AgentRun{State: types.RunCompleted}, true},
+		"kept":                {types.AgentRun{State: types.RunRunning, LostAt: &past}, true},
+		"at its cap":          {types.AgentRun{State: types.RunRunning, LifetimeCapAt: &past}, true},
+		"running":             {types.AgentRun{State: types.RunRunning}, false},
+		"its cap still ahead": {types.AgentRun{State: types.RunRunning, LifetimeCapAt: &ahead}, false},
+	} {
+		if got := runIsOver(tc.run, now); got != tc.want {
+			t.Errorf("%s: runIsOver = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// The decision door's refusal of a run that is over is written once per run: a claim holds until every token
+// of the run has lapsed, a spent claim is dropped, a claim given back is taken again, and each run, and each
+// action of the same run (a refusal and a post the door could not take), has its own.
+func TestClaimDecisionRefusalHoldsUntilTheRunsTokensLapse(t *testing.T) {
+	now := time.Now().UTC()
+	s := &Server{cfg: Config{Now: func() time.Time { return now }}}
+	runID, other := uuid.New(), uuid.New()
+	const denied = "authz.denied"
+	if !s.claimDecisionRefusal(runID, denied) || s.claimDecisionRefusal(runID, denied) {
+		t.Fatal("want the run's first refusal claimed and its second not")
+	}
+	if !s.claimDecisionRefusal(other, denied) {
+		t.Fatal("another run's first refusal was not claimed")
+	}
+	if !s.claimDecisionRefusal(runID, runReportLostAction) || s.claimDecisionRefusal(runID, runReportLostAction) {
+		t.Fatal("want the run's first lost report claimed beside its refusal, and its second not")
+	}
+	now = now.Add(identity.RunTokenLapseAfter - time.Second)
+	if s.claimDecisionRefusal(runID, denied) {
+		t.Fatal("a refusal before the run's tokens lapse was claimed again")
+	}
+	now = now.Add(time.Second)
+	if !s.claimDecisionRefusal(runID, denied) {
+		t.Fatal("a refusal once the run's tokens have lapsed was not claimed")
+	}
+	if len(s.doorRefusals.until) != 1 {
+		t.Fatalf("held claims = %d, want the spent ones dropped", len(s.doorRefusals.until))
+	}
+	s.releaseDecisionRefusal(runID, denied)
+	if !s.claimDecisionRefusal(runID, denied) {
+		t.Fatal("a claim given back was not taken again")
+	}
+}
+
+// overRunClocks is a run kept a second ago (still RUNNING, so TouchRun's own terminal guard does not hold it)
+// that counts what would move its idle and presence clocks, the failure-hint write among them (it bumps
+// updated_at, which a terminal run's tail grace is counted from).
+type overRunClocks struct {
+	keptRunStore
+	store.RunPauser
+	touched, stamped, hinted, endedHinted int
+}
+
+func (s *overRunClocks) SetRunFailureHint(context.Context, uuid.UUID, string) error {
+	s.hinted++
+	return nil
+}
+
+func (s *overRunClocks) SetEndedRunFailureHint(context.Context, uuid.UUID, string) error {
+	s.endedHinted++
+	return nil
+}
+
+func (s *overRunClocks) TouchRun(context.Context, uuid.UUID) error { s.touched++; return nil }
+
+func (s *overRunClocks) StampRunActive(context.Context, uuid.UUID) (bool, error) {
+	s.stamped++
+	return false, nil
+}
+
+// TestInternalDecisionOnARunThatIsOverMovesNoClock: a run that is over reaches the decision door only inside its
+// tail grace, and what it posts there is kept on its trail but is not activity, as on the runner spool. The
+// failure hint a late report carries is still written, on the write that leaves updated_at.
+func TestInternalDecisionOnARunThatIsOverMovesNoClock(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &overRunClocks{keptRunStore: keptRunStore{runID: runID, reason: types.LostEnded, age: time.Second}}
+	srv := New(baseTestConfig(h, st))
+
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", h.mintRunToken(t, runID),
+		`{"request":{"host":"pypi.org","method":"GET"},"decision":"allow","upstream_fault":"ThrottlingException"}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202 for a decision inside the tail grace; body=%s", w.Code, w.Body.String())
+	}
+	if st.touched != 0 || st.stamped != 0 || st.hinted != 0 || st.endedHinted != 1 {
+		t.Fatalf("touched %d, stamped %d, hint %d, hint keeping updated_at %d; want 0, 0, 0, 1 for a run that is over",
+			st.touched, st.stamped, st.hinted, st.endedHinted)
+	}
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "egress.allow" && ev.RunID != nil && *ev.RunID == runID {
+			return
+		}
+	}
+	t.Fatal("the decision is not on the run's trail")
+}
+
+// The run's identity is revoked before its sandbox is stopped, so the proxy's last reports arrive on a revoked
+// token. That token reaches the decision door alone, and only for a run that is over: inside the tail grace the
+// post is kept; past it the liveness gate refuses it with a row on the run's trail. Every other door, and the
+// same token on a run still going, is refused at verification as before.
+func TestInternalAuth_RevokedTokenReachesOnlyTheDecisionDoorOfARunThatIsOver(t *testing.T) {
+	ctx := context.Background()
+	ended := func(age time.Duration) func(uuid.UUID) store.Store {
+		return func(id uuid.UUID) store.Store {
+			return terminalRunStore{runID: id, state: types.RunCompleted, age: age}
+		}
+	}
+	for name, tc := range map[string]struct {
+		st       func(uuid.UUID) store.Store
+		decision int
+	}{
+		"ended a second ago":   {ended(time.Second), http.StatusAccepted},
+		"ended past the grace": {ended(terminalUploadGrace + time.Minute), http.StatusForbidden},
+		"kept a second ago": {func(id uuid.UUID) store.Store {
+			return keptRunStore{runID: id, reason: types.LostEnded, age: time.Second}
+		}, http.StatusAccepted},
+		"still running (a revive)": {func(uuid.UUID) store.Store { return anyRunLive{} }, http.StatusUnauthorized},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID, grantID := uuid.New(), uuid.New()
+			cfg := baseTestConfig(h, tc.st(runID))
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.RecordingStore = &fakeRecordingStore{}
+			cfg.Approvals = h.approvals
+			cfg.Broker = h.broker
+			srv := New(cfg)
+			tok := h.mintRunToken(t, runID)
+			if err := h.idp.RevokeRun(ctx, runID); err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range internalDoors(runID, grantID) {
+				want := http.StatusUnauthorized
+				if d.name == "decisions" {
+					want = tc.decision
+				}
+				if w := do(t, srv, d.method, d.path, tok, d.body); w.Code != want {
+					t.Errorf("%s: code = %d, want %d; body=%s", d.name, w.Code, want, w.Body.String())
+				}
+			}
+			// chi routes on the escaped path, so another door's parameter can spell the segment: still not the door.
+			if w := do(t, srv, http.MethodGet, "/api/v1/internal/approvals/x%2Finternal%2Fdecisions", tok, ""); w.Code != http.StatusUnauthorized {
+				t.Errorf("a parameter spelling the door: code = %d, want 401; body=%s", w.Code, w.Body.String())
+			}
+			if tc.decision != http.StatusForbidden {
+				return
+			}
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "authz.denied" && ev.RunID != nil && *ev.RunID == runID && ev.Target == "/api/v1/internal/decisions" {
+					return
+				}
+			}
+			t.Error("the post refused past the grace left no row on the run's trail")
+		})
+	}
+}
+
+// Only revocation opens the decision door to a run that is over: an expired token names its run too
+// (identity.ExpiredTokenError), and keeps the 401. What it posted is lost, so the door notes it on the run's
+// trail, once however often it is refused, and only at that door. A token that expired more than
+// identity.RunTokenLapseAfter ago is noted only while its run is not over, so a dead token cannot fail the
+// replay of a run that ended long ago.
+func TestInternalAuth_ExpiredTokenIsRefusedAtTheDecisionDoorOfARunThatIsOver(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		state      types.RunState
+		expiredAgo time.Duration
+		want       int
+	}{
+		{"a run that is over, its token expired just now", types.RunCompleted, 2 * time.Minute, 1},
+		{"a run that is over, its token expired long ago", types.RunCompleted, 2 * time.Hour, 0},
+		{"a live run, its token expired long ago", types.RunRunning, 2 * time.Hour, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runID := uuid.New()
+			st := &dispatchTestStore{run: types.AgentRun{ID: runID, CreatedBy: "t@example.com"}, state: tc.state}
+			audit := &syncAudit{}
+			srv, tok := expiredIdentityServer(t, st, audit, runID)
+			srv.cfg.Identity.(*expiredIdentity).expiry = time.Now().Add(-tc.expiredAgo)
+			for range 3 {
+				w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":{"host":"pypi.org","method":"GET"},"decision":"allow"}`)
+				if w.Code != http.StatusUnauthorized {
+					t.Fatalf("code = %d, want 401 for an expired token at the decision door; body=%s", w.Code, w.Body.String())
+				}
+			}
+			_ = do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
+			lost := 0
+			for _, ev := range audit.snapshot() {
+				if ev.Action == runReportLostAction && ev.RunID != nil && *ev.RunID == runID && ev.Target == decisionsDoor &&
+					strings.Contains(string(ev.Data), reportLostExpired) {
+					lost++
+				}
+			}
+			if lost != tc.want {
+				t.Fatalf("run.report.drop rows = %d after three expired posts to the decision door and one to another door, want %d", lost, tc.want)
+			}
+		})
+	}
+}
+
+// A decision-door post whose run cannot be read is a retryable 503, on the run's live token (the liveness gate)
+// and on its revoked one (verifyRunToken), never a 401; either way it is noted on the run's trail once, since
+// the proxy does not post it again. Another door keeps its answer and writes no such row.
+func TestInternalAuth_DecisionDoorNotesAPostOfAnUnreadableRun(t *testing.T) {
+	ctx := context.Background()
+	for _, revoked := range []bool{false, true} {
+		h := newHarness(t)
+		runID := uuid.New()
+		srv := New(baseTestConfig(h, errRunStore{err: errors.New("conn reset")}))
+		tok := h.mintRunToken(t, runID)
+		if revoked {
+			if err := h.idp.RevokeRun(ctx, runID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 3 {
+			w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":{"host":"pypi.org","method":"GET"},"decision":"deny"}`)
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("revoked %v: code = %d, want 503; body=%s", revoked, w.Code, w.Body.String())
+			}
+		}
+		_ = do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
+		lost := 0
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == runReportLostAction && ev.RunID != nil && *ev.RunID == runID && ev.Target == decisionsDoor {
+				lost++
+			}
+		}
+		if lost != 1 {
+			t.Fatalf("revoked %v: run.report.drop rows = %d, want 1", revoked, lost)
+		}
 	}
 }

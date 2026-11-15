@@ -134,7 +134,14 @@ func (j *joinedCast) openNext() (bool, error) {
 		return false, err
 	}
 	br := bufio.NewReader(rc)
-	if h, err := joinedHeader(br); err != nil || !bytes.Equal(h, j.header) {
+	// A part that cannot be read is an error, as part 1's is (OpenJoined): ending the join there would serve
+	// a shorter cast as if it were the whole one. A part cut short or of an earlier cast ends it.
+	h, err := joinedHeader(br)
+	if err != nil && !errors.Is(err, io.EOF) {
+		_ = rc.Close()
+		return false, err
+	}
+	if !bytes.Equal(h, j.header) {
 		_ = rc.Close()
 		return false, nil
 	}

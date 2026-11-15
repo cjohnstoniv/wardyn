@@ -548,9 +548,9 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return fail(err)
 	}
-	set := res.DesktopPasswordSet != nil && *res.DesktopPasswordSet
-	if desktop && !set {
-		return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
+	set, err := macVMBooted(disks, res, desktop)
+	if err != nil {
+		return fail(err)
 	}
 	go c.recordToolsDial(v.ctx, v.agent)
 	if !set {

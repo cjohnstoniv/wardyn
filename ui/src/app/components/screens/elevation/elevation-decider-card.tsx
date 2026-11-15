@@ -20,13 +20,15 @@ import { RequestedByRow } from "../../wardyn/decider-lines";
 import { Chip } from "../../wardyn/primitives";
 import { decidersPhrase, lengthWords } from "./request-phrases";
 
-export function ElevationDeciderCard({ request, onDone }: { request: GovernanceRequest; onDone: () => void }) {
+// onStart tells the screen a decision is going out, so it can hold the card through a remount.
+export function ElevationDeciderCard({ request, onStart, onDone }: { request: GovernanceRequest; onStart?: () => void; onDone: () => void }) {
   const [busy, setBusy] = React.useState(false);
   const person = request.proposed_by;
   const unit = request.unit_name ?? "";
   const length = lengthWords(request.duration ?? "");
   const decide = async (approve: boolean) => {
     setBusy(true);
+    onStart?.();
     try {
       if (approve) await requests.approve(request.id);
       else await requests.reject(request.id, "");

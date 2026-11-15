@@ -205,3 +205,29 @@ func TestSplitRequirementKey_Types(t *testing.T) {
 		}
 	}
 }
+
+// An incomplete scan keeps every row an earlier scan seeded, at the stronger level when both hold
+// one, and copies no operator row (the store keeps those itself).
+func TestKeepScanSeeded_AnIncompleteScanDropsAndWeakensNothing(t *testing.T) {
+	seed := map[string]WorkspaceRequirement{
+		"secret:new":    req("optional", "scan_seeded"),
+		"secret:shared": req("optional", "scan_seeded"),
+		"secret:raised": req("required", "scan_seeded"),
+	}
+	prior := map[string]WorkspaceRequirement{
+		"secret:old":    req("required", "scan_seeded"),
+		"secret:shared": req("required", "scan_seeded"),
+		"secret:raised": req("optional", "scan_seeded"),
+		"egress:op":     req("required", "operator_set"),
+	}
+	got := foldJSON(t, KeepScanSeeded(seed, prior))
+	want := foldJSON(t, map[string]WorkspaceRequirement{
+		"secret:new":    req("optional", "scan_seeded"),
+		"secret:old":    req("required", "scan_seeded"),
+		"secret:shared": req("required", "scan_seeded"),
+		"secret:raised": req("required", "scan_seeded"),
+	})
+	if got != want {
+		t.Errorf("KeepScanSeeded = %s, want %s", got, want)
+	}
+}

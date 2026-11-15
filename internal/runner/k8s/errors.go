@@ -63,9 +63,9 @@ var errDriveTargetInvalid = errors.New("this drive cannot be mounted on Kubernet
 // beside a share (applyDriveToPod).
 var errDriveShareBesideManaged = errors.New("a shared drive and a managed drive cannot be mounted in one Kubernetes run: the managed drive needs the pod's fsGroup, which is never set beside a shared drive (it would re-own other people's files on it); attach one of them")
 
-var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's refusal; re-creating it would undo an operator's deliberate reclaim
+var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's and recheckDriveClaims' refusal; re-creating it would undo an operator's deliberate reclaim
 
-var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again") // ensureDrivePVC's refusal when a create race is lost twice; the next run's Get→Create self-heals
+var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again") // ensureDrivePVC's refusal when a create race is lost twice, and recheckDriveClaims' for a claim deleted or replaced while the run starts; the next run checks afresh
 
 // errDriveClaimForeign: reuseDriveClaim's refusal of a claim whose IDENTITY
 // labels say it belongs to a different member (driveClaimIdentity). The

@@ -10,6 +10,7 @@
 // on its own). Built-ins are the same shape, computed from filter overrides
 // so they always read `sections`/`7d`/Everyone wherever they weren't
 // overridden, instead of drifting from DEFAULT_RUNS_FILTERS by hand.
+import { basePath } from "../../../lib/base-path";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { DEFAULT_RUNS_FILTERS, serializeRunsFilters, type RunsFilterState } from "./runs-filters";
 
@@ -18,7 +19,8 @@ export interface SavedRunsView {
   search: string;
 }
 
-const STORAGE_KEY = "wardyn-runs-saved-views";
+// Older builds kept every person's views under this one key; it is removed on read, never shown to anyone.
+const SHARED_KEY = "wardyn-runs-saved-views";
 export const MAX_SAVED_RUNS_VIEWS = 10;
 
 function searchFor(overrides: Partial<RunsFilterState>): string {
@@ -43,11 +45,18 @@ function isSavedRunsView(v: unknown): v is SavedRunsView {
   );
 }
 
-/** Reads the user-saved (non-built-in) views. A corrupted or hand-edited
+// One list per deployment (its base path on this origin) and per person; no owner keeps nothing.
+function storageKey(owner: string): string | null {
+  return owner ? `${SHARED_KEY}:${encodeURIComponent(basePath())}:${encodeURIComponent(owner)}` : null;
+}
+
+/** Reads `owner`'s saved (non-built-in) views. A corrupted or hand-edited
  *  entry is dropped rather than crashing the page — this is convenience
  *  state, never a source of truth the rest of the app depends on. */
-export function loadSavedRunsViews(): SavedRunsView[] {
-  const raw = lsGet(STORAGE_KEY);
+export function loadSavedRunsViews(owner: string): SavedRunsView[] {
+  lsSet(SHARED_KEY, null);
+  const key = storageKey(owner);
+  const raw = key && lsGet(key);
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -60,9 +69,10 @@ export function loadSavedRunsViews(): SavedRunsView[] {
 /** Saves `name` against the CURRENT url's search string (H-8). Oldest entry
  *  is dropped once the list would exceed MAX_SAVED_RUNS_VIEWS — "up to 10" as
  *  a rolling window, not a hard refusal the operator has to clear first. */
-export function saveRunsView(name: string, search: string): SavedRunsView[] {
-  const next = [...loadSavedRunsViews(), { name, search }];
+export function saveRunsView(owner: string, name: string, search: string): SavedRunsView[] {
+  const next = [...loadSavedRunsViews(owner), { name, search }];
   while (next.length > MAX_SAVED_RUNS_VIEWS) next.shift();
-  lsSet(STORAGE_KEY, JSON.stringify(next));
+  const key = storageKey(owner);
+  if (key) lsSet(key, JSON.stringify(next));
   return next;
 }

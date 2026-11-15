@@ -223,7 +223,7 @@ func TestAgentCastRecover_BothCastsAreKept(t *testing.T) {
 func TestAgentCastRecover_OnlyAMacOSVMRunGetsACast(t *testing.T) {
 	for kind, want := range map[types.MachineKind]bool{types.MachineMacOSVM: true, types.MachineLinuxVM: false, types.MachineContainer: false} {
 		f, _, _ := agentCastRecoveryFixture(t, kind, newRecoveringRunner())
-		tw := f.srv.openRecoveryTail(f.run)
+		tw := f.srv.openRecoveryTail(context.Background(), f.run)
 		if tw == nil {
 			t.Fatalf("%s: no recovery tail", kind)
 		}

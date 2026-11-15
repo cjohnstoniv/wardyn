@@ -18,3 +18,11 @@ export const MODEL_PROVIDERS_UNAVAILABLE = {
   NOTE: "Couldn't load the model providers, so the list is not shown. None still works.",
   RETRY: "Try again",
 } as const;
+
+/** A run's Recording tab: a list of its recordings could not be read, or filled its page. */
+export const RECORDING_INDEX_INCOMPLETE = {
+  NOTE: "Couldn't list all of this run's recordings, so some may be missing here.",
+  RETRY: "Try again",
+  /** The retry's accessible name: the tab can show another "Try again" (cast, terminal data or replay) beside it. */
+  RETRY_LABEL: "Try again: list this run's recordings",
+} as const;

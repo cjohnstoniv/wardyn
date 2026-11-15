@@ -16,6 +16,7 @@ import { CREATE_ALLOWED } from "../../../../../lib/new-run-fixtures/scenarios/dr
 import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import { DRIVE_REFUSAL } from "../../../../../lib/drive-refusals";
 import type { MeDrive, MeDriveCatalogue, MemberDriveCreate } from "../../../../../lib/api/me-drives";
+import { MEMBER_DRIVES } from "../../../../wardyn/copy/member-drives";
 import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -230,6 +231,32 @@ describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
     await userEvent.click(dialogs()[0].querySelector<HTMLElement>("[data-own-delete]")!);
     await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
   };
+  it("a disk on a Mac says before the click what an offline or unregistered Mac means", async () => {
+    await openChoose();
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>(`[data-own-delete="${DISK.id}"]`)!);
+    expect(within(top()).getByText(MEMBER_DRIVES.DELETE_CONFIRM_MAC(DISK.name))).toBeInTheDocument();
+  });
+  it("a drive with no Mac keeps today's confirm", async () => {
+    await openChoose();
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>(`[data-own-delete="${DOCKER.id}"]`)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(DOCKER.name))).toBeInTheDocument();
+    expect(within(top()).queryByText(MEMBER_DRIVES.DELETE_CONFIRM_MAC(DOCKER.name))).toBeNull();
+  });
+  it("a disk on a Mac says so while this card's own read of the drives has not answered", async () => {
+    show();
+    const add = await screen.findByRole("button", { name: NR_FILES.ADD_ARIA });
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([path]) => String(path).startsWith("/me/drives"))).toBe(true));
+    // The step has its list; a read started from here on (the create control's own) does not answer.
+    const answered = wfetchMock.getMockImplementation()!;
+    wfetchMock.mockImplementation((path: string, init?: { method?: string }) =>
+      path.startsWith("/me/drives") && (init?.method ?? "GET") === "GET" ? new Promise<Response>(() => {}) : answered(path, init));
+    await userEvent.click(add);
+    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    await within(top()).findByRole("radio", { name: new RegExp(`^${DISK.name}`) });
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>(`[data-own-delete="${DISK.id}"]`)!);
+    expect(within(top()).getByText(MEMBER_DRIVES.DELETE_CONFIRM_MAC(DISK.name))).toBeInTheDocument();
+    expect(within(top()).queryByText(NR_FILES.DELETE_CONFIRM(DISK.name))).toBeNull();
+  });
   it("a Mac that is offline: the server's sentence stays up until the person closes it", async () => {
     del = () => json({ reason: "member_drive_delete_deferred", message: DRIVE_REFUSAL.MEMBER_DELETE_DEFERRED("kofi-mbp") }, 202);
     await openChoose();

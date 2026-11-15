@@ -17,6 +17,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
+// errWarmPoolsRunner refuses warm pools under wardyn-runnerd, which keeps no placeholders, rather than ignoring them.
+var errWarmPoolsRunner = errors.New("k8s: refusing to boot: WARDYN_K8S_WARM_POOLS is for wardynd; wardyn-runnerd keeps no placeholders")
+
 // buildConfig maps registration Deps to the k8s driver's Config. Extracted to
 // a pure function so its Record wiring is testable without a live cluster
 // (register_test.go's TestBuildConfig_RecordFollowsDeps pins it): Deps.Record
@@ -47,6 +50,7 @@ func buildConfig(d substrate.Deps) Config {
 
 		// Experimental: the SandboxTemplate the agent pod takes its annotations from (agentsandbox_template.go).
 		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
+		AgentSandboxKeep:     cliutil.EnvBool("WARDYN_K8S_AGENT_SANDBOX_KEEP", false),
 	}
 }
 
@@ -61,8 +65,14 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 	if err := checkAgentSandboxTemplate(cfg); err != nil {
 		return nil, err
 	}
+	if err := checkAgentSandboxKeep(cfg); err != nil {
+		return nil, err
+	}
 	if cfg.AgentSandbox {
 		return nil, errAgentSandboxRunner
+	}
+	if os.Getenv("WARDYN_K8S_WARM_POOLS") != "" {
+		return nil, errWarmPoolsRunner
 	}
 	apply(&cfg)
 	if cfg.RunnerID == "" {
@@ -82,16 +92,28 @@ func init() {
 		if err := checkAgentSandboxTemplate(cfg); err != nil {
 			return nil, err
 		}
+		if err := checkAgentSandboxKeep(cfg); err != nil {
+			return nil, err
+		}
 		peer, err := controlPlanePeerFromEnv()
 		if err != nil {
 			return nil, err
 		}
 		cfg.ControlPlanePeer = peer
+		pools, err := parseWarmPools(os.Getenv("WARDYN_K8S_WARM_POOLS"))
+		if err != nil {
+			return nil, err
+		}
+		if err := checkWarmPoolClasses(pools, cfg.ConfinementRuntimes); err != nil {
+			return nil, err
+		}
+		cfg.WarmPools = pools
+		cfg.WarmPriorityClass = os.Getenv("WARDYN_K8S_WARM_PRIORITY_CLASS")
 		s, err := New(cfg)
 		if err != nil {
 			return nil, err
 		}
-		return s, nil // avoid the typed-nil interface trap
+		return served(s), nil // avoid the typed-nil interface trap
 	})
 }
 

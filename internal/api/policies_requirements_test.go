@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -31,7 +32,7 @@ func (savePolicyStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPoli
 	return types.RunPolicy{ID: id, Name: "before"}, nil
 }
 
-func (savePolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
+func (savePolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, _ time.Time, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	return types.RunPolicy{ID: id, Name: name, Spec: spec}, nil
 }
 
@@ -76,7 +77,7 @@ func requirementStatuses(reqs []client.ComponentRequirement) map[string]string {
 // namespace, beside the stored policy, which still decodes as a policy.
 func TestPoliciesRequirements_CreateAndUpdateReportEveryGrantKind(t *testing.T) {
 	srv := policiesRequirementsServer(t)
-	body := `{"name":"payments","spec":` + allKindsSpec + `}`
+	body := `{"name":"payments","expected_updated_at":"2026-01-01T00:00:00Z","spec":` + allKindsSpec + `}`
 	want := map[string]string{
 		"stripe-key": "present", "deploy-pat": "present",
 		"deploy-ssh": "missing", "deploy-hosts": "missing", "corp-token": "missing",
@@ -176,7 +177,7 @@ func TestPoliciesRequirements_ReservedNameIsRefusedAndNeverListed(t *testing.T) 
 // first.
 func TestPoliciesRequirements_ASecretStoredBetweenSavesReadsPresent(t *testing.T) {
 	srv := policiesRequirementsServer(t)
-	body := `{"name":"p","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"env_secret","scope":{"name":"CORP_TOKEN","secret_name":"corp-token"}}]}}`
+	body := `{"name":"p","expected_updated_at":"2026-01-01T00:00:00Z","spec":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"env_secret","scope":{"name":"CORP_TOKEN","secret_name":"corp-token"}}]}}`
 	first := savedPolicy(t, do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, body).Body)
 	if got := requirementStatuses(first.Requirements); got["corp-token"] != "missing" {
 		t.Fatalf("first save = %+v, want corp-token missing", first.Requirements)

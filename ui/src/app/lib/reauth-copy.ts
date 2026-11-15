@@ -21,6 +21,8 @@ export const REAUTH_DIALOG = {
   POPUP_FALLBACK: "Open it in a new tab",
   CLOSED_WITHOUT: "That window closed before you signed in.",
   UNREACHABLE: "Wardyn isn't answering. This page is still here — try again in a moment.",
+  CHECK_FAILED: "Wardyn couldn't check your session. This page is still here — try again in a moment.",
+  CHECK_FAILED_FINAL: "Wardyn couldn't check your session. This page is still here.",
   WRITE_DROPPED: "Your last save didn't go through. Everything you typed is still here — save again.",
   ROLE_CHANGED_BODY:
     "You're signed in, but this page is no longer yours to open. Copy anything you need — Wardyn will take you to Runs.",

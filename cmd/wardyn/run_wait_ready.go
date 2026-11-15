@@ -59,7 +59,12 @@ sandbox to an external tool over the SSH gateway.
 			if err != nil {
 				return err
 			}
-			res, err := waitForRunReady(cmd.Context(), cmd.ErrOrStderr(), client(), id, timeout, expectGit)
+			// The budget starts before client() reads and renews the sign-in, so a wait for another
+			// command's renewal is inside it: client() takes the root's context.
+			ctx, cancel := context.WithDeadlineCause(cmd.Context(), time.Now().Add(timeout), errWaitTimeout)
+			defer cancel()
+			cmd.Root().SetContext(ctx)
+			res, err := waitForRunReady(ctx, cmd.ErrOrStderr(), client(), id, timeout, expectGit)
 			if err != nil {
 				return err
 			}
@@ -116,6 +121,9 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if errors.Is(err, errSessionChanged) {
+				return res, err // the command's sign-in changed: no later poll is sent, so none can succeed
+			}
 			if context.Cause(waitCtx) == errWaitTimeout {
 				return res, timedOut()
 			}
@@ -127,20 +135,16 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 			consecutiveErrs = 0
 			res.State = run.State
 			if run.State.IsTerminal() {
-				if run.State == types.RunFailed {
-					msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
-					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
-						msg += ": " + reason
-					}
-					return res, &exitError{code: 1, err: errors.New(msg)}
-				}
-				return res, &exitError{code: 2, err: fmt.Errorf("run %s terminated before it was ready: %s", runID, run.State)}
+				return res, terminalBeforeReady(waitCtx, c, runID, run.State)
 			}
 			if run.State == types.RunRunning {
 				if run.Repo != "" {
 					wantGit = true
 				}
 				files, ferr := c.RunFiles(waitCtx, runID)
+				if errors.Is(ferr, errSessionChanged) {
+					return res, ferr // the command's sign-in changed: the next poll would be refused too
+				}
 				if ferr != nil && context.Cause(waitCtx) == errWaitTimeout {
 					return res, timedOut()
 				}
@@ -182,6 +186,19 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 		case <-time.After(waitPollInterval):
 		}
 	}
+}
+
+// terminalBeforeReady is waitForRunReady's exit for a run that ended before it
+// was ready: FAILED exits 1 with its reason, any other terminal state exits 2.
+func terminalBeforeReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, state types.RunState) error {
+	if state == types.RunFailed {
+		msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
+		if reason := runFailureReason(ctx, c, runID); reason != "" {
+			msg += ": " + reason
+		}
+		return &exitError{code: 1, err: errors.New(msg)}
+	}
+	return &exitError{code: 2, err: fmt.Errorf("run %s terminated before it was ready: %s", runID, state)}
 }
 
 // filesErrIsPermanent reports whether a RunFiles error cannot be fixed by

@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -64,8 +63,8 @@ func governanceDecidersCmd(client clientFn) *cobra.Command {
 	return subcommandGroup(cmd)
 }
 
-// readDeciderRules reads the rules list of the file at path, refusing unknown fields and a file with
-// no "rules" key, so a typo cannot clear a unit's rules.
+// readDeciderRules reads the rules list of the file at path, refusing unknown fields, a file with
+// no "rules" key and anything after the first value, so a typo cannot clear a unit's rules.
 func readDeciderRules(path string) ([]sdk.DeciderRule, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -74,9 +73,7 @@ func readDeciderRules(path string) ([]sdk.DeciderRule, error) {
 	var doc struct {
 		Rules []sdk.DeciderRule `json:"rules"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&doc); err != nil {
+	if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if doc.Rules == nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The owner guard and the sign-in gate adapter: how a deactivated identity is refused when a
@@ -64,13 +65,17 @@ func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (str
 // ownerGuard is the guard for a write made for owner. The request's own authority epoch counts only
 // when the request is the owner's own, or is the sign-in being issued for them (no session yet, the
 // epoch from oidc.WithAuthorityEpoch): an admin writing for someone else carries an epoch that says
-// nothing about them.
+// nothing about them. A service identity's request writing for itself is held to the identity's row as
+// its token was admitted against it (store.IdentityGuard.ServiceSince).
 func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 	g := store.IdentityGuard{Principal: owner, Epoch: -1}
 	if e, ok := oidc.AuthorityEpochFromContext(ctx); ok {
 		if p := oidc.PrincipalFromContext(ctx); p == "" || p == owner {
 			g.Epoch = e
 		}
+	}
+	if name, since, ok := serviceAdmittedFromContext(ctx); ok && owner == types.ServicePrincipalPrefix+name {
+		g.ServiceSince = since
 	}
 	return g
 }
@@ -79,6 +84,16 @@ func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 // stale-epoch owner inside their own transaction (store.WithIdentityGuard).
 func guardOwner(ctx context.Context, owner string) context.Context {
 	return store.WithIdentityGuard(ctx, ownerGuard(ctx, owner))
+}
+
+// mintGuard is guardOwner for a new API token t, the self-service mint's and an invitation claim's: the
+// insert is also refused when a session cut or a revocation of t's owner drew a revocation sequence above
+// the one t records. The late session check before the insert reads cuts and token use does not, so a group
+// removal's cut that lands between the two would otherwise leave a live token holding the removed group.
+func mintGuard(ctx context.Context, t types.APIToken) context.Context {
+	g := ownerGuard(ctx, t.Principal)
+	g.CutAfter, g.Email = t.RevSeq, t.Email
+	return store.WithIdentityGuard(ctx, g)
 }
 
 type identitySharer interface {

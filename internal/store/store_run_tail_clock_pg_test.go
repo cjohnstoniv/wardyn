@@ -26,15 +26,16 @@ func offsetSecs(p *float64) string {
 	return strconv.FormatFloat(*p, 'f', -1, 64) + " s"
 }
 
-// TestPG_KeptHoldOffPassed pins the SQL of PG.KeptHoldOffPassed against Postgres: it reads lost_at when
-// fromLostAt is set and ends_at when not, adds the hold-off to it, and says whether that is at or before the
-// database's now(); a NULL time or a run that does not exist is false, never an error. Each case seeds
-// lost_at and ends_at as seconds from now() in SQL, so nothing sleeps and no Go clock reaches a comparison.
-// It turns red if the CASE reads the wrong column (the "ends_at" cases carry the other column on the
-// opposite side of the line), if the hold-off is dropped or its sign flips (the cases ten seconds either
-// side of the boundary: a margin, since the seed and the read are two statements, each with its own now()),
-// or if a NULL time stops being false.
-func TestPG_KeptHoldOffPassed(t *testing.T) {
+// TestPG_StopKeptRunForcedIf_HoldOff pins the hold-off in PG.StopKeptRunForcedIf's WHERE against Postgres: it
+// reads lost_at when fromLostAt is set and ends_at when not, adds the hold-off to it, and claims the run only
+// when that is at or before the database's now(); a NULL time or a run that does not exist is no claim, never
+// an error. Each case seeds lost_at and ends_at as seconds from now() in SQL, so nothing sleeps and no Go clock
+// reaches a comparison, and passes the row's own mark back so only the hold-off decides. It turns red if the
+// CASE reads the wrong column (the "ends_at" cases carry the other column on the opposite side of the line), if
+// the hold-off is dropped or its sign flips (the cases a minute either side of the boundary: a margin, since
+// the seed, the read and the claim are three statements, each with its own now()), or if a NULL time stops
+// being no claim.
+func TestPG_StopKeptRunForcedIf_HoldOff(t *testing.T) {
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -53,26 +54,30 @@ func TestPG_KeptHoldOffPassed(t *testing.T) {
 		"ends_at inside":           {secs(-900), secs(-200), false, 300 * time.Second, false},
 		"no ends_at":               {secs(-900), nil, false, 0, false},
 		"no lost_at":               {nil, secs(-900), true, 0, false},
-		"just past the boundary":   {secs(-310), nil, true, 300 * time.Second, true},
-		"just before the boundary": {secs(-290), nil, true, 300 * time.Second, false},
+		"just past the boundary":   {secs(-360), nil, true, 300 * time.Second, true},
+		"just before the boundary": {secs(-240), nil, true, 300 * time.Second, false},
 	} {
 		// RunRunning is the state the lease code holds a lost run in; the columns allow lost_at on it.
 		r := persistRun(t, ctx, pool, newRun(types.RunRunning))
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now() + $2::float8 * interval '1 second',
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now() + $2::float8 * interval '1 second', lost_reason = 'outage',
 			ends_at = now() + $3::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.lostAt, tc.endsAt); err != nil {
 			t.Fatalf("%s: seed the row: %v", name, err)
 		}
-		got, err := pg.KeptHoldOffPassed(ctx, r.ID, tc.fromLostAt, tc.after)
+		seeded, err := pg.GetRun(ctx, r.ID)
+		if err != nil {
+			t.Fatalf("%s: read the row: %v", name, err)
+		}
+		_, got, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, seeded.LostAt, seeded.LostReason, seeded.EndsAt, tc.fromLostAt, tc.after)
 		if err != nil || got != tc.want {
-			t.Errorf("%s: lost_at %s, ends_at %s, fromLostAt %v, after %v: KeptHoldOffPassed = %v, %v; want %v, nil",
+			t.Errorf("%s: lost_at %s, ends_at %s, fromLostAt %v, after %v: claimed = %v, %v; want %v, nil",
 				name, offsetSecs(tc.lostAt), offsetSecs(tc.endsAt), tc.fromLostAt, tc.after, got, err, tc.want)
 		}
 	}
 
 	for _, fromLostAt := range []bool{true, false} {
-		got, err := pg.KeptHoldOffPassed(ctx, uuid.New(), fromLostAt, 0)
+		_, got, err := pg.StopKeptRunForcedIf(ctx, uuid.New(), types.RunStopped, nil, types.LostOutage, nil, fromLostAt, 0)
 		if err != nil || got {
-			t.Errorf("a run that does not exist, fromLostAt %v: KeptHoldOffPassed = %v, %v; want false, nil", fromLostAt, got, err)
+			t.Errorf("a run that does not exist, fromLostAt %v: claimed = %v, %v; want false, nil", fromLostAt, got, err)
 		}
 	}
 }

@@ -53,21 +53,6 @@ type leaseStore struct {
 	agentStopped bool
 	// forcedAt is the forced stop's mark (forced_stop_at), zero while unmarked.
 	forcedAt time.Time
-	// dbNow is the fake database's clock for KeptHoldOffPassed; nil is the real one. The server's own clock is
-	// Config.Now.
-	dbNow func() time.Time
-}
-
-// KeptHoldOffPassed answers from the fake database's clock (store.ForcedStopper).
-func (s *leaseStore) KeptHoldOffPassed(_ context.Context, _ uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
-	s.mu.Lock()
-	run := s.run
-	s.mu.Unlock()
-	now := time.Now()
-	if s.dbNow != nil {
-		now = s.dbNow()
-	}
-	return keptHoldOffPassedAt(run, fromLostAt, after, now), nil
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -196,8 +181,15 @@ func (s *leaseStore) StopKeptRunIf(_ context.Context, _ uuid.UUID, to types.RunS
 }
 
 // StopKeptRunForcedIf is StopKeptRunIf that also records the forced stop's mark, in the same step
-// (store.ForcedStopper); ListForcedStops and ClearForcedStop read and clear it.
-func (s *leaseStore) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (time.Time, bool, error) {
+// (store.ForcedStopper), held off on the fake database's clock as the statement is; ListForcedStops and
+// ClearForcedStop read and clear it.
+func (s *leaseStore) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time, fromLostAt bool, after time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	past := keptHoldOffPassedAt(s.run, fromLostAt, after, s.clockNow())
+	s.mu.Unlock()
+	if !past {
+		return time.Time{}, false, nil
+	}
 	applied, err := s.StopKeptRunIf(ctx, id, to, lostAt, lostReason, endsAt)
 	if err != nil || !applied {
 		return time.Time{}, false, err
@@ -230,7 +222,7 @@ func (s *leaseStore) ClearForcedStop(_ context.Context, _ uuid.UUID, stamp time.
 // SetRunContainmentError / ClearRunContainmentError mirror the PG conditions
 // (#1060): set only on a RUNNING kept run, keeping the first failure's time;
 // clear reports whether it cleared a recorded error.
-func (s *leaseStore) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg string, now time.Time) error {
+func (s *leaseStore) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state != types.RunRunning || s.run.LostAt == nil {
@@ -238,6 +230,7 @@ func (s *leaseStore) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg 
 	}
 	s.run.ContainmentError = msg
 	if s.run.ContainmentErrorAt == nil {
+		now := s.clockNow() // the statement stamps the database's now()
 		s.run.ContainmentErrorAt = &now
 	}
 	return nil
@@ -377,8 +370,7 @@ func newLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	f.srv.cfg.Approvals = f.fa
 	f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
 	f.srv.cfg.Now = func() time.Time { return f.now }
-	f.st.dbNow = func() time.Time { return f.now }   // the fake database keeps the time the fixture sets
-	f.st.endsNow = func() time.Time { return f.now } // the fake database agrees with the fixture's clock unless a test skews it
+	f.st.dbNow = func() time.Time { return f.now } // the fake database keeps the time the fixture sets unless a test skews it
 	f.idp = &countingIdentity{Provider: f.srv.cfg.Identity}
 	f.srv.cfg.Identity = f.idp
 	seedPendingApproval(t, f.fa, run.ID)

@@ -117,7 +117,7 @@ export function UserTypeEditor({
             id="user-type-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            disabled={disabled}
+            disabled={disabled || saving}
             autoComplete="off"
             required
           />
@@ -128,7 +128,7 @@ export function UserTypeEditor({
             type="number"
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
-            disabled={disabled || !!type?.built_in}
+            disabled={disabled || saving || !!type?.built_in}
             className="font-mono"
           />
         </Field>
@@ -144,7 +144,7 @@ export function UserTypeEditor({
               id="user-type-id"
               value={id}
               onChange={(e) => setId(e.target.value)}
-              disabled={disabled}
+              disabled={disabled || saving}
               className="font-mono"
               autoComplete="off"
               spellCheck={false}
@@ -159,7 +159,7 @@ export function UserTypeEditor({
             id="user-type-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            disabled={disabled}
+            disabled={disabled || saving}
             rows={2}
           />
         </Field>

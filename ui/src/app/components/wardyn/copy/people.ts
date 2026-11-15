@@ -59,6 +59,7 @@ export const PEOPLE_PAGE = {
   SIGN_OUT_CONFIRM: (p: string) =>
     `Sign ${p} out of every browser and CLI session? Their personal API tokens and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.`,
   TOKENS: "API tokens",
+  TOKENS_LOAD_FAILED: "Wardyn couldn't load this person's tokens.",
   SSH: "SSH keys",
   SSH_REMOVE: "Remove all",
   SSH_REMOVE_TITLE: "Remove all SSH keys?",

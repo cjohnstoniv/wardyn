@@ -237,6 +237,9 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 	if ev, err = syncRunContainmentPendingTx(ctx, tx, runnerID, row); err != nil {
 		return false, false, nil, err
 	}
+	if err = syncRunTeardownHoldTx(ctx, tx, runnerID, row); err != nil {
+		return false, false, nil, err
+	}
 	if row.ContainmentPending != nil {
 		// The runner already holds this run contained, fenced and pending completion evidence; a
 		// stop_proxy for its outage loss could not complete and would only hold its queue.

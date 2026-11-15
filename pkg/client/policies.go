@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -14,10 +15,14 @@ import (
 
 // PolicyRequest is the body for POST/PUT /api/v1/policies. Name is required;
 // Spec is validated server-side before persistence (a bad spec is rejected
-// with 400, fail closed).
+// with 400, fail closed). ExpectedUpdatedAt is required on PUT and ignored on
+// POST: the UpdatedAt of the policy as the caller read it. A PUT without it is
+// refused with 400 policy_revision_required, and a PUT whose policy was saved
+// since with 409 policy_stale; neither writes anything.
 type PolicyRequest struct {
-	Name string              `json:"name"`
-	Spec types.RunPolicySpec `json:"spec"`
+	Name              string              `json:"name"`
+	Spec              types.RunPolicySpec `json:"spec"`
+	ExpectedUpdatedAt *time.Time          `json:"expected_updated_at,omitempty"`
 }
 
 // PolicySaved is what POST /api/v1/policies and PUT /api/v1/policies/{id}
@@ -71,8 +76,9 @@ func (c *Client) CreatePolicy(ctx context.Context, req PolicyRequest) (PolicySav
 }
 
 // UpdatePolicy validates and replaces an existing policy's name and spec.
-// Returns the updated policy with the stored secrets its grants name; 404 when
-// unknown; 400 when invalid.
+// req.ExpectedUpdatedAt must be the UpdatedAt the caller read. Returns the
+// updated policy with the stored secrets its grants name; 404 when unknown; 400
+// when invalid; 409 (reason policy_stale) when the policy was saved since.
 func (c *Client) UpdatePolicy(ctx context.Context, id uuid.UUID, req PolicyRequest) (PolicySaved, error) {
 	var out PolicySaved
 	err := c.do(ctx, http.MethodPut, "/api/v1/policies/"+id.String(), req, &out)

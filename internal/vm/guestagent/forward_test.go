@@ -231,10 +231,11 @@ func TestForwardProbeAndRefusedDial(t *testing.T) {
 		t.Errorf("probe of a listener = %d, want 0", code)
 	}
 	ln.Close()
-	if code := ForwardMain(context.Background(), []string{"-probe", ps}, nil, io.Discard, io.Discard); code != 1 {
+	closed := "1" // nothing listens there; the freed port could be taken by another process
+	if code := ForwardMain(context.Background(), []string{"-probe", closed}, nil, io.Discard, io.Discard); code != 1 {
 		t.Errorf("probe of a closed port = %d, want 1", code)
 	}
-	if code := ForwardMain(context.Background(), []string{ps}, strings.NewReader(""), io.Discard, io.Discard); code != 1 {
+	if code := ForwardMain(context.Background(), []string{closed}, strings.NewReader(""), io.Discard, io.Discard); code != 1 {
 		t.Errorf("forward to a closed port = %d, want 1", code)
 	}
 }

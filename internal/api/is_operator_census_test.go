@@ -65,6 +65,10 @@ var isOperatorCensus = map[string]int{
 	// Reach: a launch's carrier follows mayLaunchWorkspace, so an operator, who
 	// reaches every workspace, owes no person's own mount gate.
 	"workspace_refs.go:launchCarrierRule": 1,
+	// Display only, it grants nothing: a member refused a folder scan by a stale workspace is not told that
+	// workspace's name or owner (another member's workspace is a 404 to them everywhere else); an operator,
+	// who reaches every workspace, reads the named sentence the audit row keeps.
+	"workspace_refs.go:scanRefusalFor": 1,
 	// Credential namespace.
 	"runs_policy.go:secretOwnerFromRequest":         1,
 	"inline_policy_bounds.go:boundEnvSecretPosture": 1,
@@ -121,6 +125,8 @@ var isOperatorCensus = map[string]int{
 	"runner_registration.go:handleRunnerTokenSelf": 1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
+	// An owner who is not an operator reads the requirement rows a workspace inherits from a source as a member does.
+	"workspace_inherited_rows.go:withholdInheritedRows": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to

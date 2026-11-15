@@ -73,7 +73,7 @@ Each workspace image build records what it built from and the image it produced.
 | Lane | Pinned when it builds | Recorded | Reads "reproducible" when |
 |---|---|---|---|
 | Generated devcontainer | Base and each feature by digest. claude-code is fetched at build time and its version and checksum recorded; a rebuild pins them | Base, features with options, installers, the generator salt and the hash of each generated file | The base, every feature and every installer carry a digest, or a version and checksum (`imageBuildResolved`) |
-| Registry or BYOI base | The wrap builds FROM the base's repository digest when the host has one | Base ref and digest | The digest is present |
+| Registry or BYOI base | The wrap builds FROM the inspected image ID; it records the repository digest when the host has one | Base ref and digest | The digest is present |
 | Repo's own devcontainer | Nothing; built verbatim at its ref | Clone URL without credentials, and ref | Never |
 
 - Every record also carries the lane, cache key, build ID, `reason` (`cache_miss`, `image_missing` or `refresh`), build time, Wardyn version, and the image's ref and ID.
@@ -130,15 +130,16 @@ wardyn workspace build <workspace-id> --refresh
 | Lane | What a refresh does |
 |---|---|
 | Generated | Resolves the base and features again, and fetches claude-code's current release. No earlier layer is replayed |
-| Registry or BYOI base | Pulls the base again (`FinalizeBase` with `forcePull`) and wraps it by digest. A pull failure fails the refresh and the kept image stays. The previous base stays on the host |
+| Registry or BYOI base | Pulls the base again (`FinalizeBase` with `forcePull`) and wraps the image it inspected. A pull failure fails the refresh and the kept image stays. The previous base stays on the host |
 | Repo's own devcontainer | Rebuilds the repository at its ref |
 
 - **Local-only base.** A base that exists only on this host has no registry copy to pull, so its refresh always fails; build without a refresh to wrap the local image.
 - **Build, then swap.** The new image builds under its own tag. The workspace row moves to it only if it still names the image the requester saw (a compare-and-swap in `commitBuiltImage`).
-- **Swap applied.** The old image is removed (`removeStaleImage`).
+- **Swap applied.** The old image is removed (`removeStaleImage`). One that a container uses, or that a run launch on this server selected and has not yet started from, is kept until removed by hand.
 - **Swap lost.** Another build replaced the image first. The refresh removes its own tag and reports `failed`, with Detail `superseded: another build replaced this workspace's image while the refresh ran` (`supersededDetail`). A plain build from the build button that loses the swap does the same.
 - **Swap lost at a run's launch.** The run uses the image its launch built, so that image keeps its tag; remove it by hand once the run has ended.
 - **Build failure.** The kept image and its record stay, and `GET …/build` reports `failed`.
+- **Swap write failed.** The refresh reports `failed` and the new image keeps its tag: the write may have landed, so the workspace may name it.
 - Each finished refresh writes one `workspace.image.refresh` audit row naming the requester, the lane, both image IDs and record hashes, and `changed`, the inputs whose digest or version moved. A failed one carries `reason` `superseded` or `build_failed` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 
 ### Offline and mirrors
@@ -149,7 +150,7 @@ wardyn workspace build <workspace-id> --refresh
 | A pull-through cache answers the upstream names | Pins pass through unchanged | Same |
 | Air-gapped, upstream unreachable, no mirror | Fails, as it did before 0.9 | Fails; the builder error names the pinned ref |
 | The daemon resolves a digest the build network cannot fetch | Fails like any build | Fails |
-| A BYOI base pre-pulled and local only | Wraps by ref; no digest, so not reproducible | Wraps the ref as written |
+| A BYOI base pre-pulled and local only | Wraps the image it inspected; no digest, so not reproducible | Same |
 | No builder wired | No build and no record; `GET …/build` answers `none` | Not applicable |
 
 - The daemon's `registry-mirrors` setting covers `docker.io` only. For `mcr.microsoft.com` and `ghcr.io` a private mirror works only by answering those names, as a pull-through cache or a network redirect.
@@ -160,7 +161,7 @@ wardyn workspace build <workspace-id> --refresh
 - That is only safe because it is wrap-ONLY: a FROM + COPY adds layers and executes nothing the base image controls.
 - Docker's ONBUILD would break exactly that property — triggers baked into a base fire when it is used as a FROM, so an `ONBUILD RUN curl … | sh` in a hostile or compromised base is host-side, build-time RCE.
 - The daemon offers no flag to suppress triggers and does not report them in the build stream, so Builder preflights the base with ImageInspect and REFUSES to wrap one that declares any (assertWrapSafeBase).
-- The base is also pulled by Builder rather than by the daemon's PullParent, so the wrap builds FROM the exact image the preflight inspected instead of one the daemon re-resolves afterwards.
+- Builder, not the daemon's PullParent, pulls the base, and a BYOI wrap builds FROM the inspected image ID: a tag moved in between cannot swap the image.
 
 ## Base-image trust (BYOI)
 

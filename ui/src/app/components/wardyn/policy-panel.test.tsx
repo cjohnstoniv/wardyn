@@ -141,6 +141,12 @@ describe("PolicyPanel — helper rail", () => {
     }
   });
 
+  // jsdom does no layout: this pins the class that lets a long field name break, so the list never scrolls sideways.
+  it("a field name may break anywhere", () => {
+    render(<Harness initial={VALID} />);
+    expect(screen.getByText("allowed_domains", { selector: "code" })).toHaveClass("[overflow-wrap:anywhere]");
+  });
+
   it("the run instance drops workspace_mounts (the Workspace card owns mounts there)", () => {
     render(<Harness instance="run" initial={VALID} />);
     const keys = Object.keys(FIELD_HELP);

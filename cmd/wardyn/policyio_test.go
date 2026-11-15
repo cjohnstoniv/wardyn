@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -85,6 +86,43 @@ func TestReadPolicyFile_ToleratesStrayTopLevelKeys(t *testing.T) {
 	}
 	if body.Name != "my-policy" || body.Spec.MinConfinementClass != types.CC1 {
 		t.Errorf("body = %+v, want name=my-policy min_confinement_class=CC1", body)
+	}
+}
+
+// TestPolicyReadersRefuseAFieldInTwoCases: a policy that writes one field in two letter cases (here
+// with a long s, which encoding/json reads as an s) is refused by `policy set`, `run --policy-file`
+// and `policy render` before anything is sent. The file is re-encoded with its keys sorted first, so
+// the spelling that sorts last would otherwise be kept, and here empty the deny list.
+func TestPolicyReadersRefuseAFieldInTwoCases(t *testing.T) {
+	dir := t.TempDir()
+	const twice = `the policy has the key "denied_domains" twice, written "denied_domains" and "denied_domainſ"`
+	spec, specYAML, body := dir+"/spec.json", dir+"/spec.yaml", dir+"/body.json"
+	writeFile(t, spec, `{"denied_domains":["evil.example"],"denied_domainſ":[]}`)
+	writeFile(t, specYAML, "denied_domains: [evil.example]\ndenied_domainſ: []\n")
+	writeFile(t, body, `{"name":"p","spec":{"denied_domains":["evil.example"]},"ſpec":{}}`)
+	const specTwice = `parse policy body: the policy has the key "spec" twice, written "spec" and "ſpec"`
+	for path, want := range map[string]string{spec: "parse policy JSON: " + twice, specYAML: "parse policy JSON: " + twice, body: specTwice} {
+		if _, err := readPolicyFile(path, "p"); err == nil || err.Error() != want {
+			t.Errorf("policy set -f %s: %v, want %q", path, err, want)
+		}
+	}
+	if _, err := readRunPolicyFile(spec); err == nil || err.Error() != "parse --policy-file "+spec+": "+twice {
+		t.Errorf("run --policy-file: %v, want the field named twice", err)
+	}
+	for path, want := range map[string]string{spec: "invalid RunPolicySpec: " + twice, body: specTwice} {
+		render := policyRenderCmd()
+		render.SetArgs([]string{"-f", path})
+		render.SetOut(&bytes.Buffer{})
+		render.SetErr(&bytes.Buffer{})
+		render.SilenceUsage = true
+		if err := render.Execute(); err == nil || err.Error() != want {
+			t.Errorf("policy render -f %s: %v, want %q", path, err, want)
+		}
+	}
+	// One spelling in another case is read, as the server reads it.
+	writeFile(t, spec, `{"Denied_Domains":["evil.example"]}`)
+	if got, err := readRunPolicyFile(spec); err != nil || len(got.DeniedDomains) != 1 {
+		t.Errorf("one spelling = %+v, %v; want the deny list read", got.DeniedDomains, err)
 	}
 }
 

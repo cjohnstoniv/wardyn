@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -50,10 +51,14 @@ func validBaselineName(h string) bool {
 }
 
 // validBaselineSuffix is validBaselineName plus a width guard: a registry-controlled suffix (co.uk,
-// github.io) is no host an operator vouches for.
+// github.io) is no host an operator vouches for. A host in a spelling the proxy refuses in every request
+// (proxy.ValidConfigHost) grades a host no request names, so it is refused with why, as baseline_hosts is.
 func validBaselineSuffix(h string) error {
 	if !validBaselineName(h) {
 		return fmt.Errorf("%q must be a hostname", h)
+	}
+	if err := proxy.ValidConfigHost(h); err != nil {
+		return err
 	}
 	if suffix, _ := publicsuffix.PublicSuffix(h); suffix == h {
 		return fmt.Errorf("%q is a public suffix, which is no host an operator can vouch for", h)
@@ -71,6 +76,9 @@ func normalizeEgressBaselineBody(in egressBaselineBody) (egressBaselineBody, err
 		h := normalizeHostName(raw)
 		if !validBaselineName(h) {
 			return out, fmt.Errorf("baseline_hosts[%d]: %q must be an exact hostname — no wildcard, scheme, port, path or IP address", i, raw)
+		}
+		if err := proxy.ValidConfigHost(h); err != nil {
+			return out, fmt.Errorf("baseline_hosts[%d]: %w", i, err)
 		}
 		out.BaselineHosts = append(out.BaselineHosts, h)
 	}

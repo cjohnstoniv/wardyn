@@ -283,10 +283,10 @@ say "  an API key, or AWS Bedrock)."
 # Ensure the local binaries + UI are built (host mode serves ./bin/wardynd + ui/dist).
 if local_build_needed; then
   hd "Building wardynd + UI (first run, or the sources changed)"
-  # go.mod pins `toolchain go1.26.4`, so the default GOTOOLCHAIN=auto tries to
+  # go.mod pins `toolchain go1.27.4`, so the default GOTOOLCHAIN=auto tries to
   # FETCH that toolchain — which a corporate proxy that blocks the public Go
   # proxy denies, even though the locally-installed Go already satisfies the
-  # `go 1.26` directive. Retry with GOTOOLCHAIN=local (use the installed Go, no
+  # `go 1.27.0` directive. Retry with GOTOOLCHAIN=local (use the installed Go, no
   # download) so a proxied/offline host still builds.
   if ! (go build -tags docker -o bin/wardynd ./cmd/wardynd && go build -o bin/wardyn ./cmd/wardyn); then
     warn "go build failed (a proxy may be blocking the pinned toolchain fetch) — retrying with the locally-installed Go (GOTOOLCHAIN=local)…"
@@ -357,9 +357,9 @@ PIDFILE="${RUNDIR}/host-wardynd.pid"; LOGFILE="${RUNDIR}/host-wardynd.log"
 # F10: create the wardynd log 0600 before anything writes to it. wardynd logs a
 # WARNING containing an ephemeral age identity (public fingerprint only after the
 # main.go fix, but keep the file owner-only regardless) — a world-readable log is a
-# needless disclosure surface. Truncate on (re)create to match nohup's '>' redirect.
-(umask 077; : > "$LOGFILE") 2>/dev/null || true
-chmod 600 "$LOGFILE" 2>/dev/null || true
+# needless disclosure surface. prepare_host_log keeps a running daemon's log; only
+# launch_wardynd's '>' redirect starts a fresh one, for the daemon it launches.
+prepare_host_log "$LOGFILE"
 
 # ensure_postgres: bring up the compose Postgres (loopback :5432) and wait until
 # it is HEALTHY. A FRESH volume runs initdb first (notably right after the stale-

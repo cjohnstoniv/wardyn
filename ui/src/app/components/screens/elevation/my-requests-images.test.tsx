@@ -82,8 +82,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const setup = (l: React.ComponentProps<typeof MyElevationRequests>["list"], onReload = vi.fn()) => {
-  const utils = render(<MyElevationRequests list={l} onReload={onReload} />);
+const setup = (l: React.ComponentProps<typeof MyElevationRequests>["list"], onReload = vi.fn(), error?: unknown) => {
+  const utils = render(<MyElevationRequests list={l} error={error} onReload={onReload} />);
   return { onReload, ...utils };
 };
 
@@ -177,11 +177,18 @@ describe("Your requests: image rows", () => {
     expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
   });
 
-  it("approved", () => {
+  it("approved: who approved it and when, never that the image launches now", () => {
     setup(list([imageRow({ state: "applied", decided_by: "priya.nair", decided_at: aheadByHours(-0.5) })]));
     expect(screen.getByText("Approved")).toBeInTheDocument();
-    expect(screen.getByText("You can launch exactly this image now. The digest rule and image checks still apply.")).toBeInTheDocument();
+    expect(screen.getByText("priya.nair · 30m ago")).toBeInTheDocument();
+    expect(screen.queryByText(/launch/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
+  });
+
+  it("approved, its decider no longer named: just the time, with no leading separator", () => {
+    setup(list([imageRow({ state: "applied", decided_at: aheadByHours(-0.5) })]));
+    expect(screen.getByText("30m ago")).toBeInTheDocument();
+    expect(screen.queryByText(/^ · /)).toBeNull();
   });
 
   it("denied: the decider's reason", () => {
@@ -290,6 +297,15 @@ describe("Your requests: the states of the card", () => {
     expect(screen.queryByRole("button", { name: "Request elevation" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /retry/i }));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 502 with no sentence", Object.assign(new HttpError(502, "Bad Gateway"), { said: "" }), "Wardyn couldn't load your requests. Try again."],
+    ["a 404 with no sentence", Object.assign(new HttpError(404, "Not Found"), { said: "" }), "Wardyn couldn't load your requests."],
+  ])("read failed with %s: says so", (_name, error, text) => {
+    setup("error", vi.fn(), error);
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
   it("offers and no rows: You have no requests.", () => {

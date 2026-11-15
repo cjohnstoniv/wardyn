@@ -239,11 +239,51 @@ describe("Host proxy tab — panel states", () => {
     const field = screen.getByLabelText(/proxy url/i);
     await userEvent.type(field, "http://ops-egress:secret123@proxy.corp.acme.com:8080");
     await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", "http://ops-egress:secret123@proxy.corp.acme.com:8080"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", "http://ops-egress:secret123@proxy.corp.acme.com:8080", { scope: "shared", createOnly: true }));
     await waitFor(() =>
       expect(saveSiteConfig).toHaveBeenCalledWith(
         expect.objectContaining({ upstream_proxy_secret_ref: "upstream-proxy-url", upstream_proxy_url: undefined }),
       ),
+    );
+  });
+
+  it("cred: a proxy secret name already stored: the first Save stores nothing and warns; Overwrite secret replaces it", async () => {
+    setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    const { saveSiteConfig } = renderStep();
+    const url = "http://ops-egress:secret123@proxy.corp.acme.com:8080";
+    await userEvent.type(screen.getByLabelText(/proxy url/i), url);
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", url, { scope: "shared", createOnly: true }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(saveSiteConfig).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /^overwrite secret$/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenLastCalledWith("upstream-proxy-url", url, { scope: "shared", createOnly: false }));
+    await waitFor(() => expect(saveSiteConfig).toHaveBeenCalledWith(expect.objectContaining({ upstream_proxy_secret_ref: "upstream-proxy-url" })));
+  });
+
+  it("cred: Save stays off while the secret is being stored, so a double click sends one write", async () => {
+    let finish: () => void = () => {};
+    setSecretMock.mockReset().mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    const { saveSiteConfig } = renderStep();
+    await userEvent.type(screen.getByLabelText(/proxy url/i), "http://ops-egress:secret123@proxy.corp.acme.com:8080");
+    const save = screen.getByRole("button", { name: /^save$/i });
+    await userEvent.click(save);
+    expect(save).toBeDisabled();
+    await userEvent.click(save, { pointerEventsCheck: 0 });
+    expect(setSecretMock).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(saveSiteConfig).toHaveBeenCalledTimes(1));
+    expect(setSecretMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("secret: Add secret… stores the proxy secret in the shared namespace by that route", async () => {
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /use a stored secret instead/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add secret…/i }));
+    await userEvent.type(await screen.findByLabelText(/^value/i), "http://u:p@proxy.corp.acme.com:8080");
+    await userEvent.click(screen.getByRole("button", { name: /^save secret$/i }));
+    await waitFor(() =>
+      expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", "http://u:p@proxy.corp.acme.com:8080", { scope: "shared", createOnly: true }),
     );
   });
 

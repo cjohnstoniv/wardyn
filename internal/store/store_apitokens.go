@@ -54,8 +54,14 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 }
 
 // insertAPIToken is the row insert CreateAPIToken and ClaimInvitation share, on qr (the pool, or the
-// caller's transaction). It freezes the admission timestamp on the database clock.
+// caller's transaction). It freezes the admission timestamp on the database clock. With a cap on ctx
+// (WithAdmissionCap) it first counts the owner's live tokens under the owner's cap lock, after any
+// revoke the caller's transaction made, so a CLI rotation stays count-neutral.
 func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken, raw string) (types.APIToken, error) {
+	if err := admitUnderCap(ctx, qr, db.APITokenCapLockClass, t.Principal,
+		`SELECT count(*) FROM api_tokens WHERE principal = $1 AND `+apiTokenLive, ErrAPITokenCap); err != nil {
+		return types.APIToken{}, err
+	}
 	groups, err := marshalGroups(t.Groups)
 	if err != nil {
 		return types.APIToken{}, err

@@ -113,7 +113,9 @@ func proposeElevation(s *Server, w http.ResponseWriter, r *http.Request, body go
 			}
 			actorType, actor := actorFromRequest(r)
 			s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "governance.elevation.request", saved.ID.String(), "success", mustJSON(data)))
-			view := s.requestViewOf(r, saved, "elevation", types.DeciderKindElevation, elevationView(s, ctx, saved), map[uuid.UUID]string{unit.ID: unit.Name})
+			// A pending request reads nothing back: its fields are the payload just written.
+			f := requestFields{unitID: &unit.ID, duration: payload.Duration}
+			view := s.requestViewOf(r, saved, "elevation", types.DeciderKindElevation, f, map[uuid.UUID]string{unit.ID: unit.Name})
 			writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": view.GovernanceChange, "request": view})
 		},
 	})
@@ -490,22 +492,26 @@ func (s *Server) auditElevationEnd(ctx context.Context, m types.GovernanceMember
 }
 
 // elevationView is an elevation's own fields of a request view: the unit, the duration and, once
-// applied, the membership's end.
-func elevationView(s *Server, ctx context.Context, ch types.GovernanceChange) requestFields {
+// applied, the membership's end, or noEnd when a unit admin's write made it permanent. Only a membership that
+// is gone leaves neither; a failed read is err, so an unreadable membership never reads as an ended elevation.
+func elevationView(s *Server, ctx context.Context, ch types.GovernanceChange) (requestFields, error) {
 	var p elevationPayload
 	if json.Unmarshal(ch.Payload, &p) != nil {
-		return requestFields{}
+		return requestFields{}, nil
 	}
 	f := requestFields{unitID: &p.UnitID, duration: p.Duration}
 	if ch.State != types.GovernanceChangeApplied {
-		return f
+		return f, nil
 	}
-	_ = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
+	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		m, err := store.GetGovernanceMembershipByKeyQ(ctx, q, p.UnitID, string(types.CapabilitySubjectUser), p.Subject, false)
-		if err == nil && m.ExpiresAt != nil {
-			f.endsAt = m.ExpiresAt
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
 		}
-		return nil
+		if err == nil {
+			f.endsAt, f.noEnd = m.ExpiresAt, m.ExpiresAt == nil
+		}
+		return err
 	})
-	return f
+	return f, err
 }

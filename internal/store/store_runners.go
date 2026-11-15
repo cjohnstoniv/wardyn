@@ -34,7 +34,7 @@ type RunnerStore interface {
 	ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p Page) ([]types.Runner, error)
 	ClaimRunner(ctx context.Context, id uuid.UUID, owner, fingerprint string, now time.Time) (types.Runner, error)
 	TouchRunner(ctx context.Context, id uuid.UUID, version string, now time.Time) error
-	RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.RunnerPosture, now time.Time) (changed bool, err error)
+	RecordRunnerPostureFrom(ctx context.Context, id uuid.UUID, session string, p types.RunnerPosture, now time.Time) (changed bool, err error)
 	RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, reason string) (RunnerRevocation, error)
 	ExpireUnclaimedRunners(ctx context.Context, createdBefore time.Time) (int, error)
 
@@ -283,20 +283,55 @@ func (s PG) RecordRunnerCaps(ctx context.Context, id uuid.UUID, session string, 
 	return current, nil
 }
 
+// recordPosture is the posture write both recorders share: it stores p on a claimed runner and says
+// whether it differs from the one held. A runner that is not claimed is pgx.ErrNoRows.
+const recordPosture = `
+		UPDATE runners r SET posture = $2::jsonb, posture_reported_at = $3, posture_source = 'runner_asserted'
+		FROM (SELECT id, posture FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE) old
+		WHERE r.id = old.id
+		RETURNING old.posture IS DISTINCT FROM $2::jsonb`
+
 // RecordRunnerPosture stores a posture report from a claimed runner and says whether it differs from
 // the one held, so only a change writes runner.posture.record. A runner that is not claimed is ErrNotFound.
+// It fences no session: a report a runner sent goes through RecordRunnerPostureFrom.
 func (s PG) RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.RunnerPosture, now time.Time) (bool, error) {
 	b, err := json.Marshal(p)
 	if err != nil {
 		return false, err
 	}
-	const q = `
-		UPDATE runners r SET posture = $2::jsonb, posture_reported_at = $3, posture_source = 'runner_asserted'
-		FROM (SELECT id, posture FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE) old
-		WHERE r.id = old.id
-		RETURNING old.posture IS DISTINCT FROM $2::jsonb`
 	var changed bool
-	err = s.Pool.QueryRow(ctx, q, id, b, now).Scan(&changed)
+	err = s.Pool.QueryRow(ctx, recordPosture, id, b, now).Scan(&changed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: record runner posture: %w", err)
+	}
+	return changed, nil
+}
+
+// RecordRunnerPostureFrom is RecordRunnerPosture for a report that came in on session. It writes only while
+// session is the runner's current inventory session (BeginRunnerInventory): a superseded session's late
+// report writes nothing and reports no change, so it records no runner.posture.record and revokes nothing.
+// The runner row is locked first, the order BeginRunnerInventory takes, so a fresh session's begin waits
+// for this write and a write after it sees that session.
+func (s PG) RecordRunnerPostureFrom(ctx context.Context, id uuid.UUID, session string, p types.RunnerPosture, now time.Time) (bool, error) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return false, err
+	}
+	var changed bool
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT 1 FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE`, id).Scan(new(int)); err != nil {
+			return err
+		}
+		var current bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+			id, session).Scan(&current); err != nil || !current {
+			return err
+		}
+		return q.QueryRow(ctx, recordPosture, id, b, now).Scan(&changed)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
 	}

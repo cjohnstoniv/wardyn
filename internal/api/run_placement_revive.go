@@ -51,7 +51,9 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 		return ref
 	}
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
-	cfg.UpstreamProxyURL, cfg.TrustedCAPEM = "", ""
+	// "" for every run here (a person's runner, or No network), recorded as a dispatch records it; no secret is read.
+	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil, upstreamNoHopReason(run))
+	cfg.TrustedCAPEM = ""
 	cfg.UpstreamProxyNoProxy = nil
 	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)
 	return nil

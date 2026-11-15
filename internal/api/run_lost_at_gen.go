@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -68,13 +69,13 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 		case lostEndOpen:
 			return cutErr
 		case lostEndReadFailed:
-			return lostReadFailure(readErr, cutErr)
+			if canCut && !errors.Is(cutErr, runner.ErrEndUnsupported) {
+				return lostReadFailure(readErr, cutErr)
+			}
+			// No cut can happen: the agent is ended as well, as with no reader.
 		}
 	}
-	err := gs.EndSandboxAt(ctx, run.SandboxRef, gen)
-	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-		err = nil
-	}
+	_, err := runner.SplitAWSCacheWipe(gs.EndSandboxAt(ctx, run.SandboxRef, gen))
 	if newer(err) {
 		return nil
 	}
@@ -84,6 +85,9 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
 		}
+	}
+	if readErr != nil && errors.Is(err, runner.ErrEndUnsupported) {
+		return fmt.Errorf("%w (its end could not be read: %v)", err, readErr) // neither stop can happen: torn down
 	}
 	if errors.Is(err, runner.ErrEndUnsupported) && cutErr != nil {
 		return cutErr // the cut failed too: containment unresolved, retried by the lease sweep

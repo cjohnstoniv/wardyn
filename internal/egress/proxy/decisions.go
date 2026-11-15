@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +30,7 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
+	spoolRunID   uuid.UUID   // the local spool's run, which the summary closeLocal writes names
 	remote       *remoteSink // k8s runners: runnerd's sink, the only spool writer
 	reservations map[uuid.UUID]spoolReservation
 	heldBytes    int64 // the sum of the reservations' bytes
@@ -43,6 +43,9 @@ type decisionSink struct {
 
 	ch      chan egress.DecisionLog
 	dropped atomic.Uint64
+	// reported is the drop count already summarized. The worker owns it; close reads and advances it only
+	// once the worker has exited (wg), for the drops counted after the worker's last summary.
+	reported uint64
 
 	// layer and layerName are the policy layer a Wardyn refusal names (Proxy attribution);
 	// set once before the proxy serves.
@@ -135,26 +138,25 @@ const dropReportInterval = 30 * time.Second
 
 func (s *decisionSink) run() {
 	defer s.wg.Done()
-	// Tracks the drop count already summarized, so each summary carries only
-	// the delta since last report. Single-goroutine, so a plain local is safe.
-	var reported uint64
+	// s.reported tracks the drop count already summarized, so each summary carries only the delta since the
+	// last report.
 	ticker := time.NewTicker(dropReportInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case log, ok := <-s.ch:
 			if !ok {
-				s.reportDropped(&reported) // drained + closed: final tail summary
+				s.reportDropped(&s.reported) // drained + closed: final tail summary
 				return
 			}
-			s.reportDropped(&reported) // piggyback on the next successful flush
+			s.reportDropped(&s.reported) // piggyback on the next successful flush
 			// A decision the control plane REFUSED (e.g. 413 over maxJSONBody)
 			// counts as dropped too, so it isn't silently lost from the audit trail.
 			if err := s.post(log); err != nil {
 				s.dropped.Add(1)
 			}
 		case <-ticker.C:
-			s.reportDropped(&reported) // idle: drops accrued, no traffic to piggyback on
+			s.reportDropped(&s.reported) // idle: drops accrued, no traffic to piggyback on
 		}
 	}
 }
@@ -269,7 +271,7 @@ func (s *decisionSink) close(ctx context.Context) error {
 		// An admitted record's append runs without s.mu (emitLocal); closed is set, so none starts now.
 		s.mu.Unlock()
 		s.appending.Wait()
-		return errors.Join(s.local.Close(), s.writerLock.Close())
+		return s.closeLocal(ctx)
 	}
 	close(s.ch)
 	s.mu.Unlock()
@@ -277,6 +279,10 @@ func (s *decisionSink) close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
+		// A decision emitted once the sink closed is counted (emit), and one counted after the worker's final
+		// summary would be in no summary: post one more for those, once the worker is gone, even when close
+		// has stopped waiting.
+		s.reportDropped(&s.reported)
 		close(done)
 	}()
 	select {

@@ -82,17 +82,24 @@ func (s PG) CreateComponentCapped(ctx context.Context, c types.Component, max in
 	return out, nil
 }
 
+// ErrComponentStale is UpdateComponent's answer when the row is not at the version the caller read.
+var ErrComponentStale = errors.New("store: the component changed since the caller read it")
+
 // UpdateComponent — see ComponentStore.
-func (s PG) UpdateComponent(ctx context.Context, c types.Component) (types.Component, error) {
+func (s PG) UpdateComponent(ctx context.Context, c types.Component, expected int) (types.Component, error) {
 	def, err := marshalComponentDefinition(c.Definition)
 	if err != nil {
 		return types.Component{}, err
 	}
 	const q = `
 		UPDATE components SET name = $3, definition = $4, version = version + 1, updated_at = now()
-		WHERE id = $1 AND owner = $2
+		WHERE id = $1 AND owner = $2 AND ($5::integer = 0 OR version = $5::integer)
 		RETURNING ` + componentCols
-	return scanComponent(s.Pool.QueryRow(ctx, q, c.ID, c.Owner, c.Name, def))
+	out, err := scanComponent(s.Pool.QueryRow(ctx, q, c.ID, c.Owner, c.Name, def, expected))
+	if errors.Is(err, ErrNotFound) && expected != 0 {
+		return types.Component{}, ErrComponentStale
+	}
+	return out, err
 }
 
 // DeleteComponent — see ComponentStore.
@@ -132,9 +139,11 @@ func (s PG) CountComponents(ctx context.Context, owner string) (int, error) {
 	return n, nil
 }
 
-// DeleteComponentsByOwner — see ComponentStore.
+// DeleteComponentsByOwner — see ComponentStore. It locks the rows in id order, the order a snapshot
+// takes its share locks in (lockSavedComponents), so the two never deadlock.
 func (s PG) DeleteComponentsByOwner(ctx context.Context, owner string) (int, error) {
-	return s.eraseComponentRowsOf(ctx, `DELETE FROM components WHERE owner = $1`, owner)
+	return s.eraseComponentRowsOf(ctx, `DELETE FROM components WHERE id IN
+		(SELECT id FROM components WHERE owner = $1 ORDER BY id FOR UPDATE)`, owner)
 }
 
 // EraseRunComponentsByOwner — see ComponentStore. It clears content and keeps
@@ -184,7 +193,12 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 	return nil
 }
 
-// insertRunComponents writes comps as runID's snapshot rows on q.
+// ErrRunComponentGone refuses a run's component snapshot that copies a person's saved component which
+// is no longer stored: their components were erased, or they deleted it, after it was read for the run.
+var ErrRunComponentGone = errors.New("store: a saved component the run copies was erased or deleted")
+
+// insertRunComponents writes comps as runID's snapshot rows on q, then holds the saved components they
+// copy (lockSavedComponents) to the transaction's commit.
 func insertRunComponents(ctx context.Context, q Querier, runID uuid.UUID, comps []types.RunComponent) error {
 	const ins = `
 		INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
@@ -201,6 +215,39 @@ func insertRunComponents(ctx context.Context, q Querier, runID uuid.UUID, comps 
 		if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, def, c.SelfDefined, harnesses); err != nil {
 			return err
 		}
+	}
+	return lockSavedComponents(ctx, q, comps)
+}
+
+// lockSavedComponents takes a share lock, in id order, on every saved component a person's row of comps
+// copies, and refuses with ErrRunComponentGone when one is no longer stored. The lock is held to the
+// snapshot's commit, so an erasure of the person's components either deleted the row first, and the copy
+// is never written, or waits for the commit and then clears the copy (EraseRunComponentsByOwner): the
+// copy never outlives the erasure, whatever happens to this process after the commit.
+func lockSavedComponents(ctx context.Context, q Querier, comps []types.RunComponent) error {
+	want := map[uuid.UUID]bool{}
+	for _, c := range comps {
+		if c.SelfDefined && c.ComponentID != nil && c.Owner != "" {
+			want[*c.ComponentID] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(want))
+	for id := range want {
+		ids = append(ids, id)
+	}
+	rows, err := q.Query(ctx, `SELECT id FROM components WHERE id = ANY($1) ORDER BY id FOR KEY SHARE`, ids)
+	if err != nil {
+		return fmt.Errorf("store: lock the run's saved components: %w", err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("store: lock the run's saved components: %w", err)
+	}
+	if len(got) != len(ids) {
+		return ErrRunComponentGone
 	}
 	return nil
 }

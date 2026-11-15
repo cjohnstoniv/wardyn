@@ -20,9 +20,12 @@ const SCHEDULE_TEXT: Record<ScheduleReason, string> = {
 
 /**
  * What the Name dialog says for a refused create: the server's own sentence, except a start-time refusal that came
- * back with no sentence (empty, or the code alone), which never shows its code.
+ * back with no sentence (empty, or the code alone), which never shows its code, and a start the server's clocks
+ * skip or repeat (detail clock_change, startAtClockChangeDetail in internal/api/run_schedule.go): the server's
+ * sentence also offers an RFC 3339 offset, which the console never sends, so the console says its own.
  */
 export function refusalText(e: unknown): string {
+  if (e instanceof HttpError && e.reason === "start_at_invalid" && e.detail === "clock_change") return NR_RUN.START_CLOCK;
   // "" fallback: a blank message must reach the code-alone check below, not become the generic sentence.
   const message = getErrorMessage(e, "");
   if (e instanceof HttpError && isScheduleReason(e.reason) && !/\s/.test(message.trim())) return SCHEDULE_TEXT[e.reason];

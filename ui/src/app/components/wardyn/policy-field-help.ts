@@ -97,10 +97,10 @@ export const FIELD_HELP = {
       {
         kind: "api_key",
         scope: {
-          host: "api.anthropic.com",
-          header: "x-api-key",
-          format: "%s",
-          secret_name: "anthropic-api-key",
+          host: "registry.npmjs.org",
+          header: "Authorization",
+          format: "Bearer %s",
+          secret_name: "npm-token",
         },
         ttl_seconds: 3600,
         requires_approval: false,

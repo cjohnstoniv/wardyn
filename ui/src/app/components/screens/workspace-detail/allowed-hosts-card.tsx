@@ -13,6 +13,7 @@ import * as React from "react";
 import { Globe } from "lucide-react";
 import { toast } from "sonner";
 import { getErrorMessage } from "../../../lib/format";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/types";
 import { EmptyState } from "../../wardyn/states";
@@ -133,6 +134,8 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
   const remove = async (host: string) => {
     setRemoving(host);
     let cleared = true;
+    // The second write goes out as the person who removed the host, never as whoever signs in after the first.
+    const person = getExpectedPrincipal();
     try {
       const updated = await workspacesApi.setApprovedEgress(
         ws.id,
@@ -156,7 +159,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
         const nextReqs = { ...updated.requirements };
         delete nextReqs[reqKey];
         try {
-          onWorkspaceUpdated(await workspacesApi.setRequirements(ws.id, nextReqs));
+          onWorkspaceUpdated(await workspacesApi.setRequirements(ws.id, nextReqs, person));
         } catch (e) {
           // Half-done, said as half-done: the allowlist no longer carries the
           // host, the required-host row still does.

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -35,11 +36,21 @@ func TestServer_OnListeningFiresOnceTheListenerIsBound(t *testing.T) {
 		_ = srv.Shutdown(ctx)
 	})
 	fired := make(chan struct{})
-	srv.OnListening(func() { close(fired) })
+	var bound net.Addr
+	srv.OnListening(func() { bound = srv.BoundAddr(); close(fired) })
 	go func() { _ = srv.ListenAndServe() }()
 	select {
 	case <-fired:
 	case <-time.After(5 * time.Second):
 		t.Fatal("OnListening never fired")
 	}
+	// BoundAddr is set before the hook runs and names the port the kernel chose for the ":0" listen.
+	if tcp, ok := bound.(*net.TCPAddr); !ok || tcp.Port == 0 {
+		t.Fatalf("BoundAddr in the hook = %v, want the bound loopback port", bound)
+	}
+	c, err := net.Dial("tcp", bound.String())
+	if err != nil {
+		t.Fatalf("the hook's BoundAddr does not accept a connection: %v", err)
+	}
+	_ = c.Close()
 }

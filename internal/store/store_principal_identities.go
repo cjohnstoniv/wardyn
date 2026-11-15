@@ -197,7 +197,8 @@ type IdentityUnbinder interface {
 	// token, SSH key, claimed runner, unspent runner registration token or non-terminal run, sponsors a non-retired service identity or is the target of a
 	// pending invitation (*PrincipalInUseError), a missing row (ErrNotFound). Once the row is
 	// re-bound, deactivation and the kill sweep reach only the new principal, so the old one must hold
-	// nothing. The epoch, the deactivation columns and the SCIM linkage are untouched.
+	// nothing. The epoch, the deactivation columns and the SCIM linkage are untouched. It records the released
+	// principal and the time in principal_identity_unbinds, which audit reads use to name rows written before.
 	UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) error
 }
 
@@ -252,6 +253,20 @@ func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) 
 	}
 	if err = endCLISessionsOf(ctx, tx, principal, types.CLISessionEndRevoked); err != nil {
 		return err
+	}
+	// The binding history, last so that unbound_at (the database clock) is as near the commit as it can be:
+	// an audit row sealed with this row's subject for principal before this statement is at or before it.
+	// A principal with an audit-seal key destroyed after the epoch (an erasure) is not written back; the row
+	// keeps no name. A destruction recorded at the epoch erases no row, as audit reads compare it with a
+	// row's time.
+	// An erasure locks this row too (EraseBindingHistoryOf): one that locked it first destroyed the key
+	// before, so the check here sees it, and one that comes after waits for this commit and clears the name.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO principal_identity_unbinds (identity_id, unbound_at, principal)
+		SELECT $1::uuid, clock_timestamp(), CASE WHEN EXISTS (SELECT 1 FROM principal_keys
+			WHERE owner = $2::text AND purpose = 'audit-seal' AND destroyed_at > 'epoch') THEN NULL ELSE $2::text END`,
+		id, principal); err != nil {
+		return fmt.Errorf("store: record the unbound principal: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: commit identity unbind: %w", err)

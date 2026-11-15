@@ -89,3 +89,67 @@ func TestMem_RunPATReader(t *testing.T) {
 func TestPG_RunPATReader(t *testing.T) {
 	runPATReaderContract(t, store.NewPG(runsPGPoolIsolated(t)))
 }
+
+// runPATRefusedContract is ListRefusedRunPATs: only a person's tokens whose
+// revoke was refused and that are still inside their valid_to, oldest first.
+// A token revoked, closed as expired, still open, past its valid_to, or
+// another person's is not listed.
+func runPATRefusedContract(t *testing.T, st runPATReaderStore) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	insert := func(owner string, validTo time.Time) uuid.UUID {
+		t.Helper()
+		run := uuid.New()
+		if err := st.InsertRunPAT(ctx, store.RunPAT{RunID: run, AuthorizationID: run, Owner: owner, ProviderRowID: "ado",
+			Org: "contoso", Scope: "vso.code", ValidTo: validTo}); err != nil {
+			t.Fatalf("InsertRunPAT: %v", err)
+		}
+		time.Sleep(2 * time.Millisecond) // distinct created_at on every clock
+		return run
+	}
+	closeRow := func(id uuid.UUID, reason, lastError string) {
+		t.Helper()
+		if _, err := st.MarkRunPATRevoked(ctx, id, id, reason, lastError); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ahead, past := now.Add(time.Hour), now.Add(-time.Hour)
+	if none, err := st.ListRefusedRunPATs(ctx, "oidc:alice", now); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("ListRefusedRunPATs on an empty record = %v, %v; want an empty, non-nil list", none, err)
+	}
+	first, second := insert("oidc:alice", ahead), insert("oidc:alice", ahead)
+	closeRow(first, "offboarding", "HTTP 400")
+	closeRow(second, "run_end", "HTTP 403")
+	revoked := insert("oidc:alice", ahead)
+	closeRow(revoked, "offboarding", "")
+	expired := insert("oidc:alice", ahead)
+	closeRow(expired, "expired", "HTTP 503")
+	open := insert("oidc:alice", ahead)
+	if err := st.NoteRunPATRevokeFailed(ctx, open, open, "HTTP 503"); err != nil {
+		t.Fatal(err)
+	}
+	closeRow(insert("oidc:alice", past), "offboarding", "HTTP 400")
+	closeRow(insert("oidc:bob", ahead), "offboarding", "HTTP 400")
+
+	got, err := st.ListRefusedRunPATs(ctx, "oidc:alice", now)
+	if err != nil {
+		t.Fatalf("ListRefusedRunPATs: %v", err)
+	}
+	if len(got) != 2 || got[0].RunID != first || got[1].RunID != second {
+		t.Fatalf("ListRefusedRunPATs = %+v, want the two refused tokens inside their valid_to, oldest first", got)
+	}
+	if got[0].LastError != "HTTP 400" || got[0].RevokeReason != "offboarding" || got[0].RevokedAt == nil {
+		t.Errorf("the refused token reads %+v, want its revoked_at, reason and last error", got[0])
+	}
+}
+
+func TestMem_RunPATRefused(t *testing.T) {
+	runPATRefusedContract(t, store.NewMemRunPATs())
+}
+
+// TestPG_RunPATRefused runs the same contract against Postgres. Guarded by
+// WARDYN_TEST_PG; skipped cleanly when unset.
+func TestPG_RunPATRefused(t *testing.T) {
+	runPATRefusedContract(t, store.NewPG(runsPGPoolIsolated(t)))
+}

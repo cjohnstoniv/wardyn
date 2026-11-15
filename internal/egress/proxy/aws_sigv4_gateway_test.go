@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A Bedrock gateway on a SSO-signed run: the sandbox's SDK targets the gateway, the proxy signs
@@ -240,6 +241,27 @@ func TestAWSSigV4Gateway_RefusesOutsideThePrefix(t *testing.T) {
 				t.Fatalf("%d mints for a refused request, want none", n)
 			}
 		})
+	}
+}
+
+// A path off the gateway's route is refused before a host rule can hold the call, so no person is
+// asked about a call that is never sent. REVERT PROOF: without the AWS SigV4 branch in
+// gatewayOffRouteRefusedInTunnel the hold asks first.
+func TestAWSSigV4Gateway_OffPrefixRefusedBeforeAHoldAsks(t *testing.T) {
+	g := newSGWHarness(t)
+	g.p.policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: append(sigv4HostPorts(), sgwHost+":443", sgwControl+":443"),
+		HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: sgwHost, Effect: types.HostRuleHold}}}}})
+	cp := newHCCP(t, g.p)
+	ct := map[string]string{"Content-Type": "application/json"}
+	rec := g.send(t, sgwRequest(t, sgwHost, "/other/model/anthropic.claude-x:0/converse", `{}`, ct), sgwHost)
+	if _, raises, _ := cp.counts(); rec.Code != http.StatusForbidden || rec.Header().Get("X-Wardyn-Reason") != awsSigV4GatewayPath ||
+		raises != 0 || len(g.arrivals()) != 0 || g.mints.Load() != 0 {
+		t.Fatalf("status %d reason %q, %d holds raised, %d arrivals, %d mints; want 403 %s and none of them",
+			rec.Code, rec.Header().Get("X-Wardyn-Reason"), raises, len(g.arrivals()), g.mints.Load(), awsSigV4GatewayPath)
+	}
+	g.send(t, sgwRequest(t, sgwHost, sgwPrefix+"/model/anthropic.claude-x:0/converse", `{}`, ct), sgwHost)
+	if _, raises, _ := cp.counts(); raises == 0 {
+		t.Error("a call on the route raised no hold, so the zero above proves nothing")
 	}
 }
 

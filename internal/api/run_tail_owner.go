@@ -381,20 +381,32 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
 		return
 	}
 	defer unlock()
-	run, st, note, again, ok := s.tailReread(lctx, id, tailGiveUp)
+	s.tailGiveUpOwed(lctx, id)
+}
+
+// tailGiveUpOwed is the give-up decision and its write: run id and its record are read again (tailReread), and when
+// the give-up is still the due step the owed pass is given up (giveUpFolderNoted), with its audit row written only
+// when the statement applied. It takes no lock itself: tailGiveUpAway calls it under the run's lock, and the forced
+// stop's retry (giveUpForcedPastKeep) without one.
+func (s *Server) tailGiveUpOwed(ctx context.Context, id uuid.UUID) {
+	run, st, note, again, ok := s.tailReread(ctx, id, tailGiveUp)
 	if !ok || !again {
 		return
 	}
-	if _, err := s.giveUpFolderNoted(lctx, run, false, st, note); err != nil {
-		slog.WarnContext(lctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
+	if _, err := s.giveUpFolderNoted(ctx, run, false, st, note); err != nil {
+		slog.WarnContext(ctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 	}
 }
 
-// tailReread reads run id and its record again under its lock, and reports whether the run is still ended with its
-// ref and step is still its due step, with the note a give-up carries: the reads here decide it (tailStepOf). ok
-// false is a read that failed or a run with nothing to tail.
+// tailReread reads run id and its record again (under its lock, except for the forced stop's retry), and reports
+// whether the run is still ended with its ref and step is still its due step, with the note a give-up carries: the
+// reads here decide it (tailStepOf). ok false is a read that failed or a run with nothing to tail.
 func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, note string, again, ok bool) {
+	// Reads only, under the run's lock on a loop's context with no deadline: one bound for them all.
+	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
+
 	run, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil {
 		tailSkipped(ctx, id, err)
@@ -451,20 +463,29 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 		s.tailFinalize(lctx, run, step)
 	case tailFolder:
 		// A run whose stop is owed gets no new pass: the containment loop stops it, and a pass begun now would
-		// be cut by that stop. A read that fails answers owed (containStopOwed).
-		if s.containStopOwed(lctx, run) {
+		// be cut by that stop. A read that fails answers owed (containStopOwed). Its reads, and the pass note's, run
+		// on heldStoreCallBound: the loop's context has no deadline, and a read its bound cuts answers owed.
+		owed := true
+		heldCall(lctx, heldStoreCallBound, func(ctx context.Context) { owed = s.containStopOwed(ctx, run) })
+		if owed {
 			return false
 		}
 		s.tailFinalize(lctx, run, step)
-		s.tailNotePass(lctx, id, st, now)
+		heldCall(lctx, heldStoreCallBound, func(ctx context.Context) { s.tailNotePass(ctx, id, st, now) })
 	}
 	return true
 }
 
-// tailFinalize runs the run's tail on a bound of reconcileFinalizeTimeout, as the sweeps give a whole tail.
+// tailFinalize runs the run's tail on a bound of reconcileFinalizeTimeout, as the sweeps give a whole tail. A
+// give-up's tail runs only once giveUpFolderNoted has made the record final, and runs no pass: it stops the sandbox
+// as a forced end that keeps nothing does (forcedEndKey). A record or folder setting that still cannot be read would
+// otherwise keep the sandbox again on each confirmed cut (keepUnreadFolder), past the give-up, for ever.
 func (s *Server) tailFinalize(ctx context.Context, run types.AgentRun, step tailStep) {
 	fctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
+	if step == tailGiveUp {
+		fctx = context.WithValue(fctx, forcedEndKey{}, forcedEnd{keep: false})
+	}
 	if fn := s.tail.finalizeFn; fn != nil {
 		fn(fctx, run, step)
 		return

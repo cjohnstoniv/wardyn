@@ -122,17 +122,17 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					return
 				}
 				defer unlock()
-				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
+				applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(ctx, runID)
+					heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 					return
 				}
 				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
@@ -181,13 +181,13 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			return
 		}
 		defer unlock()
-		cur, gerr := s.cfg.Store.GetRun(ctx, runID)
+		cur, gerr := s.getRunHeld(ctx, runID)
 		if gerr != nil {
 			select {
 			case <-time.After(completionWatcherReadRetryDelay):
 			case <-ctx.Done():
 			}
-			cur, gerr = s.cfg.Store.GetRun(ctx, runID)
+			cur, gerr = s.getRunHeld(ctx, runID)
 		}
 		if gerr != nil {
 			slog.WarnContext(ctx, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
@@ -199,9 +199,9 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		}
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.casRunState(ctx, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, terminal)
 		if uerr != nil {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+			s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"exit_code": exitCode, "error": uerr.Error(),
 				})))
@@ -211,7 +211,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
 			// already tore the sandbox down; only this process's tail is left, and
 			// finishing it is a no-op when the winner already did.
-			s.finishRunOutput(ctx, runID)
+			heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 			return
 		}
 		// We won the RUNNING->terminal transition, so this is the authoritative end
@@ -221,7 +221,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// reconciler runs the IDENTICAL sequence via finalizeRunTail. A non-zero exit
 		// carries no reason of its own; the agent's recording may (noteModelAccessFromRecording).
 		if terminal == types.RunFailed {
-			s.noteModelAccessFromRecording(ctx, runID)
+			heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { s.noteModelAccessFromRecording(ctx, runID) })
 		}
 		s.finalizeRunTail(ctx, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
@@ -238,9 +238,15 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 // is the idle reaper's RUNNING->STOPPED CAS, which is issued outside this
 // package and is counted in CancelTerminalRunApprovals instead. The !from guard
 // keeps handleKillRun's supported KILLED→KILLED re-kill retry from counting
-// the same run twice.
+// the same run twice. An end of a RUNNING run holds the run's start lock around the CAS alone (FenceRunStarts), so
+// it never lands between a command start's last read and the start.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
+	release := func() {}
+	if from == types.RunRunning && to.IsTerminal() {
+		release = s.FenceRunStarts(ctx, runID)
+	}
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	release()
 	s.runStateMoved(runID, from, to, applied)
 	return applied, err
 }
@@ -283,10 +289,14 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		return true
 	}
 	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-			ref, "failure", mustJSON(map[string]any{
-				"sandbox_ref": ref, "teardown_error": serr.Error(),
-			})))
+		// The row gets a bound of its own (settleAfterTeardown), not the stop's: a stop cut at its caller's bound is
+		// exactly the failure this row records, and it is written once per process.
+		settleAfterTeardown(ctx, func(ctx context.Context) {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+				ref, "failure", mustJSON(map[string]any{
+					"sandbox_ref": ref, "teardown_error": serr.Error(),
+				})))
+		})
 	}
 	return false
 }
@@ -327,28 +337,30 @@ func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[stri
 	return out
 }
 
-// revokeRunSteps is the cascade's work, unaudited: every step runs, and each
-// failure (or the count of PATs still unrevoked) is returned under its key.
+// revokeRunSteps is the cascade's work, unaudited: every step runs, each on a bound of its own (revokeStep), and
+// each failure (or the count of PATs still unrevoked) is returned under its key.
 func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string]any {
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
-		if rerr := s.cfg.Identity.RevokeRun(ctx, runID); rerr != nil {
+		if rerr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Identity.RevokeRun(ctx, runID) }); rerr != nil {
 			data["identity_error"] = rerr.Error()
 		}
 	}
 	if s.cfg.Broker != nil {
-		if berr := s.cfg.Broker.RevokeRun(ctx, runID); berr != nil {
+		if berr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Broker.RevokeRun(ctx, runID) }); berr != nil {
 			data["broker_error"] = berr.Error()
 		}
 	}
-	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
+	if perr := revokeStep(ctx, func(ctx context.Context) error { return s.dropRunProxyConfig(ctx, runID) }); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
 	macGUIEnvForget(runID)
-	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	_ = revokeStep(ctx, func(ctx context.Context) error { s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd); return nil })
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
-		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
+		lctx, lcancel := context.WithTimeout(ctx, revokeStepBound)
+		rows, err := st.ListUnrevokedRunPATs(lctx, store.RunPATFilter{RunID: runID})
+		lcancel()
 		if err != nil {
 			data["pat_revoke_check_error"] = err.Error()
 		} else if len(rows) > 0 {
@@ -422,84 +434,6 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	}
 }
 
-// RunSecretGrace is how long a run must have been terminal before its masking
-// corpus is evicted. It is a GRACE, not a retention policy: the late readers
-// secretmask.Registry.Evict names (the audit recorder masking a finalize event,
-// a teardown_error from a retried sandbox sweep, a recording uploaded as the
-// session closes) all run within seconds-to-minutes of the terminal
-// transition, and masking fails OPEN, so evicting too early unmasks exactly the
-// events most likely to quote a credential. An hour buys those readers room
-// while still bounding how long plaintext lives in daemon memory.
-const RunSecretGrace = time.Hour
-
-// SweepRunSecrets drops the per-run plaintext secret corpora held in memory for
-// runs that went terminal more than RunSecretGrace ago, and reports how many it
-// evicted.
-//
-// Eligibility is read from the run's own state rather than hooked onto a
-// terminal-transition call site, so every path that ends a run (watcher, kill,
-// idle reaper, boot reconcile, failAndRevoke) is covered by construction and no
-// new one can be forgotten. It fails CLOSED on anything it cannot positively
-// prove terminal-and-cold: a store error, or a held run id with no row in the
-// listing, keeps its secrets.
-//
-// It also drops the process-wide mask copies of credentials that were refreshed
-// or deleted more than RunSecretGrace ago (secretmask.Registry.SweepGlobals),
-// on the same grace and for the same reason.
-//
-// The error is the run listing's: a sweep that could not look at the runs
-// evicted nothing, and says so, so that it is not counted as a clean tick.
-func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
-	if s.cfg.MaskRegistry == nil {
-		return 0, nil
-	}
-	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
-	if s.cfg.MaskManifests != nil {
-		s.cfg.MaskManifests.DropFenced(ctx)
-	}
-	if s.cfg.Store == nil {
-		return 0, nil
-	}
-	// The committed rows are the leader's: one replica deletes them, and every
-	// other replica drops its cache when it reads the tombstones. A follower's
-	// pass below touches only its own cache.
-	lctx, end, lead := s.beginLeaderSweep(ctx)
-	if lead {
-		defer end()
-	}
-	held := s.cfg.MaskRegistry.RunIDs()
-	var persisted []uuid.UUID
-	if lead {
-		var perr error
-		if persisted, perr = s.cfg.MaskRegistry.PersistedRuns(lctx); perr != nil {
-			return 0, fmt.Errorf("list the runs with committed masking state: %w", perr)
-		}
-	}
-	if len(held) == 0 && len(persisted) == 0 {
-		return 0, s.sweepCommittedMasks(lctx, lead, nil)
-	}
-	byID, err := s.runsByID(ctx, slices.Concat(held, persisted))
-	if err != nil {
-		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
-		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
-	}
-	cutoff := time.Now().UTC().Add(-RunSecretGrace)
-	cold := func(id uuid.UUID) bool {
-		run, known := byID[id]
-		return known && isTerminalRunState(run.State) && run.UpdatedAt.Before(cutoff)
-	}
-	evicted := 0
-	for _, id := range held {
-		if !cold(id) {
-			continue
-		}
-		s.cfg.MaskRegistry.Evict(id)
-		s.forgetMaskManifest(id)
-		evicted++
-	}
-	return evicted, s.sweepCommittedMasks(lctx, lead, slices.DeleteFunc(persisted, func(id uuid.UUID) bool { return !cold(id) }))
-}
-
 // finalizeRunTail runs the terminal-transition side effects shared by the live
 // completion watcher (startCompletionWatcher) and the boot reconciler
 // (reconcileFinalize), AFTER the caller has won the CAS into terminal state:
@@ -535,8 +469,10 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // end): an interactive run's pane is then snapshotted, after the revocations
 // and before StopSandbox.
 func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop, gracefulStop bool) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		runID.String(), outcome, mustJSON(data)))
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			runID.String(), outcome, mustJSON(data)))
+	})
 	_ = s.finalizeRunEffects(ctx, runID, ref, action, data, finishAfterStop, gracefulStop)
 }
 
@@ -568,54 +504,61 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return false
 	}
 	if applied {
-		// The cascade is conditional on `from`, and the condition is load-bearing.
-		//
-		// from == RUNNING: CASCADE. This path is NOT only the create side.
-		// runs_dispatch.go fails a run with from=RunRunning three times
-		// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
-		// `agent-run --selftest` (up to 2 minutes of a vendor image's own
-		// entrypoint), and a failed task Exec — and by then the sandbox and the
-		// proxy sidecar are UP, so an egress_domain approval can already be
-		// PENDING. Skipping the cascade there left the operator's queue holding a
-		// dead question for up to 24h, expiring as "nobody answered" rather than
-		// "the run failed".
-		//
-		// from != RUNNING: EXEMPT, and still pinned by a negative test. Before the
-		// run reaches RUNNING no approval can exist: the broker raises a credential
-		// approval only from a mint the sandbox asks for, and the egress/tool
-		// approvals come from the proxy sidecar and the toolgate, neither of which
-		// is running yet. Cascading there would be one list-all-PENDING read per
-		// failed dispatch that can only ever find nothing.
-		//
-		// The census of transitions that can strand an approval is four:
-		// finalizeRunTail's (the completion watcher, the boot reconciler, the
-		// probe reclaim and the lease's stopKeptRun all route through it),
-		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
-		// cmd/wardynd (which reaches the cascade through
-		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
-		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
-		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
-		// them so a new writer reds instead of silently stranding.
-		if hint != "" {
-			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
-			// the ~30 test doubles that embed store.Store never implement it, so a
-			// core method would nil-panic in every one that reaches this path. The
-			// real PG store implements it; a double that wants to observe the hint
-			// declares the method and is picked up here.
-			if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
-				if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
-					slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
-						slog.String("run_id", runID.String()), slog.Any("err", herr))
-				}
-			}
-		}
-		s.revokeRunCascade(ctx, runID)
-		if from == types.RunRunning {
-			s.cancelRunApprovals(ctx, runID)
-		}
-		s.FinishRunOutput(ctx, runID)
+		s.failedRunEffects(ctx, runID, from, hint)
 	}
 	return applied
+}
+
+// failedRunEffects is what a won transition to FAILED owes, in order: the hint, the revoke cascade, the
+// run's approvals when it had reached RUNNING, and its output. failAndRevoke and the queue's failStaleStart
+// call it only after their own transition won, so a run another writer ended is never handled twice.
+func (s *Server) failedRunEffects(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
+	// The cascade is conditional on `from`, and the condition is load-bearing.
+	//
+	// from == RUNNING: CASCADE. This path is NOT only the create side.
+	// runs_dispatch.go fails a run with from=RunRunning three times
+	// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
+	// `agent-run --selftest` (up to 2 minutes of a vendor image's own
+	// entrypoint), and a failed task Exec — and by then the sandbox and the
+	// proxy sidecar are UP, so an egress_domain approval can already be
+	// PENDING. Skipping the cascade there left the operator's queue holding a
+	// dead question for up to 24h, expiring as "nobody answered" rather than
+	// "the run failed".
+	//
+	// from != RUNNING: EXEMPT, and still pinned by a negative test. Before the
+	// run reaches RUNNING no approval can exist: the broker raises a credential
+	// approval only from a mint the sandbox asks for, and the egress/tool
+	// approvals come from the proxy sidecar and the toolgate, neither of which
+	// is running yet. Cascading there would be one list-all-PENDING read per
+	// failed dispatch that can only ever find nothing.
+	//
+	// The census of transitions that can strand an approval is four:
+	// finalizeRunTail's (the completion watcher, the boot reconciler, the
+	// probe reclaim and the lease's stopKeptRun all route through it),
+	// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
+	// cmd/wardynd (which reaches the cascade through
+	// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
+	// BECAUSE its agent is parked on a wait_for_review hold), and this one on
+	// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
+	// them so a new writer reds instead of silently stranding.
+	if hint != "" {
+		// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
+		// the ~30 test doubles that embed store.Store never implement it, so a
+		// core method would nil-panic in every one that reaches this path. The
+		// real PG store implements it; a double that wants to observe the hint
+		// declares the method and is picked up here.
+		if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+			if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
+				slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
+					slog.String("run_id", runID.String()), slog.Any("err", herr))
+			}
+		}
+	}
+	s.revokeRunCascade(ctx, runID)
+	if from == types.RunRunning {
+		s.cancelRunApprovals(ctx, runID)
+	}
+	s.FinishRunOutput(ctx, runID)
 }
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
@@ -665,6 +608,9 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 			"run is already terminal (state="+string(run.State)+"); not re-killing")
 		return
 	}
+	// ?not_started=true is the console's cancel of a run that has not started, whose confirm says nothing was set
+	// up: it ends a run that is still QUEUED and refuses one that has moved on, rather than tear down a live sandbox.
+	notStarted := r.URL.Query().Get("not_started") == "true"
 
 	// Run the teardown/revocation cascade and the terminal state write on a
 	// context DETACHED from the request: once a kill begins it must complete even
@@ -674,7 +620,11 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 
-	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer)
+	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer, notStarted)
+	if errors.Is(serr, errKillRunStarted) {
+		writeErrorReason(w, http.StatusConflict, reasonRunKillStarted, "run has started; a cancel of a run that has not started does not end it")
+		return
+	}
 	if serr != nil {
 		writeServerError(w, r, "update run state", serr)
 		return
@@ -712,8 +662,14 @@ const killCASAttempts = 4
 // promotion, a dispatch claim, the sandbox coming up) is re-read and claimed from the state the run now
 // holds, sandbox ref included, because the run the caller asked to end is still live. A run that ended
 // under the kill, or that another kill took, is left as it is: applied is false and nothing is revoked.
-func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, map[string]any, error) {
+// With notStarted, a run read in any state but QUEUED (or KILLED, a cancel already done) is refused with
+// errKillRunStarted, before its first claim and after each lost one: a promotion that wins the CAS is never
+// followed into the run it started.
+func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, notStarted bool) (bool, map[string]any, error) {
 	for attempt := 1; ; attempt++ {
+		if notStarted && run.State != types.RunQueued && run.State != types.RunKilled {
+			return false, nil, errKillRunStarted
+		}
 		applied, killData, err := s.killRunCascade(ctx, run, killerType, killer, nil)
 		if err != nil || applied || attempt == killCASAttempts {
 			return applied, killData, err
@@ -723,6 +679,9 @@ func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType
 		}
 	}
 }
+
+// errKillRunStarted is killLiveRun's refusal of a cancel of a run that has not started, once the run has.
+var errKillRunStarted = errors.New("run has started")
 
 // killRunCascade is the kill itself, with no HTTP in it: the CAS, the approval
 // cancellation, the runner teardown, both revocations and the run.kill row, in

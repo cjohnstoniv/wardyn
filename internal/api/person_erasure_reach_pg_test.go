@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	}
 
 	// Token history: a revoked and an expired token of alice's, a revoked one of bob's, and a token of
-	// alice's still live because Azure DevOps could not be asked to revoke it (the sweep retries it).
+	// alice's still live because Azure DevOps cannot be asked to revoke it (the sign-in cannot be read).
 	a.srv.cfg.ADOEntra = func(context.Context) (ADOEntraConfig, bool, error) { return ADOEntraConfig{}, false, nil }
 	a.srv.cfg.ADOEntraByRow = func(context.Context, string) (ADOEntraConfig, bool, error) {
 		return ADOEntraConfig{}, false, errors.New("injected: the sign-in configuration is unreadable")
@@ -102,8 +103,24 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 
 	sec := ssoSession(t, "sec-sub", "sec@corp.example", oidc.RoleSecurityAdmin)
 	w := doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+alice+"/erasure", sec, erasureBody("audit_personal_fields", "credentials"))
+	// While that revoke can still finish, the credentials scope erases nothing, so a retry keeps the
+	// sign-in it needs; the scope before it is done.
+	var refused erasureIncompleteBody
+	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusServiceUnavailable || refused.Reason != reasonCredentialEraseRevokeUnfinished ||
+		strings.Join(refused.Done, ",") != "audit_personal_fields" || strings.Join(refused.Remaining, ",") != "credentials" {
+		t.Fatalf("erasure with an unfinished revoke = %d %s, want 503 %s with credentials left", w.Code, w.Body, reasonCredentialEraseRevokeUnfinished)
+	}
+	if n, d := count(`SELECT count(*) FROM ado_run_pats WHERE owner = $1`, alice), count(`SELECT count(*) FROM delegated_tokens WHERE principal = $1`, alice); n != 3 || d != 2 {
+		t.Fatalf("after the refusal alice has %d token rows and %d delegated tokens, want 3 and 2: nothing erased", n, d)
+	}
+	// The retry finishes once no token is left to revoke: here the live one has reached its valid_to.
+	exec(`UPDATE ado_run_pats SET valid_to = $2 WHERE authorization_id = $1`, pats["alice-live"], past)
+	w = doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+alice+"/erasure", sec, erasureBody("credentials"))
 	if w.Code != http.StatusOK {
-		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+		t.Fatalf("erasure retry = %d %s", w.Code, w.Body)
 	}
 	var answer struct {
 		Detail struct {
@@ -113,7 +130,7 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
 		t.Fatal(err)
 	}
-	for k, want := range map[string]float64{"pats_deleted": 2, "delegated_deleted": 2, "live_left": 1, "run_create_keys_deleted": 2} {
+	for k, want := range map[string]float64{"pats_deleted": 3, "delegated_deleted": 2, "live_left": 0, "run_create_keys_deleted": 2} {
 		if got := answer.Detail.Credentials[k]; got != want {
 			t.Errorf("credentials detail %s = %v, want %v (%s)", k, got, want, w.Body)
 		}
@@ -133,7 +150,7 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	if n := count(`SELECT count(*) FROM approvals WHERE id = $1 AND decided_by = $2 AND reason <> ''`, bobAp, bob); n != 1 {
 		t.Error("bob's decision was touched by alice's erasure")
 	}
-	for key, want := range map[string]int{"alice-revoked": 0, "alice-expired": 0, "bob-revoked": 1, "alice-live": 1} {
+	for key, want := range map[string]int{"alice-revoked": 0, "alice-expired": 0, "bob-revoked": 1, "alice-live": 0} {
 		if n := count(`SELECT count(*) FROM ado_run_pats WHERE authorization_id = $1`, pats[key]); n != want {
 			t.Errorf("token row %s: %d left, want %d", key, n, want)
 		}

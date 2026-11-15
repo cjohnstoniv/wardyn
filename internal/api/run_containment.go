@@ -115,6 +115,10 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "read node records", err)
 		return
 	}
+	if out.TeardownHold, err = s.runTeardownHold(r.Context(), id); err != nil {
+		writeServerError(w, r, "read run teardown hold", err)
+		return
+	}
 	// A record's source id and the runner's refusal text name infrastructure, as the tuple does:
 	// security operators only. Others read a fixed sentence for the reason.
 	if !s.isSecurityOperator(r.Context()) {

@@ -75,7 +75,7 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
   healthy: { tone: "success", hint: "fresh sensor heartbeats and real kernel events observed" },
   idle: { tone: "warning", hint: "sensor is beating but has observed no kernel events" },
   degraded: { tone: "warning", hint: "sensor heartbeat is stale — the sensor has stalled or died" },
-  unavailable: { tone: "neutral", hint: "no eBPF sensor has ever reported — this tier is opt-in" },
+  unavailable: { tone: "neutral", hint: "no eBPF sensor heartbeat is on record — this tier is opt-in" },
 };
 
 // Event-kind bucketing. AuditEvent.action is an open dotted-verb string the
@@ -275,8 +275,9 @@ export function AuditScreen() {
   // Must NOT client re-sort by wall-clock time — the server returns events in
   // authoritative append (seq) order; re-sorting by `time` can reorder events
   // that share a timestamp and misrepresent causality. Preserve as-is.
-  // Only the LATEST events read may write the list: a poll tick still in flight for the previous run filter
-  // would otherwise land after the new filter's read and show the wrong run's trail under it.
+  // Only the LATEST events read may write anything: a poll tick or load still in flight for the previous run
+  // filter would otherwise land after the new filter's read and show the wrong run's trail, status, error,
+  // liveness or sensor state under it. A superseded read resolves null, success or failure alike.
   const eventsRequestId = React.useRef(0);
   const fetchEvents = React.useCallback(() => {
     const requestId = ++eventsRequestId.current;
@@ -284,15 +285,23 @@ export function AuditScreen() {
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
     // events, so an event list structurally cannot show them — a dead sensor
     // reads exactly like a quiet one. health() never rejects.
-    void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
+    void healthApi.health().then((h) => {
+      if (eventsRequestId.current === requestId) setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined);
+    });
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
     // Resolves with the list it set, or null when a newer read superseded it.
-    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then((list) => {
-      if (eventsRequestId.current !== requestId) return null;
-      setEvents(list);
-      return list;
-    });
+    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(
+      (list) => {
+        if (eventsRequestId.current !== requestId) return null;
+        setEvents(list);
+        return list;
+      },
+      (e: unknown) => {
+        if (eventsRequestId.current !== requestId) return null;
+        throw e;
+      },
+    );
   }, [runFilter]);
   // A read that answers after the screen is gone is superseded: it must not write the URL from a screen that has left.
   React.useEffect(
@@ -321,6 +330,7 @@ export function AuditScreen() {
     setStatus("loading");
     fetchEvents()
       .then((list) => {
+        if (!list) return;
         setPollStale(false);
         setStatus("ready");
         dropAbsentKind(list);
@@ -340,13 +350,18 @@ export function AuditScreen() {
   const tick = React.useCallback(() => {
     return fetchEvents()
       .then((list) => {
+        if (!list) return;
         setPollStale(false);
+        setStatus("ready");
         dropAbsentKind(list);
       })
-      .catch(() => {
+      .catch((e) => {
         /* transient poll failure — keep the last good view and retry next
            tick, but stop asserting the trail is live while it is not. */
         setPollStale(true);
+        // A tick that overtook the filter's first read is that first read: nothing else will end the loading state.
+        setLoadMessage(failureSentence(e));
+        setStatus((s) => (s === "loading" ? "error" : s));
       });
   }, [fetchEvents]);
   usePoll(tick, AUDIT_POLL_MS, status !== "ready" || showRetention);
@@ -771,7 +786,7 @@ function EventOutcome({ e }: { e: AuditEvent }) {
 }
 
 // Kernel ground-truth health. The event list itself can only ever show a LIVE
-// sensor (kernel.sensor.ping rows): "unavailable" (no sensor ever) and
+// sensor (kernel.sensor.ping rows): "unavailable" (no heartbeat on record) and
 // "degraded" (stale beat) are the ABSENCE of events, so they render as an empty
 // list indistinguishable from a quiet window — exactly the blindness that has to
 // stay visible. Nothing is claimed when the daemon doesn't report the field.

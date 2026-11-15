@@ -256,7 +256,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # 55, was 40: unit ran out at 40 on a 0.10.0-rc.21 train run; set from the prebuild's measured time after.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -264,12 +265,15 @@ jobs:
           - suite: unit
             target: test-report
             tags: ''
+            build: -race -covermode=atomic -coverpkg=./...
           - suite: docker
             target: test-report-docker
             tags: docker
+            build: -race -tags docker -covermode=atomic -coverpkg=./...
           - suite: k8s
             target: test-report-k8s
             tags: docker,k8s
+            build: -race -tags docker,k8s -covermode=atomic -coverpkg=./...
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -321,9 +325,9 @@ jobs:
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
       # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
-      # extra swap lets that peak page out instead of the runner being shut down.
+      # extra swap lets that peak page out instead of the runner being shut down. No `if:`: the docs- or
+      # console-only step below compiles internal/api's tests too.
       - name: Add swap for the coverage compile
-        if: needs.changes.outputs.backend != 'false'
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -331,6 +335,31 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # internal/api's test compile is the job's memory peak (about 21-22 GB even with two workers). It is
+      # compiled here first with two workers, and measured, so the step below finds it in the build cache. vmstat
+      # writes memory to the step log every 15 s, which a runner lost mid-step still leaves.
+      - name: Prebuild internal/api's tests with two workers
+        if: needs.changes.outputs.backend != 'false'
+        env:
+          GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          else
+            time go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ${{ matrix.build }} ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
@@ -345,6 +374,8 @@ jobs:
         if: needs.changes.outputs.backend == 'false'
         env:
           TAGS: ${{ matrix.tags }}
+          # internal/api is a guard package, and this leg has no prebuild: the same soft heap limit as the prebuild
+          GOMEMLIMIT: "10GiB"
         run: |
           set -euo pipefail
           rc=0
@@ -439,26 +470,67 @@ jobs:
           restore-keys: |
             go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-lint-${{ runner.os }}-
+      # The internal/api test compile and staticcheck's whole-tree pass take about all
+      # of the hosted runner's memory; without extra swap the runner is shut down mid-step
+      # (exit 143, or no log and a timeout 5 min past the limit). Same step as the go legs.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          else
+            time go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
       # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
       # package runs even after one fails, so a push shows all the red guards.
+      # Four green runs on 2026-11-13 took 9-10 min for the whole list. A package
+      # gets 8 min, so a stuck one fails by name with a goroutine dump, and the
+      # step 20, so an overrun fails here with its log instead of the job being
+      # cancelled at its limit with none.
       - name: Whole-tree guard tests (every Go test that reads the repository)
+        timeout-minutes: 20
         run: |
           set -euo pipefail
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
           out="$(python3 -I scripts/lib/candidate-tests.py guards)"
           [ -n "$out" ] || { echo "::error::no whole-tree guard test found; the discovery pattern regressed"; exit 1; }
           rc=0
           while IFS=$'\t' read -r dir names; do
             echo "::group::./$dir"
-            WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./$dir" || rc=1
+            WARDYN_TEST_PG='' go test -count=1 -timeout 8m -run "^(${names})\$" "./$dir" || rc=1
             echo "::endgroup::"
           done <<<"$out"
           exit "$rc"
       # `make lint` also runs the console's ESLint (ui/eslint.config.js), so this
       # job sets up pnpm and node.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -619,7 +691,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -667,10 +739,12 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    # 30, was 20: ui ran out at 20 on two 0.10.0-rc.21 train runs with make ui-test still passing files,
+    # against 12-17 m on the other runs.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -824,7 +898,7 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -950,7 +1024,7 @@ jobs:
           [ -z "$running" ] || docker start $running >/dev/null
           docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - name: helm lint + template (must render load-bearing objects)
@@ -1021,7 +1095,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         if: needs.changes.outputs.backend != 'false'
         with:
           version: latest
@@ -1061,7 +1135,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       - uses: ./.github/actions/kind-binary
         if: needs.changes.outputs.backend != 'false'
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-test
@@ -1332,10 +1406,10 @@ jobs:
       # docker-style opt-out) — a bare busybox took the never-records path
       # and the gate never proved recording works. See the Makefile target's
       # own doc and deploy/kind/Dockerfile.conformance-agent.
-      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+      - name: Build the conformance agent image (busybox:1.38 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
@@ -1415,9 +1489,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-26.04
-    # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
-    # the controller fetch, two trivy scans, its install, the policies, can-i and seven real-pod cases.
-    timeout-minutes: 45
+    # Sized from two hosted runs on 2026-11-12 and 2026-11-13, which ran the first seven cases: the suite step took
+    # 715 s and 658 s, and everything else in the job took 379 s and 328 s. The seven keep and warm pool cases have
+    # not run hosted, so they are bounded by their wait limits (the worst case of each, test/conformance, in
+    # seconds): proxy through the Service 420, endpoint slice elsewhere 660, live proxy replace 570, API sequence
+    # 1145, Service admission 120, placeholder holds nothing 240, placeholder claimed and refilled 615; 3770 in
+    # all. (379 + 715 + 3770) x 1.25 = 6080 s, so 102 minutes. The Makefile's 30m go test -timeout is lower than
+    # 715 s plus those 3770 s, so this job's suite step passes CONFORMANCE_K8S_TIMEOUT=94m: (715 + 3770) x 1.25 =
+    # 5606 s, rounded up. TestAgentSandboxCaseBudgetsFitTheJobTimeout adds the cases' limits up against it and
+    # against this bound. Typical time: about 6 minutes of setup and about 12 minutes for the seven measured
+    # cases; the seven new cases' typical time is not measured yet (the first hosted run measures it). The bound
+    # only bites on a hang.
+    timeout-minutes: 102
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       AGENT_SANDBOX_CONTROLLER_IMAGE: registry.k8s.io/agent-sandbox/agent-sandbox-controller@sha256:ef1a1a3076afc996e711c44b388fbb7ffb7cd6858953d7e685166b299d77bd38
@@ -1425,7 +1508,7 @@ jobs:
       WARDYN_CHART_VALUES: >-
         --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
         --set serviceAccount.automount=true --set k8s.enabled=true --set k8s.proxyImage=wardyn/wardyn-proxy:kind-test
-        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true
+        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true
     steps:
       - name: Free disk for the images and the kind node
         run: |
@@ -1475,9 +1558,9 @@ jobs:
           tags: wardyn/wardyn-proxy:kind-test
           load: true
           cache-from: type=gha,scope=wardyn-proxy
-      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+      - name: Build the conformance agent image (busybox:1.38 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
@@ -1486,7 +1569,7 @@ jobs:
       - uses: ./.github/actions/kind-binary
         with:
           version: v0.23.0
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           version: v0.23.0
           node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
@@ -1599,7 +1682,8 @@ jobs:
           set -euo pipefail
           # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
           helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=wardynd \
-            --show-only templates/agent-sandbox-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+            --show-only templates/agent-sandbox-policy.yaml \
+            --show-only templates/agent-sandbox-keep-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           grep -F "system:serviceaccount:wardyn:wardynd" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           grep -F "system:serviceaccount:agent-sandbox-system:agent-sandbox-controller" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           kubectl apply -f "$RUNNER_TEMP/agent-sandbox-policy.yaml"
@@ -1667,7 +1751,8 @@ jobs:
           grep -qx 'core pods patch' <<<"$rules" || { echo "::error::the rendered Role has no pods patch"; fail=1; }
           grep -qx 'agents.x-k8s.io sandboxes create' <<<"$rules" || { echo "::error::the rendered Role has no sandboxes create"; fail=1; }
           for q in "agents.x-k8s.io sandboxes update" "agents.x-k8s.io sandboxes patch" "agents.x-k8s.io sandboxes watch" \
-                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update"; do
+                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update" \
+                   "core services list" "core services watch"; do
             read -r g r v <<<"$q"
             got=$(ask "$g" "$r" "$v")
             echo "must not hold: can-i $v $r ($g): $got"
@@ -1683,7 +1768,7 @@ jobs:
           WARDYN_K8S_NAMESPACE: wardyn-conformance
           WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
           WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
-        run: make test-conformance-k8s
+        run: make test-conformance-k8s CONFORMANCE_K8S_TIMEOUT=94m
       # A typo in the switch would skip every backend case and pass the suite on plain pods.
       - name: The agent-sandbox cases ran and passed (a skip fails here)
         run: |
@@ -1692,7 +1777,10 @@ jobs:
           fail=0
           for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
                    TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
-                   TestAgentSandboxStagedSecretStarts; do
+                   TestAgentSandboxStagedSecretStarts \
+                   TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence \
+                   TestWarmPoolPlaceholderHoldsNothing TestWarmPoolPlaceholderClaimedAndRefilled \
+                   TestAgentSandboxKeepAdmissionBoundsServices; do
             if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
               echo "passed: $t"
             else
@@ -1830,8 +1918,8 @@ jobs:
     runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
-    # key-service leg.
-    timeout-minutes: 55
+    # key-service leg. 70, was 55: the step ran out at 55 on a 0.10.0-rc.21 train run, against 11 m on the one before.
+    timeout-minutes: 70
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -1908,10 +1996,46 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # See go-lint: the internal/api compile in internal-hosts-docker.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # See the go job: internal/api's test compile, prebuilt and measured. One worker here, because the
+      # images built above are already in docker: no second compile or link runs beside the api one.
+      - name: Prebuild internal/api's tests with one worker
+        env:
+          GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 1 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          else
+            time go test -c -p 1 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n -tags docker ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-conformance-docker
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-docker test reports
         if: always()
@@ -2098,6 +2222,7 @@ jobs:
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
   #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
+  #   - the folder sync's copy pins on an exFAT disk image, a filesystem without hard links
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
   macos:
@@ -2141,6 +2266,9 @@ jobs:
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
           go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The folder sync's one-step swap and move-aside on APFS: -v and the grep prove the pins ran, not just compiled.
+          go test -count=1 -timeout 5m -v -run '^TestPass_ALaptop' ./internal/foldersync/ | tee "$RUNNER_TEMP/foldersync.out"
+          test "$(grep -c -- '^--- PASS: TestPass_ALaptop' "$RUNNER_TEMP/foldersync.out")" = 4
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
@@ -2150,12 +2278,65 @@ jobs:
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
           # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
           grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
+          # The sign-in hold's macOS pieces as root: the console owner, the IOPlatformUUID read, auto-login
+          # written to and read back from the loginwindow file, and the carry's copy as another account. They
+          # restore what they change; a skip here is a failure. No guest boots: order and the pane are unproven.
+          go test -c -o "$RUNNER_TEMP/guestagent.test" ./internal/vm/guestagent/
+          sudo env TMPDIR="$TMPDIR" WARDYN_LOGINWINDOW_PIN=1 "$RUNNER_TEMP/guestagent.test" -test.count=1 -test.v -test.run '^TestDarwinLoginHold' | tee "$RUNNER_TEMP/loginhold-root.out"
+          for t in ConsoleOwner IoregUUID AutoLoginWriteAndReadBack CarryCopiesAsAnotherAccount; do
+            grep -q -- "^--- PASS: TestDarwinLoginHold$t " "$RUNNER_TEMP/loginhold-root.out"
+          done
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           export TMPDIR=/private/tmp
           go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      # The folder sync's copy into a laptop name, where hard links are refused, on a real exFAT volume: the pins
+      # in Tests run on APFS with links made to fail, and exFAT may number a file by its directory entry, which
+      # the copy's same-file checks rely on. hdiutil ships with macOS. The test binary is built on the runner's
+      # disk; only the tests' temp dirs (TMPDIR, and GOTMPDIR, which t.TempDir reads first) are on the image.
+      - name: Attach an exFAT disk image
+        id: exfat
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          img="$RUNNER_TEMP/exfat.dmg"
+          mnt="$RUNNER_TEMP/exfat"
+          hdiutil create -size 64m -fs ExFAT -volname WEXFAT "$img"
+          mkdir "$mnt"
+          hdiutil attach -nobrowse -noautoopen -mountpoint "$mnt" "$img"
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          # The pins' premise: this volume refuses a hard link.
+          : >"$mnt/link-probe"
+          if ln "$mnt/link-probe" "$mnt/link-probe-2"; then echo "::error::the exFAT volume made a hard link"; exit 1; fi
+          rm -f "$mnt/link-probe"
+      - name: Folder sync copy pins on the exFAT image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mnt="$RUNNER_TEMP/exfat"
+          # Still the exFAT volume: a plain directory at this path would run the pins on APFS, and they would pass.
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          pins='TestInstall_AFailedCopyOrLinkRefusesThePush|TestPass_AFailedCopyNeverRemovesAnEditorsSave'
+          pins+='|TestPass_ACopyNeverStampsOrClaimsAnEditorsSave|TestPass_ASecondSaveIsNeverTakenForTheFailedCopy'
+          pins+='|TestPass_APutBackNamesALaterSaveItsFailedCopyMovedAside|TestPass_APartialCopyThatCannotBeMovedAsideIsNamed'
+          pins+='|TestPass_APutBackCopyWhoseNameIsGoneKeepsTheSave|TestPass_ALaptopSaveAfterAPullDeletesLookIsKept'
+          pins+='|TestPass_ALaptopFileMadeDuringAPullDeletesMoveBackIsKept'
+          pins+='|TestPass_APutBackWhoseFileIDChangesLeavesNoDuplicate|TestPass_APutBackOfAnEmptySaveWhoseFileIDChangesLeavesNoDuplicate'
+          pins+='|TestPass_ACopyWhoseFileIDChangesNeverTakesAnEditorsSave|TestPass_AFailedCopyWhoseFileIDChangesLeavesNoUnnamedPartial'
+          pins+='|TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved|TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy'
+          go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
+          (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
+            -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
+          # -v and the count prove all fifteen ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 15
+      - name: Detach the exFAT disk image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 2
+        run: hdiutil detach -force "$RUNNER_TEMP/exfat"
       - name: Build the darwin runnerd
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
@@ -2421,10 +2602,12 @@ jobs:
             suite: pg-api-1
             run: make test-report-pg-api PG_PART=1/2 PG_REPORT=pg-api-1
             superuser: "1"
+            prebuild: plain
           - shard: api-2
             suite: pg-api-2
             run: make test-report-pg-api PG_PART=2/2 PG_REPORT=pg-api-2
             superuser: "1"
+            prebuild: plain
           - shard: store
             suite: pg-store
             run: make test-report-pg-store PG_REPORT=pg-store
@@ -2440,6 +2623,7 @@ jobs:
             suite: ''
             run: make test-race-pg
             superuser: ''
+            prebuild: race
     services:
       postgres:
         image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
@@ -2484,6 +2668,15 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
+      # See go-lint: the internal/api test compile.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -2491,6 +2684,29 @@ jobs:
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
       # consult the marker. The race shard does not set it, as before.
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        if: matrix.prebuild != ''
+        env:
+          GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          else
+            time go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ${{ matrix.prebuild == 'race' && '-race' || '' }} ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: Postgres-gated suite (${{ matrix.shard }})
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
@@ -2499,7 +2715,11 @@ jobs:
           # No gate reads a PG shard's coverage (the floor and cover-union take unit,
           # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
           WARDYN_TEST_REPORT_COVER: '0'
-        run: ${{ matrix.run }}
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
         if: always() && matrix.suite != ''
@@ -2916,7 +3136,7 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh notices
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2940,8 +3160,9 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
-    timeout-minutes: 25
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
+    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -2986,8 +3207,23 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+      # See go-lint: staticcheck's whole-tree pass.
+      - name: Add swap for the memory peak
+        if: matrix.gate == 'staticcheck'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # vmstat as in the go job: staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
-        run: make ${{ matrix.gate }}
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

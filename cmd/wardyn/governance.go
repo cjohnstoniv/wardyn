@@ -196,6 +196,8 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 			fmt.Fprintf(w, "  unit admin %s %q on %q\n", s.SubjectType, s.Subject, s.Unit)
 		case "deciders":
 			fmt.Fprintf(w, "  deciders of %q\n", s.Name)
+		case "restriction":
+			fmt.Fprintf(w, "  restriction %q\n", s.Name)
 		default:
 			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
 		}
@@ -351,6 +353,9 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "governance change %s -> %s\n", ch.ID, ch.State)
+			if ch.TokensRevocationFailed {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", ch.Detail)
+			}
 			return nil
 		},
 	}
