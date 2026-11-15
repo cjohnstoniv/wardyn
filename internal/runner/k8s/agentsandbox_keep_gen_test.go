@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -195,6 +196,47 @@ func TestEndSandboxAtLeavesARevivedAgentPod(t *testing.T) {
 	}
 	if n := len(agentPodDeletes(r.cs)); n != 0 {
 		t.Errorf("agent pod deletes = %d, want none: the running pod is the newer revive's", n)
+	}
+}
+
+// A generation 1 end reads a generation 1 proxy pod; while its delete lands, a newer revive's proxy takes the name and
+// that revive writes its replacement config Secret. The end must leave the Secret and refuse with ErrProxyGenerationNewer.
+// Without the second read of the proxy pod in stopKeptProxy, the end deletes the Secret and returns nil or an agent-pod
+// error.
+func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
+	r := newKeptRig(t, nil)
+	labelProxyPod(t, r.cs, "1")
+	secretsGVR := schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+	swapped := false
+	r.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		name := a.(clienttesting.DeleteAction).GetName()
+		if swapped || name != proxyPodName(asRunID) {
+			return false, nil, nil
+		}
+		// A newer revive's proxy takes the name, and its config Secret is written, while this end removes the old pod.
+		swapped = true
+		if err := r.cs.Tracker().Delete(podsGVR, testNamespace, name); err != nil {
+			return true, nil, err
+		}
+		newer := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, UID: "proxy-uid-2",
+			Labels: map[string]string{labelRun: asRunID.String(), labelComponent: componentProxy, labelProxyGeneration: "2"}}}
+		if err := r.cs.Tracker().Create(podsGVR, newer, testNamespace); err != nil {
+			return true, nil, err
+		}
+		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "proxy-cfg-2", Namespace: testNamespace,
+			Labels: map[string]string{labelRun: asRunID.String(), labelProxyCfg: "true"}}}
+		return true, nil, r.cs.Tracker().Create(secretsGVR, cfg, testNamespace)
+	})
+	if err := r.k.EndSandboxAt(context.Background(), r.ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
+		t.Fatalf("EndSandboxAt(1) = %v, want ErrProxyGenerationNewer once a generation 2 proxy appeared", err)
+	}
+	if _, err := r.cs.Tracker().Get(secretsGVR, testNamespace, "proxy-cfg-2"); err != nil {
+		t.Errorf("the newer revive's config Secret after the end: %v; want it left", err)
+	}
+	for _, a := range r.cs.Actions() {
+		if a.GetVerb() == "delete-collection" && a.GetResource().Resource == "secrets" {
+			t.Errorf("recorded %s %s, want no Secret delete: the Secret is the newer revive's", a.GetVerb(), a.GetResource().Resource)
+		}
 	}
 }
 

@@ -150,16 +150,24 @@ func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) erro
 	if err := k.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
 		return err
 	}
-	if err := k.stopKeptProxy(ctx, ns, runID, old); err != nil {
+	if err := k.stopKeptProxy(ctx, ns, runID, old, gen); err != nil {
 		return err
 	}
 	return k.deleteKeptAgentPod(ctx, ns, runID, gen)
 }
 
 // stopKeptProxy removes pod, the run's proxy pod as the end read it (nil: none), and the replacement config Secrets.
-func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod) error {
+// For gen > 0 the run's proxy pod is read again before the Secrets go: removing pod can wait, and a newer revive may
+// have started its proxy, with its own config Secret, in the meantime; that Secret is left, with
+// runner.ErrProxyGenerationNewer.
+func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, gen int) error {
 	if err := d.removeProxyPod(ctx, ns, pod); err != nil {
 		return fmt.Errorf("k8s: keep: remove the proxy pod: %w", err)
+	}
+	if gen > 0 {
+		if _, err := d.proxyNotNewer(ctx, ns, runID, gen, false); err != nil {
+			return err
+		}
 	}
 	replacements := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelProxyCfg}
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, replacements); err != nil && !isNotFound(err) {
