@@ -2005,8 +2005,9 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
-      - name: Prebuild internal/api's tests with two workers
+      # See the go job: internal/api's test compile, prebuilt and measured. One worker here, because the
+      # images built above are already in docker: no second compile or link runs beside the api one.
+      - name: Prebuild internal/api's tests with one worker
         env:
           GOMAXPROCS: "2"
           # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
@@ -2018,11 +2019,11 @@ jobs:
           trap 'kill "$vm" 2>/dev/null || true' EXIT
           free -m; df -h /
           if [ -x /usr/bin/time ]; then
-            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 1 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
             cat "$RUNNER_TEMP/api.time"
             echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           else
-            time go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
+            time go test -c -p 1 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
           fi
           rm -f "$RUNNER_TEMP/api.test"
           free -m; df -h /
