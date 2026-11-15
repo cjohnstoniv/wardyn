@@ -57,6 +57,9 @@ func TestSweepForcedStops_AnotherServersRetryStopsOnceThenWaits(t *testing.T) {
 	other.locks.override = f.s.locker()
 	f.tick(t, f.s)
 	f.tick(t, other)
+	if f.sb.stopCount() != 2 {
+		t.Fatalf("%d stops after the other server's first retry; want 2: this server's wait does not hold another server's first stop", f.sb.stopCount())
+	}
 	f.tick(t, other)
 	if f.sb.stopCount() != 2 {
 		t.Errorf("%d stops; want 2: one by each server, and none by the other server inside its own wait", f.sb.stopCount())
@@ -89,5 +92,9 @@ func TestSweepForcedStops_TheGiveUpPastTheKeepIsNotHeldByTheWait(t *testing.T) {
 	f.tick(t, f.s)
 	if got := f.giveUpState(t); got.rows != 1 || !got.cleared || got.marks != 0 || got.success != 1 || f.sb.stopCount() != 2 {
 		t.Errorf("past the wait: %+v, %d stops; want the sandbox stopped, the ref and the mark cleared with one success row", got, f.sb.stopCount())
+	}
+	f.tick(t, f.s) // the run is no longer listed: the tick drops this server's wait for it
+	if _, held := forcedRestopWaits.Load(forcedRestopKey{f.s, f.run.ID}); held {
+		t.Error("the wait outlived the run's mark")
 	}
 }
