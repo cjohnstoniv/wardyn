@@ -227,17 +227,27 @@ func (f fileStore) get(origin string) (cliItem, bool, error) {
 	return it, ok, err
 }
 
-// put stores it for origin. A damaged file is replaced, as its error says to sign in again. A file that could
-// not be read is left as it is, since it may hold other organisations' sign-ins: load's read errors are
-// *fs.PathError (os.ReadFile), and its damaged-file error is not.
-func (f fileStore) put(origin string, it cliItem) error {
+// loadToReplace is the items a put adds to. A damaged file is replaced, as its error says to sign in again, so
+// it gives none. A file that could not be read is left as it is, since it may hold other organisations'
+// sign-ins: load's read errors are *fs.PathError (os.ReadFile), and its damaged-file error is not. A sign-in
+// to the file asks it before the sign-in is created, so a refusal leaves no session behind.
+func (f fileStore) loadToReplace() (map[string]cliItem, error) {
 	items, err := f.load()
 	var unread *fs.PathError
 	if errors.As(err, &unread) {
-		return err
+		return nil, err
 	}
 	if err != nil {
 		items = map[string]cliItem{}
+	}
+	return items, nil
+}
+
+// put stores it for origin, as loadToReplace allows.
+func (f fileStore) put(origin string, it cliItem) error {
+	items, err := f.loadToReplace()
+	if err != nil {
+		return err
 	}
 	items[origin] = it
 	return f.save(items)

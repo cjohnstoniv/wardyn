@@ -157,6 +157,13 @@ func TestASignInToTheFileReplacesOnlyADamagedFile(t *testing.T) {
 		if !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("login: %v; want it refused with the file's read error", err)
 		}
+		// Refused before the sign-in is created: no session issued, so none is left live at the server.
+		f.mu.Lock()
+		created := len(f.signIns)
+		f.mu.Unlock()
+		if n := f.liveSessions(); n != 0 || created != 0 {
+			t.Errorf("the server holds %d live sessions and %d sign-ins; want none, as the login was refused before it", n, created)
+		}
 		if err := os.Chmod(path, 0o600); err != nil {
 			t.Fatal(err)
 		}

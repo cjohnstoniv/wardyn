@@ -183,6 +183,11 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		return errors.New(errNoBrowserNoPaste)
 	}
 	if kind == types.CLIStoreFile && base == nil {
+		// A file that cannot be read is refused by the put that follows the sign-in; refused here, the server
+		// issues no session that nothing holds.
+		if _, err := (fileStore{l.dir}).loadToReplace(); err != nil {
+			return err
+		}
 		fmt.Fprintf(l.errOut, copyFileStore+"\n", fileStore{l.dir}.path(), inWords(types.CLIFileStoreSessionCap))
 	}
 	verifier := randomB64(32)
