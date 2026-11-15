@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ import (
 
 // sweepDesktopSignins ends every sign-in whose run ended, whose window
 // passed, or whose end could not finish before. One pass of the reconciler.
+// A killed run's sandbox it still cannot tear down is in its error, so the tick is not counted healthy.
 func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 	st, on := s.desktopSigninStore()
 	if !on {
@@ -33,6 +35,7 @@ func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 		return err
 	}
 	now := s.cfg.Now()
+	var owed []error
 	for _, si := range open {
 		run, err := s.cfg.Store.GetRun(ctx, si.RunID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -46,6 +49,7 @@ func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 			cancel()
 			if kerr != nil {
 				slog.WarnContext(ctx, "wardynd: desktop sign-in's killed sandbox is not torn down", "run_id", run.ID, "err", kerr)
+				owed = append(owed, fmt.Errorf("desktop sign-in of run %s: the killed sandbox is not torn down: %w", run.ID, kerr))
 				continue
 			}
 			_ = s.closeDesktopSignin(ctx, st, run, si, si.EndRequested, types.ActorSystem, "wardynd", false)
@@ -63,7 +67,7 @@ func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 			_ = s.finishDesktopSignin(ctx, run, si, reason, types.ActorSystem, "wardynd")
 		}
 	}
-	return nil
+	return errors.Join(owed...)
 }
 
 // inDesktopSignin reports whether the run has an open sign-in, reading the
