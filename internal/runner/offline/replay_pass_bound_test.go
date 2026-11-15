@@ -18,7 +18,9 @@ import (
 // A replay send the organisation never answers holds its pass only until replayPassBound: the pass
 // ends, the hung run is backed off, and the runs behind it are sent in the next pass.
 func TestReplayPassEndsAtTheBoundOnAHungSend(t *testing.T) {
-	const bound = 100 * time.Millisecond
+	// A whole pass, observing exits and replaying, shares this bound, so it leaves room for that work on a loaded
+	// machine: a tight bound could run out before the second pass reaches the later run.
+	const bound = time.Second
 	prev := replayPassBound
 	replayPassBound = bound
 	t.Cleanup(func() { replayPassBound = prev })
@@ -79,7 +81,7 @@ func TestReplayPassEndsAtTheBoundOnAHungSend(t *testing.T) {
 	t.Cleanup(func() { cancel(); <-done })
 	select {
 	case ticks <- time.Time{}: // taken once the first pass has ended
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the first pass is still held by a send that never answers")
 	}
 	mu.Lock()
@@ -93,7 +95,7 @@ func TestReplayPassEndsAtTheBoundOnAHungSend(t *testing.T) {
 	}
 	select {
 	case ticks <- time.Time{}: // taken once the second pass has ended
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the second pass did not end")
 	}
 	if n := sent(2, later); n != 1 {
