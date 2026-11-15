@@ -292,3 +292,28 @@ func TestDesktopSignin_AnEndWhoseRecordCannotBeWrittenIsLeftToEndAgain(t *testin
 		t.Fatalf("SIGCONTs sent by the end = %d, want 1", n)
 	}
 }
+
+// TestDesktopSignin_AnEndWhoseResumeAgentFailsSaysTheAgentCouldNotBeResumed: an end whose display closed but whose
+// resume-agent failed answers the resume message, leaves the row open at the resume stage with one failure row, and
+// sends no SIGCONT.
+func TestDesktopSignin_AnEndWhoseResumeAgentFailsSaysTheAgentCouldNotBeResumed(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	before := len(f.rn.seen())
+	f.rn.mu.Lock()
+	f.rn.exit["resume-agent"] = 1
+	f.rn.mu.Unlock()
+	want := "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway || !strings.Contains(body, want) {
+		t.Fatalf("end = %d %s, want 502 %q", code, body, want)
+	}
+	if si := f.st.only(t); si.EndedAt != nil || si.EndStage != signinStageResume {
+		t.Fatalf("row = %+v, want open at stage %q", si, signinStageResume)
+	}
+	if got := signinCloseRows(f); !slices.Equal(got, []string{"failure false"}) {
+		t.Fatalf("desktop_signin.close rows = %v, want [failure false]", got)
+	}
+	if n := signinConts(f, before); n != 0 {
+		t.Fatalf("SIGCONTs sent by the end = %d, want 0: resume-agent failed before the continue", n)
+	}
+}
