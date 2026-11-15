@@ -15,7 +15,7 @@ func ExpandPR(caps []Capability) []Capability {
 	if caps == nil {
 		return nil
 	}
-	out := make([]Capability, 0, len(caps)+len(prParts))
+	out := make([]Capability, 0, len(caps))
 	for _, c := range caps {
 		add := []Capability{c}
 		if c == CapPR {
