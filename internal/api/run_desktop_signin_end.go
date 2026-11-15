@@ -31,6 +31,10 @@ var errSigninStateUnread = errors.New("the agent's state could not be read")
 // message.
 var errSigninResumeStage = errors.New("the agent could not be resumed")
 
+// errSigninEndUnrecorded marks an end whose display closed and whose agent was
+// continued, but whose row could not be closed.
+var errSigninEndUnrecorded = errors.New("the sign-in's end could not be recorded")
+
 // continueMain sends pid 1 a SIGCONT, then reads its state through
 // signinSettleGaps: nil only when the last read finds it running, and a read
 // that finds it stopped sends one more SIGCONT. errSigninStateUnread: the

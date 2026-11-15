@@ -810,7 +810,10 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 		}
 		resumed = err == nil
 	}
-	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, resumed)
+	if err := s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, resumed); err != nil {
+		return fmt.Errorf("%w: %w", errSigninEndUnrecorded, err)
+	}
+	return nil
 }
 
 func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin,

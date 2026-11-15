@@ -261,3 +261,34 @@ func TestDesktopSignin_AnEndAtItsLastPassKillsTheRunOnEntry(t *testing.T) {
 		})
 	}
 }
+
+// signinEndUnwrittenStore is signinTestStore whose EndDesktopSignin fails, as a database write that cannot be made.
+type signinEndUnwrittenStore struct{ *signinTestStore }
+
+func (s signinEndUnwrittenStore) EndDesktopSignin(context.Context, uuid.UUID, string, time.Time) (bool, error) {
+	return false, errors.New("store: write refused")
+}
+
+// TestDesktopSignin_AnEndWhoseRecordCannotBeWrittenIsLeftToEndAgain: an end whose display closed and whose agent
+// was continued, but whose row could not be closed, answers 502 desktop_signin_end_failed and gives the row back open,
+// unmarked and unclaimed, so the person can end it again at once; no close row is written, and the agent got its one
+// SIGCONT.
+func TestDesktopSignin_AnEndWhoseRecordCannotBeWrittenIsLeftToEndAgain(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	before := len(f.rn.seen())
+	f.srv.cfg.Store = signinEndUnwrittenStore{f.st}
+	code, body := f.post(t, "/desktop-signin/end", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninEndFailed) {
+		t.Fatalf("end = %d %s, want 502 %s", code, body, reasonDesktopSigninEndFailed)
+	}
+	if si := f.st.only(t); si.EndedAt != nil || si.EndRequested != "" || si.EndStage != "" {
+		t.Fatalf("row = %+v, want open, unmarked and unclaimed", si)
+	}
+	if got := signinCloseRows(f); len(got) != 0 {
+		t.Fatalf("desktop_signin.close rows = %v, want none", got)
+	}
+	if n := signinConts(f, before); n != 1 {
+		t.Fatalf("SIGCONTs sent by the end = %d, want 1", n)
+	}
+}
