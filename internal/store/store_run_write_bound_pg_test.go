@@ -176,7 +176,7 @@ func TestPG_SettleRunState_ReadsTheOutcomeOfACommitStillPendingWhenItsClientRetu
 
 	st := store.NewPG(pool)
 	wctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	_, err = st.UpdateRunStateIf(wctx, run.ID, types.RunRunning, types.RunFailed)
+	_, err := st.UpdateRunStateIf(wctx, run.ID, types.RunRunning, types.RunFailed)
 	cancel()
 	if !errors.Is(err, store.ErrRunWriteUnsettled) {
 		t.Fatalf("err %v; want ErrRunWriteUnsettled for a COMMIT sent and not answered", err)
