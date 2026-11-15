@@ -62,6 +62,7 @@ var runnerContextCensus = map[runnerContextSite]runnerContextRow{
 	{"k8s/imagecheck.go", "Driver.CheckPrewrappedImage", "WithoutCancel"}:     {1, ctxSettingsCheck},
 	{"k8s/imagecheck.go", "Driver.checkImageOnArch", "WithoutCancel"}:         {1, ctxSettingsCheck},
 	{"k8s/sandbox.go", "Driver.CreateSandbox", "Background"}:                  {1, ctxCreate},
+	{"k8s/warm_loop.go", "Driver.startWarmPools", "Background"}:               {1, ctxOwnLoop},
 	{"offline/retirement.go", "Manager.ReleaseSettledOutput", "Background"}:   {1, ctxBoot},
 	{"remote/streams.go", "Substrate.ExecStream", "Background"}:               {1, ctxCallerBound},
 	{"runnerio/server.go", "Server.life", "Background"}:                       {1, ctxOwnLoop},

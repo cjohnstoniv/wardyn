@@ -120,6 +120,7 @@ func (g *gwcertRig) presented(t *testing.T) *x509.Certificate {
 
 func (g *gwcertRig) newConnections() {
 	g.p.transport.CloseIdleConnections()
+	//lint:ignore SA1019 the fallback's transport is h2Fallback's deprecated http2.Transport (see h2Fallback)
 	g.p.h2.transport.CloseIdleConnections()
 }
 
@@ -310,9 +311,11 @@ func TestGatewayClientCert_OtherPortGetsNone(t *testing.T) {
 // this test at the response.
 func TestGatewayClientCert_H2FallbackPresents(t *testing.T) {
 	g := newGwcertRig(t, tls.RequireAndVerifyClientCert)
+	//lint:ignore SA1019 see h2Fallback
 	cfg := g.p.h2.transport.TLSClientConfig.Clone()
 	cfg.ServerName = gwidHost
 	ctx := context.WithValue(context.Background(), vettedIPKey{}, "93.184.216.10:443")
+	//lint:ignore SA1019 see h2Fallback
 	conn, err := g.p.h2.transport.DialTLSContext(ctx, "tcp", gwidHost+":443", cfg)
 	if err != nil {
 		t.Fatal(err)

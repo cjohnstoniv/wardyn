@@ -17,6 +17,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
+// errWarmPoolsRunner refuses warm pools under wardyn-runnerd, which keeps no placeholders, rather than ignoring them.
+var errWarmPoolsRunner = errors.New("k8s: refusing to boot: WARDYN_K8S_WARM_POOLS is for wardynd; wardyn-runnerd keeps no placeholders")
+
 // buildConfig maps registration Deps to the k8s driver's Config. Extracted to
 // a pure function so its Record wiring is testable without a live cluster
 // (register_test.go's TestBuildConfig_RecordFollowsDeps pins it): Deps.Record

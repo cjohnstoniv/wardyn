@@ -120,7 +120,7 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
   || die "keep: the runner Role has no, or a wider, services rule"
 [[ "$(y -o=json -I=0 "$role | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/keep.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","delete","deletecollection"]}' ]] \
   || die "keep: the runner Role has no, or a wider, endpointslices rule"
-[[ "$(y "$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/keep.out")" == 2 ]] \
+[[ "$(y "$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/keep.out" | grep -vx 0 || true)" == 2 ]] \
   || die "keep: not exactly the services and endpointslices rules"
 [[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP") | .value' "$TMP/keep.out")" == "true" ]] \
   || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"

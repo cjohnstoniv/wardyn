@@ -10,10 +10,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// labelAgent is the run's agent id, which dispatch sets in SandboxSpec.Labels, so the agent pod and its Sandbox's template
-// carry it.
-const labelAgent = "wardyn.agent"
-
 // reviveHarnesses are the agents whose kept runs are revived on Kubernetes: their images have a revive mode of their own
 // and take it on a second boot (booted_before). A run of any other agent is not kept and ends as before.
 var reviveHarnesses = []string{"claude-code", "codex-cli"}
