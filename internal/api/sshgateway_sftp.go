@@ -186,7 +186,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 // says nothing about the process.
 type bridgeEnd struct {
 	err    error // Wait's own error: no exit was read
-	closed bool  // the session's context had ended by then: the client closed first
+	closed bool  // the client's close had ended the bridge's context by then (sshClientClosedFirst); a daemon stop is not the client's
 }
 
 // noteBridgeEnd keeps how sess.Wait ended in end. ctx is the context the bridge
@@ -198,7 +198,7 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 	noted := *sess
 	noted.Wait = func() (int, error) {
 		code, err := sess.Wait()
-		end.err, end.closed = err, ctx.Err() != nil
+		end.err, end.closed = err, sshClientClosedFirst(ctx)
 		return code, err
 	}
 	return &noted
@@ -213,8 +213,10 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 // process ended (most SFTP libraries close where OpenSSH half-closes and waits;
 // an ssh -L ended with a connection still open) left no exit to read: the
 // session is closed under the process and Wait errs, which is the client's end
-// and not a failed transfer, so the row stays a success. ssh.exec keeps its own
-// rule: the command's exit is the person's, recorded as exit on a success.
+// and not a failed transfer, so the row stays a success.
+// A daemon stop that ends the bridge's context under the process is not the client's end: the process it cut
+// left no exit, so the row is a failure that says so (sshClientClosedFirst tells the two apart).
+// ssh.exec keeps its own rule: the command's exit is the person's, recorded as exit on a success.
 func bridgeOutcome(exit int, end bridgeEnd, process string, extra map[string]any) string {
 	switch {
 	case end.closed, end.err == nil && exit == 0:
