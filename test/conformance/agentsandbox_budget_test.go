@@ -29,8 +29,8 @@ const agentSandboxMeasuredCases = 7
 var agentSandboxWorstCase = map[string]time.Duration{
 	"TestAgentSandboxKeepProxyThroughService":             ASKeepServiceLimit + ASKillBound,
 	"TestAgentSandboxKeepEndpointSliceElsewhereIsDropped": ASKeepSliceLimit + max(ASKeepSliceDecoyWait, ASKeepSliceGoneWait, ASKeepSliceBackWait) + ASKillBound,
-	"TestAgentSandboxKeepLiveReplaceProxy":                ASKeepReplaceLimit + ASKeepReplaceWait + ASKillBound,
-	"TestAgentSandboxKeepAPISequence":                     ASKeepSequenceLimit + max(ASKeepSequenceStop, ASKeepSequenceHeld) + ASKeepSequenceSettle + 2*ASKillBound,
+	"TestAgentSandboxKeepLiveReplaceProxy":                ASKeepReplaceLimit + ASKeepReplaceWait + ASKeepHopfakeStart + ASKillBound,
+	"TestAgentSandboxKeepAPISequence":                     ASKeepSequenceLimit + max(ASKeepSequenceStop, ASKeepSequenceHeld) + ASKeepSequenceSettle + ASKeepHopfakeStart + 2*ASKillBound,
 	"TestAgentSandboxKeepAdmissionBoundsServices":         ASKeepAdmissionLimit,
 	"TestWarmPoolPlaceholderHoldsNothing":                 ASWarmReadyWait + ASWarmCleanupBound,
 	"TestWarmPoolPlaceholderClaimedAndRefilled": ASWarmReadyWait + runner.DefaultSandboxStartTimeout + warmClaimGoneWait +

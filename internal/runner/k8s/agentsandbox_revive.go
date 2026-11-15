@@ -147,27 +147,25 @@ func (d *Driver) agentDeadline(ctx context.Context, ns string, runID uuid.UUID) 
 	return &secs, nil
 }
 
-// swapProxy empties the run's endpoint, removes the old proxy, starts the new one and points the endpoint at it. Every
-// error from here on wraps runner.ErrProxyReplaceFailed: the old proxy may be gone.
-func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, in proxyPodInputs) error {
+// swapProxy empties the run's endpoint, removes old (the proxy pod the replace read; nil for none), starts the new one for
+// policy generation gen and points the endpoint at it. Every error from here on wraps runner.ErrProxyReplaceFailed: the
+// old proxy may be gone.
+func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, in proxyPodInputs, old *corev1.Pod, gen int) error {
 	fail := func(step string, err error) error {
 		return fmt.Errorf("%w: %s: %v", runner.ErrProxyReplaceFailed, step, err)
 	}
 	if err := d.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
 		return fail("empty the endpoint", err)
 	}
-	if err := d.clientset.CoreV1().Pods(ns).Delete(ctx, proxyPodName(runID), metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
-		return fail("delete the old proxy pod", err)
-	}
-	proxyOnly := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelComponent + "=" + componentProxy}
-	if err := d.waitPodsGone(ctx, ns, proxyOnly, 2*time.Minute); err != nil {
-		return fail("wait for the old proxy pod to go", err)
+	if err := d.removeProxyPod(ctx, ns, old); err != nil {
+		return fail("remove the old proxy pod", err)
 	}
 	pod, err := d.buildProxyPod(in)
 	if err != nil {
 		return fail("build the new proxy pod", err)
 	}
-	if _, err := d.createPod(ctx, runID, componentProxy, pod); err != nil {
+	markReplacement(pod, gen)
+	if err := d.createReplacementPod(ctx, ns, runID, pod, gen); err != nil {
 		return fail("create the new proxy pod", err)
 	}
 	ip, err := d.waitPodIP(ctx, d.newStartClock(), ns, proxyPodName(runID), nil)
@@ -180,16 +178,35 @@ func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc 
 	return nil
 }
 
-// ReplaceProxy starts a new proxy for a run whose agent reaches it through the run's Service. The run Secret is left as
-// it is (the agent's env and files come from it); the new config goes in a Secret of its own.
+// ReplaceProxy is ReplaceProxyHashedAt for no generation.
 func (k *keepDriver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	_, err := k.ReplaceProxyHashedAt(ctx, ref, cfgJSON, 0)
+	return err
+}
+
+// ReplaceProxyHashed is ReplaceProxyHashedAt for no generation.
+func (k *keepDriver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
+	return k.ReplaceProxyHashedAt(ctx, ref, cfgJSON, 0)
+}
+
+// ReplaceProxyHashedAt starts a new proxy for a run whose agent reaches it through the run's Service, acting for policy
+// generation gen (runner.ProxyReviverAt), and answers the hash of the config it started it with. The run Secret is left
+// as it is (the agent's env and files come from it); the new config goes in a Secret of its own. With gen > 0 the new
+// proxy pod is labelled with gen, and a proxy pod labelled gen or newer refuses the replace with
+// runner.ErrProxyGenerationNewer before anything is written. The proxy pod removed is the one read, never one that took
+// the name since.
+func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	runID, ns, svc, err := k.runService(ctx, ref)
 	if err != nil {
-		return err
+		return "", err
+	}
+	old, err := k.proxyNotNewer(ctx, ns, runID, gen, true)
+	if err != nil {
+		return "", err
 	}
 	in, err := k.replaceInputs(ctx, ns, runID, cfgJSON)
 	if err != nil {
-		return err
+		return "", err
 	}
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)
 	labels := wardynLabels(runID, componentProxy, in.Labels)
@@ -200,24 +217,16 @@ func (k *keepDriver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byt
 		Data:       map[string][]byte{proxyConfigSecretKey: cfgJSON},
 	}
 	if _, err := k.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("k8s: keep: create the new proxy config Secret: %w", err)
+		return "", fmt.Errorf("k8s: keep: create the new proxy config Secret: %w", err)
 	}
 	in.SecretName = sec.Name
-	if err := k.swapProxy(ctx, ns, runID, svc, in); err != nil {
-		return err
+	if err := k.swapProxy(ctx, ns, runID, svc, in, old, gen); err != nil {
+		return "", err
 	}
 	older := labelRun + "=" + runID.String() + "," + labelProxyCfg + "," + labelProxyCfg + "!=" + stamp
 	if err := k.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: older}); err != nil && !isNotFound(err) {
 		slog.Warn("wardynd: k8s substrate: could not remove the older proxy config Secrets; the new proxy is up",
 			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
-	}
-	return nil
-}
-
-// ReplaceProxyHashed is ReplaceProxy, answering the hash of the config it started the proxy with.
-func (k *keepDriver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
-	if err := k.ReplaceProxy(ctx, ref, cfgJSON); err != nil {
-		return "", err
 	}
 	return proxy.ConfigSHA256(cfgJSON), nil
 }

@@ -27,9 +27,11 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 
 	proxycfg "github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
@@ -195,6 +197,7 @@ func TestAgentSandboxKeepEndpointSliceElsewhereIsDropped(t *testing.T) {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
 	decoy := e.startDecoy(ctx, t)
+	e.decoyAccepts(ctx, t, decoy)
 	name := "wardyn-proxy-svc-" + runID.String()
 	slices := e.cs.DiscoveryV1().EndpointSlices(e.ns)
 	original, err := slices.Get(ctx, name, metav1.GetOptions{})
@@ -251,10 +254,54 @@ func (e *asEnv) startDecoy(ctx context.Context, t *testing.T) string {
 	return ip
 }
 
-// keepProxyConfig is the run's proxy config as the API marshals it.
-func keepProxyConfig(t *testing.T, runID uuid.UUID) []byte {
+// decoyAccepts is the decoy's positive control: a one-shot pod that no policy selects connects to ip:3128 and exits 0.
+// Without it, a connect refused once the endpoint is moved could be a decoy that never listened.
+func (e *asEnv) decoyAccepts(ctx context.Context, t *testing.T, ip string) {
 	t.Helper()
-	cfg, err := runner.BuildProxyConfig(runID, conformance.LoadableProxyConfig(), runner.ProxyListenPort)
+	name := "wardyn-conformance-decoy-probe-" + uuid.NewString()[:8]
+	spec := asPodSpec(e.image, false)
+	spec.Containers[0].Command = []string{"sh", "-c", "for i in 1 2 3 4 5 6 7 8 9 10; do nc -z -w2 " + ip + " 3128 && exit 0; sleep 1; done; exit 1"}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: e.ns, Labels: map[string]string{"app": "wardyn-conformance-decoy-probe"}}, Spec: spec}
+	if _, err := e.cs.CoreV1().Pods(e.ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create the decoy probe pod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = e.cs.CoreV1().Pods(e.ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+	})
+	var phase corev1.PodPhase
+	keepWaitFor(t, conformance.ASKeepSliceDecoyWait, "the decoy probe pod finishing", func() bool {
+		if got, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			phase = got.Status.Phase
+		}
+		return phase == corev1.PodSucceeded || phase == corev1.PodFailed
+	})
+	if phase != corev1.PodSucceeded {
+		t.Fatalf("decoy probe pod = %s, want Succeeded: the decoy does not accept on 3128 from a pod no policy selects, so the refused connect below would prove nothing", phase)
+	}
+}
+
+// keepProxyConfig is the run's proxy config as the API marshals it, behind a control plane that answers token renewals: a
+// replacement proxy serves only after its first renewal lands (proxycfg.FirstRenewGateEnv), and the suite's default
+// control plane address answers nothing. The fake control plane runs in a pod of its own, started here.
+func (e *asEnv) keepProxyConfig(t *testing.T, runID uuid.UUID) []byte {
+	t.Helper()
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, ok := e.cs.(*kubernetes.Clientset)
+	if !ok {
+		t.Fatalf("the suite's clientset is %T, want *kubernetes.Clientset", e.cs)
+	}
+	host, token := "wardyn-hopfake-"+uuid.NewString()[:8], "keep-renew-token"
+	startHopFakeK8s(t, e.cfg, cs, e.ns, e.image, ca, host, uuid.New(), token)
+	pc := conformance.LoadableProxyConfig()
+	pc.ControlPlaneURL, pc.ControlPlaneCAPEM, pc.RunToken = "https://"+host+":8443", string(ca.CertPEM), token
+	cfg, err := runner.BuildProxyConfig(runID, pc, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
 	}
@@ -274,7 +321,7 @@ func TestAgentSandboxKeepLiveReplaceProxy(t *testing.T) {
 	}
 	proxyName := "wardyn-proxy-" + runID.String()
 	proxyBefore, agentBefore := e.keepPod(ctx, t, proxyName).UID, e.keepPod(ctx, t, ref).UID
-	if err := r.ReplaceProxy(ctx, ref, keepProxyConfig(t, runID)); err != nil {
+	if err := r.ReplaceProxy(ctx, ref, e.keepProxyConfig(t, runID)); err != nil {
 		t.Fatalf("ReplaceProxy: %v", err)
 	}
 	if got := e.keepPod(ctx, t, proxyName).UID; got == proxyBefore {
@@ -344,7 +391,7 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 	}
 
 	// 6. The revive, in run_revive.go's order.
-	cfg := keepProxyConfig(t, runID)
+	cfg := e.keepProxyConfig(t, runID)
 	if err := r.CanReplaceProxy(ctx, ref); err != nil {
 		t.Fatalf("CanReplaceProxy: %v", err)
 	}
@@ -379,6 +426,32 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 	}
 	if st, err := r.Status(ctx, ref); err != nil || st.State != types.RunRunning {
 		t.Errorf("Status after the revive = %+v, %v, want running", st, err)
+	}
+
+	// 7b. Calls for generation 1 once generation 2's revive owns the run: refused, nothing touched.
+	proxyName := "wardyn-proxy-" + runID.String()
+	revivedProxy := e.keepPod(ctx, t, proxyName)
+	if got := revivedProxy.Labels["wardyn.proxy.generation"]; got != "2" {
+		t.Errorf("revived proxy pod generation label = %q, want 2", got)
+	}
+	gated := false
+	for _, v := range revivedProxy.Spec.Containers[0].Env {
+		gated = gated || (v.Name == proxycfg.FirstRenewGateEnv && v.Value == "1")
+	}
+	if !gated {
+		t.Errorf("revived proxy pod env = %v, want %s=1", revivedProxy.Spec.Containers[0].Env, proxycfg.FirstRenewGateEnv)
+	}
+	if err := r.EndSandboxAt(ctx, ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
+		t.Errorf("EndSandboxAt(1) after generation 2's revive = %v, want ErrProxyGenerationNewer", err)
+	}
+	if _, err := r.ReplaceProxyHashedAt(ctx, ref, cfg, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
+		t.Errorf("ReplaceProxyHashedAt(1) after generation 2's revive = %v, want ErrProxyGenerationNewer", err)
+	}
+	if got := e.keepPod(ctx, t, ref).UID; got != pod.UID {
+		t.Errorf("the revived agent pod changed from %s to %s after generation 1's calls", pod.UID, got)
+	}
+	if got := e.keepPod(ctx, t, proxyName).UID; got != revivedProxy.UID {
+		t.Errorf("the revived proxy pod changed from %s to %s after generation 1's calls", revivedProxy.UID, got)
 	}
 
 	// 8. A run that is not kept ends as before: unsupported, then the stop wardynd's fallback calls.

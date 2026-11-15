@@ -72,6 +72,27 @@ func TestCanReplaceProxyRefusesARunNotKept(t *testing.T) {
 
 func TestReplaceProxyOrder(t *testing.T) {
 	k, cs, dyn, ref := keptRun(t)
+	// The replacement reads another IP than the proxy it replaces, so writing back any IP read before the swap fails.
+	created := false
+	cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if pod, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod); ok && pod.Name == proxyPodName(asRunID) {
+			created = true
+		}
+		return false, nil, nil
+	})
+	cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if !created || a.(clienttesting.GetAction).GetName() != proxyPodName(asRunID) {
+			return false, nil, nil
+		}
+		obj, err := cs.Tracker().Get(podsGVR, a.GetNamespace(), proxyPodName(asRunID))
+		if err != nil {
+			return true, nil, err
+		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.PodIP = "10.244.0.9"
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: true}}
+		return true, pod, nil
+	})
 	order := writesInOrder(cs, dyn)
 	if err := k.ReplaceProxy(context.Background(), ref, replaceCfg); err != nil {
 		t.Fatalf("ReplaceProxy: %v", err)
@@ -80,8 +101,8 @@ func TestReplaceProxyOrder(t *testing.T) {
 	if !slices.Equal(*order, want) {
 		t.Errorf("writes = %v\nwant %v: the agent Sandbox and pod see no write", *order, want)
 	}
-	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.7"}) {
-		t.Errorf("endpoints after the replace = %v, want the new proxy pod's IP", got)
+	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.9"}) {
+		t.Errorf("endpoints after the replace = %v, want the new proxy pod's IP 10.244.0.9, not the old 10.244.0.7", got)
 	}
 }
 

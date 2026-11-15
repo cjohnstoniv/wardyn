@@ -19,6 +19,7 @@ const (
 	ASKeepSliceBackWait  = 30 * time.Second // for it succeeding once the endpoint is restored
 	ASKeepReplaceLimit   = 8 * time.Minute  // TestAgentSandboxKeepLiveReplaceProxy
 	ASKeepReplaceWait    = 30 * time.Second
+	ASKeepHopfakeStart   = 3 * time.Minute  // keepProxyConfig's startHopFakeK8s: the hopfake build and its own 2-minute bound
 	ASKeepSequenceLimit  = 15 * time.Minute // TestAgentSandboxKeepAPISequence, both of its runs
 	ASKeepSequenceSettle = 5 * time.Second  // its sleep inside the remake window
 	ASKeepSequenceStop   = 2 * time.Minute  // its keepWaitFor for no pod of the run remaining

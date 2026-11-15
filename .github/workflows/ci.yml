@@ -1478,11 +1478,15 @@ jobs:
     # Sized from two hosted runs on 2026-11-12 and 2026-11-13, which ran the first seven cases: the suite step took
     # 715 s and 658 s, and everything else in the job took 379 s and 328 s. The seven keep and warm pool cases have
     # not run hosted, so they are bounded by their wait limits (the worst case of each, test/conformance, in
-    # seconds): proxy through the Service 420, endpoint slice elsewhere 660, live proxy replace 570, API sequence
-    # 1145, Service admission 120, placeholder holds nothing 240, placeholder claimed and refilled 615; 3770 in
-    # all. (379 + 715 + 3770) x 1.25 = 6080 s, so 102 minutes. The Makefile's 30m go test -timeout is lower than
-    # 715 s plus those 3770 s, so this job's suite step passes CONFORMANCE_K8S_TIMEOUT=94m: (715 + 3770) x 1.25 =
-    # 5606 s, rounded up. TestAgentSandboxCaseBudgetsFitTheJobTimeout adds the cases' limits up against it and
+    # seconds): proxy through the Service 420, endpoint slice elsewhere 660, live proxy replace 750, API sequence
+    # 1325, Service admission 120, placeholder holds nothing 240, placeholder claimed and refilled 615; 4130 in
+    # all (the live replace and the API sequence each count the 180 s of the control plane pod their proxy config
+    # starts). With the 1.25 margin, (379 + 715 + 4130) x 1.25 = 6530 s would be 109 minutes; this job keeps 102,
+    # which holds the worst cases without it: 379 + 715 + 4130 = 5224 s of 6120 s. The Makefile's 30m go test
+    # -timeout is lower than 715 s plus those 4130 s, so this job's suite step passes CONFORMANCE_K8S_TIMEOUT=94m:
+    # (715 + 4130) x 1.25 = 6056 s would be 101 minutes; 94m is kept, and holds the worst cases without the margin:
+    # 715 + 4130 = 4845 s of 5640 s.
+    # TestAgentSandboxCaseBudgetsFitTheJobTimeout adds the cases' limits up against it and
     # against this bound. Typical time: about 6 minutes of setup and about 12 minutes for the seven measured
     # cases; the seven new cases' typical time is not measured yet (the first hosted run measures it). The bound
     # only bites on a hang.
