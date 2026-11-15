@@ -423,3 +423,35 @@ func TestDesktopSignin_TheStatedStartingBoundIsTheBeginHoldTwice(t *testing.T) {
 		t.Fatal("the 409 texts and docs/sdk.md state 6 minutes; change them with the bound")
 	}
 }
+
+// TestDesktopSignin_AnEndOfASignInWithNoPauseRecordWaitsOnlyTwiceTheBeginHold: an end of a sign-in whose begin never
+// recorded what it stopped is refused only until twice signinBeginHold after the sign-in began; from then on it runs,
+// so a begin that died after writing its row never keeps the sign-in from being ended for its whole window.
+// Values: the time half of the wait is false at the wait's end exactly, true a minute before it, and the window's
+// 30 minutes is far past it; the record half is empty in both rows.
+func TestDesktopSignin_AnEndOfASignInWithNoPauseRecordWaitsOnlyTwiceTheBeginHold(t *testing.T) {
+	for name, tc := range map[string]struct {
+		age   time.Duration // how long ago the sign-in began
+		code  int
+		calls []string
+	}{
+		"inside the wait": {age: 2*signinBeginHold - time.Minute, code: http.StatusConflict},
+		"the wait passed": {age: 2 * signinBeginHold, code: http.StatusNoContent, calls: []string{"person:stop", "agent:resume-agent", "signal:SIGCONT"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			began := f.srv.cfg.Now().Add(-tc.age)
+			si := types.DesktopSignin{ID: uuid.New(), RunID: f.run.ID, Holder: signinOwner, BeganAt: began, ExpiresAt: began.Add(desktopSigninWindow)}
+			if err := f.st.BeginDesktopSignin(context.Background(), si); err != nil {
+				t.Fatal(err)
+			}
+			code, body := f.post(t, "/desktop-signin/end", "")
+			if code != tc.code || code == http.StatusConflict && !strings.Contains(body, reasonDesktopSigninStarting) {
+				t.Fatalf("end = %d %s, want %d", code, body, tc.code)
+			}
+			if got := f.rn.seen(); !slices.Equal(got, tc.calls) {
+				t.Fatalf("calls = %v, want %v", got, tc.calls)
+			}
+		})
+	}
+}
