@@ -651,13 +651,18 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       .then(() => holdUntilRead(id, list, after));
   };
   // The server's 409 for a request that is no longer pending: someone else decided it, or it ended. The card on screen
-  // is stale, so the lists are read again at once, and the caller waits: the card stays busy until that read answers.
-  const refreshIfDecided = async (err: unknown): Promise<boolean> => {
+  // is stale, so the lists are read again at once, and the caller waits for that read. The request then stays held
+  // until a read of its list that began after the 409 has landed, or for READ_HOLD_MS (useReadHold), as after a
+  // decision that went through: a read that fails frees nothing. Any other error answers false, and the caller frees
+  // the request itself.
+  const refreshIfDecided = async (id: string, err: unknown): Promise<boolean> => {
     if (!isAlreadyDecided(err)) return false;
+    const after = newestRead();
     onChanged?.();
     await fetchAllRef.current().catch(() => {
       /* transient refresh failure: the next poll tick catches the view up */
     });
+    holdUntilRead(id, "approvals", after);
     return true;
   };
 
@@ -691,9 +696,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           { description: getErrorMessage(err) },
         );
       }
-      // The dialog is for a request that is decided, so it closes with the card.
-      if (await refreshIfDecided(err)) setPrompt((cur) => (cur?.id === id ? null : cur));
-      releaseDeciding(id);
+      // The dialog is for a request that is decided, so it closes with the card, which stays held (refreshIfDecided).
+      if (await refreshIfDecided(id, err)) setPrompt((cur) => (cur?.id === id ? null : cur));
+      else releaseDeciding(id);
       return false;
     }
   };
@@ -720,8 +725,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
-      await refreshIfDecided(err);
-      releaseDeciding(id);
+      if (!(await refreshIfDecided(id, err))) releaseDeciding(id);
     }
   };
 
@@ -741,8 +745,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       onChanged?.();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
-      await refreshIfDecided(err);
-      releaseDeciding(id);
+      if (!(await refreshIfDecided(id, err))) releaseDeciding(id);
     }
   };
 

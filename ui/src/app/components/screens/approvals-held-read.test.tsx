@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { HttpError } from "../../lib/api/core";
 import type { ApprovalRequest } from "../../lib/types";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -18,6 +19,7 @@ let knows = false;
 let waitingFails = false;
 let waitingRows: ApprovalRequest[] = [];
 const approveMock = vi.fn<() => Promise<unknown>>();
+const declineMock = vi.fn<() => Promise<unknown>>();
 const pendingMock = vi.fn(() => (pendingFails ? Promise.reject(new Error("read failed")) : Promise.resolve(pendingRows)));
 const waitingMock = vi.fn(() =>
   waitingFails ? Promise.reject(new Error("read failed")) : Promise.resolve({ rows: waitingRows, truncated: false }),
@@ -29,7 +31,7 @@ vi.mock("../../lib/api/approvals", () => ({
     listDecidableByMe: () => waitingMock(),
     approve: () => approveMock(),
     deny: vi.fn(),
-    decline: vi.fn(),
+    decline: () => declineMock(),
   },
 }));
 const elevationList = vi.fn<() => Promise<unknown>>(async () => null);
@@ -62,6 +64,16 @@ const push = (id: string): ApprovalRequest => ({
   state: "PENDING",
   requested_at: NOW,
 });
+const egress = (id: string, extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id,
+  run_id: "4f2a91c0-1111-2222-3333-444455556666",
+  kind: "egress_domain",
+  requested_scope: { host: `${id}.example.com` },
+  state: "PENDING",
+  requested_at: NOW,
+  ...extra,
+});
+const takeover = (id: string) => egress(id, { kind: "human_takeover", requested_scope: { reason: "stuck on a prompt" } });
 const later = <T,>() => {
   let answer: (v: T) => void = () => {};
   let fail: (e: Error) => void = () => {};
@@ -98,6 +110,7 @@ beforeEach(() => {
   waitingFails = false;
   waitingRows = [];
   approveMock.mockReset().mockResolvedValue({});
+  declineMock.mockReset().mockResolvedValue({});
   elevationList.mockReset().mockResolvedValue(null);
   elevationApprove.mockReset().mockResolvedValue({});
 });
@@ -173,5 +186,71 @@ describe("ApprovalsScreen: a decided request is held until a read of its list la
     await flush();
     expect(approveMock).toHaveBeenCalledTimes(1);
     for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
+});
+
+// The server's 409 for a request someone else decided first: the card is stale, so the lists are read again at once.
+// The request stays held until a read of its list that began after the 409 has landed, as after a decision that went
+// through, so a read that fails does not draw the decided request with live buttons from the list shown before.
+describe("ApprovalsScreen: a request refused as already decided is held until a read of its list lands", () => {
+  const refused = (sentence = "approval already decided") => new HttpError(409, sentence, "approval_already_decided");
+
+  it("a card's own Approve refused as already decided stays off while the read after it fails, until a later read lands", async () => {
+    pendingRows = [push("p1")];
+    await mount("/approvals");
+    approveMock.mockReset().mockRejectedValueOnce(refused());
+    pendingFails = true;
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(approveMock).toHaveBeenCalledTimes(1);
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    pendingFails = false;
+    await flush(10_000);
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
+
+  it("a card refused as already decided that no read frees is freed after the bound", async () => {
+    pendingRows = [push("p1")];
+    await mount("/approvals");
+    approveMock.mockReset().mockRejectedValueOnce(refused());
+    pendingFails = true;
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    await flush(READ_HOLD_MS - 1000);
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    await flush(1000);
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
+
+  it("the reason dialog refused as already decided closes, and its card stays off while the read after it fails", async () => {
+    pendingRows = [egress("p1")];
+    await mount("/approvals");
+    approveMock.mockReset().mockRejectedValueOnce(refused());
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    await flush();
+    pendingFails = true;
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^approve$/i }));
+    await flush();
+    expect(approveMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    pendingFails = false;
+    await flush(10_000);
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeEnabled();
+  });
+
+  it("a Decline refused as no longer open stays off while the read after it fails, until a later read lands", async () => {
+    pendingRows = [takeover("t1")];
+    await mount("/approvals");
+    declineMock.mockReset().mockRejectedValueOnce(refused("this takeover request is no longer open"));
+    pendingFails = true;
+    const decline = () => within(screen.getByTestId("takeover-card")).getByRole("button", { name: /^Decline$/ });
+    fireEvent.click(decline());
+    await flush();
+    expect(declineMock).toHaveBeenCalledTimes(1);
+    expect(decline()).toBeDisabled();
+    pendingFails = false;
+    await flush(10_000);
+    expect(decline()).toBeEnabled();
   });
 });
