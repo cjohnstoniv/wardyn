@@ -227,8 +227,15 @@ func (f fileStore) get(origin string) (cliItem, bool, error) {
 	return it, ok, err
 }
 
+// put stores it for origin. A damaged file is replaced, as its error says to sign in again. A file that could
+// not be read is left as it is, since it may hold other organisations' sign-ins: load's read errors are
+// *fs.PathError (os.ReadFile), and its damaged-file error is not.
 func (f fileStore) put(origin string, it cliItem) error {
 	items, err := f.load()
+	var unread *fs.PathError
+	if errors.As(err, &unread) {
+		return err
+	}
 	if err != nil {
 		items = map[string]cliItem{}
 	}

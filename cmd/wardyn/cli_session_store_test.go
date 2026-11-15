@@ -8,9 +8,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +110,57 @@ func TestADeleteForOneOrganisationLeavesAFileItCannotRead(t *testing.T) {
 		unchanged(t, path)
 		if k, _ := cliprofile.ReadSessionStore(dir, f.srv.URL); k != types.CLIStoreKeychain {
 			t.Errorf("the profile names %q, want keychain", k)
+		}
+	})
+}
+
+// TestASignInToTheFileReplacesOnlyADamagedFile: a sign-in stored in the file replaces a damaged file, as the
+// damaged file's error says to sign in again, but not a file this user cannot read, which may hold other
+// organisations' sign-ins: that sign-in fails and leaves the file as it was.
+func TestASignInToTheFileReplacesOnlyADamagedFile(t *testing.T) {
+	// setup is a computer with no keychain, so a sign-in goes to the file, and a sign-in file holding body.
+	setup := func(t *testing.T, body []byte) (*signInOrg, string, string) {
+		t.Helper()
+		f := newSignInOrg(t)
+		dir := cliEnv(t, nil)
+		openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+		keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+		if err := os.MkdirAll(dir, 0o700); err != nil { // no login has made the profile directory yet
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, cliSessionFile)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f, dir, path
+	}
+	t.Run("damaged", func(t *testing.T) {
+		f, dir, _ := setup(t, []byte(`{"https://other.example":{`))
+		if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+			t.Fatalf("login: %v; want the damaged file replaced", err)
+		}
+		if _, ok, err := (fileStore{dir}).get(f.srv.URL); !ok || err != nil {
+			t.Errorf("the file holds no sign-in (found=%v, %v)", ok, err)
+		}
+	})
+	t.Run("cannot be read", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("needs POSIX permissions that bind this user")
+		}
+		other := []byte(`{"https://other.example":{}}`)
+		f, _, path := setup(t, other)
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := runCLI(t, "", "login", f.srv.URL)
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("login: %v; want it refused with the file's read error", err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, other) {
+			t.Errorf("the file holds %q (%v); want it as it was", got, err)
 		}
 	})
 }
