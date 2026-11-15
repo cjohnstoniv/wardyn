@@ -911,6 +911,9 @@ type computerFolderRunView struct {
 	SandboxCopy *string           `json:"sandbox_copy,omitempty"`
 	LastReport  *folderLastReport `json:"last_report,omitempty"`
 	GiveUpAt    *time.Time        `json:"give_up_at,omitempty"`
+	// RecordUnreadable says the folder's record could not be decoded: the view shows only a give-up the record
+	// holds (setUnreadFolderFate), as the run's given_up row says status_unreadable.
+	RecordUnreadable bool `json:"record_unreadable,omitempty"`
 }
 
 // folderPassView is a pass record as the folder's views show it: types.FolderPassRecord without GivenUpAudited,
@@ -972,6 +975,8 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 			if run, err := s.cfg.Store.GetRun(ctx, id); err == nil {
 				s.setFolderFate(ctx, v, run, rec, seed.SeededAt != nil)
 			}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			s.setUnreadFolderFate(ctx, v, id, seed.SeededAt != nil)
 		}
 	}
 	return v
