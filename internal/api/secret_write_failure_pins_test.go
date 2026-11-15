@@ -130,7 +130,7 @@ func TestResolveADOOwnPAT_StampThatDidNotLandWritesNoRefusalRow(t *testing.T) {
 }
 
 // Each secret.write failure row names the writer that made the save: the person for their own key or sign-in, the
-// run's agent for its own-token refusal stamp, and wardynd for its own write probe.
+// run's agent for its own-token refusal stamp, and wardynd for its own sign-in and probe writes.
 func TestSecretWriteFailure_RowNamesItsWriter(t *testing.T) {
 	t.Run("a person's provider key", func(t *testing.T) {
 		site := credentialSite(keyProvider("anthropic", "claude-code"))
@@ -181,12 +181,20 @@ func TestSecretWriteFailure_RowNamesItsWriter(t *testing.T) {
 		}
 		wantWriter(t, rows[0], types.ActorAgent, "spiffe://wardyn.local/run")
 	})
-	t.Run("wardynd's write probe", func(t *testing.T) {
+	t.Run("wardynd's own writes", func(t *testing.T) {
 		sec := &memSecrets{m: map[string][]byte{}}
 		h, srv := secretsRBACServer(t, sec)
 		srv.cfg.Secrets = rowFailingSecrets{sec}
 		if err := srv.probeSecretWrite(context.Background(), awsSSOScope{perUser: true, owner: "bob"}); !errors.Is(err, secretstore.ErrRowNotWritten) {
 			t.Fatalf("probe = %v, want ErrRowNotWritten", err)
+		}
+		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
+		if err := srv.storeAWSSSOBlob(context.Background(), awsSSOScope{perUser: true, owner: "bob"}, awsSSOBlob{}); !errors.Is(err, secretstore.ErrRowNotWritten) {
+			t.Fatalf("aws sso store = %v, want ErrRowNotWritten", err)
+		}
+		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
+		if err := srv.storeADOEntraBlob(context.Background(), "alice", "ado-1", adoEntraBlob{}); !errors.Is(err, secretstore.ErrRowNotWritten) {
+			t.Fatalf("ado entra store = %v, want ErrRowNotWritten", err)
 		}
 		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
 	})
