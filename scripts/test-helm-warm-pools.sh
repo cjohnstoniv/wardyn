@@ -44,7 +44,8 @@ envval() { # <name> <render file>
 # Off: absent, null and an empty list are the same bytes, and carry no marker.
 render -f "$ALLON" >"$TMP/absent.out"
 render -f "$ALLON" --set k8s.warmPools=null >"$TMP/null.out"
-render -f "$ALLON" --set 'k8s.warmPools=[]' >"$TMP/empty.out"
+# --set-json: --set reads [] as the string "[]", which is a non-empty value, not an empty list.
+render -f "$ALLON" --set-json 'k8s.warmPools=[]' >"$TMP/empty.out"
 cmp -s "$TMP/absent.out" "$TMP/null.out" || die "an explicit null renders differently from the default"
 cmp -s "$TMP/absent.out" "$TMP/empty.out" || die "an empty list renders differently from the default"
 grep -qx 'kind: Role' "$TMP/absent.out" && grep -q 'WARDYN_K8S_READ_NODES\|name: WARDYN_RUNNER' "$TMP/absent.out" \
