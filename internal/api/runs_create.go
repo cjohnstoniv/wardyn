@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -124,8 +126,12 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	var newRepos []types.WorkspaceRepo
 	for _, id := range ids {
 		ws, gerr := s.cfg.Store.GetWorkspace(ctx, id)
-		if gerr != nil {
+		if errors.Is(gerr, store.ErrNotFound) {
 			return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("workspace %s: %w", id, gerr))
+		}
+		if gerr != nil {
+			// Any other read fault is the server's, not the caller's: the store's error goes to the log only.
+			return workspaceSeed{}, seedErr(http.StatusInternalServerError, reasonWorkspaceSeedUnreadable, errors.New(loggedMsg(ctx, "the workspace could not be read", gerr)))
 		}
 		seed.attached = append(seed.attached, ws)
 		sel := sels[id.String()]

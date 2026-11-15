@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -73,5 +74,40 @@ func TestSeedRequestWorkspace_AnUnreadableListIsAServerFault(t *testing.T) {
 	if refusal == nil || refusal.status != http.StatusInternalServerError || refusal.body.Reason != reasonWorkspaceSourcesListUnavailable ||
 		strings.Contains(refusal.body.Error, "store down") {
 		t.Fatalf("refusal = %+v, want 500 %s without the store's own error", refusal, reasonWorkspaceSourcesListUnavailable)
+	}
+}
+
+// getFailStore is an owner store whose single-workspace read fails with err.
+type getFailStore struct {
+	*ownerStore
+	err error
+}
+
+func (s getFailStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return types.Workspace{}, s.err
+}
+
+// A run that attaches a workspace by id answers a workspace the store does not hold as the caller's 422, and any
+// other read fault as the server's 500 with the store's error in the log only.
+func TestSeedRequestWorkspace_OnlyAMissingWorkspaceIsUnprocessable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		store    store.Store
+		status   int
+		hideText string
+	}{
+		"not found":   {store: newOwnerStore(), status: http.StatusUnprocessableEntity},
+		"store fault": {store: getFailStore{newOwnerStore(), errors.New("scan: driver down")}, status: http.StatusInternalServerError, hideText: "driver down"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := New(Config{Store: tc.store})
+			id := uuid.New()
+
+			_, refusal := srv.seedRequestWorkspace(context.Background(), &types.RunPolicySpec{}, &createRunRequest{WorkspaceID: &id})
+
+			if refusal == nil || refusal.status != tc.status || refusal.body.Reason != reasonWorkspaceSeedUnreadable ||
+				(tc.hideText != "" && strings.Contains(refusal.body.Error, tc.hideText)) {
+				t.Fatalf("refusal = %+v, want %d %s without the store's own error", refusal, tc.status, reasonWorkspaceSeedUnreadable)
+			}
+		})
 	}
 }
