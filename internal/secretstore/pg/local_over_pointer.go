@@ -20,6 +20,11 @@ import (
 // removeOld's recheck, which logs a failed removal.
 func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) error {
 	ref := rowRef(s.owner, name)
+	done, err := startPut(s.pool)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
+	}
+	defer done()
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
