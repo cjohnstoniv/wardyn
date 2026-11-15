@@ -125,3 +125,23 @@ func TestGiveUpForcedPastKeep_ReadsTheMarkAfterTheKeepsAnswer(t *testing.T) {
 		t.Errorf("reads %v, %d give-ups; want the keep's answer, then the mark, then the give-up's own reads, and one give-up", got, len(f.cs.giveUps))
 	}
 }
+
+// Inside the keep the give-up asks the database whether the keep has run out, and reads nothing more: not the mark,
+// the run or its record. Catches: the keep gate dropped or moved after other reads, which would read, and on a failed
+// read log, on every tick for the whole keep.
+func TestGiveUpForcedPastKeep_InsideTheKeepReadsOnlyTheKeepsAnswer(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.setRecord(owedCounted())
+	f.cs.giveUpApplies = true
+	ctx := context.Background()
+	marks, err := f.leaser.ListForcedStops(ctx)
+	if err != nil || len(marks) != 1 {
+		t.Fatalf("marks %v, %v; want one", marks, err)
+	}
+	reads := f.logReads()
+	f.s.giveUpForcedPastKeep(ctx, f.s.cfg.Store.(store.ForcedStopper), marks[0])
+	if got := reads(); !slices.Equal(got, []string{"due"}) || len(f.cs.giveUps) != 0 {
+		t.Errorf("reads %v, %d give-ups inside the keep; want only the keep's answer and no give-up", got, len(f.cs.giveUps))
+	}
+}
