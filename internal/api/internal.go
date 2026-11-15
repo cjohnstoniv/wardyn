@@ -90,16 +90,27 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
 	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 	// decisions are kept on its trail and, as on the runner spool, are not activity.
+	// Whether the run is over is read on the database's clock (runIsOverNow), and only once a touch or a presence
+	// stamp is due, so a chatty agent's posts add no read. A clock that cannot be read counts as over: neither is
+	// written, and the next due decision reads it again.
+	liveRun, live := liveRunFromContext(r.Context())
 	var kind types.MachineKind
-	var over bool
-	if run, ok := liveRunFromContext(r.Context()); ok {
-		kind, over = run.MachineKind, runIsOver(run, s.cfg.Now().UTC())
+	if live {
+		kind = liveRun.MachineKind
 	}
-	if s.cfg.Store != nil && !over && s.shouldTouch(runID, kind, dl) {
+	overRead, over := false, false
+	isOver := func() bool {
+		if live && !overRead {
+			o, err := s.runIsOverNow(r.Context(), liveRun)
+			overRead, over = true, o || err != nil
+		}
+		return over
+	}
+	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if !over && decisionIsActivity(kind, dl) {
+	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
 		s.noteAgentActive(r.Context(), runID)
 	}
 

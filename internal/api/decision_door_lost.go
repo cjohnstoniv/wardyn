@@ -34,8 +34,9 @@ const (
 // run in that span.
 const expiredRunRead = "run.report.drop:read"
 
-// runUnreadableError is verifyRunToken's refusal of a revoked token at the decision door whose run could not
-// be read, so it is not known whether the run is over. The run id is the token's verified one.
+// runUnreadableError is verifyRunToken's refusal of a revoked token at the decision door whose run, or the database's
+// clock that judges it over (runIsOverNow), could not be read, so it is not known whether the run is over. The run id
+// is the token's verified one.
 type runUnreadableError struct {
 	RunID uuid.UUID
 	Err   error
@@ -125,8 +126,8 @@ func (w decisionGateWriter) WriteHeader(code int) {
 // renew handler refuses it), so every token of such a run expires at most RunTokenTTL after it ended:
 //   - a token that expired within identity.RunTokenLapseAfter is noted at once;
 //   - an older one is noted only while its run is not over, read at most once per run in that span
-//     (expiredRunRead). A run that is over, or gone, writes no row; a read that fails writes none and is
-//     tried again at the next post.
+//     (expiredRunRead). A run that is over, or gone, writes no row; a read of the run or of the database's clock
+//     that fails writes none and is tried again at the next post.
 //
 // So no such row lands on a run more than RunTokenTTL + RunTokenLapseAfter after it ended. The older arm keeps
 // its own claim so that an old token's read cannot hold back the row a recent one writes.
@@ -145,7 +146,12 @@ func (s *Server) noteExpiredDecisionPost(r *http.Request, exp *identity.ExpiredT
 		}
 		return
 	}
-	if !runIsOver(run, s.cfg.Now().UTC()) && !s.noteDecisionReportLost(r, exp.RunID, reportLostExpired) {
+	over, cerr := s.runIsOverNow(r.Context(), run)
+	if cerr != nil {
+		s.releaseDecisionRefusal(exp.RunID, expiredRunRead) // the next post reads the run and the clock again
+		return
+	}
+	if !over && !s.noteDecisionReportLost(r, exp.RunID, reportLostExpired) {
 		s.releaseDecisionRefusal(exp.RunID, expiredRunRead)
 	}
 }
