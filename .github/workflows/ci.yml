@@ -256,7 +256,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # 55, was 40: unit ran out at 40 on rc.21 wave 3 (D643); set from the prebuild's measured time after.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -264,12 +265,15 @@ jobs:
           - suite: unit
             target: test-report
             tags: ''
+            build: -race -covermode=atomic -coverpkg=./...
           - suite: docker
             target: test-report-docker
             tags: docker
+            build: -race -tags docker -covermode=atomic -coverpkg=./...
           - suite: k8s
             target: test-report-k8s
             tags: docker,k8s
+            build: -race -tags docker,k8s -covermode=atomic -coverpkg=./...
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -331,6 +335,26 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # internal/api's test compile is the job's memory peak (D643: under swap it outlasted the timeout). It is
+      # compiled here first with two workers, and measured, so the step below finds it in the build cache. vmstat
+      # writes memory to the step log every 15 s, which a runner lost mid-step still leaves.
+      - name: Prebuild internal/api's tests with two workers
+        if: needs.changes.outputs.backend != 'false'
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          else
+            time go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step: $(go test -n ${{ matrix.build }} ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
@@ -450,6 +474,23 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/
+          else
+            time go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step: $(go test -n ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
@@ -463,6 +504,9 @@ jobs:
         timeout-minutes: 20
         run: |
           set -euo pipefail
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
           out="$(python3 -I scripts/lib/candidate-tests.py guards)"
           [ -n "$out" ] || { echo "::error::no whole-tree guard test found; the discovery pattern regressed"; exit 1; }
           rc=0
@@ -1860,8 +1904,8 @@ jobs:
     runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
-    # key-service leg.
-    timeout-minutes: 55
+    # key-service leg. 70, was 55: the step ran out at 55 on rc.21 wave 3 (D643), against 11 m on wave 2.
+    timeout-minutes: 70
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -1947,10 +1991,31 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
+          else
+            time go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step: $(go test -n -tags docker ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-conformance-docker
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-docker test reports
         if: always()
@@ -2517,10 +2582,12 @@ jobs:
             suite: pg-api-1
             run: make test-report-pg-api PG_PART=1/2 PG_REPORT=pg-api-1
             superuser: "1"
+            prebuild: plain
           - shard: api-2
             suite: pg-api-2
             run: make test-report-pg-api PG_PART=2/2 PG_REPORT=pg-api-2
             superuser: "1"
+            prebuild: plain
           - shard: store
             suite: pg-store
             run: make test-report-pg-store PG_REPORT=pg-store
@@ -2536,6 +2603,7 @@ jobs:
             suite: ''
             run: make test-race-pg
             superuser: ''
+            prebuild: race
     services:
       postgres:
         image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
@@ -2596,6 +2664,24 @@ jobs:
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
       # consult the marker. The race shard does not set it, as before.
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      - name: Prebuild internal/api's tests with two workers
+        if: matrix.prebuild != ''
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          free -m; df -h /
+          if [ -x /usr/bin/time ]; then
+            /usr/bin/time -v go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          else
+            time go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+          fi
+          rm -f "$RUNNER_TEMP/api.test"
+          free -m; df -h /
+          echo "internal/api compiles left for the next step: $(go test -n ${{ matrix.prebuild == 'race' && '-race' || '' }} ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
       - name: Postgres-gated suite (${{ matrix.shard }})
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
@@ -2604,7 +2690,11 @@ jobs:
           # No gate reads a PG shard's coverage (the floor and cover-union take unit,
           # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
           WARDYN_TEST_REPORT_COVER: '0'
-        run: ${{ matrix.run }}
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
         if: always() && matrix.suite != ''
@@ -3045,8 +3135,9 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
-    timeout-minutes: 25
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
+    # train's cold staticcheck was killed at 25 inside `make staticcheck` (D643).
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -3101,8 +3192,13 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # vmstat as in the go job (D643): staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
-        run: make ${{ matrix.gate }}
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
