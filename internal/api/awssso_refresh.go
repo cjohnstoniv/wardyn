@@ -267,13 +267,13 @@ const awsSSOPersistBudget = 30 * time.Second
 // (secretstore.ErrRevisionChanged, never retried). The same holds for an erase
 // of the owner since that read (secretstore.ErrGenerationChanged).
 func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
+	// pctx is assigned once, from the parameter, so the secret-read audit guard can follow the re-read below to the
+	// caller's purpose. Only the write carries the compare-and-set's revision; a Get reads none.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()
-	// Only the write carries the compare-and-set's revision. The re-read below keeps ctx, which a Get reads no
-	// revision from and the secret-read audit guard can follow to the caller's purpose.
-	storeCtx := ctx
+	storeCtx := pctx
 	if guarded {
-		storeCtx = secretstore.WithIfRevision(ctx, rev)
+		storeCtx = secretstore.WithIfRevision(pctx, rev)
 	}
 	lost := false
 	for attempts = 1; ; attempts++ {
@@ -281,7 +281,7 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 		// An earlier attempt whose reply was lost may have committed: the
 		// compare-and-set then refuses this renewal's own row, which is stored.
 		if lost && errors.Is(err, secretstore.ErrRevisionChanged) {
-			if stored, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil && found &&
+			if stored, found, rerr := s.readAWSSSOBlob(pctx, scope); rerr == nil && found &&
 				stored.AccessToken == next.AccessToken && stored.RefreshToken == next.RefreshToken {
 				return attempts, nil
 			}
@@ -291,7 +291,7 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 			return attempts, err
 		}
 		select {
-		case <-ctx.Done():
+		case <-pctx.Done():
 			return attempts, err
 		case <-time.After(awsSSOPersistRetryDelay):
 		}
