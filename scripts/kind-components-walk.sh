@@ -76,7 +76,7 @@ fi
 
 step "creating ${CLUSTER} (deploy/kind/quickstart.sh, private kubeconfig)"
 CREATED=1
-deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -40 "${TMPDIR}/quickstart.log" >&2; die "quickstart failed"; }
+deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -n 400 "${TMPDIR}/quickstart.log" >&2; die "quickstart failed"; }
 # The port the node container publishes wardynd's NodePort (quickstart.sh NODE_HTTP_PORT) on, as docker
 # bound it, not the number asked for.
 HTTP_PORT="$(docker port "${CLUSTER}-control-plane" 30080/tcp | sed -nE 's/^127\.0\.0\.1:([0-9]+)$/\1/p' | sed -n 1p)"

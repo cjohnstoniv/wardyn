@@ -111,9 +111,9 @@ calico_rollout() {
   {
     echo ""
     echo "FAIL: ${target} did not roll out in 180s. Pod state and events follow verbatim."
-    kubectl --context "${CONTEXT}" -n kube-system get pods -o wide || true
-    kubectl --context "${CONTEXT}" -n kube-system describe pod -l "${selector}" || true
-    kubectl --context "${CONTEXT}" -n kube-system get events --sort-by=.lastTimestamp || true
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system get pods -o wide || true
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system describe pod -l "${selector}" || true
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system get events --sort-by=.lastTimestamp || true
   } >&2
   die "Calico is not ready: ${target}"
 }
