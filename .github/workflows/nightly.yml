@@ -273,14 +273,30 @@ jobs:
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # Twice this runner took a shutdown signal while the step below compiled -tags docker ./internal/api/ for
+      # TestInternalHostsOnRunnerDocker; the cause is not measured yet. The package is compiled here first with two
+      # workers, so the step below finds it in the build cache, and memory and disk are printed around it.
+      - name: Prebuild the docker-tagged api test binary with two workers
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          free -m; df -h /
+          go test -c -tags docker -p 2 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/
+          rm -f "$RUNNER_TEMP/api-docker.test"
+          free -m; df -h /
       - name: Docker conformance at CC2 (runsc)
         env:
           WARDYN_TEST_DOCKER: "1"
           WARDYN_TEST_REQUIRE_CLASS: CC2
         shell: bash # pipefail — see the e2e-live job above
+        # vmstat writes to the step log itself, every 15 s, so a runner lost mid-step still leaves its last numbers.
         run: |
           mkdir -p test/reports/e2e
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
           make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
+          free -m; df -h /
       - name: Live task e2e with CC2 required (oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
