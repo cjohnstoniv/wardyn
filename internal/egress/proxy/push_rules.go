@@ -119,6 +119,11 @@ const (
 	// refuses over the ceiling rather than grinding, like gitpack's own tree
 	// walk.
 	maxGlobOps = 8 << 20
+	// maxPatternSegments bounds one compiled pattern's segments, far above any
+	// real one (validation caps an entry at 256 bytes, and a policy stored
+	// before that cap still splits into far fewer). It tells code scanning the
+	// matcher's allocations cannot overflow.
+	maxPatternSegments = 1 << 20
 )
 
 // errGlobBudget is the too-much-work refusal, reported like a pack over one
@@ -262,6 +267,9 @@ func shownPath(c gitpack.Change) string {
 // A remaining segment is assumed to match — the conservative answer for a
 // deny rule.
 func matchesBeneath(pat, name []string, budget *int) (bool, error) {
+	if len(pat) > maxPatternSegments {
+		return false, errGlobBudget // refused like an over-budget push, never read as a pass
+	}
 	at := make([]bool, len(pat)+1)
 	at[0] = true
 	spreadStars(pat, at)
