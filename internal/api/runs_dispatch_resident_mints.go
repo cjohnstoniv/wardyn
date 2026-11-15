@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -46,12 +47,13 @@ const residentPATBrokered = "a git_pat is brokered proxy-side while WARDYN_GIT_P
 //     cannot be read skips its grant, as today's skip rules do, and the proxy
 //     then relays the mint, which the control plane refuses for a grant not
 //     recorded own.
-//   - ExpiresAt is the not_after a delivery now would carry. A stored PAT or key
-//     has no expiry of its own, so nothing earlier applies, and the delivery's
-//     own not_after, a moment later, is never earlier than it.
+//   - ExpiresAt is the not_after a delivery now would carry, counted on the same clock deliverResident counts it on
+//     (boundNow). A stored PAT or key has no expiry of its own, so nothing earlier applies, and the delivery's own
+//     not_after, a moment later, is never earlier than it.
 func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, rows []types.CredentialGrant,
 	patBroker bool, spec *runner.SandboxSpec, resident *[]residentValue) bool {
 	var mints []proxy.ResidentMint
+	var at time.Time // the database's now (boundNow), read at the first mint only: most dispatches author none
 	sorted := slices.SortedFunc(slices.Values(rows), func(a, b types.CredentialGrant) int { return strings.Compare(a.ID.String(), b.ID.String()) })
 	for _, row := range sorted {
 		kind := row.Spec.Kind
@@ -74,7 +76,10 @@ func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, ro
 			s.skipResidentMint(ctx, run, row, "the grant's scope names no stored secret")
 			continue
 		}
-		mint := proxy.ResidentMint{GrantID: row.ID, Kind: kind, Token: placement.ResidentPlaceholder(row.ID), ExpiresAt: residentNotAfter(run, s.cfg.Now())}
+		if at.IsZero() {
+			at = s.boundNow(ctx)
+		}
+		mint := proxy.ResidentMint{GrantID: row.ID, Kind: kind, Token: placement.ResidentPlaceholder(row.ID), ExpiresAt: residentNotAfter(run, at)}
 		if kind == types.GrantSSHKey {
 			_, _, user, _, _ := sshKeyScopeFields(row.Spec.Scope)
 			mint.Username, mint.Host = user, host
