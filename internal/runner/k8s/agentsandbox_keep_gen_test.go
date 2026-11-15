@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -152,6 +153,30 @@ func storedProxyPod(t *testing.T, cs *fake.Clientset) *corev1.Pod {
 	return obj.(*corev1.Pod)
 }
 
+// newerReviveTakesOver does a newer revive's work through the tracker: its proxy pod, labelled gen and mounting cfg,
+// replaces the run's proxy pod, and the run's EndpointSlice points at ip. A reactor calls it, so it never goes through
+// the clientset.
+func newerReviveTakesOver(cs *fake.Clientset, gen, uid, cfg, ip string) error {
+	tr := cs.Tracker()
+	if err := tr.Delete(podsGVR, testNamespace, proxyPodName(asRunID)); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(asRunID), Namespace: testNamespace, UID: k8stypes.UID(uid),
+		Labels: map[string]string{labelRun: asRunID.String(), labelComponent: componentProxy, labelProxyGeneration: gen}},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: proxyConfigSecretVolumeName,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: cfg}}}}}}
+	if err := tr.Create(podsGVR, pod, testNamespace); err != nil {
+		return err
+	}
+	obj, err := tr.Get(endpointSlicesGVR, testNamespace, keepServiceName(asRunID))
+	if err != nil {
+		return err
+	}
+	es := obj.(*discoveryv1.EndpointSlice).DeepCopy()
+	es.Endpoints = []discoveryv1.Endpoint{{Addresses: []string{ip}, Conditions: discoveryv1.EndpointConditions{Ready: boolPtr(true)}}}
+	return tr.Update(endpointSlicesGVR, es, testNamespace)
+}
+
 func TestKeepDriverHonoursGenerations(t *testing.T) {
 	on, _, _ := newSandboxRig(t, Config{AgentSandboxKeep: true}, controllerMaking(t, nil))
 	s := served(on)
@@ -232,7 +257,7 @@ func TestReplaceProxyAtRefusesAnOlderOrSameGeneration(t *testing.T) {
 // Another replace's proxy pod takes the name after this generation 3 replace removed the old pod, and before its create.
 // A pod of an older generation is removed with the config Secret it mounted, and the create is tried again. One of
 // generation 3 is the same-generation race: that replace won the name, so this one answers ErrProxyReplaceFailed and
-// leaves its pod and Secret; its own Secret, mounted by no pod, is left for the run's teardown. A newer one is left too.
+// leaves its pod and Secret; it deletes its own Secret, which no pod mounts. A newer one is left too.
 func TestReplaceProxyAtLooksAgainWhenTheNameIsTaken(t *testing.T) {
 	for _, tc := range []struct {
 		taken string
@@ -262,11 +287,143 @@ func TestReplaceProxyAtLooksAgainWhenTheNameIsTaken(t *testing.T) {
 			if !errors.Is(err, runner.ErrProxyReplaceFailed) || pod.UID != "proxy-uid-9" || !kept {
 				t.Errorf("over a generation %s pod that took the name: err %v, pod %s, its Secret kept %v; want ErrProxyReplaceFailed, and that pod and its Secret left", tc.taken, err, pod.UID, kept)
 			}
+			if names := cfgSecretNames(t, cs); !slices.Equal(names, []string{theirs}) {
+				t.Errorf("over a generation %s pod that took the name: replacement config Secrets %v, want only %s: the failed replace deletes its own", tc.taken, names, theirs)
+			}
 			continue
 		}
 		if err != nil || pod.Labels[labelProxyGeneration] != "3" || kept {
 			t.Errorf("over a generation %s pod that took the name: err %v, labels %v, its Secret kept %v; want it removed with its Secret and the generation 3 pod made", tc.taken, err, pod.Labels, kept)
 		}
+	}
+}
+
+// A newer revive makes its proxy pod and points the slice at it after this generation 3 replace read the proxy pod.
+// The replace reads the pod again before it empties the slice, so it stops there: the newer revive's endpoint and pod
+// stay, and the replace deletes the config Secret it wrote, which no pod mounts.
+func TestReplaceProxyAtLeavesTheEndpointOfANewerRevive(t *testing.T) {
+	k, cs, dyn, ref := keptRun(t)
+	theirs := secretName(asRunID) + "-r9"
+	addCfgSecret(t, cs, theirs, "5")
+	if len(sliceIPs(keepSlice(t, cs, asRunID))) == 0 {
+		t.Fatal("the kept run's EndpointSlice has no address to begin with")
+	}
+	armed, swapped := false, false
+	cs.PrependReactor("create", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+		armed = true
+		return false, nil, nil
+	})
+	cs.PrependReactor("get", "endpointslices", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if !armed || swapped {
+			return false, nil, nil
+		}
+		swapped = true
+		if err := newerReviveTakesOver(cs, "5", "proxy-uid-5", theirs, "10.244.0.5"); err != nil {
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	order := writesInOrder(cs, dyn)
+	_, err := k.ReplaceProxyHashedAt(context.Background(), ref, replaceCfg, 3)
+	if !errors.Is(err, runner.ErrProxyReplaceFailed) {
+		t.Fatalf("a replace overtaken before it emptied the slice = %v, want ErrProxyReplaceFailed", err)
+	}
+	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.5"}) {
+		t.Errorf("endpoints = %v, want the newer revive's 10.244.0.5: the stale replace emptied them", got)
+	}
+	if uid := storedProxyPod(t, cs).UID; uid != "proxy-uid-5" {
+		t.Errorf("proxy pod UID = %q, want the newer revive's proxy-uid-5", uid)
+	}
+	if want := []string{"create secrets", "delete secrets"}; !slices.Equal(*order, want) {
+		t.Errorf("writes = %v\nwant %v: the Secret written, then deleted, and nothing else", *order, want)
+	}
+	if names := cfgSecretNames(t, cs); !slices.Equal(names, []string{theirs}) {
+		t.Errorf("replacement config Secrets = %v, want only %s: the stale replace deletes its own", names, theirs)
+	}
+	if reads := secretReads(cs); len(reads) != 0 {
+		t.Errorf("Secret reads = %v, want none: the chart's Role grants no read on Secrets", reads)
+	}
+}
+
+// A newer revive points the slice at its proxy after this replace read the slice and the pod. The update carries the
+// resourceVersion read, so the API server refuses it with a conflict; the fake does not check resourceVersions, so the
+// reactor answers as the server would.
+func TestReplaceProxyAtLeavesAnEndpointWrittenAfterItsRead(t *testing.T) {
+	k, cs, dyn, ref := keptRun(t)
+	theirs := secretName(asRunID) + "-r9"
+	addCfgSecret(t, cs, theirs, "5")
+	if len(sliceIPs(keepSlice(t, cs, asRunID))) == 0 {
+		t.Fatal("the kept run's EndpointSlice has no address to begin with")
+	}
+	hit := false
+	cs.PrependReactor("update", "endpointslices", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if hit {
+			return false, nil, nil
+		}
+		hit = true
+		if err := newerReviveTakesOver(cs, "5", "proxy-uid-5", theirs, "10.244.0.5"); err != nil {
+			return true, nil, err
+		}
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "discovery.k8s.io", Resource: "endpointslices"},
+			keepServiceName(asRunID), errors.New("the object has been modified"))
+	})
+	order := writesInOrder(cs, dyn)
+	_, err := k.ReplaceProxyHashedAt(context.Background(), ref, replaceCfg, 3)
+	if !errors.Is(err, runner.ErrProxyReplaceFailed) {
+		t.Fatalf("a replace overtaken after it read the slice = %v, want ErrProxyReplaceFailed", err)
+	}
+	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.5"}) {
+		t.Errorf("endpoints = %v, want the newer revive's 10.244.0.5", got)
+	}
+	if uid := storedProxyPod(t, cs).UID; uid != "proxy-uid-5" {
+		t.Errorf("proxy pod UID = %q, want the newer revive's proxy-uid-5", uid)
+	}
+	if want := []string{"create secrets", "update endpointslices", "delete secrets"}; !slices.Equal(*order, want) {
+		t.Errorf("writes = %v\nwant %v: the refused update, then the Secret deleted", *order, want)
+	}
+	if names := cfgSecretNames(t, cs); !slices.Equal(names, []string{theirs}) {
+		t.Errorf("replacement config Secrets = %v, want only %s: the stale replace deletes its own", names, theirs)
+	}
+}
+
+// A newer revive makes its proxy pod and points the slice at it after this generation 1 end read the proxy pod. The end
+// reads the pod again before it empties the slice, and stops there with nothing written.
+func TestEndSandboxAtLeavesTheEndpointOfANewerRevive(t *testing.T) {
+	r := newKeptRig(t, nil)
+	labelProxyPod(t, r.cs, "1")
+	if len(sliceIPs(keepSlice(t, r.cs, asRunID))) == 0 {
+		t.Fatal("the kept run's EndpointSlice has no address to begin with")
+	}
+	armed, swapped := false, false
+	r.cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.(clienttesting.GetAction).GetName() == proxyPodName(asRunID) {
+			armed = true
+		}
+		return false, nil, nil
+	})
+	r.cs.PrependReactor("get", "endpointslices", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if !armed || swapped {
+			return false, nil, nil
+		}
+		swapped = true
+		if err := newerReviveTakesOver(r.cs, "2", "proxy-uid-2", secretName(asRunID)+"-r2", "10.244.0.5"); err != nil {
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	order := writesInOrder(r.cs, r.dyn)
+	err := r.k.EndSandboxAt(context.Background(), r.ref, 1)
+	if !errors.Is(err, runner.ErrProxyGenerationNewer) {
+		t.Fatalf("an end overtaken before it emptied the slice = %v, want ErrProxyGenerationNewer", err)
+	}
+	if got := sliceIPs(keepSlice(t, r.cs, asRunID)); !slices.Equal(got, []string{"10.244.0.5"}) {
+		t.Errorf("endpoints = %v, want the newer revive's 10.244.0.5: the stale end emptied them", got)
+	}
+	if uid := storedProxyPod(t, r.cs).UID; uid != "proxy-uid-2" {
+		t.Errorf("proxy pod UID = %q, want the newer revive's proxy-uid-2", uid)
+	}
+	if len(*order) != 0 {
+		t.Errorf("writes = %v, want none", *order)
 	}
 }
 

@@ -127,7 +127,8 @@ func (k *keepDriver) EndSandbox(ctx context.Context, ref string) error {
 // reads it back. The work drive and the run Secret stay. Every step can run again: the lease pass repeats the end until
 // the run is revived or torn down, and a run whose pod the controller has not yet made again is still kept. With gen > 0,
 // a proxy pod started for a newer generation refuses the end with runner.ErrProxyGenerationNewer before anything is
-// written, and again before a running agent pod goes (deleteKeptAgentPod). The proxy pod removed is the one read first.
+// written, and again before a running agent pod goes (deleteKeptAgentPod). The run's EndpointSlice is emptied only while
+// no newer proxy pod is there (emptyKeepEndpointsAt). The proxy pod removed is the one read first.
 func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) error {
 	runID, ns, err := k.refRun(ctx, ref)
 	if err != nil {
@@ -147,7 +148,7 @@ func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) erro
 	if err != nil {
 		return fmt.Errorf("k8s: keep: read the run's Service: %w", err)
 	}
-	if err := k.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
+	if err := k.emptyKeepEndpointsAt(ctx, ns, runID, svc, gen, false); err != nil {
 		return err
 	}
 	if err := k.stopKeptProxy(ctx, ns, runID, old, gen); err != nil {

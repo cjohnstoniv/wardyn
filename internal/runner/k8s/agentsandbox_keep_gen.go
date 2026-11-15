@@ -53,6 +53,50 @@ func (d *Driver) proxyNotNewer(ctx context.Context, ns string, runID uuid.UUID, 
 	return pod, nil
 }
 
+// emptyKeepEndpointsAt empties the run's EndpointSlice for a replace or an end acting for policy generation gen, so the
+// agent reaches no proxy while its proxy pod changes. With gen > 0 the slice is read first, then the proxy pod
+// (proxyNotNewer), and the slice is updated as read. A newer revive points the slice at its proxy only after making
+// that pod, so either the pod read refuses with runner.ErrProxyGenerationNewer, or the update, which carries the
+// resourceVersion read, fails with a conflict; either way the newer revive's endpoint stays. With gen 0 it is
+// writeKeepEndpoints with no address.
+func (d *Driver) emptyKeepEndpointsAt(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, gen int, replace bool) error {
+	if gen <= 0 {
+		return d.writeKeepEndpoints(ctx, ns, runID, svc, "")
+	}
+	eps := d.clientset.DiscoveryV1().EndpointSlices(ns)
+	slice, err := eps.Get(ctx, keepServiceName(runID), metav1.GetOptions{})
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("k8s: keep: read the run's EndpointSlice: %w", err)
+	}
+	if _, perr := d.proxyNotNewer(ctx, ns, runID, gen, replace); perr != nil {
+		return perr
+	}
+	if err != nil { // no slice yet: make it with no address
+		return d.writeKeepEndpoints(ctx, ns, runID, svc, "")
+	}
+	if len(slice.Endpoints) == 0 {
+		return nil
+	}
+	slice.Endpoints = nil
+	if _, err := eps.Update(ctx, slice, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("k8s: keep: empty the run's EndpointSlice: %w", err)
+	}
+	return nil
+}
+
+// deleteUnmountedCfgSecret deletes name, the replacement config Secret a replace wrote, when the replace fails before
+// its proxy pod is made: no pod mounts it and no later call would name it. It runs on a context of its own, so a
+// replace its caller cut short still deletes it. A failed delete is logged; the Secret carries the run's label, and
+// the run's teardown deletes it.
+func (d *Driver) deleteUnmountedCfgSecret(ctx context.Context, ns, name string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := d.clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
+		slog.Warn("wardynd: k8s substrate: could not delete a failed replace's config Secret; the run's teardown deletes it",
+			slog.String("namespace", ns), slog.String("secret", name), slog.String("error", err.Error()))
+	}
+}
+
 // removeProxyPod deletes pod, a proxy pod of runID as read, under its UID, waits until it is gone, and then deletes the
 // replacement config Secret it mounted (replacementCfgSecret). A pod made under its name since is not it: the UID
 // precondition refuses that delete with a conflict, and the wait ends on the other UID. nil is no pod, and nothing is
@@ -61,8 +105,9 @@ func (d *Driver) proxyNotNewer(ctx context.Context, ns string, runID uuid.UUID, 
 // The Secret is deleted by its name, never found by a read: the chart's Role grants no get, list or watch on Secrets.
 // Each replace writes a Secret of its own, under a name no other takes, and only the proxy pod that replace makes mounts
 // it, so once pod is gone no proxy needs it, and a newer revive's Secret, written before its pod exists, is never named.
-// A failed delete is logged, not returned: a second try would not find pod to name it. A Secret no removed pod mounted,
-// as one a failed replace wrote, carries the run's label, and the run's teardown deletes it.
+// A failed delete is logged, not returned: a second try would not find pod to name it. A replace that fails before its
+// new pod is made deletes the Secret it wrote (deleteUnmountedCfgSecret); one that delete missed carries the run's
+// label, and the run's teardown deletes it.
 func (d *Driver) removeProxyPod(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod) error {
 	if pod == nil {
 		return nil

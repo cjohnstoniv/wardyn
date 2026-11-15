@@ -178,6 +178,9 @@ func TestReplaceProxyFailsAfterDeleteWrapsReplaceFailed(t *testing.T) {
 	if got := sliceIPs(keepSlice(t, cs, asRunID)); len(got) != 0 {
 		t.Errorf("endpoints after the failed replace = %v, want none", got)
 	}
+	if names := cfgSecretNames(t, cs); len(names) != 0 {
+		t.Errorf("replacement config Secrets after the refused create = %v, want none: no pod mounts the one it wrote", names)
+	}
 }
 
 func TestReplaceProxyBeforeAnyChangeIsNotReplaceFailed(t *testing.T) {

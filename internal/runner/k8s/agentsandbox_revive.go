@@ -153,19 +153,25 @@ func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc 
 	fail := func(step string, err error) error {
 		return fmt.Errorf("%w: %s: %v", runner.ErrProxyReplaceFailed, step, err)
 	}
-	if err := d.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
-		return fail("empty the endpoint", err)
+	// Until the new pod is made no pod mounts the config Secret this replace wrote, so a step that fails before then
+	// deletes it.
+	unmade := func(step string, err error) error {
+		d.deleteUnmountedCfgSecret(ctx, ns, in.SecretName)
+		return fail(step, err)
+	}
+	if err := d.emptyKeepEndpointsAt(ctx, ns, runID, svc, gen, true); err != nil {
+		return unmade("empty the endpoint", err)
 	}
 	if err := d.removeProxyPod(ctx, ns, runID, old); err != nil {
-		return fail("remove the old proxy pod", err)
+		return unmade("remove the old proxy pod", err)
 	}
 	pod, err := d.buildProxyPod(in)
 	if err != nil {
-		return fail("build the new proxy pod", err)
+		return unmade("build the new proxy pod", err)
 	}
 	markReplacement(pod, gen)
 	if err := d.createReplacementPod(ctx, ns, runID, pod, gen); err != nil {
-		return fail("create the new proxy pod", err)
+		return unmade("create the new proxy pod", err)
 	}
 	ip, err := d.waitPodIP(ctx, d.newStartClock(), ns, proxyPodName(runID), nil)
 	if err != nil {
@@ -194,6 +200,8 @@ func (k *keepDriver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON
 // proxy pod is labelled with gen, and a proxy pod labelled gen or newer refuses the replace with
 // runner.ErrProxyGenerationNewer before anything is written. The proxy pod removed is the one read, never one that took
 // the name since, and the replacement config Secret it mounted goes with it (removeProxyPod).
+// The run's EndpointSlice is emptied only while no newer proxy pod is there (emptyKeepEndpointsAt), and a replace that
+// fails before its new proxy pod is made deletes the config Secret it wrote.
 func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	runID, ns, svc, err := k.runService(ctx, ref)
 	if err != nil {
