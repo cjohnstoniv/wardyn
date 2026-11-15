@@ -38,6 +38,10 @@ func (d *Driver) interactiveIdleCmd(spec runner.SandboxSpec) []string {
 // deleted and made again under the same name is at generation 1 again, but has a new UID.
 const annotationKeptSandbox = "wardyn.dev/kept-sandbox-uid"
 
+// labelAgent is the run's agent id, which dispatch sets in SandboxSpec.Labels, so the agent pod and its Sandbox's template
+// carry it.
+const labelAgent = "wardyn.agent"
+
 var errKeptSandboxNotOurs = errors.New("k8s: the run's EndpointSlice does not record the agent's Sandbox as the one Wardyn created for this run")
 
 // recordKeptSandbox writes uid, from Wardyn's own Sandbox create, on a kept run's EndpointSlice. A failure is logged: the

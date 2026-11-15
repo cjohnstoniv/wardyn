@@ -72,9 +72,6 @@ const (
 	warmDenyPolicy   = "wardyn-warm-deny"
 )
 
-// errWarmPoolsRunner refuses warm pools under wardyn-runnerd, which keeps no placeholders, rather than ignoring them.
-var errWarmPoolsRunner = errors.New("k8s: refusing to boot: WARDYN_K8S_WARM_POOLS is for wardynd; wardyn-runnerd keeps no placeholders")
-
 const warmPoolsRefusal = "k8s: refusing to boot: WARDYN_K8S_WARM_POOLS: "
 
 var warmPoolNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
