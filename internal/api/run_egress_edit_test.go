@@ -592,6 +592,22 @@ func (r *blockingStopRunner) StopProxy(ctx context.Context, ref string) error {
 	return r.hashedReviveRunner.StopProxy(ctx, ref)
 }
 
+// reviveSettled waits until the edit's revive released the run, its reviving mark and its lock: a
+// report's handler contains a failed start only by trying the lock, and gives up while it is busy.
+func (f *readbackFixture) reviveSettled(t *testing.T) {
+	t.Helper()
+	for range 5000 {
+		if _, busy := f.srv.reviving.Load(f.run.ID); !busy {
+			if _, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID); ok {
+				unlock()
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the edit's revive never released the run")
+}
+
 // mismatchAfterAnswer has the edit's new proxy report bytes other than it was handed, after the
 // driver answered: the start fails by its report, not by the revive.
 func (f *readbackFixture) mismatchAfterAnswer(t *testing.T) {
@@ -623,6 +639,9 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	}
 	t.Cleanup(func() { egressEditSawUncontained = hook })
 	f.answeredStart(t, 0)
+	// Until the revive settles, the report's handler would find the lock busy and leave the stop to the
+	// edit, which the hook holds.
+	f.reviveSettled(t)
 	br.block.Store(true)
 	f.mismatchAfterAnswer(t)
 	select {
