@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -328,10 +329,10 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 // A record the forced end left unsettled is settled before anything is stopped: owed (a resume) when the cut
 // is observed and the sandbox keepable, otherwise as not brought back. A final record (brought back or given
 // up) is left as it is (folderFinal). A run on a runner that is not here, and can come back, has nothing
-// settled, stopped, queued or given up, and the mark waits for it. Once its keep has run out, a copy back still
-// owed is given up first, before the settle and whatever the stop then does (giveUpForcedPastKeep): the tail
-// owner gives up a marked run only on a replica its runner is away from, so a stop that never succeeds would
-// otherwise show the changes as kept for good.
+// settled, stopped, queued or given up, and the mark waits for it. Once its keep has run out, and while its mark is
+// still set, a copy back still owed is given up first, before the settle and whatever the stop then does
+// (giveUpForcedPastKeep): the tail owner gives up a marked run only on a replica its runner is away from, so a stop
+// that never succeeds would otherwise show the changes as kept for good.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
@@ -355,7 +356,7 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 		return
 	}
-	settleAfterTeardown(ctx, func(sctx context.Context) { s.giveUpForcedPastKeep(sctx, run.ID) })
+	settleAfterTeardown(ctx, func(sctx context.Context) { s.giveUpForcedPastKeep(sctx, fs, m) })
 	if !s.settleUnsettledForcedFolder(ctx, run) {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 		return
@@ -458,21 +459,39 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 }
 
 // giveUpForcedPastKeep gives up a marked run's owed copy back once its keep has run out, as the tail owner decides
-// and writes it (tailGiveUpOwed). Whether the keep has run out is the database's answer (RunDueFlags), asked first,
-// so inside the keep nothing more is read or logged; a read that fails is asked again on the next tick. It takes no
-// lock, since a holder that never lets go would block it for good: the statement moves the record's generation on,
-// so a pass still holding the record writes nothing. It stops nothing and leaves the mark alone. The statement
-// applies only to a record that is not final yet, and only an applied statement writes the audit row, so a give-up
-// raced by another replica or loop writes one row.
-func (s *Server) giveUpForcedPastKeep(ctx context.Context, id uuid.UUID) {
+// and writes it (tailGiveUpOwed), and only while mark m is still set. Whether the keep has run out is the database's
+// answer (RunDueFlags), asked first, so inside the keep nothing more is read or logged; a read that fails is asked
+// again on the next tick. The mark is then read again (forcedMarkHeld): m comes from the tick's one listing, and
+// another replica may have cleared it since, after which the tail owner owns the run and a pass it started inside the
+// keep may have brought the changes back. The order makes the re-read enough. A mark is never set again once it
+// clears, since only a RUNNING run is marked, and the keep never comes back once it has run out, since the forced
+// claim set the run's end. So a mark still set after the keep has run out means no pass has started since the forced
+// end, and none can start: the tail owner starts one only on a run that is not marked and is still inside its keep.
+// It takes no lock, since a holder that never lets go would block it for good: the statement moves the record's
+// generation on, so a pass from before the forced end that still holds the record writes nothing. It stops nothing
+// and leaves the mark alone. The statement applies only to a record that is not final yet, and only an applied
+// statement writes the audit row, so a give-up raced by another replica or loop writes one row.
+func (s *Server) giveUpForcedPastKeep(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	flags, ok := s.cfg.Store.(runDueReader)
 	if !ok {
 		return
 	}
-	if due, err := flags.RunDueFlags(ctx, id, s.pendingCap()); err != nil || !due.CapPassed {
+	if due, err := flags.RunDueFlags(ctx, m.RunID, s.pendingCap()); err != nil || !due.CapPassed {
 		return
 	}
-	s.tailGiveUpOwed(ctx, id)
+	if !forcedMarkHeld(ctx, fs, m) {
+		return
+	}
+	s.tailGiveUpOwed(ctx, m.RunID)
+}
+
+// forcedMarkHeld reports whether mark m (its run and its stamp) is still set, as a fresh listing reads it. A listing
+// that fails answers false, so nothing is given up on it and the next tick asks again.
+func forcedMarkHeld(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) bool {
+	marks, err := fs.ListForcedStops(ctx)
+	return err == nil && slices.ContainsFunc(marks, func(c store.ForcedStop) bool {
+		return c.RunID == m.RunID && c.At.Equal(m.At)
+	})
 }
 
 // runnerGoneReason is why a failed stop of run's sandbox can never be confirmed, "" when it still can. It reads
