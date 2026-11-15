@@ -251,10 +251,21 @@ func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, no
 	return false
 }
 
-// tailSkipped logs a row left for the next tick because a read of it failed.
+// forcedRetryReading reports whether the tail owner's reads are made by the forced stop's retry, whose give-up past
+// the keep runs them under forcedCtx (giveUpForcedPastKeep), so a log line names who could not read.
+func forcedRetryReading(ctx context.Context) bool {
+	_, ok := ctx.Value(forcedCtxKey{}).(*revokeResidue)
+	return ok
+}
+
+// tailSkipped logs a row left for the next tick because a read of it failed, naming the forced stop's retry when it
+// made the read (forcedRetryReading).
 func tailSkipped(ctx context.Context, id uuid.UUID, err error) {
-	slog.WarnContext(ctx, "wardynd: the tail owner could not read an ended run's folder state; skipping it until the next tick",
-		slog.String("run_id", id.String()), slog.Any("err", err))
+	msg := "wardynd: the tail owner could not read an ended run's folder state; skipping it until the next tick"
+	if forcedRetryReading(ctx) {
+		msg = "wardynd: the forced stop retry could not read an ended run's folder state; skipping it until the next tick"
+	}
+	slog.WarnContext(ctx, msg, slog.String("run_id", id.String()), slog.Any("err", err))
 }
 
 // tailStepOf reads run's record and answers the step it is due for (tailStepFor), with the record and the note
@@ -275,8 +286,11 @@ func (s *Server) tailStepOf(ctx context.Context, run types.AgentRun, due store.R
 				}
 				return types.RunLocalFolderStatus{}, tailNone, "", nil
 			}
-			slog.WarnContext(ctx, "wardynd: the tail owner could not read an ended run's folder record past its keep; giving its owed changes up",
-				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			msg := "wardynd: the tail owner could not read an ended run's folder record past its keep; giving its owed changes up"
+			if forcedRetryReading(ctx) {
+				msg = "wardynd: the forced stop retry could not read an ended run's folder record past its keep; giving its owed changes up"
+			}
+			slog.WarnContext(ctx, msg, slog.String("run_id", run.ID.String()), slog.Any("err", err))
 			return types.RunLocalFolderStatus{}, tailGiveUp, folderStatusUnreadable, nil
 		}
 		return st, tailNone, "", err
