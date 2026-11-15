@@ -235,7 +235,7 @@ func (f fileStore) loadToReplace() (map[string]cliItem, error) {
 	items, err := f.load()
 	var unread *fs.PathError
 	if errors.As(err, &unread) {
-		return nil, err
+		return nil, fmt.Errorf("%w; it may hold other organisations' sign-ins, so it is not replaced: make it readable, then run `wardyn login` again", err)
 	}
 	if err != nil {
 		items = map[string]cliItem{}

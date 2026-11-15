@@ -307,6 +307,9 @@ func (l *login) store(ctx context.Context, kind string, it cliItem, stepUp bool)
 	for _, err := range readErrs {
 		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", readCause(err))
 	}
+	if l.profileUnread && kind == types.CLIStoreFile {
+		fmt.Fprintln(l.errOut, copyKeychainNotRead)
+	}
 	// Another store's item goes only once the new one is stored and the profile names its store: deleted
 	// first, a refused write would leave this computer with no sign-in. One that cannot be deleted stays
 	// where a later login reads it (previous).

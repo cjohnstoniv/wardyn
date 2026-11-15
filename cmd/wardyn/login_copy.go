@@ -27,6 +27,11 @@ const (
 	// succeeds): the keychain or the file's path, then the delete's error.
 	copyPreviousNotRemoved = "wardyn: signed in, but the previous sign-in is still stored in %s and could not be removed: %v"
 
+	// A login over a CLI profile it could not read, whose sign-in goes to the file: that profile may have named
+	// the keychain, which is not read then (login.previous); the next login to the keychain reads it and signs
+	// out what it holds (stderr; login succeeds).
+	copyKeychainNotRead = "wardyn: the CLI profile could not be read and the keychain was not read, so an earlier sign-in it may hold was not signed out; the next `wardyn login` that can reach the keychain signs it out, or sign it out in Settings → Signed-in CLIs"
+
 	// How a damaged item's read error ends (cli_session.go), and what replaces that ending in a line printed
 	// once the item is replaced or removed (readCause).
 	errDamagedAdvice = " is damaged: run `wardyn login` again"
