@@ -120,9 +120,8 @@ const (
 	// walk.
 	maxGlobOps = 8 << 20
 	// maxPatternSegments bounds one compiled pattern's segments, far above any
-	// real one (validation caps an entry at 256 bytes, and a policy stored
-	// before that cap still splits into far fewer). It tells code scanning the
-	// matcher's allocations cannot overflow.
+	// real one: validation caps an entry at 256 bytes and a request body at
+	// 1 MiB. It tells code scanning the matcher's allocations cannot overflow.
 	maxPatternSegments = 1 << 20
 )
 
