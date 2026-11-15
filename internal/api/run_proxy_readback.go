@@ -491,7 +491,10 @@ const (
 // folderKeepVerdict is the one rule every destructive sweep decides a kept sandbox by: a sandbox kept for its
 // computer folder's pass back (keepsSandboxForFolder), or whose record cannot be read (ferr), stays only once
 // the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy stop
-// answered nil). A runner that is not here leaves it in place (folderKeepAway), and cutErr is errRunnerNotHere.
+// answered nil). A record, seed or rule that cannot be read is kept that way only inside the keep: past it the copy
+// back is given up here, as the tail owner gives it up (unreadKeepEnded), and the verdict is folderKeepNone, so a
+// record that never reads does not keep its sandbox for good. A runner that is not here leaves it in place
+// (folderKeepAway), and cutErr is errRunnerNotHere.
 // Anything else is folderKeepNone: stopped whatever its record says. That covers a sandbox that cannot be cut (a
 // virtual machine, Kubernetes in server mode, a runner sandbox whose cut failed, as quiesceKeptSandbox decides)
 // and a hosted cut whose proxy stop failed, whose failure row copyBackCut has written. cutErr is copyBackCut's
@@ -509,6 +512,8 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 	switch {
 	case errors.Is(cutErr, errRunnerNotHere):
 		return folderKeepAway, ferr, cutErr // no row: the runner is not here, and the next pass asks again
+	case cutErr == nil && ferr != nil && s.unreadKeepEnded(ctx, run):
+		return folderKeepNone, ferr, nil // past the keep its copy back is given up, so nothing is kept for it
 	case cutErr == nil:
 		return folderKeepCut, ferr, nil
 	}

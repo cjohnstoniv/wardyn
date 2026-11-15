@@ -106,6 +106,65 @@ func (s *Server) unreadOwed(ctx context.Context, run types.AgentRun) (bool, erro
 	return rs.RunLocalFolderHoldsResume(ctx, run.ID)
 }
 
+// unreadKeepPassed is how a terminal run whose folder record cannot be read is decided without it, as the stop's
+// give-up decides it (unreadOwed): past says the database answers that the run is past its keep (RunDueFlags), and
+// owesNothing that unreadOwed then says nothing is owed. Inside the keep, a keep that cannot be read, or a store
+// without the read, is not past.
+func (s *Server) unreadKeepPassed(ctx context.Context, run types.AgentRun) (past, owesNothing bool) {
+	flags, ok := s.cfg.Store.(runDueReader)
+	if !ok {
+		return false, false
+	}
+	due, err := flags.RunDueFlags(ctx, run.ID, s.pendingCap())
+	if err != nil || !due.CapPassed {
+		return false, false
+	}
+	owed, oerr := s.unreadOwed(ctx, run)
+	return true, oerr == nil && !owed
+}
+
+// unreadKeepEnded is a keep verdict's answer for a kept sandbox whose folder record, folder seed or data_out rule
+// could not be read (folderKeepVerdict): true once the copy back is given up past the keep, or owes nothing there,
+// so the sweep may remove the sandbox. Inside the keep it is false and the sandbox stays, as on any confirmed cut.
+// The record is read again: one that cannot be read is given up noted folderStatusUnreadable; one that reads and
+// is owed has its seed or rule read again by folderOwed, and is given up noted folderRuleUnreadable when that read
+// fails, or plainly when it answers; one that reads and owes nothing, or whose run is gone, is left to the next
+// pass, which then decides it with the record.
+func (s *Server) unreadKeepEnded(ctx context.Context, run types.AgentRun) bool {
+	past, nothing := s.unreadKeepPassed(ctx, run)
+	if !past {
+		return false
+	}
+	if nothing {
+		return true
+	}
+	st, err := s.tailFolderStatus(ctx, run.ID)
+	note := folderStatusUnreadable
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false
+	case err != nil:
+		st = types.RunLocalFolderStatus{}
+	default:
+		owed, oerr := s.folderOwed(ctx, run, st)
+		switch {
+		case oerr != nil:
+			note = folderRuleUnreadable
+		case !owed:
+			return false
+		default:
+			note = ""
+		}
+	}
+	final, gerr := s.giveUpFolderNoted(ctx, run, false, st, note)
+	if gerr != nil || !final {
+		slog.WarnContext(ctx, "wardynd: a sweep could not give up the copy back of a sandbox whose folder record could not be read past its keep; it stays",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		return false
+	}
+	return true
+}
+
 // giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep
 // (reconcileOrphanedRun), the forced stop's retry (retryForcedStop) or a run's end tail (giveUpFolderEnded, which the
 // tail owner's tails reach too) stopped, and whose ref the caller is about to clear: with no ref no pass runs again,
