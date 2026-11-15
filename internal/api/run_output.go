@@ -523,9 +523,16 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 	case !captureKnown:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"no output is kept for this run: the runner's capture capability could not be read")
-	case s.runOutputExpiredByRetention(run):
-		writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
-			"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
+	case s.cfg.RunOutputRetention > 0 && run.EndedAt != nil:
+		switch expired, err := s.runOutputExpiredNow(r.Context(), run); {
+		case err != nil:
+			writeServerError(w, r, "read the database's clock", err)
+		case expired:
+			writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
+				"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
+		default:
+			writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
+		}
 	default:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	}
@@ -658,8 +665,17 @@ func (s *Server) readStoredRunOutput(ctx context.Context, runID uuid.UUID) (stor
 	return st.GetRunOutput(ctx, runID)
 }
 
-// runOutputExpiredByRetention reports whether run ended longer ago than
-// WARDYN_RUN_OUTPUT_RETENTION_DAYS, so a missing row is a deleted one.
-func (s *Server) runOutputExpiredByRetention(run types.AgentRun) bool {
-	return s.cfg.RunOutputRetention > 0 && run.EndedAt != nil && s.cfg.Now().Sub(*run.EndedAt) > s.cfg.RunOutputRetention
+// runOutputExpiredNow reports whether run ended longer ago than WARDYN_RUN_OUTPUT_RETENTION_DAYS, so a missing row
+// is a deleted one. The window is counted on the database's clock (dbNow), which stamps ended_at, and that clock is
+// read only for an ended run with a window set. An error is that clock not answering; each caller says what it then
+// does.
+func (s *Server) runOutputExpiredNow(ctx context.Context, run types.AgentRun) (bool, error) {
+	if s.cfg.RunOutputRetention <= 0 || run.EndedAt == nil {
+		return false, nil
+	}
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return false, err
+	}
+	return now.Sub(*run.EndedAt) > s.cfg.RunOutputRetention, nil
 }

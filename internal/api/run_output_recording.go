@@ -29,17 +29,34 @@ var errRecordingOutputOverBudget = errors.New("recording output read outlived it
 var errRecordingOutputUnavailable = errors.New("recording output source is temporarily unavailable")
 
 // recordingOutputEnabled is whether run's output is read from its recording:
-// only a recorded run whose own runner keeps no tail (execOutputCapture). A run
-// whose tail this process holds reads that tail, so a recording that yields
-// nothing never hides output that was captured.
+// only a recorded run whose own runner keeps no tail (execOutputCapture), and
+// whose output has not expired (runOutputExpiredNow). A run whose tail this
+// process holds reads that tail, so a recording that yields nothing never hides
+// output that was captured. A database clock that cannot be read leaves the run
+// on its recording path for this pass: a false here would send the run's end and
+// the stale sweep (run_output_final.go) to recoverRunOutput, which writes a gap
+// and marks the run not recorded. The read door judges the window strictly
+// (repairRecordingOutput).
 func (s *Server) recordingOutputEnabled(ctx context.Context, run types.AgentRun) bool {
+	on, _ := s.recordingOutputEnabledNow(ctx, run)
+	return on
+}
+
+// recordingOutputEnabledNow is recordingOutputEnabled with the clock's error: the
+// bool is the answer as if the run had not expired, and the error is the
+// database's clock not answering. It reads that clock once, and not at all for a run the other
+// rules already rule out.
+func (s *Server) recordingOutputEnabledNow(ctx context.Context, run types.AgentRun) (bool, error) {
 	if s.cfg.RecordingStore == nil || s.cfg.ExecOutputTailOff || s.runOutputStore() == nil ||
-		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.runOutputExpiredByRetention(run) ||
-		s.tailFor(run.ID) != nil {
-		return false
+		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.tailFor(run.ID) != nil {
+		return false, nil
+	}
+	expired, err := s.runOutputExpiredNow(ctx, run)
+	if expired {
+		return false, nil
 	}
 	uncaptured, known := s.execOutputCapture(ctx, run)
-	return known && uncaptured
+	return known && uncaptured, err
 }
 
 // uploadedRecordingOutput runs only after the cast commit. The durable work
@@ -50,7 +67,12 @@ func (s *Server) uploadedRecordingOutput(ctx context.Context, runID uuid.UUID) e
 		return nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) {
+		return err
+	}
+	// An expired run owes no recording output. A window that cannot be judged is the upload's error, as a run that
+	// cannot be read is.
+	if expired, err := s.runOutputExpiredNow(ctx, run); err != nil || expired {
 		return err
 	}
 	// The runner never withholds a receipt: one that cannot be asked owes
@@ -269,8 +291,16 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 // repairRecordingOutput is reachable only after recordingReader. A cooldown
 // bounds rereads of unchanged gaps, including a lost upload receipt on restart.
 func (s *Server) repairRecordingOutput(ctx context.Context, run types.AgentRun, row store.RunOutput, found bool) (store.RunOutput, bool, error) {
-	if !run.State.IsTerminal() || found && row.CapturedAt != nil && !row.CaptureGap || !s.recordingOutputEnabled(ctx, run) {
+	if !run.State.IsTerminal() || found && row.CapturedAt != nil && !row.CaptureGap {
 		return row, found, nil
+	}
+	// The read door rebuilds no output on a guess: a window it cannot judge is the read's error (a 500).
+	on, err := s.recordingOutputEnabledNow(ctx, run)
+	if !on {
+		return row, found, nil
+	}
+	if err != nil {
+		return row, found, err
 	}
 	st := s.runOutputStore()
 	if err := s.queueRecordingOutput(ctx, st, run, false); err != nil {
