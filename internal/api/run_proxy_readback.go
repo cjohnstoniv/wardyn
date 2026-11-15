@@ -528,7 +528,8 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 // row with folder_record_error that stays unresolved so a later pass reads it again. Past the keep its copy back
 // is given up, or found to owe nothing (unreadKeepEnded), and the sandbox is stopped as any other, so a record
 // that never reads does not keep it for good; a give-up that does not land, or a record that reads when read
-// again, leaves it kept as inside the keep, for the next pass. A runner run whose runner is not connected here
+// again and owes nothing, leaves it kept as inside the keep, for the next pass (one that reads again and is still
+// owed is given up and stopped in the same pass). A runner run whose runner is not connected here
 // is left in place with errRunnerNotHere, nothing stopped, queued or written, until its runner is. It fails
 // closed: any other sandbox is stopped, a hosted one whose proxy stop failed among them (its failure row is the
 // cut's, and a sandbox stop that fails too is the failed-stop retry's).
