@@ -99,7 +99,10 @@ func (d *Driver) pinDriveVolumes(ctx context.Context, runID uuid.UUID, vols []ju
 		}
 	}
 	if err != nil {
-		if rerr := d.removeSeedByID(context.WithoutCancel(ctx), created.ID); rerr != nil {
+		// The removal runs even when the start's context has ended, on a deadline of its own.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
+		defer cancel()
+		if rerr := d.removeSeedByID(rctx, created.ID); rerr != nil {
 			err = errors.Join(err, rerr)
 		}
 		return err
@@ -109,8 +112,11 @@ func (d *Driver) pinDriveVolumes(ctx context.Context, runID uuid.UUID, vols []ju
 
 // dropDrivePin removes runID's hold for a create that failed; one it cannot remove stays for the orphan sweep,
 // which keys a teardown on it.
+// The removal has driveSeedRemoveTimeout, as the seed's has: a daemon that never answers cannot hold it.
 func (d *Driver) dropDrivePin(runID uuid.UUID) {
-	_ = d.removeRunContainer(context.Background(), drivePinName(runID), runID, componentDrivePin)
+	ctx, cancel := context.WithTimeout(context.Background(), driveSeedRemoveTimeout)
+	defer cancel()
+	_ = d.removeRunContainer(ctx, drivePinName(runID), runID, componentDrivePin)
 }
 
 // removeRunContainer removes the container under name if it is runID's component as this driver
