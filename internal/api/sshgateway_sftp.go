@@ -71,11 +71,11 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced 
 	return nil, reason, err
 }
 
-// errSSHChannelClosed is the cause a door's context ends with when the client's side ends while the daemon runs:
-// a session channel's context when its request stream ends while the connection's context is still live (the
-// client closed the channel or its whole connection), and the connection's context when the connection ends (the
-// client closed it or it dropped, or the gateway closed one that stopped answering or lost its key, sshProbeConn).
-var errSSHChannelClosed = errors.New("the client closed the SSH channel")
+// errSSHChannelClosed is the cause a door's context ends with when its channel or connection ends while the daemon
+// runs: a session channel's context when its request stream ends while the connection's context is still live,
+// and the connection's context when the connection ends (the client closed it or it dropped, or the gateway
+// closed one that stopped answering or lost its key, sshProbeConn).
+var errSSHChannelClosed = errors.New("the SSH channel or its connection closed")
 
 // sshClientClosedFirst reports whether ctx, a door's context (a session channel's, or the connection's for a port
 // forward), ended because its client closed the channel or its connection (errSSHChannelClosed), not because the
