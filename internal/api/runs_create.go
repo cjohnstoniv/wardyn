@@ -391,7 +391,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	}
 	all, err := s.listWorkspaces(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
+		return http.StatusInternalServerError, reasonWorkspaceSourcesListUnavailable, workspaceListUnread(ctx, err)
 	}
 	// A source several workspaces carry is judged by one the caller may launch
 	// when there is one: another member onboarding it first refuses nobody.

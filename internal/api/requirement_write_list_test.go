@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -33,7 +35,29 @@ func TestApplyWorkspaceRequirements_PolicyMountUnreadableListRefuses(t *testing.
 
 	_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{supplier}, nil, nil, nil)
 
-	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonWorkspaceSourcesListUnavailable {
-		t.Fatalf("refusal = %v, want 422 %s", refusal, reasonWorkspaceSourcesListUnavailable)
+	if refusal == nil || refusal.status != http.StatusInternalServerError || refusal.reason != reasonWorkspaceSourcesListUnavailable ||
+		strings.Contains(refusal.Error(), "store down") {
+		t.Fatalf("refusal = %v, want 500 %s without the store's own error", refusal, reasonWorkspaceSourcesListUnavailable)
+	}
+}
+
+// The run and policy doors' own reads of the workspace list answer a list that cannot be read as the server fault
+// it is, as the scan doors do, with the store's error in the log only.
+func TestWorkspaceSources_AnUnreadableListIsAServerFault(t *testing.T) {
+	spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/app", Target: "/home/agent/work"}}}
+	srv := New(Config{Store: listFailStore{newOwnerStore()}})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	for name, answer := range map[string]func() (int, string, error){
+		"validateWorkspaceSources": func() (int, string, error) {
+			return srv.validateWorkspaceSources(context.Background(), spec, runCarrierRule{})
+		},
+		"authorizeSpecWorkspaceSources": func() (int, string, error) {
+			return srv.authorizeSpecWorkspaceSources(context.Background(), r, spec)
+		},
+	} {
+		code, reason, err := answer()
+		if code != http.StatusInternalServerError || reason != reasonWorkspaceSourcesListUnavailable || err == nil || strings.Contains(err.Error(), "store down") {
+			t.Errorf("%s = %d %s %v, want 500 %s without the store's own error", name, code, reason, err, reasonWorkspaceSourcesListUnavailable)
+		}
 	}
 }

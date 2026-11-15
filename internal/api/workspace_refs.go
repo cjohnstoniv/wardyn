@@ -256,7 +256,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 	}
 	all, err := s.listWorkspaces(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
+		return http.StatusInternalServerError, reasonWorkspaceSourcesListUnavailable, workspaceListUnread(ctx, err)
 	}
 	idx := rule.index(all)
 
@@ -355,6 +355,13 @@ func (s *Server) openScanSource(ctx context.Context, owner string, src types.Sou
 // errScanHoldersUnread is openScanSource's failed read of the workspaces that attach a folder.
 var errScanHoldersUnread = errors.New("list the workspaces that attach the folder")
 
+// workspaceListUnread is the run, policy and record doors' answer to a workspace list that cannot be read:
+// a server fault (500 with reasonWorkspaceSourcesListUnavailable), as it is at the scan doors. Its cause goes to
+// the log, never into the answer.
+func workspaceListUnread(ctx context.Context, err error) error {
+	return errors.New(loggedMsg(ctx, "list workspaces", err))
+}
+
 // scanRefusalFor is an openScanSource refusal as r's caller reads it. A member
 // is told that a workspace whose owner's roots no longer hold the folder blocks
 // the scan, never its name or owner: another member's workspace answers them a
@@ -432,7 +439,7 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 				}
 				var err error
 				if stored, err = s.listWorkspaces(ctx); err != nil {
-					return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
+					return &sourceRefusal{status: http.StatusInternalServerError, reason: reasonWorkspaceSourcesListUnavailable, err: workspaceListUnread(ctx, err)}
 				}
 			}
 			holders = localDirHolders(stored, wm.Source)
