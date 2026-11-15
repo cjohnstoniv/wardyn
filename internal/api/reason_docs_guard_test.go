@@ -316,14 +316,13 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 // name.
 var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// reasonsGoFiles is the closed set's own three files (reasons.go's header
-// comment explains the split: #656 slice 3 pushed reasons.go past
-// scripts/check-file-size.sh's 1000-line gate; reasons_revive.go holds the
-// revive block moved out of reasons_routes.go for the same reason;
-// reasons_governance.go the run-context reasons; reasons_kept_machine.go the kept-machine ones). Every
-// reader of the set — this guard, driveRefusalConstants
-// (user_drives_run_test.go) — must read all of them, or a value declared in
-// another file is invisible to it.
+// reasonsGoFiles is every file the closed set is declared in. reasons.go's header comment explains the split:
+// #656 slice 3 pushed reasons.go past scripts/check-file-size.sh's 1000-line gate, so reasons_routes.go continues
+// it, and reasons_revive.go holds the revive block moved out of reasons_routes.go for the same reason. The others
+// keep one surface's reasons beside its code: reasons_governance.go the run-context reasons,
+// reasons_kept_machine.go the kept-machine ones, reasons_desktop_review.go the reviewed-download ones and
+// reasons_policies.go those of /api/v1/policies. Every reader of the whole set (this guard, and the coverage guard in
+// reason_coverage_guard_test.go) reads this list, so a file left off it hides its values from both.
 var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
