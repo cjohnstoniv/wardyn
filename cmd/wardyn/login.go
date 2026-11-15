@@ -305,7 +305,7 @@ func (l *login) store(ctx context.Context, kind string, it cliItem, stepUp bool)
 			if old == types.CLIStoreFile {
 				where = fileStore{l.dir}.path()
 			}
-			fmt.Fprintf(l.errOut, copyPreviousNotRemoved+"\n", where, err)
+			fmt.Fprintf(l.errOut, copyPreviousNotRemoved+"\n", where, readCause(err))
 		}
 	}
 	return prev, replacing, nil
@@ -341,8 +341,9 @@ func (l *login) previous(kind string) (string, cliItem, bool, error) {
 }
 
 // readCause is err, a store's error reading a sign-in, for a line printed once that item is replaced or
-// removed. A damaged item's error ends with advice to sign in again (keychainStore.get, fileStore.load);
-// by then the damaged item is gone, so the advice is dropped and the damage is put in the past.
+// removed. A damaged item's error ends with advice to sign in again (keychainStore.get, fileStore.load),
+// which no longer applies by then, so the advice is dropped and the damage is put in the past. The damaged
+// item may still be on disk: a login that moved to the keychain leaves a damaged file, and says so.
 func readCause(err error) string {
 	if cut, ok := strings.CutSuffix(err.Error(), errDamagedAdvice); ok {
 		return cut + copyWasDamaged

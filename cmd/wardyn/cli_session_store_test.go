@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -20,17 +21,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestLogoutWarnsWhenTheStoredSignInCannotBeRead: a stored sign-in that cannot be read may still be live at
-// the server, so logout deletes it here and says the server was not told, instead of a clean sign-out.
+// TestLogoutWarnsWhenTheStoredSignInCannotBeRead: a keychain item that cannot be read may still be live at
+// the server, so logout deletes it here and says the server was not told, instead of a clean sign-out. A
+// sign-in file that cannot be read is left as it is (TestADeleteForOneOrganisationLeavesAFileItCannotRead).
 func TestLogoutWarnsWhenTheStoredSignInCannotBeRead(t *testing.T) {
 	const org = "https://org.example"
 	for _, tc := range []struct {
 		kind   string
 		damage func(dir string) error
 	}{
-		{types.CLIStoreFile, func(dir string) error {
-			return os.WriteFile(filepath.Join(dir, cliSessionFile), []byte("{"), 0o600)
-		}},
 		{types.CLIStoreKeychain, func(string) error { return keyring.Set(cliKeyringService, org, "{") }},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -57,6 +56,60 @@ func TestLogoutWarnsWhenTheStoredSignInCannotBeRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestADeleteForOneOrganisationLeavesAFileItCannotRead: the sign-in file holds every organisation's sign-in
+// stored in it, so a delete for one organisation leaves a file it cannot read as it was. Logout then fails
+// with the file's own error and changes nothing; a login that moved the sign-in to the keychain says the
+// previous one is still stored there, without the damaged file's advice to sign in again.
+func TestADeleteForOneOrganisationLeavesAFileItCannotRead(t *testing.T) {
+	// Another organisation's item, cut short: the file cannot be read, and its bytes could still be repaired.
+	damaged := []byte(`{"https://other.example":{`)
+	damage := func(t *testing.T, dir, origin string) string {
+		t.Helper()
+		if err := cliprofile.WriteSessionStore(dir, origin, types.CLIStoreFile); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, cliSessionFile)
+		if err := os.WriteFile(path, damaged, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	unchanged := func(t *testing.T, path string) {
+		t.Helper()
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, damaged) {
+			t.Errorf("the file holds %q (%v); want it as it was", got, err)
+		}
+	}
+	t.Run("logout", func(t *testing.T) {
+		const org = "https://org.example"
+		dir := cliEnv(t, nil)
+		path := damage(t, dir, org)
+		out, _, err := runCLI(t, "", "logout", "--url", org)
+		if want := path + errDamagedAdvice; err == nil || err.Error() != want || out != "" {
+			t.Errorf("logout: %q, %v; want nothing signed out and the error %q", out, err, want)
+		}
+		unchanged(t, path)
+		if k, _ := cliprofile.ReadSessionStore(dir, org); k != types.CLIStoreFile {
+			t.Errorf("the profile names %q, want file", k)
+		}
+	})
+	t.Run("login to the keychain", func(t *testing.T) {
+		f := newSignInOrg(t)
+		dir := cliEnv(t, nil)
+		openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+		path := damage(t, dir, f.srv.URL)
+		_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+		want := fmt.Sprintf(copyPreviousNotRemoved+"\n", path, path+copyWasDamaged)
+		if err != nil || strings.Count(stderr, want) != 1 {
+			t.Fatalf("login: %v, stderr %q; want it signed in with one line %q", err, stderr, want)
+		}
+		unchanged(t, path)
+		if k, _ := cliprofile.ReadSessionStore(dir, f.srv.URL); k != types.CLIStoreKeychain {
+			t.Errorf("the profile names %q, want keychain", k)
+		}
+	})
 }
 
 // TestLoginKeepsTheOldSignInWhenTheNewOneCannotBeStored: a sign-in that moves to another store writes the new

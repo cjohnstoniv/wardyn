@@ -236,10 +236,12 @@ func (f fileStore) put(origin string, it cliItem) error {
 	return f.save(items)
 }
 
+// del removes origin's item, and the file with the last one. A file it cannot load is left as it is, since it
+// may hold other organisations' sign-ins, and the load error is returned.
 func (f fileStore) del(origin string) error {
 	items, err := f.load()
 	if err != nil {
-		return os.Remove(f.path())
+		return err
 	}
 	if _, ok := items[origin]; !ok {
 		return nil
