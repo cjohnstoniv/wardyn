@@ -173,3 +173,97 @@ func TestSSHGateway_AStopClosesAConnectionAndItsIdleChannel(t *testing.T) {
 		t.Errorf("WaitBackground took %v after the stop; want it over once the connection closed", took)
 	}
 }
+
+// outcomeRows keeps every row it is given, with its outcome, and refuses one
+// whose context has ended, as the store does: a stop's rows reach it on the
+// stopped daemon's context, and the chain after it would spool them.
+type outcomeRows struct {
+	mu     sync.Mutex
+	events []types.AuditEvent
+}
+
+func (r *outcomeRows) Record(ctx context.Context, ev types.AuditEvent) error {
+	r.mu.Lock()
+	r.events = append(r.events, ev)
+	r.mu.Unlock()
+	return ctx.Err()
+}
+
+func (r *outcomeRows) outcomes(action string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, ev := range r.events {
+		if ev.Action == action {
+			out = append(out, ev.Outcome)
+		}
+	}
+	return out
+}
+
+// A daemon stop ends every session channel's door with the stop's own cause,
+// before the connection is closed, so each running transfer is recorded as the
+// failure it is and none is read as the client's close, a success. The channels
+// of one connection and the close of that connection are racing contexts, so
+// the check repeats. Catches: a close that can land before a channel's context
+// has been cancelled with the stop's cause (an AfterFunc on connCtx, which is a
+// sibling of each channel's context, not their parent).
+func TestSSHGateway_AStopRecordsEveryOpenChannelAsAFailure(t *testing.T) {
+	const channels, rounds = 4, 30
+	for round := range rounds {
+		st, run, principal := sshOwnedRunningRun(t)
+		priv, pub := mustSSHKeypair(t)
+		st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+		reading := make(chan struct{}, channels)
+		fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+			out, w := io.Pipe()
+			ended := make(chan struct{})
+			closeOnce := sync.OnceFunc(func() { _ = w.Close(); close(ended) })
+			return &runner.ExecSession{
+				Stdout: readSignal{Reader: out, first: sync.OnceFunc(func() {
+					select {
+					case reading <- struct{}{}:
+					default:
+					}
+				})},
+				Close: func() error { closeOnce(); return nil },
+				Wait: func() (int, error) {
+					<-ended
+					return 1, fmt.Errorf("exec wait: %w", context.Canceled) // the session closed under the process: no exit read
+				},
+			}, nil
+		}}
+		rec := &outcomeRows{}
+		h, stop := stoppableGateway(t, st, fr, rec)
+		client, err := sshDial(t, h, run.ID.String(), priv)
+		if err != nil {
+			t.Fatalf("round %d: dial: %v", round, err)
+		}
+		for range channels {
+			sess, err := client.NewSession()
+			if err != nil {
+				t.Fatalf("round %d: new session: %v", round, err)
+			}
+			go func() { _ = sess.RequestSubsystem("sftp") }()
+		}
+		for range channels {
+			select {
+			case <-reading:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("round %d: a channel's transfer never started", round)
+			}
+		}
+		stop()
+		h.srv.WaitBackground()
+		got := rec.outcomes("ssh.sftp.transfer")
+		if len(got) != channels {
+			t.Fatalf("round %d: %d transfer rows after the stop, want %d (%v)", round, len(got), channels, got)
+		}
+		for _, o := range got {
+			if o != "failure" {
+				t.Fatalf("round %d: a stop was recorded as %q for a transfer it cut, want failure (rows %v)", round, o, got)
+			}
+		}
+		_ = client.Close()
+	}
+}

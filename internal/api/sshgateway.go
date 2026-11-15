@@ -601,7 +601,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		lim.leaveSource(src)
 	})
 	defer release()
+	stopPre := context.AfterFunc(ctx, func() { _ = nc.Close() }) // a stop ends a connection still in its handshake
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
+	stopPre()
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was
 		// reached; a pure transport failure (bad version string, KEX failure)
@@ -653,9 +655,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	// first, so connCtx then keeps ctx's own cause.
 	connCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errSSHChannelClosed)
-	// A daemon stop closes the connection once connCtx holds the stop's cause, so its doors end with it and the
-	// stop's wait for them (sshGoTracked) does not wait on the client.
-	defer context.AfterFunc(connCtx, func() { _ = sconn.Close() })()
+	// A daemon stop cancels connCtx with its own cause, which reaches every door's context before the close, then
+	// closes the connection, so its doors end with it and the stop's wait (sshGoTracked) does not wait on the client.
+	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)); _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() {
 		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
