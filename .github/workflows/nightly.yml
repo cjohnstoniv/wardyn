@@ -273,15 +273,28 @@ jobs:
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
-      # Twice this runner took a shutdown signal while the step below compiled -tags docker ./internal/api/ for
-      # TestInternalHostsOnRunnerDocker; the cause is not measured yet. The package is compiled here first with two
-      # workers, so the step below finds it in the build cache, and memory and disk are printed around it.
+      # The -tags docker ./internal/api/ test compile for TestInternalHostsOnRunnerDocker needs about 21-22 GB at
+      # its peak, even with two workers (measured in CI), against this runner's 16 GB; the runner was shut
+      # down in the prebuild below. Extra swap lets the peak page out, as in ci.yml's go job.
+      - name: Add swap for the api compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # The package is compiled here first with two workers, so the step below finds it in the build cache, and
+      # memory and disk are printed around it. vmstat writes to the step log every 15 s.
       - name: Prebuild the docker-tagged api test binary with two workers
         env:
           GOMAXPROCS: "2"
         run: |
           free -m; df -h /
-          go test -c -tags docker -p 2 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          /usr/bin/time -v go test -c -tags docker -p 2 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/
           rm -f "$RUNNER_TEMP/api-docker.test"
           free -m; df -h /
       - name: Docker conformance at CC2 (runsc)
@@ -812,6 +825,16 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: docker
+      # This job compiles the -tags docker ./internal/api/ tests, which need more memory at their peak than the
+      # hosted runner has; extra swap lets the peak page out, as in the gvisor-cc2-live job.
+      - name: Add swap for the api compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
