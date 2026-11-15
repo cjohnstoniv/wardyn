@@ -61,3 +61,17 @@ func TestWorkspaceSources_AnUnreadableListIsAServerFault(t *testing.T) {
 		}
 	}
 }
+
+// A run that attaches a workspace by id reads the workspace list to seed from it; a list that cannot be read is the
+// same server fault the run's other source checks answer, with the store's error in the log only.
+func TestSeedRequestWorkspace_AnUnreadableListIsAServerFault(t *testing.T) {
+	srv := New(Config{Store: listFailStore{newOwnerStore()}})
+	id := uuid.New()
+
+	_, refusal := srv.seedRequestWorkspace(context.Background(), &types.RunPolicySpec{}, &createRunRequest{WorkspaceID: &id})
+
+	if refusal == nil || refusal.status != http.StatusInternalServerError || refusal.body.Reason != reasonWorkspaceSourcesListUnavailable ||
+		strings.Contains(refusal.body.Error, "store down") {
+		t.Fatalf("refusal = %+v, want 500 %s without the store's own error", refusal, reasonWorkspaceSourcesListUnavailable)
+	}
+}

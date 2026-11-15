@@ -117,7 +117,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	}
 	all, lerr := s.listWorkspaces(ctx)
 	if lerr != nil {
-		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("list workspaces: %w", lerr))
+		return workspaceSeed{}, seedErr(http.StatusInternalServerError, reasonWorkspaceSourcesListUnavailable, workspaceListUnread(ctx, lerr))
 	}
 	sels := resolveWorkspaceSelections(*req)
 	var newMounts []types.WorkspaceMount
