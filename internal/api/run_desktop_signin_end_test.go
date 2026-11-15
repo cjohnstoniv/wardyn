@@ -206,3 +206,58 @@ func TestDesktopSignin_AnEndWhoseClaimLapsedIsEndedByTheNext(t *testing.T) {
 		})
 	}
 }
+
+// TestSigninStageMade_ReadsAHandEditedCountAsTheLastPass: the counts signinStage writes read back as written; any
+// other count after a counted stage's colon reads as the last pass; any other end_stage is not the stage's.
+func TestSigninStageMade_ReadsAHandEditedCountAsTheLastPass(t *testing.T) {
+	type read struct {
+		made int
+		ok   bool
+	}
+	for endStage, want := range map[string]read{
+		"stop": {0, true}, "stop:1": {1, true}, "stop:2": {2, true}, "stop:3": {3, true},
+		"stop:0": {3, true}, "stop:4": {3, true}, "stop:x": {3, true}, "stop:": {3, true},
+		"stop:-2": {3, true}, "stop:+1": {3, true}, "stop:01": {3, true},
+		"resume:1": {0, false}, "stopped": {0, false}, "": {0, false},
+	} {
+		if made, ok := signinStageMade(endStage, signinStageStop); made != want.made || ok != want.ok {
+			t.Errorf("signinStageMade(%q, stop) = %d, %t; want %d, %t", endStage, made, ok, want.made, want.ok)
+		}
+	}
+}
+
+// TestDesktopSignin_AnEndAtItsLastPassKillsTheRunOnEntry: a row whose end_stage is a counted stage's last pass, or a
+// count no wardynd path writes, is killed by the sweep's next pass before any stop, resume-agent or SIGCONT: the run
+// is KILLED with desktop_signin_resume_failed and the row closes with agent_resumed false.
+func TestDesktopSignin_AnEndAtItsLastPassKillsTheRunOnEntry(t *testing.T) {
+	for _, stage := range []string{
+		signinStage(signinStageStop, signinContinueTries), signinStage(signinStageResume, signinContinueTries),
+		signinStage(signinStageContinue, signinContinueTries),
+		"stop:x", "stop:", "stop:0", "stop:-2", "stop:+1", "resume:x", "continue:x",
+	} {
+		t.Run(stage, func(t *testing.T) {
+			f := newSigninFixture(t)
+			f.begin(t)
+			if _, err := f.st.RequestDesktopSigninEnd(context.Background(), f.st.only(t).ID, signinEndDone, stage); err != nil {
+				t.Fatal(err)
+			}
+			before := len(f.rn.seen())
+			_ = f.srv.sweepDesktopSignins(context.Background())
+			for _, c := range f.rn.seen()[before:] {
+				if c == "person:stop" || c == "agent:resume-agent" || c == "signal:SIGCONT" {
+					t.Fatalf("the pass ran %q; want the kill before any stop, resume-agent or SIGCONT", c)
+				}
+			}
+			run, err := f.st.GetRun(context.Background(), f.run.ID)
+			if si := f.st.only(t); err != nil || run.State != types.RunKilled || si.EndedAt == nil {
+				t.Fatalf("after the pass: run %v %v, row %+v; want KILLED and closed", run.State, err, si)
+			}
+			if ev := findAuditData(f.h.audit.snapshot(), f.run.ID, "run.kill", `"reason":"`+reasonDesktopSigninResumeFailed+`"`); ev == nil {
+				t.Fatalf("no run.kill row with reason %s", reasonDesktopSigninResumeFailed)
+			}
+			if got := signinCloseRows(f); !slices.Equal(got, []string{"success false"}) {
+				t.Fatalf("desktop_signin.close rows = %v, want [success false]", got)
+			}
+		})
+	}
+}

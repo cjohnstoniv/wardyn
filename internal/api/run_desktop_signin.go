@@ -117,7 +117,7 @@ func signinStage(stage string, made int) string {
 }
 
 // signinStageMade is how many sweep passes the counted stage has made at a
-// row's end_stage; false for any other end_stage.
+// row's end_stage; false for any other end_stage. A count signinStage never writes reads as the last pass.
 func signinStageMade(endStage, stage string) (int, bool) {
 	if endStage == stage {
 		return 0, true
@@ -127,7 +127,12 @@ func signinStageMade(endStage, stage string) (int, bool) {
 		return 0, false
 	}
 	made, err := strconv.Atoi(rest)
-	return made, err == nil
+	if err != nil || made < 1 || made > signinContinueTries || strconv.Itoa(made) != rest {
+		// No wardynd path writes such a count (signinStage): one edited by hand is read as the
+		// last pass, so the next pass kills the run rather than restarting or stretching the count.
+		return signinContinueTries, true
+	}
+	return made, true
 }
 
 // signinEndMade is the stage an end is stuck at and how many sweep passes it
