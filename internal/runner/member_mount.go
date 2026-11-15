@@ -164,8 +164,11 @@ type ScanHolder struct{ Owner, Workspace string }
 // folder swapped for a link after the check is never read through. An open that fails is the member
 // refusal, its cause in the operator's log. At an operator's door a folder no root holds and no member
 // workspace attaches gets no handle and no error, and the caller reads it by its path.
+// One the walk cannot follow (a link loop, more than memberWalkLinks links, or a name on its way
+// that cannot be read) while a member workspace attaches it is refused for that, never as that
+// person's narrowed roots.
 func (p UserMountPolicy) OpenScanSource(owner, src string, holders []ScanHolder, open func(real string) (*os.Root, error)) (*os.Root, error) {
-	at, held := p.memberLocation(src)
+	at, held, gaveUp := p.memberLocation(src)
 	roots := held // the roots a refusal names
 	var real string
 	var err error
@@ -176,6 +179,8 @@ func (p UserMountPolicy) OpenScanSource(owner, src string, holders []ScanHolder,
 		}
 	} else if len(held) == 0 && len(holders) == 0 {
 		return nil, nil
+	} else if gaveUp != nil {
+		return nil, walkGaveUp(src, gaveUp)
 	}
 	for _, h := range holders {
 		own := p.RootsFor(h.Owner)
@@ -233,6 +238,19 @@ func (e *StaleWorkspaceError) Unnamed() string {
 
 func (e *StaleWorkspaceError) Unwrap() error { return errMemberSourceRefused }
 
+// walkGaveUp refuses a folder scan at an operator's door when memberLocation could not follow src
+// while a member workspace attaches it: no root can be said to hold the folder, and that person's
+// roots are not the cause. The cause goes to the operator's log; the refusal names no workspace.
+func walkGaveUp(src string, cause error) error {
+	slog.Warn("runner: member mount source refused", slog.String("source", src), slog.Any("err", cause))
+	return errMemberSourceRefused
+}
+
+// memberWalkLinks is how many links memberLocation follows before it gives up: filepath.EvalSymlinks'
+// own limit, so a folder the walk gives up on is one EvalSymlinks refuses too. Never lower it: a name
+// EvalSymlinks resolves would then lose the root that holds it.
+const memberWalkLinks = 255
+
 // memberLocation is where src lies among the member workspace roots: at is the name to check it by
 // and held every root that holds at by its text. A src whose text a root holds is itself. Any other
 // is walked one name at a time from the top, following each link on the way as EvalSymlinks does,
@@ -241,8 +259,9 @@ func (e *StaleWorkspaceError) Unwrap() error { return errMemberSourceRefused }
 // at is then src named from that root as configured. The walk stops at the first root and never
 // looks below it, where a member can make any folder a link; a bind or second mount of a folder
 // below a root is not that root, and the walk goes on through it. held is empty when the walk meets
-// no root or cannot go on.
-func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
+// no root or cannot go on; gaveUp is set only in the second case, with why: a name on the way that
+// cannot be read, or more than memberWalkLinks links (a loop among them).
+func (p UserMountPolicy) memberLocation(src string) (at string, held []string, gaveUp error) {
 	all := p.allRoots()
 	holding := func(at string) []string {
 		var out []string
@@ -254,7 +273,7 @@ func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
 		return out
 	}
 	if held := holding(src); len(held) > 0 {
-		return src, held
+		return src, held, nil
 	}
 	type rootDir struct {
 		name string
@@ -267,7 +286,7 @@ func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
 		}
 	}
 	if len(dirs) == 0 {
-		return src, nil
+		return src, nil, nil
 	}
 	cur, rest := string(filepath.Separator), strings.Split(src, "/") // a stored folder is "/"-rooted and clean
 	for links := 0; len(rest) > 0; {
@@ -283,7 +302,7 @@ func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
 		next := filepath.Join(cur, name)
 		fi, err := os.Lstat(next)
 		if err != nil {
-			return src, nil
+			return src, nil, err
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			for _, d := range dirs {
@@ -291,15 +310,18 @@ func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
 					// A name left that is not plain (a link's own "..") leaves at unclean,
 					// which validateUserSource refuses: nothing below a root is walked.
 					at := strings.Join(append([]string{d.name}, slices.DeleteFunc(rest, func(n string) bool { return n == "" || n == "." })...), string(filepath.Separator))
-					return at, holding(at)
+					return at, holding(at), nil
 				}
 			}
 			cur = next
 			continue
 		}
 		target, err := os.Readlink(next)
-		if links++; err != nil || links > 255 {
-			return src, nil
+		if err != nil {
+			return src, nil, err
+		}
+		if links++; links > memberWalkLinks {
+			return src, nil, fmt.Errorf("more than %d links on the way to %s", memberWalkLinks, src)
 		}
 		if filepath.IsAbs(target) {
 			cur = filepath.VolumeName(target) + string(filepath.Separator)
@@ -307,7 +329,7 @@ func (p UserMountPolicy) memberLocation(src string) (at string, held []string) {
 		}
 		rest = append(strings.Split(filepath.ToSlash(target), "/"), rest...)
 	}
-	return src, nil
+	return src, nil, nil
 }
 
 // rootHolds reports whether src, by its text alone, is root or lies under it,
