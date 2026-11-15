@@ -17,7 +17,8 @@
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
 # WARDYN_TEST_REPORT_NAME renames the report directory only (the suite name still scopes the skip floor).
 # WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
-# WARDYN_TEST_REPORT_TAIL=<n> echoes the last n output lines of each failing test into the log (default 8).
+# WARDYN_TEST_REPORT_TAIL=<n> echoes the last n output lines of each failing test into the log (default 8); a failing
+# test's -race report ("WARNING: DATA RACE" to the closing "=================="), 200 lines at most, is echoed first.
 # test/go-quarantine.txt (WARDYN_GO_QUARANTINE overrides the path) lists the flaky Go tests every suite
 # skips with `go test -skip`; the file is validated first and an expired or malformed entry exits 1.
 # Its format and rules are the ones in ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh).
@@ -89,6 +90,11 @@ GO_EXIT=$?
 # its name (#1209), and any package that failed with no failing test to name
 # (a -timeout panic, a panic in init, os.Exit or a failure in TestMain) prints
 # its package name and the panic, or else its last few output lines.
+# A -race failure echoes its "WARNING: DATA RACE" blocks first, since its last
+# lines no longer hold the access stacks. A package whose test binary exited
+# while a test ran (os.Exit inside a test, as the pool guard's) is listed under
+# "failed outside any named test" too, beside its named failures, with that
+# test's name and its last 200 lines: the exit skipped every later test.
 if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
   python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
 import json
@@ -101,14 +107,31 @@ build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fa
 build_fails = {}   # ImportPath -> [Output, ...]
 pkg_fails = set()  # Package: failed with no Test and not a build failure
 tail = {}          # Package -> its last few output lines
-test_tail = {}     # (Package, Test) -> that test's last few output lines (#1209)
+test_out = {}      # (Package, Test) -> that test's last output lines as (n, line), n counting its lines from 1 (#1209)
+race = {}          # (Package, Test) -> that test's "WARNING: DATA RACE" blocks as (n, line), LONG lines at most
+in_race = set()    # (Package, Test) whose output is inside a race block
+count = {}         # (Package, Test) -> how many output lines that test has had
+running = {}       # Package -> the tests that started and have not ended (pass, fail or skip)
+exited = {}        # Package -> the tests still running when its test binary ended: it exited inside them
 panics = {}        # Package -> its first `panic:` line and the lines after it
 panic_test = {}    # Package -> the test that panic was attributed to, if any
 TEST_TAIL = int(os.environ.get("WARDYN_TEST_REPORT_TAIL") or 8)
+# The most lines echoed for a failing test's race blocks, and for a test its binary exited inside: a race report
+# holds two access stacks and two creation stacks, and an exit's cause (a guard's message and its stacks) sits
+# just before the exit.
+LONG = 200
+REPORT = os.path.basename(sys.argv[1])
 
 
 def emit(out):
     sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+
+
+def last(buf, k):
+    """The last k entries of buf; none when k is 0."""
+    buf = list(buf)
+    return buf[len(buf) - min(k, len(buf)):]
+
 
 with open(sys.argv[1]) as f:
     for line in f:
@@ -120,34 +143,68 @@ with open(sys.argv[1]) as f:
         except ValueError:
             continue  # a non-JSON line (e.g. `go test` itself failed to start)
         action = ev.get("Action")
+        pkg, test = ev.get("Package", ""), ev.get("Test", "")
         if action == "build-output":
             build_output.setdefault(ev.get("ImportPath", ""), []).append(ev.get("Output", ""))
         elif action == "build-fail":
             ip = ev.get("ImportPath", "")
             build_fails[ip] = build_output.get(ip, [])
-        elif action == "output" and ev.get("Package"):
-            pkg, out = ev["Package"], ev.get("Output", "")
+        elif action == "run" and test:
+            running.setdefault(pkg, set()).add(test)
+        elif action == "output" and pkg:
+            out = ev.get("Output", "")
             tail.setdefault(pkg, deque(maxlen=8)).append(out)
-            if ev.get("Test"):
-                test_tail.setdefault((pkg, ev["Test"]), deque(maxlen=TEST_TAIL)).append(out)
+            if test:
+                key = (pkg, test)
+                n = count[key] = count.get(key, 0) + 1
+                test_out.setdefault(key, deque(maxlen=max(TEST_TAIL, LONG))).append((n, out))
+                # A -race failure names its cause in each "WARNING: DATA RACE" block, from that line to
+                # the closing "==================", which a test's last lines no longer hold.
+                text = out.rstrip("\n")
+                if text == "WARNING: DATA RACE":
+                    in_race.add(key)
+                if key in in_race:
+                    block = race.setdefault(key, [])
+                    if len(block) < LONG:
+                        block.append((n, out))
+                    if text == "==================":
+                        in_race.discard(key)
             # A -timeout panic is attributed to the running test but emits no
             # fail event for it, and its last lines are goroutine frames: the
             # `panic:` line and the ones after it are what name the cause.
             if pkg not in panics and out.startswith("panic: "):
                 panics[pkg] = [out]
-                panic_test[pkg] = ev.get("Test", "")
+                panic_test[pkg] = test
             elif pkg in panics and len(panics[pkg]) < 8:
                 panics[pkg].append(out)
-        elif action == "fail" and ev.get("Test"):
-            fails.add((ev.get("Package", ""), ev["Test"]))
+        elif action in ("pass", "skip", "fail") and test:
+            running.get(pkg, set()).discard(test)
+            if action == "fail":
+                fails.add((pkg, test))
+            else:
+                # Only a failing test's lines are echoed: a passed or skipped one's are dropped.
+                for kept in (test_out, race, count):
+                    kept.pop((pkg, test), None)
+                in_race.discard((pkg, test))
         elif action == "fail" and not ev.get("FailedBuild"):
-            pkg_fails.add(ev.get("Package", ""))
+            pkg_fails.add(pkg)
+            # A test that started and never ended was running when the binary exited (os.Exit or a
+            # crash inside it): test2json gives it no end event, and the package's fail is all that comes.
+            if running.get(pkg):
+                exited[pkg] = sorted(running[pkg])
 
 if fails:
     print(">> failing tests:")
     for pkg, test in sorted(fails):
         print(f">>   {pkg} {test}")
-        for out in test_tail.get((pkg, test), []):
+        block = race.get((pkg, test), [])
+        for _, out in block:
+            emit(out)
+        after = block[-1][0] if block else 0
+        lines = [(n, out) for n, out in last(test_out.get((pkg, test), []), TEST_TAIL) if n > after]
+        if block and lines and lines[0][0] > after + 1:
+            print(f">>     ... {lines[0][0] - after - 1} lines cut (the whole output is in {REPORT})")
+        for _, out in lines:
             emit(out)
 
 if build_fails:
@@ -159,12 +216,22 @@ if build_fails:
 
 named_fail_pkgs = {pkg for pkg, _ in fails}
 # An ordinary panic in a test fails that test, already named above; a -timeout
-# panic fails no test, so it still needs its package listed here.
+# panic fails no test, so it still needs its package listed here. So does a
+# binary that exited inside a test: the exit skipped every later test.
 orphan_panics = {p for p in panics if (p, panic_test[p]) not in fails}
-unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p not in named_fail_pkgs)
+unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p in exited or p not in named_fail_pkgs)
 if unnamed:
     print(">> failed outside any named test:")
     for pkg in unnamed:
+        if pkg in exited and pkg not in orphan_panics:
+            print(f">>   {pkg} (the test binary exited while {', '.join(exited[pkg])} ran)")
+            for test in exited[pkg]:
+                lines = last(test_out.get((pkg, test), []), LONG)
+                if lines and lines[0][0] > 1:
+                    print(f">>     ... {lines[0][0] - 1} earlier lines of {test} cut (the whole output is in {REPORT})")
+                for _, out in lines:
+                    emit(out)
+            continue
         print(f">>   {pkg}")
         for out in panics.get(pkg) or tail.get(pkg, []):
             emit(out)
