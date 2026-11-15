@@ -60,7 +60,7 @@ func TestSSHGateway_AConnectionEndIsTheClientsClose(t *testing.T) {
 		wantErr               any
 		open                  func(t *testing.T, client *ssh.Client)
 	}{
-		{"a forward's start", "ssh.forward", "failure", lockUnavailableMsg, func(t *testing.T, client *ssh.Client) {
+		{"a forward's start", "ssh.forward", "failure", errSSHChannelClosed.Error(), func(t *testing.T, client *ssh.Client) {
 			go func() { _, _ = client.Dial("tcp", "127.0.0.1:9999") }()
 		}},
 		{"an sftp start", "ssh.sftp.transfer", "success", nil, func(t *testing.T, client *ssh.Client) {

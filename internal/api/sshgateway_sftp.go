@@ -84,6 +84,22 @@ func sshClientClosedFirst(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errSSHChannelClosed)
 }
 
+// sshStartCutByClient reports whether err, a door's start error, is the start lock wait or the start that its
+// client's own close cut (sshClientClosedFirst), not one of the fence's own refusals (its wait's bound, the start
+// budget, a lost lock) nor a daemon stop.
+func sshStartCutByClient(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && sshClientClosedFirst(ctx)
+}
+
+// sshStartError is a door's start error as its failure row records it: a start its client's close cut names that
+// close (errSSHChannelClosed), where the start lock's busy sentence would name a cause that was not there.
+func sshStartError(ctx context.Context, err error) string {
+	if sshStartCutByClient(ctx, err) {
+		return errSSHChannelClosed.Error()
+	}
+	return err.Error()
+}
+
 // sftpServerMissing is the image contract a missing sftp-server breaks.
 const sftpServerMissing = "sftp unavailable: the sandbox image has no " + sftpServerPath
 
@@ -140,7 +156,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
 		outcome, data := "failure", map[string]any{"error": err.Error()}
-		if errors.Is(err, context.Canceled) && sshClientClosedFirst(ctx) {
+		if sshStartCutByClient(ctx, err) {
 			// A start its client's own close cut is the client's end, as a close under the running process is
 			// (bridgeOutcome): a success that names no error, with nothing moved. Only a wait the channel's end
 			// cut reads so: the fence's own refusals (its wait's bound, the start budget, a lost lock) are never
