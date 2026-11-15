@@ -12,7 +12,7 @@
 # one test that panics, one package that fails to COMPILE, and two that fail with no test to name
 # (os.Exit in TestMain, a panic in init), and asserts the failing test's name,
 # the compiler's own error text and each package's cause all land on stderr.
-# A third module adds a test binary that exits inside a test and two tests with race reports.
+# A third module adds a test binary that exits inside a test, two tests with race reports and a panic with paused siblings.
 #
 # Daemon-free, network-free: no substrate beyond `go test` itself.
 set -euo pipefail
@@ -279,7 +279,8 @@ $OUT3"
 echo "ok  names a binary exit inside a test beside the package's named failure"
 
 for want in "Write at 0x00c000012345 by goroutine 8:" "racepkg.writer01()" "Previous read at 0x00c000012345 by goroutine 7:" \
-  "after the race 12" "long frame 199" "lines cut (the whole output is in test-output.json)" "long frame 250"; do
+  "after the race 12" "long frame 199" "... 6 lines cut (the whole output is in test-output.json)" \
+  "... 45 lines cut (the whole output is in test-output.json)" "long frame 250"; do
   echo "$OUT3" | grep -F "$want" >/dev/null \
     || fail "a failing test's race report must reach the log ahead of its last lines ($want) — got:
 $OUT3"
@@ -290,3 +291,32 @@ for cut in "after the race 01" "long frame 200"; do
 $OUT3"
 done
 echo "ok  echoes a failing test's race report whole, cut at 200 lines"
+
+# A panic inside a test, while parallel siblings are paused: the siblings never ended, but the
+# panic belongs to a test that failed, so only that test is named and no exit is reported.
+mkdir -p "$TMP3/parpkg"
+cat > "$TMP3/parpkg/p_test.go" <<'EOF'
+package parpkg
+
+import "testing"
+
+func TestP1(t *testing.T) { t.Parallel() }
+func TestP2(t *testing.T) { t.Parallel() }
+func TestP3(t *testing.T) { t.Parallel() }
+
+func TestPanicsWithPausedSiblings(t *testing.T) {
+	var m map[string]int
+	m["x"] = 1
+}
+EOF
+OUT4="$( (cd "$TMP3" && WARDYN_TEST_REPORT_COVER=0 WARDYN_TEST_REPORT_SKIP_FLOOR=1 ./scripts/test-report.sh fixture ./parpkg 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when a test panics"
+echo "$OUT4" | grep -F "exitfixture/parpkg TestPanicsWithPausedSiblings" >/dev/null \
+  || fail "stderr must name the test that panicked — got:
+$OUT4"
+for bad in "exited while" "failed outside any named test" "TestP1"; do
+  echo "$OUT4" | grep -F "$bad" >/dev/null \
+    && fail "a panic in a test must not list its package outside any named test or name its paused siblings ($bad) — got:
+$OUT4"
+done
+echo "ok  a panic in a test is not reported as a binary exit because siblings are paused"

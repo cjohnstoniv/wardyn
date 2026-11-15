@@ -111,7 +111,7 @@ test_out = {}      # (Package, Test) -> that test's last output lines as (n, lin
 race = {}          # (Package, Test) -> that test's "WARNING: DATA RACE" blocks as (n, line), LONG lines at most
 in_race = set()    # (Package, Test) whose output is inside a race block
 count = {}         # (Package, Test) -> how many output lines that test has had
-running = {}       # Package -> the tests that started and have not ended (pass, fail or skip)
+running = {}       # Package -> the tests that started and are neither ended (pass, fail or skip) nor paused
 exited = {}        # Package -> the tests still running when its test binary ended: it exited inside them
 panics = {}        # Package -> its first `panic:` line and the lines after it
 panic_test = {}    # Package -> the test that panic was attributed to, if any
@@ -149,8 +149,10 @@ with open(sys.argv[1]) as f:
         elif action == "build-fail":
             ip = ev.get("ImportPath", "")
             build_fails[ip] = build_output.get(ip, [])
-        elif action == "run" and test:
+        elif action in ("run", "cont") and test:
             running.setdefault(pkg, set()).add(test)
+        elif action == "pause" and test:
+            running.get(pkg, set()).discard(test)
         elif action == "output" and pkg:
             out = ev.get("Output", "")
             tail.setdefault(pkg, deque(maxlen=8)).append(out)
@@ -190,7 +192,7 @@ with open(sys.argv[1]) as f:
             pkg_fails.add(pkg)
             # A test that started and never ended was running when the binary exited (os.Exit or a
             # crash inside it): test2json gives it no end event, and the package's fail is all that comes.
-            if running.get(pkg):
+            if running.get(pkg) and (pkg, panic_test.get(pkg)) not in fails:
                 exited[pkg] = sorted(running[pkg])
 
 if fails:
