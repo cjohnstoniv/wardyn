@@ -107,6 +107,15 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 // row can run past forcedStopBound, by at most those budgets, and is still bounded.
 var forcedStopBound = reconcileFinalizeTimeout
 
+// forcedRestopWaitMin and forcedRestopWaitMax bound the wait before the forced retry stops again a sandbox it has
+// already stopped while the run's copy back could not be given up (inside the keep, a folder read that fails):
+// forcedRestopWaitMin, doubling each time, to forcedRestopWaitMax. The stop has already succeeded, so repeating it
+// on every tick only repeats its warning; the revoke and the give-up past the keep still run on every tick.
+const (
+	forcedRestopWaitMin = 2 * time.Minute
+	forcedRestopWaitMax = 10 * time.Minute
+)
+
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
 const forcedNotBroughtBack = "Not brought back: the run was ended past its end while another operation held it or too many runs were ending at once"
 
@@ -294,7 +303,7 @@ func (s *Server) clearForcedStop(ctx context.Context, fs store.ForcedStopper, id
 // the marked runs and not the stored ones). Each row has a bound of its own (forcedStopBound, plus the
 // detached budgets it names), so one wedged runner holds neither the tick nor the rows behind it for good.
 //
-// Per row, retryForcedStop.
+// Per row, retryForcedStop. The tick then drops this server's restop waits for runs it no longer lists (forgetForcedRestops).
 func (s *Server) sweepForcedStops(ctx context.Context) error {
 	fs, ok := s.cfg.Store.(store.ForcedStopper)
 	if !ok {
@@ -304,11 +313,14 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	listed := make(map[uuid.UUID]bool, len(marked))
 	for _, m := range marked {
+		listed[m.RunID] = true
 		rctx, cancel := context.WithTimeout(ctx, forcedStopBound)
 		s.retryForcedStop(rctx, fs, m)
 		cancel()
 	}
+	s.forgetForcedRestops(listed)
 	return nil
 }
 
@@ -332,7 +344,9 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 // settled, stopped, queued or given up, and the mark waits for it. Once its keep has run out, and while its mark is
 // still set, a copy back still owed is given up first, before the settle and whatever the stop then does
 // (giveUpForcedPastKeep): the tail owner gives up a marked run only on a replica its runner is away from, so a stop
-// that never succeeds would otherwise show the changes as kept for good.
+// that never succeeds would otherwise show the changes as kept for good. A sandbox this server stopped whose copy
+// back could not be given up is stopped again only once its wait has run out (forcedRestopWaiting); the revoke runs
+// on every tick.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
@@ -357,6 +371,12 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		return
 	}
 	settleAfterTeardown(ctx, func(sctx context.Context) { s.giveUpForcedPastKeep(sctx, fs, m) })
+	// A sandbox this server already stopped, whose copy back could not be given up, waits before it is stopped again
+	// (noteForcedRestop); the revoke still runs.
+	if s.forcedRestopWaiting(run.ID) {
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+		return
+	}
 	if !s.settleUnsettledForcedFolder(ctx, run) {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 		return
@@ -406,16 +426,17 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		// A copy back still owed is given up first, while the ref the give-up needs is set: once the ref is cleared
 		// no pass runs again, and the record would still show the changes as owed with no given_up row. Without the
 		// lock too: the give-up moves the record's generation on, so a pass still holding it writes nothing. A record
-		// not final yet keeps the ref and the mark for this tick. The next tick decides the sandbox again: while its
-		// cut is still not confirmed it stops again (a stop of a gone sandbox answers success) and tries the give-up
-		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record. A
-		// folder read that never answers is given up once the keep has run out (giveUpFolderStopped), so the stops
-		// end with the keep.
+		// not final yet keeps the ref and the mark for this tick. A later tick decides the sandbox again once this
+		// server's wait has run out (noteForcedRestop: 2 minutes, doubling to 10): while its cut is still not confirmed
+		// it stops again (a stop of a gone sandbox answers success) and tries the give-up again; once a cut is
+		// confirmed the sandbox counts as kept, and the tail owner's pass closes the record. A folder read that never
+		// answers is given up once the keep has run out (giveUpFolderStopped), so the stops end with the keep.
 		final, gerr := false, error(nil)
 		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderStopped(sctx, run) })
 		if !final {
 			slog.WarnContext(ctx, "wardynd: forced stop retry stopped a sandbox whose folder copy back could not be given up; its ref and mark stay",
 				slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+			s.noteForcedRestop(run.ID)
 			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
 			return
 		}
@@ -618,6 +639,48 @@ type teardownRowKey struct {
 // whose stop is failing and not every run ever stopped.
 func (s *Server) forgetTeardownRow(runID uuid.UUID, action string) {
 	teardownRowsWritten.Delete(teardownRowKey{s, runID, action})
+}
+
+// forcedRestopWaits holds, per server and run, the wait before the forced retry stops that run's sandbox again
+// (noteForcedRestop). In memory only, like teardownRowsWritten: a restart, or another replica, stops once and starts
+// a wait of its own. A tick drops this server's entries for runs it no longer lists (forgetForcedRestops).
+var forcedRestopWaits sync.Map
+
+type forcedRestopKey struct {
+	srv *Server
+	run uuid.UUID
+}
+
+type forcedRestopWait struct {
+	delay time.Duration
+	next  time.Time
+}
+
+// forcedRestopWaiting reports whether this server's retry stopped run id's sandbox and its wait has not run out.
+func (s *Server) forcedRestopWaiting(id uuid.UUID) bool {
+	v, ok := forcedRestopWaits.Load(forcedRestopKey{s, id})
+	return ok && s.cfg.Now().Before(v.(forcedRestopWait).next)
+}
+
+// noteForcedRestop starts run id's wait at forcedRestopWaitMin, or doubles it up to forcedRestopWaitMax, after a stop
+// whose copy back could not be given up.
+func (s *Server) noteForcedRestop(id uuid.UUID) {
+	k := forcedRestopKey{s, id}
+	delay := forcedRestopWaitMin
+	if v, ok := forcedRestopWaits.Load(k); ok {
+		delay = min(2*v.(forcedRestopWait).delay, forcedRestopWaitMax)
+	}
+	forcedRestopWaits.Store(k, forcedRestopWait{delay: delay, next: s.cfg.Now().Add(delay)})
+}
+
+// forgetForcedRestops drops this server's waits for runs the tick did not list: their mark is gone.
+func (s *Server) forgetForcedRestops(listed map[uuid.UUID]bool) {
+	forcedRestopWaits.Range(func(key, _ any) bool {
+		if k := key.(forcedRestopKey); k.srv == s && !listed[k.run] {
+			forcedRestopWaits.Delete(key)
+		}
+		return true
+	})
 }
 
 // stopCauseKey carries a *stopCause down to the teardown calls.
