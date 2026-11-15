@@ -579,7 +579,13 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	cleaned := make(chan error, 1)
 	go func() { cleaned <- waitCleanUps(cleanCtx) }()
 	srv.WaitBackground()
-	if err := <-cleaned; err != nil {
+	cleanErr := <-cleaned
+	if cleanErr == nil {
+		// A clean-up a background save started after that wait found none running is waited for too, on the same
+		// deadline: run's deferred close waits no more after a shutdown, so it would be cut with budget left.
+		cleanErr = waitCleanUps(cleanCtx)
+	}
+	if cleanErr != nil {
 		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
 			slog.Duration("budget", api.BackgroundShutdownBudget))
 	}

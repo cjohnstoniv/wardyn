@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,11 +54,15 @@ func (f *fakeBackgroundServer) WaitBackground() {
 }
 func (f *fakeBackgroundServer) FlushAuthFailedStreak() { *f.log = append(*f.log, "flush") }
 
-// fakeCleanUpWait stands in for secretstorepg.WaitForCleanUps: it notes how
-// much time its ctx leaves (0 for none) and closes started.
+// fakeCleanUpWait stands in for secretstorepg.WaitForCleanUps: it notes how much time its ctx leaves (0 for
+// none) and each call's deadline, closes started on its first call, and from its second call on logs
+// "cleanups again" to log when log is set.
 type fakeCleanUpWait struct {
-	started chan struct{}
-	left    time.Duration
+	started   chan struct{}
+	once      sync.Once
+	left      time.Duration
+	deadlines []time.Time
+	log       *order
 }
 
 func newFakeCleanUpWait() *fakeCleanUpWait { return &fakeCleanUpWait{started: make(chan struct{})} }
@@ -64,8 +70,12 @@ func newFakeCleanUpWait() *fakeCleanUpWait { return &fakeCleanUpWait{started: ma
 func (f *fakeCleanUpWait) wait(ctx context.Context) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		f.left = time.Until(deadline)
+		f.deadlines = append(f.deadlines, deadline)
 	}
-	close(f.started)
+	if len(f.deadlines) > 1 && f.log != nil {
+		*f.log = append(*f.log, "cleanups again")
+	}
+	f.once.Do(func() { close(f.started) })
 	return nil
 }
 
@@ -128,6 +138,32 @@ func TestRunShutdownSequence_SucceedsWhenHTTPDrainSucceeds(t *testing.T) {
 	}
 	if got := []string(log); len(got) != 4 || got[0] != "shutdown" || got[1] != "cleanups" || got[2] != "wait" || got[3] != "flush" {
 		t.Errorf("runShutdownSequence(clean Shutdown) called %v, want [shutdown cleanups wait flush]", got)
+	}
+}
+
+// TestRunShutdownSequence_WaitsAgainForACleanUpTheBackgroundWorkStarted: a clean-up that the background work's own
+// saves start after the first wait found none running is waited for too, after WaitBackground and before the
+// auth-fail flush, on the same deadline, so the grace period does not grow. Catches a sequence that waits once,
+// which leaves that clean-up to run's deferred close, which after a shutdown waits no more and cuts it.
+func TestRunShutdownSequence_WaitsAgainForACleanUpTheBackgroundWorkStarted(t *testing.T) {
+	var log order
+	cw := newFakeCleanUpWait()
+	cw.log = &log
+	bg := &fakeBackgroundServer{log: &log, cleanUps: cw}
+	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, waited)
+
+	if err != nil {
+		t.Fatalf("runShutdownSequence returned %v, want nil", err)
+	}
+	if len(cw.deadlines) != 2 || !cw.deadlines[0].Equal(cw.deadlines[1]) {
+		t.Errorf("clean-up waits ran on deadlines %v; want two, on the same deadline", cw.deadlines)
+	}
+	if got, want := []string(log), []string{"shutdown", "cleanups", "wait", "cleanups again", "flush"}; !slices.Equal(got, want) {
+		t.Errorf("runShutdownSequence called %v, want %v", got, want)
 	}
 }
 
