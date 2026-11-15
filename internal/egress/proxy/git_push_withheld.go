@@ -37,6 +37,9 @@ func (p *Proxy) refuseWithheldPush(w http.ResponseWriter, r *http.Request, host,
 		return false
 	}
 	deny(ruleSourceGitPushCapability)
+	// A forge name holds no apostrophe; replacing one keeps the message's own
+	// apostrophes from reading as quotes around the name.
+	forge = strings.ReplaceAll(forge, "'", "\u2019")
 	p.denyAttributed(w, "Your walls (or this run's policy) don't include code_write for "+forge+
 		", so this run can't push. Change them in Settings, or start a run that allows pushing.", http.StatusForbidden)
 	return true
