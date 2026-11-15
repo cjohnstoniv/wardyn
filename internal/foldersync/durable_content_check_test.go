@@ -6,11 +6,13 @@
 package foldersync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // A failed copy someone rewrote in place to its own length, through its name, is the same file with the same size
@@ -93,5 +95,81 @@ func TestPass_AnEditorsBackupRenameOfAFailedCopyIsNotNamedAsItsPartialCopy(t *te
 		backup != "from the sandbox" || len(temps) != 0 || reason == "" || strings.Contains(reason, "its partial copy is left at") {
 		t.Errorf("laptop %s = %q, backup %q, temps %v, refusal %q: want the editor's save and backup kept, no temp, and a refusal that names no partial copy",
 			name, got, backup, temps, reason)
+	}
+}
+
+func failCopyStamp(t *testing.T, name string) {
+	t.Helper()
+	old := setModTime
+	t.Cleanup(func() { setModTime = old })
+	setModTime = func(f *os.File, at time.Time) error {
+		if filepath.Base(f.Name()) == name {
+			return syscall.EIO
+		}
+		return old(f, at)
+	}
+}
+
+// Where a volume has the handle report another number than the copy's name until the copy's sync, a copy that fails
+// before that sync is still at its name, so the refusal names it.
+// Catches a number from before the sync trusted as proof the file at the name is not the copy.
+func TestPass_AFailedCopyBeforeItsNumberSettlesIsNamed(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	idSettlesOnSync(t, name, nil)
+	failCopyStamp(t, name)
+	reason := refusedFor(pass(t, sy), name)
+	if _, err := os.Lstat(filepath.Join(root, name)); err != nil || !strings.Contains(reason, "its partial copy is left at "+name) {
+		t.Errorf("laptop %s: %v, refusal %q: want the partial copy kept and named", name, err, reason)
+	}
+}
+
+// A copy that fails before its sync, on whatever the volume numbers files like, is removed or kept and named, and
+// leaves no temp.
+func TestPass_AFailedCopyBeforeItsSyncLeavesNoUnnamedPartial(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	failCopyStamp(t, name)
+	reason := refusedFor(pass(t, sy), name)
+	temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
+	_, err := os.Lstat(filepath.Join(root, name))
+	if reason == "" || len(temps) != 0 || (!errors.Is(err, os.ErrNotExist) && !strings.Contains(reason, "its partial copy is left at "+name)) {
+		t.Errorf("laptop %s: %v, temps %v, refusal %q: want the partial copy removed, or kept and named, and no temp", name, err, temps, reason)
+	}
+}
+
+// The handle and the name told one number at the create, the handle told another once the copy was written, and an
+// editor then renamed the copy to a backup name and saved at the name: the number did not hold, so the file at the
+// name is not proved to be another file and the refusal names it.
+// Catches the create-time number trusted without the handle reporting it still.
+func TestPass_AnEditorsBackupRenameWhereTheCopysNumberChangedIsNamed(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	decoy := filepath.Join(t.TempDir(), "decoy")
+	putSyncFile(t, decoy, "decoy", 0o644)
+	oldS, oldF := statCopy, fsyncFile
+	t.Cleanup(func() { statCopy, fsyncFile = oldS, oldF })
+	created := false
+	statCopy = func(f *os.File) (os.FileInfo, error) {
+		if filepath.Base(f.Name()) != name || !created {
+			created = created || filepath.Base(f.Name()) == name
+			return oldS(f)
+		}
+		return os.Lstat(decoy)
+	}
+	fsyncFile = func(f *os.File) error {
+		if filepath.Base(f.Name()) != name {
+			return oldF(f)
+		}
+		if err := oldF(f); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(filepath.Join(root, name), filepath.Join(root, name+"~")); err != nil {
+			t.Fatal(err)
+		}
+		editorSave(t, root, name, "editor save")
+		return syscall.EIO
+	}
+	reason := refusedFor(pass(t, sy), name)
+	if got, backup := getSyncFile(t, filepath.Join(root, name)), getSyncFile(t, filepath.Join(root, name+"~")); got != "editor save" ||
+		backup != "from the sandbox" || !strings.Contains(reason, "its partial copy is left at "+name) {
+		t.Errorf("laptop %s = %q, backup %q, refusal %q: want both kept and the name named, since the number did not hold", name, got, backup, reason)
 	}
 }

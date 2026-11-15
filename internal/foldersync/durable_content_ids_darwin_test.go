@@ -47,6 +47,8 @@ func TestCopyFileIDs_HowThisVolumeNumbersFiles(t *testing.T) {
 	if _, err := a.WriteString("bytes"); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("file ids: after the write, before the sync: handle %s, name %s, name is handle=%v",
+		id(fstat(a)), id(lstat("a")), os.SameFile(fstat(a), lstat("a")))
 	if err := a.Sync(); err != nil {
 		t.Fatal(err)
 	}
