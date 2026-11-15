@@ -32,7 +32,11 @@ func newGitRig(t *testing.T) *gitRig {
 		t.Skip("no git on this machine")
 	}
 	home := t.TempDir()
+	// maintenance.auto=false: a git that runs its auto maintenance detached after a fetch or commit (newer releases
+	// do; 2.43 runs it in the foreground) can still hold .git/objects/maintenance.lock when the test's temp dirs
+	// are removed, and the cleanup then fails with "directory not empty".
 	for k, v := range map[string]string{"HOME": home, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": filepath.Join(home, "none"),
+		"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
 		"GIT_AUTHOR_NAME": "Dev", "GIT_AUTHOR_EMAIL": "dev@example.com", "GIT_COMMITTER_NAME": "Dev", "GIT_COMMITTER_EMAIL": "dev@example.com"} {
 		t.Setenv(k, v)
 	}
