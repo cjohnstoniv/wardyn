@@ -187,6 +187,38 @@ describe("ApprovalsScreen: a decided request is held until a read of its list la
     expect(approveMock).toHaveBeenCalledTimes(1);
     for (const button of cardButtons()) expect(button).toBeEnabled();
   });
+
+  it("a read that landed before the decision does not free the card", async () => {
+    pendingRows = [push("p1")];
+    await mount("/approvals");
+    await flush(10_000);
+    pendingFails = true;
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(approveMock).toHaveBeenCalledTimes(1);
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    pendingFails = false;
+    await flush(10_000);
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
+
+  it("a read that began before the decision does not free the card when it lands after it", async () => {
+    pendingRows = [push("p1")];
+    await mount("/approvals");
+    const before = later<ApprovalRequest[]>();
+    pendingMock.mockReturnValueOnce(before.promise);
+    await flush(10_000);
+    pendingFails = true;
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(approveMock).toHaveBeenCalledTimes(1);
+    await act(async () => before.answer([push("p1")]));
+    await flush();
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    pendingFails = false;
+    await flush(10_000);
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
 });
 
 // The server's 409 for a request someone else decided first: the card is stale, so the lists are read again at once.

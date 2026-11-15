@@ -682,9 +682,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       // uses instead; a refresh failure here is not fatal — the decide
       // itself already succeeded, and the next poll tick will catch the
       // view up.
-      // The dialog closes when that read has answered: closed while its card is still held, focus would find no
-      // usable control in the list and go to the page heading instead of the next card. Only this request's dialog
-      // closes, never one opened since for another request.
+      // The dialog closes when that read has answered, whether the read worked or failed. If it failed, the card is
+      // still held at that point, so focus may land on the page heading rather than on the next card. Only this
+      // request's dialog closes, never one opened since for another request.
       await readAfterDecision(id);
       setPrompt((cur) => (cur?.id === id ? null : cur));
       return true;
