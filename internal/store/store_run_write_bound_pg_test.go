@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -54,7 +55,9 @@ func TestPG_RunWriteStatementTimeout_AStuckStateWriteIsRolledBack(t *testing.T) 
 // holdRunRow opens a transaction holding run id's row lock (FOR UPDATE); a test's cleanup rolls it back.
 func holdRunRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) pgx.Tx {
 	t.Helper()
-	holder, err := pool.Begin(ctx)
+	// The holder is a connection of its own, so the write under test takes no second connection from the pool
+	// while this goroutine holds one.
+	holder, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +165,9 @@ func TestPG_SettleRunState_ReadsTheOutcomeOfACommitStillPendingWhenItsClientRetu
 		t.Fatal(err)
 	}
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	gate, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(gate.Release)
+	// The gate is a connection of its own, so the write below takes no second connection from the pool while this
+	// goroutine holds one.
+	gate := testutil.PGConn(t, pool)
 	if _, err := gate.Exec(ctx, `SELECT pg_advisory_lock(4207)`); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestPG_SettleRunState_ReadsTheOutcomeOfACommitStillPendingWhenItsClientRetu
 
 	st := store.NewPG(pool)
 	wctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	_, err = st.UpdateRunStateIf(wctx, run.ID, types.RunRunning, types.RunFailed)
+	_, err := st.UpdateRunStateIf(wctx, run.ID, types.RunRunning, types.RunFailed)
 	cancel()
 	if !errors.Is(err, store.ErrRunWriteUnsettled) {
 		t.Fatalf("err %v; want ErrRunWriteUnsettled for a COMMIT sent and not answered", err)
