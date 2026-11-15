@@ -256,7 +256,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # 55, was 40: unit ran out at 40 on rc.21 wave 3 (D643); set from the prebuild's measured time after.
+    # 55, was 40: unit ran out at 40 on a 0.10.0-rc.21 train run; set from the prebuild's measured time after.
     timeout-minutes: 55
     strategy:
       fail-fast: false
@@ -335,7 +335,7 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # internal/api's test compile is the job's memory peak (D643: under swap it outlasted the timeout). It is
+      # internal/api's test compile is the job's memory peak (about 21-22 GB even with two workers). It is
       # compiled here first with two workers, and measured, so the step below finds it in the build cache. vmstat
       # writes memory to the step log every 15 s, which a runner lost mid-step still leaves.
       - name: Prebuild internal/api's tests with two workers
@@ -474,7 +474,7 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
       - name: Prebuild internal/api's tests with two workers
         env:
           GOMAXPROCS: "2"
@@ -727,7 +727,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # 30, was 20: ui ran out at 20 on rc.21 wave 2 and wave 3 with make ui-test still passing files (D646),
+    # 30, was 20: ui ran out at 20 on two 0.10.0-rc.21 train runs with make ui-test still passing files,
     # against 12-17 m on the other runs.
     timeout-minutes: 30
     steps:
@@ -1906,7 +1906,7 @@ jobs:
     runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
-    # key-service leg. 70, was 55: the step ran out at 55 on rc.21 wave 3 (D643), against 11 m on wave 2.
+    # key-service leg. 70, was 55: the step ran out at 55 on a 0.10.0-rc.21 train run, against 11 m on the one before.
     timeout-minutes: 70
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1993,7 +1993,7 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
       - name: Prebuild internal/api's tests with two workers
         env:
           GOMAXPROCS: "2"
@@ -2666,7 +2666,7 @@ jobs:
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
       # consult the marker. The race shard does not set it, as before.
-      # See the go job: internal/api's test compile, prebuilt with two workers and measured (D643).
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
       - name: Prebuild internal/api's tests with two workers
         if: matrix.prebuild != ''
         env:
@@ -3138,7 +3138,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
-    # train's cold staticcheck was killed at 25 inside `make staticcheck` (D643).
+    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -3194,7 +3194,7 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # vmstat as in the go job (D643): staticcheck's whole-tree load is a memory peak of its own.
+      # vmstat as in the go job: staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
         run: |
           vmstat -t 15 &
