@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -154,8 +155,8 @@ func installStuckCanaryReactor(t *testing.T, cs *fake.Clientset) {
 	})
 }
 
-// deleteCollectionGVKs maps the three resource kinds this package's teardown
-// sweeps to their (singular, per-item) Kind, for installDeleteCollectionSupport.
+// deleteCollectionGVKs maps the resource kinds this package's teardown
+// sweeps (pods, Secrets, NetworkPolicies, and the keep path's EndpointSlices) to their (singular, per-item) Kind, for installDeleteCollectionSupport.
 // The tracker derives the LIST kind itself (Kind+"List" — see
 // testing/fixture.go's tracker.List), so this must be the item kind ("Pod"),
 // not "PodList" — passing the list kind double-suffixes to "PodListList" and
@@ -164,6 +165,7 @@ var deleteCollectionGVKs = map[string]schema.GroupVersionKind{
 	"pods":            {Version: "v1", Kind: "Pod"},
 	"secrets":         {Version: "v1", Kind: "Secret"},
 	"networkpolicies": {Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"},
+	"endpointslices":  {Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"},
 }
 
 // installDeleteCollectionSupport makes DeleteCollection actually delete
@@ -192,7 +194,9 @@ func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 		gvr := dc.GetResource()
 		gvk, known := deleteCollectionGVKs[gvr.Resource]
 		if !known {
-			return false, nil, nil
+			// A resource the fake cannot sweep must fail the call: answering nil without deleting
+			// would let an "is it gone" check pass with the delete missing.
+			return true, nil, fmt.Errorf("fake delete-collection of %s: add it to deleteCollectionGVKs", gvr.Resource)
 		}
 		ns := dc.GetNamespace()
 		selector, err := labels.Parse(dc.GetListOptions().LabelSelector)
@@ -219,7 +223,8 @@ func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 				return true, nil, err
 			}
 		}
-		return true, nil, nil
+		// Not handled, so a reactor behind this one and the recorded action still see the call.
+		return false, nil, nil
 	})
 }
 

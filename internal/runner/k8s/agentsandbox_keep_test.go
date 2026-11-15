@@ -425,6 +425,12 @@ func TestTeardownKeepDeletesServiceAndSlices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
+	for name, run := range map[string]uuid.UUID{"run-slice": asRunID, "other-run-slice": uuid.New()} {
+		es := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: map[string]string{labelRun: run.String()}}, AddressType: discoveryv1.AddressTypeIPv4}
+		if err := cs.Tracker().Create(endpointSlicesGVR, es, testNamespace); err != nil {
+			t.Fatalf("seed EndpointSlice %s: %v", name, err)
+		}
+	}
 	order := writesInOrder(cs, dyn)
 	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
 		t.Fatalf("KillSandbox: %v", err)
@@ -439,14 +445,15 @@ func TestTeardownKeepDeletesServiceAndSlices(t *testing.T) {
 	if _, err := cs.CoreV1().Services(testNamespace).Get(context.Background(), keepServiceName(asRunID), metav1.GetOptions{}); !isNotFound(err) {
 		t.Errorf("the run's Service is still there (get err %v)", err)
 	}
-	// The fake deletes nothing on an EndpointSlice delete-collection, so the selector is read from the call itself.
-	selector := "no delete-collection on endpointslices"
-	for _, a := range cs.Actions() {
-		if dc, ok := a.(clienttesting.DeleteCollectionActionImpl); ok && a.GetResource().Resource == "endpointslices" {
-			selector = dc.GetListOptions().LabelSelector
-		}
+	list, err := cs.DiscoveryV1().EndpointSlices(testNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list EndpointSlices: %v", err)
 	}
-	if want := labelRun + "=" + asRunID.String(); selector != want {
-		t.Errorf("EndpointSlice delete-collection selector = %q, want %q: this run's slices and no others", selector, want)
+	var left []string
+	for _, es := range list.Items {
+		left = append(left, es.Name)
+	}
+	if want := []string{"other-run-slice"}; !slices.Equal(left, want) {
+		t.Errorf("EndpointSlices after teardown = %v, want %v: this run's slice gone, another run's kept", left, want)
 	}
 }
