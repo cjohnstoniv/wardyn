@@ -751,23 +751,11 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
-      # The suite below compiles internal/api with coverage beside the agent images in docker; that compile
-      # peaked at 15.4-15.6 GB of the runner's 16 GB elsewhere. It is compiled here first, with test-report.sh's
-      # coverage flags so the suite finds it in the build cache, under a soft heap limit and with one worker.
-      - name: Prebuild the docker-tagged api test binary with one worker
-        env:
-          GOMEMLIMIT: "10GiB"
-        run: |
-          free -m
-          /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -tags docker -p 1 -covermode=atomic -coverpkg=./... -o "$RUNNER_TEMP/api-docker.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
-          cat "$RUNNER_TEMP/api.time"
-          echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
-          rm -f "$RUNNER_TEMP/api-docker.test"
-          free -m
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
-          # a soft heap limit for any package the suite still compiles (the api one is prebuilt above)
+          # the internal/api test compile peaked at 15.4-15.6 GB of a 16 GB runner elsewhere; a soft heap limit
+          # has each compile collect harder near it
           GOMEMLIMIT: "10GiB"
           # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
           WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
@@ -787,7 +775,12 @@ jobs:
               echo "MON   containers=$(docker ps -q | wc -l) $(docker ps --format '{{.Image}}' | sort | uniq -c | sort -rn | head -4 | tr -s ' ' | tr '\n' ';')"
             done ) &
           ( tail -n0 -F test/reports/go/docker/test-output.json 2>/dev/null | jq -r --unbuffered 'select(.Action=="pass" or .Action=="fail" or .Action=="skip" or .Action=="run") | select((.Test==null and .Action!="run") or (.Test!=null and (.Test|contains("/")|not) and (.Action=="run" or .Action=="fail"))) | "PROGRESS \(.Action) \(.Package|sub("^github.com/cjohnstoniv/wardyn/";"")) \(.Test // "") \(.Elapsed // "")"' ) &
-          ./scripts/test-report.sh docker -tags docker "${pkgs[@]}"
+          # The largest single process's peak and the suite's wall go to the log and a notice, pass or fail.
+          rc=0
+          /usr/bin/time -v -o "$RUNNER_TEMP/suite.time" ./scripts/test-report.sh docker -tags docker "${pkgs[@]}" || rc=$?
+          cat "$RUNNER_TEMP/suite.time"
+          echo "::notice title=docker-tagged suite::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/suite.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
+          exit "$rc"
       - name: Kernel memory messages (docker-tagged)
         if: always()
         run: sudo dmesg | grep -iE 'oom|out of memory|killed process' | tail -20 || true
