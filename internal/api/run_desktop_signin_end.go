@@ -6,10 +6,12 @@ package api
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -63,4 +65,64 @@ func (s *Server) continueMain(ctx context.Context, se runner.SigninExecer, run t
 		case <-time.After(signinSettleGaps[i]):
 		}
 	}
+}
+
+// signinEndHold bounds an end that claimed its row (claimSigninEnd). An end runs
+// at most five execs, each within signinExecTimeout, so one still running when
+// its hold passes is waiting on a signal that hung: its context is done there,
+// and a later end may claim the row from it.
+const signinEndHold = 6 * time.Minute
+
+// signinStageEnding is the end_stage of a row an end has claimed:
+// "ending:<the unix second its hold passes>".
+const signinStageEnding = "ending"
+
+// errSigninEndClaimed: another end holds the sign-in's row, or the row closed,
+// so this end sent nothing.
+var errSigninEndClaimed = errors.New("another end holds the sign-in")
+
+// signinEndClaimLive reports whether endStage is an end's claim whose hold has
+// not passed at now.
+func signinEndClaimLive(endStage string, now time.Time) bool {
+	rest, ok := strings.CutPrefix(endStage, signinStageEnding+":")
+	if !ok {
+		return false
+	}
+	until, err := strconv.ParseInt(rest, 10, 64)
+	return err == nil && now.Before(time.Unix(until, 0))
+}
+
+// claimSigninEnd claims si's row for one end, before any of its signals. Ends
+// that no failure has marked (the person's, a begin's rollback, abandon or
+// unstarted close, the sweep's once the window passed) can run at once, and a
+// signal from one whose row another end closed could undo a newer sign-in's
+// stop. While the claim holds, every other such end loses its own and sends
+// nothing; and the store allows one open row per run, so no newer sign-in can
+// begin before the claimer closes the row. It returns ctx bounded by
+// signinEndHold, and release, which ends that bound and clears the claim when
+// the end left the row open and unmarked, so the next end need not wait out
+// the hold. errSigninEndClaimed: another end holds the row, or it closed. A
+// store that cannot take the claim cannot close the row either, so the end
+// then runs unclaimed with a release that does nothing: a store fault never
+// leaves the agent stopped.
+func (s *Server) claimSigninEnd(ctx context.Context, st store.DesktopSigninStore, si types.DesktopSignin) (context.Context, func(), error) {
+	now := s.cfg.Now()
+	if signinEndClaimLive(si.EndStage, now) {
+		return ctx, nil, errSigninEndClaimed
+	}
+	claim := signinStageEnding + ":" + strconv.FormatInt(now.Add(signinEndHold).Unix(), 10)
+	claimed, err := st.ClaimDesktopSigninEnd(ctx, si.ID, si.EndStage, claim)
+	if err != nil {
+		return ctx, func() {}, nil
+	}
+	if !claimed {
+		return ctx, nil, errSigninEndClaimed
+	}
+	held, cancel := context.WithTimeout(ctx, signinEndHold)
+	return held, func() {
+		cancel()
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
+		defer rcancel()
+		_, _ = st.ClaimDesktopSigninEnd(rctx, si.ID, claim, "")
+	}, nil
 }

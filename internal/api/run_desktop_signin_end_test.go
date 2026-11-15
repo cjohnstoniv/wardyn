@@ -1,0 +1,208 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// ClaimDesktopSigninEnd is the test store's compare-and-set of an unmarked end's end_stage, as store.PG's.
+func (s *signinTestStore) ClaimDesktopSigninEnd(_ context.Context, id uuid.UUID, read, claim string) (bool, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	si, ok := s.signins[id]
+	if !ok || si.EndedAt != nil || si.EndRequested != "" || si.EndStage != read {
+		return false, nil
+	}
+	si.EndStage = claim
+	s.signins[id] = si
+	return true, nil
+}
+
+// signinPid1Runner is signinFakeRunner whose pid 1 is stopped by a SIGSTOP and running after a SIGCONT, as a real
+// agent's is, and whose reads of pid 1's state answer that. When at names an event, "signal:<name>" or "read" (a read
+// of pid 1's state), during runs once, just before the first such event.
+type signinPid1Runner struct {
+	*signinFakeRunner
+	stopped bool
+	at      string
+	during  func()
+}
+
+func (r *signinPid1Runner) before(event string) {
+	if during := r.during; during != nil && event == r.at {
+		r.during = nil
+		during()
+	}
+}
+
+func (r *signinPid1Runner) SignalMain(ctx context.Context, ref, signal string) error {
+	r.before("signal:" + signal)
+	if err := r.signinFakeRunner.SignalMain(ctx, ref, signal); err != nil {
+		return err
+	}
+	r.stopped = signal == "SIGSTOP"
+	return nil
+}
+
+func (r *signinPid1Runner) ExecStreamAs(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if !slices.Equal(spec.Argv, signinMainState) {
+		return r.signinFakeRunner.ExecStreamAs(ctx, ref, user, spec)
+	}
+	r.before("read")
+	state := "S"
+	if r.stopped {
+		state = "T"
+	}
+	return &runner.ExecSession{Stdout: strings.NewReader("1 (agent) " + state + " 0 1"), Stderr: strings.NewReader(""),
+		Wait: func() (int, error) { return 0, nil }}, nil
+}
+
+// TestDesktopSignin_ALateEndNeverContinuesANewerSignInsStop: an end that is reading pid 1's state after its SIGCONT,
+// while a second end of the same sign-in closes the row and the person begins again, must not continue pid 1 once
+// the newer sign-in stopped it. Whichever end wins, pid 1 is stopped exactly while a sign-in is open.
+func TestDesktopSignin_ALateEndNeverContinuesANewerSignInsStop(t *testing.T) {
+	f := newSigninFixture(t)
+	pid1 := &signinPid1Runner{signinFakeRunner: f.rn}
+	f.srv.cfg.Runner = pid1
+	f.begin(t)
+	pid1.at, pid1.during = "read", func() {
+		f.post(t, "/desktop-signin/end", "") // a second end of the same sign-in
+		f.post(t, "/desktop-signin", "")     // the person begins again
+	}
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusNoContent {
+		t.Fatalf("the first end = %d %s, want 204", code, body)
+	}
+	if pid1.during != nil {
+		t.Fatal("the first end never read pid 1's state")
+	}
+	_, err := f.st.OpenDesktopSignin(context.Background(), f.run.ID)
+	if open := err == nil; open != pid1.stopped {
+		t.Fatalf("a sign-in open = %t (%v), pid 1 stopped = %t; want pid 1 stopped exactly while a sign-in is open", open, err, pid1.stopped)
+	}
+}
+
+// TestDesktopSignin_ALateEndSendsNothingOnceItsRowClosed: an end that read its row before another end closed it, and
+// runs only after a newer sign-in stopped the agent, sends no stop, resume-agent or SIGCONT, and leaves the newer
+// sign-in as it was.
+func TestDesktopSignin_ALateEndSendsNothingOnceItsRowClosed(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	late := f.st.only(t) // read before the person's end, as the sweep's list or a begin's own row is
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusNoContent {
+		t.Fatalf("end = %d %s, want 204", code, body)
+	}
+	f.begin(t)
+	ctx := context.Background()
+	newer, err := f.st.OpenDesktopSignin(ctx, f.run.ID)
+	if err != nil || newer.ID == late.ID {
+		t.Fatalf("open = %+v %v, want the newer sign-in", newer, err)
+	}
+	before := len(f.rn.seen())
+	if err := f.srv.finishDesktopSignin(ctx, f.run, late, signinEndExpired, types.ActorSystem, "wardynd"); !errors.Is(err, errSigninEndClaimed) {
+		t.Fatalf("the late end = %v, want errSigninEndClaimed", err)
+	}
+	f.srv.abandonDesktopSignin(ctx, f.rn, f.run, late, signinOwner)
+	if got := f.rn.seen()[before:]; len(got) != 0 {
+		t.Fatalf("the late ends sent %v; want nothing", got)
+	}
+	if open, err := f.st.OpenDesktopSignin(ctx, f.run.ID); err != nil || open.ID != newer.ID || open.EndStage != "" || open.EndRequested != "" {
+		t.Fatalf("open = %+v %v, want the newer sign-in as it was", open, err)
+	}
+}
+
+// TestDesktopSignin_ASecondEndSendsNothingWhileTheFirstRuns: while one end of a sign-in runs, every other end of it
+// (the person's again, the sweep's once the window passed, a begin's abandon or unstarted close) sends no stop,
+// resume-agent or SIGCONT and leaves the row open, and no newer sign-in can begin; the first end then finishes alone,
+// so nothing it sends lands on a newer sign-in.
+func TestDesktopSignin_ASecondEndSendsNothingWhileTheFirstRuns(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	ctx := context.Background()
+	var during []string
+	hook := &signinPid1Runner{signinFakeRunner: f.rn, at: "signal:SIGCONT"}
+	hook.during = func() {
+		before := len(f.rn.seen())
+		si := f.st.only(t)
+		if err := f.srv.finishDesktopSignin(ctx, f.run, si, signinEndDone, types.ActorHuman, signinOwner); !errors.Is(err, errSigninEndClaimed) {
+			t.Errorf("the person's second end = %v, want errSigninEndClaimed", err)
+		}
+		if err := f.srv.finishDesktopSignin(ctx, f.run, si, signinEndExpired, types.ActorSystem, "wardynd"); !errors.Is(err, errSigninEndClaimed) {
+			t.Errorf("the sweep's end = %v, want errSigninEndClaimed", err)
+		}
+		f.srv.abandonDesktopSignin(ctx, f.rn, f.run, si, signinOwner)
+		f.srv.endUnstartedDesktopSignin(ctx, f.st, f.run, si)
+		now := time.Now()
+		newer := types.DesktopSignin{ID: uuid.New(), RunID: f.run.ID, Holder: signinOwner, BeganAt: now, ExpiresAt: now.Add(desktopSigninWindow)}
+		if err := f.st.BeginDesktopSignin(ctx, newer); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("a newer begin = %v, want store.ErrConflict", err)
+		}
+		during = f.rn.seen()[before:]
+	}
+	f.srv.cfg.Runner = hook
+	before := len(f.rn.seen())
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusNoContent {
+		t.Fatalf("the first end = %d %s, want 204", code, body)
+	}
+	if hook.during != nil {
+		t.Fatal("the first end sent no SIGCONT")
+	}
+	if len(during) != 0 {
+		t.Fatalf("sent while the first end ran: %v; want nothing", during)
+	}
+	if got, want := f.rn.seen()[before:], []string{"person:stop", "agent:resume-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndDone {
+		t.Fatalf("row = %+v, want closed by the first end (done)", si)
+	}
+}
+
+// TestDesktopSignin_AnEndWhoseClaimLapsedIsEndedByTheNext: a row an end claimed and never closed or gave back (wardynd
+// stopped mid-end) is left alone while the claim holds: the person's end answers 409 and sends nothing. Once the
+// claim's hold passed, the next end claims the row again and ends it.
+func TestDesktopSignin_AnEndWhoseClaimLapsedIsEndedByTheNext(t *testing.T) {
+	for name, tc := range map[string]struct {
+		left  time.Duration // how long the earlier claim still holds
+		code  int
+		calls []string
+	}{
+		"the claim holds":  {left: time.Minute, code: http.StatusConflict},
+		"the claim lapsed": {left: -time.Second, code: http.StatusNoContent, calls: []string{"person:stop", "agent:resume-agent", "signal:SIGCONT"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			f.begin(t)
+			si := f.st.only(t)
+			claim := signinStageEnding + ":" + strconv.FormatInt(f.srv.cfg.Now().Add(tc.left).Unix(), 10)
+			if ok, err := f.st.ClaimDesktopSigninEnd(context.Background(), si.ID, "", claim); err != nil || !ok {
+				t.Fatalf("claim = %t %v", ok, err)
+			}
+			before := len(f.rn.seen())
+			code, body := f.post(t, "/desktop-signin/end", "")
+			if code != tc.code || code == http.StatusConflict && !strings.Contains(body, reasonDesktopSigninNotOpen) {
+				t.Fatalf("end = %d %s, want %d", code, body, tc.code)
+			}
+			if got := f.rn.seen()[before:]; !slices.Equal(got, tc.calls) {
+				t.Fatalf("calls = %v, want %v", got, tc.calls)
+			}
+			if closed := f.st.only(t).EndedAt != nil; closed != (tc.code == http.StatusNoContent) {
+				t.Fatalf("row closed = %t, want %t", closed, tc.code == http.StatusNoContent)
+			}
+		})
+	}
+}

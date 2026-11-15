@@ -455,9 +455,15 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 // A desktop watch may already have read the row open and held the recording, so the hold ends too.
 // It runs on its own bounded context: a row left open by a cancelled request would keep every
 // recorded desktop stream paused until the sweep's window passed.
+// Another end holding the row (claimSigninEnd) closes it instead.
 func (s *Server) endUnstartedDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
 	defer cancel()
+	_, release, err := s.claimSigninEnd(ctx, st, si)
+	if err != nil {
+		return // another end holds the row and closes it, or no row was written
+	}
+	defer release()
 	if ended, _ := st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now()); ended {
 		s.endDesktopHold(ctx, run, si.ID.String(), nil)
 	}
@@ -476,6 +482,7 @@ func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, 
 // SIGCONT (continueDesktopSignin), never the helper; a state that cannot be
 // read closes the row with agent_resumed false. It runs on its own
 // bounded context, since the begin's request may be gone.
+// It claims the row first (claimSigninEnd), and leaves the row to another end that holds it.
 func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
 	defer cancel()
@@ -483,7 +490,12 @@ func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExece
 	if !ok {
 		return
 	}
-	err := s.continueMain(ctx, se, run)
+	ctx, release, err := s.claimSigninEnd(ctx, st, si)
+	if err != nil {
+		return // another end holds the row and continues the agent, or the row closed
+	}
+	defer release()
+	err = s.continueMain(ctx, se, run)
 	if err == nil || errors.Is(err, errSigninStateUnread) {
 		_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, err == nil)
 		return
@@ -690,6 +702,7 @@ func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store
 // handleEndDesktopSignin closes the person's display and resumes the agent.
 // When the display cannot be proven closed, or the agent cannot be resumed
 // after it, the agent stays stopped and the sweep retries.
+// Another end of the same sign-in still running answers 409, as one whose end was asked for does.
 func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
@@ -702,6 +715,10 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.finishDesktopSignin(ctx, run, si, signinEndDone, types.ActorHuman, principal); err != nil {
+		if errors.Is(err, errSigninEndClaimed) {
+			writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotOpen, "no sign-in is open on this run")
+			return
+		}
 		msg := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
 		if errors.Is(err, errSigninResumeStage) {
 			msg = "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
@@ -719,10 +736,20 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 // "stop" or "resume" are counted together and store only the stage and the
 // count, and after signinContinueTries of them the run is killed, as for the
 // "continue" stage.
+// An end that no failure has marked claims the row first (claimSigninEnd), and
+// sends nothing while another end holds it.
 func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si types.DesktopSignin, reason string, actorType types.ActorType, actor string) error {
 	st, ok := s.desktopSigninStore()
 	if !ok {
 		return errors.New("desktop sign-ins are off")
+	}
+	if si.EndRequested == "" {
+		var release func()
+		var err error
+		if ctx, release, err = s.claimSigninEnd(ctx, st, si); err != nil {
+			return err
+		}
+		defer release()
 	}
 	failed := func(stage string, err error) error {
 		slog.WarnContext(ctx, "wardynd: desktop sign-in did not end", "run_id", run.ID, "stage", stage, "err", err)
