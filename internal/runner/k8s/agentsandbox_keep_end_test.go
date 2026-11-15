@@ -195,12 +195,11 @@ func TestKeepDriverEndsOnlyKeptRuns(t *testing.T) {
 
 func TestKeepEndSandboxOrder(t *testing.T) {
 	r := newKeptRig(t, nil)
-	addCfgSecret(t, r.cs, "proxy-cfg-1", "")
 	order := writesInOrder(r.cs, r.dyn)
 	r.end(t)
-	want := []string{"update endpointslices", "delete pods", "delete secrets", "delete pods"}
+	want := []string{"update endpointslices", "delete pods", "delete pods"}
 	if !slices.Equal(*order, want) {
-		t.Errorf("writes = %v\nwant %v: the slice emptied, the proxy pod, the replacement Secrets, the agent pod; nothing on the Sandbox", *order, want)
+		t.Errorf("writes = %v\nwant %v: the slice emptied, the proxy pod, the agent pod; no Secret, as the created proxy mounts the run's own; nothing on the Sandbox", *order, want)
 	}
 	deletes := agentPodDeletes(r.cs)
 	if len(deletes) != 1 {
@@ -212,8 +211,8 @@ func TestKeepEndSandboxOrder(t *testing.T) {
 	if es := keepSlice(t, r.cs, asRunID); len(es.Endpoints) != 0 || es.Annotations[annotationKeptSandbox] != string(asSandboxUID) {
 		t.Errorf("slice after the end = %+v, want no endpoint and the recorded Sandbox UID kept", es)
 	}
-	if _, err := r.cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(asRunID), metav1.GetOptions{}); err != nil {
-		t.Errorf("the run's Secret is gone: %v", err)
+	if !secretStored(t, r.cs, secretName(asRunID)) {
+		t.Error("the run's Secret is gone: the created proxy mounts it, and an end deletes only a replacement's")
 	}
 }
 

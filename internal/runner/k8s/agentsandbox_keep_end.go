@@ -156,21 +156,17 @@ func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) erro
 	return k.deleteKeptAgentPod(ctx, ns, runID, gen)
 }
 
-// stopKeptProxy removes pod, the run's proxy pod as the end read it (nil: none), and the replacement config Secrets.
-// For gen > 0 the run's proxy pod is read again before the Secrets go: removing pod can wait, and a newer revive may
-// have started its proxy, with its own config Secret, in the meantime; that Secret is left, with
-// runner.ErrProxyGenerationNewer.
+// stopKeptProxy removes pod, the run's proxy pod as the end read it (nil: none), with the replacement config Secret it
+// mounted (removeProxyPod). For gen > 0 the run's proxy pod is then read again: removing pod can wait, and a newer revive
+// may have started its proxy in the meantime, so the end stops there with runner.ErrProxyGenerationNewer.
 func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, gen int) error {
-	if err := d.removeProxyPod(ctx, ns, pod); err != nil {
+	if err := d.removeProxyPod(ctx, ns, runID, pod); err != nil {
 		return fmt.Errorf("k8s: keep: remove the proxy pod: %w", err)
 	}
 	if gen > 0 {
 		if _, err := d.proxyNotNewer(ctx, ns, runID, gen, false); err != nil {
 			return err
 		}
-	}
-	if err := d.deleteProxyCfgSecrets(ctx, ns, runID, gen, ""); err != nil {
-		return fmt.Errorf("k8s: keep: delete the replacement config Secrets: %w", err)
 	}
 	return nil
 }

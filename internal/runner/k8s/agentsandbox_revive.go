@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"time"
 
@@ -27,8 +26,8 @@ import (
 // reaching its proxy through its own Service can take. Registered only then, so every other install answers as before.
 type keepDriver struct{ *Driver }
 
-// labelProxyCfg marks a replacement proxy config Secret with its stamp, so the next replacement can delete the older ones
-// without a list verb on Secrets.
+// labelProxyCfg marks a replacement proxy config Secret with its stamp. Like every object of the run, the Secret carries
+// the run's label, by which the run's teardown deletes one that no removed proxy pod mounted (removeProxyPod).
 const labelProxyCfg = "wardyn.proxy-cfg"
 
 // served is the substrate wardynd's registry hands out: the Driver, or with keep on the keepDriver that adds keep and revive.
@@ -147,9 +146,9 @@ func (d *Driver) agentDeadline(ctx context.Context, ns string, runID uuid.UUID) 
 	return &secs, nil
 }
 
-// swapProxy empties the run's endpoint, removes old (the proxy pod the replace read; nil for none), starts the new one for
-// policy generation gen and points the endpoint at it. Every error from here on wraps runner.ErrProxyReplaceFailed: the
-// old proxy may be gone.
+// swapProxy empties the run's endpoint, removes old (the proxy pod the replace read; nil for none) with the replacement
+// config Secret it mounted, starts the new one for policy generation gen and points the endpoint at it. Every error from
+// here on wraps runner.ErrProxyReplaceFailed: the old proxy may be gone.
 func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, in proxyPodInputs, old *corev1.Pod, gen int) error {
 	fail := func(step string, err error) error {
 		return fmt.Errorf("%w: %s: %v", runner.ErrProxyReplaceFailed, step, err)
@@ -157,7 +156,7 @@ func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc 
 	if err := d.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
 		return fail("empty the endpoint", err)
 	}
-	if err := d.removeProxyPod(ctx, ns, old); err != nil {
+	if err := d.removeProxyPod(ctx, ns, runID, old); err != nil {
 		return fail("remove the old proxy pod", err)
 	}
 	pod, err := d.buildProxyPod(in)
@@ -194,7 +193,7 @@ func (k *keepDriver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON
 // as it is (the agent's env and files come from it); the new config goes in a Secret of its own. With gen > 0 the new
 // proxy pod is labelled with gen, and a proxy pod labelled gen or newer refuses the replace with
 // runner.ErrProxyGenerationNewer before anything is written. The proxy pod removed is the one read, never one that took
-// the name since.
+// the name since, and the replacement config Secret it mounted goes with it (removeProxyPod).
 func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	runID, ns, svc, err := k.runService(ctx, ref)
 	if err != nil {
@@ -225,10 +224,6 @@ func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJS
 	in.SecretName = sec.Name
 	if err := k.swapProxy(ctx, ns, runID, svc, in, old, gen); err != nil {
 		return "", err
-	}
-	if err := k.deleteProxyCfgSecrets(ctx, ns, runID, gen, sec.Name); err != nil {
-		slog.Warn("wardynd: k8s substrate: could not remove the older proxy config Secrets; the new proxy is up",
-			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 	}
 	return proxy.ConfigSHA256(cfgJSON), nil
 }

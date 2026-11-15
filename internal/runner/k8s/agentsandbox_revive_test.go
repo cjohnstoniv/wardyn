@@ -97,7 +97,8 @@ func TestReplaceProxyOrder(t *testing.T) {
 	if err := k.ReplaceProxy(context.Background(), ref, replaceCfg); err != nil {
 		t.Fatalf("ReplaceProxy: %v", err)
 	}
-	want := []string{"create secrets", "update endpointslices", "delete pods", "create pods", "update endpointslices", "delete-collection secrets"}
+	// The created proxy mounts the run's own Secret, which a replace never deletes.
+	want := []string{"create secrets", "update endpointslices", "delete pods", "create pods", "update endpointslices"}
 	if !slices.Equal(*order, want) {
 		t.Errorf("writes = %v\nwant %v: the agent Sandbox and pod see no write", *order, want)
 	}
@@ -114,16 +115,20 @@ func TestReplaceProxyUsesTheNewSecretAndLabels(t *testing.T) {
 			t.Fatalf("ReplaceProxy %d: %v", i, err)
 		}
 	}
-	secrets, err := cs.CoreV1().Secrets(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelProxyCfg})
-	if err != nil || len(secrets.Items) != 1 {
-		t.Fatalf("replacement Secrets = %d (err %v), want only the newest", len(secrets.Items), err)
+	names := cfgSecretNames(t, cs)
+	if len(names) != 1 {
+		t.Fatalf("replacement Secrets = %v, want only the newest", names)
 	}
-	newest := secrets.Items[0]
+	obj, err := cs.Tracker().Get(secretsGVR, testNamespace, names[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := obj.(*corev1.Secret)
 	if !strings.HasPrefix(newest.Name, secretName(asRunID)+"-r") || string(newest.Data[proxyConfigSecretKey]) != string(replaceCfg) {
 		t.Errorf("replacement Secret %q holds %q, want the passed config under a -r<stamp> name", newest.Name, newest.Data[proxyConfigSecretKey])
 	}
-	if _, err := cs.CoreV1().Secrets(testNamespace).Get(ctx, secretName(asRunID), metav1.GetOptions{}); err != nil {
-		t.Errorf("the run's own Secret is gone: %v", err)
+	if !secretStored(t, cs, secretName(asRunID)) {
+		t.Error("the run's own Secret is gone")
 	}
 	pod, err := cs.CoreV1().Pods(testNamespace).Get(ctx, proxyPodName(asRunID), metav1.GetOptions{})
 	if err != nil {

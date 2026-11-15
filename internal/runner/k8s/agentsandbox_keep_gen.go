@@ -8,8 +8,10 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,10 +53,17 @@ func (d *Driver) proxyNotNewer(ctx context.Context, ns string, runID uuid.UUID, 
 	return pod, nil
 }
 
-// removeProxyPod deletes pod, a proxy pod as read, under its UID, and waits until it is gone. A pod made under its name
-// since is not it: the UID precondition refuses that delete with a conflict, and the wait ends on the other UID. nil is no
-// pod, and nothing is removed.
-func (d *Driver) removeProxyPod(ctx context.Context, ns string, pod *corev1.Pod) error {
+// removeProxyPod deletes pod, a proxy pod of runID as read, under its UID, waits until it is gone, and then deletes the
+// replacement config Secret it mounted (replacementCfgSecret). A pod made under its name since is not it: the UID
+// precondition refuses that delete with a conflict, and the wait ends on the other UID. nil is no pod, and nothing is
+// removed.
+//
+// The Secret is deleted by its name, never found by a read: the chart's Role grants no get, list or watch on Secrets.
+// Each replace writes a Secret of its own, under a name no other takes, and only the proxy pod that replace makes mounts
+// it, so once pod is gone no proxy needs it, and a newer revive's Secret, written before its pod exists, is never named.
+// A failed delete is logged, not returned: a second try would not find pod to name it. A Secret no removed pod mounted,
+// as one a failed replace wrote, carries the run's label, and the run's teardown deletes it.
+func (d *Driver) removeProxyPod(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod) error {
 	if pod == nil {
 		return nil
 	}
@@ -66,7 +75,27 @@ func (d *Driver) removeProxyPod(ctx context.Context, ns string, pod *corev1.Pod)
 	if err := d.waitPodGone(ctx, ns, pod, 2*time.Minute); err != nil {
 		return fmt.Errorf("wait for it to go: %w", err)
 	}
+	if name := replacementCfgSecret(runID, pod); name != "" {
+		if err := d.clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
+			slog.Warn("wardynd: k8s substrate: could not delete a removed proxy pod's config Secret; the run's teardown deletes it",
+				slog.String("namespace", ns), slog.String("secret", name), slog.String("error", err.Error()))
+		}
+	}
 	return nil
+}
+
+// replacementCfgSecret is the replacement proxy config Secret pod mounts, "" for none: a nil pod, or one whose config
+// volume names any Secret but one of runID's replacements, as the run's own Secret that a created proxy mounts.
+func replacementCfgSecret(runID uuid.UUID, pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == proxyConfigSecretVolumeName && v.Secret != nil && strings.HasPrefix(v.Secret.SecretName, secretName(runID)+"-r") {
+			return v.Secret.SecretName
+		}
+	}
+	return ""
 }
 
 // markReplacement sets a replacement proxy pod apart from the one a create makes: the generation label (none for gen 0),
@@ -83,7 +112,7 @@ func markReplacement(pod *corev1.Pod, gen int) {
 }
 
 // createReplacementPod creates pod, the run's new proxy pod. A proxy pod that took the name after the replace read it is
-// read again, once, under the same generation rule, and removed before the create is tried again.
+// read again, once, under the same generation rule, and removed with its config Secret before the create is tried again.
 func (d *Driver) createReplacementPod(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, gen int) error {
 	_, err := d.createPod(ctx, runID, componentProxy, pod)
 	if !apierrors.IsAlreadyExists(err) {
@@ -93,7 +122,7 @@ func (d *Driver) createReplacementPod(ctx context.Context, ns string, runID uuid
 	if err != nil {
 		return err
 	}
-	if err := d.removeProxyPod(ctx, ns, taken); err != nil {
+	if err := d.removeProxyPod(ctx, ns, runID, taken); err != nil {
 		return err
 	}
 	_, err = d.createPod(ctx, runID, componentProxy, pod)
@@ -113,28 +142,4 @@ func (k *keepDriver) StopProxyAt(ctx context.Context, ref string, gen int) error
 		}
 	}
 	return k.StopProxy(ctx, ref)
-}
-
-// deleteProxyCfgSecrets removes the run's replacement proxy config Secrets, except keep and, for gen > 0, any labelled
-// with a newer generation: a newer revive writes its Secret before its proxy pod exists, so a slower end or replace
-// cannot tell it from the pod. Each is deleted by name with its UID, so one written since the list is left.
-func (d *Driver) deleteProxyCfgSecrets(ctx context.Context, ns string, runID uuid.UUID, gen int, keep string) error {
-	list, err := d.clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelProxyCfg})
-	if err != nil {
-		return err
-	}
-	for i := range list.Items {
-		s := &list.Items[i]
-		if s.Name == keep {
-			continue
-		}
-		if have, perr := strconv.Atoi(s.Labels[labelProxyGeneration]); gen > 0 && perr == nil && have > gen {
-			continue
-		}
-		uid := s.UID
-		if err := d.clientset.CoreV1().Secrets(ns).Delete(ctx, s.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) && !apierrors.IsConflict(err) {
-			return err
-		}
-	}
-	return nil
 }

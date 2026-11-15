@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -71,6 +73,75 @@ func secretDeletes(cs *fake.Clientset) (names []string, collection bool) {
 	return names, collection
 }
 
+// secretReads is the get, list and watch calls on Secrets the fake recorded: the chart's Role grants none of them.
+func secretReads(cs *fake.Clientset) []string {
+	var reads []string
+	for _, a := range cs.Actions() {
+		if v := a.GetVerb(); a.GetResource().Resource == "secrets" && (v == "get" || v == "list" || v == "watch") {
+			reads = append(reads, v)
+		}
+	}
+	return reads
+}
+
+// mountCfgSecret stores a replacement proxy config Secret of the run, labelled with generation gen ("" for none), and
+// points the stored proxy pod's config volume at it, as a replace leaves them.
+func mountCfgSecret(t *testing.T, cs *fake.Clientset, name, gen string) {
+	t.Helper()
+	addCfgSecret(t, cs, name, gen)
+	pod := storedProxyPod(t, cs).DeepCopy()
+	found := false
+	for i := range pod.Spec.Volumes {
+		if v := &pod.Spec.Volumes[i]; v.Name == proxyConfigSecretVolumeName && v.Secret != nil {
+			v.Secret.SecretName, found = name, true
+		}
+	}
+	if !found {
+		t.Fatalf("the proxy pod has no %s volume", proxyConfigSecretVolumeName)
+	}
+	if err := cs.Tracker().Update(podsGVR, pod, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// secretStored answers whether the tracker holds Secret name; any error but its absence fails the test.
+func secretStored(t *testing.T, cs *fake.Clientset, name string) bool {
+	t.Helper()
+	_, err := cs.Tracker().Get(secretsGVR, testNamespace, name)
+	if apierrors.IsNotFound(err) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return true
+}
+
+// cfgSecretNames is the sorted names of the stored Secrets that carry labelProxyCfg, read from the tracker.
+func cfgSecretNames(t *testing.T, cs *fake.Clientset) []string {
+	t.Helper()
+	obj, err := cs.Tracker().List(secretsGVR, deleteCollectionGVKs["secrets"], testNamespace, metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := meta.ExtractList(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, item := range items {
+		acc, err := meta.Accessor(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := acc.GetLabels()[labelProxyCfg]; ok {
+			names = append(names, acc.GetName())
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 func storedProxyPod(t *testing.T, cs *fake.Clientset) *corev1.Pod {
 	t.Helper()
 	obj, err := cs.Tracker().Get(podsGVR, testNamespace, proxyPodName(asRunID))
@@ -108,6 +179,16 @@ func TestReplaceProxyAtMarksTheNewPod(t *testing.T) {
 		env := pod.Spec.Containers[0].Env
 		if len(env) == 0 || env[len(env)-1] != gateOn {
 			t.Errorf("gen %d: proxy env = %v, want %s=1 last", gen, env, proxy.FirstRenewGateEnv)
+		}
+		cfg := replacementCfgSecret(asRunID, pod)
+		obj, err := cs.Tracker().Get(secretsGVR, testNamespace, cfg)
+		if err != nil {
+			t.Fatalf("gen %d: the new proxy pod's config Secret %q: %v", gen, cfg, err)
+		}
+		sl := obj.(*corev1.Secret).Labels
+		sgen, slabelled := sl[labelProxyGeneration]
+		if (gen == 0 && slabelled) || (gen == 3 && sgen != "3") || sl[labelRun] != asRunID.String() {
+			t.Errorf("gen %d: config Secret labels = %v, want %s=3 for generation 3, no such label for none, and the run's %s, by which its teardown deletes it", gen, sl, labelProxyGeneration, labelRun)
 		}
 	}
 }
@@ -147,12 +228,18 @@ func TestReplaceProxyAtRefusesAnOlderOrSameGeneration(t *testing.T) {
 	}
 }
 
+// Another replace's proxy pod takes the name after this generation 3 replace removed the old pod, and before its create.
+// A pod of an older generation is removed with the config Secret it mounted, and the create is tried again. One of
+// generation 3 is the same-generation race: that replace won the name, so this one answers ErrProxyReplaceFailed and
+// leaves its pod and Secret; its own Secret, mounted by no pod, is left for the run's teardown. A newer one is left too.
 func TestReplaceProxyAtLooksAgainWhenTheNameIsTaken(t *testing.T) {
 	for _, tc := range []struct {
 		taken string
 		fails bool
-	}{{"1", false}, {"5", true}} {
+	}{{"1", false}, {"3", true}, {"5", true}} {
 		k, cs, _, ref := keptRun(t)
+		theirs := secretName(asRunID) + "-r9"
+		addCfgSecret(t, cs, theirs, tc.taken)
 		took := false
 		cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
 			pod, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod)
@@ -162,19 +249,22 @@ func TestReplaceProxyAtLooksAgainWhenTheNameIsTaken(t *testing.T) {
 			// Another replace makes its proxy pod after this one removed the old pod, before this create.
 			took = true
 			other := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: testNamespace, UID: "proxy-uid-9",
-				Labels: map[string]string{labelRun: asRunID.String(), labelComponent: componentProxy, labelProxyGeneration: tc.taken}}}
+				Labels: map[string]string{labelRun: asRunID.String(), labelComponent: componentProxy, labelProxyGeneration: tc.taken}},
+				Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: proxyConfigSecretVolumeName,
+					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: theirs}}}}}}
 			return false, nil, cs.Tracker().Create(podsGVR, other, testNamespace)
 		})
 		_, err := k.ReplaceProxyHashedAt(context.Background(), ref, replaceCfg, 3)
 		pod := storedProxyPod(t, cs)
+		kept := secretStored(t, cs, theirs)
 		if tc.fails {
-			if !errors.Is(err, runner.ErrProxyReplaceFailed) || pod.UID != "proxy-uid-9" {
-				t.Errorf("over a generation %s pod that took the name: err %v, pod %s; want ErrProxyReplaceFailed and that pod left", tc.taken, err, pod.UID)
+			if !errors.Is(err, runner.ErrProxyReplaceFailed) || pod.UID != "proxy-uid-9" || !kept {
+				t.Errorf("over a generation %s pod that took the name: err %v, pod %s, its Secret kept %v; want ErrProxyReplaceFailed, and that pod and its Secret left", tc.taken, err, pod.UID, kept)
 			}
 			continue
 		}
-		if err != nil || pod.Labels[labelProxyGeneration] != "3" {
-			t.Errorf("over a generation %s pod that took the name: err %v, labels %v; want it removed and the generation 3 pod made", tc.taken, err, pod.Labels)
+		if err != nil || pod.Labels[labelProxyGeneration] != "3" || kept {
+			t.Errorf("over a generation %s pod that took the name: err %v, labels %v, its Secret kept %v; want it removed with its Secret and the generation 3 pod made", tc.taken, err, pod.Labels, kept)
 		}
 	}
 }
@@ -183,7 +273,7 @@ func TestEndSandboxAtRefusesAnOlderGeneration(t *testing.T) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "2")
 	ctx := context.Background()
-	addCfgSecret(t, r.cs, "proxy-cfg-2", "2")
+	mountCfgSecret(t, r.cs, secretName(asRunID)+"-r2", "2")
 	order := writesInOrder(r.cs, r.dyn)
 	if err := r.k.EndSandboxAt(ctx, r.ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
 		t.Fatalf("EndSandboxAt(1) beside a generation 2 proxy = %v, want ErrProxyGenerationNewer", err)
@@ -231,14 +321,16 @@ func TestEndSandboxAtLeavesARevivedAgentPod(t *testing.T) {
 	}
 }
 
-// A generation 1 end reads a generation 1 proxy pod; while its delete lands, a newer revive's proxy takes the name and
-// that revive writes its replacement config Secret. The end must leave the Secret and refuse with ErrProxyGenerationNewer.
-// The Secret here carries no generation, so only the second read of the proxy pod in stopKeptProxy saves it. Without that
-// read the end deletes it by name and returns nil or an agent-pod error: the error check and the recorded-actions check
-// fail, and the tracker check fails with them because the fake applies a delete by name.
+// A generation 1 end reads a generation 1 proxy pod, which mounts its replace's config Secret. While its delete lands, a
+// newer revive's proxy takes the name and that revive writes its own config Secret. The end deletes only the Secret the
+// removed pod mounted, by name, and refuses with ErrProxyGenerationNewer on its second read of the proxy pod. The newer
+// Secret carries no generation: the end never names a Secret that no removed pod mounted, whatever its labels. The agent
+// pod is left stored, as it is the newer revive's.
 func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "1")
+	mounted, newer := secretName(asRunID)+"-r1", secretName(asRunID)+"-r2"
+	mountCfgSecret(t, r.cs, mounted, "1")
 	swapped := false
 	r.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
 		name := a.(clienttesting.DeleteAction).GetName()
@@ -250,35 +342,45 @@ func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
 		if err := r.cs.Tracker().Delete(podsGVR, testNamespace, name); err != nil {
 			return true, nil, err
 		}
-		newer := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, UID: "proxy-uid-2",
+		other := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, UID: "proxy-uid-2",
 			Labels: map[string]string{labelRun: asRunID.String(), labelComponent: componentProxy, labelProxyGeneration: "2"}}}
-		if err := r.cs.Tracker().Create(podsGVR, newer, testNamespace); err != nil {
+		if err := r.cs.Tracker().Create(podsGVR, other, testNamespace); err != nil {
 			return true, nil, err
 		}
-		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "proxy-cfg-2", Namespace: testNamespace,
+		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: newer, Namespace: testNamespace,
 			Labels: map[string]string{labelRun: asRunID.String(), labelProxyCfg: "true"}}}
 		return true, nil, r.cs.Tracker().Create(secretsGVR, cfg, testNamespace)
 	})
 	if err := r.k.EndSandboxAt(context.Background(), r.ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
 		t.Fatalf("EndSandboxAt(1) = %v, want ErrProxyGenerationNewer once a generation 2 proxy appeared", err)
 	}
-	if _, err := r.cs.Tracker().Get(secretsGVR, testNamespace, "proxy-cfg-2"); err != nil {
-		t.Errorf("the newer revive's config Secret after the end: %v; want it left", err)
+	if _, err := r.cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID)); err != nil {
+		t.Errorf("the agent pod after a refused end: %v; want it stored, as a refused end must not delete the newer revive's agent pod", err)
 	}
-	if names, collection := secretDeletes(r.cs); len(names) != 0 || collection {
-		t.Errorf("recorded Secret deletes %v, delete-collection %v; want none: the Secret is the newer revive's", names, collection)
+	if !secretStored(t, r.cs, newer) {
+		t.Errorf("the newer revive's config Secret %s is gone after the end; want it left", newer)
+	}
+	if names, collection := secretDeletes(r.cs); !slices.Equal(names, []string{mounted}) || collection {
+		t.Errorf("Secret deletes %v, delete-collection %v; want only %s, the one the removed pod mounted", names, collection, mounted)
+	}
+	if reads := secretReads(r.cs); len(reads) != 0 {
+		t.Errorf("Secret reads %v; the chart's Role grants no get, list or watch on Secrets", reads)
 	}
 }
 
-// A newer revive creates its config Secret before its proxy pod: for a while the run has the Secret and no proxy pod. A
-// generation 1 end that read a generation 1 pod finds no pod on its second read, so only the Secret's own generation
-// label tells it apart. The end must delete no Secret by name and no collection of them. Without the generation label and
-// the list-and-delete in deleteProxyCfgSecrets the end deletes it, recorded as a delete-collection that the fake does not
-// apply, so the recorded actions are what fail. The agent pod is held, so deleteKeptAgentPod returns nil and only the
-// Secret path is under test.
+// A newer revive creates its config Secret before its proxy pod, so for a while the run has the Secret and no proxy pod.
+// A generation 1 end that read a generation 1 pod, which mounts its replace's Secret, finds no pod on its second read, and
+// nothing it reads tells the newer Secret apart. It need not: it deletes only the Secret the removed pod mounted, by name,
+// and answers nil. The rig applies a delete by name and a delete-collection (installDeleteCollectionSupport, which
+// newSandboxRig installs), though not a delete's preconditions. It also refuses a get or a list of a Secret, as the
+// chart's Role does (denySecretReads). An end that lists fails, and one that deletes the newer Secret, by name or by
+// selector, fails the tracker check. The agent pod is held, so deleteKeptAgentPod returns nil and only the Secret path is
+// under test.
 func TestKeepEndSandboxAtLeavesANewerRevivesSecretBeforeItsPod(t *testing.T) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "1")
+	mounted, newer := secretName(asRunID)+"-r1", secretName(asRunID)+"-r2"
+	mountCfgSecret(t, r.cs, mounted, "1")
 	obj, err := r.cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID))
 	if err != nil {
 		t.Fatal(err)
@@ -299,39 +401,87 @@ func TestKeepEndSandboxAtLeavesANewerRevivesSecretBeforeItsPod(t *testing.T) {
 		if err := r.cs.Tracker().Delete(podsGVR, testNamespace, name); err != nil {
 			return true, nil, err
 		}
-		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "proxy-cfg-2", Namespace: testNamespace,
+		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: newer, Namespace: testNamespace,
 			Labels: map[string]string{labelRun: asRunID.String(), labelProxyCfg: "true", labelProxyGeneration: "2"}}}
 		return true, nil, r.cs.Tracker().Create(secretsGVR, cfg, testNamespace)
 	})
 	if err := r.k.EndSandboxAt(context.Background(), r.ref, 1); err != nil {
 		t.Fatalf("EndSandboxAt(1) = %v, want nil: no proxy pod is left to refuse it", err)
 	}
-	if names, collection := secretDeletes(r.cs); len(names) != 0 || collection {
-		t.Errorf("recorded Secret deletes %v, delete-collection %v; want none: the Secret is the newer revive's", names, collection)
+	if names, collection := secretDeletes(r.cs); !slices.Equal(names, []string{mounted}) || collection {
+		t.Errorf("Secret deletes %v, delete-collection %v; want only %s, the one the removed pod mounted", names, collection, mounted)
 	}
-	if _, err := r.cs.Tracker().Get(secretsGVR, testNamespace, "proxy-cfg-2"); err != nil {
-		t.Errorf("the newer revive's config Secret after the end: %v; want it left", err)
+	if !secretStored(t, r.cs, newer) {
+		t.Errorf("the newer revive's config Secret %s is gone after the end; want it left", newer)
+	}
+	if reads := secretReads(r.cs); len(reads) != 0 {
+		t.Errorf("Secret reads %v; the chart's Role grants no get, list or watch on Secrets", reads)
 	}
 }
 
-// A replace at generation 1 removes the older config Secrets, those labelled 1 or nothing, and leaves one a newer revive
-// labelled 2: that revive wrote it before its proxy pod, and this replace cannot tell it from the pod.
-func TestReplaceProxyAtLeavesANewerGenerationsSecret(t *testing.T) {
-	k, cs, _, ref := keptRun(t)
-	addCfgSecret(t, cs, "cfg-gen-1", "1")
-	addCfgSecret(t, cs, "cfg-unlabelled", "")
-	addCfgSecret(t, cs, "cfg-gen-2", "2")
+// A replace deletes, once the old proxy pod is gone and before it makes the new one, the replacement config Secret that
+// pod mounted, by name, and reads no Secret. A newer revive's Secret, written before its pod exists, is mounted by no pod
+// this replace removes and is left, and so is the run's own.
+func TestReplaceProxyAtDeletesOnlyTheSecretTheOldPodMounted(t *testing.T) {
+	k, cs, dyn, ref := keptRun(t)
+	mounted, newer := secretName(asRunID)+"-r1", secretName(asRunID)+"-r2"
+	mountCfgSecret(t, cs, mounted, "")
+	addCfgSecret(t, cs, newer, "2")
 	cs.ClearActions()
+	order := writesInOrder(cs, dyn)
 	if _, err := k.ReplaceProxyHashedAt(context.Background(), ref, replaceCfg, 1); err != nil {
 		t.Fatalf("ReplaceProxyHashedAt(1): %v", err)
 	}
-	names, collection := secretDeletes(cs)
-	slices.Sort(names)
-	if want := []string{"cfg-gen-1", "cfg-unlabelled"}; !slices.Equal(names, want) || collection {
-		t.Errorf("Secret deletes %v, delete-collection %v; want %v and no collection", names, collection, want)
+	want := []string{"create secrets", "update endpointslices", "delete pods", "delete secrets", "create pods", "update endpointslices"}
+	if !slices.Equal(*order, want) {
+		t.Errorf("writes = %v\nwant %v: the old pod's Secret once that pod is gone, before the new pod", *order, want)
 	}
-	if _, err := cs.Tracker().Get(secretsGVR, testNamespace, "cfg-gen-2"); err != nil {
-		t.Errorf("the generation 2 Secret after a generation 1 replace: %v; want it left", err)
+	if names, collection := secretDeletes(cs); !slices.Equal(names, []string{mounted}) || collection {
+		t.Errorf("Secret deletes %v, delete-collection %v; want only %s by name", names, collection, mounted)
+	}
+	for _, kept := range []string{newer, secretName(asRunID)} {
+		if !secretStored(t, cs, kept) {
+			t.Errorf("Secret %s is gone; a replace deletes only the Secret the old proxy pod mounted", kept)
+		}
+	}
+	if reads := secretReads(cs); len(reads) != 0 {
+		t.Errorf("Secret reads %v; the chart's Role grants no get, list or watch on Secrets", reads)
+	}
+}
+
+// The end deletes the one replacement config Secret its removed proxy pod mounted, by name, and reads no Secret. Another
+// run's replacement Secret is left, and so is the run's own. A Secret of the run that no removed pod mounted is left as
+// well: a newer revive's looks the same before its pod exists, and the run's teardown deletes one a failed replace left.
+// The rig applies a delete by name and a delete-collection, so an end that sweeps by selector, or deletes the wrong name,
+// fails the tracker checks, and it refuses a get or a list of a Secret, as the chart's Role does.
+func TestKeepEndSandboxDeletesOnlyTheSecretItsProxyMounted(t *testing.T) {
+	r := newKeptRig(t, nil)
+	mounted, unmounted := secretName(asRunID)+"-r1", secretName(asRunID)+"-r2"
+	mountCfgSecret(t, r.cs, mounted, "")
+	addCfgSecret(t, r.cs, unmounted, "")
+	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wardyn-proxy-cfg-other-run-r1", Namespace: testNamespace,
+		Labels: map[string]string{labelRun: "other-run", labelProxyCfg: "1"}}}
+	if err := r.cs.Tracker().Create(secretsGVR, other, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	order := writesInOrder(r.cs, r.dyn)
+	r.end(t)
+	if want := []string{"update endpointslices", "delete pods", "delete secrets", "delete pods"}; !slices.Equal(*order, want) {
+		t.Errorf("writes = %v\nwant %v: the slice, the proxy pod, its Secret once the pod is gone, the agent pod", *order, want)
+	}
+	if names, collection := secretDeletes(r.cs); !slices.Equal(names, []string{mounted}) || collection {
+		t.Errorf("Secret deletes %v, delete-collection %v; want only %s by name", names, collection, mounted)
+	}
+	if secretStored(t, r.cs, mounted) {
+		t.Errorf("Secret %s, which the removed proxy pod mounted, is still stored", mounted)
+	}
+	for _, kept := range []string{unmounted, other.Name, secretName(asRunID)} {
+		if !secretStored(t, r.cs, kept) {
+			t.Errorf("Secret %s is gone; the end deletes only the Secret its removed proxy pod mounted", kept)
+		}
+	}
+	if reads := secretReads(r.cs); len(reads) != 0 {
+		t.Errorf("Secret reads %v; the chart's Role grants no get, list or watch on Secrets", reads)
 	}
 }
 
