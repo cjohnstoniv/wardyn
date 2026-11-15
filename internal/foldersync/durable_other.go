@@ -49,10 +49,11 @@ func noHardLinks(err error) bool {
 	return false
 }
 
-// copyHandle is copyNew's copy in progress: the file it copies from, the copy's open handle, and the bytes
-// written to it.
+// copyHandle is copyNew's copy in progress: the file it copies from, the copy's open handle, what the
+// handle reported just after the create (nil if that read failed), and the bytes written to it.
 type copyHandle struct {
 	src, dst *os.File
+	made     os.FileInfo
 	written  int64
 }
 
@@ -79,6 +80,7 @@ func copyNew(root *os.Root, from, to string) (err error) {
 		return err
 	}
 	c := &copyHandle{src: src, dst: dst}
+	c.made, _ = statCopy(dst)
 	defer func() {
 		if err != nil {
 			err = dropCopy(root, to, c, err)
@@ -105,15 +107,16 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	return nil
 }
 
-// statCopy is fstat on a copy's open handle; replaced by tests. It is read after the copy's last
-// write, never before: a filesystem may number a file anew once its bytes land, and on macOS exFAT a
-// number read before the write did not match the copy's name after it.
+// statCopy is fstat on a copy's open handle; replaced by tests. The proofs read it after the copy's last write: a
+// filesystem may number a file anew once its bytes land, and on macOS exFAT a number read before the write did not
+// match the copy's name after it. The read just after the create only tells whether the number held (copyAt).
 var statCopy = func(f *os.File) (os.FileInfo, error) { return f.Stat() }
 
-// copyAt reports whether name holds the copy c holds open, by two proofs: the same file as c's handle
-// reports now, and the size written. gone is true when name is free, or when the handle's file has
-// no name left, as a copy has once a save is renamed over it: either way name holds nothing of the
-// copy's. When neither holds, name may hold the copy and is named, never removed.
+// copyAt reports whether name holds the copy c holds open, by two proofs: the same file as c's handle reports now,
+// and the size written. gone is true when name is free; when the handle's file has no name left, as a copy has once
+// a save is renamed over it; or when name holds another file and the handle reported the same file from its create
+// to now, so its number did not change under the write and the mismatch is real: each way name holds nothing of the
+// copy's. When none holds, name may hold the copy and is named, never removed.
 func copyAt(root *os.Root, name string, c *copyHandle) (held, gone bool) {
 	li, lerr := lstatIn(root, name)
 	if errors.Is(lerr, fs.ErrNotExist) {
@@ -125,6 +128,9 @@ func copyAt(root *os.Root, name string, c *copyHandle) (held, gone bool) {
 	}
 	if os.SameFile(own, li) {
 		return li.Size() == c.written, false
+	}
+	if c.made != nil && os.SameFile(c.made, own) {
+		return false, true // the copy's number held through its write, so the file at name is not the copy
 	}
 	st, ok := own.Sys().(*syscall.Stat_t)
 	return false, ok && st.Nlink == 0

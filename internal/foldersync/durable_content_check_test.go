@@ -69,3 +69,29 @@ func TestPass_AFailedEmptyCopyIsNamedNotRemoved(t *testing.T) {
 		t.Errorf("laptop new.txt = %q, temps %v, refusal %q: want the empty copy kept at its name, no temp and the refusal naming it", got, temps, reason)
 	}
 }
+
+// An editor that renames a failed copy to its backup name and saves at the name leaves its save there, and the
+// refusal never calls that save the copy's partial copy: the copy's file number held from its create through its
+// write, so the save at the name is another file. Catches a refusal that names whatever is at the name while the
+// copy still has a name of its own.
+func TestPass_AnEditorsBackupRenameOfAFailedCopyIsNotNamedAsItsPartialCopy(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	sync := fsyncFile
+	onSync(t, func(f *os.File) error {
+		if filepath.Base(f.Name()) != name {
+			return sync(f)
+		}
+		if err := os.Rename(filepath.Join(root, name), filepath.Join(root, name+"~")); err != nil {
+			t.Fatal(err)
+		}
+		editorSave(t, root, name, "editor save")
+		return syscall.EIO
+	}, nil)
+	reason := refusedFor(pass(t, sy), name)
+	temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
+	if got, backup := getSyncFile(t, filepath.Join(root, name)), getSyncFile(t, filepath.Join(root, name+"~")); got != "editor save" ||
+		backup != "from the sandbox" || len(temps) != 0 || reason == "" || strings.Contains(reason, "its partial copy is left at") {
+		t.Errorf("laptop %s = %q, backup %q, temps %v, refusal %q: want the editor's save and backup kept, no temp, and a refusal that names no partial copy",
+			name, got, backup, temps, reason)
+	}
+}
