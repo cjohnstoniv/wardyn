@@ -455,3 +455,27 @@ func TestDesktopSignin_AnEndOfASignInWithNoPauseRecordWaitsOnlyTwiceTheBeginHold
 		})
 	}
 }
+
+// signinClaimUnwrittenStore is signinTestStore whose ClaimDesktopSigninEnd fails, as a database that cannot take the claim.
+type signinClaimUnwrittenStore struct{ *signinTestStore }
+
+func (s signinClaimUnwrittenStore) ClaimDesktopSigninEnd(context.Context, uuid.UUID, string, string) (bool, error) {
+	return false, errors.New("store: claim refused")
+}
+
+// TestDesktopSignin_AnEndWhoseClaimCannotBeTakenRunsUnclaimed: a store that cannot take the end's claim cannot be
+// blamed on the person's end: it answers 204 and sends the person's stop, resume-agent and SIGCONT, so the agent is
+// never left stopped by a store fault.
+func TestDesktopSignin_AnEndWhoseClaimCannotBeTakenRunsUnclaimed(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	before := len(f.rn.seen())
+	f.srv.cfg.Store = signinClaimUnwrittenStore{f.st}
+	code, body := f.post(t, "/desktop-signin/end", "")
+	if code != http.StatusNoContent {
+		t.Fatalf("end = %d %s, want 204", code, body)
+	}
+	if got, want := f.rn.seen()[before:], []string{"person:stop", "agent:resume-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}
