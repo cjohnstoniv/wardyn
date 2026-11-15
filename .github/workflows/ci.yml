@@ -342,13 +342,18 @@ jobs:
         if: needs.changes.outputs.backend != 'false'
         env:
           GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
         run: |
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
           free -m; df -h /
           if [ -x /usr/bin/time ]; then
-            /usr/bin/time -v go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           else
             time go test -c -p 2 ${{ matrix.build }} -o "$RUNNER_TEMP/api.test" ./internal/api/
           fi
@@ -478,13 +483,18 @@ jobs:
       - name: Prebuild internal/api's tests with two workers
         env:
           GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
         run: |
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
           free -m; df -h /
           if [ -x /usr/bin/time ]; then
-            /usr/bin/time -v go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           else
             time go test -c -p 2 -o "$RUNNER_TEMP/api.test" ./internal/api/
           fi
@@ -1997,13 +2007,18 @@ jobs:
       - name: Prebuild internal/api's tests with two workers
         env:
           GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
         run: |
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
           free -m; df -h /
           if [ -x /usr/bin/time ]; then
-            /usr/bin/time -v go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           else
             time go test -c -p 2 -tags docker -o "$RUNNER_TEMP/api.test" ./internal/api/
           fi
@@ -2671,13 +2686,18 @@ jobs:
         if: matrix.prebuild != ''
         env:
           GOMAXPROCS: "2"
+          # The compile peaked at 15.4-15.6 GB of the runner's 16 GB. A soft heap limit makes the
+          # compiler collect harder near it instead of pushing the runner into swap.
+          GOMEMLIMIT: "10GiB"
         run: |
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
           free -m; df -h /
           if [ -x /usr/bin/time ]; then
-            /usr/bin/time -v go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/
+            /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+            cat "$RUNNER_TEMP/api.time"
+            echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           else
             time go test -c -p 2 ${{ matrix.prebuild == 'race' && '-race' || '' }} -o "$RUNNER_TEMP/api.test" ./internal/api/
           fi
