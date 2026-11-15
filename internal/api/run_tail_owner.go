@@ -213,7 +213,7 @@ func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor
 // like any other away row, so a runner that never returns cannot keep an owed pass for ever. A runner run whose
 // runner is not connected here (a live session, never last-known caps) gets
 // no runner call, no folder pass and no tail; the one step it takes is the give-up at the cap, which needs no
-// runner (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
+// runner, and for a forced-marked row no lock (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
 // row; inside the cap it takes no lock and writes no row. A record, seed or rule that cannot be read skips the row
 // for the tick inside the cap: an unreadable answer is never "not owed", which would stop a sandbox that owes its
 // changes. Past the cap the same row is given up (tailStepOf), and its audit row names the read that failed.
@@ -234,7 +234,7 @@ func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, no
 	}
 	if away {
 		if step == tailGiveUp {
-			s.tailGiveUpAway(ctx, run.ID)
+			s.tailGiveUpAway(ctx, run.ID, row.ForcedStopAt != nil)
 		}
 		return false
 	}
@@ -370,12 +370,24 @@ func (s *Server) tailFolderVisitable(ctx context.Context, run types.AgentRun) bo
 	return false
 }
 
-// tailGiveUpAway is the give-up of a run whose runner is not connected here, and only that: under the run's lock,
-// with the run and its record read again, the owed pass whose keep ran out is given up (the statement and its
-// audit row). No runner is called and no tail runs, so the sandbox stays; the record is then final, the sweeps no
-// longer keep the sandbox, and the queued kill or the history tail ends it once the runner is back. A runner that
-// never comes back therefore cannot keep a sandbox for ever.
-func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
+// tailGiveUpAway is the give-up of a run whose runner is not connected here, and only that: with the run and its
+// record read again, the owed pass whose keep ran out is given up (the statement and its audit row). No runner is
+// called and no tail runs, so the sandbox stays; the record is then final, the sweeps no longer keep the sandbox, and
+// the queued kill or the history tail ends it once the runner is back. A runner that never comes back therefore
+// cannot keep a sandbox for ever.
+//
+// A run that is not forced-marked is given up under its lock, so a pass on another server that holds it finishes
+// first. A forced-marked one (marked: its listing row, which also answered that its keep ran out) takes no lock: its
+// forced end went past a holder that did not let go, and one that never does would keep the copy back owed for good.
+// Nothing can be in flight for it: the tail owner starts a pass only on a run that is not marked and is inside its
+// keep, a mark is never set again once it clears and the keep never comes back, so that one reading of both rules out
+// a pass started since the forced end; a pass from before it writes nothing once the give-up moves the record's
+// generation on.
+func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID, marked bool) {
+	if marked {
+		s.tailGiveUpOwed(ctx, id)
+		return
+	}
 	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
 	if !ok {
 		return
@@ -386,8 +398,8 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
 
 // tailGiveUpOwed is the give-up decision and its write: run id and its record are read again (tailReread), and when
 // the give-up is still the due step the owed pass is given up (giveUpFolderNoted), with its audit row written only
-// when the statement applied. It takes no lock itself: tailGiveUpAway calls it under the run's lock, and the forced
-// stop's retry (giveUpForcedPastKeep) without one.
+// when the statement applied. It takes no lock itself: tailGiveUpAway calls it under the run's lock for a row that is not
+// forced-marked and without it for one that is, and the forced stop's retry (giveUpForcedPastKeep) without one.
 func (s *Server) tailGiveUpOwed(ctx context.Context, id uuid.UUID) {
 	run, st, note, again, ok := s.tailReread(ctx, id, tailGiveUp)
 	if !ok || !again {
@@ -399,7 +411,7 @@ func (s *Server) tailGiveUpOwed(ctx context.Context, id uuid.UUID) {
 	}
 }
 
-// tailReread reads run id and its record again (under its lock, except for the forced stop's retry), and reports
+// tailReread reads run id and its record again (under its lock, except for a forced-marked run's give-up), and reports
 // whether the run is still ended with its ref and step is still its due step, with the note a give-up carries: the
 // reads here decide it (tailStepOf). ok false is a read that failed or a run with nothing to tail.
 func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, note string, again, ok bool) {
