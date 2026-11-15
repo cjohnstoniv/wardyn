@@ -274,6 +274,7 @@ func (s signinEndUnwrittenStore) EndDesktopSignin(context.Context, uuid.UUID, st
 // was continued, but whose row could not be closed, answers 502 desktop_signin_end_failed and gives the row back open,
 // unmarked and unclaimed, so the person can end it again at once; no close row is written, and the agent got its one
 // SIGCONT.
+// Its message says the end could not be recorded and asks for the end again.
 func TestDesktopSignin_AnEndWhoseRecordCannotBeWrittenIsLeftToEndAgain(t *testing.T) {
 	f := newSigninFixture(t)
 	f.begin(t)
@@ -282,6 +283,9 @@ func TestDesktopSignin_AnEndWhoseRecordCannotBeWrittenIsLeftToEndAgain(t *testin
 	code, body := f.post(t, "/desktop-signin/end", "")
 	if code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninEndFailed) {
 		t.Fatalf("end = %d %s, want 502 %s", code, body, reasonDesktopSigninEndFailed)
+	}
+	if want := "the sign-in display closed, but its end could not be recorded; end the sign-in again"; !strings.Contains(body, want) {
+		t.Fatalf("end = %d %s, want the message %q", code, body, want)
 	}
 	if si := f.st.only(t); si.EndedAt != nil || si.EndRequested != "" || si.EndStage != "" {
 		t.Fatalf("row = %+v, want open, unmarked and unclaimed", si)

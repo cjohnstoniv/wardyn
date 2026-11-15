@@ -735,7 +735,10 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		msg := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
-		if errors.Is(err, errSigninResumeStage) {
+		switch {
+		case errors.Is(err, errSigninEndUnrecorded):
+			msg = "the sign-in display closed, but its end could not be recorded; end the sign-in again"
+		case errors.Is(err, errSigninResumeStage):
 			msg = "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
 		}
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninEndFailed, msg)

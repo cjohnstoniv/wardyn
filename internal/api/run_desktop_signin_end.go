@@ -32,7 +32,8 @@ var errSigninStateUnread = errors.New("the agent's state could not be read")
 var errSigninResumeStage = errors.New("the agent could not be resumed")
 
 // errSigninEndUnrecorded marks an end whose display closed and whose agent was
-// continued, but whose row could not be closed.
+// continued, but whose row could not be closed: handleEndDesktopSignin answers
+// it with its own message, since the display message is wrong there.
 var errSigninEndUnrecorded = errors.New("the sign-in's end could not be recorded")
 
 // continueMain sends pid 1 a SIGCONT, then reads its state through
