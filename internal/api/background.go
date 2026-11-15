@@ -38,6 +38,20 @@ func (s *Server) GoBackground(fn func()) {
 	s.goBackground(fn)
 }
 
+// sshGoTracked is sshGo, with its panic containment, for an SSH gateway
+// goroutine that may write an audit row: a connection, and each door that
+// runs a bridge. WaitBackground waits for it, so a daemon stop has that row
+// stored, or spooled by the recorder chain, before the pool closes and the
+// process exits. A stop ends each one: handleSSHConn closes the connection,
+// and every bridge ends with its context.
+func (s *Server) sshGoTracked(fn func()) {
+	s.bg.Add(1)
+	sshGo(func() {
+		defer s.bg.Done()
+		fn()
+	})
+}
+
 // backgroundShutdownBudget bounds WaitBackground. killCascadeTimeout
 // (runs_lifecycle.go) is the longest bound most goroutines tracked by
 // goBackground give themselves internally (killTeardownTail's own

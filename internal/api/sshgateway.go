@@ -289,7 +289,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		}
 		select {
 		case lim.handshakes <- struct{}{}:
-			sshGo(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
+			s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 		default:
 			lim.leaveSource(src)
 			lim.refused(sshBoundHandshake, maxSSHHandshakes)
@@ -653,6 +653,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	// first, so connCtx then keeps ctx's own cause.
 	connCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errSSHChannelClosed)
+	// A daemon stop closes the connection once connCtx holds the stop's cause, so its doors end with it and the
+	// stop's wait for them (sshGoTracked) does not wait on the client.
+	defer context.AfterFunc(connCtx, func() { _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() {
 		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
@@ -687,7 +690,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 				continue
 			}
 			slot.dataOut = dataOut
-			sshGo(func() {
+			s.sshGoTracked(func() {
 				defer slot.release()
 				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
@@ -701,7 +704,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", s.cfg.SSHMaxSessionsPerRun))
 				continue
 			}
-			sshGo(func() {
+			s.sshGoTracked(func() {
 				defer s.sshReleaseSession(runID)
 				s.handleSSHDirectTCPIP(connCtx, runID, principal, newCh)
 			})
