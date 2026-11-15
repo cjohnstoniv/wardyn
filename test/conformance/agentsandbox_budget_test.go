@@ -37,9 +37,23 @@ var agentSandboxWorstCase = map[string]time.Duration{
 		ASWarmRefillWait + ASKillBound + ASWarmCleanupBound,
 }
 
+// workflowJob is the text of the workflow job name in wf, from its key line to the next job's key, "" when there is none.
+func workflowJob(wf, name string) string {
+	i := strings.Index(wf, "\n  "+name+":\n")
+	if i < 0 {
+		return ""
+	}
+	job := wf[i+1:]
+	if j := regexp.MustCompile(`\n  [a-z][\w-]*:\n`).FindStringIndex(job); j != nil {
+		job = job[:j[0]]
+	}
+	return job
+}
+
 // TestAgentSandboxCaseBudgetsFitTheJobTimeout reads ci.yml's agent-sandbox job: the cases its "ran and passed" step
-// requires, the CONFORMANCE_K8S_TIMEOUT its suite step passes, and its timeout-minutes. The measured suite time plus
-// the new cases' worst cases must fit that go test timeout, which must fit inside the job's. A go test timeout expiry
+// requires, the CONFORMANCE_K8S_TIMEOUT its suite step passes, and its timeout-minutes. The measured suite
+// time plus the new cases' worst cases, with the 1.25 margin, must fit that go test timeout, and with the job's setup
+// added, the job's timeout-minutes. A go test timeout expiry
 // is a panic that discards every verdict already produced, so a raised limit or a new case reds here instead.
 func TestAgentSandboxCaseBudgetsFitTheJobTimeout(t *testing.T) {
 	b, err := os.ReadFile("../../.github/workflows/ci.yml")
@@ -53,14 +67,9 @@ func TestAgentSandboxCaseBudgetsFitTheJobTimeout(t *testing.T) {
 	if want := fmt.Sprintf("d.waitPodGone(ctx, ns, pod, %d*time.Second)", warmClaimGoneWait/time.Second); !strings.Contains(string(src), want) {
 		t.Errorf("internal/runner/k8s/warm_claim.go has no %q: warmClaimGoneWait must equal the driver's wait for a claimed placeholder to go", want)
 	}
-	job := string(b)
-	i := strings.Index(job, "\n  conformance-k8s-agent-sandbox:\n")
-	if i < 0 {
+	job := workflowJob(string(b), "conformance-k8s-agent-sandbox")
+	if job == "" {
 		t.Fatal("ci.yml has no conformance-k8s-agent-sandbox job")
-	}
-	job = job[i+1:]
-	if j := regexp.MustCompile(`\n  [a-z][\w-]*:\n`).FindStringIndex(job); j != nil {
-		job = job[:j[0]]
 	}
 	find := func(re string) []string {
 		m := regexp.MustCompile(re).FindStringSubmatch(job)
@@ -94,8 +103,11 @@ func TestAgentSandboxCaseBudgetsFitTheJobTimeout(t *testing.T) {
 	if measured != agentSandboxMeasuredCases {
 		t.Errorf("ci.yml lists %d cases without a budget here, want the %d that ran hosted: give each new case a worst case in agentSandboxWorstCase", measured, agentSandboxMeasuredCases)
 	}
-	if total > timeout {
-		t.Errorf("the measured suite %s plus the new cases' worst cases come to %s, above the CONFORMANCE_K8S_TIMEOUT %s the agent-sandbox suite step passes", ASMeasuredSuite, total, timeout)
+	if total*5/4 > timeout {
+		t.Errorf("the measured suite %s plus the new cases' worst cases come to %s, %s with the 1.25 margin, above the CONFORMANCE_K8S_TIMEOUT %s the agent-sandbox suite step passes", ASMeasuredSuite, total, total*5/4, timeout)
+	}
+	if need := (ASJobSetup + total) * 5 / 4; need > time.Duration(minutes)*time.Minute {
+		t.Errorf("the job's setup %s plus the suite's %s come to %s with the 1.25 margin, above the agent-sandbox job's timeout-minutes %d", ASJobSetup, total, need, minutes)
 	}
 	if time.Duration(minutes)*time.Minute <= timeout {
 		t.Errorf("the agent-sandbox job's timeout-minutes %d does not exceed CONFORMANCE_K8S_TIMEOUT %s", minutes, timeout)

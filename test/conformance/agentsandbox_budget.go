@@ -32,4 +32,8 @@ const (
 	// ASMeasuredSuite is the go test step of the seven cases that ran hosted before the keep and warm pool cases:
 	// 715 s and 658 s on two runs, the slower kept.
 	ASMeasuredSuite = 715 * time.Second
+
+	// ASJobSetup is everything in the agent-sandbox job but its go test step: 379 s and 328 s on the same two runs,
+	// the slower kept.
+	ASJobSetup = 379 * time.Second
 )
