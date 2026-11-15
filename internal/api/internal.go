@@ -90,22 +90,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
 	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 	// decisions are kept on its trail and, as on the runner spool, are not activity.
-	// Whether the run is over is read on the database's clock (runIsOverNow), and only once a touch or a presence
-	// stamp is due, so a chatty agent's posts add no read. A clock that cannot be read counts as over: neither is
-	// written, and the next due decision reads it again.
-	liveRun, live := liveRunFromContext(r.Context())
-	var kind types.MachineKind
-	if live {
-		kind = liveRun.MachineKind
-	}
-	overRead, over := false, false
-	isOver := func() bool {
-		if live && !overRead {
-			o, err := s.runIsOverNow(r.Context(), liveRun)
-			overRead, over = true, o || err != nil
-		}
-		return over
-	}
+	kind, isOver := s.decisionRunOver(r.Context())
 	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
@@ -197,6 +182,26 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 	}
 	answerDecisionPost(w, kept)
+}
+
+// decisionRunOver is the liveness gate's run's machine kind, and a check of whether that run is over, read on the
+// database's clock (runIsOverNow) the first time it is asked and not again, so a chatty agent's posts add no read and
+// a decision that needs no touch or stamp reads none. A clock that cannot be read counts as over: neither write is
+// made, and the next due decision reads it again. Without a run from the gate nothing is over.
+func (s *Server) decisionRunOver(ctx context.Context) (types.MachineKind, func() bool) {
+	run, live := liveRunFromContext(ctx)
+	var kind types.MachineKind
+	if live {
+		kind = run.MachineKind
+	}
+	read, over := false, false
+	return kind, func() bool {
+		if live && !read {
+			o, err := s.runIsOverNow(ctx, run)
+			read, over = true, o || err != nil
+		}
+		return over
+	}
 }
 
 // recordLLMScanAudit shares the content-free payload and finding cap with
