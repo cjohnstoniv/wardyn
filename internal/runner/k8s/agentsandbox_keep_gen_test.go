@@ -8,6 +8,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -325,12 +326,31 @@ func TestEndSandboxAtLeavesARevivedAgentPod(t *testing.T) {
 // newer revive's proxy takes the name and that revive writes its own config Secret. The end deletes only the Secret the
 // removed pod mounted, by name, and refuses with ErrProxyGenerationNewer on its second read of the proxy pod. The newer
 // Secret carries no generation: the end never names a Secret that no removed pod mounted, whatever its labels. The agent
-// pod is left stored, as it is the newer revive's.
+// pod is left stored, as it is the newer revive's. The agent pod is run twice, running and held: a running one is refused by
+// deleteKeptAgentPod's own read of the proxy pod, so only a held one, which that read lets through, shows that the end
+// itself refuses on its second read.
 func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%v", held), func(t *testing.T) { keepEndLeavesANewerRevivesConfigSecret(t, held) })
+	}
+}
+
+func keepEndLeavesANewerRevivesConfigSecret(t *testing.T, held bool) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "1")
 	mounted, newer := secretName(asRunID)+"-r1", secretName(asRunID)+"-r2"
 	mountCfgSecret(t, r.cs, mounted, "1")
+	if held {
+		obj, err := r.cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gated := obj.(*corev1.Pod).DeepCopy()
+		gated.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: "wardyn.dev/held"}}
+		if err := r.cs.Tracker().Update(podsGVR, gated, testNamespace); err != nil {
+			t.Fatal(err)
+		}
+	}
 	swapped := false
 	r.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
 		name := a.(clienttesting.DeleteAction).GetName()
@@ -352,7 +372,7 @@ func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
 		return true, nil, r.cs.Tracker().Create(secretsGVR, cfg, testNamespace)
 	})
 	if err := r.k.EndSandboxAt(context.Background(), r.ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
-		t.Fatalf("EndSandboxAt(1) = %v, want ErrProxyGenerationNewer once a generation 2 proxy appeared", err)
+		t.Fatalf("EndSandboxAt(1) with the agent pod held=%v = %v, want ErrProxyGenerationNewer once a generation 2 proxy appeared", held, err)
 	}
 	if _, err := r.cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID)); err != nil {
 		t.Errorf("the agent pod after a refused end: %v; want it stored, as a refused end must not delete the newer revive's agent pod", err)
