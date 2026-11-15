@@ -320,9 +320,14 @@ func (s *Server) sweepRecordingOutputs(ctx context.Context, st store.RunOutputSt
 	if err != nil {
 		return err
 	}
+	// A recording that cannot be read holds back no other run: the pass reads the rest of its page and answers that
+	// error at its end. It stays the pass's error, as a failing recording store is, while the run is inside its
+	// give-up (recordingReadGaveUp); past it the run's pending row settles as a gap (settleStaleRecordingOutput), and
+	// the recording is that run's outcome alone, logged with its id.
+	var unreadable error
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return nil // the remaining page is still durable for the next pass
+			return unreadable // the remaining page is still durable for the next pass
 		}
 		run, err := s.cfg.Store.GetRun(ctx, id)
 		if err != nil {
@@ -337,9 +342,14 @@ func (s *Server) sweepRecordingOutputs(ctx context.Context, st store.RunOutputSt
 			// That run's outcome, not the pass's: a sandbox sizes its own recording,
 			// and one slow read must not turn the whole sweep's health stale.
 			s.logRecordingOutputError(ctx, run.ID, err)
+		case errors.Is(err, errRecordingOutputUnavailable):
+			s.logRecordingOutputError(ctx, run.ID, err)
+			if unreadable == nil && ctx.Err() == nil && !s.recordingReadGaveUp(ctx, st, run.ID) {
+				unreadable = err
+			}
 		case err != nil && !errors.Is(err, store.ErrRunOutputErased) && !errors.Is(err, store.ErrRecordingOutputErased):
 			return err
 		}
 	}
-	return nil
+	return unreadable
 }
