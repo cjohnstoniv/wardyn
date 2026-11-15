@@ -6,9 +6,11 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -59,5 +61,22 @@ func TestDesktopSignin_AnOwedKillThatFailsFailsTheSweep(t *testing.T) {
 	}
 	if got := signinCloseRows(f); len(got) != 0 {
 		t.Fatalf("desktop_signin.close rows = %v, want none", got)
+	}
+}
+
+// TestDesktopSignin_AnOwedKillQueuedOnTheRunnerClosesTheRow: a teardown the runner queued
+// (runner.ErrPendingOnRunner) counts as done, as the kill's own teardown does: the row closes with agent_resumed
+// false and the sweep is healthy.
+func TestDesktopSignin_AnOwedKillQueuedOnTheRunnerClosesTheRow(t *testing.T) {
+	kills := 0
+	f := signinOwedFixture(t, runner.ErrPendingOnRunner, &kills)
+	if err := f.srv.sweepDesktopSignins(context.Background()); err != nil || kills != 1 {
+		t.Fatalf("sweep = %v with %d kills; want nil and 1 kill", err, kills)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndDone {
+		t.Fatalf("row = %+v, want ended %s", si, signinEndDone)
+	}
+	if got := signinCloseRows(f); !slices.Equal(got, []string{"success false"}) {
+		t.Fatalf("desktop_signin.close rows = %v, want [success false]", got)
 	}
 }

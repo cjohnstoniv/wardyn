@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -44,10 +45,11 @@ func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 		if err == nil && run.State == types.RunKilled && run.SandboxRef != "" && s.cfg.Runner != nil && signinKillOwed(si.EndStage) {
 			// A stuck sign-in's kill that left the sandbox: the row closes once the person's display,
 			// in that sandbox, is gone.
+			// A teardown queued on an offline runner counts as done, as the kill's own does (killTeardownTail).
 			kctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 			kerr := s.cfg.Runner.KillSandbox(kctx, run.SandboxRef)
 			cancel()
-			if kerr != nil {
+			if kerr != nil && !errors.Is(kerr, runner.ErrPendingOnRunner) {
 				slog.WarnContext(ctx, "wardynd: desktop sign-in's killed sandbox is not torn down", "run_id", run.ID, "err", kerr)
 				owed = append(owed, fmt.Errorf("desktop sign-in of run %s: the killed sandbox is not torn down: %w", run.ID, kerr))
 				continue
