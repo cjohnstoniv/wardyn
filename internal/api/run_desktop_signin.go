@@ -854,7 +854,7 @@ func (s *Server) signinExec(ctx context.Context, run types.AgentRun, as signinUs
 	return s.sandboxExec(ctx, run, as, stdin, maxOut, append([]string{signinBinary}, args...))
 }
 
-// sandboxExec is signinExec for a whole argv of two words or more.
+// sandboxExec is signinExec for a whole argv of two words or more; as is who it runs as, and whether it starts under the run's start lock (signinUser).
 func (s *Server) sandboxExec(ctx context.Context, run types.AgentRun, as signinUser, stdin []byte, maxOut int, argv []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, signinExecTimeout)
 	defer cancel()
