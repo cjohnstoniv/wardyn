@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -315,5 +316,110 @@ func TestDesktopSignin_AnEndWhoseResumeAgentFailsSaysTheAgentCouldNotBeResumed(t
 	}
 	if n := signinConts(f, before); n != 0 {
 		t.Fatalf("SIGCONTs sent by the end = %d, want 0: resume-agent failed before the continue", n)
+	}
+}
+
+// TestDesktopSignin_AnEndBeforeTheBeginsStopLeavesTheSignInToTheBegin: an end that lands after a begin wrote its row
+// but before its SIGSTOP answers 409 and sends nothing, so the stop never lands on a closed sign-in; the sign-in then
+// begins as usual, and its end continues pid 1.
+func TestDesktopSignin_AnEndBeforeTheBeginsStopLeavesTheSignInToTheBegin(t *testing.T) {
+	f := newSigninFixture(t)
+	pid1 := &signinPid1Runner{signinFakeRunner: f.rn, at: "signal:SIGSTOP"}
+	f.srv.cfg.Runner = pid1
+	var endCode int
+	var endBody string
+	var sent []string
+	pid1.during = func() {
+		before := len(f.rn.seen())
+		endCode, endBody = f.post(t, "/desktop-signin/end", "")
+		sent = f.rn.seen()[before:]
+	}
+	f.begin(t)
+	if endCode != http.StatusConflict || !strings.Contains(endBody, reasonDesktopSigninStarting) || len(sent) != 0 {
+		t.Fatalf("an end before the begin's stop = %d %s and sent %v; want 409 %s and nothing", endCode, endBody, sent, reasonDesktopSigninStarting)
+	}
+	if si, err := f.st.OpenDesktopSignin(context.Background(), f.run.ID); err != nil || !pid1.stopped {
+		t.Fatalf("after the begin: open = %+v %v, pid 1 stopped = %t; want the sign-in open and pid 1 stopped", si, err, pid1.stopped)
+	}
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusNoContent || pid1.stopped {
+		t.Fatalf("the end after the begin = %d %s, pid 1 stopped = %t; want 204 and pid 1 running", code, body, pid1.stopped)
+	}
+}
+
+// signinHang waits for ctx or two seconds, whichever ends first: when ctx ends first it sets *bounded and answers
+// ctx's error.
+func signinHang(ctx context.Context, bounded *bool) error {
+	select {
+	case <-ctx.Done():
+		*bounded = true
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return errors.New("never bounded")
+	}
+}
+
+// signinHungStopRunner is signinFakeRunner whose SIGSTOP never answers on its own (signinHang).
+type signinHungStopRunner struct {
+	*signinFakeRunner
+	bounded *bool
+}
+
+func (r *signinHungStopRunner) SignalMain(ctx context.Context, ref, signal string) error {
+	if signal == "SIGSTOP" {
+		return signinHang(ctx, r.bounded)
+	}
+	return r.signinFakeRunner.SignalMain(ctx, ref, signal)
+}
+
+// signinHungRecordStore is signinTestStore whose pause-record write never answers on its own (signinHang).
+type signinHungRecordStore struct {
+	*signinTestStore
+	bounded *bool
+}
+
+func (s signinHungRecordStore) SetDesktopSigninPauseRecord(ctx context.Context, _ uuid.UUID, _ json.RawMessage) error {
+	return signinHang(ctx, s.bounded)
+}
+
+// TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold: a SIGSTOP, or a pause-record write, that never
+// answers ends when signinBeginHold passes, so no begin outlives the wait an end gives a row with no pause record; the
+// begin then undoes its stop and closes the row.
+func TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold(t *testing.T) {
+	defer func(d time.Duration) { signinBeginHold = d }(signinBeginHold)
+	signinBeginHold = 100 * time.Millisecond
+	for name, tc := range map[string]struct {
+		hang   func(f *signinFixture, bounded *bool)
+		code   int
+		reason string
+	}{
+		"the SIGSTOP never answers": {func(f *signinFixture, bounded *bool) {
+			f.srv.cfg.Runner = &signinHungStopRunner{signinFakeRunner: f.rn, bounded: bounded}
+		}, http.StatusBadGateway, reasonDesktopSigninPauseFailed},
+		"the record's write never answers": {func(f *signinFixture, bounded *bool) {
+			f.srv.cfg.Store = signinHungRecordStore{signinTestStore: f.st, bounded: bounded}
+		}, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			var bounded bool
+			tc.hang(f, &bounded)
+			if code, body := f.post(t, "/desktop-signin", ""); code != tc.code || !strings.Contains(body, tc.reason) {
+				t.Fatalf("begin = %d %s, want %d %s", code, body, tc.code, tc.reason)
+			}
+			if !bounded {
+				t.Fatal("the step was not bounded by signinBeginHold")
+			}
+			if _, err := f.st.OpenDesktopSignin(context.Background(), f.run.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("open = %v, want no sign-in open", err)
+			}
+		})
+	}
+}
+
+// TestDesktopSignin_TheStatedStartingBoundIsTheBeginHoldTwice: the 409 text for an end before the begin's stop and
+// docs/sdk.md state six minutes, so the bound they state must stay twice signinBeginHold.
+func TestDesktopSignin_TheStatedStartingBoundIsTheBeginHoldTwice(t *testing.T) {
+	if 2*signinBeginHold != 6*time.Minute {
+		t.Fatal("the 409 texts and docs/sdk.md state 6 minutes; change them with the bound")
 	}
 }

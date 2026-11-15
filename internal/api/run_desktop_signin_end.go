@@ -77,6 +77,13 @@ func (s *Server) continueMain(ctx context.Context, se runner.SigninExecer, run t
 // and a later end may claim the row from it.
 const signinEndHold = 6 * time.Minute
 
+// signinBeginHold bounds a begin's steps up to its pause record
+// (handleBeginDesktopSignin): its SIGSTOP and the record's write run within it,
+// and pause-agent between them within signinExecTimeout. An end leaves a row
+// with no pause record to its begin for twice as long (handleEndDesktopSignin),
+// a margin for the clocks of two replicas.
+var signinBeginHold = 3 * time.Minute
+
 // signinStageEnding is the end_stage of a row an end has claimed:
 // "ending:<the unix second its hold passes>".
 const signinStageEnding = "ending"

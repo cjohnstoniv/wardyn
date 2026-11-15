@@ -403,7 +403,11 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		fail(0, "", "", "pause", runner.ErrSigninUnsupported)
 		return
 	}
-	if err := se.SignalMain(ctx, run.SandboxRef, "SIGSTOP"); err != nil {
+	// The SIGSTOP and the pause record's write run within signinBeginHold
+	// (handleEndDesktopSignin).
+	pctx, pcancel := context.WithTimeout(ctx, signinBeginHold)
+	defer pcancel()
+	if err := se.SignalMain(pctx, run.SandboxRef, "SIGSTOP"); err != nil {
 		if !errors.Is(err, runner.ErrSigninUnsupported) {
 			// Any other answer can follow a stop that landed, or come before one dockerd
 			// still applies: continue pid 1 and close the row, as when pause-agent never ran.
@@ -434,7 +438,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		pauseRec = []byte(`{}`)
 	}
 	si.PauseRecord = pauseRec
-	if err := st.SetDesktopSigninPauseRecord(ctx, si.ID, pauseRec); err != nil {
+	if err := st.SetDesktopSigninPauseRecord(pctx, si.ID, pauseRec); err != nil {
 		s.rollbackDesktopSignin(ctx, run, si, principal)
 		fail(http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded; Wardyn resumes the agent, or ends the run if it cannot", "record", err)
 		return
@@ -708,6 +712,8 @@ func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store
 // When the display cannot be proven closed, or the agent cannot be resumed
 // after it, the agent stays stopped and the sweep retries.
 // Another end of the same sign-in still running answers 409, as one whose end was asked for does.
+// So does a sign-in whose begin has not yet recorded what it stopped: an end before
+// the begin's SIGSTOP would close the row, and the stop would land with none open.
 func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
@@ -717,6 +723,10 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 	_, principal := actorFromRequest(r)
 	si, ok := s.heldSignin(w, ctx, st, run, principal)
 	if !ok {
+		return
+	}
+	if len(si.PauseRecord) == 0 && s.cfg.Now().Before(si.BeganAt.Add(2*signinBeginHold)) {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninStarting, "the sign-in is still starting; ask for its end again (refused this way for at most 6 minutes after the sign-in began)")
 		return
 	}
 	if err := s.finishDesktopSignin(ctx, run, si, signinEndDone, types.ActorHuman, principal); err != nil {
