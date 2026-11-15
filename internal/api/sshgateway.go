@@ -649,8 +649,10 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		return // unreachable in practice: sshAuth only succeeds after parsing this
 	}
 
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The connection ends while the daemon runs: the client's end (sshClientClosedFirst). A daemon stop ends ctx
+	// first, so connCtx then keeps ctx's own cause.
+	connCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errSSHChannelClosed)
 	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() {
 		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
