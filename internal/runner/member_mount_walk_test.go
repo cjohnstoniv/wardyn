@@ -44,6 +44,7 @@ func wantWalkGaveUp(t *testing.T, dir *os.Root, err error, src string) {
 		_ = dir.Close()
 	}
 	if dir != nil || !errors.Is(err, errMemberSourceRefused) || errors.As(err, new(*StaleWorkspaceError)) ||
+		!strings.Contains(err.Error(), "could not be followed on this host") || !strings.Contains(err.Error(), src) ||
 		strings.Contains(err.Error(), "payroll") {
 		t.Errorf("OpenScanSource(%s) = %v, %v; want no handle and the refusal for a folder the walk could not follow", src, dir, err)
 	}

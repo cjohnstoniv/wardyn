@@ -359,7 +359,7 @@ var errScanHoldersUnread = errors.New("list the workspaces that attach the folde
 // a server fault (500 with reasonWorkspaceSourcesListUnavailable), as it is at the scan doors. Its cause goes to
 // the log, never into the answer.
 func workspaceListUnread(ctx context.Context, err error) error {
-	return errors.New(loggedMsg(ctx, "list workspaces", err))
+	return errors.New(loggedMsg(ctx, "the workspace list could not be read", err))
 }
 
 // scanRefusalFor is an openScanSource refusal as r's caller reads it. A member

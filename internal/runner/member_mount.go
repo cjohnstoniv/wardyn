@@ -165,7 +165,7 @@ type ScanHolder struct{ Owner, Workspace string }
 // refusal, its cause in the operator's log. At an operator's door a folder no root holds and no member
 // workspace attaches gets no handle and no error, and the caller reads it by its path.
 // One the walk cannot follow (a link loop, more than memberWalkLinks links, or a name on its way
-// that cannot be read) while a member workspace attaches it is refused for that, never as that
+// that is missing or cannot be read) while a member workspace attaches it is refused for that, never as that
 // person's narrowed roots.
 func (p UserMountPolicy) OpenScanSource(owner, src string, holders []ScanHolder, open func(real string) (*os.Root, error)) (*os.Root, error) {
 	at, held, gaveUp := p.memberLocation(src)
@@ -243,7 +243,9 @@ func (e *StaleWorkspaceError) Unwrap() error { return errMemberSourceRefused }
 // roots are not the cause. The cause goes to the operator's log; the refusal names no workspace.
 func walkGaveUp(src string, cause error) error {
 	slog.Warn("runner: member mount source refused", slog.String("source", src), slog.Any("err", cause))
-	return errMemberSourceRefused
+	return fmt.Errorf("%w: the folder %q could not be followed on this host (a link loop, more than %d links, or a name on its way that is missing or could not be read) "+
+		"while a member workspace attaches it, so no scan of it can run; fix the folder's path on this host, or remove it from every member workspace that attaches it",
+		errMemberSourceRefused, src, memberWalkLinks)
 }
 
 // memberWalkLinks is how many links memberLocation follows before it gives up: filepath.EvalSymlinks'
@@ -260,7 +262,7 @@ const memberWalkLinks = 255
 // looks below it, where a member can make any folder a link; a bind or second mount of a folder
 // below a root is not that root, and the walk goes on through it. held is empty when the walk meets
 // no root or cannot go on; gaveUp is set only in the second case, with why: a name on the way that
-// cannot be read, or more than memberWalkLinks links (a loop among them).
+// is missing or cannot be read, or more than memberWalkLinks links (a loop among them).
 func (p UserMountPolicy) memberLocation(src string) (at string, held []string, gaveUp error) {
 	all := p.allRoots()
 	holding := func(at string) []string {
