@@ -23,6 +23,11 @@ const recordingOutputSource = "recording"
 // rather than failing: the work stays pending for a later attempt.
 var errRecordingOutputOverBudget = errors.New("recording output read outlived its budget")
 
+// errRecordingOutputUnavailable is a source read that failed, not on its deadline and not with an answer (the
+// recording erased, missing or invalid): a part that cannot be read, or a store that does not answer. The work
+// stays pending for a later attempt, and a stale row settles on it only past recordingOutputReadGiveUp.
+var errRecordingOutputUnavailable = errors.New("recording output source is temporarily unavailable")
+
 // recordingOutputEnabled is whether run's output is read from its recording:
 // only a recorded run whose own runner keeps no tail (execOutputCapture). A run
 // whose tail this process holds reads that tail, so a recording that yields
@@ -86,8 +91,8 @@ func (s *Server) finalizeRecordingOutput(ctx context.Context, st store.RunOutput
 }
 
 // recordingOutputReadGiveUp is how long after a run ended (its ended_at, else its last update) a stale pending
-// row keeps waiting on a recording whose read runs over its budget (outputRecoverWait) on every try: about six
-// tries at the claim's five-minute cooldown (runOutputPendingStale). Past it the row becomes a capture gap;
+// row keeps waiting on a recording whose read runs over its budget (outputRecoverWait) or fails on every try: about
+// six tries at the claim's five-minute cooldown (runOutputPendingStale). Past it the row becomes a capture gap;
 // agentCastReadGiveUp is the same bound for the cast obligation.
 const recordingOutputReadGiveUp = 30 * time.Minute
 
@@ -114,10 +119,10 @@ func (s *Server) recordingReadGaveUp(ctx context.Context, st store.RunOutputStor
 }
 
 // settleStaleRecordingOutput is finalizeRecordingOutput for a stale pending row. A recording that can never give
-// the output (erased), or whose read runs over its budget on a try made recordingOutputReadGiveUp or more after the
-// run ended, turns the row into a capture gap with that reason; a later read of the recording that succeeds still
-// replaces it. A read cut short by the pass's own deadline, an unavailable source or a transient error leaves the
-// row pending for the next sweep.
+// the output (erased), or whose read runs over its budget or cannot be read on a try made recordingOutputReadGiveUp
+// or more after the run ended, turns the row into a capture gap with that reason; a later read of the recording
+// that succeeds still replaces it. A read cut short by the pass's own deadline, or a transient error before the
+// give-up, leaves the row pending for the next sweep.
 func (s *Server) settleStaleRecordingOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun) {
 	err := s.finalizeRecordingOutput(ctx, st, run)
 	switch {
@@ -125,6 +130,8 @@ func (s *Server) settleStaleRecordingOutput(ctx context.Context, st store.RunOut
 		s.writeGapRow(ctx, st, run.ID, "recording_erased")
 	case errors.Is(err, errRecordingOutputOverBudget) && ctx.Err() == nil && s.recordingReadGaveUp(ctx, st, run.ID):
 		s.writeGapRow(ctx, st, run.ID, "recording_over_budget")
+	case errors.Is(err, errRecordingOutputUnavailable) && ctx.Err() == nil && s.recordingReadGaveUp(ctx, st, run.ID):
+		s.writeGapRow(ctx, st, run.ID, "recording_unavailable")
 	}
 }
 
@@ -147,7 +154,7 @@ func (s *Server) recoverRecordingOutput(ctx context.Context, st store.RunOutputS
 		case "recording_over_budget":
 			return errRecordingOutputOverBudget
 		case "recording_unavailable":
-			return errors.New("recording output source is temporarily unavailable")
+			return errRecordingOutputUnavailable
 		case "recording_erased":
 			if _, err := st.EraseRecordingRunOutputs(ctx, []uuid.UUID{run.ID}); err != nil {
 				return err
