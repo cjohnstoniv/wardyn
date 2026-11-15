@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -174,7 +175,7 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	out, queued, err := queueRunnerActionTx(ctx, tx, a)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
@@ -191,7 +192,7 @@ func (s PG) QueueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind ty
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var runID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM agent_runs WHERE runner_id = $1 AND sandbox_ref = $2 AND sandbox_ref <> ''`, runnerID, ref).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -378,7 +379,7 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	// The subject is immutable, so reading it before any lock is safe; an
 	// asserted subject has no run row to lock.
 	var asserted bool
@@ -507,7 +508,7 @@ func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, ses
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var claimed bool
 	err = tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
 	if errors.Is(err, pgx.ErrNoRows) {

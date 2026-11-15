@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // PgxStore adapts a *pgxpool.Pool to the broker's TxBeginner/Tx surface so the
@@ -33,7 +35,7 @@ func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		_ = tx.Rollback(context.Background())
+		db.Rollback(ctx, tx)
 		return nil, fmt.Errorf("broker: pin read committed: %w", err)
 	}
 	return &pgxTx{tx: tx}, nil

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/google/uuid"
 )
@@ -27,7 +28,7 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+			db.Rollback(ctx, tx)
 			b.discardMinted(ctx, caller.RunID, grantID, minted)
 		}
 	}()

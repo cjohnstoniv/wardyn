@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -73,7 +74,7 @@ func sweepRetiredADOSharedCredentials(ctx context.Context, pool *pgxpool.Pool, s
 	if err != nil {
 		return fmt.Errorf("refusing to start: lock the Azure DevOps credential sweep marker: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	// Read again under the lock: another boot may have finished the sweep while this one waited.
 	err = tx.QueryRow(ctx, `SELECT done_at IS NULL FROM boot_once WHERE name = $1 FOR UPDATE`, adoSharedRetireMarker).Scan(&pending)
 	if err != nil {

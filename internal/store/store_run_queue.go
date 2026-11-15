@@ -110,7 +110,7 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	if err != nil {
 		return types.AgentRun{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if guarded {
 		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return types.AgentRun{}, err

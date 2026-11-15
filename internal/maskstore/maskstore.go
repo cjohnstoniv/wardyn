@@ -36,6 +36,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -129,7 +130,7 @@ func (s *Store) commit(ctx context.Context, fn func(tx pgx.Tx, gen int64) error)
 	if err != nil {
 		return 0, fmt.Errorf("maskstore: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	var gen int64
 	if err := tx.QueryRow(ctx, `UPDATE mask_gen SET gen = gen + 1 RETURNING gen`).Scan(&gen); err != nil {
 		return 0, fmt.Errorf("maskstore: take a generation: %w", err)
@@ -494,7 +495,7 @@ func (s *Store) prune(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("maskstore: begin prune: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	var top *int64
 	if err := tx.QueryRow(ctx,
 		`WITH gone AS (DELETE FROM mask_values WHERE tombstone AND updated_at < now() - make_interval(secs => $1) RETURNING gen)

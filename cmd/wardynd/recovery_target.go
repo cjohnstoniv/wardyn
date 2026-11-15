@@ -66,7 +66,7 @@ func holdLiveLock(ctx context.Context, live *pgxpool.Pool, key int64) (bool, fun
 	if err != nil {
 		return false, func() {}, fmt.Errorf("begin the live probe: %w", err)
 	}
-	release := func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }
+	release := func() { db.Rollback(ctx, tx) }
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
 		return false, release, fmt.Errorf("take the live probe lock: %w", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -156,7 +157,7 @@ func (s PG) QueueRunNodeRecord(ctx context.Context, rec RunNodeRecordWrite) (typ
 	if err != nil {
 		return types.RunnerPendingAction{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	a, err := queueRunNodeRecordTx(ctx, tx, rec)
 	if err != nil {
 		return types.RunnerPendingAction{}, err

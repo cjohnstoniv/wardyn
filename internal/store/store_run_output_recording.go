@@ -249,7 +249,7 @@ func (s PG) EraseRecordingRunOutputs(ctx context.Context, runIDs []uuid.UUID) (i
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // no-op after commit
+	defer db.Rollback(ctx, tx) // no-op after commit
 	for _, id := range ids {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.RunOutputLockClass, runOutputLockKey(id)); err != nil {
 			return 0, err

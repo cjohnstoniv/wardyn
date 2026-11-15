@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -78,7 +79,7 @@ func (s PG) ConsumeRunnerRegistrationToken(ctx context.Context, raw, orgHash str
 	if err != nil {
 		return types.RunnerRegistrationToken{}, false, fmt.Errorf("store: begin runner registration token spend: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	var owner string
 	err = tx.QueryRow(ctx, `SELECT owner FROM runner_registration_tokens
  WHERE token_sha256=$1 AND org_url_sha256=$2 AND consumed_at IS NULL AND expires_at>$3 FOR UPDATE`, hashToken(raw), orgHash, now).Scan(&owner)

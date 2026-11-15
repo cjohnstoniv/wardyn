@@ -74,7 +74,7 @@ func (s PG) BeginResidentDelivery(ctx context.Context, runID, runnerID, holder u
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	_, run, _, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
 	if err != nil {
 		return err
@@ -199,7 +199,7 @@ func (s PG) AbandonResidentErase(ctx context.Context, now time.Time,
 	if err != nil {
 		return 0, fmt.Errorf("store: begin abandon resident erase: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	type abandoned struct {
 		run, runner uuid.UUID
 		reason      string

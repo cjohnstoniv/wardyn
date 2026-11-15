@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -168,7 +169,7 @@ func (s *Store) commitMigration(ctx context.Context, target string, before rowSn
 	if err != nil {
 		return loc, err
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := replaceSnapshot(ctx, tx, before, after); err != nil {
 		return loc, err
 	}

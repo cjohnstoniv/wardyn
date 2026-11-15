@@ -98,7 +98,7 @@ func (s PG) ClearSandboxRefRetaining(ctx context.Context, runID uuid.UUID) error
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var runnerID *uuid.UUID
 	var ref string
 	err = tx.QueryRow(ctx, `SELECT runner_id, sandbox_ref FROM agent_runs WHERE id = $1`, runID).Scan(&runnerID, &ref)
@@ -135,7 +135,7 @@ func (s PG) ClearSandboxRefRetainingIf(ctx context.Context, runID uuid.UUID, ref
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var runnerID *uuid.UUID
 	var cur string
 	err = tx.QueryRow(ctx, `SELECT runner_id, sandbox_ref FROM agent_runs WHERE id = $1`, runID).Scan(&runnerID, &cur)
@@ -323,7 +323,7 @@ func (s PG) AdvanceRunnerRetirement(ctx context.Context, runID uuid.UUID,
 	if err != nil {
 		return RetirementIdle, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var runnerID *uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT runner_id FROM agent_runs WHERE id = $1`, runID).Scan(&runnerID)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && runnerID == nil) {
@@ -586,7 +586,7 @@ func (s PG) AbandonRevokedRunnerRetirements(ctx context.Context, prepare func(co
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	rows, err := collect(ctx, tx, "list", "revoked runner retirements", `SELECT t.run_id, t.runner_id, t.obligation_id FROM runner_retirements t
 		JOIN runners rn ON rn.id = t.runner_id WHERE t.state IN ('kill', 'retire') AND (rn.revoked_at IS NOT NULL OR rn.state <> 'claimed')
 		ORDER BY t.run_id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`, nil, func(row pgx.Row) (runnerRetirement, error) {
