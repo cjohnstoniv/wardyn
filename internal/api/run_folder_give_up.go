@@ -87,18 +87,40 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 	return s.giveUpFolderWith(ctx, run, st, note, p)
 }
 
+// unreadOwed is folderOwed for a terminal run whose folder record cannot be read, decided without decoding it: the
+// owed checks that need no record (folderOwed on the empty record) say it is owed, or the stored record holds a
+// resume (store.RunLocalFolderResumes), for which keepsSandboxForFolder keeps a sandbox whatever the run's state. The
+// second half is a killed run's, which the first never counts: a run killed under a release that still ran its pass
+// back at a kill can hold one. A store without the resume read holds none. An error is a seed, rule or resume read
+// that failed, and no answer.
+func (s *Server) unreadOwed(ctx context.Context, run types.AgentRun) (bool, error) {
+	owed, err := s.folderOwed(ctx, run, types.RunLocalFolderStatus{})
+	if err != nil || owed {
+		return owed, err
+	}
+	rs, ok := s.cfg.Store.(store.RunLocalFolderResumes)
+	if !ok {
+		return false, nil
+	}
+	return rs.RunLocalFolderHoldsResume(ctx, run.ID)
+}
+
 // giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep
-// (reconcileOrphanedRun), the forced stop's retry (retryForcedStop) or a run's end tail (giveUpFolderEnded)
-// stopped, and whose ref the caller is about to clear: with no ref no pass runs again, so the keep ends now
-// (a zero cap) and the final record and its given_up row keep what was left behind. final says the ref may be
-// cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two halves), or
-// the record is final. A read that fails is decided as the tail owner decides it (tailStepOf): a record that cannot
-// be read, on a run that the owed checks needing no record say owes nothing, is final; otherwise a record, folder
-// seed or data_out rule that cannot be read has the copy back given up once its keep has run out (noted
-// folderStatusUnreadable or folderRuleUnreadable), by the statement that also finds a record already final without
-// decoding it. Inside the keep that is not final, so a read that fails for a while throws no count away. Not final
-// whatever the keep, a read that never answers would keep the ref for good, and a forced-marked run's retry, which
-// the tail owner passes over, would stop its sandbox again on every tick.
+// (reconcileOrphanedRun), the forced stop's retry (retryForcedStop) or a run's end tail (giveUpFolderEnded, which the
+// tail owner's tails reach too) stopped, and whose ref the caller is about to clear: with no ref no pass runs again,
+// so the keep ends now (a zero cap) and the final record and its given_up row keep what was left behind. final says
+// the ref may be cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two
+// halves), or the record is final. A record that cannot be read is decided without decoding it (unreadOwed: the owed
+// checks that need no record, and whether the stored record holds a resume), at once and whatever the keep: a run
+// that owes nothing is final, and any other, or one whose reads fail, has its copy back given up, noted
+// folderStatusUnreadable, with the keep as its cap, so the database applies it only once the keep has run out. The
+// tail owner asks the record-free checks only past the keep (tailStepOf), since inside it the tail owner reads the
+// record again on its next tick, and a killed run's resume is given up here, at the end of the history tail it takes.
+// A folder seed or data_out rule that cannot be read has the copy back given up the same way, noted
+// folderRuleUnreadable, by the statement that also finds a record already final without decoding it. Inside the keep
+// that is not final, so a read that fails for a while throws no count away. Not final whatever the keep, a read that
+// never answers would keep the ref for good, and a forced-marked run's retry, which the tail owner passes over, would
+// stop its sandbox again on every tick.
 func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
@@ -109,7 +131,7 @@ func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (f
 	case errors.Is(err, store.ErrNotFound):
 		return true, nil
 	case err != nil:
-		if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
+		if owed, oerr := s.unreadOwed(ctx, run); oerr == nil && !owed {
 			return true, nil
 		}
 		return s.giveUpFolderNoted(ctx, run, false, types.RunLocalFolderStatus{}, folderStatusUnreadable)

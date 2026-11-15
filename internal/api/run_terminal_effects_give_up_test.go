@@ -169,8 +169,9 @@ func TestFinalizeRunEffects_AKeptSandboxItCannotQuiesceIsGivenUpWithItsCount(t *
 	}
 }
 
-// unreadableAfterStopStore is endGiveUpFixture's store whose folder record cannot be read once down is set, and
-// whose give-up answers Done for a record already final, as the statement reads it without decoding it.
+// unreadableAfterStopStore is endGiveUpFixture's store whose folder record cannot be read once down is set, whose
+// give-up answers Done for a record already final, and whose resume read answers from the stored record, as the
+// statement and that read take it without decoding it.
 type unreadableAfterStopStore struct {
 	refAtEndGiveUpStore
 	down *atomic.Bool
@@ -193,12 +194,20 @@ func (s unreadableAfterStopStore) GiveUpRunLocalFolder(ctx context.Context, id u
 	return out, err
 }
 
+func (s unreadableAfterStopStore) RunLocalFolderHoldsResume(context.Context, uuid.UUID) (bool, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.status.Resume != nil, nil
+}
+
 // A run's end tail whose folder record cannot be read once the sandbox is stopped decides it as the tail owner
 // does: past the keep the copy back is given up here, noted that the record could not be read, or found already
-// final, and the ref is cleared; inside the keep the ref is kept with an error; a killed run owes nothing and its
-// ref is cleared with no give-up. A folder seed that cannot be read either changes none of that. Catches: a record
-// that never reads keeping a stopped sandbox's ref for good, so that the tail owner's give-up past the keep stops the
-// sandbox again on every tick.
+// final, and the ref is cleared; inside the keep the ref is kept with an error. A killed run is decided by whether
+// its stored record holds a resume, read without decoding it: one that holds a resume is given up the same way, and
+// one that holds none owes nothing, its ref cleared with no give-up. A folder seed that cannot be read either
+// changes none of that. Catches: a record that never reads keeping a stopped sandbox's ref for good, so that the
+// tail owner's give-up past the keep stops the sandbox again on every tick; and a killed run's resume dropped with
+// no given_up row because its record does not decode.
 func TestFinalizeRunEffects_AnUnreadableRecordIsDecidedAsTheTailOwnerDecidesIt(t *testing.T) {
 	at := time.Now().UTC()
 	givenUp := types.RunLocalFolderStatus{Gen: 4, Settled: 4, Back: &types.FolderPassRecord{At: at, Refused: []types.FolderRefusal{}, GivenUpAt: &at}}
@@ -215,7 +224,9 @@ func TestFinalizeRunEffects_AnUnreadableRecordIsDecidedAsTheTailOwnerDecidesIt(t
 		{"past the keep, given up here", types.RunCompleted, keptForCopyBack(), true, 1, 1, true, false},
 		{"past the keep, already given up by the tail owner", types.RunCompleted, givenUp, true, 1, 0, true, false},
 		{"inside the keep", types.RunCompleted, keptForCopyBack(), false, 1, 0, false, false},
-		{"a killed run owes nothing", types.RunKilled, keptForCopyBack(), true, 0, 0, true, false},
+		{"a killed run holding a resume, past the keep", types.RunKilled, keptForCopyBack(), true, 1, 1, true, false},
+		{"a killed run holding a resume, inside the keep", types.RunKilled, keptForCopyBack(), false, 1, 0, false, false},
+		{"a killed run holding no resume owes nothing", types.RunKilled, types.RunLocalFolderStatus{Gen: 3, Settled: 3}, true, 0, 0, true, false},
 		{"past the keep, already given up, its seed unreadable too", types.RunCompleted, givenUp, true, 1, 0, true, true},
 		{"inside the keep, its seed unreadable too", types.RunCompleted, keptForCopyBack(), false, 1, 0, false, true},
 	} {
