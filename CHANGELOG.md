@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.21] — 2026-11-15
+
 ### Added
 
 - `/metrics` has a new counter, `wardyn_lock_holds_over_limit_total`: holds of a run's lock that ran past 10 minutes. Each such hold is also logged at WARN with the functions that took the lock, and again with its length when it is released. The watchdog never frees the lock or cancels the holder's work.
