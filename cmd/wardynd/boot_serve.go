@@ -416,10 +416,10 @@ const forwarderJoinWait = 5 * time.Second
 // orgFederation is nil unless hybrid enrolment (issue #103) is on; when set,
 // it is joined (not merely cancelled) before this returns, so the process
 // never exits while its goroutine might still be logging or touching the
-// store. cleanUpsWaited reports that the shutdown sequence waited for the
+// store. cleanUpsBy is the deadline of the shutdown sequence's wait for the
 // secret store's clean-ups; a serve error returns before that wait, so it is
-// false there.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) (cleanUpsWaited bool, err error) {
+// zero there.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) (cleanUpsBy time.Time, err error) {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -490,7 +490,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	case <-rootCtx.Done():
 		slog.Info("wardynd: shutdown signal received")
 	case err := <-errCh:
-		return false, fmt.Errorf("serve: %w", err)
+		return time.Time{}, fmt.Errorf("serve: %w", err)
 	}
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
@@ -503,17 +503,16 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, secretstorepg.WaitForCleanUps, orgFederation)
 }
 
-// cleanUpWaitAfterServe is how long run's deferred CloseAfterCleanUps still
-// waits once serveAndShutdown has returned. None when the shutdown sequence
-// already waited within its budget: a second wait would run past the
-// termination grace, so whatever started since is cut at once. The whole
-// budget otherwise (a serve that failed at once), so the clean-ups the boot's
-// Puts left are still waited for.
-func cleanUpWaitAfterServe(cleanUpsWaited bool) time.Duration {
-	if cleanUpsWaited {
-		return 0
+// cleanUpWaitAfterServe is how long run's deferred CloseAfterCleanUps waits,
+// given the deadline of the shutdown sequence's own wait for the clean-ups.
+// Until that deadline after a shutdown: a clean-up started after that wait
+// looked is still waited for, on the same deadline. The whole budget when no
+// shutdown wait ran (a serve that failed at once), for the boot's Puts.
+func cleanUpWaitAfterServe(cleanUpsBy time.Time) time.Duration {
+	if cleanUpsBy.IsZero() {
+		return api.BackgroundShutdownBudget
 	}
-	return api.BackgroundShutdownBudget
+	return max(0, time.Until(cleanUpsBy))
 }
 
 // httpShutdowner is the *http.Server surface runShutdownSequence drives,
@@ -542,7 +541,7 @@ type backgroundServer interface {
 // fails and prove WaitBackground/FlushAuthFailedStreak still ran
 // (TestRunShutdownSequence*) — TestServeShutdownOrder used to pin the same
 // invariant by walking serveAndShutdown's AST for call order.
-func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, waitCleanUps func(context.Context) error, orgFederation *federation.Forwarder) (cleanUpsWaited bool, err error) {
+func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, waitCleanUps func(context.Context) error, orgFederation *federation.Forwarder) (cleanUpsBy time.Time, err error) {
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
@@ -576,6 +575,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	// secretstorepg.WaitForCleanUps, passed in so a test can see it run.
 	cleanCtx, stopCleanWait := context.WithTimeout(context.Background(), api.BackgroundShutdownBudget)
 	defer stopCleanWait()
+	cleanUpsBy, _ = cleanCtx.Deadline()
 	cleaned := make(chan error, 1)
 	go func() { cleaned <- waitCleanUps(cleanCtx) }()
 	srv.WaitBackground()
@@ -612,7 +612,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	srv.FlushAuthFailedStreak()
 
 	if shutErr != nil {
-		return true, fmt.Errorf("shutdown: %w", shutErr)
+		return cleanUpsBy, fmt.Errorf("shutdown: %w", shutErr)
 	}
-	return true, nil
+	return cleanUpsBy, nil
 }

@@ -263,8 +263,8 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 	}
 	// A serve that fails at once never reached the clean-up wait: run's close must
 	// still wait the whole budget for the clean-ups the boot's Puts left.
-	if waited || cleanUpWaitAfterServe(waited) != api.BackgroundShutdownBudget {
-		t.Errorf("after a serve error: cleanUpsWaited %v, run's close waits %v; want false and %v", waited, cleanUpWaitAfterServe(waited), api.BackgroundShutdownBudget)
+	if !waited.IsZero() || cleanUpWaitAfterServe(waited) != api.BackgroundShutdownBudget {
+		t.Errorf("after a serve error: the clean-up wait's deadline %v, run's close waits %v; want none and %v", waited, cleanUpWaitAfterServe(waited), api.BackgroundShutdownBudget)
 	}
 
 	mu.Lock()

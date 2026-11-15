@@ -80,11 +80,11 @@ func (f *fakeCleanUpWait) wait(ctx context.Context) error {
 }
 
 // checkCleanUpWait fails unless the clean-up wait ran beside WaitBackground,
-// within the background budget, and runShutdownSequence reported it.
-func checkCleanUpWait(t *testing.T, cw *fakeCleanUpWait, waited bool) {
+// within the background budget, and runShutdownSequence reported its deadline.
+func checkCleanUpWait(t *testing.T, cw *fakeCleanUpWait, by time.Time) {
 	t.Helper()
-	if !waited {
-		t.Error("runShutdownSequence reported no clean-up wait, so run's deferred close would wait the whole budget again")
+	if len(cw.deadlines) == 0 || !by.Equal(cw.deadlines[0]) {
+		t.Errorf("runShutdownSequence reported %v as the clean-up wait's deadline; want the deadline that wait ran on (%v)", by, cw.deadlines)
 	}
 	if cw.left <= 0 || cw.left > api.BackgroundShutdownBudget {
 		t.Errorf("the clean-up wait's ctx left %v; want a deadline within api.BackgroundShutdownBudget (%v)", cw.left, api.BackgroundShutdownBudget)
@@ -107,8 +107,8 @@ func TestRunShutdownSequence_WaitsForBackgroundEvenWhenHTTPDrainFails(t *testing
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{err: drainErr, log: &log}, bg, cw.wait, nil)
-	checkCleanUpWait(t, cw, waited)
+	by, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{err: drainErr, log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, by)
 
 	if !errors.Is(err, drainErr) {
 		t.Fatalf("runShutdownSequence returned %v, want an error wrapping %v", err, drainErr)
@@ -130,8 +130,8 @@ func TestRunShutdownSequence_SucceedsWhenHTTPDrainSucceeds(t *testing.T) {
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
-	checkCleanUpWait(t, cw, waited)
+	by, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, by)
 
 	if err != nil {
 		t.Fatalf("runShutdownSequence returned %v, want nil", err)
@@ -153,8 +153,8 @@ func TestRunShutdownSequence_WaitsAgainForACleanUpTheBackgroundWorkStarted(t *te
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
-	checkCleanUpWait(t, cw, waited)
+	by, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, by)
 
 	if err != nil {
 		t.Fatalf("runShutdownSequence returned %v, want nil", err)
@@ -169,17 +169,35 @@ func TestRunShutdownSequence_WaitsAgainForACleanUpTheBackgroundWorkStarted(t *te
 
 // TestServeAndShutdown_ReportsTheCleanUpWaitAfterAShutdown: a shutdown runs
 // the sequence, which waits for the secret store's clean-ups, so run's
-// deferred close waits no more (a second wait would run past the grace).
+// deferred close waits only for what that wait's deadline leaves: a clean-up
+// started after the wait is still waited for, and the grace does not grow.
 func TestServeAndShutdown_ReportsTheCleanUpWaitAfterAShutdown(t *testing.T) {
 	addr, empty, no, trust := "127.0.0.1:0", "", false, "wardyn.local"
 	f := &bootFlags{listen: &addr, tlsCert: &empty, tlsKey: &empty, tlsTerminated: &no, trustDomain: &trust}
 	rootCtx, cancel := context.WithCancel(context.Background())
 	cancel() // the shutdown signal, already received
-	waited, err := serveAndShutdown(rootCtx, f, tlsPosture{}, api.New(api.Config{}), "none", nil, &audit.DenialCoalescer{}, nil, nil)
+	by, err := serveAndShutdown(rootCtx, f, tlsPosture{}, api.New(api.Config{}), "none", nil, &audit.DenialCoalescer{}, nil, nil)
 	if err != nil {
 		t.Fatalf("serveAndShutdown after a shutdown signal = %v; want nil", err)
 	}
-	if !waited || cleanUpWaitAfterServe(waited) != 0 {
-		t.Fatalf("after a shutdown: cleanUpsWaited %v, run's close waits %v; want true and 0", waited, cleanUpWaitAfterServe(waited))
+	if left := cleanUpWaitAfterServe(by); by.IsZero() || left <= 0 || left > api.BackgroundShutdownBudget {
+		t.Fatalf("after a shutdown: the clean-up wait's deadline %v leaves run's close %v; want a deadline with time left, within api.BackgroundShutdownBudget (%v)", by, left, api.BackgroundShutdownBudget)
+	}
+}
+
+// TestCleanUpWaitAfterServe_WaitsUntilTheShutdownWaitsDeadline: run's
+// deferred close waits the whole budget when no shutdown wait ran, what is
+// left of that wait's deadline when one did, and nothing once it has passed.
+// Catches: a close that waits nothing after a shutdown, which cuts a clean-up
+// started after the shutdown's wait looked, with time left before its deadline.
+func TestCleanUpWaitAfterServe_WaitsUntilTheShutdownWaitsDeadline(t *testing.T) {
+	if got := cleanUpWaitAfterServe(time.Time{}); got != api.BackgroundShutdownBudget {
+		t.Errorf("with no shutdown wait, run's close waits %v; want api.BackgroundShutdownBudget (%v)", got, api.BackgroundShutdownBudget)
+	}
+	if got := cleanUpWaitAfterServe(time.Now().Add(time.Minute)); got <= 50*time.Second || got > time.Minute {
+		t.Errorf("a minute before the shutdown wait's deadline, run's close waits %v; want what is left of that minute", got)
+	}
+	if got := cleanUpWaitAfterServe(time.Now().Add(-time.Second)); got != 0 {
+		t.Errorf("past the shutdown wait's deadline, run's close waits %v; want 0", got)
 	}
 }
