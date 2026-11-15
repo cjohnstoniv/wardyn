@@ -354,7 +354,7 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/api.test"
           free -m; df -h /
-          echo "internal/api compiles left for the next step: $(go test -n ${{ matrix.build }} ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ${{ matrix.build }} ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
@@ -490,7 +490,7 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/api.test"
           free -m; df -h /
-          echo "internal/api compiles left for the next step: $(go test -n ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
@@ -2007,7 +2007,7 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/api.test"
           free -m; df -h /
-          echo "internal/api compiles left for the next step: $(go test -n -tags docker ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n -tags docker ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -2681,7 +2681,7 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/api.test"
           free -m; df -h /
-          echo "internal/api compiles left for the next step: $(go test -n ${{ matrix.prebuild == 'race' && '-race' || '' }} ./internal/api/ 2>&1 | grep -c '/compile ' || true)"
+          echo "internal/api compiles left for the next step, testmain aside: $(go test -n ${{ matrix.prebuild == 'race' && '-race' || '' }} ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
       - name: Postgres-gated suite (${{ matrix.shard }})
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
