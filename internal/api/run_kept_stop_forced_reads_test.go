@@ -145,3 +145,42 @@ func TestGiveUpForcedPastKeep_InsideTheKeepReadsOnlyTheKeepsAnswer(t *testing.T)
 		t.Errorf("reads %v, %d give-ups inside the keep; want only the keep's answer and no give-up", got, len(f.cs.giveUps))
 	}
 }
+
+// The give-up statement answers Done for a record already final, as Postgres's does, and the give-up is then final
+// with no read of the record again; a statement that applied nothing to a record still owed reads it once, and is not
+// final. Catches: a fake whose losing statement answers Done=false for a final record, so a race between two give-ups
+// pins the re-read and never the Done answer.
+func TestGiveUpFolderWith_ADoneAnswerIsFinalWithNoReread(t *testing.T) {
+	at := time.Now()
+	givenUp := types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: "given up", GivenUpAt: &at}}
+	for _, tc := range []struct {
+		name           string
+		rec            types.RunLocalFolderStatus
+		applies, final bool
+		rereads        int
+	}{
+		{"a record already final", givenUp, true, true, 0},
+		{"a record still owed that the statement does not apply to", owedCounted(), false, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			f.setRecord(tc.rec)
+			f.cs.giveUpApplies = tc.applies
+			reads := f.logReads()
+			final, err := f.s.giveUpFolderWith(context.Background(), f.terminalRun(t), tc.rec, "", store.GiveUpParams{})
+			rereads := 0
+			for _, r := range reads() {
+				if r == "record" {
+					rereads++
+				}
+			}
+			if final != tc.final || err != nil || len(f.cs.giveUps) != 1 || rereads != tc.rereads {
+				t.Errorf("final %v, err %v, %d statements, %d re-reads; want %v, nil, 1, %d", final, err, len(f.cs.giveUps), rereads, tc.final, tc.rereads)
+			}
+			if rec := f.cs.folderStatus(); rec.Gen != tc.rec.Gen {
+				t.Errorf("record at generation %d; want %d: the statement applied nothing", rec.Gen, tc.rec.Gen)
+			}
+		})
+	}
+}
