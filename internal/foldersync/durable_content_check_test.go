@@ -173,3 +173,26 @@ func TestPass_AnEditorsBackupRenameWhereTheCopysNumberChangedIsNamed(t *testing.
 		t.Errorf("laptop %s = %q, backup %q, refusal %q: want both kept and the name named, since the number did not hold", name, got, backup, reason)
 	}
 }
+
+// An editor's save renamed over a copy whose number changed after its create, and that then fails, is never named as
+// the copy's partial copy: the number did not hold, but the copy's handle has no name left. Catches a save called the
+// partial copy wherever the create-time number is not trusted.
+func TestPass_AnEditorsSaveOverAFailedCopyWhoseNumberChangedIsNotNamedAsItsPartialCopy(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	idSettlesOnSync(t, name, nil)
+	sync := fsyncFile
+	onSync(t, func(f *os.File) error {
+		if filepath.Base(f.Name()) != name {
+			return sync(f)
+		}
+		if err := sync(f); err != nil {
+			t.Fatal(err)
+		}
+		editorSave(t, root, name, "editor save")
+		return syscall.EIO
+	}, nil)
+	reason := refusedFor(pass(t, sy), name)
+	if got := getSyncFile(t, filepath.Join(root, name)); got != "editor save" || reason == "" || strings.Contains(reason, "its partial copy is left at") {
+		t.Errorf("laptop %s = %q, refusal %q: want the editor's save in place and a refusal that does not call it the partial copy", name, got, reason)
+	}
+}
