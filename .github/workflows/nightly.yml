@@ -274,8 +274,8 @@ jobs:
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
       # The -tags docker ./internal/api/ test compile for TestInternalHostsOnRunnerDocker needs about 21-22 GB at
-      # its peak, even with two workers (D643 measured it in CI), against this runner's 16 GB; the runner was shut
-      # down in the prebuild below (D642). Extra swap lets the peak page out, as in ci.yml's go job.
+      # its peak, even with two workers (measured in CI), against this runner's 16 GB; the runner was shut
+      # down in the prebuild below. Extra swap lets the peak page out, as in ci.yml's go job.
       - name: Add swap for the api compile
         run: |
           swapon --show
@@ -826,7 +826,7 @@ jobs:
         with:
           suite: docker
       # This job compiles the -tags docker ./internal/api/ tests, which need more memory at their peak than the
-      # hosted runner has (D643); extra swap lets the peak page out, as in the gvisor-cc2-live job.
+      # hosted runner has; extra swap lets the peak page out, as in the gvisor-cc2-live job.
       - name: Add swap for the api compile
         run: |
           swapon --show
