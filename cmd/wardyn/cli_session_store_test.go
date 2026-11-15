@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/zalando/go-keyring"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
@@ -381,8 +382,9 @@ func TestLoginOverAProfileThatCannotBeReadSignsOutTheOtherStore(t *testing.T) {
 
 // TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst: the keychain holds a sign-in the fallback
 // with no session bus could not remove, the file holds the one that replaced it, and the profile cannot be
-// read. A login to the keychain signs out the keychain's sign-in, which its put overwrites. A login that chose
-// the file because the keychain read failed signs out the file's sign-in and does not read the keychain again.
+// read. A login to the keychain signs out the keychain's sign-in, which its put overwrites, and the file's,
+// which it removes. A login that chose the file because the keychain read failed signs out the file's
+// sign-in and does not read the keychain again.
 func TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst(t *testing.T) {
 	for _, kind := range []string{types.CLIStoreKeychain, types.CLIStoreFile} {
 		t.Run(kind, func(t *testing.T) {
@@ -433,8 +435,13 @@ func TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst(t *testing.T)
 				defer f.mu.Unlock()
 				return f.sessions[it.SessionID].ended != ""
 			}
-			if !ended(replaced) || ended(other) {
-				t.Errorf("signed out: the %s sign-in %v, the other store's %v; want only the %s one", kind, ended(replaced), ended(other), kind)
+			// A login to the keychain reads the file too; a login to the file does not read the keychain, whose
+			// sign-in the next login to the keychain signs out.
+			if !ended(replaced) || ended(other) != (kind == types.CLIStoreKeychain) {
+				t.Errorf("signed out: the %s sign-in %v, the other store's %v; want the other store's only after a login to the keychain", kind, ended(replaced), ended(other))
+			}
+			if _, ok, err := (fileStore{dir}).get(f.srv.URL); kind == types.CLIStoreKeychain && (ok || err != nil) {
+				t.Errorf("the file still holds a sign-in after the login to the keychain (found=%v, %v)", ok, err)
 			}
 			if now, ok, err := storeFor(kind, dir).get(f.srv.URL); !ok || err != nil || now.SessionID == replaced.SessionID {
 				t.Errorf("the %s store still holds the replaced sign-in (found=%v, %v)", kind, ok, err)
@@ -486,6 +493,204 @@ func TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst(t *testing.T)
 			t.Errorf("the file holds no sign-in (found=%v, %v)", ok, err)
 		}
 	})
+}
+
+// TestLoginOverAProfileThatCannotBeReadSaysTheItemItCouldNotRead: a profile that cannot be read may have named
+// the store whose item the new sign-in overwrites. An item there that cannot be read is overwritten, as
+// before, and login now says it was not signed out, as it does when the profile names that store.
+func TestLoginOverAProfileThatCannotBeReadSaysTheItemItCouldNotRead(t *testing.T) {
+	for _, tc := range []struct {
+		kind   string
+		damage func(dir, org string) error
+		cause  func(dir string) string
+	}{
+		{types.CLIStoreKeychain, func(_, org string) error { return keyring.Set(cliKeyringService, org, "{") },
+			func(string) string { return "the keychain item for the CLI sign-in" + copyWasDamaged }},
+		{types.CLIStoreFile, func(dir, _ string) error {
+			return os.WriteFile(filepath.Join(dir, cliSessionFile), []byte("{"), 0o600)
+		}, func(dir string) string { return filepath.Join(dir, cliSessionFile) + copyWasDamaged }},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			f := newSignInOrg(t)
+			dir := cliEnv(t, nil)
+			openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+			if tc.kind == types.CLIStoreFile {
+				keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+			}
+			if err := os.MkdirAll(dir, 0o700); err != nil { // no login has made the profile directory yet
+				t.Fatal(err)
+			}
+			if err := tc.damage(dir, f.srv.URL); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, cliprofile.FileName), []byte("{"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+			want := fmt.Sprintf(copyPreviousNotEnded+"\n", tc.cause(dir))
+			if err != nil || strings.Count(stderr, want) != 1 {
+				t.Fatalf("login: %v, stderr %q; want it signed in with one line %q", err, stderr, want)
+			}
+			if _, ok, err := storeFor(tc.kind, dir).get(f.srv.URL); !ok || err != nil {
+				t.Errorf("the %s store holds no new sign-in (found=%v, %v)", tc.kind, ok, err)
+			}
+		})
+	}
+}
+
+// TestRunnerSetupSignInOverAProfileThatCannotBeReadSaysTheItemItCouldNotRead: the browser sign-in of
+// `wardyn runner setup` replaces the profile as `wardyn login` does, and says so as login does.
+func TestRunnerSetupSignInOverAProfileThatCannotBeReadSaysTheItemItCouldNotRead(t *testing.T) {
+	f := newSignInOrg(t)
+	dir := cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+	if err := os.MkdirAll(dir, 0o700); err != nil { // no login has made the profile directory yet
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, cliSessionFile)
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, cliprofile.FileName), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	var out, errOut strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetContext(t.Context())
+	want := fmt.Sprintf(copyPreviousNotEnded+"\n", path+copyWasDamaged)
+	if err := signInForSetup(cmd, f.srv.URL, false); err != nil || strings.Count(errOut.String(), want) != 1 {
+		t.Fatalf("sign-in: %v, stderr %q; want it signed in with one line %q", err, errOut.String(), want)
+	}
+}
+
+// TestALoginToTheKeychainSignsOutTheSignInALoginToTheFileLeft: the keychain holds a sign-in the fallback with
+// no session bus could not remove, the file holds the one that replaced it, and the profile cannot be read. A
+// login that chose the file because the keychain read failed signs out the file's sign-in (or, when the file
+// is damaged, says it could not) and does not read the keychain. The next login to the keychain reads the
+// keychain's sign-in before its put overwrites it, and signs it out.
+func TestALoginToTheKeychainSignsOutTheSignInALoginToTheFileLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		damaged bool
+	}{{"file readable", false}, {"file damaged", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			dir := cliEnv(t, nil)
+			approve := approveInBrowser(t, f, nil)
+			openBrowser = func(a string) error { go approve(a); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("keychain login: %v", err)
+			}
+			keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("file login: %v", err)
+			}
+			keychainReady = func() error { return nil }
+			left, ok, err := keychainStore{}.get(f.srv.URL)
+			if !ok || err != nil || f.liveSessions() != 2 {
+				t.Fatalf("want a live sign-in in each store: keychain %v %v, live %d", ok, err, f.liveSessions())
+			}
+			if tc.damaged {
+				if err := os.WriteFile(filepath.Join(dir, cliSessionFile), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, cliprofile.FileName), []byte("{"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := keyring.Get(cliKeyringService, f.srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keyring.MockInitWithError(errors.New("the keychain is locked")) // so the store chosen is the file
+			openBrowser = func(a string) error {
+				keyring.MockInit() // the keychain answers again once the store is chosen, still holding its sign-in
+				if err := keyring.Set(cliKeyringService, f.srv.URL, raw); err != nil {
+					t.Error(err)
+				}
+				go approve(a)
+				return nil
+			}
+			_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+			damagedLine := fmt.Sprintf(copyPreviousNotEnded+"\n", filepath.Join(dir, cliSessionFile)+copyWasDamaged)
+			if err != nil || strings.Contains(stderr, damagedLine) != tc.damaged {
+				t.Fatalf("login to the file: %v, stderr %q", err, stderr)
+			}
+			ended := func(it cliItem) bool {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				return f.sessions[it.SessionID].ended != ""
+			}
+			if ended(left) {
+				t.Fatal("the login to the file signed out the keychain's sign-in, which it does not read")
+			}
+			openBrowser = func(a string) error { go approve(a); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login to the keychain: %v", err)
+			}
+			// A damaged file's session cannot be read, so nothing here can sign it out; it ends on its own.
+			want := 1
+			if tc.damaged {
+				want = 2
+			}
+			if !ended(left) || f.liveSessions() != want {
+				t.Errorf("the keychain's sign-in signed out: %v, live sessions %d; want true and %d", ended(left), f.liveSessions(), want)
+			}
+			if _, ok, err := (fileStore{dir}).get(f.srv.URL); ok || err != nil {
+				t.Errorf("the file still holds a sign-in (found=%v, %v)", ok, err)
+			}
+		})
+	}
+}
+
+// TestALoginToTheKeychainSignsOutASignInLeftInTheFile: a sign-in the file still holds while the profile names
+// the keychain, such as one a store move could not remove, is signed out and removed by the next login to the
+// keychain, which reads the file as well.
+func TestALoginToTheKeychainSignsOutASignInLeftInTheFile(t *testing.T) {
+	f := newSignInOrg(t)
+	dir := cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("file login: %v", err)
+	}
+	keychainReady = func() error { return nil }
+	if err := cliprofile.WriteSessionStore(dir, f.srv.URL, types.CLIStoreKeychain); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, err := runCLI(t, "", "login", f.srv.URL); err != nil || strings.Contains(stderr, "could not be") {
+		t.Fatalf("keychain login: %v, stderr %q", err, stderr)
+	}
+	if n := f.liveSessions(); n != 1 {
+		t.Errorf("live sessions at the server = %d, want 1: the file's sign-in signed out", n)
+	}
+	if _, ok, err := (fileStore{dir}).get(f.srv.URL); ok || err != nil {
+		t.Errorf("the file still holds a sign-in (found=%v, %v)", ok, err)
+	}
+}
+
+// TestALoginToTheKeychainSaysWhenTheItemItOverwritesCannotBeRead: a keychain item is the organisation's alone,
+// so a login to the keychain that cannot read the item it overwrites says it was not signed out, even when the
+// profile names the file.
+func TestALoginToTheKeychainSaysWhenTheItemItOverwritesCannotBeRead(t *testing.T) {
+	f := newSignInOrg(t)
+	dir := cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if err := cliprofile.WriteSessionStore(dir, f.srv.URL, types.CLIStoreFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Set(cliKeyringService, f.srv.URL, "{"); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+	want := fmt.Sprintf(copyPreviousNotEnded+"\n", "the keychain item for the CLI sign-in"+copyWasDamaged)
+	if err != nil || strings.Count(stderr, want) != 1 {
+		t.Fatalf("login: %v, stderr %q; want it signed in with one line %q", err, stderr, want)
+	}
 }
 
 // TestOrgTransportsBoundTheHeaderWait: the transport a stored sign-in's requests go through, and an
