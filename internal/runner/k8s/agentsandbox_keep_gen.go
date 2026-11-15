@@ -114,3 +114,27 @@ func (k *keepDriver) StopProxyAt(ctx context.Context, ref string, gen int) error
 	}
 	return k.StopProxy(ctx, ref)
 }
+
+// deleteProxyCfgSecrets removes the run's replacement proxy config Secrets, except keep and, for gen > 0, any labelled
+// with a newer generation: a newer revive writes its Secret before its proxy pod exists, so a slower end or replace
+// cannot tell it from the pod. Each is deleted by name with its UID, so one written since the list is left.
+func (d *Driver) deleteProxyCfgSecrets(ctx context.Context, ns string, runID uuid.UUID, gen int, keep string) error {
+	list, err := d.clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelProxyCfg})
+	if err != nil {
+		return err
+	}
+	for i := range list.Items {
+		s := &list.Items[i]
+		if s.Name == keep {
+			continue
+		}
+		if have, perr := strconv.Atoi(s.Labels[labelProxyGeneration]); gen > 0 && perr == nil && have > gen {
+			continue
+		}
+		uid := s.UID
+		if err := d.clientset.CoreV1().Secrets(ns).Delete(ctx, s.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) && !apierrors.IsConflict(err) {
+			return err
+		}
+	}
+	return nil
+}

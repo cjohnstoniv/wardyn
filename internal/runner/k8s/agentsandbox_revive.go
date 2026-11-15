@@ -211,6 +211,9 @@ func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJS
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)
 	labels := wardynLabels(runID, componentProxy, in.Labels)
 	labels[labelProxyCfg] = stamp
+	if gen > 0 {
+		labels[labelProxyGeneration] = strconv.Itoa(gen)
+	}
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: secretName(runID) + "-r" + stamp, Namespace: ns, Labels: labels},
 		Type:       corev1.SecretTypeOpaque,
@@ -223,8 +226,7 @@ func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJS
 	if err := k.swapProxy(ctx, ns, runID, svc, in, old, gen); err != nil {
 		return "", err
 	}
-	older := labelRun + "=" + runID.String() + "," + labelProxyCfg + "," + labelProxyCfg + "!=" + stamp
-	if err := k.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: older}); err != nil && !isNotFound(err) {
+	if err := k.deleteProxyCfgSecrets(ctx, ns, runID, gen, sec.Name); err != nil {
 		slog.Warn("wardynd: k8s substrate: could not remove the older proxy config Secrets; the new proxy is up",
 			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 	}

@@ -195,9 +195,10 @@ func TestKeepDriverEndsOnlyKeptRuns(t *testing.T) {
 
 func TestKeepEndSandboxOrder(t *testing.T) {
 	r := newKeptRig(t, nil)
+	addCfgSecret(t, r.cs, "proxy-cfg-1", "")
 	order := writesInOrder(r.cs, r.dyn)
 	r.end(t)
-	want := []string{"update endpointslices", "delete pods", "delete-collection secrets", "delete pods"}
+	want := []string{"update endpointslices", "delete pods", "delete secrets", "delete pods"}
 	if !slices.Equal(*order, want) {
 		t.Errorf("writes = %v\nwant %v: the slice emptied, the proxy pod, the replacement Secrets, the agent pod; nothing on the Sandbox", *order, want)
 	}

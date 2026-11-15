@@ -40,6 +40,37 @@ func labelProxyPod(t *testing.T, cs *fake.Clientset, gen string) {
 	}
 }
 
+var secretsGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+
+// addCfgSecret stores a replacement proxy config Secret of the run, labelled with generation gen ("" for none).
+func addCfgSecret(t *testing.T, cs *fake.Clientset, name, gen string) {
+	t.Helper()
+	labels := map[string]string{labelRun: asRunID.String(), labelProxyCfg: "true"}
+	if gen != "" {
+		labels[labelProxyGeneration] = gen
+	}
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: labels}}
+	if err := cs.Tracker().Create(secretsGVR, sec, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// secretDeletes returns the names the recorded actions delete a Secret by, and whether any delete-collection hit Secrets.
+func secretDeletes(cs *fake.Clientset) (names []string, collection bool) {
+	for _, a := range cs.Actions() {
+		if a.GetResource().Resource != "secrets" {
+			continue
+		}
+		switch a.GetVerb() {
+		case "delete":
+			names = append(names, a.(clienttesting.DeleteAction).GetName())
+		case "delete-collection":
+			collection = true
+		}
+	}
+	return names, collection
+}
+
 func storedProxyPod(t *testing.T, cs *fake.Clientset) *corev1.Pod {
 	t.Helper()
 	obj, err := cs.Tracker().Get(podsGVR, testNamespace, proxyPodName(asRunID))
@@ -152,6 +183,7 @@ func TestEndSandboxAtRefusesAnOlderGeneration(t *testing.T) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "2")
 	ctx := context.Background()
+	addCfgSecret(t, r.cs, "proxy-cfg-2", "2")
 	order := writesInOrder(r.cs, r.dyn)
 	if err := r.k.EndSandboxAt(ctx, r.ref, 1); !errors.Is(err, runner.ErrProxyGenerationNewer) {
 		t.Fatalf("EndSandboxAt(1) beside a generation 2 proxy = %v, want ErrProxyGenerationNewer", err)
@@ -168,7 +200,7 @@ func TestEndSandboxAtRefusesAnOlderGeneration(t *testing.T) {
 	if err := r.k.EndSandboxAt(ctx, r.ref, 2); err != nil {
 		t.Fatalf("EndSandboxAt(2) beside a generation 2 proxy: %v", err)
 	}
-	want := []string{"update endpointslices", "delete pods", "delete-collection secrets", "delete pods"}
+	want := []string{"update endpointslices", "delete pods", "delete secrets", "delete pods"}
 	if !slices.Equal(*order, want) {
 		t.Errorf("writes of the generation 2 end = %v, want %v", *order, want)
 	}
@@ -201,12 +233,12 @@ func TestEndSandboxAtLeavesARevivedAgentPod(t *testing.T) {
 
 // A generation 1 end reads a generation 1 proxy pod; while its delete lands, a newer revive's proxy takes the name and
 // that revive writes its replacement config Secret. The end must leave the Secret and refuse with ErrProxyGenerationNewer.
-// Without the second read of the proxy pod in stopKeptProxy, the end deletes the Secret and returns nil or an agent-pod
-// error.
+// The Secret here carries no generation, so only the second read of the proxy pod in stopKeptProxy saves it. Without that
+// read the end deletes it by name and returns nil or an agent-pod error: the error check and the recorded-actions check
+// fail, and the tracker check fails with them because the fake applies a delete by name.
 func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
 	r := newKeptRig(t, nil)
 	labelProxyPod(t, r.cs, "1")
-	secretsGVR := schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 	swapped := false
 	r.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
 		name := a.(clienttesting.DeleteAction).GetName()
@@ -233,10 +265,73 @@ func TestKeepEndSandboxAtLeavesANewerRevivesConfigSecret(t *testing.T) {
 	if _, err := r.cs.Tracker().Get(secretsGVR, testNamespace, "proxy-cfg-2"); err != nil {
 		t.Errorf("the newer revive's config Secret after the end: %v; want it left", err)
 	}
-	for _, a := range r.cs.Actions() {
-		if a.GetVerb() == "delete-collection" && a.GetResource().Resource == "secrets" {
-			t.Errorf("recorded %s %s, want no Secret delete: the Secret is the newer revive's", a.GetVerb(), a.GetResource().Resource)
+	if names, collection := secretDeletes(r.cs); len(names) != 0 || collection {
+		t.Errorf("recorded Secret deletes %v, delete-collection %v; want none: the Secret is the newer revive's", names, collection)
+	}
+}
+
+// A newer revive creates its config Secret before its proxy pod: for a while the run has the Secret and no proxy pod. A
+// generation 1 end that read a generation 1 pod finds no pod on its second read, so only the Secret's own generation
+// label tells it apart. The end must delete no Secret by name and no collection of them. Without the generation label and
+// the list-and-delete in deleteProxyCfgSecrets the end deletes it, recorded as a delete-collection that the fake does not
+// apply, so the recorded actions are what fail. The agent pod is held, so deleteKeptAgentPod returns nil and only the
+// Secret path is under test.
+func TestKeepEndSandboxAtLeavesANewerRevivesSecretBeforeItsPod(t *testing.T) {
+	r := newKeptRig(t, nil)
+	labelProxyPod(t, r.cs, "1")
+	obj, err := r.cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := obj.(*corev1.Pod).DeepCopy()
+	held.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: "wardyn.dev/held"}}
+	if err := r.cs.Tracker().Update(podsGVR, held, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	r.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		name := a.(clienttesting.DeleteAction).GetName()
+		if swapped || name != proxyPodName(asRunID) {
+			return false, nil, nil
 		}
+		// A newer revive has written its config Secret and not yet made its proxy pod.
+		swapped = true
+		if err := r.cs.Tracker().Delete(podsGVR, testNamespace, name); err != nil {
+			return true, nil, err
+		}
+		cfg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "proxy-cfg-2", Namespace: testNamespace,
+			Labels: map[string]string{labelRun: asRunID.String(), labelProxyCfg: "true", labelProxyGeneration: "2"}}}
+		return true, nil, r.cs.Tracker().Create(secretsGVR, cfg, testNamespace)
+	})
+	if err := r.k.EndSandboxAt(context.Background(), r.ref, 1); err != nil {
+		t.Fatalf("EndSandboxAt(1) = %v, want nil: no proxy pod is left to refuse it", err)
+	}
+	if names, collection := secretDeletes(r.cs); len(names) != 0 || collection {
+		t.Errorf("recorded Secret deletes %v, delete-collection %v; want none: the Secret is the newer revive's", names, collection)
+	}
+	if _, err := r.cs.Tracker().Get(secretsGVR, testNamespace, "proxy-cfg-2"); err != nil {
+		t.Errorf("the newer revive's config Secret after the end: %v; want it left", err)
+	}
+}
+
+// A replace at generation 1 removes the older config Secrets, those labelled 1 or nothing, and leaves one a newer revive
+// labelled 2: that revive wrote it before its proxy pod, and this replace cannot tell it from the pod.
+func TestReplaceProxyAtLeavesANewerGenerationsSecret(t *testing.T) {
+	k, cs, _, ref := keptRun(t)
+	addCfgSecret(t, cs, "cfg-gen-1", "1")
+	addCfgSecret(t, cs, "cfg-unlabelled", "")
+	addCfgSecret(t, cs, "cfg-gen-2", "2")
+	cs.ClearActions()
+	if _, err := k.ReplaceProxyHashedAt(context.Background(), ref, replaceCfg, 1); err != nil {
+		t.Fatalf("ReplaceProxyHashedAt(1): %v", err)
+	}
+	names, collection := secretDeletes(cs)
+	slices.Sort(names)
+	if want := []string{"cfg-gen-1", "cfg-unlabelled"}; !slices.Equal(names, want) || collection {
+		t.Errorf("Secret deletes %v, delete-collection %v; want %v and no collection", names, collection, want)
+	}
+	if _, err := cs.Tracker().Get(secretsGVR, testNamespace, "cfg-gen-2"); err != nil {
+		t.Errorf("the generation 2 Secret after a generation 1 replace: %v; want it left", err)
 	}
 }
 

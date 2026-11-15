@@ -169,8 +169,7 @@ func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, 
 			return err
 		}
 	}
-	replacements := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelProxyCfg}
-	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, replacements); err != nil && !isNotFound(err) {
+	if err := d.deleteProxyCfgSecrets(ctx, ns, runID, gen, ""); err != nil {
 		return fmt.Errorf("k8s: keep: delete the replacement config Secrets: %w", err)
 	}
 	return nil
