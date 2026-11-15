@@ -864,7 +864,7 @@ const (
 // or as the container's own user (the agent), with stdin, and returns its
 // stdout. A non-zero exit, or more than maxOut bytes, is an error. The steps a
 // person starts on a live run, the display and a share's export and import,
-// start under the run's start lock, on the run as it stands there (startFresh):
+// start under the run's start lock, on the run as it stands there (sandboxExec's startFresh):
 // a run that ended or was kept there is refused (startRefused). The others never
 // wait on it, so an end's stop and resume are never refused by a start.
 func (s *Server) signinExec(ctx context.Context, run types.AgentRun, as signinUser, stdin []byte, maxOut int, args ...string) ([]byte, error) {
