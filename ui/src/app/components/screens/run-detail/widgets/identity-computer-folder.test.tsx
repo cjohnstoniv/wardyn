@@ -71,6 +71,16 @@ describe("Folders from your computer", () => {
     expect(screen.queryByText(C.MAY_BE_GONE)).toBeNull();
   });
 
+  it("says when the folder's record could not be read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced", record_unreadable: true, fate: "given_up", sandbox_copy: "deleted", last_report: { unsynced: 3, at: AT } });
+    expect(screen.getByText(C.RECORD_UNREADABLE)).toBeInTheDocument();
+  });
+
+  it("says nothing of the record when it was read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced" });
+    expect(screen.queryByText(C.RECORD_UNREADABLE)).toBeNull();
+  });
+
   describe("a back error that opens with the kept-for-copy-back words", () => {
     const keptWith = (error: string) =>
       show("FAILED", {

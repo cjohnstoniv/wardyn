@@ -75,6 +75,7 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
         ))}
       {ended && f.state === "synced" && !isKnownFate(f.fate) && f.sandbox_copy !== "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.MAY_BE_GONE}</p>}
       {ended && (f.fate === "retained" || f.fate === "given_up") && <OwedRows f={f} />}
+      {f.record_unreadable && <p className="col-span-2 text-meta text-muted-foreground">{C.RECORD_UNREADABLE}</p>}
       {ended && f.sandbox_copy === "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.DELETED}</p>}
     </>
   );

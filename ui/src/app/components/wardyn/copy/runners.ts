@@ -246,6 +246,7 @@ export const RUN_COMPUTER_FOLDER = {
   GAVE_UP_NO_LIST: "The sandbox was stopped. Wardyn gave up recovery, but has no file list to show.",
   DELETED: "Wardyn confirmed that the sandbox was stopped and its copy deleted.",
   STOP_UNCONFIRMED: "The run has ended. Wardyn has not confirmed that the sandbox was stopped, so it cannot say whether a copy remains.",
+  RECORD_UNREADABLE: "Wardyn could not read the rest of this folder's sync record, so some details are not shown.",
   PATHS_LABEL: "Files last reported as not copied back",
 };
 
