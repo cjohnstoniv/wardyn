@@ -41,6 +41,29 @@ func ValidOperationKey(s string) bool {
 	return true
 }
 
+// DerivedOperationKeyPrefix begins an operation key a run's proxy makes from a call under send once: the prefix,
+// the call's hash, a colon and its occurrence. A caller's own key never starts with it (the proxy refuses one).
+const DerivedOperationKeyPrefix = "call:"
+
+// DerivedOperationKeyFits reports whether key is either not of the made form, or exactly a key made from
+// callSHA256: DerivedOperationKeyPrefix, callSHA256, ":" and a positive number with no leading zero.
+func DerivedOperationKeyFits(key, callSHA256 string) bool {
+	rest, ok := strings.CutPrefix(key, DerivedOperationKeyPrefix)
+	if !ok {
+		return true
+	}
+	n, ok := strings.CutPrefix(rest, callSHA256+":")
+	if !ok || callSHA256 == "" || n == "" || n[0] == '0' {
+		return false
+	}
+	for _, c := range n {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // MCPCallSentAnswer is the control plane's answer about a keyed MCP call's send. On a 200 to the send
 // record it names the send just recorded; on a 409 operation_already_sent, the earlier send, with
 // Answered set once its server's answer was recorded. A 409 operation_key_reused names none.

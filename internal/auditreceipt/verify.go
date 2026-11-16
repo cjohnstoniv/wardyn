@@ -79,6 +79,7 @@ var RedactableActions = map[string]bool{
 	"run.policy.resolve": true, "run.policy.effective": true, "run.policy.generation": true,
 	"policy.create": true, "policy.update": true, "policy.delete": true,
 	"preset.create": true, "preset.update": true,
+	"workload.apply": true, "workload.policy_pin.set": true, "workload.launch_refused": true, "workload.delete": true,
 }
 
 // Failure is one failed check: the bundle's checkpoint index, the seq it concerns, and why.

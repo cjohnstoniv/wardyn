@@ -27,6 +27,9 @@ type withdrawnStore struct {
 	viaPortal   map[[2]string]store.PrincipalGroups
 	recordErr   error
 	recordReads int
+
+	mappingsErr  error
+	userTypesErr error
 }
 
 func (s *withdrawnStore) GetPrincipalGroups(_ context.Context, principal, portal string) (store.PrincipalGroups, error) {
@@ -45,11 +48,11 @@ func (s *withdrawnStore) GetPrincipalGroups(_ context.Context, principal, portal
 }
 
 func (s *withdrawnStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
-	return nil, nil
+	return nil, s.mappingsErr
 }
 
 func (s *withdrawnStore) ListUserTypes(context.Context) ([]types.UserType, error) {
-	return s.userTypes, nil
+	return s.userTypes, s.userTypesErr
 }
 
 // withdrawnFixture is a server over a withdrawnStore and a run of capSub's that carries one
@@ -277,4 +280,24 @@ func TestComponentWithdrawnStoreWithoutARecordAsksNothing(t *testing.T) {
 	srv := capServer(st)
 	wantWithdrawn(t, srv, types.AgentRun{ID: uuid.New(), CreatedBy: capSub}, []types.RunComponent{{ComponentID: new(uuid.UUID)}},
 		"no record store", "")
+}
+
+// A role mapping or user type read that fails is the error, never "exempt": an admin owner's run is not given
+// the component's credentials on a fault.
+func TestComponentWithdrawnExemptionReadFaultIsTheError(t *testing.T) {
+	srv, st, run, comps := withdrawnFixture(t)
+	srv.cfg.OIDC = newAccessAuth(t, map[string]string{"wardyn-admins": oidc.RoleAdmin}, oidc.RoleUser, nil, nil)
+	st.records[capSub] = store.PrincipalGroups{Email: capEmail, Groups: []string{"wardyn-admins"}}
+	wantWithdrawn(t, srv, run, comps, "admin owner", "")
+	boom := errors.New("read failed")
+	for name, set := range map[string]func(error){
+		"role mappings": func(e error) { st.mappingsErr = e },
+		"user types":    func(e error) { st.userTypesErr = e },
+	} {
+		set(boom)
+		if got, err := srv.componentWithdrawn(t.Context(), run, comps); !errors.Is(err, boom) {
+			t.Errorf("%s fault: componentWithdrawn = %q, %v; want the fault", name, got, err)
+		}
+		set(nil)
+	}
 }

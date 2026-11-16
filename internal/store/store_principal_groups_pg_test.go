@@ -183,3 +183,20 @@ func TestPG_PrincipalGroups_ErasureDeletesTheRecord(t *testing.T) {
 		}
 	}
 }
+
+// A sign-in (zero issuedAt) replaces the record even when the stored row's issued_at is later than the
+// database's clock now, as after a failover to a standby behind the primary: the guard never skips it.
+func TestPG_PrincipalGroups_ASignInReplacesARecordStampedAhead(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	if err := st.PutPrincipalGroups(ctx, "sub-ahead", "", "a@corp.example", []string{"old"}, false, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutPrincipalGroups(ctx, "sub-ahead", "", "a@corp.example", []string{"new"}, false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetPrincipalGroups(ctx, "sub-ahead", "")
+	if err != nil || !slices.Equal(got.Groups, []string{"new"}) {
+		t.Fatalf("record = %+v, %v; want the sign-in's groups [new]", got, err)
+	}
+}

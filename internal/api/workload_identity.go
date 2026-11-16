@@ -38,8 +38,9 @@ func (a queueAuthority) workload() identity.Workload {
 var errNoWorkloadMint = errors.New("the identity provider cannot name a workload's run")
 
 // mintRunIdentity mints runID's run token for the internal audience: under w's SPIFFE ID for a run a
-// workload launched, and the ad-hoc one when w is zero. Every run mint goes through it, so a run keeps
-// the ID its first mint gave it.
+// workload launched, and the ad-hoc one when w is zero. Every mint of a workload's or an ad-hoc run's own
+// identity goes through it, so a run keeps the ID its first mint gave it; a workspace step's helper run
+// (workspace_run_launch.go) mints the ad-hoc form directly, and is never a workload's.
 func (s *Server) mintRunIdentity(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor string, operatorOwned bool) (identity.RunIdentity, error) {
 	if w == (identity.Workload{}) {
 		return s.cfg.Identity.MintRunIdentity(ctx, runID, humanSub, sponsor, internalAudience, operatorOwned)
