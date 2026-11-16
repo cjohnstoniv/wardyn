@@ -18,7 +18,7 @@ const principalGroupsMigration = "0290"
 // with no snapshot gets no record.
 func TestMigration0290_FillsTheRecordFromTheLastSignIns(t *testing.T) {
 	pool, _ := partialSchemaPool(t, principalGroupsMigration)
-	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second)
 	pgExec(t, pool, `INSERT INTO key_domain_login_groups (principal, groups, truncated, verified_at) VALUES
 		('sub-ann', '["eng","ops"]', false, $1), ('sub-ben', '[]', true, $1)`, at)
 	// The identity she last signed in with was made first, so made-last cannot stand in for it.
