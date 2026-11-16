@@ -1400,7 +1400,7 @@ erases one person's retained records by explicit scope, in one audited act
 - An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
 
 - `run_tasks` clears a run's correlation ID. The audit sinks on this replica stop adding it at once, the others within 30 seconds, and copies a sink already exported follow that sink's own retention.
-- `run_tasks` also overwrites the send records of the person's runs (`mcp_call_sends`), a send less than 24 hours old included, so a later MCP call that one of them would have answered is asked about as a new call.
+- `run_tasks` also overwrites the send records of the person's runs (`mcp_call_sends`), a send less than 24 hours old included, so a later MCP call that one of them would have answered is a new call and needs approval.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.

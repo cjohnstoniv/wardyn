@@ -16,7 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `mcp_call_sends`. Without it,
   no `approve_each` MCP call that carries an operation key is asked about or sent, and erasing any person's run tasks
-  (`run_tasks`) fails. Calls without a key, in runs without a `correlation_id`, are unaffected. An upgrade from before
+  (`run_tasks`) fails. Calls without a key are unaffected. An upgrade from before
   0.10.0-rc.21 also needs the 0.10.0-rc.21 grants: `SELECT, INSERT, UPDATE` on `principal_identity_unbinds` and
   `run_teardown_holds`. An
   upgrade from before 0.10.0-rc.18 also needs the 0.10.0-rc.18 grant: `SELECT, INSERT, UPDATE` on `run_proxy_starts`.
