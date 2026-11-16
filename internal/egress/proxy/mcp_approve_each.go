@@ -485,9 +485,9 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 					return
 				}
 				if c.scope.OperationKey != "" {
-					// A keyed call (its own key, or send once's): the call that took it holds this call's key, so it
-					// sends this operation; asking again would put a person in front of a call its record then answers
-					// as sent.
+					// A keyed call (its own key, or send once's): the call that took it holds this call's key and is
+					// the only one that may send this operation; asking again would put a person in front of a call
+					// its record then answers as sent.
 					x.record(egress.Deny, ruleSourceMCPApprovalSent, id, "an identical call waiting at the same time took the approval")
 					writeToolError(w, c.id, fmt.Sprintf(mcpCallTakenTogetherText, id))
 					return
