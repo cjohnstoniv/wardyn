@@ -188,6 +188,8 @@ Each edit past the body check writes one `run.egress.edit` row. Proxied connecti
 
 The Kubernetes substrate doesn't implement the optional runner capabilities the Docker driver does. An agent pod pins its proxy pod's IP, so there's no "same address, new container" to replace, and a stopped pod is gone, not kept.
 
+The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused.
+
 - A Kubernetes run's end and limits still fire on schedule.
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.

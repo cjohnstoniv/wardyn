@@ -135,6 +135,7 @@ plane request itself (auth/client/server/network), independent of what the run i
   - a usage error (unknown flag or argument), a malformed id, an unreadable or schema-invalid `--policy-file`, or a response the CLI could not classify (e.g. a 2xx whose body did not decode).
 - This is `exitCodeFor`'s catch-all in [`cmd/wardyn/main.go`](../cmd/wardyn/main.go), so a future local failure lands here too.
 - **Also** `run --wait`: see [the row below](#exit-codes)
+- `wardyn policy check`: the candidate is not within the other policy, and the fields are printed. With nothing printed, exit 1 is the local failure above: the check did not run.
 
 #### ssh's own remote status
 
@@ -154,6 +155,13 @@ plane request itself (auth/client/server/network), independent of what the run i
 
 - `--policy-file` accepts **JSON or YAML** (same schema); YAML also lets you keep inline comments.
 - `wardyn policy render -f <file>` converts either to canonical JSON and rejects a misspelled field, so you can validate a policy in the pipeline before launching.
+- `wardyn policy check --within <evaluated> -f <candidate>` fails the pipeline with exit 1 when the candidate admits anything the evaluated policy does not, or cannot be shown not to, and names each field. `<evaluated>` is a stored policy's id, a run template's id, or a file that holds a policy, such as the output of `record save --json`.
+  - A template is checked as it resolves for whoever runs the check, so a person who will launch the run should run it.
+  - Values your own read of the policy hides are checked as that read shows them. A candidate that spells a mount's host path or the workspace secret names the way your read does is within on that field, and one that names the real value is reported as wider.
+  - A candidate that carries a grant whose secret name your read hides is reported as wider on `eligible_grants`, whether or not it names the secret.
+  - A service identity's token cannot check against a template or read a stored policy: give it a file.
+- To hold a promoted workload to the policy you checked, read the `launch policy digest:` line of `wardyn apply -f FILE --dry-run`, run `wardyn workload pin NAME <digest>`, then `wardyn apply -f FILE`. A launch whose policy has changed since is refused. A new workload is applied first and pinned after its first launch.
+- A pin does not hold everything a run is given. [Known limits](operations/workloads.md#known-limits) lists what it leaves out.
 - Start from [`examples/policies/ci.json`](../examples/policies/ci.json) — the unattended baseline — and add exactly what the task needs:
   - **`"first_use_approval": "always_deny"`** — non-negotiable for unattended runs. Anything off the allowlist is hard-denied instantly; nothing ever waits on a human. (`wait_for_review` holds connections for a reviewer; `deny_with_review` files approvals nobody will decide.)
   - **Complete `allowed_domains`** — list every host the task legitimately needs (package registries, your model provider). The sealed default (empty list) means the sandbox can reach nothing. GitHub is the exception: it is reached through the Wardyn git-broker (see below), not via `allowed_domains`.
@@ -430,7 +438,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 - The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
 - The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
-- The `macos` job also runs eighteen folder sync copy pins on an exFAT disk image, which has no hard links, and shows the volume's file numbers as notices. It runs the member-scan letter-case pin after checking that the runner's volume ignores letter case.
+  - The `macos` job also runs eighteen folder sync copy pins on an exFAT disk image, which has no hard links, and shows the volume's file numbers as notices. It runs the member-scan letter-case pin after checking that the runner's volume ignores letter case.
   - `macos` is not a required check, but a red `macos` makes the run unusable as release evidence (green-by-tree reads the run's conclusion). It also runs the package postinstall as root against a temp root and reads the ledger back.
   - `macos-xcode-27` runs on a public-preview image with `continue-on-error`, so it is informational and never release evidence.
 
