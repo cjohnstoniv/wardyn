@@ -61,7 +61,8 @@ RELEASING.md=6283 share=35 # 6283 measured (+19: the corrections from the releas
 # ROADMAP.md 1783 = 1757 + 26, measured: corrects the signed checkpoints and receipts status to match the code
 # ROADMAP.md 1825 = 1783 + 42, measured: the v0.10.0-rc.20 Shipped row.
 # ROADMAP.md 1867 = 1825 + 42, measured: the v0.10.0-rc.21 Shipped row.
-ROADMAP.md=1867 share=5
+# ROADMAP.md 1905 = 1867 + 38, measured: the v0.10.0-rc.22 Shipped row.
+ROADMAP.md=1905 share=5
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6881 share=35 # -9 (internal wording removed), measured
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
