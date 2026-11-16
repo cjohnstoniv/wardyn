@@ -173,6 +173,6 @@
 
 ## The run record
 
-- A run records its guest macOS build (`guest_os`) and the Mac's (`host_os`) in `vm_machine`.
+- A run records its guest macOS build (`guest_os`) and the Mac's (`host_os`) in `vm_machine`. With the inspection CA on, a run whose proxy inspects at least one host also records `inspection_ca` (`trusted`, `not_trusted` or `expired`) and the CA's `inspection_ca_sha256`.
 - A run's page says whether the Mac removed the run's directory, with the VM's disk and clone, or why it could not. The runner sends fixed codes.
 - The migrations are listed in [Upgrades](../OPERATIONS.md#upgrades). A runner older than 0.10.0-rc.3 sends no disk report. Its run's page says "Removing the macOS VM's disk from this Mac…" for 10 minutes after the run ends, then nothing about the disk.

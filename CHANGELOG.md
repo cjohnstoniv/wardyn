@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VMs: an opt-in inspection CA per Mac (`macos_vm_inspection_ca`). Trusted once in `macos-vm edit-base`, it lets apps that use only the system trust store reach Inspected hosts. Each such run records `inspection_ca` on its machine.
+
 ### Changed
 
 - A `once` egress approval is no longer spent by an HTTPS connection that got nothing back from the far side. That is a failed dial, a configured upstream proxy's refusal of the CONNECT, or an upstream that, after the sandbox's TLS hello, closed or reset without a reply or answered in plaintext. The next request to that host within 60 seconds uses it, once per approval, and the failure's audit row carries the `approval_id` and says so. A TLS alert, a sandbox that closed first, and plain HTTP requests still spend it. Needs the new proxy image.
@@ -23,6 +27,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - An organisation whose runners or proxy image predate this release: a VM run with `host_rules` now passes create and fails at its proxy's start, because the older proxy refuses the config. Upgrade the runners and the proxy image first.
+
+### Before you downgrade
+
+- Going back to an earlier runner: remove `macos_vm_inspection_ca` from runnerd.json first. An earlier runner refuses a file with a key it does not know.
+- Turn `macos_vm_inspection_ca` off and start this runner once first: that deletes the CA's key. An earlier runner leaves the key in the VM directory and does not keep it away from a drive root.
 
 ## [0.10.0-rc.22] — 2026-11-16
 

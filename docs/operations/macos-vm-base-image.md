@@ -202,10 +202,12 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 - `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in the admin Terminal, run `sudo launchctl asuser $(stat -f %u /dev/console) security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's dialog.
   - `launchctl asuser` runs it in the desktop session, where macOS can show that dialog; from `su` alone macOS denies it.
   - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself. The Trust the list's CAs button in its window opens a Terminal that runs them, as the admin.
-  - A certificate trusted by hand reaches hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate.
+  - A certificate trusted by hand reaches hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate, unless `macos_vm_inspection_ca` is on: this Mac's CA is then listed as `wardyn-inspection-ca`. Trust it here once.
   - The list is a file on the Mac ([Customising the base](#customising-the-base)). Whoever can write that file decides which certificates `edit-base` offers; the console does not edit it.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
 - On macOS 26, expect removing or rotating a CA to stop the tools update: Apple asks a person to remove an admin trust. The old base stays ready and still trusts the old CA. To drop or replace a CA, change the list and run `wardyn-runnerd macos-vm prepare --new-image`: the new base trusts only the CAs the list holds.
+  - Turning `macos_vm_inspection_ca` off deletes this Mac's inspection CA and drops it from the list. On macOS 26 the next tools update of each base and kept machine that trusted it then stops, as for any dropped CA. The base stays ready, and still trusts a root nothing can sign for any more. Run `prepare --new-image` to clear it.
+  - To rotate the CA: stop its runs, delete `inspection-ca` in the VM directory, restart the runner (it makes a new CA), run `prepare --new-image`, then trust the new CA here. Kept machines keep the old trust and stop updating until they start with `--fresh`.
 
 ### Configuration profiles
 

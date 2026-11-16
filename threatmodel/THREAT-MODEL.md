@@ -2628,6 +2628,7 @@ These risks are **not closed by v1 Wardyn**.
     - An actor with Docker-daemon or host access can still read a RUNNING proxy's memory, the pre-existing process-memory residual.
     - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and a kept run is not kept at all (residual 58), so the Secret's life is the run's.
     - It is not re-created from the row.
+    - On a Mac with `macos_vm_inspection_ca` on, the runner re-issues this CA under the Mac's own, limited to the hosts the run's proxy terminates; see the macOS VM inspection CA residual (#99).
 
     </details>
 
@@ -3275,6 +3276,18 @@ These risks are **not closed by v1 Wardyn**.
     - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
     - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run and per caller, and the token never reaches the sandbox.
     - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check and closes an open inbound-token stream at its next tick; a browser stream already open is not cut by it.
+
+    </details>
+
+99. **macOS VM inspection CA (opt-in).**
+    <details><summary>Details</summary>
+
+    - Each macOS VM run's proxy CA is re-issued under a root every trusting guest on that Mac accepts.
+    - The re-issued CA permits only the hosts that run's proxy terminates (and, where one of them sits under another, the outer host's other subdomains) and no IP address, and lasts 7 days at most, so a leaked run key passes only for hosts its own proxy inspects (on any port, in any trusting guest on that Mac), and not for long.
+    - The root's key is a plain file of the runner login in the VM directory: excluded from Time Machine (any other backup tool copies it off the Mac), deleted when the runner starts with the setting off, unless the managed profile cannot be read, and never used while one of the runner's drive roots holds it.
+    - Any process of that login, or root, can read it and sign for any name on every trusting guest for the CA's five years.
+    - There is no revocation: recovery is deleting the key, `prepare --new-image`, and starting kept machines fresh.
+    - Whether macOS enforces the name constraints is not yet shown on a Mac.
 
     </details>
 
