@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Corrections to earlier notes
+
+- A forced stop happens when a run's end comes due while another operation holds the run's lock, and the lock is still held 5 minutes past the end of the run's keep grace, or past the run's end for a run that cannot be kept. Wardyn then ends the run without the lock, whatever the holder does later. The earlier notes said only that the run's lock had been held that long.
+- A step on a server that does not let go of a run's lock keeps the sandbox from being stopped only for a run whose end Wardyn recorded under that lock. A run whose end was a forced stop is not such a run: its stop is retried without waiting for the lock, and its keep applies. The earlier notes did not say which runs this covers.
+
 ## [0.10.0-rc.21] — 2026-11-15
 
 ### Added
