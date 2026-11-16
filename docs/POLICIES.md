@@ -1230,7 +1230,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 
 An `approve_each` call can carry an operation key, the `_meta` member `wardyn.dev/operation-key`: 1 to 128 ASCII letters, digits or `. _ : / -`, such as the run's correlation ID joined to a step name. The key may not start with `call:`, which is reserved for the keys Wardyn makes. A call with a key is sent at most once in 24 hours.
 - Wardyn records the send before it sends the call and keeps the record on the server, so a revive or a new proxy keeps it.
-- The run proxy resolves the server's address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (a host deny, its body scan or its gateway identity) leaves the record standing for 24 hours.
+- The run proxy checks the server's host against the run's policy, resolves its address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (its body scan or its gateway identity) leaves the record standing for 24 hours.
 - A key's namespace is the run's owner, within the run's correlation ID, else within the run.
 - A call is the same call by its server name, tool, arguments and any other parameters it sends outside `_meta`, not by the host it is sent to.
 - Runs of one owner and one correlation ID share send records. A call sent in one of them is not sent again in another for those 24 hours, even where their policies send that server name to different hosts.
