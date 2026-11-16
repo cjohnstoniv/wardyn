@@ -114,3 +114,39 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	}
 }
 
+// A record whose groups are not a JSON list (here JSON null) is left as it is by a SCIM removal, which
+// still removes the membership: the list step is never asked of it, so it cannot fail the removal.
+func TestPG_PrincipalGroups_ScimRemovalSkipsARecordThatIsNoList(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now()
+	var id uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('sub-ann', 'https://idp.example', 'ann@corp.example') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutPrincipalGroups(ctx, "sub-ann", "", "ann@corp.example", []string{"eng"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_groups SET groups = 'null'::jsonb WHERE principal = 'sub-ann'`); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := st.CreateScimGroup(ctx, "eng", "Engineering", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddScimGroupMembers(ctx, eng.ID, []uuid.UUID{id}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartGroupRemoval(ctx, eng.ID, id); err != nil {
+		t.Fatalf("removal with a record that is no list: %v, want it to succeed", err)
+	}
+	var members int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM scim_group_members WHERE group_id = $1 AND identity_id = $2`, eng.ID, id).Scan(&members); err != nil || members != 0 {
+		t.Fatalf("membership rows %d, %v; want the membership removed", members, err)
+	}
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT jsonb_typeof(groups) FROM principal_groups WHERE principal = 'sub-ann'`).Scan(&kind); err != nil || kind != "null" {
+		t.Fatalf("record groups are %q, %v; want JSON null left as it was", kind, err)
+	}
+}
