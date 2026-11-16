@@ -546,7 +546,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			HarnessCredentials: harnessCreds,
 			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,
 			// Present exactly when a rule is approve_each: an older proxy refuses the key.
-			MCPApproveEach: mcpApproveEachMarker(proxyPolicy, p.HarnessToolRules),
+			MCPApproveEach: mcpApproveEachMarker(proxyPolicy, p.HarnessToolRules, run.CorrelationID != ""),
 			// A macOS VM run's boot hosts; its proxy does not read their allowed traffic as the run working.
 			ActivityIgnoreHosts: activityIgnoreHosts(run.MachineKind),
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when

@@ -21,6 +21,11 @@ type MCPApproveEachConfig struct {
 	// id. A harness with no entry gets the broker's default. Each is 1 to 300, under the idle
 	// timer of the slowest client.
 	Windows map[string]int `json:"windows,omitempty"`
+	// SendOnce is set for a run with a correlation ID: each approve_each call without its caller's
+	// own operation key is given one made from the call (mcp_send_once.go), so a retry in a new run
+	// of the same correlation ID is answered with the earlier send instead of being asked about and
+	// sent again. A proxy older than the switch refuses the key, so such a run fails at start.
+	SendOnce bool `json:"send_once,omitempty"`
 }
 
 func (c *MCPApproveEachConfig) validate() error {

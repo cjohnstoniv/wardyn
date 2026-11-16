@@ -87,9 +87,11 @@ var mcpServerKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type mcpBroker struct {
 	servers  map[string]*mcpServer
 	bindings []MCPBinding
-	// calls and windows are the approve_each state (mcp_approve_each.go).
-	calls   mcpCalls
-	windows map[string]int
+	// calls and windows are the approve_each state (mcp_approve_each.go); sendOnce gives each
+	// keyless approve_each call an operation key made from the call (mcp_send_once.go).
+	calls    mcpCalls
+	windows  map[string]int
+	sendOnce bool
 }
 
 // mcpServer is one server and its credential, resolved on first use.
