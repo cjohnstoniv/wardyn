@@ -385,12 +385,26 @@ func (s signinHungRecordStore) SetDesktopSigninPauseRecord(ctx context.Context, 
 	return signinHang(ctx, s.bounded)
 }
 
-// TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold: a SIGSTOP, or a pause-record write, that never
-// answers ends when signinBeginHold passes, so no begin outlives the wait an end gives a row with no pause record; the
-// begin then undoes its stop and closes the row.
+// signinHungStartRunner is signinFakeRunner whose display start never answers on its own (signinHang).
+type signinHungStartRunner struct {
+	*signinFakeRunner
+	bounded *bool
+}
+
+func (r *signinHungStartRunner) ExecStreamAs(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if slices.Equal(spec.Argv, []string{signinBinary, "start"}) {
+		return nil, signinHang(ctx, r.bounded)
+	}
+	return r.signinFakeRunner.ExecStreamAs(ctx, ref, user, spec)
+}
+
+// TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold: a SIGSTOP, a display start or a pause-record write
+// that never answers ends when signinBeginHold passes, so no begin outlives the wait an end gives a row with no pause
+// record; the begin then undoes its stop and closes the row. The hold leaves the steps before the one that hangs
+// time to run on a loaded machine.
 func TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold(t *testing.T) {
 	defer func(d time.Duration) { signinBeginHold = d }(signinBeginHold)
-	signinBeginHold = 100 * time.Millisecond
+	signinBeginHold = 500 * time.Millisecond
 	for name, tc := range map[string]struct {
 		hang   func(f *signinFixture, bounded *bool)
 		code   int
@@ -399,6 +413,9 @@ func TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold(t *testing.T)
 		"the SIGSTOP never answers": {func(f *signinFixture, bounded *bool) {
 			f.srv.cfg.Runner = &signinHungStopRunner{signinFakeRunner: f.rn, bounded: bounded}
 		}, http.StatusBadGateway, reasonDesktopSigninPauseFailed},
+		"the display's start never answers": {func(f *signinFixture, bounded *bool) {
+			f.srv.cfg.Runner = &signinHungStartRunner{signinFakeRunner: f.rn, bounded: bounded}
+		}, http.StatusBadGateway, reasonDesktopSigninStartFailed},
 		"the record's write never answers": {func(f *signinFixture, bounded *bool) {
 			f.srv.cfg.Store = signinHungRecordStore{signinTestStore: f.st, bounded: bounded}
 		}, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable},
@@ -417,6 +434,55 @@ func TestDesktopSignin_ABeginsStepsBeforeItsRecordEndWithinItsHold(t *testing.T)
 				t.Fatalf("open = %v, want no sign-in open", err)
 			}
 		})
+	}
+}
+
+// signinStartHookRunner is signinPid1Runner whose display start runs during once, just before it starts.
+type signinStartHookRunner struct {
+	*signinPid1Runner
+	during func()
+}
+
+func (r *signinStartHookRunner) ExecStreamAs(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if during := r.during; during != nil && slices.Equal(spec.Argv, []string{signinBinary, "start"}) {
+		r.during = nil
+		during()
+	}
+	return r.signinPid1Runner.ExecStreamAs(ctx, ref, user, spec)
+}
+
+// TestDesktopSignin_AnEndBeforeTheDisplayStartsLeavesTheSignInToTheBegin: an end that lands after a begin stopped the
+// agent but before its display started answers 409 and sends nothing, so the display never starts on a closed sign-in
+// with the agent running again; the sign-in then begins as usual, and its end closes the display and continues pid 1.
+func TestDesktopSignin_AnEndBeforeTheDisplayStartsLeavesTheSignInToTheBegin(t *testing.T) {
+	f := newSigninFixture(t)
+	pid1 := &signinPid1Runner{signinFakeRunner: f.rn}
+	hook := &signinStartHookRunner{signinPid1Runner: pid1}
+	f.srv.cfg.Runner = hook
+	var endCode int
+	var endBody string
+	var sent []string
+	hook.during = func() {
+		before := len(f.rn.seen())
+		endCode, endBody = f.post(t, "/desktop-signin/end", "")
+		sent = f.rn.seen()[before:]
+	}
+	f.begin(t)
+	if hook.during != nil {
+		t.Fatal("the begin never started the display")
+	}
+	if endCode != http.StatusConflict || !strings.Contains(endBody, reasonDesktopSigninStarting) || len(sent) != 0 {
+		t.Fatalf("an end before the display started = %d %s and sent %v; want 409 %s and nothing", endCode, endBody, sent, reasonDesktopSigninStarting)
+	}
+	if si, err := f.st.OpenDesktopSignin(context.Background(), f.run.ID); err != nil || len(si.PauseRecord) == 0 || !pid1.stopped {
+		t.Fatalf("after the begin: open = %+v %v, pid 1 stopped = %t; want the sign-in open with its pause record and pid 1 stopped", si, err, pid1.stopped)
+	}
+	before := len(f.rn.seen())
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusNoContent || pid1.stopped {
+		t.Fatalf("the end after the begin = %d %s, pid 1 stopped = %t; want 204 and pid 1 running", code, body, pid1.stopped)
+	}
+	if got := f.rn.seen()[before:]; len(got) == 0 || got[0] != "person:stop" {
+		t.Fatalf("the end's calls = %v; want the display closed first", got)
 	}
 }
 

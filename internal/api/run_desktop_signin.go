@@ -403,8 +403,8 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		fail(0, "", "", "pause", runner.ErrSigninUnsupported)
 		return
 	}
-	// The SIGSTOP and the pause record's write run within signinBeginHold
-	// (handleEndDesktopSignin).
+	// The SIGSTOP, the display's start and the pause record's write run
+	// within signinBeginHold (handleEndDesktopSignin).
 	pctx, pcancel := context.WithTimeout(ctx, signinBeginHold)
 	defer pcancel()
 	if err := se.SignalMain(pctx, run.SandboxRef, "SIGSTOP"); err != nil {
@@ -438,11 +438,6 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		pauseRec = []byte(`{}`)
 	}
 	si.PauseRecord = pauseRec
-	if err := st.SetDesktopSigninPauseRecord(pctx, si.ID, pauseRec); err != nil {
-		s.rollbackDesktopSignin(ctx, run, si, principal)
-		fail(http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded; Wardyn resumes the agent, or ends the run if it cannot", "record", err)
-		return
-	}
 
 	// 2. The person's display, with the lane credential on stdin. The desktop's screen recording keeps
 	// no frames from here until the sign-in closes (closeDesktopSignin), a failed start included.
@@ -450,9 +445,20 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		s.PauseDesktopRecording(ctx, run, desktopPauseSignin, si.ID.String())
 	}
 	startCfg, _ := json.Marshal(map[string]string{"credential": cred, "proxy": signinProxyAddr})
-	if _, err := s.signinExec(ctx, run, signinOpensDisplay, startCfg, 64<<10, "start"); err != nil {
+	if _, err := s.signinExec(pctx, run, signinOpensDisplay, startCfg, 64<<10, "start"); err != nil {
+		// The row keeps what pause-agent stopped for a rollback the sweep has to finish.
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
+		_ = st.SetDesktopSigninPauseRecord(rctx, si.ID, pauseRec)
+		rcancel()
 		s.rollbackDesktopSignin(ctx, run, si, principal)
 		fail(http.StatusBadGateway, reasonDesktopSigninStartFailed, "the sign-in display did not start; Wardyn resumes the agent, or ends the run if it cannot", "start", err)
+		return
+	}
+	// The record is written only once the display is up: an end refuses a row without one
+	// (handleEndDesktopSignin), so no end closes the row before the display it must close exists.
+	if err := st.SetDesktopSigninPauseRecord(pctx, si.ID, pauseRec); err != nil {
+		s.rollbackDesktopSignin(ctx, run, si, principal)
+		fail(http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded; Wardyn resumes the agent, or ends the run if it cannot", "record", err)
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.begin", run.ID.String(), "success",
@@ -712,8 +718,9 @@ func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store
 // When the display cannot be proven closed, or the agent cannot be resumed
 // after it, the agent stays stopped and the sweep retries.
 // Another end of the same sign-in still running answers 409, as one whose end was asked for does.
-// So does a sign-in whose begin has not yet recorded what it stopped: an end before
-// the begin's SIGSTOP would close the row, and the stop would land with none open.
+// So does a sign-in whose begin has not yet recorded what it stopped, which it does
+// once the person's display is up: an end before then would close the row, and the
+// begin's stop or display would land with none open.
 func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
