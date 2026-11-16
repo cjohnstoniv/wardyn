@@ -79,6 +79,8 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		// workspace attaches it, and read only through the handle.
 		dir, derr := s.openScanSource(r.Context(), "", src)
 		if errors.Is(derr, errScanHoldersUnread) {
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": derr.Error()})))
 			writeServerError(w, r, "scan source", derr)
 			return
 		}
