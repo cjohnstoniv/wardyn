@@ -46,8 +46,8 @@ func TestGatewayIdentity_ComponentCutIsA403(t *testing.T) {
 			g.answerBody(http.StatusForbidden, `{"reason":"component_gone"}`)
 			send := gwidLanes(g, t)[lane]
 			rec := send()
-			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), gatewayComponentCutSentence) {
-				t.Fatalf("status %d, want 403 with the cut sentence: %s %v", rec.Code, rec.Body, rec.Header())
+			if rec.Code != http.StatusForbidden || strings.Count(rec.Body.String(), gatewayComponentCutSentence) != 1 {
+				t.Fatalf("status %d, want 403 with the cut sentence once: %s %v", rec.Code, rec.Body, rec.Header())
 			}
 			g.advance(lastGoodRetry + time.Second)
 			if rec := send(); rec.Code != http.StatusForbidden {

@@ -76,7 +76,7 @@ const (
 
 // mcpCallTakenTogetherText is what the agent reads for a keyed call (its own operation key, or the one send once
 // makes) that waited on the same request as an identical call under the same key, which took the approval: the
-// other call sends this operation, and this one is not asked about again.
+// other call is the only one that may send this operation, and this one is not asked about again.
 const mcpCallTakenTogetherText = "An identical call that waited at the same time took this call's approval, under request %s, so Wardyn did not send this one or ask a person again."
 
 // setApproveEach takes the sealed config's windows and send-once switch; nil keeps the defaults.
