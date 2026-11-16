@@ -66,7 +66,10 @@ func (s *Server) componentWithdrawn(ctx context.Context, run types.AgentRun, com
 	if err != nil {
 		return "", err
 	}
-	owner := a.context(ctx)
+	// Read as a display read: a user type deleted since launch withholds below, and its refusal row
+	// (callerSubjects) would name the owner, who asked for nothing, once per mint. The door that asked
+	// writes its own row. Nothing else on this path reads the mark.
+	owner := withDisplayRead(a.context(ctx))
 	// The owner's own batch, never the request's: the request is the run's, not the owner's.
 	b := s.newCapBatch(owner)
 	// The zero run and no provider rows leave the component doors alone.
