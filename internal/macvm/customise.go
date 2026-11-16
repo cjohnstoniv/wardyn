@@ -27,6 +27,13 @@ import (
 // FlagBaseFile is prepare's and update-tools' install list (the runner setting macos_vm_base_file).
 const FlagBaseFile = "base-file"
 
+// FlagInspectionCA is the same jobs' path to this Mac's inspection CA certificate (the runner setting
+// macos_vm_inspection_ca), which stage 2 adds to the install list (WithInspectionCA).
+const FlagInspectionCA = "inspection-ca"
+
+// InspectionCAItem is the install list name of this Mac's inspection CA. A list may not use it.
+const InspectionCAItem = "wardyn-inspection-ca"
+
 // Base item kinds.
 const (
 	ItemKindPkg     = "pkg"
@@ -120,6 +127,23 @@ func LoadBaseList(path string) (BaseList, error) {
 	return l, nil
 }
 
+// WithInspectionCA is l with this Mac's inspection CA, the certificate at path, as its last item: a ca item
+// named InspectionCAItem, pinned to the file as it reads now. runnerd and the helper both add it this way, so
+// the list's digest is the same on both sides.
+func WithInspectionCA(l BaseList, path string) (BaseList, error) {
+	if _, _, err := readCA(path); err != nil {
+		return BaseList{}, fmt.Errorf("macvm: this Mac's inspection CA: %w", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return BaseList{}, fmt.Errorf("macvm: this Mac's inspection CA: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	l.Version = 1
+	l.Items = append(slices.Clone(l.Items), BaseItem{Kind: ItemKindCA, Name: InspectionCAItem, Path: path, SHA256: hex.EncodeToString(sum[:])})
+	return l, nil
+}
+
 // ParseBaseList parses an install list and checks every item, refusing an unknown field, kind or version.
 func ParseBaseList(b []byte) (BaseList, error) {
 	var l BaseList
@@ -150,6 +174,8 @@ func (it BaseItem) check() error {
 		return errors.New("a name is lower-case letters, digits, '.', '_' and '-', at most 64")
 	case it.Name == guestagent.AgentSigningItem:
 		return fmt.Errorf("the name %q is Wardyn's own, for the guest agent's signing certificate", it.Name)
+	case it.Name == InspectionCAItem:
+		return fmt.Errorf("the name %q is Wardyn's own, for this Mac's inspection CA", it.Name)
 	case !filepath.IsAbs(it.Path):
 		return errors.New("path must be an absolute path on this Mac")
 	case !sha256Hex.MatchString(it.SHA256):
