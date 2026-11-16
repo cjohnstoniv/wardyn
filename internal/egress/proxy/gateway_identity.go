@@ -46,9 +46,14 @@ const gatewayCutSentence = "This run's gateway access was cut when the portal th
 // gatewayCutCause is the decision row's cause for a call refused by the cut.
 const gatewayCutCause = "gateway access cut: the run's portal was revoked"
 
+// gatewayComponentCutSentence is what the sandbox reads when the control plane
+// refuses an MCP server's gateway token for a component the run carries. It
+// carries nothing the control plane sent.
+const gatewayComponentCutSentence = "a component this run carries was withdrawn from its owner, deleted, or pinned to a unit the run is not in, so this run's MCP servers get no gateway token until that changes; otherwise start a new run without that component"
+
 // errGatewayAccessCut is a mint refused with the control plane's permanent
-// gateway_access_cut reason, the only reason a refusal body is read for. It
-// makes the holder terminal.
+// gateway_access_cut reason, one of the closed reasons a refusal body is read
+// for (refusalReason). It makes the holder terminal.
 var errGatewayAccessCut = errors.New("the control plane cut this run's gateway access")
 
 // maxCutReasonBody bounds how much of a refusal is read for its reason.
@@ -588,16 +593,22 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 		return "", time.Time{}, false, fmt.Errorf("the control plane could not be reached for this run's gateway identity: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	reason := ""
+	if resp.StatusCode == http.StatusForbidden {
+		reason = refusalReason(resp.Body)
+	}
 	switch {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 		return "", time.Time{}, false, fmt.Errorf("the control plane answered %d for this run's gateway identity", resp.StatusCode)
-	case resp.StatusCode == http.StatusForbidden && refusedAsCut(resp.Body):
+	case reason == reasonGatewayAccessCut:
 		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %w", resp.StatusCode, errGatewayAccessCut)
+	case reason != "":
+		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %s", resp.StatusCode, gatewayComponentCutSentence)
 	default:
 		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d); if the provider was changed or turned off, start a new run", resp.StatusCode)
 	}
-	// A refused body is read only by refusedAsCut, and no error below quotes an
+	// A refused body is read only by refusalReason, and no error below quotes an
 	// answer: what it carries must not reach a decision row, the sandbox or a log.
 	var answer struct {
 		Token     string    `json:"token"`
@@ -613,17 +624,24 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 	return answer.Token, exp, false, nil
 }
 
-// refusedAsCut reports whether a refusal body names the one closed reason that
-// ends the holder. It reads at most maxCutReasonBody bytes and keeps nothing
-// else of them: any other body, or one that does not parse in that much, is not it.
-func refusedAsCut(body io.Reader) bool {
+// refusalReason is the reason a refusal body names when it is one of the closed
+// reasons the holder acts on: gateway_access_cut, which ends the holder, or a
+// component's cut (capability_component, component_gone, component_unit_pinned),
+// which the sandbox is told of. It reads at most maxCutReasonBody bytes and keeps
+// nothing else of them: any other body, or one that does not parse in that much,
+// is "".
+func refusalReason(body io.Reader) string {
 	var refusal struct {
 		Reason string `json:"reason"`
 	}
 	if json.NewDecoder(io.LimitReader(body, maxCutReasonBody)).Decode(&refusal) != nil {
-		return false
+		return ""
 	}
-	return refusal.Reason == reasonGatewayAccessCut
+	switch refusal.Reason {
+	case reasonGatewayAccessCut, "capability_component", "component_gone", "component_unit_pinned":
+		return refusal.Reason
+	}
+	return ""
 }
 
 // check reads a minted token's aud and exp, and refuses one for any audience but
