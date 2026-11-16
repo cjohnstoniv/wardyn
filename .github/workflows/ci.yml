@@ -2320,11 +2320,15 @@ jobs:
           pins+='|TestPass_APutBackWhoseFileIDChangesLeavesNoDuplicate|TestPass_APutBackOfAnEmptySaveWhoseFileIDChangesLeavesNoDuplicate'
           pins+='|TestPass_ACopyWhoseFileIDChangesNeverTakesAnEditorsSave|TestPass_AFailedCopyWhoseFileIDChangesLeavesNoUnnamedPartial'
           pins+='|TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved|TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy'
+          pins+='|TestPass_AFailedCopyRewrittenInPlaceToItsLengthIsKept|TestCopyFileIDs_HowThisVolumeNumbersFiles'
+          pins+='|TestPass_AFailedCopyBeforeItsSyncLeavesNoUnnamedPartial'
           go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
           (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
             -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
-          # -v and the count prove all fifteen ran and passed, not just compiled: a skip prints no PASS line.
-          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 15
+          # -v and the count prove all eighteen ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 18
+          # The volume's file numbers, as notices on the run: what the copy proofs rest on there.
+          grep -F 'file ids:' "$RUNNER_TEMP/foldersync-exfat.out" | sed 's/^.*file ids: /::notice title=exFAT file ids::/'
       - name: Detach the exFAT disk image
         if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
         timeout-minutes: 2
