@@ -6,17 +6,41 @@ package store
 import (
 	"context"
 	"fmt"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // EraseApprovalDecisionPersonalFields clears the decider and the typed reason of every approval
 // decided by one of principals, the approvals-table twin of EraseGovernanceChangePersonalFields: the
-// audit copy of the reason is sealed, this one is not. The state, its time and the decided scope stay.
+// audit copy of the reason is sealed, this one is not. In the same statement it removes the MCP call's
+// operation key from the scope of every approval raised in a run one of principals created (the key is
+// the caller's own text and may carry the run's correlation ID), and puts types.FileDownloadAskerErased
+// in place of one of principals as who asked for a file download, so the scope still parses. The state,
+// its time and the rest of the scope, a call's arguments and a file's name, size and hash included, stay.
 // It returns the rows it touched.
 func (s PG) EraseApprovalDecisionPersonalFields(ctx context.Context, principals []string) (int, error) {
 	if len(principals) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE approvals SET decided_by = '', reason = '' WHERE decided_by = ANY($1)`, principals)
+	// One UPDATE, never two on one table: a row can be both decided by principals and raised in their
+	// run, and every SET reads the row as it was. A pending approval whose scope, with the key removed or
+	// the asker erased, equals another pending one of its run fails the statement
+	// (approvals_pending_noncred_hash_uniq), so nothing lands, and a retry once either is decided or
+	// cancelled finishes it.
+	tag, err := s.Pool.Exec(ctx, `
+		WITH theirs AS (SELECT id FROM agent_runs WHERE created_by = ANY($1))
+		UPDATE approvals a SET
+			decided_by = CASE WHEN a.decided_by = ANY($1) THEN '' ELSE a.decided_by END,
+			reason = CASE WHEN a.decided_by = ANY($1) THEN '' ELSE a.reason END,
+			requested_scope = CASE
+				WHEN a.kind = $2 AND a.requested_scope->>'requested_by' = ANY($1)
+					THEN jsonb_set(a.requested_scope, '{requested_by}', to_jsonb($3::text))
+				WHEN a.run_id IN (SELECT id FROM theirs) THEN a.requested_scope - 'operation_key'
+				ELSE a.requested_scope END
+		WHERE a.decided_by = ANY($1)
+			OR (a.requested_scope ? 'operation_key' AND a.run_id IN (SELECT id FROM theirs))
+			OR (a.kind = $2 AND a.requested_scope->>'requested_by' = ANY($1))`,
+		principals, string(types.ApprovalFileDownload), types.FileDownloadAskerErased)
 	if err != nil {
 		return 0, fmt.Errorf("store: erase approval decision personal fields: %w", err)
 	}

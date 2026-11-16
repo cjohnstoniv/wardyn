@@ -263,11 +263,13 @@ func fileDownloadDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, s
 	return scope, true, false
 }
 
-// askedForDownload reports whether principal asked for ap's download: the asker never decides it, whoever they are.
+// askedForDownload reports whether principal asked for ap's download: the asker never decides it, whoever they
+// are. An erased asker (types.FileDownloadAskerErased) could have been anyone, so it counts as every principal.
 func askedForDownload(ap types.ApprovalRequest, principal string) bool {
 	if ap.Kind != types.ApprovalFileDownload {
 		return false
 	}
 	sc, ok := types.ParseFileDownloadScope(ap.RequestedScope)
-	return !ok || sc.RequestedBy == principal // a scope that cannot be read names nobody who may decide
+	// A scope that cannot be read, or whose asker was erased, names nobody who may decide.
+	return !ok || sc.RequestedBy == principal || sc.RequestedBy == types.FileDownloadAskerErased
 }
