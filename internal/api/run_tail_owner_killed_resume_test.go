@@ -11,8 +11,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// stopsAtGiveUpStore is unreadableAfterStopStore noting how many sandbox stops had been made as each give-up is made.
+type stopsAtGiveUpStore struct {
+	unreadableAfterStopStore
+	sb      *folderSandboxRunner
+	stopsAt *[]int
+}
+
+func (s stopsAtGiveUpStore) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	*s.stopsAt = append(*s.stopsAt, s.sb.stopCount())
+	return s.unreadableAfterStopStore.GiveUpRunLocalFolder(ctx, id, p)
+}
 
 // The tail owner's tail of a killed run past its keep, which still holds its sandbox ref and whose stored folder
 // record does not decode but holds a resume, gives that copy back up first, its given_up row saying the record could
@@ -24,7 +39,11 @@ func TestTailOwner_AKilledRunsUnreadableRecordHoldingAResumeIsGivenUpBeforeItsSt
 	s, cs, audit, run, sb, refAt := endGiveUpFixture(t, types.RunKilled, keptForCopyBack())
 	down := &atomic.Bool{}
 	down.Store(true)
-	s.cfg.Store = unreadableAfterStopStore{refAtEndGiveUpStore: s.cfg.Store.(refAtEndGiveUpStore), down: down}
+	var stopsAt []int
+	s.cfg.Store = stopsAtGiveUpStore{
+		unreadableAfterStopStore: unreadableAfterStopStore{refAtEndGiveUpStore: s.cfg.Store.(refAtEndGiveUpStore), down: down},
+		sb:                       sb, stopsAt: &stopsAt,
+	}
 	ended := time.Now().UTC().Add(-s.pendingCap() - time.Hour)
 	cs.dispatchTestStore.mu.Lock()
 	cs.run.EndedAt = &ended
@@ -38,6 +57,9 @@ func TestTailOwner_AKilledRunsUnreadableRecordHoldingAResumeIsGivenUpBeforeItsSt
 	if sb.stopCount() != 1 || len(cs.giveUps) != 1 || rows != 1 || cur.SandboxRef != "" {
 		t.Fatalf("%d stops, %d give-ups, %d given_up rows, ref %q; want 1 stop, 1 give-up, 1 row and the ref cleared",
 			sb.stopCount(), len(cs.giveUps), rows, cur.SandboxRef)
+	}
+	if len(stopsAt) == 0 || stopsAt[0] != 0 {
+		t.Errorf("sandbox stops made at each give-up %v; want the first give-up made before any stop", stopsAt)
 	}
 	if slices.ContainsFunc(*refAt, func(r string) bool { return r != "sbx" }) {
 		t.Errorf("refs at give-up %v; want the give-up made while the ref was set", *refAt)
