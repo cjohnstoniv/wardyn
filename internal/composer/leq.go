@@ -339,7 +339,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 			return false
 		}
 	}
-	return leqRubric(a.AutonomyRubric, b.AutonomyRubric)
+	return leqRubric(a.AutonomyRubric, b.AutonomyRubric) && leqConfinementFloors(a.ConfinementFloors, b.ConfinementFloors)
 }
 
 // leqRubric holds when a caps every posture b caps, at the same level or lower, and keeps b's guardrail lock.
@@ -362,6 +362,24 @@ func leqRubric(a, b *types.AutonomyRubric) bool {
 		switch {
 		case lb[i] == "": // b caps nothing here
 		case la[i] == "" || la[i].Rank() > lb[i].Rank():
+			return false
+		}
+	}
+	return true
+}
+
+// leqConfinementFloors holds when a floors every trait b floors, at the same class or higher: a floor a lowers
+// or removes is wider, and one a adds or raises is narrower.
+func leqConfinementFloors(a, b *types.ConfinementFloors) bool {
+	classes := func(f *types.ConfinementFloors) [3]types.ConfinementClass {
+		if f == nil {
+			return [3]types.ConfinementClass{}
+		}
+		return [3]types.ConfinementClass{f.OwnImage, f.SelfDefinedComponent, f.DataOutOpen}
+	}
+	ca, cb := classes(a), classes(b)
+	for i := range cb {
+		if cb[i] != "" && confinementRank(ca[i]) < confinementRank(cb[i]) {
 			return false
 		}
 	}

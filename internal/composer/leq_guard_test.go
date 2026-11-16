@@ -97,6 +97,10 @@ var leqRules = map[string]string{
 
 	"autonomy_rubric.self_defined_component": "b caps nothing: any a; else a caps at a level <= b's",
 
+	"confinement_floors.own_image":              "b floors nothing: any a; else a floors at a class >= b's",
+	"confinement_floors.self_defined_component": "b floors nothing: any a; else a floors at a class >= b's",
+	"confinement_floors.data_out_open":          "b floors nothing: any a; else a floors at a class >= b's",
+
 	"deny_components":      "a names every component id b names (a is a superset of b)",
 	"deny_model_providers": "a names every provider uid b names (a is a superset of b)",
 }

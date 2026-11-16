@@ -117,6 +117,10 @@ var meetRules = map[string]meetRule{
 
 	"autonomy_rubric.self_defined_component": {"caps nothing", "the lower level"},
 
+	"confinement_floors.own_image":              {"raises nothing", "the higher class"},
+	"confinement_floors.self_defined_component": {"raises nothing", "the higher class"},
+	"confinement_floors.data_out_open":          {"raises nothing", "the higher class"},
+
 	"deny_components":      {"none; every component may attach", "union; the base's order, then the overlay's new ids"},
 	"deny_model_providers": {"none; every provider may serve", "union; the base's order, then the overlay's new ids"},
 }

@@ -174,6 +174,10 @@ func cloneAuthority(a Authority) Authority {
 		r := *a.Limits.AutonomyRubric
 		out.Limits.AutonomyRubric = &r
 	}
+	if a.Limits.ConfinementFloors != nil {
+		c := *a.Limits.ConfinementFloors
+		out.Limits.ConfinementFloors = &c
+	}
 	return out
 }
 
@@ -240,6 +244,11 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if r := ov.Limits.AutonomyRubric; r != nil {
 		if err := r.Validate(); err != nil {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)
+		}
+	}
+	if c := ov.Limits.ConfinementFloors; c != nil {
+		if err := c.Validate(); err != nil {
+			m.fail(ReasonOverlayInvalid, "confinement_floors", "%v", err)
 		}
 	}
 }
