@@ -96,6 +96,10 @@ type hostApproval struct {
 	// verifiedAt is when the control plane last confirmed the approved state (the poll that
 	// observed it), the clock maxApprovalStaleness runs against.
 	verifiedAt time.Time
+	// spent is the approval of the last approved once grant consumeIfOnce spent here, and refunds how many times
+	// refundOnce gave that approval back. Only refundOnce reads them; no poll or raise writes through them.
+	spent   uuid.UUID
+	refunds int
 }
 
 // rejoinGap is how long after holdStart a further held request counts as re-entering the hold
@@ -242,9 +246,12 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //     HTTP (a keep-alive connection burns one `once` each) — honest for HTTPS,
 //     understated for HTTP.
 //   - A `once` grant is SPENT BEFORE SUCCESS IS GUARANTEED: evaluate consumes
-//     it before VetHost/dial, so a DNS-rebind denial or failed dial burns the
-//     grant and re-asks the operator. The METHOD check runs before the
-//     approval flow, so a method-denied request never spends one.
+//     it before VetHost/dial, so a DNS-rebind denial burns the grant and
+//     re-asks the operator. An HTTPS CONNECT that got nothing back (a failed
+//     dial, or an upstream that, after the TLS hello, closed or reset with no
+//     byte back or answered in plaintext the proxy refused) gives it back once
+//     (refundOnce). The METHOD check runs before the approval flow, so a
+//     method-denied request never spends one.
 //   - `until` is enforced against TWO CLOCKS (control plane vs. this sidecar's
 //     clock) — negligible when they share a host, real on a split topology.
 //   - Resolve/ResolveWait can now return apNone (an expiry reset inside
@@ -254,9 +261,12 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 // consumeIfOnce expires a stale grant, then reports the entry's current
 // terminal grant and — when that grant is scope=once — SPENDS it, clearing
 // the WHOLE entry so no sibling can take it again. The caller must hold a.mu.
+// A spent approve keeps only spent and refunds, for refundOnce.
 //
-// Invariant: a terminal `once` entry never survives an unlock — every write
-// of state/scope/expiresAt is followed by a consumeIfOnce under the SAME lock.
+// Invariant: a terminal `once` entry survives an unlock only as refundOnce
+// writes it, and every path that serves a grant reads it through consumeIfOnce
+// under a.mu, so it goes to one caller. Every other write of
+// state/scope/expiresAt is followed by a consumeIfOnce under the SAME lock.
 //
 // Both resets clear the ENTIRE entry, not just `state`: a surviving approvalID
 // would let a stale poll re-stamp apApproved onto it with no human in the
@@ -274,7 +284,15 @@ func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consume
 	}
 	state, id = st.state, st.approvalID
 	if (state == apApproved || state == apDenied) && st.scope.Normalize() == types.ScopeOnce {
-		*st = hostApproval{state: apNone}
+		left := hostApproval{state: apNone}
+		if state == apApproved {
+			// What refundOnce needs: the approval spent, and how often it came back before (none for a new one).
+			left.spent = id
+			if st.spent == id {
+				left.refunds = st.refunds
+			}
+		}
+		*st = left
 		consumed = true
 	}
 	// Either reset also zeroes lastPoll — benign, since cur is apNone there and
