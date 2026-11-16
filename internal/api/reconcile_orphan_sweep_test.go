@@ -766,14 +766,17 @@ func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
 
 // givenUpSweepStore is keptFolderStore whose kept runs hold resume and have a folder for the given_up row. Each
 // give-up is noted with the ref its run held when it was made; it applies unless refuse is set, and a kept run's
-// record cannot be read when unreadable is.
+// record cannot be read when unreadable is. The kept run's folder is on a folder runner and seeded, both ways
+// unless copiedIn.
 type givenUpSweepStore struct {
 	*keptFolderStore
-	resume     *types.FolderResume
-	refuse     bool
-	unreadable bool
-	giveUps    []store.GiveUpParams
-	refAt      []string
+	resume       *types.FolderResume
+	refuse       bool
+	unreadable   bool
+	copiedIn     bool
+	folderRunner uuid.UUID
+	giveUps      []store.GiveUpParams
+	refAt        []string
 }
 
 func (s *givenUpSweepStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
@@ -801,8 +804,19 @@ func (s *givenUpSweepStore) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID
 	return store.GiveUpOutcome{Applied: true, Gen: 3}, nil
 }
 
-func (s *givenUpSweepStore) RunLocalFolderSeed(context.Context, uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
-	return &types.RunLocalFolder{Name: "work", Direction: types.ComputerFolderBoth}, store.LocalFolderSeed{}, nil
+func (s *givenUpSweepStore) RunLocalFolderSeed(_ context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if !s.kept[id] {
+		return &types.RunLocalFolder{Name: "work", Direction: types.ComputerFolderBoth}, store.LocalFolderSeed{}, nil
+	}
+	dir, at := types.ComputerFolderBoth, time.Now().UTC()
+	if s.copiedIn {
+		dir = types.ComputerFolderIn
+	}
+	return &types.RunLocalFolder{Name: "work", Direction: dir, RunnerID: &s.folderRunner}, store.LocalFolderSeed{SeededAt: &at}, nil
+}
+
+func (s *givenUpSweepStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
 }
 
 func (s *givenUpSweepStore) SetRunLocalFolderSeed(context.Context, uuid.UUID, string) (bool, error) {
@@ -813,14 +827,22 @@ func (s *givenUpSweepStore) SetRunLocalFolderSeed(context.Context, uuid.UUID, st
 // owed copy back up before it clears the run's ref: the give-up is made while the ref is still set, due at once (a
 // zero cap), its final record keeps the count and names of the changes left behind, and its run.folder.transfer
 // given_up row is written. A give-up that leaves the record open keeps the ref for the next boot. A record that
-// cannot be read is decided by the owed checks that need no record: this folder has no runner and was never seeded,
-// so nothing is owed, and the ref is cleared with no give-up and no row. A run with nothing owed is not given up and
-// its ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
+// cannot be read is decided by the owed checks that need no record: this folder is on a folder runner, seeded and both
+// ways, so its copy back is owed and is given up with the keep as its cap, noted that the record could not be read.
+// Inside the keep the database does not apply that, so the ref stays; past it the give-up lands with its given_up row
+// and the ref is cleared. A folder copied in only owes nothing, and its ref is cleared with no give-up and no row. A
+// run with nothing owed is not given up and its ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
 func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 	for _, c := range []struct {
-		name               string
-		refuse, unreadable bool
-	}{{"applied", false, false}, {"left open", true, false}, {"record unreadable", false, true}} {
+		name                         string
+		refuse, unreadable, copiedIn bool
+	}{
+		{"applied", false, false, false},
+		{"left open", true, false, false},
+		{"record unreadable inside the keep", true, true, false},
+		{"record unreadable past the keep", false, true, false},
+		{"record unreadable, a folder copied in only", false, true, true},
+	} {
 		refuse, unreadable := c.refuse, c.unreadable
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -833,7 +855,7 @@ func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 			st := &givenUpSweepStore{keptFolderStore: &keptFolderStore{
 				orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run(kept, "kept"), run(ended, "ended")}},
 				kept:             map[uuid.UUID]bool{kept: true}},
-				resume: &types.FolderResume{Unsynced: 3, Counted: true, Paths: []string{"a.txt", "b.txt"}}, refuse: refuse, unreadable: unreadable}
+				resume: &types.FolderResume{Unsynced: 3, Counted: true, Paths: []string{"a.txt", "b.txt"}}, refuse: refuse, unreadable: unreadable, copiedIn: c.copiedIn}
 			rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}} // no fence and no proxy stop: no cut is confirmed
 			audit := &recRecorder{}
 			cfg := baseTestConfig(h, st)
@@ -847,14 +869,32 @@ func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 				t.Fatalf("stopped the kept sandbox %d times and the other %d; want 1 and 1", k, e)
 			}
 			if unreadable {
+				rows := 0
 				for _, ev := range audit.snapshot() {
-					if ev.Action == "run.folder.transfer" {
-						t.Errorf("audit row %s %s for a run whose record could not be read; want none", ev.Action, ev.Outcome)
+					if ev.Action != "run.folder.transfer" {
+						continue
+					}
+					rows++
+					if !strings.Contains(string(ev.Data), `"status_unreadable":true`) {
+						t.Errorf("audit row %s %s; want it to say the record could not be read", ev.Action, ev.Data)
 					}
 				}
-				if len(st.giveUps) != 0 || !slices.Contains(st.clearedRefs, kept) || !slices.Contains(st.clearedRefs, ended) {
-					t.Errorf("%d give-ups, refs cleared %v; want none, and both runs' refs cleared: a folder with no runner owes nothing",
-						len(st.giveUps), st.clearedRefs)
+				wantGiveUps, wantRows, cleared := 1, 0, false // inside the keep: given up with the keep as its cap, not applied
+				switch {
+				case c.copiedIn:
+					wantGiveUps, cleared = 0, true // a folder copied in only owes nothing
+				case !c.refuse:
+					wantRows, cleared = 1, true
+				}
+				if len(st.giveUps) != wantGiveUps || rows != wantRows || slices.Contains(st.clearedRefs, kept) != cleared ||
+					!slices.Contains(st.clearedRefs, ended) {
+					t.Errorf("%d give-ups, %d rows, refs cleared %v; want %d, %d, the kept ref cleared %v and the other cleared",
+						len(st.giveUps), rows, st.clearedRefs, wantGiveUps, wantRows, cleared)
+				}
+				for _, p := range st.giveUps {
+					if p.Cap != srv.pendingCap() || p.D1 || !strings.HasSuffix(p.Back.Error, folderStatusUnreadable) {
+						t.Errorf("give-up %+v; want the keep as its cap, no containment terms, and the unreadable record noted", p)
+					}
 				}
 				return
 			}

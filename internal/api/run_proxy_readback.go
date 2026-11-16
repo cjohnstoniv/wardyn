@@ -434,8 +434,9 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		// so its changes not yet copied back are not lost; its ref stays for the tail owner. A runner that is not
 		// here fails this stop for the sweep to retry. A substrate that cannot be cut keeps no such sandbox, and
 		// neither does a hosted one whose proxy stop failed (its failure row written): its sandbox is stopped as
-		// any other. A record that cannot be read keeps the sandbox only on a confirmed cut, with one failure row
-		// carrying folder_record_error; a rule that cannot be read past the cap is given up by the tail owner.
+		// any other. A record, seed or rule that cannot be read keeps the sandbox only inside the keep and on a
+		// confirmed cut, with one failure row carrying folder_record_error. Past the keep the verdict gives its
+		// copy back up, or finds nothing owed (unreadKeepEnded), and the sandbox is stopped below as any other.
 		v, ferr, cutErr := s.folderKeepVerdict(ctx, run, "run.reconcile")
 		switch v {
 		case folderKeepCut:
@@ -491,7 +492,10 @@ const (
 // folderKeepVerdict is the one rule every destructive sweep decides a kept sandbox by: a sandbox kept for its
 // computer folder's pass back (keepsSandboxForFolder), or whose record cannot be read (ferr), stays only once
 // the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy stop
-// answered nil). A runner that is not here leaves it in place (folderKeepAway), and cutErr is errRunnerNotHere.
+// answered nil). A record, seed or rule that cannot be read is kept that way only inside the keep: past it the copy
+// back is given up here, as the tail owner gives it up (unreadKeepEnded), and the verdict is folderKeepNone, so a
+// record that never reads does not keep its sandbox for good. A runner that is not here leaves it in place
+// (folderKeepAway), and cutErr is errRunnerNotHere.
 // Anything else is folderKeepNone: stopped whatever its record says. That covers a sandbox that cannot be cut (a
 // virtual machine, Kubernetes in server mode, a runner sandbox whose cut failed, as quiesceKeptSandbox decides)
 // and a hosted cut whose proxy stop failed, whose failure row copyBackCut has written. cutErr is copyBackCut's
@@ -509,6 +513,8 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 	switch {
 	case errors.Is(cutErr, errRunnerNotHere):
 		return folderKeepAway, ferr, cutErr // no row: the runner is not here, and the next pass asks again
+	case cutErr == nil && ferr != nil && s.unreadKeepEnded(ctx, run):
+		return folderKeepNone, ferr, nil // past the keep its copy back is given up, so nothing is kept for it
 	case cutErr == nil:
 		return folderKeepCut, ferr, nil
 	}
@@ -518,11 +524,15 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 // stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
 // (folderKeepVerdict); left reports a sandbox left in place. A sandbox kept for its pass back stays when the
 // agent's cut is confirmed, and a stop that failed is action's failure row with teardown_error. A record that
-// cannot be read is logged, and the sandbox stays only once that cut is confirmed, as a failure row with
-// folder_record_error that stays unresolved so a later pass reads it again. A runner run whose runner is
-// not connected here is left in place with errRunnerNotHere, nothing stopped, queued or written, until its
-// runner is. It fails closed: any other sandbox is stopped, a hosted one whose proxy stop failed among them (its
-// failure row is the cut's, and a sandbox stop that fails too is the failed-stop retry's).
+// cannot be read is logged. Inside the keep the sandbox then stays only once that cut is confirmed, as a failure
+// row with folder_record_error that stays unresolved so a later pass reads it again. Past the keep its copy back
+// is given up, or found to owe nothing (unreadKeepEnded), and the sandbox is stopped as any other, so a record
+// that never reads does not keep it for good; a give-up that does not land, or a record that reads when read
+// again and owes nothing, leaves it kept as inside the keep, for the next pass (one that reads again and is still
+// owed is given up and stopped in the same pass). A runner run whose runner is not connected here
+// is left in place with errRunnerNotHere, nothing stopped, queued or written, until its runner is. It fails
+// closed: any other sandbox is stopped, a hosted one whose proxy stop failed among them (its failure row is the
+// cut's, and a sandbox stop that fails too is the failed-stop retry's).
 func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
 	if run.SandboxRef == "" {
 		return false, nil
