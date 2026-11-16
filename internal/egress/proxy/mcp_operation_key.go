@@ -32,7 +32,7 @@ const (
 	mcpCallOperationKeyText   = "This call's operation key (_meta \"wardyn.dev/operation-key\") is not 1 to 128 ASCII letters, digits or . _ : / -, so Wardyn did not ask about it or send it."
 	mcpCallKeyReusedText      = "This operation key was already used for a different call, so Wardyn did not send this one. Give a different operation a key of its own."
 	mcpCallSendUnrecordedText = "Wardyn could not record that this call was being sent, so it did not send it. Call the tool again to ask again."
-	mcpCallSentText           = "This operation was already sent once, under request %s at %s, and its server answered. Wardyn did not send it again or ask a person."
+	mcpCallSentText           = "This operation was already sent once, under request %s at %s, and its server answered (with any status). Wardyn did not send it again or ask a person."
 	mcpCallSentUnansweredText = "A send of this operation was started under request %s at %s, and no answer from its server was recorded, so it may or may not have run. Wardyn did not send it again or ask a person."
 )
 
