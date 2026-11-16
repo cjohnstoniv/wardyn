@@ -77,6 +77,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - Pinning an unpinned component, or moving the pin to a unit below, applies at once. Any other move is held for a second person when held governance writes are on.
 - A pin moved after launch reaches a running run at its next credential mint: every credential on the run, and every gateway token for an organisation MCP server, is then refused `component_unit_pinned`. A revive, restart or end extension is refused with the same reason.
 - A deleted organisation component reaches a running run that carries it at its next credential mint or redeem: every credential on the run, and every gateway token for an organisation MCP server, is then refused `component_gone`, as a revive, restart or end extension is.
+- A `custom_component` feature no longer allowed to a run's owner reaches a running run that carries a component they defined at its next credential mint or redeem: every credential on the run, and every gateway token for an organisation MCP server, is then refused `capability_component`.
 - A person's own `wardyn` sign-in to a component (the AWS and Azure CLI sign-ins) is not a run, has no context and is not pinned.
 - A unit with a component pinned to it cannot be deleted until the component is unpinned.
 
