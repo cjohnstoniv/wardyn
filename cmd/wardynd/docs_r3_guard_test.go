@@ -1032,21 +1032,26 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 		"so it is not denied at step 0",
 		"(`VetHost`, step 4) still binds it",
 	)
-	// §4.2's FIRST statement of the same bound must carry the same qualifier and
-	// cite the file the guard actually lives in (it moved out of proxy.go).
+	// Section 4.2's first statement of the same bound must state it as bound (3)
+	// does, in every literal spelling, and cite the file the guard lives in (it
+	// moved out of proxy.go).
 	s42 := doc[strings.Index(doc, "### 4.2 The unconditional IP guard"):]
 	if i := strings.Index(s42, "\n### "); i > 0 {
 		s42 = s42[:i]
 	}
 	for _, want := range []string{
 		"internal/egress/proxy/literal_ip_guard.go",
-		"in every spelling that guard parses",
+		"in every literal spelling, among them",
 	} {
 		if !strings.Contains(s42, want) {
-			t.Fatalf("THREAT-MODEL.md §4.2's opening statement of the literal-IP bound is missing %q — "+
-				"the section bound (3) forwards the reader to must not restate the promise unqualified, "+
-				"nor cite proxy.go for a guard that lives in literal_ip_guard.go", want)
+			t.Fatalf("THREAT-MODEL.md section 4.2's opening statement of the literal-IP bound is missing %q: "+
+				"it must state the bound as bound (3) does, unqualified, "+
+				"and cite literal_ip_guard.go, where the guard lives, not proxy.go", want)
 		}
+	}
+	if strings.Contains(s42, "in every spelling that guard parses") {
+		t.Fatal("THREAT-MODEL.md section 4.2 still qualifies the literal-IP bound as \"in every spelling that guard parses\"; " +
+			"bound (3) states it in every literal spelling, and the two statements must agree")
 	}
 }
 

@@ -946,9 +946,9 @@ is not the deployment described above.**
 
 - A literal-IP target is denied before policy or approval run (`evaluate` step 0, `literalIPGuard`
   in [`internal/egress/proxy/literal_ip_guard.go`](../internal/egress/proxy/literal_ip_guard.go)) —
-  - in every spelling that guard parses: the canonical one, the `inet_aton` non-canonical IPv4
+  - in every literal spelling, among them the canonical one, the `inet_aton` non-canonical IPv4
     forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`).
-  - The residual below states what that set does not cover.
+  - The residual below states what that bound does not cover.
 - **`no_network`** (the `no-network` wall preset) refuses every request at step 0, before a `via_org`
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.

@@ -121,7 +121,7 @@ func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 			d, target, _ := p.evaluate(context.Background(), tc.host, 443, http.MethodConnect, "")
 			if d != egress.Deny {
 				t.Fatalf("evaluate(%q) [%s] = %v target=%q, want Deny: bound (3) of the corp-upstream "+
-					"relaxation promises every literal spelling the guard PARSES is denied at step 0",
+					"relaxation promises every literal spelling is denied at step 0",
 					tc.host, tc.why, d, target)
 			}
 			if r := VetHost(tc.host, publicResolver{}); !r.Denied {
