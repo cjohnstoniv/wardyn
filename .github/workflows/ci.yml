@@ -144,7 +144,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -2227,6 +2227,7 @@ jobs:
   #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
   #   - the folder sync's copy pins on an exFAT disk image, a filesystem without hard links
+  #   - the member-scan letter-case pin, on the runner's volume, which ignores letter case
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
   macos:
@@ -2273,6 +2274,13 @@ jobs:
           # The folder sync's one-step swap and move-aside on APFS: -v and the grep prove the pins ran, not just compiled.
           go test -count=1 -timeout 5m -v -run '^TestPass_ALaptop' ./internal/foldersync/ | tee "$RUNNER_TEMP/foldersync.out"
           test "$(grep -c -- '^--- PASS: TestPass_ALaptop' "$RUNNER_TEMP/foldersync.out")" = 4
+          # The member-scan pin's letter-case branch runs only on a volume that ignores case: prove this one does,
+          # then that the pin ran and passed.
+          probe="$(mktemp -d)"; touch "$probe/case"
+          test -e "$probe/CASE" || { echo "::error::$TMPDIR is case-sensitive, so the member-scan letter-case branch would not run"; exit 1; }
+          rm -rf "$probe"
+          go test -count=1 -timeout 5m -v -run '^TestOpenScanSource_AnotherNameOfAMemberRootHoldsTheFolder$' ./internal/runner/ | tee "$RUNNER_TEMP/member-scan.out"
+          grep -q -- '^--- PASS: TestOpenScanSource_AnotherNameOfAMemberRootHoldsTheFolder ' "$RUNNER_TEMP/member-scan.out"
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
