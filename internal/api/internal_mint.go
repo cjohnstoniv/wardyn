@@ -339,14 +339,10 @@ func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, cla
 	if !lg.found || !lg.withheld {
 		return lg.run, false
 	}
-	reason, msg := reasonGrantWithheld,
-		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches"
-	if lg.pinned {
-		reason, msg = reasonComponentUnitPinned,
-			"wardyn: this run is no longer given credentials: a component it carries is now pinned to a unit this run is not in; start a new run in that unit"
-	}
-	if lg.withdrawn != "" {
-		reason, msg = lg.withdrawn, componentWithdrawnMsgs[lg.withdrawn]
+	reason, msg := componentCut(lg.pinned, lg.withdrawn)
+	if reason == "" {
+		reason, msg = reasonGrantWithheld,
+			"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches"
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 		grantID.String(), "denied", mustJSON(map[string]any{

@@ -82,9 +82,11 @@ func (s *Server) handleGatewayClientCertificate(w http.ResponseWriter, r *http.R
 
 // gatewayCertAdmit runs gatewayMintAdmit for each of the run's sealed routes and
 // returns the shortest token lifetime among those admitted. A route changed since
-// dispatch is passed over, as its own token would be refused; any other refusal
-// (the person, the portal, a store fault) is the answer, since it holds for every
-// route. No route admitted is gatewayChanged.
+// dispatch is passed over, as its own token would be refused, and so is an MCP
+// server's route refused for a component the run carries (gatewayComponentCut),
+// which does not reach the model provider's; any other refusal (the person, the
+// portal, a store fault) is the answer, since it holds for every route. No route
+// admitted is gatewayChanged.
 func (s *Server) gatewayCertAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun) (time.Duration, *ownerRefusal) {
 	routes, err := s.sealedGatewayRoutes(ctx, run.ID)
 	switch {
@@ -97,7 +99,7 @@ func (s *Server) gatewayCertAdmit(ctx context.Context, claims *identity.Claims, 
 	lifetime := time.Duration(0)
 	for _, rt := range routes {
 		dest, _, ref := s.gatewayMintAdmit(ctx, claims, run, rt.ProviderID, rt.MCPKey)
-		if ref != nil && ref.reason == reasonGatewayIdentityChanged {
+		if ref != nil && (ref.reason == reasonGatewayIdentityChanged || gatewayComponentCutReason(ref.reason)) {
 			continue
 		}
 		if ref != nil {
