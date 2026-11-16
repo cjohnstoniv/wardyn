@@ -174,6 +174,16 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
 		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
 	},
+	// A pin is set only on the caller's own workload: a ?owner= naming anyone else, a sponsor or an
+	// operator included, is the same 404 as a missing workload, and nothing is written.
+	"PUT /api/v1/workloads/{name}/policy-pin?owner": {
+		entity: entityPrincipal, readers: []string{"setWorkloadPolicyPin"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange",
+	},
+	"DELETE /api/v1/workloads/{name}/policy-pin?owner": {
+		entity: entityPrincipal, readers: []string{"setWorkloadPolicyPin"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange",
+	},
 	// A restart launches as the owner, so only the owner, the sponsor or an operator reaches it: even a
 	// security_admin naming the service gets the 404, which a member gets a fortiori.
 	"POST /api/v1/workloads/{name}/restart?owner": {
