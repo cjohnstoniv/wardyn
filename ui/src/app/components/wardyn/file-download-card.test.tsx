@@ -115,7 +115,7 @@ describe("the file_download card", () => {
   });
 
   it("an erased asker is named in words, and the card offers no decision, since no person can make it", () => {
-    renderCard(row({ requested_by: "dana.reyes@acme.example", requested_scope: scope({ requested_by: "erased" }) }), { canDecide: true });
+    renderCard(row({ requested_by: "dana.reyes@acme.example", requested_scope: scope({ requested_by: "erased" }) as unknown as ApprovalRequest["requested_scope"] }), { canDecide: true });
     const card = screen.getByTestId("file-download-card");
     expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toContain(C.ERASED_ASKER);
     expect(card).toHaveTextContent(C.ERASED_NOTE);
