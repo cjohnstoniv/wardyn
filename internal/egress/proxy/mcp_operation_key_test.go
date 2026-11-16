@@ -246,11 +246,19 @@ func opCallKey(t *testing.T, args string) string {
 	return key
 }
 
-// wantSentText checks the agent's answer to a call whose operation was already sent as s.
+// wantSentText checks the agent's answer to a call whose operation was already sent as s: it names the
+// approval and the time, says whether the server answered, and that nothing was sent again.
 func wantSentText(t *testing.T, rec *httptest.ResponseRecorder, s opSend) {
 	t.Helper()
-	if got, want := toolResultText(t, rec), operationSentText(&operationSentError{approvalID: s.id, sentAt: s.at, answered: s.answered}); got != want {
-		t.Fatalf("text %q, want %q", got, want)
+	got := toolResultText(t, rec)
+	clause := "no answer from its server was recorded"
+	if s.answered {
+		clause = "its server answered"
+	}
+	for _, want := range []string{s.id.String(), s.at.UTC().Format(time.RFC3339), clause, "did not send it again"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("text %q, want it to contain %q", got, want)
+		}
 	}
 }
 
