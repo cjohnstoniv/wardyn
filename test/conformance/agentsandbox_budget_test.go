@@ -51,10 +51,10 @@ func workflowJob(wf, name string) string {
 }
 
 // TestAgentSandboxCaseBudgetsFitTheJobTimeout reads ci.yml's agent-sandbox job: the cases its "ran and passed" step
-// requires, the CONFORMANCE_K8S_TIMEOUT its suite step passes, and its timeout-minutes. The measured suite
-// time plus the new cases' worst cases, with the 1.25 margin, must fit that go test timeout, and with the job's setup
-// added, the job's timeout-minutes. A go test timeout expiry
-// is a panic that discards every verdict already produced, so a raised limit or a new case reds here instead.
+// requires, the CONFORMANCE_K8S_TIMEOUT its suite step passes, and its timeout-minutes. The measured suite time plus
+// the new cases' worst cases, with the 1.25 margin, must fit that go test timeout, and with the job's setup added, the
+// job's timeout-minutes. A go test timeout expiry is a panic that discards every verdict already produced, so a raised
+// limit or a new case reds here instead.
 func TestAgentSandboxCaseBudgetsFitTheJobTimeout(t *testing.T) {
 	b, err := os.ReadFile("../../.github/workflows/ci.yml")
 	if err != nil {
