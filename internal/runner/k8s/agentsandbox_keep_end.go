@@ -117,16 +117,28 @@ func (d *Driver) refRun(ctx context.Context, ref string) (uuid.UUID, string, err
 	return runID, ns, nil
 }
 
-// EndSandbox keeps the run: the proxy stops and the agent pod goes; the controller makes it again held behind
-// Wardyn's gate, with no node and no compute, until StartSandbox reads it back. The work drive and the run Secret stay.
-// Every step can run again: the lease pass repeats the end until the run is revived or torn down, and a run whose
-// pod the controller has not yet made again is still kept.
+// EndSandbox is EndSandboxAt for no generation.
 func (k *keepDriver) EndSandbox(ctx context.Context, ref string) error {
+	return k.EndSandboxAt(ctx, ref, 0)
+}
+
+// EndSandboxAt keeps the run, acting for policy generation gen (runner.ProxyGenerationStopper): the proxy stops and the
+// agent pod goes; the controller makes it again held behind Wardyn's gate, with no node and no compute, until StartSandbox
+// reads it back. The work drive and the run Secret stay. Every step can run again: the lease pass repeats the end until
+// the run is revived or torn down, and a run whose pod the controller has not yet made again is still kept. With gen > 0,
+// a proxy pod started for a newer generation refuses the end with runner.ErrProxyGenerationNewer before anything is
+// written, and again before a running agent pod goes (deleteKeptAgentPod). The run's EndpointSlice is emptied only while
+// no newer proxy pod is there (emptyKeepEndpointsAt). The proxy pod removed is the one read first.
+func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) error {
 	runID, ns, err := k.refRun(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if _, err := k.keptSandbox(ctx, ns, runID); err != nil {
+		return err
+	}
+	old, err := k.proxyNotNewer(ctx, ns, runID, gen, false)
+	if err != nil {
 		return err
 	}
 	svc, err := k.clientset.CoreV1().Services(ns).Get(ctx, keepServiceName(runID), metav1.GetOptions{})
@@ -136,40 +148,46 @@ func (k *keepDriver) EndSandbox(ctx context.Context, ref string) error {
 	if err != nil {
 		return fmt.Errorf("k8s: keep: read the run's Service: %w", err)
 	}
-	if err := k.writeKeepEndpoints(ctx, ns, runID, svc, ""); err != nil {
+	if err := k.emptyKeepEndpointsAt(ctx, ns, runID, svc, gen, false); err != nil {
 		return err
 	}
-	if err := k.stopKeptProxy(ctx, ns, runID); err != nil {
+	if err := k.stopKeptProxy(ctx, ns, runID, old, gen); err != nil {
 		return err
 	}
-	return k.deleteKeptAgentPod(ctx, ns, runID)
+	return k.deleteKeptAgentPod(ctx, ns, runID, gen)
 }
 
-// stopKeptProxy deletes the run's proxy pod, waits until it is gone, and removes the replacement config Secrets.
-func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID) error {
-	if err := d.clientset.CoreV1().Pods(ns).Delete(ctx, proxyPodName(runID), metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("k8s: keep: delete the proxy pod: %w", err)
+// stopKeptProxy removes pod, the run's proxy pod as the end read it (nil: none), with the replacement config Secret it
+// mounted (removeProxyPod). For gen > 0 the run's proxy pod is then read again: removing pod can wait, and a newer revive
+// may have started its proxy in the meantime, so the end stops there with runner.ErrProxyGenerationNewer.
+func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, gen int) error {
+	if err := d.removeProxyPod(ctx, ns, runID, pod); err != nil {
+		return fmt.Errorf("k8s: keep: remove the proxy pod: %w", err)
 	}
-	proxyOnly := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelComponent + "=" + componentProxy}
-	if err := d.waitPodsGone(ctx, ns, proxyOnly, 2*time.Minute); err != nil {
-		return fmt.Errorf("k8s: keep: wait for the proxy pod to go: %w", err)
-	}
-	replacements := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + labelProxyCfg}
-	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, replacements); err != nil && !isNotFound(err) {
-		return fmt.Errorf("k8s: keep: delete the replacement config Secrets: %w", err)
+	if gen > 0 {
+		if _, err := d.proxyNotNewer(ctx, ns, runID, gen, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // deleteKeptAgentPod deletes the agent pod so the controller makes it again held. A pod already gone, or already held,
-// is left as it is.
-func (d *Driver) deleteKeptAgentPod(ctx context.Context, ns string, runID uuid.UUID) error {
+// is left as it is. For gen > 0 the run's proxy pod is read again first: a revive starts its proxy before it ungates the
+// agent pod, so a running pod beside a proxy of a newer generation is that revive's, and is left, with
+// runner.ErrProxyGenerationNewer.
+func (d *Driver) deleteKeptAgentPod(ctx context.Context, ns string, runID uuid.UUID, gen int) error {
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, agentPodName(runID), metav1.GetOptions{})
 	if isNotFound(err) || err == nil && agentPodGated(pod) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("k8s: keep: read the agent pod: %w", err)
+	}
+	if gen > 0 {
+		if _, err := d.proxyNotNewer(ctx, ns, runID, gen, false); err != nil {
+			return err
+		}
 	}
 	uid := pod.UID
 	if err := d.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) {
@@ -195,8 +213,11 @@ func (k *keepDriver) StartSandbox(ctx context.Context, ref string) error {
 	if err == nil && pod.DeletionTimestamp != nil {
 		return errors.New("k8s: keep: the agent pod is still being deleted by the run's end; revive again once it is gone")
 	}
-	if err == nil && !agentPodGated(pod) && mainContainerRunning(pod) {
-		return nil
+	if err == nil && !agentPodGated(pod) {
+		if mainContainerRunning(pod) {
+			return nil
+		}
+		return errors.New("k8s: keep: the agent pod is not held (its gate was removed earlier) and its main container is not running, as after a start that stopped partway; the run's end makes the pod again held, so revive again after that")
 	}
 	want, uid, err := k.keptWant(ctx, ns, runID)
 	if err != nil {

@@ -93,6 +93,29 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 	}
 }
 
+// TestConformanceK8sJobPassesNoTimeoutOverride holds ci.yml's conformance-k8s job to the Makefile's
+// CONFORMANCE_K8S_TIMEOUT default, the timeout TestEphemeralCaseBudgetFitsTheMakefileTimeout checks the eviction case
+// against: the job or the workflow's own env setting it would run the suite under a timeout no test sized.
+func TestConformanceK8sJobPassesNoTimeoutOverride(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	wf := string(b)
+	job := workflowJob(wf, "conformance-k8s")
+	if !strings.Contains(job, "run: make test-conformance-k8s\n") {
+		t.Fatal("ci.yml's conformance-k8s job has no `run: make test-conformance-k8s` step")
+	}
+	head, _, _ := strings.Cut(wf, "\njobs:\n")
+	for _, part := range []struct{ name, text string }{{"the conformance-k8s job", job}, {"the workflow's top-level settings", head}} {
+		for _, line := range strings.Split(part.text, "\n") {
+			if code, _, _ := strings.Cut(line, "#"); strings.Contains(code, "CONFORMANCE_K8S_TIMEOUT") {
+				t.Errorf("%s sets CONFORMANCE_K8S_TIMEOUT (%q); the conformance-k8s suite must run under the Makefile's default", part.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 // TestEphemeralFillScriptCodesAreDistinct pins the fill script's exit-code
 // contract, which is what the case BRANCHES on — 90 skips as an image verdict, 91
 // as an environment one (or, on a substrate-owned target, a substrate verdict),

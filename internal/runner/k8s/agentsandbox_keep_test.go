@@ -331,8 +331,19 @@ func keepRig(t *testing.T, cfg Config) (*Driver, *fake.Clientset, *dynamicfake.F
 	t.Helper()
 	d, cs, dyn := newSandboxRig(t, cfg, controllerMaking(t, nil))
 	installKeepServiceReactor(cs, "10.96.0.50")
+	denySecretReads(cs)
 	cs.ClearActions()
 	return d, cs, dyn
+}
+
+// denySecretReads refuses a get or a list of a Secret as the chart's Role does: it grants create, delete and
+// deletecollection on Secrets, and no get, list or watch. A test reads a Secret through the tracker.
+func denySecretReads(cs *fake.Clientset) {
+	for _, verb := range []string{"get", "list"} {
+		cs.PrependReactor(verb, "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("test: the Role grants no get, list or watch on secrets"))
+		})
+	}
 }
 
 func sandboxTemplate(t *testing.T, dyn *dynamicfake.FakeDynamicClient, ref string) (*unstructured.Unstructured, *corev1.Pod) {
