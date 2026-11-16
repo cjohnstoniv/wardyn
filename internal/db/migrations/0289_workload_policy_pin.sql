@@ -7,3 +7,4 @@
 -- NOT NULL with a constant default, so the column is metadata-only; the check scans the table once, and
 -- the table's grants cover it.
 ALTER TABLE workloads ADD COLUMN IF NOT EXISTS policy_pin TEXT NOT NULL DEFAULT ''
+    CHECK (policy_pin = '' OR policy_pin ~ '^[0-9a-f]{64}$');
