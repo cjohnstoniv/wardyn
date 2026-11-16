@@ -171,7 +171,7 @@ func TestHandleScanSource(t *testing.T) {
 		st := &scanSourceStore{sources: sources(), setErr: errors.New("write to db.internal:5432 refused")}
 		h, srv := newSrv(t, st, false)
 		w := scan(srv, dirID.String())
-		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || strings.Contains(w.Body.String(), "db.internal") {
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || !strings.Contains(w.Body.String(), scanAuditPersistFault) || strings.Contains(w.Body.String(), "db.internal") {
 			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
 		}
 		if got := h.auditOutcomes("source.scan"); len(got) != 1 || got[0] != "failure" {
@@ -284,7 +284,7 @@ func TestScanAttachedSourcesOutcomes(t *testing.T) {
 		st := base()
 		st.setErr = errors.New("write to db.internal:5432 refused")
 		h, w := run(t, st, false, attach(dirID))
-		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || strings.Contains(w.Body.String(), "db.internal") {
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || !strings.Contains(w.Body.String(), scanAuditPersistFault) || strings.Contains(w.Body.String(), "db.internal") {
 			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
 		}
 		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "failure" {

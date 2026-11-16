@@ -51,6 +51,21 @@ func writebackMergeAuditDetail(err error) string {
 	return writebackAuditStoreError
 }
 
+// writebackAuditEgressRefused is an `always` decision's failure row detail when the store's guard refused the
+// list write: the list is at its cap, or was edited after the decision.
+const writebackAuditEgressRefused = "egress list at its cap or edited since the decision"
+
+// writebackEgressAuditDetail is the failure row's detail for an egress list write the store failed.
+func writebackEgressAuditDetail(err error) string {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		return writebackAuditEgressRefused
+	case errors.Is(err, store.ErrNotFound):
+		return writebackAuditWorkspaceGone
+	}
+	return writebackAuditStoreError
+}
+
 // primaryWorkspace is an `always` decision's target workspace: WorkspaceIDs[0]
 // (the documented PRIMARY — referencedWorkspaces builds it in a stable order,
 // mounts then repos, deduped, and it also drives image selection), else the
@@ -197,7 +212,12 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	}
 	ws, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, wsID, host, allow, maxApprovedEgress)
 	if err != nil {
-		data["detail"] = err.Error()
+		detail := writebackEgressAuditDetail(err)
+		if detail == writebackAuditStoreError {
+			slog.ErrorContext(ctx, "wardynd: write an approval's decided host into a workspace's egress lists",
+				slog.String("run_id", ap.RunID.String()), slog.String("workspace_id", wsID.String()), slog.Any("err", err))
+		}
+		data["detail"] = detail
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure",
 			auditWorkspaceDataFor(by, s.workspaceOwner(ctx, wsID), data)))
 		return
