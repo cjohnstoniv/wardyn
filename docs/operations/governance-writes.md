@@ -5,6 +5,8 @@
 The optional switches that hold a write until a second human decides it, and the walkthrough
 an operator follows to turn one on and run the queue.
 
+[Delegation](delegation.md) says, for each kind of consent, who may give it and when a second person is needed.
+
 **Optional: require a SECOND human on egress decisions.**
 
 - Set `WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain` approval may not be the human who created the run.
