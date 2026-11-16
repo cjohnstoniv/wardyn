@@ -408,7 +408,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The autonomy gate's own sentences, as create carries them (runs.go), so Review shows a derived hold, then the
 	// sentence naming the confinement floors that raised the run's minimum class (one statement: the handler is at
 	// the function-length gate).
-	warnings = append(append(warnings, f.autonomyWarns...), confinementRaisedWarning(traitFloor(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling))...)
+	warnings = append(append(warnings, f.autonomyWarns...), confinementRaisedWarning(traitFloor(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling))...)
 	// …and create's managed-settings sentence. A pooled run is read as the queued path reads it, against
 	// every runner it could take; otherwise against the runner create would bind: the named one, or the
 	// deployment's executor.

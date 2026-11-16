@@ -11,7 +11,8 @@ import "fmt"
 // field, validated by Validate, like AutonomyRubric.
 type ConfinementFloors struct {
 	// OwnImage floors a run on an image its launcher chose: the request's image (an attached workspace's base
-	// image included), a policy-carried workspace's image, or a devcontainer build.
+	// image included), a policy-carried workspace's image, a devcontainer build, or a workspace built from its
+	// repository's own devcontainer.
 	OwnImage ConfinementClass `json:"own_image,omitempty"`
 	// SelfDefinedComponent floors a run that carries a component its launcher defined.
 	SelfDefinedComponent ConfinementClass `json:"self_defined_component,omitempty"`

@@ -666,7 +666,7 @@ What the check does and does not settle:
 
 `confinement_floors` is a limit on a governance profile, not a field of a run's policy. It raises a run's minimum confinement class by what the run does:
 
-- `own_image`: the run uses an image its launcher chose: `image`, an attached workspace's base image, a policy-carried workspace's image, or `devcontainer_repo`.
+- `own_image`: the run uses an image its launcher chose: `image`, an attached workspace's base image, a policy-carried workspace's image, `devcontainer_repo`, or a workspace built from its repository's own devcontainer.
 - `self_defined_component`: the run carries a component its launcher defined.
 - `data_out_open`: the run's `data_out` is `allowed` or unset.
 

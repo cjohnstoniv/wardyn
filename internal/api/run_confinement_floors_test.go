@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // TestConfinementTraitsFireOnTheirSignal: each trait the confinement floors read is true on its own signal and
@@ -30,6 +32,14 @@ func TestConfinementTraitsFireOnTheirSignal(t *testing.T) {
 		{"the request's image", func(f *runFold) { f.req.Image = "registry.example/team/tool:1" }, composer.ConfinementTraits{OwnImage: true}},
 		{"a policy-carried workspace's image", func(f *runFold) { f.carriedImage = "registry.example/team/base:2" }, composer.ConfinementTraits{OwnImage: true}},
 		{"a devcontainer build", func(f *runFold) { f.req.DevcontainerRepo = "https://git.example/team/repo" }, composer.ConfinementTraits{OwnImage: true}},
+		{"a workspace built from its repository's own devcontainer", func(f *runFold) { f.wsRefs = []types.Workspace{devcontainerRepoWorkspace(t, true)} }, composer.ConfinementTraits{OwnImage: true}},
+		{"a workspace whose image Wardyn generates", func(f *runFold) { f.wsRefs = []types.Workspace{devcontainerRepoWorkspace(t, false)} }, composer.ConfinementTraits{}},
+		{"a devcontainer workspace beside one naming a base image", func(f *runFold) {
+			// The base image decides the image (resolveCreateRunImage), and the fold carries it as carriedImage.
+			based := devcontainerRepoWorkspace(t, false)
+			based.BaseImage = &types.WorkspaceBaseImage{Kind: "registry", Image: "registry.example/team/base:2"}
+			f.wsRefs = []types.Workspace{devcontainerRepoWorkspace(t, true), based}
+		}, composer.ConfinementTraits{}},
 		{"a component the launcher defined", func(f *runFold) { f.comps.selfDefined = 1 }, composer.ConfinementTraits{SelfDefinedComponent: true}},
 		{"data_out unset", func(f *runFold) { f.spec.DataOut = "" }, composer.ConfinementTraits{DataOutOpen: true}},
 		{"data_out allowed", func(f *runFold) { f.spec.DataOut = types.TransferAllowed }, composer.ConfinementTraits{DataOutOpen: true}},
@@ -38,10 +48,24 @@ func TestConfinementTraitsFireOnTheirSignal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := runFold{req: &createRunRequest{}, spec: types.RunPolicySpec{DataOut: types.TransferBlocked}}
 			tc.set(&f)
-			if got := confinementTraits(*f.req, f.carriedImage, f.comps, f.spec); got != tc.want {
+			if got := confinementTraits(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec); got != tc.want {
 				t.Errorf("traits = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// devcontainerRepoWorkspace is a scanned workspace whose primary source is an HTTPS repository, carrying its own
+// devcontainer when devcontainer is true.
+func devcontainerRepoWorkspace(t *testing.T, devcontainer bool) types.Workspace {
+	t.Helper()
+	profile, err := json.Marshal(workspacescan.WorkspaceProfile{Languages: []string{"Go"}, HasDevcontainer: devcontainer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.Workspace{
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "https://git.example/team/repo", Ref: "main"}},
+		Profile: profile,
 	}
 }
 
@@ -55,9 +79,11 @@ func TestConfinementFloorHoldsTheRunToTheTraitFloor(t *testing.T) {
 		ceiling: governanceCeiling{Limits: types.GovernanceLimits{ConfinementFloors: &types.ConfinementFloors{OwnImage: types.CC3}}},
 	}
 	floorOf := func() types.RunPolicySpec {
-		return confinementFloor(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling)
+		return confinementFloor(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling)
 	}
-	raisedBy := func() []string { return confinementRaisedBy(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling) }
+	raisedBy := func() []string {
+		return confinementRaisedBy(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling)
+	}
 	floor := floorOf()
 	if floor.MinConfinementClass != types.CC3 || f.spec.MinConfinementClass != types.CC1 {
 		t.Fatalf("floor %q over spec %q; want CC3 over an unchanged CC1", floor.MinConfinementClass, f.spec.MinConfinementClass)
@@ -148,7 +174,7 @@ func TestConfinementFloorIsOneAtEveryDoor(t *testing.T) {
 	// its own ceiling. A copy of the spec a door has since changed would name the wrong traits, or none. A waiting
 	// launch reads its own request, q.req, which handleCreateRun copies from the request the fold read once the
 	// fold is done: the same value, and a queuedCreate need not carry the fold's request pointer.
-	const own = "*f.req, f.carriedImage, f.comps, f.spec, f.ceiling"
+	const own = "*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling"
 	want := map[string]string{"stepPlacement": own, "stepConfinement": own, "runCreateAuditData": own, "handlePreflightRun": own,
 		"auditQueuedCreate": strings.Replace(strings.ReplaceAll(own, "f.", "q.f."), "*q.f.req", "q.req", 1)}
 	if !maps.Equal(foldArgs, want) {
