@@ -1,0 +1,380 @@
+name: api compile measure
+
+# One job that measures internal/api's builds, compile and link apart. Evidence for splitting the test build; this
+# branch is never merged.
+on:
+  push:
+    branches: ['feature/*-api-compile-measure']
+
+permissions:
+  contents: read
+
+jobs:
+  api-compile-measure:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 150
+    env:
+      # The same settings as the unit leg's prebuild, so the numbers compare.
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "10GiB"
+      BUILD: -race -covermode=atomic -coverpkg=./...
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The module cache only: no build cache is restored, so every phase below compiles internal/api itself.
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # The same swap as the go legs, so a phase over the runner's memory pages out instead of losing the runner;
+      # each phase reports the swap it used.
+      - name: Add swap
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      - name: GNU time
+        run: |
+          [ -x /usr/bin/time ] || { sudo apt-get update -q && sudo apt-get install -y -q time; }
+          /usr/bin/time --version | head -1
+      - name: Write the measuring scripts
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/shardgen" "$RUNNER_TEMP/overlays"
+          : > "$RUNNER_TEMP/phases.tsv"
+          cat > "$RUNNER_TEMP/tx.sh" <<'EOF'
+          #!/usr/bin/env bash
+          # go's -toolexec wrapper: runs the tool under GNU time and appends its name, its -p package, its maximum
+          # resident set (kB) and its wall to $TX_LOG, passing the tool's output and exit code through.
+          tool=$(basename "$1")
+          case " $* " in *" -V=full "*) exec "$@" ;; esac
+          pkg=-
+          prev=
+          for a in "$@"; do
+            [ "$prev" = -p ] && pkg=$a
+            prev=$a
+          done
+          t=$(mktemp "$RUNNER_TEMP/tx.XXXXXX")
+          /usr/bin/time -v -o "$t" "$@"
+          rc=$?
+          rss=$(awk -F': ' '/Maximum resident set size/ { print $2 }' "$t")
+          wall=$(awk -F': ' '/Elapsed \(wall clock\)/ { print $2 }' "$t")
+          printf '%s\t%s\t%s\t%s\n' "$tool" "$pkg" "${rss:-0}" "${wall:-?}" >> "$TX_LOG"
+          rm -f "$t"
+          exit "$rc"
+          EOF
+          cat > "$RUNNER_TEMP/phase.sh" <<'EOF'
+          #!/usr/bin/env bash
+          # phase.sh <label> <go subcommand> <args...>: runs one go command with tx.sh as -toolexec while vmstat
+          # samples memory every 5 s, then prints the internal/api compile's and the link's peak and wall in a
+          # notice. It exits 0; the go command's exit code goes in the notice and in phases.tsv.
+          set -u
+          label=$1; sub=$2; shift 2
+          export TX_LOG="$RUNNER_TEMP/tx-$label.tsv"
+          : > "$TX_LOG"
+          vmstat -S M -t 5 > "$RUNNER_TEMP/vm-$label.txt" &
+          vm=$!
+          start=$SECONDS
+          rc=0
+          go "$sub" -toolexec "$RUNNER_TEMP/tx.sh" "$@" || rc=$?
+          wall=$((SECONDS - start))
+          kill "$vm" 2>/dev/null || true
+          wait "$vm" 2>/dev/null || true
+          peak() { awk -F'\t' -v t="$1" -v p="$2" '$1 == t && (p == "" || $2 == p) && $3 + 0 > m { m = $3; w = $4 } END { if (m) printf "%.2f GiB in %s", m / 1048576, w; else printf "none" }' "$TX_LOG"; }
+          compile=$(peak compile github.com/cjohnstoniv/wardyn/internal/api)
+          link=$(peak link "")
+          swap=$(awk 'NR == 3 { s = $3 } NR > 2 && $3 + 0 > m { m = $3 } END { printf "%d MB (%d MB at the start)", m, s }' "$RUNNER_TEMP/vm-$label.txt")
+          free=$(awk 'NR > 2 && (f == "" || $4 + 0 < f) { f = $4 } END { printf "%d MB", f }' "$RUNNER_TEMP/vm-$label.txt")
+          echo "the five largest processes of this phase (tool, package, maximum resident set kB, wall):"
+          sort -t "$(printf '\t')" -k3,3nr "$TX_LOG" | head -5
+          echo "::notice title=api measure ($label)::rc $rc; internal/api compile maxRSS $compile; link maxRSS $link; step wall ${wall}s; most swap used $swap; least free $free"
+          printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$rc" "$compile" "$link" "${wall}s" "$swap" >> "$RUNNER_TEMP/phases.tsv"
+          exit 0
+          EOF
+          cat > "$RUNNER_TEMP/shardgen/main.go" <<'EOF'
+          // Writes a go -overlay file for one package's test build: main.go <pkgdir> <outdir> <label> <k> <n> keeps the
+          // Test, Fuzz and Example functions whose name hashes (crc32 IEEE) to k mod n, and every one that calls
+          // testfloor.Mark in shard 0; k = -1 keeps none. Benchmarks are always removed. A removed function becomes
+          // blank lines, an import only removed code used becomes a blank import, and a file left with no declaration
+          // is removed. A reference to a test function other than its declaration is refused (exit 2).
+          package main
+
+          import (
+              "bytes"
+              "encoding/json"
+              "fmt"
+              "go/ast"
+              "go/parser"
+              "go/token"
+              "hash/crc32"
+              "os"
+              "os/exec"
+              "path/filepath"
+              "sort"
+              "strconv"
+              "strings"
+              "unicode"
+              "unicode/utf8"
+          )
+
+          type parsed struct {
+              path string
+              src  []byte
+              fset *token.FileSet
+              file *ast.File
+          }
+
+          func die(err error) {
+              if err != nil {
+                  fmt.Fprintln(os.Stderr, err)
+                  os.Exit(1)
+              }
+          }
+
+          // entry answers the prefix of a function go test runs, as cmd/go names them: the prefix, then nothing or a
+          // rune that is not lower case. TestMain is not one.
+          func entry(name string) (string, bool) {
+              for _, p := range []string{"Test", "Benchmark", "Fuzz", "Example"} {
+                  rest, ok := strings.CutPrefix(name, p)
+                  if !ok || name == "TestMain" {
+                      continue
+                  }
+                  if rest == "" {
+                      return p, true
+                  }
+                  r, _ := utf8.DecodeRuneInString(rest)
+                  return p, !unicode.IsLower(r)
+              }
+              return "", false
+          }
+
+          func cut(src []byte, cuts [][2]int) []byte {
+              var b bytes.Buffer
+              last := 0
+              for _, c := range cuts {
+                  b.Write(src[last:c[0]])
+                  b.Write(bytes.Repeat([]byte("\n"), bytes.Count(src[c[0]:c[1]], []byte("\n"))))
+                  last = c[1]
+              }
+              b.Write(src[last:])
+              return b.Bytes()
+          }
+
+          func blankUnused(src []byte, names map[string]string, path string) []byte {
+              fset := token.NewFileSet()
+              af, err := parser.ParseFile(fset, path, src, 0)
+              die(err)
+              used := map[string]bool{}
+              ast.Inspect(af, func(x ast.Node) bool {
+                  if s, ok := x.(*ast.SelectorExpr); ok {
+                      if id, ok := s.X.(*ast.Ident); ok {
+                          used[id.Name] = true
+                      }
+                  }
+                  return true
+              })
+              type edit struct {
+                  at, drop int
+                  text     string
+              }
+              var edits []edit
+              for _, im := range af.Imports {
+                  p, _ := strconv.Unquote(im.Path.Value)
+                  name := names[p]
+                  if im.Name != nil {
+                      name = im.Name.Name
+                  }
+                  if name == "_" || name == "." || used[name] {
+                      continue
+                  }
+                  if name == "" {
+                      die(fmt.Errorf("no package name for %q in %s", p, path))
+                  }
+                  if im.Name != nil {
+                      edits = append(edits, edit{fset.Position(im.Name.Pos()).Offset, len(im.Name.Name), "_"})
+                  } else {
+                      edits = append(edits, edit{fset.Position(im.Path.Pos()).Offset, 0, "_ "})
+                  }
+              }
+              for i := len(edits) - 1; i >= 0; i-- {
+                  e := edits[i]
+                  src = append(src[:e.at:e.at], append([]byte(e.text), src[e.at+e.drop:]...)...)
+              }
+              return src
+          }
+
+          func main() {
+              dir, out, label := os.Args[1], os.Args[2], os.Args[3]
+              k, err := strconv.Atoi(os.Args[4])
+              die(err)
+              n, err := strconv.Atoi(os.Args[5])
+              die(err)
+              files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+              die(err)
+              sort.Strings(files)
+              var all []parsed
+              entries, paths := map[string]bool{}, map[string]bool{}
+              for _, f := range files {
+                  src, err := os.ReadFile(f)
+                  die(err)
+                  fset := token.NewFileSet()
+                  af, err := parser.ParseFile(fset, f, src, parser.ParseComments)
+                  die(err)
+                  for _, d := range af.Decls {
+                      if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
+                          if _, ok := entry(fd.Name.Name); ok {
+                              entries[fd.Name.Name] = true
+                          }
+                      }
+                  }
+                  for _, im := range af.Imports {
+                      p, _ := strconv.Unquote(im.Path.Value)
+                      paths[p] = true
+                  }
+                  all = append(all, parsed{f, src, fset, af})
+              }
+              for _, p := range all {
+                  decl, sel := map[*ast.Ident]bool{}, map[*ast.Ident]bool{}
+                  ast.Inspect(p.file, func(x ast.Node) bool {
+                      switch x := x.(type) {
+                      case *ast.FuncDecl:
+                          decl[x.Name] = true
+                      case *ast.SelectorExpr:
+                          sel[x.Sel] = true
+                      }
+                      return true
+                  })
+                  ast.Inspect(p.file, func(x ast.Node) bool {
+                      if id, ok := x.(*ast.Ident); ok && entries[id.Name] && !decl[id] && !sel[id] {
+                          fmt.Fprintf(os.Stderr, "refused: %s refers to the test function %s\n", p.fset.Position(id.Pos()), id.Name)
+                          os.Exit(2)
+                      }
+                      return true
+                  })
+              }
+              var list []string
+              for p := range paths {
+                  list = append(list, p)
+              }
+              sort.Strings(list)
+              cmd := exec.Command("go", append([]string{"list", "-e", "-tags", "docker,k8s", "-f", "{{.ImportPath}}\t{{.Name}}"}, list...)...)
+              cmd.Dir = dir
+              cmd.Stderr = os.Stderr
+              b, err := cmd.Output()
+              die(err)
+              names := map[string]string{}
+              for _, ln := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+                  if path, name, ok := strings.Cut(ln, "\t"); ok {
+                      names[path] = name
+                  }
+              }
+              replace := map[string]string{}
+              kept, removed, gone := 0, 0, 0
+              for _, p := range all {
+                  var cuts [][2]int
+                  others := 0
+                  for _, d := range p.file.Decls {
+                      if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
+                          if prefix, ok := entry(fd.Name.Name); ok {
+                              lo, hi := p.fset.Position(fd.Pos()).Offset, p.fset.Position(fd.End()).Offset
+                              keep := k >= 0 && prefix != "Benchmark"
+                              if keep && bytes.Contains(p.src[lo:hi], []byte("testfloor.Mark(")) {
+                                  keep = k == 0
+                              } else if keep {
+                                  keep = int(crc32.ChecksumIEEE([]byte(fd.Name.Name))%uint32(n)) == k
+                              }
+                              if keep {
+                                  kept++
+                                  others++
+                                  continue
+                              }
+                              removed++
+                              if fd.Doc != nil {
+                                  lo = p.fset.Position(fd.Doc.Pos()).Offset
+                              }
+                              cuts = append(cuts, [2]int{lo, hi})
+                              continue
+                          }
+                      }
+                      if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.IMPORT {
+                          continue
+                      }
+                      others++
+                  }
+                  if len(cuts) == 0 {
+                      continue
+                  }
+                  abs, err := filepath.Abs(p.path)
+                  die(err)
+                  if others == 0 {
+                      replace[abs] = ""
+                      gone++
+                      continue
+                  }
+                  dst, err := filepath.Abs(filepath.Join(out, label, filepath.Base(p.path)))
+                  die(err)
+                  die(os.MkdirAll(filepath.Dir(dst), 0o755))
+                  die(os.WriteFile(dst, blankUnused(cut(p.src, cuts), names, p.path), 0o644))
+                  replace[abs] = dst
+              }
+              js, err := json.MarshalIndent(map[string]any{"Replace": replace}, "", " ")
+              die(err)
+              die(os.WriteFile(filepath.Join(out, label+".json"), js, 0o644))
+              fmt.Printf("%s: %d test functions kept, %d removed; %d files rewritten, %d removed\n", label, kept, removed, len(replace)-gone, gone)
+          }
+          EOF
+          chmod +x "$RUNNER_TEMP/tx.sh" "$RUNNER_TEMP/phase.sh"
+      - name: Write the overlays for (c) and (e)
+        run: |
+          set -uo pipefail
+          api="$PWD/internal/api"
+          cd "$RUNNER_TEMP/shardgen"
+          for spec in "shard0 0 2" "none -1 1"; do
+            set -- $spec
+            rc=0
+            go run main.go "$api" "$RUNNER_TEMP/overlays" "$1" "$2" "$3" || rc=$?
+            [ "$rc" = 0 ] || echo "::warning title=api measure overlay $1::not written (exit $rc), so its phase is skipped"
+          done
+          ls -la "$RUNNER_TEMP/overlays"
+      - name: (a) the package without its tests
+        run: '"$RUNNER_TEMP/phase.sh" a build -p 2 $BUILD ./internal/api/'
+      - name: (b) the test build as the unit leg makes it
+        run: |
+          "$RUNNER_TEMP/phase.sh" b test -c -p 2 $BUILD -o "$RUNNER_TEMP/api.test" ./internal/api/
+          rm -f "$RUNNER_TEMP/api.test"
+      - name: (c) the test build with half the test functions
+        run: |
+          if [ -f "$RUNNER_TEMP/overlays/shard0.json" ]; then
+            "$RUNNER_TEMP/phase.sh" c test -c -p 2 $BUILD -overlay "$RUNNER_TEMP/overlays/shard0.json" -o "$RUNNER_TEMP/api.test" ./internal/api/
+            rm -f "$RUNNER_TEMP/api.test"
+          else
+            echo "::notice title=api measure (c)::skipped: no overlay"
+          fi
+      - name: (e) the test build with no test function, the helpers only
+        run: |
+          if [ -f "$RUNNER_TEMP/overlays/none.json" ]; then
+            "$RUNNER_TEMP/phase.sh" e test -c -p 2 $BUILD -overlay "$RUNNER_TEMP/overlays/none.json" -o "$RUNNER_TEMP/api.test" ./internal/api/
+            rm -f "$RUNNER_TEMP/api.test"
+          else
+            echo "::notice title=api measure (e)::skipped: no overlay"
+          fi
+      - name: (d) the full test build without DWARF
+        run: |
+          "$RUNNER_TEMP/phase.sh" d test -c -p 2 $BUILD -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w -o "$RUNNER_TEMP/api.test" ./internal/api/
+          rm -f "$RUNNER_TEMP/api.test"
+      # The bar: the largest single process under about 12 GB, with no swap used past the start. A failed (a) or (b)
+      # fails the job; (c), (d) and (e) are reported either way.
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          printf 'phase\trc\tinternal/api compile\tlink\tstep wall\tmost swap used\n'
+          cat "$RUNNER_TEMP/phases.tsv"
+          awk -F'\t' '($1 == "a" || $1 == "b") && $2 != 0 { bad = 1 } END { exit bad }' "$RUNNER_TEMP/phases.tsv"
