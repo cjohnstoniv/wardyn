@@ -264,7 +264,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
-	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
+	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks); keep it when you retry the same work: within it each approved MCP call is sent at most once per occurrence in 24 hours")
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "make a re-run of this command safe: with the same key, a second launch gets the first run back instead of starting another "+
 		"(1 to 255 visible ASCII characters, kept 24 hours; default a fresh value per call, which protects nothing across processes). "+
 		"In CI use a value stable across a job re-run, such as the build id and job name")
