@@ -166,6 +166,19 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 	if err != nil {
 		return fmt.Errorf("store: remove group member: %w", err)
 	}
+	// Every record of the person's last sign-ins (principal_groups: their own and each portal's) loses the
+	// group, so a grant held through it stops at the run's next credential mint. Only the principal this
+	// identity row binds is narrowed: the external id is this identity provider's, and another issuer's
+	// sign-in names its own groups. A blank one cannot be told from any group, so it takes them all, as
+	// the token step reads it. Nothing is ever added, and a person with no record keeps none.
+	if _, err = tx.Exec(ctx, `
+		UPDATE principal_groups p SET groups = COALESCE((
+			SELECT jsonb_agg(x) FROM jsonb_array_elements_text(p.groups) AS x
+			WHERE btrim(g.external_id) <> '' AND lower(btrim(x)) <> lower(btrim(g.external_id))), '[]'::jsonb)
+		FROM principal_identities i, scim_groups g
+		WHERE i.id = $2 AND g.id = $1 AND p.principal = i.principal`, groupID, identityID); err != nil {
+		return fmt.Errorf("store: remove the group from the sign-in record: %w", err)
+	}
 	var existing int
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 AND target = $3`,
 		identityID, JobKindGroupRemove, target).Scan(&existing); err != nil {

@@ -30,6 +30,17 @@ type identityGateStore interface {
 	GetIdentityByObject(ctx context.Context, issuer, tenantID, objectID string) (store.PrincipalIdentity, error)
 }
 
+// principalGroupsWriter is the store that keeps the record of each person's last sign-in through each
+// door (store.PG.PutPrincipalGroups): portal "" for an SSO sign-in, a portal's id for its token
+// exchange. A store without it keeps none.
+type principalGroupsWriter interface {
+	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool) error
+}
+
+// The Postgres store keeps the record, so a deployment never issues a session or a portal token without
+// writing it.
+var _ principalGroupsWriter = store.PG{}
+
 type storeIdentityGate struct{ st identityGateStore }
 
 // NewIdentityGate is oidc.IdentityGate over the store's identity rows.
@@ -51,7 +62,18 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 	case errors.Is(err, store.ErrIdentityBindingMismatch):
 		return 0, fmt.Errorf("%w: %w", oidc.ErrIdentityBindingMismatch, err)
 	}
-	return epoch, err
+	if err != nil {
+		return epoch, err
+	}
+	// The sign-in's email and groups go on the record (portal "") before its session is issued, and a
+	// failed write refuses the sign-in: no session is issued with groups the record lacks, and the record
+	// is what a running run's owner is judged by where no session of theirs is at hand.
+	if pw, ok := g.st.(principalGroupsWriter); ok {
+		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated); err != nil {
+			return 0, err
+		}
+	}
+	return epoch, nil
 }
 
 func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (string, error) {

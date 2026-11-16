@@ -163,6 +163,17 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		}
 		actor = &types.DelegationActor{Sub: a.Sub, Iss: a.Iss}
 	}
+	// The person's email and groups as this exchange carried them go on the record under this portal's id
+	// before the token is issued, and a failed write refuses the exchange: a run this portal launches is
+	// judged by them at the live doors, and a sign-in to Wardyn itself keeps its own record.
+	if pw, ok := s.cfg.Store.(principalGroupsWriter); ok {
+		if err := pw.PutPrincipalGroups(r.Context(), sess.Sub, d.ID.String(), sess.Email, sess.Groups, sess.GroupsTruncated); err != nil {
+			slog.ErrorContext(r.Context(), "api: record the exchange's groups failed; token exchange refused", "error", err)
+			s.metrics.authStoreErrorInc()
+			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")
+			return
+		}
+	}
 	raw := newBearer(delegatedTokenPrefix)
 	t, err := ds.MintDelegatedToken(r.Context(), types.DelegatedToken{
 		ID: uuid.New(), DelegateID: d.ID, Principal: sess.Sub, Email: sess.Email, UserType: sess.UserType,
