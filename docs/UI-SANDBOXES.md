@@ -5,7 +5,7 @@
 - The gateway is off by default. It exists only when `WARDYN_UI_SANDBOX_LISTEN` is set — see [docs/ENV.md](ENV.md) for all three variables (`WARDYN_UI_SANDBOX_LISTEN`, `WARDYN_UI_SANDBOX_ADVERTISE`, `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). With it unset there is no listener and no new surface: the relay's cookie key is not even generated.
 - It listens on a **second address**, and boot refuses one equal to `-listen` (or to `-ssh-listen`). That is a security control, not a deployment convenience: everything the relay serves is the sandbox's **own** HTML and JavaScript.
 - The only thing keeping that code away from the console's session storage and admin actions is that it arrives on a different browser origin. See [Bounds](#bounds) for what that separation does and does not buy.
-- **Not available on the desktop tier.** See [Deployment](#4-deployment).
+- **Not available on the desktop tier.** See [Deployment](#4-deployment). The [glossary](GLOSSARY.md) tells the UI sandbox gateway apart from the other gateways, proxies and brokers in and around Wardyn.
 
 ## The noVNC image, and what relaying a DESKTOP costs
 

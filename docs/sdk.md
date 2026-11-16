@@ -743,6 +743,8 @@ The run's `machine` request field is `RunMachine`:
 `POST /api/v1/runs` honours an `Idempotency-Key` header. Send a new value, such as a UUID, for each run you mean
 to launch, and the same value when you retry that launch.
 
+[Orchestrators](operations/orchestrators.md) shows the key in use: one governed run per workflow step, retried with the same key when an answer is lost.
+
 - The value is 1 to 255 visible ASCII characters. An RFC 8941 string in quotes is read without its quotes.
 - A key belongs to its caller. A portal acting for a person has a scope of its own.
 - For 24 hours from first use, a retry with the same key and body gets the first answer back byte for byte, with

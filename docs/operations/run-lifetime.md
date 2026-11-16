@@ -4,6 +4,7 @@
 
 - How a run's lease is captured, extended and ended, and what reviving a kept run can and can't do.
 - The full audit contract for every event named here is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `run.end.set`, `run.wait_budget.set`, `run.ended`, `run.ended.expired`, `run.lost`, `run.lost.expired` and `run.revive` rows.
+- [Delegation](delegation.md#when-a-running-run-loses-access) says when a running run loses each kind of access it was given.
 
 ## Capturing the lease
 

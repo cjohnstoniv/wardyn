@@ -95,6 +95,7 @@
 | Turn a governance write into a two-human decision | [operations/governance-writes.md](operations/governance-writes.md) |
 | Set the Wardyn boundary around every run, and use break-glass | [operations/boundary.md](operations/boundary.md) |
 | Let a security admin's rule approve a service identity's held requests | [operations/approval-rules.md](operations/approval-rules.md) |
+| See who may consent to what, for how long, and when a running run loses it | [operations/delegation.md](operations/delegation.md) |
 | Stop sharing the admin token: a token per person, and for service use | [operations/api-tokens.md](operations/api-tokens.md) |
 | Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
 | Configure an org component, and what a launch leaves behind | [operations/custom-components.md](operations/custom-components.md) |
@@ -111,6 +112,8 @@
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
 | Run each CI job as a confined one-shot run on a control plane you operate | [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |
+| Drive Wardyn from a workflow engine, one governed run per step | [operations/orchestrators.md](operations/orchestrators.md) |
+| Tell apart the gateways, proxies and brokers in and around Wardyn | [GLOSSARY.md](GLOSSARY.md) |
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
 | Know what a run can count on, runtime by runtime, and the test that checks each promise | [RUNTIME-CONTRACT.md](RUNTIME-CONTRACT.md) |

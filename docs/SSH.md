@@ -5,7 +5,7 @@
 - It authenticates registered **public keys only** (no passwords) and is **owner-only**: a human may SSH into a run they created.
 - A super admin's key reaches a run only when it has no personal owner (an operator-owned service or local run); it opens no shell in a person's run (`run_owner_only`, #1476). That admin carve-out is a bounded-stale stamp, not a live role check; see [Bounds](#bounds) for the ceiling that comes with it.
 - The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`, `WARDYN_SSH_ADVERTISE`). With it unset there is no listener and no new attack surface: the daemon does not even generate a host key.
-- Recording has limits: see [Recording](#recording).
+- Recording has limits: see [Recording](#recording). The [glossary](GLOSSARY.md) tells the SSH gateway apart from the other gateways, proxies and brokers in and around Wardyn.
 
 ## 1. Register a public key
 

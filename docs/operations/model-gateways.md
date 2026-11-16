@@ -5,6 +5,7 @@
 - Wardyn plugs in an established model gateway or PII detector that you run yourself. It builds neither, bundles neither and does not change them.
 - Every recipe here is a `custom_endpoint` provider (or the `detector_sidecar_url` policy field) pointed at your own deployment. Model providers › Your own endpoint can start from a preset for some of these gateways, which fills only the fields it names and records nothing; everything else is yours to set.
 - [An external AI gateway](ai-gateway.md) covers agentgateway, run identity and MCP federation.
+- The [glossary](../GLOSSARY.md) tells a model gateway apart from the other gateways, proxies and brokers in and around Wardyn.
 
 ## Every gateway
 
