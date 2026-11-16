@@ -22,9 +22,9 @@ import (
 
 // What a keyed call's refusals and faults say to the run proxy.
 const (
-	operationAlreadySentMsg = reasonOperationAlreadySent
-	operationKeyReusedMsg   = reasonOperationKeyReused
-	mcpCallSendFaultMsg     = "request approval"
+	operationAlreadySentMsg = "this operation key was already sent with this call; approval_id, sent_at and answered say under which approval, when, and whether its server's answer was recorded"
+	operationKeyReusedMsg   = "this operation key was already sent with another call"
+	mcpCallSendFaultMsg     = "check or record an MCP call's send"
 )
 
 // errMCPCallSendsUnavailable is logged when a keyed call meets a server with no send record: no store
