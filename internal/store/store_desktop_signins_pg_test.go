@@ -117,3 +117,60 @@ func TestPG_DesktopSigninLifecycle(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_DesktopSigninEndClaim: an end claims an open sign-in's end_stage only from the stage it read, and only while
+// no failure has marked the end; a second claim from the same read, a claim of a marked end and a claim of a closed
+// row all lose, and a claim can be given back.
+func TestPG_DesktopSigninEndClaim(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	run, err := st.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sum := sha256.Sum256([]byte("cred"))
+	si := types.DesktopSignin{ID: uuid.New(), RunID: run.ID, Holder: "alice", CredentialHash: sum[:],
+		BeganAt: now, ExpiresAt: now.Add(30 * time.Minute)}
+	if err := st.BeginDesktopSignin(ctx, si); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		read, claim string
+		want        bool
+	}{
+		{"", "ending:1", true},
+		{"", "ending:2", false},
+		{"ending:1", "ending:3", true},
+		{"ending:1", "ending:4", false},
+		{"ending:3", "", true},
+		{"", "ending:5", true},
+	} {
+		if got, err := st.ClaimDesktopSigninEnd(ctx, si.ID, c.read, c.claim); err != nil || got != c.want {
+			t.Fatalf("claim %q -> %q = %t, %v; want %t", c.read, c.claim, got, err, c.want)
+		}
+	}
+	if open, err := st.OpenDesktopSignin(ctx, run.ID); err != nil || open.EndStage != "ending:5" || open.EndRequested != "" {
+		t.Fatalf("open = %+v %v, want end_stage ending:5 and no end requested", open, err)
+	}
+	if _, err := st.RequestDesktopSigninEnd(ctx, si.ID, "done", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.ClaimDesktopSigninEnd(ctx, si.ID, "stop", "ending:6"); err != nil || got {
+		t.Fatalf("claim of a marked end = %t, %v; want false", got, err)
+	}
+	if _, err := st.EndDesktopSignin(ctx, si.ID, "done", now); err != nil {
+		t.Fatal(err)
+	}
+	second := si
+	second.ID = uuid.New()
+	if err := st.BeginDesktopSignin(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EndDesktopSignin(ctx, second.ID, "failed", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.ClaimDesktopSigninEnd(ctx, second.ID, "", "ending:7"); err != nil || got {
+		t.Fatalf("claim of a closed row = %t, %v; want false", got, err)
+	}
+}

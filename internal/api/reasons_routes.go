@@ -964,6 +964,7 @@ const (
 	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
 	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
 	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
+	reasonDesktopSigninStarting          = "desktop_signin_starting"           // the sign-in's begin has not yet recorded that it stopped the agent; the end can be asked again
 	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
 	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
 	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
