@@ -204,16 +204,20 @@ func printPolicyCheck(w io.Writer, file, within string, res policyCheckResult) {
 	if len(res.Widenings) == 0 {
 		fmt.Fprint(w, policyCheckNoField)
 	}
-	for _, wd := range res.Widenings {
-		if len(wd.Entries) == 0 {
-			fmt.Fprintf(w, "  %s\n", wd.Field)
-			continue
-		}
-		fmt.Fprintf(w, "  %s: %s\n", wd.Field, strings.Map(func(r rune) rune {
+	// A field name and its entries come from the candidate or from a server's answer: neither may start a line.
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
 			if unicode.IsControl(r) {
 				return ' '
 			}
 			return r
-		}, strings.Join(wd.Entries, ", ")))
+		}, s)
+	}
+	for _, wd := range res.Widenings {
+		if len(wd.Entries) == 0 {
+			fmt.Fprintf(w, "  %s\n", clean(wd.Field))
+			continue
+		}
+		fmt.Fprintf(w, "  %s: %s\n", clean(wd.Field), clean(strings.Join(wd.Entries, ", ")))
 	}
 }
