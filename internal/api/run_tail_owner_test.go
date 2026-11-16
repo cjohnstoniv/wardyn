@@ -696,10 +696,12 @@ func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) 
 	}
 }
 
-// A run that owes no copy back whatever its record says (a killed run, a folder copied in only) is not given up when
-// its record cannot be read past the cap: no statement, no given_up row, no "given up" record. It takes the history
-// tail, which stops its sandbox, as the same run does with a record that reads. Catches: the unreadable-record
-// give-up skipping the owed checks that need no record.
+// A run the owed checks that need no record say owes no copy back (a killed run, a folder copied in only) is not
+// given up by the tail owner when its record cannot be read past the cap: no statement and no given_up row of its
+// own, and no "given up" record. It takes the history tail, which stops its sandbox, as the same run does with a
+// record that reads. Whether a killed run's stored record still holds a resume to give up is decided by the stop's
+// give-up at the end of that tail (giveUpFolderStopped), not here. Catches: the unreadable-record give-up skipping
+// the owed checks that need no record.
 func TestTailOwner_UnreadableStatusOfARunOwingNothingIsNotGivenUp(t *testing.T) {
 	for name, change := range map[string]func(*tailRow){
 		"a killed run":            func(r *tailRow) { r.run.State = types.RunKilled },
