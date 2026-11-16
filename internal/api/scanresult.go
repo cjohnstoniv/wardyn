@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -16,6 +17,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
+
+// scanAuditFactsUnparsed is a source.scan failure row's detail for an upload that is not scan facts: the
+// parser's text quotes bytes the sandbox chose, so the row names the step and the log keeps the error.
+const scanAuditFactsUnparsed = "parse scan facts"
 
 // maxScanResultUploadBytes caps a single scan-result PUT. ScanFacts is already
 // bounded on the producing side (internal/workspacescan manifest-count + per-file
@@ -73,8 +78,10 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	// Unmarshal is both sufficient and forward-compatible with a newer scanner.
 	var facts workspacescan.ScanFacts
 	if err := json.Unmarshal(raw, &facts); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: a scan run's upload is not scan facts",
+			slog.String("run_id", claims.RunID.String()), slog.String("source_id", sourceID.String()), slog.Any("err", err))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
+			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": scanAuditFactsUnparsed})))
 		writeErrorReason(w, http.StatusBadRequest, reasonScanFactsInvalid, "invalid scan facts: "+err.Error())
 		return
 	}

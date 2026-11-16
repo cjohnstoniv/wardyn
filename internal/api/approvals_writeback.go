@@ -15,14 +15,41 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// writebackAuditRunUnread is a write-back failure row's detail when the run could not be read: a store error can
+// name hosts, users and databases, so the row names the step and the log keeps the cause.
+const writebackAuditRunUnread = "read run"
+
+// The requirements write's failure classes, each a failure row's detail. The store tells the first two apart
+// (store.ErrConflict at the key cap, store.ErrNotFound for a workspace that is not there); the third is any
+// other store failure, whose text can name hosts and databases, so only the server log keeps it.
+const (
+	writebackAuditRequirementsFull = "requirements at their key cap"
+	writebackAuditWorkspaceGone    = "workspace not found"
+	writebackAuditStoreError       = "store error"
+)
+
+// writebackMergeAuditDetail is the failure row's detail for a requirements write the store failed.
+func writebackMergeAuditDetail(err error) string {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		return writebackAuditRequirementsFull
+	case errors.Is(err, store.ErrNotFound):
+		return writebackAuditWorkspaceGone
+	}
+	return writebackAuditStoreError
+}
 
 // primaryWorkspace is an `always` decision's target workspace: WorkspaceIDs[0]
 // (the documented PRIMARY — referencedWorkspaces builds it in a stable order,
@@ -224,9 +251,10 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	}
 	run, err := s.cfg.Store.GetRun(ctx, ap.RunID)
 	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read a run for its approval's write-back", slog.String("run_id", ap.RunID.String()), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
 			"", "failure", auditWorkspaceDataFor(by, "", map[string]any{
-				"source": "verify:" + ap.RunID.String(), "detail": "read run: " + err.Error(),
+				"source": "verify:" + ap.RunID.String(), "detail": writebackAuditRunUnread,
 			})))
 		return
 	}
@@ -277,11 +305,16 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	})
 	if err != nil {
 		// The approval stands either way; the contract write is audited as the
-		// miss it is (cap hit / workspace gone) so the operator can add the row
-		// on Reach instead of wondering why the replay still denies the host.
+		// miss it is, by class (writebackMergeAuditDetail), so the operator can add
+		// the row on Reach instead of wondering why the replay still denies the host.
+		detail := writebackMergeAuditDetail(err)
+		if detail == writebackAuditStoreError {
+			slog.ErrorContext(ctx, "wardynd: write an approved host into a workspace's requirements",
+				slog.String("run_id", ap.RunID.String()), slog.String("workspace_id", run.WorkspaceID.String()), slog.Any("err", err))
+		}
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
 			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
-				"key": key, "source": "verify:" + ap.RunID.String(), "detail": err.Error(),
+				"key": key, "source": "verify:" + ap.RunID.String(), "detail": detail,
 			})))
 		return
 	}
