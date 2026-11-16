@@ -69,12 +69,14 @@ const (
 	ruleSourceMCPListUnreadable = "brokered:mcp:list-unreadable"
 
 	// An approve_each call (mcp_approve_each.go): forwarded once approved, still waiting when its
-	// window ended, declined, closed undecided, or refused before anyone was asked.
+	// window ended, declined, closed undecided, refused before anyone was asked, or already sent
+	// under its operation key (mcp_operation_key.go).
 	ruleSourceMCPApproved        = "brokered:mcp:approved"
 	ruleSourceMCPApprovalWait    = "brokered:mcp:approval-wait"
 	ruleSourceMCPApprovalDenied  = "brokered:mcp:approval-denied"
 	ruleSourceMCPApprovalClosed  = "brokered:mcp:approval-closed"
 	ruleSourceMCPApprovalRefused = "brokered:mcp:approval-refused"
+	ruleSourceMCPApprovalSent    = "brokered:mcp:approval-sent"
 )
 
 // mcpServerKeyRE is a server key: the <server> of mcp__<server>__<tool>, so
@@ -186,6 +188,8 @@ type mcpExchange struct {
 	req     egress.Request
 	// approvalID is the approval an approve_each call is forwarded on; nil for any other request.
 	approvalID *uuid.UUID
+	// upstreamAnswered is set once the server answered what forward sent, with any status.
+	upstreamAnswered bool
 }
 
 func (x *mcpExchange) emit(decision egress.Decision, ruleSource string) {
@@ -600,6 +604,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID, Scan: scan}, s.host, "MCP upstream error")
 		return
 	}
+	x.upstreamAnswered = true
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.StatusCode != http.StatusNotModified {
 		// The server was sent the id, so its log and this row join on it.

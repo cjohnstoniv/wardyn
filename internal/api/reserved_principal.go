@@ -31,6 +31,9 @@ func (s *Server) isReservedPrincipal(p string) bool {
 	if strings.HasPrefix(p, types.ServicePrincipalPrefix) { // a service identity (#1508): authenticates only by its own tokens
 		return true
 	}
+	if p == types.FileDownloadAskerErased { // the name an erased person is replaced with as who asked for a download
+		return true
+	}
 	op := strings.ToLower(strings.TrimSpace(s.cfg.LocalOperator))
 	return p == adminTokenPrincipal || (op != "" && p == op) ||
 		strings.HasPrefix(p, "local:") || strings.HasPrefix(p, "device:") || strings.HasPrefix(p, delegateActorPrefix) ||

@@ -28,6 +28,8 @@ import (
 // The approval is keyed by types.MCPCallKey (server, RAW tool name, canonical arguments and
 // extra params), so two tools that share a display name, or a call with other arguments, never
 // spend each other's approval. The spend table lives in this proxy only: a new proxy asks again.
+// A call with an operation key is also sent at most once in its run's namespace, by a record the
+// control plane keeps (mcp_operation_key.go), so a new proxy answers a retry of it with that send.
 
 const (
 	// maxSeenTools and maxSeenToolName bound the raw tool names remembered per server.
@@ -303,12 +305,18 @@ func (x *mcpExchange) readCall(m mcpMessage) (approveEachCall, string, error) {
 		return approveEachCall{}, "", err
 	}
 	var progress json.RawMessage
+	var opKey string
 	if meta, ok := params["_meta"]; ok && string(meta) != "null" {
-		mo, err := exactKeys(meta, "progressToken")
+		mo, err := exactKeys(meta, "progressToken", types.MCPOperationKeyMeta)
 		if err != nil {
 			return approveEachCall{}, "", fmt.Errorf("_meta: %w", err)
 		}
 		progress = mo["progressToken"]
+		if raw, keyed := mo[types.MCPOperationKeyMeta]; keyed {
+			if opKey, keyed = operationKeyOf(raw); !keyed {
+				return approveEachCall{}, mcpCallOperationKeyText, nil
+			}
+		}
 	}
 	args := params["arguments"]
 	rest := map[string]json.RawMessage{}
@@ -329,6 +337,7 @@ func (x *mcpExchange) readCall(m mcpMessage) (approveEachCall, string, error) {
 	} else if err != nil {
 		return approveEachCall{}, "", err
 	}
+	scope.OperationKey = opKey
 	canon := func(raw []byte) []byte { out, _ := types.CanonicalJSON(raw); return out } // checked above
 	return approveEachCall{id: m.id, scope: scope, body: buildMCPCall(m.id, canon(params["name"]), scope, canon(progress))}, "", nil
 }
@@ -389,7 +398,7 @@ func buildMCPCall(id, name []byte, s types.MCPCallScope, progress []byte) []byte
 // awaitCall spends an approved call, refuses a declined one, or asks (or rejoins the request
 // pending for it) and waits on the open request up to the harness's window.
 func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
-	calls, key := &x.p.mcp.calls, c.scope.CallSHA256
+	calls, key := &x.p.mcp.calls, mcpTableKey(c.scope)
 	id, state, why := calls.admit(key)
 	switch {
 	case state == apApproved: // admit spent it for this call
@@ -468,7 +477,11 @@ func (x *mcpExchange) ask(ctx context.Context, w http.ResponseWriter, c approveE
 	for range 2 {
 		id, err := x.raise(ctx, c.scope, uuid.Nil)
 		var refused *raiseRefusedError
+		var sent *operationSentError
 		switch {
+		case errors.As(err, &sent): // a keyed call whose key the control plane has a send for
+			x.refuseSent(w, c, sent)
+			return uuid.Nil
 		case errors.As(err, &refused):
 			x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, fmt.Sprintf("the request for an approval was refused (%d)", refused.status))
 			writeToolError(w, c.id, fmt.Sprintf(mcpCallRefusedText, refused.status))
@@ -478,7 +491,7 @@ func (x *mcpExchange) ask(ctx context.Context, w http.ResponseWriter, c approveE
 			writeToolError(w, c.id, mcpCallNoAskText)
 			return uuid.Nil
 		}
-		if got := x.p.mcp.calls.install(c.scope.CallSHA256, id); got != uuid.Nil {
+		if got := x.p.mcp.calls.install(mcpTableKey(c.scope), id); got != uuid.Nil {
 			return got
 		}
 	}
@@ -509,8 +522,13 @@ func (p *Proxy) raiseMCPCall(ctx context.Context, scope types.MCPCallScope, rejo
 	return p.approval.raiseBytes(ctx, body)
 }
 
-// forwardApproved sends the approved call; its row names the approval.
+// forwardApproved sends the approved call; its row names the approval. A keyed call is sent only once
+// the control plane has recorded its send (forwardKeyed).
 func (x *mcpExchange) forwardApproved(w http.ResponseWriter, c approveEachCall, id uuid.UUID) {
+	if c.scope.OperationKey != "" {
+		x.forwardKeyed(w, c, id)
+		return
+	}
 	x.approvalID = &id
 	x.forward(w, c.body)
 }
