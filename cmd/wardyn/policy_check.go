@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -208,6 +209,11 @@ func printPolicyCheck(w io.Writer, file, within string, res policyCheckResult) {
 			fmt.Fprintf(w, "  %s\n", wd.Field)
 			continue
 		}
-		fmt.Fprintf(w, "  %s: %s\n", wd.Field, strings.Join(wd.Entries, ", "))
+		fmt.Fprintf(w, "  %s: %s\n", wd.Field, strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, strings.Join(wd.Entries, ", ")))
 	}
 }

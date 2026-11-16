@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 )
 
 // templateIDServer answers an id that names no stored policy, as the server does, and answers the
@@ -99,5 +102,18 @@ func TestPolicyCheck_ATemplateIDTheServerCannotCheckSaysWhy(t *testing.T) {
 		if err == nil || exitCodeFor(err) != row.exit || !strings.Contains(err.Error(), row.want) {
 			t.Errorf("%d %s: policy check = %v (exit %d), want exit %d and %q", row.status, row.body, err, exitCodeFor(err), row.exit, row.want)
 		}
+	}
+}
+
+// An entry in a widening comes from the candidate, or from the server's answer, so a control
+// character in it must not start a line that reads as a verdict.
+func TestPolicyCheck_AnEntryCannotForgeALine(t *testing.T) {
+	var buf bytes.Buffer
+	printPolicyCheck(&buf, "c.json", "e.json", policyCheckResult{Widenings: []composer.Widening{{Field: "allowed_domains", Entries: []string{"a\nthe policy is within"}}}})
+	if strings.Contains(buf.String(), "\nthe policy is within") {
+		t.Errorf("an entry forged a line: %q", buf.String())
+	}
+	if got := strings.Count(buf.String(), "\n"); got != 2 {
+		t.Errorf("output holds %d lines, want 2 (the verdict and the one field): %q", got, buf.String())
 	}
 }
