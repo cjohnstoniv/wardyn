@@ -3,7 +3,7 @@
 
 package pg
 
-// A Put rolls back on its caller's context. Guarded by WARDYN_TEST_PG.
+// A Put's rollback ends by its caller's bound. Guarded by WARDYN_TEST_PG.
 
 import (
 	"context"
@@ -15,17 +15,27 @@ import (
 	"github.com/jackc/pgx/v5/multitracer"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
-// rollbackTracer reports, for the first rollback a pool runs, whether the
-// context it ran on had ended.
-type rollbackTracer struct{ ended chan bool }
+// rolledBack is the context the first rollback a pool runs ran on: whether it
+// had ended, and its deadline, if any, against when the rollback started.
+type rolledBack struct {
+	ended       bool
+	at          time.Time
+	deadline    time.Time
+	hasDeadline bool
+}
+
+// rollbackTracer reports the first rollback a pool runs.
+type rollbackTracer struct{ rolled chan rolledBack }
 
 func (r rollbackTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
 	if d.SQL == "rollback" {
+		dl, ok := ctx.Deadline()
 		select {
-		case r.ended <- ctx.Err() != nil:
+		case r.rolled <- rolledBack{ended: ctx.Err() != nil, at: time.Now(), deadline: dl, hasDeadline: ok}:
 		default:
 		}
 	}
@@ -35,10 +45,13 @@ func (r rollbackTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.
 func (rollbackTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 // Each Put path that defers a rollback (putExternal, putOverPointer and
-// putFenced) rolls back on its caller's context. The Put waits on the erase
-// counter row, which the test holds, until the test ends its context. The
-// rollback then runs on that ended context, so it cannot outlast the caller's
-// bound: pgx closes the connection instead, which ends the transaction.
+// putFenced) ends that rollback by its caller's bound. The Put waits on the
+// erase counter row, which the test holds, until the test ends its context.
+// putExternal rolls back on its own bounded context, which ended with the
+// caller's: pgx closes the connection instead, which ends the transaction.
+// putOverPointer and putFenced roll back through db.Rollback: not on the ended
+// context, but on one that ends within db.RollbackBound, as the caller here
+// sets no deadline.
 func TestPG_Put_RollsBackOnTheCallersContext(t *testing.T) {
 	for _, c := range []struct {
 		path     string
@@ -51,7 +64,7 @@ func TestPG_Put_RollsBackOnTheCallersContext(t *testing.T) {
 	} {
 		t.Run(c.path, func(t *testing.T) {
 			cfg := rekeyDatabase(t).Config()
-			rolled := make(chan bool, 1)
+			rolled := make(chan rolledBack, 1)
 			// multitracer keeps the pool guard's tracer, set when WARDYN_TEST_POOL_GUARD=1.
 			if base := cfg.ConnConfig.Tracer; base != nil {
 				cfg.ConnConfig.Tracer = multitracer.New(base, rollbackTracer{rolled})
@@ -80,9 +93,21 @@ func TestPG_Put_RollsBackOnTheCallersContext(t *testing.T) {
 				t.Fatal("the Put did not answer once its context ended")
 			}
 			select {
-			case ended := <-rolled:
-				if !ended {
+			case r := <-rolled:
+				if c.path == "putExternal" {
+					if !r.ended {
+						t.Fatal("the Put rolled back on a context that cannot end")
+					}
+					break
+				}
+				if r.ended {
+					t.Fatal("the Put rolled back on its caller's ended context, not through db.Rollback")
+				}
+				if !r.hasDeadline {
 					t.Fatal("the Put rolled back on a context that cannot end")
+				}
+				if r.deadline.After(r.at.Add(db.RollbackBound)) {
+					t.Fatalf("the Put's rollback may run %v, past db.RollbackBound (%v)", r.deadline.Sub(r.at), db.RollbackBound)
 				}
 			default:
 				t.Fatal("the Put ran no rollback")
