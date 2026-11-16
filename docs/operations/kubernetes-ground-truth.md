@@ -66,7 +66,7 @@ helm upgrade wardyn deploy/helm/wardyn --reuse-values \
 
 ### Limits of the shipped sensor
 
-- The kind job feeds the sensor a made-up export line shaped from Tetragon's published reference. It has not run against a live Tetragon. "Joined" is tested; "corroborated" is your Tetragon's word.
+- scripts/kind-groundtruth.sh, run by hand on kind and not by any CI job, feeds the sensor a made-up export line shaped from Tetragon's published reference. It has not run against a live Tetragon. "Joined" is tested; "corroborated" is your Tetragon's word.
 - A token in a Secret is readable by anyone who can `get secrets` in the sensor namespace. It authorises `kernel.*` audit writes only and lasts about an hour.
 - The join keys on a pod's name. Only a principal who can create pods in the runs namespace can make a `wardyn-agent-` pod, which is why the chart refuses an empty `k8s.runsNamespace`.
 - A different sensor still needs the recipe below.
