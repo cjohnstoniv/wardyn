@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -17,7 +18,7 @@ import (
 // groupsWriteFails is the Postgres store with a record of people's last sign-ins that cannot be written.
 type groupsWriteFails struct{ store.PG }
 
-func (groupsWriteFails) PutPrincipalGroups(context.Context, string, string, string, []string, bool) error {
+func (groupsWriteFails) PutPrincipalGroups(context.Context, string, string, string, []string, bool, time.Time) error {
 	return errors.New("db down")
 }
 
@@ -28,7 +29,7 @@ func TestDelegation_ExchangeRecordsThePortalsGroups(t *testing.T) {
 	e := newDelegationPG(t)
 	ctx := context.Background()
 	id, cred := e.registerPortal(t, delegGroup)
-	if err := e.st.PutPrincipalGroups(ctx, delegPerson, "", delegPersonEmail, []string{"eng"}, false); err != nil {
+	if err := e.st.PutPrincipalGroups(ctx, delegPerson, "", delegPersonEmail, []string{"eng"}, false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	e.delegate(t, id, cred, delegPerson, delegPersonEmail, delegGroup, "ops")
@@ -49,6 +50,24 @@ func TestDelegation_ExchangeRecordsThePortalsGroups(t *testing.T) {
 	}
 	if _, err := e.st.GetPrincipalGroups(ctx, "out-sub", id.String()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("a refused exchange wrote a record: %v", err)
+	}
+}
+
+// A subject token issued before the one on the portal's record is still exchanged, but leaves the record
+// as the newer token wrote it: an older token cannot put back a group the newer one no longer carried.
+func TestDelegation_AnOlderSubjectTokenKeepsTheNewerRecord(t *testing.T) {
+	e := newDelegationPG(t)
+	ctx := context.Background()
+	id, cred := e.registerPortal(t, delegGroup)
+	e.delegate(t, id, cred, delegPerson, delegPersonEmail, delegGroup)
+	older := e.subjectToken(t, delegPerson, delegPersonEmail, []string{delegGroup, "eng"}, func(c map[string]any) {
+		c["iat"] = time.Now().Add(-time.Minute).Unix()
+	})
+	if w := e.exchange(t, id, cred, older); w.Code != http.StatusOK {
+		t.Fatalf("older subject token: %d %s, want 200", w.Code, w.Body)
+	}
+	if got, err := e.st.GetPrincipalGroups(ctx, delegPerson, id.String()); err != nil || !slices.Equal(got.Groups, []string{delegGroup}) {
+		t.Fatalf("the portal's record = %+v, %v; want the newer token's groups alone", got, err)
 	}
 }
 

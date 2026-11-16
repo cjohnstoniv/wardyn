@@ -49,11 +49,11 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	ann, ben, dee, cy, eve := identity("sub-ann", "ann@corp.example"), identity("sub-ben", "ben@corp.example"),
 		identity("sub-dee", "dee@corp.example"), identity(nil, "cy@corp.example"), identity("sub-eve", "eve@corp.example")
 	for p, groups := range map[string][]string{"sub-ann": {"eng", "ops"}, "sub-ben": {"eng"}, "sub-cy": {"eng"}, "sub-eve": {"eng", "ops"}} {
-		if err := st.PutPrincipalGroups(ctx, p, "", strings.TrimPrefix(p, "sub-")+"@corp.example", groups, p == "sub-ann"); err != nil {
+		if err := st.PutPrincipalGroups(ctx, p, "", strings.TrimPrefix(p, "sub-")+"@corp.example", groups, p == "sub-ann", now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := st.PutPrincipalGroups(ctx, "sub-ann", portal, "ann@corp.example", []string{"eng", "sales"}, false); err != nil {
+	if err := st.PutPrincipalGroups(ctx, "sub-ann", portal, "ann@corp.example", []string{"eng", "sales"}, false, now); err != nil {
 		t.Fatal(err)
 	}
 	eng, err := st.CreateScimGroup(ctx, " ENG ", "Engineering", now)
@@ -125,7 +125,7 @@ func TestPG_PrincipalGroups_ScimRemovalSkipsARecordThatIsNoList(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('sub-ann', 'https://idp.example', 'ann@corp.example') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutPrincipalGroups(ctx, "sub-ann", "", "ann@corp.example", []string{"eng"}, false); err != nil {
+	if err := st.PutPrincipalGroups(ctx, "sub-ann", "", "ann@corp.example", []string{"eng"}, false, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE principal_groups SET groups = 'null'::jsonb WHERE principal = 'sub-ann'`); err != nil {

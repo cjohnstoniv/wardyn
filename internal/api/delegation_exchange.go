@@ -165,9 +165,10 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	// The person's email and groups as this exchange carried them go on the record under this portal's id
 	// before the token is issued, and a failed write refuses the exchange: a run this portal launches is
-	// judged by them at the live doors, and a sign-in to Wardyn itself keeps its own record.
+	// judged by them at the live doors, and a sign-in to Wardyn itself keeps its own record. A record from
+	// a subject token issued after this one is kept.
 	if pw, ok := s.cfg.Store.(principalGroupsWriter); ok {
-		if err := pw.PutPrincipalGroups(r.Context(), sess.Sub, d.ID.String(), sess.Email, sess.Groups, sess.GroupsTruncated); err != nil {
+		if err := pw.PutPrincipalGroups(r.Context(), sess.Sub, d.ID.String(), sess.Email, sess.Groups, sess.GroupsTruncated, sess.IssuedAt); err != nil {
 			slog.ErrorContext(r.Context(), "api: record the exchange's groups failed; token exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
 			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")

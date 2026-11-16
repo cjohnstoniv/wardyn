@@ -34,7 +34,7 @@ type identityGateStore interface {
 // door (store.PG.PutPrincipalGroups): portal "" for an SSO sign-in, a portal's id for its token
 // exchange. A store without it keeps none.
 type principalGroupsWriter interface {
-	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool) error
+	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error
 }
 
 // The Postgres store keeps the record, so a deployment never issues a session or a portal token without
@@ -51,9 +51,10 @@ func (g storeIdentityGate) Refused(ctx context.Context, ref oidc.IdentityRef) (b
 }
 
 func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64, error) {
+	now := time.Now().UTC()
 	epoch, err := g.st.IssueLoginIdentity(ctx, store.LoginIdentity{
 		Principal: f.Sub, Issuer: f.Issuer, TenantID: f.TenantID, ObjectID: f.ObjectID, Email: f.Email,
-	}, time.Now().UTC())
+	}, now)
 	switch {
 	case errors.Is(err, store.ErrIdentityDeactivated):
 		return 0, oidc.ErrIdentityDeactivated
@@ -69,7 +70,7 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 	// failed write refuses the sign-in: no session is issued with groups the record lacks, and the record
 	// is what a running run's owner is judged by where no session of theirs is at hand.
 	if pw, ok := g.st.(principalGroupsWriter); ok {
-		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated); err != nil {
+		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, now); err != nil {
 			return 0, err
 		}
 	}

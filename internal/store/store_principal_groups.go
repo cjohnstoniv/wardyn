@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -24,9 +25,11 @@ type PrincipalGroups struct {
 
 // PutPrincipalGroups records a sign-in's email and group snapshot as principal's through portal ("" for
 // an SSO sign-in to Wardyn itself, else the portal's id), replacing the one before through the same door
-// and stamping the database's time. A nil groups is recorded as none. The sign-in gate and the portal
-// token exchange call it before they issue a session or token and refuse on an error.
-func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool) error {
+// and stamping the database's time. issuedAt is when the token the snapshot came from was issued: a
+// record from a token issued later is kept, and the write changes nothing, so an older token still valid
+// cannot put back a group a newer one dropped. A nil groups is recorded as none. The sign-in gate and the
+// portal token exchange call it before they issue a session or token and refuse on an error.
+func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error {
 	if groups == nil {
 		groups = []string{}
 	}
@@ -34,9 +37,12 @@ func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email str
 	if err != nil {
 		return fmt.Errorf("store: encode sign-in groups: %w", err)
 	}
-	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated) VALUES ($1, $2, $3, $4, $5)
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated, issued_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (principal, portal) DO UPDATE SET email = EXCLUDED.email, groups = EXCLUDED.groups,
-			truncated = EXCLUDED.truncated, signed_in_at = now()`, principal, portal, email, b, truncated); err != nil {
+			truncated = EXCLUDED.truncated, issued_at = EXCLUDED.issued_at, signed_in_at = now()
+		WHERE principal_groups.issued_at IS NULL OR principal_groups.issued_at <= EXCLUDED.issued_at`,
+		principal, portal, email, b, truncated, issuedAt); err != nil {
 		return fmt.Errorf("store: record sign-in groups: %w", err)
 	}
 	return nil

@@ -42,7 +42,7 @@ func TestLiveMintRefusedWhenAComponentGrantIsWithdrawn(t *testing.T) {
 	}
 	signIn := func() {
 		t.Helper()
-		if err := e.pg.PutPrincipalGroups(ctx, owner, "", "gwm@corp.example", []string{"eng"}, false); err != nil {
+		if err := e.pg.PutPrincipalGroups(ctx, owner, "", "gwm@corp.example", []string{"eng"}, false, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
