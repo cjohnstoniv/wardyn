@@ -293,8 +293,9 @@ type Resources struct {
 	DiskMiBSoft bool `json:"DiskMiBFilled"`
 	// LifetimeCap is how much longer the run may live, counted from the sandbox
 	// create: the run's own lifetime cap (lifetime_cap_at) less now. Zero means the
-	// run has no cap. Only the k8s substrate reads it, as the run pods'
-	// activeDeadlineSeconds and the quota scope that deadline selects.
+	// run has no cap. The k8s substrate reads it as the run pods'
+	// activeDeadlineSeconds and the quota scope that deadline selects; the macOS VM
+	// create reads it as the longest its re-issued proxy CA lasts.
 	LifetimeCap time.Duration
 	// ProxyAzure says the run's proxy carries an Azure route gate, which raises the proxy's memory
 	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads

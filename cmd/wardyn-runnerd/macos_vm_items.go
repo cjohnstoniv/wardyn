@@ -43,18 +43,18 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 		return
 	}
 	dir := m.layout.InspectionCADir()
-	over := ""
-	if *on {
-		over = driveRootOver(dir, driveRoots)
-	}
+	over := driveRootOver(dir, driveRoots)
 	switch {
 	case *on && over == "":
+		// A profile that is there but cannot be read could be hiding an organisation's 0, so it makes no CA either.
 		open := macvm.OpenInspectionCA
-		if !owner {
+		_, perr := managedPrefErr("MacOSVMInspectionCA")
+		readOnly := !owner || perr != nil
+		if readOnly {
 			open = macvm.ReadInspectionCA
 		}
 		ca, err := open(context.Background(), dir)
-		if !owner && errors.Is(err, os.ErrNotExist) {
+		if readOnly && errors.Is(err, os.ErrNotExist) {
 			slog.Info("macOS VM base: this Mac's inspection CA is not made yet; the runner makes it at its next start")
 			return
 		}
@@ -68,7 +68,7 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 	case !owner:
 		return
 	case over != "":
-		slog.Warn("macOS VM base: macos_vm_inspection_ca is treated as off: a drive root holds the VM directory, so a run could mount the CA's key", "drive_root", over)
+		slog.Warn("macOS VM base: this Mac's inspection CA is not kept: a drive root holds the VM directory, so a run could mount the CA's key", "drive_root", over)
 	default:
 		// A profile that is there but cannot be read reads as unset, which could turn an organisation's 1 into off.
 		if _, perr := managedPrefErr("MacOSVMInspectionCA"); perr != nil {
@@ -86,17 +86,19 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 
 // driveRootOver is the drive root in roots that is dir or one of its parents; "" when there is none. dir's
 // parent is resolved first, since a mount of any folder above the real one holds the key. Roots are compared as
-// files (os.SameFile), so another spelling of the same folder counts.
+// files (os.SameFile), so another spelling of the same folder counts, and by spelling, so a root that names a folder not made yet counts.
 func driveRootOver(dir string, roots []string) string {
 	if resolved, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
 		dir = filepath.Join(resolved, filepath.Base(dir))
 	}
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		if di, err := os.Stat(d); err == nil {
-			for _, r := range roots {
-				if ri, rerr := os.Stat(r); rerr == nil && os.SameFile(di, ri) {
-					return r
-				}
+		di, derr := os.Stat(d)
+		for _, r := range roots {
+			if filepath.Clean(r) == d {
+				return r
+			}
+			if ri, rerr := os.Stat(r); derr == nil && rerr == nil && os.SameFile(di, ri) {
+				return r
 			}
 		}
 		if filepath.Dir(d) == d {

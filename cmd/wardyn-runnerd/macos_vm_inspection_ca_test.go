@@ -297,10 +297,59 @@ func TestMacOSVMInspectionCAOffKeepsTheKeyWhenTheProfileCannotBeRead(t *testing.
 	m.items = macOSVMItems{}
 	m.openInspectionCA(&off, nil, true)
 	inspectionCAGone(t, m, false, "off, profile unreadable")
+	// A drive root over the VM directory outranks the unreadable profile: the key goes.
+	m.items = macOSVMItems{}
+	m.openInspectionCA(&off, []string{filepath.Dir(m.layout.Root)}, true)
+	inspectionCAGone(t, m, true, "off, profile unreadable, drive root over")
 	restore()
 	m.items = macOSVMItems{}
 	m.openInspectionCA(&off, nil, true)
 	inspectionCAGone(t, m, true, "off, profile readable")
+}
+
+// A drive root that names the CA's folder before it exists is over it: no CA is made there.
+func TestMacOSVMInspectionCADriveRootNamingTheNotYetMadeFolderStaysOff(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	on := true
+	m.openInspectionCA(&on, []string{m.layout.InspectionCADir()}, true)
+	if m.items.ca != nil || m.items.caErr != nil {
+		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
+	}
+	inspectionCAGone(t, m, true, "drive root names the folder")
+}
+
+// A profile that cannot be read could be hiding an organisation's 0, so runnerd.json's 1 makes no CA then: an
+// existing one is read, and none is made nor listed.
+func TestMacOSVMInspectionCAUnreadableProfileMakesNone(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	on := true
+	oldOS, oldExtract := prefsOS, prefsExtract
+	t.Cleanup(func() { prefsOS, prefsExtract = oldOS, oldExtract })
+	prefsOS = "darwin"
+	prefsExtract = func(string, string) (string, error) { return "", errors.New("unreadable") }
+	m.openInspectionCA(&on, nil, true)
+	inspectionCAGone(t, m, true, "unreadable profile, no CA")
+	if m.items.ca != nil || m.items.caErr != nil {
+		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
+	}
+	if slices.Contains(m.editItems(), "--"+macvm.FlagInspectionCA) {
+		t.Error("edit-base passes a CA that was never made")
+	}
+	if l, err := m.loadItems(); err != nil || len(l.Items) != 0 {
+		t.Errorf("loadItems: %v, %d items", err, len(l.Items))
+	}
+	prefsOS, prefsExtract = oldOS, oldExtract
+	m.openInspectionCA(&on, nil, true)
+	inspectionCAGone(t, m, false, "profile readable")
+	prefsOS = "darwin"
+	prefsExtract = func(string, string) (string, error) { return "", errors.New("unreadable") }
+	m.items = macOSVMItems{}
+	m.openInspectionCA(&on, nil, true)
+	if m.items.ca == nil {
+		t.Errorf("an existing CA was not read: %v", m.items.caErr)
+	}
 }
 
 func TestMacOSVMInspectionCADroppedWithMacOSVMsOff(t *testing.T) {
@@ -341,6 +390,14 @@ func TestMacOSVMInspectionCADroppedWithMacOSVMsOff(t *testing.T) {
 	dropInspectionCA(macOSVMSettings{inspectionCA: &off})
 	if has() {
 		t.Error("kept with the setting off")
+	}
+	// With macOS VMs off, the setting on and the folder empty (an earlier removal), no CA is made.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dropInspectionCA(macOSVMSettings{inspectionCA: &on})
+	if has() {
+		t.Error("made a CA with macOS VMs off")
 	}
 }
 

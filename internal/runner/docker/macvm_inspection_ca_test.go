@@ -122,6 +122,8 @@ func TestMacVMInspectionOffChangesNothing(t *testing.T) {
 	noCert.ProxyConfig.MITMCACertPEM = ""
 	noHosts := inspectionSpec(t)
 	noHosts.ProxyConfig.MITMHosts = nil
+	noKey := inspectionSpec(t)
+	noKey.ProxyConfig.MITMCAKeyPEM = ""
 	for name, c := range map[string]struct {
 		cfg  *MacVMConfig
 		spec runner.SandboxSpec
@@ -129,6 +131,7 @@ func TestMacVMInspectionOffChangesNothing(t *testing.T) {
 		"no CA":                     {&MacVMConfig{Layout: macvm.Layout{Root: t.TempDir()}}, inspectionSpec(t)},
 		"the proxy has no CA":       {trusted, noCert},
 		"the proxy terminates none": {trusted, noHosts},
+		"hosts listed, but no key":  {trusted, noKey},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := c.cfg.macVMInspection(c.spec, nil)
@@ -234,6 +237,26 @@ func TestMacVMInspectionResumedKeptMachineReadsItsOwnRecord(t *testing.T) {
 	}
 	if got.state != types.InspectionCANotTrusted || got.signed {
 		t.Errorf("got %v %q", got.signed, got.state)
+	}
+}
+
+// A new or fresh kept machine is cloned from the base, so it reads the base's record, not the machine's folder.
+func TestMacVMInspectionNewAndFreshKeptMachinesReadTheBase(t *testing.T) {
+	for _, mode := range []string{macvm.KeptNew, macvm.KeptFresh} {
+		t.Run(mode, func(t *testing.T) {
+			c, _ := inspectionConfig(t, macvm.ItemTrusted)
+			kept := &macvm.KeptRun{ID: uuid.NewString(), Mode: mode}
+			if err := os.MkdirAll(c.Layout.KeptMachineDir(kept.ID), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.macVMInspection(inspectionSpec(t), kept)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.signed || got.state != types.InspectionCATrusted {
+				t.Errorf("got %v %q", got.signed, got.state)
+			}
+		})
 	}
 }
 

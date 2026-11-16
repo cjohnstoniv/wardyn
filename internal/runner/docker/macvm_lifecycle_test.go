@@ -314,3 +314,41 @@ func TestMacVMStartReportsItsPhases(t *testing.T) {
 		t.Fatalf("a run whose network failed said %q (%v), want %q", said, err, want)
 	}
 }
+
+// With this Mac's inspection CA set and a base that trusts it, a create hands the proxy the run CA re-issued
+// by the Mac CA, sends the guest no run CA to trust, and records the CA as trusted on the machine.
+func TestMacVMCreateSignsTheProxyCAWithTheMacsInspectionCA(t *testing.T) {
+	r := newMacRig(t)
+	ca, err := macvm.OpenInspectionCA(context.Background(), r.c.Layout.InspectionCADir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeInspectionTools(t, r.c.Layout.BaseDir(0), ca, macvm.ItemTrusted)
+	r.c.InspectionCA = ca
+	spec := inspectionSpec(t)
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MITMCACertPEM string `json:"mitm_ca_cert_pem"`
+	}
+	if err := json.Unmarshal(r.f.stdinOf(proxyContainerName(spec.RunID)), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cross := parseInspectionCert(t, cfg.MITMCACertPEM)
+	mac := parseInspectionCert(t, ca.PEM())
+	if string(cross.RawIssuer) != string(mac.RawSubject) || cross.CheckSignatureFrom(mac) != nil {
+		t.Errorf("the proxy's CA is not issued by the Mac CA: issuer %q", cross.Issuer)
+	}
+	r.mu.Lock()
+	in := r.init
+	r.mu.Unlock()
+	if in == nil || in.RunCA != "" {
+		t.Errorf("the guest's Init %+v", in)
+	}
+	if sb.Machine == nil || sb.Machine.InspectionCA != types.InspectionCATrusted {
+		t.Errorf("machine %+v", sb.Machine)
+	}
+	_ = r.d.StopSandbox(context.Background(), sb.Ref)
+}
