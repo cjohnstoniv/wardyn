@@ -6,6 +6,7 @@
 - A unit's **deciders** add people to that list, per kind of hold, for the runs launched in that unit.
 - A unit with no rules changes nothing: the verdicts, the `404`s and the `approval.decide` audit rows are the ones a deployment without deciders gives.
 - Nothing refuses more on upgrade. Rules reach holds already pending, because they are read when a hold is decided.
+- [Delegation](delegation.md#who-may-consent) sets deciders beside the other people and rules that may consent, kind by kind.
 
 ## Today's rule
 
