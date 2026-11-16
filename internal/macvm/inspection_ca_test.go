@@ -50,6 +50,8 @@ func testRunCA(t *testing.T, notAfter time.Time) (*x509.Certificate, *ecdsa.Priv
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		MaxPathLenZero:        true,
+		// Set, not derived: the copy must carry this one, which a derived id would match by chance.
+		SubjectKeyId: []byte("run-ca-key-id"),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -131,8 +133,8 @@ func macCert(t *testing.T, ca *macvm.InspectionCA) *x509.Certificate {
 	return c
 }
 
-// expiredCADir is a directory holding a CA whose validity ended an hour ago.
-func expiredCADir(t *testing.T) string {
+// caDirEnding is a directory holding a CA whose validity ends at notAfter.
+func caDirEnding(t *testing.T, notAfter time.Time) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "expired")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -146,7 +148,7 @@ func expiredCADir(t *testing.T) string {
 		SerialNumber:          big.NewInt(7),
 		Subject:               pkix.Name{CommonName: "expired test CA"},
 		NotBefore:             time.Now().Add(-2 * time.Hour),
-		NotAfter:              time.Now().Add(-time.Hour),
+		NotAfter:              notAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLen:            1,
@@ -228,30 +230,31 @@ func TestInspectionCAIsMadeOnceAndKeptPrivate(t *testing.T) {
 
 func TestInspectionCARefusedAndKeptWhenNotPrivate(t *testing.T) {
 	spoilers := []struct {
-		name  string
-		spoil func(t *testing.T, dir string)
+		name    string
+		wantErr string // text the refusal must carry, when it is the point
+		spoil   func(t *testing.T, dir string)
 	}{
-		{"a key others can read", func(t *testing.T, dir string) {
+		{"a key others can read", "", func(t *testing.T, dir string) {
 			if err := os.Chmod(filepath.Join(dir, "key.pem"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"a certificate others can write", func(t *testing.T, dir string) {
+		{"a certificate others can write", "", func(t *testing.T, dir string) {
 			if err := os.Chmod(filepath.Join(dir, "ca.pem"), 0o666); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"an open directory", func(t *testing.T, dir string) {
+		{"an open directory", "", func(t *testing.T, dir string) {
 			if err := os.Chmod(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"a missing key", func(t *testing.T, dir string) {
+		{"a missing key", "", func(t *testing.T, dir string) {
 			if err := os.Remove(filepath.Join(dir, "key.pem")); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"another CA's key", func(t *testing.T, dir string) {
+		{"another CA's key", "", func(t *testing.T, dir string) {
 			_, other := openCA(t)
 			b, err := os.ReadFile(filepath.Join(other, "key.pem"))
 			if err != nil {
@@ -261,7 +264,7 @@ func TestInspectionCARefusedAndKeptWhenNotPrivate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"a symlinked key", func(t *testing.T, dir string) {
+		{"a symlinked key", "is a symlink", func(t *testing.T, dir string) {
 			if err := os.Rename(filepath.Join(dir, "key.pem"), filepath.Join(dir, "key.real")); err != nil {
 				t.Fatal(err)
 			}
@@ -269,7 +272,7 @@ func TestInspectionCARefusedAndKeptWhenNotPrivate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"a symlinked certificate", func(t *testing.T, dir string) {
+		{"a symlinked certificate", "is a symlink", func(t *testing.T, dir string) {
 			if err := os.Rename(filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca.real")); err != nil {
 				t.Fatal(err)
 			}
@@ -282,8 +285,12 @@ func TestInspectionCARefusedAndKeptWhenNotPrivate(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ca, dir := openCA(t)
 			s.spoil(t, dir)
-			if _, err := macvm.OpenInspectionCA(context.Background(), dir); err == nil {
+			_, err := macvm.OpenInspectionCA(context.Background(), dir)
+			switch {
+			case err == nil:
 				t.Error("OpenInspectionCA accepted it")
+			case !strings.Contains(err.Error(), s.wantErr):
+				t.Errorf("the refusal %q does not say %q", err, s.wantErr)
 			}
 			// The certificate is kept, not replaced by a new CA (a symlink reads through to the same bytes).
 			b, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
@@ -294,6 +301,22 @@ func TestInspectionCARefusedAndKeptWhenNotPrivate(t *testing.T) {
 				t.Error("the certificate was changed")
 			}
 		})
+	}
+}
+
+// A directory that is a symlink is refused before anything is read through it: on macOS a symlink's mode can
+// be set, so the mode check alone would not catch it.
+func TestInspectionCARefusesASymlinkedDirectory(t *testing.T) {
+	_, dir := openCA(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.OpenInspectionCA(context.Background(), link); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Errorf("OpenInspectionCA: %v", err)
+	}
+	if _, err := macvm.ReadInspectionCA(context.Background(), link); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Errorf("ReadInspectionCA: %v", err)
 	}
 }
 
@@ -470,6 +493,15 @@ func TestCrossSignIsShortLived(t *testing.T) {
 	if cp.NotAfter.After(time.Now().Add(2*time.Hour + time.Minute)) {
 		t.Errorf("validFor 2h: NotAfter %s", cp.NotAfter)
 	}
+	// A copy never outlives the Mac CA that signs it.
+	short, err := macvm.OpenInspectionCA(context.Background(), caDirEnding(t, time.Now().Add(72*time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	macEnd := macCert(t, short).NotAfter
+	if cp := crossed(t, short, runPEM, []string{"api.example.com"}, 0); cp.NotAfter.After(macEnd) {
+		t.Errorf("the copy ends %s, after the Mac CA's %s", cp.NotAfter, macEnd)
+	}
 }
 
 func TestCrossSignRefuses(t *testing.T) {
@@ -496,7 +528,7 @@ func TestCrossSignRefuses(t *testing.T) {
 		})
 	}
 	t.Run("an expired Mac CA", func(t *testing.T) {
-		old, err := macvm.OpenInspectionCA(context.Background(), expiredCADir(t))
+		old, err := macvm.OpenInspectionCA(context.Background(), caDirEnding(t, time.Now().Add(-time.Hour)))
 		if err != nil {
 			t.Fatal(err)
 		}
