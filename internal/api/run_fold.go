@@ -184,6 +184,9 @@ type runFoldStep struct {
 //     policy with the lane's default under it.
 //   - A No network launch's refusal straight after the tool policy, the last step that adds a host:
 //     every host source the fold can see is known by then (stepNoNetwork).
+//   - A workload's policy pin straight after that: the tool policy is the last step every door runs
+//     that writes the spec, so the pin's digest holds every step that changes the run's policy, and a
+//     launch off its pin is refused before anything is minted or written (launchPolicyDigest).
 //   - A macOS VM's hold straight after the tool lane: autonomy and the inner walls
 //     have derived the hold by then, and the VM cannot hold a tool call.
 //   - A kept machine after the window at start: its own Mac, its pool, governance,
@@ -229,6 +232,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepNoNetwork, foldAll},
+	{(*Server).stepPolicyPin, foldAll},
 	{(*Server).stepHostRulesVM, foldAll},
 	{(*Server).stepMacOSHold, foldAll},
 	{(*Server).stepMacWindow, foldAll},

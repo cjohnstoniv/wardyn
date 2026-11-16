@@ -311,6 +311,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workload-bindings":        {class: classSecurity},
 	"GET /api/v1/workload-bindings":         {class: classSecurity},
 	"DELETE /api/v1/workload-bindings/{id}": {class: classSecurity},
+	// A workload's policy pin: the caller's own workload only, as the apply.
+	"PUT /api/v1/workloads/{name}/policy-pin":    {class: classMember},
+	"DELETE /api/v1/workloads/{name}/policy-pin": {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).

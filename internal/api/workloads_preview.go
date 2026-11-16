@@ -113,13 +113,19 @@ func (s *Server) handlePreviewWorkload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) previewWorkloadLaunch(w http.ResponseWriter, r *http.Request, planned store.Workload, cur *store.Workload,
 	launch *client.WorkloadPreviewLaunch,
 ) (ok bool) {
-	cr, err := workloadCreateRequest(r, planned)
+	want := ""
+	if cur != nil {
+		want = cur.PolicyPin // an apply leaves the stored pin as it is
+	}
+	ctx, pin := withPolicyPin(r.Context(), want)
+	cr, err := workloadCreateRequest(r.WithContext(ctx), planned)
 	if err != nil {
 		writeServerError(w, r, "preview workload launch", err)
 		return false
 	}
 	cw := newQueueRefusalCapture()
 	s.handlePreflightRun(cw, cr)
+	launch.PolicyDigest = pin.got
 	switch {
 	case cw.status == http.StatusOK:
 		var pf client.PreflightResult

@@ -254,6 +254,9 @@ type Workload struct {
 	// Digest is the hex SHA-256 over the intent, run_in and restart_key; an apply of the same digest changes
 	// nothing. It is withheld from a reader who sees the intent with its host axis withheld.
 	Digest string `json:"digest,omitempty"`
+	// PolicyPin is the launch policy digest every launch of the workload must resolve to (PinWorkloadPolicy),
+	// empty when it has none. It is withheld where Digest is.
+	PolicyPin string `json:"policy_pin,omitempty"`
 	// Generation counts spec changes; CurrentGeneration is the one the current run was launched from.
 	Generation        int64      `json:"generation"`
 	CurrentGeneration int64      `json:"current_generation"`
@@ -273,7 +276,7 @@ type Workload struct {
 // WorkloadEvent is one row of a workload's history: a workload.* audit row without its actor and hashes.
 type WorkloadEvent struct {
 	Time time.Time `json:"time"`
-	// Action is apply, launch, replace, launch_refused, restart or delete.
+	// Action is apply, launch, replace, launch_refused, restart, delete or policy_pin.set.
 	Action     string `json:"action"`
 	Generation int64  `json:"generation,omitempty"`
 	// RunID is the run a launch started, or the run that replaced another.
@@ -394,6 +397,28 @@ func (c *Client) RestartWorkload(ctx context.Context, name, owner string) (Workl
 	return out, err
 }
 
+// WorkloadPolicyPinRequest is the body of PUT /api/v1/workloads/{name}/policy-pin.
+type WorkloadPolicyPinRequest struct {
+	// Digest is a launch policy digest, 64 lowercase hex characters, as WorkloadPreviewLaunch.PolicyDigest reads.
+	Digest string `json:"digest"`
+}
+
+// PinWorkloadPolicy pins the caller's own workload to digest: a later launch of it whose policy resolves to
+// another digest is refused (workload_policy_pin_mismatch) before any run starts, and the current run keeps
+// running. PUT /api/v1/workloads/{name}/policy-pin.
+func (c *Client) PinWorkloadPolicy(ctx context.Context, name, digest string) (Workload, error) {
+	var out Workload
+	err := c.do(ctx, http.MethodPut, workloadPath(name, "")+"/policy-pin", WorkloadPolicyPinRequest{Digest: digest}, &out)
+	return out, err
+}
+
+// UnpinWorkloadPolicy clears the caller's own workload's pin. DELETE /api/v1/workloads/{name}/policy-pin.
+func (c *Client) UnpinWorkloadPolicy(ctx context.Context, name string) (Workload, error) {
+	var out Workload
+	err := c.do(ctx, http.MethodDelete, workloadPath(name, "")+"/policy-pin", nil, &out)
+	return out, err
+}
+
 // CreateWorkloadBinding binds a namespace on a pool's runners to a service identity (security
 // tier, a signed-in person). POST /api/v1/workload-bindings.
 func (c *Client) CreateWorkloadBinding(ctx context.Context, req CreateWorkloadBindingRequest) (WorkloadBinding, error) {
@@ -459,6 +484,9 @@ type WorkloadPreviewLaunch struct {
 	Replaces *uuid.UUID `json:"replaces,omitempty"`
 	// Preflight is the launch's dry run, with State would_launch.
 	Preflight *PreflightResult `json:"preflight,omitempty"`
+	// PolicyDigest is the launch policy digest the launch resolves to, what PinWorkloadPolicy takes; empty
+	// when the preview refuses the launch before its policy is fully resolved.
+	PolicyDigest string `json:"policy_digest,omitempty"`
 }
 
 // WorkloadPreview is the answer of POST /api/v1/workloads/{name}/preview: what the same body to PUT
