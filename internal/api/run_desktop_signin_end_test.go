@@ -626,3 +626,17 @@ func TestDesktopSignin_AnEndWhoseClaimCannotBeTakenSendsNothing(t *testing.T) {
 		t.Fatalf("calls = %v, want none", got)
 	}
 }
+
+// TestDesktopSignin_AnAbandonWhoseClaimCannotBeTakenStillContinuesTheAgent: a begin's abandon whose claim the store
+// cannot write runs unclaimed and sends a bare SIGCONT alone, so a store fault does not leave the agent stopped.
+func TestDesktopSignin_AnAbandonWhoseClaimCannotBeTakenStillContinuesTheAgent(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	si := f.st.only(t)
+	before := len(f.rn.seen())
+	f.srv.cfg.Store = signinClaimUnwrittenStore{f.st}
+	f.srv.abandonDesktopSignin(context.Background(), f.rn, f.run, si, signinOwner)
+	if got := f.rn.seen()[before:]; !slices.Equal(got, []string{"signal:SIGCONT"}) {
+		t.Fatalf("calls = %v, want signal:SIGCONT alone", got)
+	}
+}

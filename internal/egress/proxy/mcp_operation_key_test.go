@@ -504,6 +504,38 @@ func TestMCPOperationKeyDeclineHoldsForTheCall(t *testing.T) {
 	}
 }
 
+// TestMCPOperationKeyGateDeclineHoldsForAKeyedCall: a decline the gate learns while it polls holds for the
+// call, so the same call under an operation key is refused at the broker without asking.
+func TestMCPOperationKeyGateDeclineHoldsForAKeyedCall(t *testing.T) {
+	f, cp := newOpFixture(t)
+	if rec := gatePost(t, f, "mcp__linear__delete_issue", `{"id":"ENG-1"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("answer %d %q, want the gate to raise a row", rec.Code, rec.Body.String())
+	}
+	cp.set(0, types.ApprovalDenied)
+	wantGateDecision(t, gatePost(t, f, "mcp__linear__delete_issue", `{"id":"ENG-1"}`), "DENIED")
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(1, `{"id":"ENG-1"}`, `"a"`)), "identical retries are refused")
+	if rows, _ := cp.snapshot(); len(rows) != 1 || f.up.hitCount() != 0 {
+		t.Fatalf("rows %d, upstream hits %d; want the declined call not asked about again and nothing sent", len(rows), f.up.hitCount())
+	}
+}
+
+// TestMCPOperationKeyUnavailableCredentialIsNotRecorded: an approved keyed call whose server's credential
+// cannot be read is refused before its send is recorded, so no record stands for a call never sent.
+func TestMCPOperationKeyUnavailableCredentialIsNotRecorded(t *testing.T) {
+	f, cp := newOpFixture(t)
+	cp.approve = true
+	f.up.mu.Lock()
+	f.up.credStatus = http.StatusServiceUnavailable
+	f.up.mu.Unlock()
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", keyedCall(1, `{"id":"ENG-1"}`, `"step-1"`)); rec.Code == http.StatusOK || f.up.hitCount() != 0 {
+		t.Fatalf("answer %d %q, upstream hits %d; want a refusal and no send", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+	if got := cp.records(); len(got) != 0 {
+		t.Fatalf("send records %+v, want none for a call that was not sent", got)
+	}
+	wantDecision(t, f.buf, egress.Deny, ruleSourceMCPCredential)
+}
+
 // TestMCPOperationKeyUnresolvedServerIsNotRecorded: an approved keyed call whose server's address does
 // not resolve is refused before its send is recorded, so no record stands for a call never sent, and the
 // same call under the same key asks again and is sent once the address resolves.
