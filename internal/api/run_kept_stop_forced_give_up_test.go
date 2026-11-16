@@ -106,6 +106,7 @@ func TestSweepForcedStops_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T
 				if tc.name != "left open" {
 					return
 				}
+				f.clock.now = f.clock.now.Add(forcedRestopWaitMin) // past this server's wait after the first stop
 				f.cs.giveUpApplies = true
 				f.tick(t, f.s)
 				check("the next tick, the give-up applying", true)
@@ -120,7 +121,7 @@ func TestSweepForcedStops_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T
 // that failed. Inside the keep it applies nothing, and the ref and the mark stay; past it the record is given up, the
 // ref is cleared with one success row, the mark clears, and the next tick stops nothing. Its given_up row is written
 // with the give-up, and names no folder when the seed is the read that fails. Catches: a read that never answers
-// keeping the ref and the mark for good, with the sandbox stopped again on every tick; a give-up inside the keep,
+// keeping the ref and the mark for good, with the sandbox stopped again for the whole keep; a give-up inside the keep,
 // which throws away a copy back that a later read could still bring; a given_up row that waits for a seed that
 // never reads.
 func TestSweepForcedStops_GivesUpAFolderThatNeverReadsOnceItsKeepHasRunOut(t *testing.T) {
@@ -169,7 +170,8 @@ func TestSweepForcedStops_GivesUpAFolderThatNeverReadsOnceItsKeepHasRunOut(t *te
 			}
 			f.tick(t, f.s) // inside the keep: the statement's cap has not passed, so it applies nothing
 			check("inside the keep", 1, false)
-			f.cs.giveUpApplies = true // past the keep
+			f.clock.now = f.clock.now.Add(forcedRestopWaitMin) // past this server's wait after the first stop
+			f.cs.giveUpApplies = true                          // past the keep
 			f.tick(t, f.s)
 			check("past the keep", 2, true)
 			f.tick(t, f.s)

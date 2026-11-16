@@ -331,7 +331,10 @@ func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.U
 	if s.giveUpErr != nil {
 		return store.GiveUpOutcome{}, s.giveUpErr
 	}
-	if !s.giveUpApplies || (s.status.Back != nil && s.status.Resume == nil) {
+	if folderDone(s.status) {
+		return store.GiveUpOutcome{Done: true}, nil // the statement's own read of a record already final, as in PG
+	}
+	if !s.giveUpApplies {
 		return store.GiveUpOutcome{}, nil
 	}
 	back := p.Back
