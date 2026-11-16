@@ -13,7 +13,7 @@ import (
 
 // componentPinnedMsg is what a run is told when a component it carries is now pinned to a unit the run
 // is not in (componentPinnedOut).
-const componentPinnedMsg = "wardyn: this run is no longer given credentials: a component it carries is now pinned to a unit this run is not in; start a new run in that unit"
+var componentPinnedMsg = "wardyn: this run is no longer given credentials: a component it carries is now pinned to a unit this run is not in; start a new run in that unit"
 
 // componentCut is the reason and text every live door refuses a run with when a component it carries is
 // pinned to a unit the run is not in (pinned) or deleted or no longer its owner's to use (withdrawn, a
