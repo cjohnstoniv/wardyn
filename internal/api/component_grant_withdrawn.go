@@ -33,8 +33,9 @@ var _ principalGroupsReader = store.PG{}
 
 // componentWithdrawnMsgs is what a mint or redeem refused by componentWithdrawn tells the run, by reason.
 var componentWithdrawnMsgs = map[string]string{
-	reasonOwnerComponentGone:       "wardyn: this run is no longer given credentials",
-	reasonOwnerCapabilityComponent: "wardyn: this run is no longer given credentials",
+	reasonOwnerComponentGone: "wardyn: this run is no longer given credentials: a component it carries no longer exists; start a new run",
+	reasonOwnerCapabilityComponent: "wardyn: this run is no longer given credentials: its owner no longer holds a component it carries. " +
+		"If they should, they sign in again so Wardyn sees their groups, through the portal if a portal started the run; otherwise start a new run without the component",
 }
 
 // componentWithdrawn is why the run is no longer given credentials over a component in comps (its
