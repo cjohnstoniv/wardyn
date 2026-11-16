@@ -446,7 +446,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	}
 	startCfg, _ := json.Marshal(map[string]string{"credential": cred, "proxy": signinProxyAddr})
 	if _, err := s.signinExec(pctx, run, signinOpensDisplay, startCfg, 64<<10, "start"); err != nil {
-		// The row keeps what pause-agent stopped for a rollback the sweep has to finish.
+		// The row keeps what pause-agent stopped, when this write lands, for a rollback the sweep has to finish.
 		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
 		_ = st.SetDesktopSigninPauseRecord(rctx, si.ID, pauseRec)
 		rcancel()

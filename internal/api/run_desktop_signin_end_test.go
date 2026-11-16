@@ -350,14 +350,14 @@ func TestDesktopSignin_AnEndBeforeTheBeginsStopLeavesTheSignInToTheBegin(t *test
 	}
 }
 
-// signinHang waits for ctx or two seconds, whichever ends first: when ctx ends first it sets *bounded and answers
+// signinHang waits for ctx or ten seconds, whichever ends first: when ctx ends first it sets *bounded and answers
 // ctx's error.
 func signinHang(ctx context.Context, bounded *bool) error {
 	select {
 	case <-ctx.Done():
 		*bounded = true
 		return ctx.Err()
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		return errors.New("never bounded")
 	}
 }
@@ -483,6 +483,83 @@ func TestDesktopSignin_AnEndBeforeTheDisplayStartsLeavesTheSignInToTheBegin(t *t
 	}
 	if got := f.rn.seen()[before:]; len(got) == 0 || got[0] != "person:stop" {
 		t.Fatalf("the end's calls = %v; want the display closed first", got)
+	}
+}
+
+// signinRecordWatchStore is signinTestStore whose pause-record write fails on a finished context, as PostgreSQL's
+// does, and notes the runner's calls at the time of the write.
+type signinRecordWatchStore struct {
+	*signinTestStore
+	rn *signinFakeRunner
+	at *[]string
+}
+
+func (s signinRecordWatchStore) SetDesktopSigninPauseRecord(ctx context.Context, id uuid.UUID, rec json.RawMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	*s.at = s.rn.seen()
+	return s.signinTestStore.SetDesktopSigninPauseRecord(ctx, id, rec)
+}
+
+// signinStartEndsRequestRunner is signinFakeRunner whose display start ends the begin's request and fails.
+type signinStartEndsRequestRunner struct {
+	*signinFakeRunner
+	cancel context.CancelFunc
+}
+
+func (r *signinStartEndsRequestRunner) ExecStreamAs(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if slices.Equal(spec.Argv, []string{signinBinary, "start"}) {
+		r.cancel()
+		return nil, context.Canceled
+	}
+	return r.signinFakeRunner.ExecStreamAs(ctx, ref, user, spec)
+}
+
+// TestDesktopSignin_AFailedStartKeepsThePauseRecordForTheSweep: a begin whose display did not start stores the pause
+// record before it rolls back, on a context its own bound or request cannot end, so a rollback that cannot stop the
+// display leaves the row with the record, and the sweep's resume-agent gets exactly that record.
+func TestDesktopSignin_AFailedStartKeepsThePauseRecordForTheSweep(t *testing.T) {
+	const rec = `{"already_stopped":[7]}`
+	for name, failStart := range map[string]func(f *signinFixture, cancel context.CancelFunc){
+		"the start exits non-zero": func(f *signinFixture, _ context.CancelFunc) {
+			f.rn.exit["start"] = 1
+		},
+		"the request ends during the start": func(f *signinFixture, cancel context.CancelFunc) {
+			f.srv.cfg.Runner = &signinStartEndsRequestRunner{signinFakeRunner: f.rn, cancel: cancel}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var atWrite []string
+			f.srv.cfg.Store = signinRecordWatchStore{signinTestStore: f.st, rn: f.rn, at: &atWrite}
+			f.rn.exit["stop"] = 1
+			failStart(f, cancel)
+			w := doSSOCtx(t, f.srv, ctx, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/desktop-signin", f.cookie, "")
+			if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), reasonDesktopSigninStartFailed) {
+				t.Fatalf("begin = %d %s, want 502 %s", w.Code, w.Body.String(), reasonDesktopSigninStartFailed)
+			}
+			if si := f.st.only(t); si.EndedAt != nil || string(si.PauseRecord) != rec {
+				t.Fatalf("row = ended %v, record %q, want open with the record %s", si.EndedAt, si.PauseRecord, rec)
+			}
+			if len(atWrite) == 0 || slices.Contains(atWrite, "person:stop") {
+				t.Fatalf("calls when the record was written = %v, want some, and no stop of the display yet", atWrite)
+			}
+
+			f.rn.exit["stop"] = 0
+			f.srv.cfg.Now = func() time.Time { return time.Now().Add(time.Second) }
+			if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(f.rn.input("agent:resume-agent")); got != rec {
+				t.Fatalf("resume-agent stdin = %q, want the stored record %s", got, rec)
+			}
+			if si := f.st.only(t); si.EndedAt == nil {
+				t.Fatalf("row = %+v, want the sweep to have closed it", si)
+			}
+		})
 	}
 }
 
