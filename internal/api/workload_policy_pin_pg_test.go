@@ -207,8 +207,9 @@ func TestPG_WorkloadPolicyPin_ARunnerCutLeavesTheDigest(t *testing.T) {
 
 // TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange: the owner pins and unpins; each change
 // is one workload.policy_pin.set row naming the pin it replaced, and a repeat writes none. A malformed digest
-// is refused, another person reaches no workload of the owner's, and a reader who sees the intent with its
-// host axis withheld does not see the pin.
+// is refused, another person reaches no workload of the owner's, even one who holds a workload of that name
+// (theirs is not written either), and a reader who sees the intent with its host axis withheld does not see
+// the pin.
 func TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange(t *testing.T) {
 	e := newSvcEnv(t)
 	pol := e.plainPolicy(t, "wl-pol")
@@ -224,6 +225,7 @@ func TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange(t *testing
 			t.Fatalf("pin %q: %d %s, want 400 %s", bad, w.Code, w.Body.String(), reasonWorkloadPolicyPinInvalid)
 		}
 	}
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.other, workloadBody(pol, "t", "")), http.StatusCreated)
 	for who, c := range map[string]*http.Cookie{"another person": e.other, "the security tier": e.sec, "an administrator": e.admin} {
 		for _, method := range []string{http.MethodPut, http.MethodDelete} {
 			w := doSSO(t, e.h.srv, method, "/api/v1/workloads/web/policy-pin?owner=mem", c, `{"digest":"`+strings.Repeat("0", 64)+`"}`)
@@ -242,6 +244,9 @@ func TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange(t *testing
 	}
 	if got := read(e.mem, "/api/v1/workloads/web").PolicyPin; got != pin {
 		t.Fatalf("owner reads pin %q, want %q", got, pin)
+	}
+	if got := read(e.other, "/api/v1/workloads/web").PolicyPin; got != "" {
+		t.Fatalf("the other person's own web reads pin %q, want none: a route naming another owner wrote it", got)
 	}
 	if got := read(e.sec, "/api/v1/workloads/web?owner=mem").PolicyPin; got != "" {
 		t.Fatalf("security tier reads pin %q, want it withheld", got)
