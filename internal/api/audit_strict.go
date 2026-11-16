@@ -97,6 +97,7 @@ var auditStrictExcluded = map[string]bool{
 	"POST /api/v1/governance/dry-run":                true,
 	"POST /api/v1/governance/approval-rules/dry-run": true,
 	"POST /api/v1/templates/import":                  true,
+	"POST /api/v1/templates/{id}/policy-check":       true,
 }
 
 // strictIntentBodyCap bounds the body read to hash it. It is above every covered handler's own cap, so a

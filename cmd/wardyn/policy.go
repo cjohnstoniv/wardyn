@@ -164,7 +164,7 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(list, get, getDefault, set, del, policyRenderCmd())
+	cmd.AddCommand(list, get, getDefault, set, del, policyRenderCmd(), policyCheckCmd(client))
 	return subcommandGroup(cmd)
 }
 

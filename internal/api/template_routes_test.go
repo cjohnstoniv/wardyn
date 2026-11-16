@@ -206,6 +206,7 @@ func TestTemplateForeignIDIsTheMissingID404(t *testing.T) {
 		{http.MethodPut, "", `{"name":"x","expected_revision":1,"document":` + templateDocBody(templateIntentEgress) + `}`},
 		{http.MethodDelete, "", ""},
 		{http.MethodPost, "/copy", `{"scope":"person"}`},
+		{http.MethodPost, "/policy-check", `{"candidate":{}}`},
 	}
 	foreign := map[string]types.RunTemplate{
 		"another person's":      e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"}, types.TemplateKindTemplate, "mine", templateIntentEgress),
