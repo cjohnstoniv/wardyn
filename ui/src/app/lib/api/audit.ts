@@ -90,8 +90,9 @@ export function egressFromAudit(events: AuditEvent[]): SpooledEgressDecision[] {
         // network fault, not a refusal: it reads "failed".
         decision: isNetworkFault(e) ? "failed" : map[action],
         bytes: num(d.bytes),
-        // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
-        // answers undefined for the other two actions and for an older trail.
+        // B3: egress.hold stamps one, and so does a deny row whose failed connection
+        // gave a once approval back (docs/AUDIT-ACTIONS.md); str() answers undefined
+        // otherwise and for an older trail.
         approval_id: str(d.approval_id),
         ...(d.spooled === true && str(d.observed_at) ? { spooled_at: str(d.observed_at) } : {}),
         ...(str(d.rule_source) === SPOOL_FULL_RULE ? { spool_full: true } : {}),
