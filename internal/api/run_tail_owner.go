@@ -213,7 +213,8 @@ func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor
 // like any other away row, so a runner that never returns cannot keep an owed pass for ever. A runner run whose
 // runner is not connected here (a live session, never last-known caps) gets
 // no runner call, no folder pass and no tail; the one step it takes is the give-up at the cap, which needs no
-// runner, and for a forced-marked row no lock (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
+// runner, and for a forced-marked row no lock (tailGiveUpAway): the record is read, and an owed pass whose keep ran out, or a stored resume that no pass will
+// run for (tailStepFor), is given up, with its audit
 // row; inside the cap it takes no lock and writes no row. A record, seed or rule that cannot be read skips the row
 // for the tick inside the cap: an unreadable answer is never "not owed", which would stop a sandbox that owes its
 // changes. Past the cap the same row is given up (tailStepOf), and its audit row names the read that failed.
@@ -389,7 +390,8 @@ func (s *Server) tailFolderVisitable(ctx context.Context, run types.AgentRun) bo
 }
 
 // tailGiveUpAway is the give-up of a run whose runner is not connected here, and only that: with the run and its
-// record read again, the owed pass whose keep ran out is given up (the statement and its audit row). No runner is
+// record read again, the owed pass whose keep ran out, or a stored resume that no pass will run for (tailStepFor), is
+// given up (the statement and its audit row). No runner is
 // called and no tail runs, so the sandbox stays; the record is then final, the sweeps no longer keep the sandbox, and
 // the queued kill or the history tail ends it once the runner is back. A runner that never comes back therefore
 // cannot keep a sandbox for ever.
@@ -415,7 +417,7 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID, marked bool) 
 }
 
 // tailGiveUpOwed is the give-up decision and its write: run id and its record are read again (tailReread), and when
-// the give-up is still the due step the owed pass is given up (giveUpFolderNoted), with its audit row written only
+// the give-up is still the due step the owed pass, or a stored resume that no pass will run for (tailStepFor), is given up (giveUpFolderNoted), with its audit row written only
 // when the statement applied. It takes no lock itself: tailGiveUpAway calls it under the run's lock for a row that is not
 // forced-marked and without it for one that is, and the forced stop's retry (giveUpForcedPastKeep) without one.
 func (s *Server) tailGiveUpOwed(ctx context.Context, id uuid.UUID) {
