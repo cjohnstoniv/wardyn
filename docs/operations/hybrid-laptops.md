@@ -215,6 +215,7 @@ What you see tells you which one is missing:
 | What you see | Missing | Fix |
 |---|---|---|
 | "is outside every member workspace root", or "configures no member workspace roots" | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
+| "is attached to a workspace whose owner's member workspace roots no longer hold it", or "none of that person's member workspace roots" | The workspace owner's workspace roots | Remove the folder from that workspace, or the operator sets that person's roots to cover it again (`WARDYN_USER_WORKSPACE_ROOTS` or `_MAP`); an operator sees which workspace in the audit log |
 | "which shares no folders", "is outside every --drive-root its runner shares", or "this runner shares no folder" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
 | A macOS run stops within 10 seconds with "approve Full Disk Access for the Wardyn guest agent in edit-base" | Full Disk Access | Grant it to the guest agent in `edit-base` |
 
