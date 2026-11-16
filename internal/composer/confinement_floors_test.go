@@ -73,6 +73,8 @@ func TestMeetConfinementFloors(t *testing.T) {
 		{"a floor on the base only is kept", floors(types.ConfinementFloors{SelfDefinedComponent: types.CC2}),
 			types.ConfinementFloors{OwnImage: types.CC3}, &types.ConfinementFloors{OwnImage: types.CC3, SelfDefinedComponent: types.CC2}},
 		{"an overlay that raises nothing keeps none", types.GovernanceLimits{}, types.ConfinementFloors{}, nil},
+		{"a higher overlay floor wins on self_defined_component", floors(types.ConfinementFloors{SelfDefinedComponent: types.CC1}),
+			types.ConfinementFloors{SelfDefinedComponent: types.CC3}, &types.ConfinementFloors{SelfDefinedComponent: types.CC3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := Authority{Limits: tc.base}
@@ -104,6 +106,14 @@ func TestValidateOverlayRefusesAnUnknownConfinementFloor(t *testing.T) {
 	wantOverlayErr(t, ValidateOverlay(Authority{}, ov), ReasonOverlayInvalid, "confinement_floors")
 }
 
+// TestComposedConfinementFloorIsChecked: a stored floor with an unknown class is refused when the profile is
+// composed, naming limits.confinement_floors, as an autonomy rubric is.
+func TestComposedConfinementFloorIsChecked(t *testing.T) {
+	base := Authority{Limits: types.GovernanceLimits{ConfinementFloors: &types.ConfinementFloors{OwnImage: "CC9"}}}
+	_, _, err := ApplyOverlay(base, limitsOverlay(types.LimitsOverlay{}))
+	wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "limits.confinement_floors")
+}
+
 // TestTraitFloor: each trait raises the floor to its class only when the run has it, the strongest class wins
 // and names every trait that set it, and a class at or below the floor raises nothing.
 func TestTraitFloor(t *testing.T) {
@@ -129,6 +139,8 @@ func TestTraitFloor(t *testing.T) {
 			all, types.CC3, []string{"data_out_open"}},
 		{"a tie names both", types.CC1, &types.ConfinementFloors{OwnImage: types.CC3, SelfDefinedComponent: types.CC3},
 			all, types.CC3, []string{"own_image", "self_defined_component"}},
+		{"a trait the run lacks is not named at a tie", types.CC1, &types.ConfinementFloors{OwnImage: types.CC3, DataOutOpen: types.CC3},
+			ConfinementTraits{DataOutOpen: true}, types.CC3, []string{"data_out_open"}},
 		{"a floor never lowers", types.CC3, &types.ConfinementFloors{OwnImage: types.CC2}, all, types.CC3, nil},
 		{"a class equal to the floor names none", types.CC2, &types.ConfinementFloors{OwnImage: types.CC2}, all, types.CC2, nil},
 	} {

@@ -318,6 +318,11 @@ func (m *meeter) checkResult() {
 			m.fail(ReasonOverlayUnsatisfiable, "limits.autonomy_rubric", "%v", err)
 		}
 	}
+	if l.ConfinementFloors != nil {
+		if err := l.ConfinementFloors.Validate(); err != nil {
+			m.fail(ReasonOverlayUnsatisfiable, "limits.confinement_floors", "%v", err)
+		}
+	}
 }
 
 // tightest is the smaller of two bounds where a value <= 0 is no bound; two
