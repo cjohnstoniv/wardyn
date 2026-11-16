@@ -31,6 +31,7 @@ func TestInternalDoors_RefuseWhenNoRunClaimsAreOnTheRequest(t *testing.T) {
 		"raise approval":  h.srv.handleInternalRequestApproval,
 		"get approval":    h.srv.handleInternalGetApproval,
 		"expire approval": h.srv.handleInternalExpireApproval,
+		"record send":     h.srv.handleInternalMCPCallSent,
 	} {
 		w := httptest.NewRecorder()
 		call(w, httptest.NewRequest(http.MethodPost, "/internal/x/"+id, strings.NewReader(`{}`)))

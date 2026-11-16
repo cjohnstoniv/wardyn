@@ -947,8 +947,8 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	r.Post("/internal/proxy/loaded", s.handleInternalProxyLoaded)
 	r.Post("/internal/approvals", s.handleInternalRequestApproval)
 	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-	// wardyn-toolgate's own give-up signal (#811): closes the row it raised instead of leaving it PENDING for the sweep.
-	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
+	// wardyn-toolgate's give-up (#811) and a keyed MCP call's send record (approvals_mcp_call_send.go).
+	s.mountInternalApprovalSettleRoutes(r)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
 	// The run proxy's sign-in lane asks whether a credential is the run's
 	// open sign-in's (run_desktop_signin.go).
