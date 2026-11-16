@@ -785,7 +785,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
 - The copy is literally accurate for HTTPS; for HTTP it undersells rather than oversells — it never claims a grant covers more than it does, only occasionally less.
 - Either way the grant is spent on the approved verdict itself — ahead of the method check, IP vetting, and the dial.
-- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund.
+- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund. The audit row of such a failure names `builtin:dial-failed` or `builtin:tunnel-failed`, and a retry needs a new approval.
 
 **`until` is bounded by the run, and honored against two clocks.**
 
