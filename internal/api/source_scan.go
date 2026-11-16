@@ -20,6 +20,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
+// The detail of a source.scan failure row the server caused names the step that failed, never the error's text:
+// a store or driver error can name hosts, users and databases. writeServerError and the log keep the cause.
+const (
+	scanAuditLaunchFault  = "launch scan run"
+	scanAuditRunnerUnread = "read the folder's runner"
+	scanAuditPersistFault = "persist scan profile"
+)
+
 // source_scan.go — the tier-1 scan: a SOURCE scans itself. This is what
 // structurally fixes the old whole-workspace scan's bug (a repo+dir workspace
 // never scanned its dirs — the repo branch won on every call and the "later
@@ -135,7 +143,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		}
 		if lerr != nil {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditLaunchFault})))
 			writeServerError(w, r, "launch scan run", lerr)
 			return
 		}
@@ -249,7 +257,8 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *
 		seed = types.KeepScanSeeded(seed, src.Requirements)
 	}
 	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seed); err != nil {
-		return workspacescan.WorkspaceProfile{}, false, false, "persist scan profile: " + err.Error(), false
+		slog.ErrorContext(ctx, "wardynd: persist a source's scan profile", slog.String("source_id", src.ID.String()), slog.Any("err", err))
+		return workspacescan.WorkspaceProfile{}, false, false, scanAuditPersistFault, false
 	}
 	return profile, aiRan, aiChanged, "", true
 }
@@ -536,7 +545,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				// A binding that no longer holds refuses by name, as a run would; a live one is skipped.
 				rn, state, err := s.boundRunnerState(r.Context(), *src.RunnerID, ws.OwnedBy)
 				if err != nil {
-					partialAudit(id, err.Error())
+					partialAudit(id, scanAuditRunnerUnread)
 					writeServerError(w, r, "read the folder's runner", err)
 					return
 				}
@@ -601,7 +610,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				return
 			}
 			if lerr != nil {
-				partialAudit(id, lerr.Error())
+				partialAudit(id, scanAuditLaunchFault)
 				writeServerError(w, r, "launch scan run", lerr)
 				return
 			}
