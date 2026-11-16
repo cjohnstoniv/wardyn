@@ -35,6 +35,8 @@ export interface RunComputerFolder {
   sandbox_copy?: ComputerFolderSandboxCopy;
   last_report?: ComputerFolderLastReport;
   give_up_at?: string;
+  // The folder's record could not be read, so only a give-up it holds is shown (computerFolderRunView).
+  record_unreadable?: boolean;
 }
 
 // One pass as the server shows it (folderPassView, internal/api/run_computer_folder.go): types.FolderPassRecord
