@@ -77,9 +77,10 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 	}
 	// The sign-in's email and groups go on the record (portal "") before its session is issued, and a
 	// failed write refuses the sign-in: no session is issued with groups the record lacks, and the record
-	// is what a running run's owner is judged by where no session of theirs is at hand.
+	// is what a running run's owner is judged by where no session of theirs is at hand. No issue time is
+	// passed, so the record is stamped with the database's time, one clock for every server.
 	if pw, ok := g.st.(principalGroupsWriter); ok {
-		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, now); err != nil {
+		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, time.Time{}); err != nil {
 			return 0, err
 		}
 	}

@@ -27,7 +27,8 @@ type PrincipalGroups struct {
 // an SSO sign-in to Wardyn itself, else the portal's id), replacing the one before through the same door
 // and stamping the database's time. issuedAt is when the token the snapshot came from was issued: a
 // record from a token issued later is kept, and the write changes nothing, so an older token still valid
-// cannot put back a group a newer one dropped. A nil groups is recorded as none. The sign-in gate and the
+// cannot put back a group a newer one dropped. A zero issuedAt stamps the database's time instead, so
+// sign-ins through several servers are ordered by one clock. A nil groups is recorded as none. The sign-in gate and the
 // portal token exchange call it before they issue a session or token and refuse on an error.
 func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error {
 	if groups == nil {
@@ -37,12 +38,16 @@ func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email str
 	if err != nil {
 		return fmt.Errorf("store: encode sign-in groups: %w", err)
 	}
+	var at any
+	if !issuedAt.IsZero() {
+		at = issuedAt
+	}
 	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated, issued_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()))
 		ON CONFLICT (principal, portal) DO UPDATE SET email = EXCLUDED.email, groups = EXCLUDED.groups,
 			truncated = EXCLUDED.truncated, issued_at = EXCLUDED.issued_at, signed_in_at = now()
 		WHERE principal_groups.issued_at IS NULL OR principal_groups.issued_at <= EXCLUDED.issued_at`,
-		principal, portal, email, b, truncated, issuedAt); err != nil {
+		principal, portal, email, b, truncated, at); err != nil {
 		return fmt.Errorf("store: record sign-in groups: %w", err)
 	}
 	return nil
