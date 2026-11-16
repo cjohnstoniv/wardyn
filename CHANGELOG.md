@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.22] — 2026-11-16
+
 ### Added
 
 - `wardyn policy check --within <policy-id|template-id|file> -f <candidate>` tells a pipeline whether a candidate policy is no broader than another. It exits 1 and lists each field that is wider. It fails a candidate it cannot show to be no wider.
