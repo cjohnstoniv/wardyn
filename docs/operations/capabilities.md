@@ -9,6 +9,7 @@ the ADMIN pre-authorized.
 - The [three-role split](three-roles.md) is deployment-wide.
 - A profile's limits (`max_concurrent_runs` and the two launch modes it can refuse) are not capabilities: they bind only the people the profile is assigned to.
 - A **capability grant** is per-human: a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny` (`capability_grants`, migration 0042), with a per-kind **enforcement switch** beside it (`capability_enforcement`).
+- A capability grant is standing consent. [Delegation](delegation.md) sets it beside session and one-time consent, and says when a running run loses each.
 - One sentence is the doctrine, and every rule below follows from it: **a capability bounds what the MEMBER chose, never what the ADMIN pre-authorized.**
 - So a stored policy, a workspace's own requirements, the hosts a workspace scan seeded, the model provider's own egress, and the grants `applyWorkspaceRequirements` re-adds at launch are all left untouched no matter what a member holds.
 
