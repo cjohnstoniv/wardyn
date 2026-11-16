@@ -104,6 +104,9 @@ type mcpCalls struct {
 	// done is, by call hash, the last occurrence of a call under a key made from it that was
 	// recorded as sent or answered as sent (mcp_send_once.go).
 	done map[string]int
+	// declined is, by call hash, the approval a person declined for the call. A decline holds for
+	// the run whatever operation key the call is sent with next, so a new key does not ask again.
+	declined map[string]uuid.UUID
 }
 
 // mcpCallKey is one call key's state: its current approval, if any, and the approvals already
@@ -239,6 +242,25 @@ func (c *mcpCalls) update(key string, id uuid.UUID, state approvalState) {
 	}
 	k.state = state
 	c.tidy(key, k)
+}
+
+// decline remembers that a person declined approval id for the call whose hash is hash.
+func (c *mcpCalls) decline(hash string, id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.declined == nil {
+		c.declined = map[string]uuid.UUID{}
+	}
+	c.declined[hash] = id
+}
+
+// declinedAs is the approval a person declined for the call whose hash is hash, and false when
+// none was declined.
+func (c *mcpCalls) declinedAs(hash string) (uuid.UUID, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, ok := c.declined[hash]
+	return id, ok
 }
 
 // approveEachCall is one approve_each call read for asking and sending.
@@ -409,6 +431,11 @@ func buildMCPCall(id, name []byte, s types.MCPCallScope, progress []byte) []byte
 // pending for it) and waits on the open request up to the harness's window.
 func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 	calls, key := &x.p.mcp.calls, mcpTableKey(c.scope)
+	if id, ok := calls.declinedAs(c.scope.CallSHA256); ok {
+		x.record(egress.Deny, ruleSourceMCPApprovalDenied, id, "a declined call, refused for the run")
+		writeToolError(w, c.id, mcpCallDeclinedText)
+		return
+	}
 	id, state, why := calls.admit(key)
 	switch {
 	case state == apApproved: // admit spent it for this call
@@ -458,6 +485,7 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 				}
 			case types.ApprovalDenied:
 				calls.update(key, id, apDenied)
+				calls.decline(c.scope.CallSHA256, id)
 				x.record(egress.Deny, ruleSourceMCPApprovalDenied, id, "declined by a person")
 				writeToolError(w, c.id, mcpCallDeclinedText)
 				return
@@ -722,6 +750,11 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 		return
 	}
 	calls, key := &p.mcp.calls, mcpTableKey(scope) // the broker's key for the same call, so it spends this approval
+	if id, declined := calls.declinedAs(scope.CallSHA256); declined {
+		p.emitGateDecision(r, egress.Deny, ruleSourceToolApproveEachDeclined, tool, matched, &id)
+		writeToolDecision(w, "DENIED")
+		return
+	}
 	if !calls.gateEnter(key) {
 		passOn() // no room to remember another call: the broker refuses or asks
 		return
@@ -737,6 +770,7 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 				calls.update(key, id, apApproved)
 			case types.ApprovalDenied:
 				calls.update(key, id, apDenied)
+				calls.decline(scope.CallSHA256, id)
 			case types.ApprovalExpired, types.ApprovalCancelled:
 				calls.update(key, id, apNone)
 			}

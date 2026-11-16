@@ -472,3 +472,27 @@ func TestMCPOperationKeysEachHaveTheirOwnApproval(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPOperationKeyDeclineHoldsForTheCall: a decline holds for the call, not its operation key, so the
+// same call under a new key, or under none, is refused for the run without asking, at the broker and at
+// the gate; other arguments still ask.
+func TestMCPOperationKeyDeclineHoldsForTheCall(t *testing.T) {
+	f, cp := newOpFixture(t)
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(1, `{"id":"ENG-1"}`, `"a"`)), "waiting for a person")
+	cp.set(0, types.ApprovalDenied)
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(2, `{"id":"ENG-1"}`, `"a"`)), "A person declined this call")
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(3, `{"id":"ENG-1"}`, `"b"`)), "identical retries are refused")
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", eachCall(4, "delete_issue", `{"id":"ENG-1"}`)), "identical retries are refused")
+	wantGateDecision(t, gatePost(t, f, "mcp__linear__delete_issue", `{"id":"ENG-1"}`), "DENIED")
+	rows, _ := cp.snapshot()
+	if len(rows) != 1 || f.up.hitCount() != 0 {
+		t.Fatalf("rows %d, upstream hits %d; want the declined call not asked about again and nothing sent", len(rows), f.up.hitCount())
+	}
+	if d := findDecision(t, f.buf, "policy:tool-approve-each-declined"); d.Decision != egress.Deny || d.ApprovalID == nil || *d.ApprovalID != rows[0].id {
+		t.Fatalf("gate decision %+v, want a deny naming the declined row", d)
+	}
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(5, `{"id":"ENG-2"}`, `"b"`)), "waiting for a person")
+	if rows, _ := cp.snapshot(); len(rows) != 2 {
+		t.Fatalf("rows %d, want other arguments to ask", len(rows))
+	}
+}
