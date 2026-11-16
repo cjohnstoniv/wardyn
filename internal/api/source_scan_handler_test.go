@@ -33,6 +33,7 @@ type scanSourceStore struct {
 	// workspaces and wsListErr answer ListWorkspaces: the workspaces that attach a scanned folder.
 	workspaces []types.Workspace
 	wsListErr  error
+	setErr     error // SetSourceScanResultUnfenced fails with it
 }
 
 func (s *scanSourceStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
@@ -64,6 +65,9 @@ func (s *scanSourceStore) GetSourcesByIDs(_ context.Context, ids []uuid.UUID) (m
 }
 
 func (s *scanSourceStore) SetSourceScanResultUnfenced(_ context.Context, id uuid.UUID, _ []byte, status types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	if s.setErr != nil {
+		return types.Source{}, s.setErr
+	}
 	if s.statuses == nil {
 		s.statuses = map[uuid.UUID]types.WorkspaceStatus{}
 	}
@@ -163,6 +167,22 @@ func TestHandleScanSource(t *testing.T) {
 			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
 		}
 	})
+	t.Run("a local_dir scan whose result cannot be saved is a 500 naming the step, never the store's text", func(t *testing.T) {
+		st := &scanSourceStore{sources: sources(), setErr: errors.New("write to db.internal:5432 refused")}
+		h, srv := newSrv(t, st, false)
+		w := scan(srv, dirID.String())
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || strings.Contains(w.Body.String(), "db.internal") {
+			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
+		}
+		if got := h.auditOutcomes("source.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "source.scan" && (!strings.Contains(string(ev.Data), scanAuditPersistFault) || strings.Contains(string(ev.Data), "db.internal")) {
+				t.Errorf("source.scan row data = %s, want the step %q and no store text", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
 	t.Run("repo without a runner is 503", func(t *testing.T) {
 		_, srv := newSrv(t, &scanSourceStore{sources: sources()}, false)
 		if w := scan(srv, repoID.String()); w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonSourceScanNoRunner {
@@ -258,6 +278,22 @@ func TestScanAttachedSourcesOutcomes(t *testing.T) {
 		st.freshErr = errors.New("db down")
 		if _, w := run(t, st, false, attach(dirID)); w.Code != http.StatusInternalServerError {
 			t.Errorf("= %d %s, want 500", w.Code, w.Body.String())
+		}
+	})
+	t.Run("a folder whose scan result cannot be saved stops the fan-out with a 500 naming the step", func(t *testing.T) {
+		st := base()
+		st.setErr = errors.New("write to db.internal:5432 refused")
+		h, w := run(t, st, false, attach(dirID))
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || strings.Contains(w.Body.String(), "db.internal") {
+			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
+		}
+		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("workspace.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "workspace.scan" && (!strings.Contains(string(ev.Data), scanAuditPersistFault) || strings.Contains(string(ev.Data), "db.internal")) {
+				t.Errorf("workspace.scan row data = %s, want the step %q and no store text", ev.Data, scanAuditPersistFault)
+			}
 		}
 	})
 }

@@ -103,9 +103,16 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, derr.Error())
 			return
 		}
-		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src, dir)
+		profile, aiRan, aiChanged, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
 		if dir != nil {
 			_ = dir.Close()
+		}
+		if fault != nil {
+			// The scan ran and its result could not be saved: a server fault, which a retry may clear.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditPersistFault})))
+			writeServerError(w, r, scanAuditPersistFault, fault)
+			return
 		}
 		if !ok {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
@@ -225,9 +232,11 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 }
 
 // scanLocalDirSource runs the bounded host-side scan for one directory source
-// and persists the outcome on the source row. ok=false returns the 422 detail
-// (already persisted as status=error) — the same never-a-false-green rule the
-// workspace scan enforces, with the same sealed-daemon diagnosis.
+// and persists the outcome on the source row. ok=false with a nil fault returns
+// the 422 detail (already persisted as status=error) — the same
+// never-a-false-green rule the workspace scan enforces, with the same
+// sealed-daemon diagnosis. A fault is the write of the scanned profile failing:
+// the row keeps its old status, and the caller answers it as a server fault.
 //
 // Consults the SAME opt-in ADVISORY AI gap-fill the sandboxed repo-scan upload
 // lane does (applyScanAIAdvisor, scanresult.go) — WARDYN_SCAN_AI_ADVISOR
@@ -238,7 +247,7 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 // dir is a source as openScanSource checked and opened it, and the scan reads
 // only through it; nil reads by its path a source that no member root holds
 // under the name memberLocation gives it and no member's workspace attaches.
-func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *os.Root) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
+func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *os.Root) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool, fault error) {
 	var facts workspacescan.ScanFacts
 	if dir != nil {
 		facts = workspacescan.CollectFactsIn(dir)
@@ -246,7 +255,7 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *
 		detail := localDirScanFailureDetail(src.Locator, serr == nil && !fi.IsDir(),
 			os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
 		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError, nil)
-		return workspacescan.WorkspaceProfile{}, false, false, detail, false
+		return workspacescan.WorkspaceProfile{}, false, false, detail, false, nil
 	} else {
 		facts = workspacescan.CollectFacts(src.Locator)
 	}
@@ -257,10 +266,9 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *
 		seed = types.KeepScanSeeded(seed, src.Requirements)
 	}
 	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seed); err != nil {
-		slog.ErrorContext(ctx, "wardynd: persist a source's scan profile", slog.String("source_id", src.ID.String()), slog.Any("err", err))
-		return workspacescan.WorkspaceProfile{}, false, false, scanAuditPersistFault, false
+		return workspacescan.WorkspaceProfile{}, false, false, "", false, err // the caller's writeServerError logs it
 	}
-	return profile, aiRan, aiChanged, "", true
+	return profile, aiRan, aiChanged, "", true, nil
 }
 
 // launchSourceScanRun is launchScanRun retargeted one tier down: the fence is
@@ -578,9 +586,14 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, s.scanRefusalFor(r, err))
 				return
 			}
-			_, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src, dir)
+			_, _, _, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
 			if dir != nil {
 				_ = dir.Close()
+			}
+			if fault != nil {
+				partialAudit(id, scanAuditPersistFault)
+				writeServerError(w, r, scanAuditPersistFault, fault)
+				return
 			}
 			if !ok {
 				partialAudit(id, detail)
