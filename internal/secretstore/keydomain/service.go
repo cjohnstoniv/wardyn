@@ -391,7 +391,7 @@ func (s *Service) WriteAssignments(ctx context.Context, fn func(q Querier) error
 	if err != nil {
 		return unavailable("begin an assignment write", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if err := LockAssignments(ctx, tx); err != nil {
 		return err
 	}

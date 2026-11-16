@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -58,7 +59,7 @@ func (s PG) MoveAPIToken(ctx context.Context, id uuid.UUID, serviceIdentity, by 
 	if err != nil {
 		return types.TokenMove{}, fmt.Errorf("store: move api token: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// FOR UPDATE: a revoke committing between this check and the insert would otherwise link a dead token.
 	var movable bool
 	err = tx.QueryRow(ctx, `SELECT COALESCE(minted_by, '') NOT IN ('', principal) AND `+apiTokenLive+`

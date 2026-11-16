@@ -83,6 +83,11 @@ func extErr(ref string, err error) error {
 // one is removed after the row points away from it. Both removals run after
 // the Put returns (afterPut).
 func (s *Store) putExternal(ctx context.Context, name string, value []byte) error {
+	done, err := startPut(s.pool)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
+	}
+	defer done()
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
 	ref := rowRef(s.owner, name)
@@ -175,6 +180,40 @@ var (
 	cut, cutAll = context.WithCancel(context.Background())
 )
 
+// puts counts the Puts that may leave a clean-up (putExternal, putOverPointer)
+// from their start until they have handed it to afterPut, and closing holds
+// the pools CloseAfterCleanUps has stopped waiting for; putsMu guards both. A
+// clean-up starts only inside a counted Put, so a look that sees no Put and no
+// clean-up has seen every clean-up a Put can still start.
+var (
+	putsMu  sync.Mutex
+	puts    int64
+	closing = map[interface{ Close() }]bool{}
+)
+
+// errStoreClosing refuses a Put on a pool that is closing, before it writes
+// the secret.
+var errStoreClosing = errors.New("the secret store is closing, so the secret was not written")
+
+// startPut counts a Put that may leave a clean-up until the Put calls the
+// returned func, which it defers, so the count ends after its afterPut. Once
+// CloseAfterCleanUps has stopped waiting for pool, it refuses the Put instead:
+// the close would not wait for its clean-up, which would fail on the closed
+// pool and leave the value it was removing.
+func startPut(pool interface{ Close() }) (func(), error) {
+	putsMu.Lock()
+	defer putsMu.Unlock()
+	if closing[pool] {
+		return nil, errStoreClosing
+	}
+	puts++
+	return func() {
+		putsMu.Lock()
+		puts--
+		putsMu.Unlock()
+	}, nil
+}
+
 // cleanUpCap is how many clean-ups may run at once beside a pool of pool's
 // size. Each holds one pooled connection, and the row's lock, for up to
 // bounded's six per-call timeouts plus a 2 s release, and its Put no longer
@@ -224,14 +263,34 @@ func (s *Store) afterPut(ctx context.Context, name string, cleanUp func(context.
 	}()
 }
 
-// WaitForCleanUps returns nil once no clean-up a Put left is running. If ctx
-// ends first, it cuts every one still running and returns ctx's error. Puts
-// may run while it waits. wardynd's shutdown calls it beside the wait for its
-// background work; tests call it before they read what a clean-up removes.
-func WaitForCleanUps(ctx context.Context) error {
-	for cleanUps.Load() > 0 {
+// WaitForCleanUps returns nil once no Put that may leave a clean-up is running
+// (startPut) and no clean-up a Put left is running. If ctx ends first, it cuts
+// every clean-up still running and returns ctx's error. Puts may run while it
+// waits. wardynd's shutdown calls it beside the wait for its background work;
+// tests call it before they read what a clean-up removes.
+func WaitForCleanUps(ctx context.Context) error { return waitForCleanUps(ctx, nil) }
+
+// waitForCleanUps is WaitForCleanUps that, given a pool, marks it closing as it
+// returns: under putsMu, with its last look at the counts when it returns nil,
+// so no Put on pool starts after that look (startPut refuses it).
+func waitForCleanUps(ctx context.Context, pool interface{ Close() }) error {
+	for {
+		putsMu.Lock()
+		idle := puts == 0 && cleanUps.Load() == 0
+		if idle && pool != nil {
+			closing[pool] = true
+		}
+		putsMu.Unlock()
+		if idle {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
+			if pool != nil {
+				putsMu.Lock()
+				closing[pool] = true
+				putsMu.Unlock()
+			}
 			cutMu.Lock()
 			cutAll()
 			cut, cutAll = context.WithCancel(context.Background())
@@ -240,19 +299,20 @@ func WaitForCleanUps(ctx context.Context) error {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return nil
 }
 
-// CloseAfterCleanUps waits up to bound for the clean-ups Puts left, cutting
-// any still running then, and closes pool. A command that may exit soon after
-// a Put closes its pool this way: pool.Close waits only for a clean-up that
-// already holds a connection, and one that has not taken it yet would fail on
-// the closed pool and leave its value.
+// CloseAfterCleanUps waits up to bound for the Puts still running and the
+// clean-ups Puts left, cutting any clean-up still running then, and closes
+// pool. Once it stops waiting, a Put on pool that may leave a clean-up is
+// refused before it writes the secret. A command that may exit soon after a
+// Put closes its pool this way: pool.Close waits only for a clean-up that
+// already holds a connection, and one that has not taken it yet, or one a Put
+// still running would start, would fail on the closed pool and leave its value.
 func CloseAfterCleanUps(pool interface{ Close() }, bound time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
-	if err := WaitForCleanUps(ctx); err != nil {
-		slog.Warn("pg secretstore: closing the pool with a Put's clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+	if err := waitForCleanUps(ctx, pool); err != nil {
+		slog.Warn("pg secretstore: closing the pool with a Put or its clean-up still running; a clean-up still running was cut, and the value a cut or failed clean-up was removing stays (`wardynd -reconcile` lists it if no row points to it)",
 			slog.Duration("bound", bound))
 	}
 	pool.Close()

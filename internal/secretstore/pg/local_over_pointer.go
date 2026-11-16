@@ -10,6 +10,8 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // putOverPointer is a local Put on a store that still reads an external store's pointer rows. Under
@@ -18,12 +20,17 @@ import (
 // removeOld's recheck, which logs a failed removal.
 func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) error {
 	ref := rowRef(s.owner, name)
+	done, err := startPut(s.pool)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
+	}
+	defer done()
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
 	}
-	// On ctx, so it never outlasts the caller's bound (see putExternal).
-	defer func() { _ = tx.Rollback(ctx) }()
+	// Put sets no bound of its own, so the rollback takes db.Rollback's: ctx's deadline or db.RollbackBound.
+	defer db.Rollback(ctx, tx)
 	// The counter row's share lock before the row's advisory lock, putExternal's order.
 	if gen, fenced := s.generationFence(ctx); fenced {
 		if err := s.checkGeneration(ctx, tx, gen); err != nil {

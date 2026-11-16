@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,7 +32,7 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err

@@ -38,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -188,7 +189,7 @@ func (m *Manifests) insert(ctx context.Context, runID uuid.UUID, owner string, v
 	if err != nil {
 		return 0, fmt.Errorf("maskmanifest: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	var fenced bool
 	if err := tx.QueryRow(ctx, `SELECT fenced_at IS NOT NULL FROM run_mask_manifest WHERE run_id=$1 FOR UPDATE`, runID).Scan(&fenced); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -471,7 +472,7 @@ func (m *Manifests) snapshot(ctx context.Context, runID uuid.UUID) (int, []seale
 	if err != nil {
 		return 0, nil, false
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	var complete, fenced bool
 	var rev int
 	if err := tx.QueryRow(ctx, `SELECT complete, fenced_at IS NOT NULL, revision FROM run_mask_manifest WHERE run_id=$1`, runID).Scan(&complete, &fenced, &rev); err != nil {
@@ -575,7 +576,7 @@ func (m *Manifests) FenceSubject(ctx context.Context, owner string) ([]uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("maskmanifest: begin fence: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	rows, err := tx.Query(ctx,
 		`UPDATE run_mask_manifest SET fenced_at = COALESCE(fenced_at, now()), revision = revision + 1 WHERE owner=$1 RETURNING run_id`, owner)
 	if err != nil {
