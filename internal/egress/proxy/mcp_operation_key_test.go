@@ -373,6 +373,11 @@ func TestMCPOperationKeyAlreadySentIsAnsweredWithItsSend(t *testing.T) {
 			cp.approve = true
 			f.up.status = c.status
 			if c.down {
+				// The fixture's server also answers the credential, which is resolved before the record:
+				// held first, so only the server is gone at the send.
+				if _, err := f.p.mcpCredential(t.Context(), f.p.mcp.server("linear")); err != nil {
+					t.Fatal(err)
+				}
 				f.up.srv.Close()
 			}
 			f.post(t, mcpToken("codex-cli"), "linear", call(1))
