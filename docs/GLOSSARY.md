@@ -6,7 +6,7 @@ Several parts of Wardyn, and of the systems around it, are called a gateway, a p
 
 | Term | What it is | Where it runs | Its page |
 |---|---|---|---|
-| Egress proxy (`wardyn-proxy`) | One per run, and the run's only path out. It enforces the allowlist, first-use approval and tool rules, adds credentials the sandbox never holds, and writes the decision log | Beside the run's sandbox, outside it | [Architecture](../ARCHITECTURE.md#wardyn-proxy-role) |
+| Egress proxy (`wardyn-proxy`) | One per run, and the run's route out ([the runtime contract](RUNTIME-CONTRACT.md#ingress-and-egress) says what holds that on each runtime). It enforces the allowlist, first-use approval and tool rules, adds credentials the sandbox never holds, and writes the decision log | Beside the run's sandbox, outside it | [Architecture](../ARCHITECTURE.md#wardyn-proxy-role) |
 | AI gateway | A gateway you run beside Wardyn that serves model and MCP traffic for every caller. Wardyn can send it a short-lived token naming the run | Central: one gateway for many runs, reached through each run's egress proxy | [An external AI gateway](operations/ai-gateway.md) |
 | Model gateway | A model gateway you run, added as a `custom_endpoint` provider. It does routing, fallbacks, rate limits and guardrails; Wardyn checks `allowed_models` before it | Central, like an AI gateway | [Model gateways and detectors](operations/model-gateways.md) |
 | SSH gateway | wardynd's own SSH listener into a running sandbox's terminal, for the run's owner with a registered public key. Off unless `WARDYN_SSH_LISTEN` is set | In the control plane | [SSH gateway](SSH.md) |

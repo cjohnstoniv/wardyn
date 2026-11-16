@@ -1,6 +1,6 @@
 # Runtime contract
 
-What a run can rely on, promise by promise, on each of five runtimes, and the test that checks each claim.
+What a run can rely on, promise by promise, on each of five runtimes, and the test or page each claim rests on.
 It is for a platform team that offers Wardyn runs to its own consumers and must say what holds where.
 [How to read a cell](#how-to-read-a-cell) explains the four verdict words.
 
@@ -73,7 +73,7 @@ Its limits:
 - It runs only on pushes to main and on pull requests from `train/` branches, and skips when the `changes` job finds no backend change. It is not a required check, and it is not in the `gates` job.
 - It covers one cluster setup: kind, Calico and `CC1` ([What is claimed](operations/kubernetes-agent-sandbox.md#what-is-claimed)).
 - Docker, Docker through the runner protocol, and Kubernetes on either backend call one shared function, [`conformance.Run`](../test/conformance/conformance.go).
-- Their options differ. Only the Docker suites pass a route probe, and only the Docker server suite a name-lookup probe, so `L0StructuralEgress` and `DNSAudit` skip on Kubernetes.
+- Their options differ. The Kubernetes driver declares no structural egress, and only the Docker server suite passes a name-lookup probe, so `L0StructuralEgress` and `DNSAudit` skip on Kubernetes.
 - The Docker suites run a stand-in proxy, so their `NoNetwork` case checks only that nothing gets out. Kubernetes runs the real proxy.
 - Linux VM and macOS VM do not call it. Linux VM has its own suite, [`TestLinuxVMSandbox`](../test/conformance/vm/vm_test.go), in the `vm` job. The macOS live suite skips in the `macos` job, where no guest boots.
 
