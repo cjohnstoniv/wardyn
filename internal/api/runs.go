@@ -251,7 +251,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
 	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
+	id, err := s.mintRunIdentity(ctx, runID, launchWorkloadFrom(ctx), runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return

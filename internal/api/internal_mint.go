@@ -589,7 +589,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer releaseLease()
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
+	id, err := s.mintRunIdentity(r.Context(), claims.RunID, runWorkloadOf(claims.SPIFFEID, claims.RunID), claims.Sub, sponsor, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return
