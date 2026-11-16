@@ -15,14 +15,13 @@ import (
 // closes its pool only after the Put's clean-ups: pool.Close alone cuts one
 // that has not yet taken its connection, and the value it was removing stays.
 // run's wait is the whole budget until serveAndShutdown returns, and then
-// cleanUpWaitAfterServe's: none once the shutdown sequence has waited.
+// cleanUpWaitAfterServe's: what is left of the shutdown sequence's own wait.
 func TestPoolsCloseAfterTheSecretStoresCleanUps(t *testing.T) {
 	for file, want := range map[string][]string{
 		"main.go": {
-			"cleanUpWait := api.BackgroundShutdownBudget",
-			"defer func() { secretstorepg.CloseAfterCleanUps(pool, cleanUpWait) }()",
-			"cleanUpsWaited, err := serveAndShutdown(",
-			"\tcleanUpWait = cleanUpWaitAfterServe(cleanUpsWaited)\n\treturn err\n}",
+			"var cleanUpsBy time.Time",
+			"defer func() { secretstorepg.CloseAfterCleanUps(pool, cleanUpWaitAfterServe(cleanUpsBy)) }()",
+			"\tcleanUpsBy, err = serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)\n\treturn err\n}",
 		},
 		"rotate_gateway_identity_key.go": {"defer secretstorepg.CloseAfterCleanUps(pool, api.BackgroundShutdownBudget)"},
 	} {
@@ -39,8 +38,8 @@ func TestPoolsCloseAfterTheSecretStoresCleanUps(t *testing.T) {
 		if strings.Contains(src, "defer pool.Close()") {
 			t.Errorf("%s closes its pool without waiting for the secret store's clean-ups", file)
 		}
-		if n := strings.Count(src, "cleanUpWait = "); n != strings.Count(strings.Join(want, ""), "cleanUpWait = ") {
-			t.Errorf("%s sets cleanUpWait %d times; want it set only from cleanUpWaitAfterServe after serveAndShutdown", file, n)
+		if n := strings.Count(src, "cleanUpsBy = ") + strings.Count(src, "cleanUpsBy, err = "); n != strings.Count(strings.Join(want, ""), "cleanUpsBy, err = ") {
+			t.Errorf("%s sets cleanUpsBy %d times; want it set only from serveAndShutdown, as run's last step", file, n)
 		}
 	}
 }
