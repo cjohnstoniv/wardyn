@@ -953,7 +953,7 @@ is not the deployment described above.**
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
 - **`host_rules`** are judged per request on a connection the proxy opens: a `CONNECT` to a rule host
-  without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
+  without the per-run CA, on a port it does not open or on the sign-in lane is refused
   (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
   (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
   forward is judged again where it is sent (`roundTripUpstream`, or before an API door's own transport).

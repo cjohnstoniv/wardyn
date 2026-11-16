@@ -295,7 +295,6 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | Desktop | One fixed 1920 x 1080 display. A `view only` desktop ([Preparing the base image](macos-vm-base-image.md#preparing-the-base-image)) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
-| Request rules | A run whose policy has [`host_rules`](../POLICIES.md#host_rules--hostruleset) is refused at create with `422` `host_rules_need_inspected_vm`: host rules are not yet judged on a VM guest's flows |
 
 ### Apps that use only the system trust store
 

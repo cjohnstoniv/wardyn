@@ -783,12 +783,12 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 
 - On HTTPS, `once` releases one CONNECT tunnel — and a single tunnel can carry many requests before the agent closes it, so one grant can cover far more traffic than "once" suggests.
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
-- The copy is literally accurate for HTTPS; for HTTP it undersells rather than oversells — it never claims a grant covers more than it does, only occasionally less.
+- The copy is literally accurate for HTTPS, except that the retry it names comes only in the cases listed below; for HTTP it undersells rather than oversells.
 - Either way the grant is spent on the approved verdict itself — after the method check, but ahead of IP vetting and the dial.
 - On HTTPS, a CONNECT that got nothing back from the far side gives the grant back once. That covers a failed dial, a configured upstream proxy's refusal of the CONNECT included (`builtin:dial-failed`).
 - Or a tunnel whose upstream, after the sandbox's TLS hello, closed or reset with no byte back, or answered in plaintext that the proxy refused and did not relay (`builtin:tunnel-failed`).
 - That row then carries the `approval_id`, and its `cause` ends with a note that the once approval was not spent. The next request to the host within 60 seconds uses the same approval.
-- One approval comes back at most once, and not when another request to the host raised an approval first; one whose raise failed does not block it. A replaced proxy starts with no approvals cached, so a replace drops it.
+- One approval comes back at most once, and not when another request to the host raised an approval first; one whose raise had already failed without a refusal does not block it. A replaced proxy starts with no approvals cached, so a replace drops it.
 - A request still held on the same approval under `wait_for_review` can take it after the 60 seconds. A proxy image from an earlier release always spends it.
 - Everything else spends it: a DNS-rebind refusal (`builtin:private-ip`), a name that did not resolve (`builtin:resolve-failed`), a TLS alert, which reaches the sandbox, and a tunnel that relayed any answer.
 - So do an upstream that wrote or closed before the sandbox sent anything, and a sandbox that closed first or did not open with TLS.
@@ -1313,7 +1313,8 @@ What the proxy does for a rule host:
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` without that certificate and on the desktop sign-in lane. When the run's own rules name the host, a `CONNECT` on another port is refused too. A host named only by a set an outer layer adds when the policy is sealed is opened on any port.
 - Plain HTTP to a rule host is checked per request.
 - Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
-- A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
+- A VM run (`linux_vm`, `macos_vm`) judges host rules on its guest's flows as a container run does. HTTPS to an inspected port is opened and each request allowed, held or refused, and plain HTTP on port 80 is judged by path.
+- A rule host the proxy cannot open, on any other port or with no interception certificate, is refused. On a macOS VM, an app that uses only the system trust store fails TLS to a rule host unless `macos_vm_inspection_ca` is on.
 - Requests the proxy sends for itself are not checked: handing a GitHub token back, the push check's reads of the forge, and AWS role credentials.
 
 Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under `allow_all_egress`, a `CONNECT` to the server's IP address, or to another name for it, reads no rule, even when the request inside names the rule host. `refuse_ip_literals` blocks only the IP-address form.
