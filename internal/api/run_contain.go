@@ -540,6 +540,10 @@ func (s *Server) containCallWithin(ctx context.Context, run types.AgentRun, gen 
 		var ans containAnswer
 		defer func() {
 			answer <- ans
+			for range 2000000 {
+				c.mu.Lock()
+				c.mu.Unlock()
+			}
 			s.containCallDone(f, ans)
 		}()
 		defer func() {
