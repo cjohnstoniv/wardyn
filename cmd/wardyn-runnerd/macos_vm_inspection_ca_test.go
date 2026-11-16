@@ -317,6 +317,24 @@ func TestMacOSVMInspectionCADriveRootNamingTheNotYetMadeFolderStaysOff(t *testin
 		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
 	}
 	inspectionCAGone(t, m, true, "drive root names the folder")
+
+	// The same, with the VM directory reached through a symlink and the root named by the spelling the operator sees.
+	r = newMacLedgerRig(t)
+	inner := filepath.Join(t.TempDir(), "inner")
+	if err := os.Mkdir(inner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(inner, link); err != nil {
+		t.Fatal(err)
+	}
+	r.root = filepath.Join(link, "macos-vm.noindex")
+	m = r.open(t)
+	m.openInspectionCA(&on, []string{m.layout.InspectionCADir()}, true)
+	if m.items.ca != nil || m.items.caErr != nil {
+		t.Errorf("through a symlink: ca %v, error %v", m.items.ca, m.items.caErr)
+	}
+	inspectionCAGone(t, m, true, "drive root names the folder through a symlink")
 }
 
 // A profile that cannot be read could be hiding an organisation's 0, so runnerd.json's 1 makes no CA then: an

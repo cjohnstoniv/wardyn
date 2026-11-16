@@ -55,7 +55,11 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 		}
 		ca, err := open(context.Background(), dir)
 		if readOnly && errors.Is(err, os.ErrNotExist) {
-			slog.Info("macOS VM base: this Mac's inspection CA is not made yet; the runner makes it at its next start")
+			if owner {
+				slog.Warn("macOS VM base: macos_vm_inspection_ca is on, but the managed profile could not be read, so this Mac's inspection CA is not made; the runner makes it at its first start that reads the profile", "error", perr.Error())
+			} else {
+				slog.Info("macOS VM base: this Mac's inspection CA is not made yet; the runner makes it at its next start")
+			}
 			return
 		}
 		if err != nil {
@@ -85,16 +89,19 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 }
 
 // driveRootOver is the drive root in roots that is dir or one of its parents; "" when there is none. dir's
-// parent is resolved first, since a mount of any folder above the real one holds the key. Roots are compared as
+// parent and each root's are resolved first, since a mount of any folder above the real one holds the key. Roots are compared as
 // files (os.SameFile), so another spelling of the same folder counts, and by spelling, so a root that names a folder not made yet counts.
 func driveRootOver(dir string, roots []string) string {
-	if resolved, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
-		dir = filepath.Join(resolved, filepath.Base(dir))
+	resolve := func(p string) string {
+		if parent, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			return filepath.Join(parent, filepath.Base(p))
+		}
+		return filepath.Clean(p)
 	}
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+	for d := resolve(dir); ; d = filepath.Dir(d) {
 		di, derr := os.Stat(d)
 		for _, r := range roots {
-			if filepath.Clean(r) == d {
+			if resolve(r) == d {
 				return r
 			}
 			if ri, rerr := os.Stat(r); derr == nil && rerr == nil && os.SameFile(di, ri) {
