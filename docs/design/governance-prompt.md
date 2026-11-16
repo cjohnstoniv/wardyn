@@ -858,8 +858,9 @@ is always "rows" regardless of `n`.
 | `LIMITS_CHIP.PLACEMENT(placement)` | No {placement} runs |
 | `LIMITS_CHIP.CPU` | Max CPU (millicores) |
 | `LIMITS_CHIP.MEMORY` | Max memory (MiB) |
+| `LIMITS_CHIP.CONFINEMENT_FLOORS` | Confinement floors |
 
-The last four rows (#2111, #2506) are proposed wording awaiting approval. Each chip is drawn
+The last five rows (#2111, #2506) are proposed wording awaiting approval. Each chip is drawn
 only when its limit is set, so a profile that bounds only one of them no longer reads "None".
 `{placement}` is `remote` or `local`; the numeric chips read "Max CPU (millicores): 2000".
 
