@@ -18,7 +18,7 @@
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
-  - A job marked not required is not a branch-protection context on main. A release still needs the whole run green.
+  - A job marked not required is not a branch-protection context on main, and some unmarked jobs are not one either: the context list under "Repo settings (GitHub-side)" is the whole set. A release still needs the whole run green.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
   - Two more publish workflows are not part of this job list at all (see ["Container images"](#container-images) below):
