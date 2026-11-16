@@ -134,6 +134,30 @@ func TestPG_PrincipalGroups_AnOlderTokenKeepsTheNewerRecord(t *testing.T) {
 	}
 }
 
+// A sign-in with no issue time is stamped with the database's time, so each later sign-in replaces it
+// whichever server's clock is behind.
+func TestPG_PrincipalGroups_ASignInIsStampedByTheDatabase(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	if err := st.PutPrincipalGroups(ctx, "sub-pat", "", "pat@corp.example", []string{"eng"}, false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	var stamped, dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT issued_at, now() FROM principal_groups WHERE principal = 'sub-pat' AND portal = ''`).Scan(&stamped, &dbNow); err != nil {
+		t.Fatal(err)
+	}
+	if stamped.IsZero() || stamped.After(dbNow) {
+		t.Fatalf("issued_at = %v at database time %v; want the database's time", stamped, dbNow)
+	}
+	if err := st.PutPrincipalGroups(ctx, "sub-pat", "", "pat@corp.example", []string{"ops"}, false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetPrincipalGroups(ctx, "sub-pat", ""); err != nil || !slices.Equal(got.Groups, []string{"ops"}) {
+		t.Fatalf("after a later sign-in: %+v, %v; want its groups", got, err)
+	}
+}
+
 // Erasing a person's group snapshots takes every door's record of theirs with them and leaves another
 // person's.
 func TestPG_PrincipalGroups_ErasureDeletesTheRecord(t *testing.T) {

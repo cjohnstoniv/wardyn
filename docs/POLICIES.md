@@ -666,7 +666,7 @@ What the check does and does not settle:
 
 `confinement_floors` is a limit on a governance profile, not a field of a run's policy. It raises a run's minimum confinement class by what the run does:
 
-- `own_image`: the run uses an image its launcher chose: `image`, an attached workspace's base image, a policy-carried workspace's image, `devcontainer_repo`, or a workspace built from its repository's own devcontainer.
+- `own_image`: the run uses an image its launcher chose: `image`, an attached workspace's base image, a policy-carried workspace's image, `devcontainer_repo`, or a workspace built from its repository's own devcontainer. It counts a workspace that builds its repository's devcontainer even when no image builder is configured and the run uses the convention image.
 - `self_defined_component`: the run carries a component its launcher defined.
 - `data_out_open`: the run's `data_out` is `allowed` or unset.
 
@@ -1230,7 +1230,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 
 An `approve_each` call can carry an operation key, the `_meta` member `wardyn.dev/operation-key`: 1 to 128 ASCII letters, digits or `. _ : / -`, such as the run's correlation ID joined to a step name. The key may not start with `call:`, which is reserved for the keys Wardyn makes. A call with a key is sent at most once in 24 hours.
 - Wardyn records the send before it sends the call and keeps the record on the server, so a revive or a new proxy keeps it.
-- The run proxy resolves the server's address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (a host deny, its body scan or its gateway identity) leaves the record standing for 24 hours.
+- The run proxy checks the server's host against the run's policy, resolves its address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (its body scan or its gateway identity) leaves the record standing for 24 hours.
 - A key's namespace is the run's owner, within the run's correlation ID, else within the run.
 - A call is the same call by its server name, tool, arguments and any other parameters it sends outside `_meta`, not by the host it is sent to.
 - Runs of one owner and one correlation ID share send records. A call sent in one of them is not sent again in another for those 24 hours, even where their policies send that server name to different hosts.
@@ -1244,7 +1244,7 @@ An `approve_each` call can carry an operation key, the `_meta` member `wardyn.de
 
 A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
 
-After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does.
+After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does. A second identical call that waits at the same time as the first may ask a person, and that approval then sends nothing.
 
 
 ### Try approve_each without an MCP server

@@ -113,3 +113,24 @@ func TestDelegation_ExchangeRefusedWhenTheRecordFails(t *testing.T) {
 		t.Errorf("%d delegated token(s) issued without a record", n)
 	}
 }
+
+// narrowFails is the Postgres store whose record of people's last exchanges cannot be narrowed.
+type narrowFails struct{ store.PG }
+
+func (narrowFails) NarrowPrincipalGroups(context.Context, string, string, []string, bool, time.Time) error {
+	return errors.New("db down")
+}
+
+// An exchange the portal's scope refuses whose record cannot be narrowed is answered 503
+// temporarily_unavailable, not the scope's 403, so the person is not told they are outside the portal
+// while the record still holds the groups their token no longer carries.
+func TestDelegation_ARefusedExchangeWhoseNarrowFailsIsUnavailable(t *testing.T) {
+	e := newDelegationPG(t)
+	id, cred := e.registerPortal(t, delegGroup)
+	e.delegate(t, id, cred, delegPerson, delegPersonEmail, delegGroup)
+	e.h.srv.cfg.Store = narrowFails{PG: e.st}
+	w := e.exchange(t, id, cred, e.subjectToken(t, delegPerson, delegPersonEmail, []string{"ops"}, nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "temporarily_unavailable") {
+		t.Fatalf("exchange = %d %s, want 503 temporarily_unavailable", w.Code, w.Body)
+	}
+}

@@ -24,11 +24,12 @@ type gateGroupsStore struct {
 	gotEmail   string
 	gotGroups  []string
 	gotPartial bool
+	gotIssued  time.Time
 }
 
-func (g *gateGroupsStore) PutPrincipalGroups(_ context.Context, principal, portal, email string, groups []string, truncated bool, _ time.Time) error {
+func (g *gateGroupsStore) PutPrincipalGroups(_ context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error {
 	g.puts++
-	g.gotPrinc, g.gotPortal, g.gotEmail, g.gotGroups, g.gotPartial = principal, portal, email, groups, truncated
+	g.gotPrinc, g.gotPortal, g.gotEmail, g.gotGroups, g.gotPartial, g.gotIssued = principal, portal, email, groups, truncated, issuedAt
 	return g.putErr
 }
 
@@ -38,7 +39,7 @@ func gateGroupsFacts() oidc.LoginFacts {
 }
 
 // An issued sign-in leaves its email and group snapshot, truncation bit included, on the record of a
-// sign-in to Wardyn itself (portal "").
+// sign-in to Wardyn itself (portal ""), with no issue time, so the database stamps its own.
 func TestIdentityGateIssueRecordsTheSignInGroups(t *testing.T) {
 	st := &gateGroupsStore{gapCovGateStore: gapCovGateStore{epoch: 7}}
 	epoch, err := NewIdentityGate(st).Issue(t.Context(), gateGroupsFacts())
@@ -48,6 +49,9 @@ func TestIdentityGateIssueRecordsTheSignInGroups(t *testing.T) {
 	if st.puts != 1 || st.gotPrinc != "alice" || st.gotPortal != "" || st.gotEmail != "Alice@Example.Test" ||
 		!slices.Equal(st.gotGroups, []string{"eng", "wardyn-admins"}) || !st.gotPartial {
 		t.Fatalf("recorded %d time(s): %q %q %v %v; want alice's sign-in once, as it came", st.puts, st.gotPrinc, st.gotEmail, st.gotGroups, st.gotPartial)
+	}
+	if !st.gotIssued.IsZero() {
+		t.Fatalf("issued at %v; want no time, for the database's clock", st.gotIssued)
 	}
 }
 
