@@ -261,7 +261,8 @@ func mountPlacesMsg(path string) string {
 func (s *Server) boundMountAllowed(ctx context.Context, ws types.Workspace, rid uuid.UUID, wm types.WorkspaceMount) (int, string, error) {
 	rn, state, err := s.boundRunnerState(ctx, rid, ws.OwnedBy)
 	if err != nil {
-		return http.StatusServiceUnavailable, reasonWorkspaceSourceRunnerUnavailable, err
+		// Its callers write this error into the body: the store's own text stays in the log.
+		return http.StatusServiceUnavailable, reasonWorkspaceSourceRunnerUnavailable, errors.New(loggedMsg(ctx, "read the folder's runner", err))
 	}
 	if state != types.WorkspaceSourceRunnerClaimed {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourceRunnerUnavailable, errors.New(runnerUnavailableMsg(ws.Name, rid, rn, state))
