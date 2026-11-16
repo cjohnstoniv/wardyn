@@ -534,24 +534,8 @@ func writeJSONStatus(w http.ResponseWriter, status int, contentType string, v an
 // and internal hosts as configured). A redirect is refused, never followed.
 func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	p, s := x.p, x.server
-	// Only an explicit deny stops it here: the builtin evaluator is the only one wired, and it answers
-	// allow or deny, so a verdict that needs a decision cannot reach this check.
-	if verdict, err := p.evaluator.EvaluateHost(x.r.Context(), x.req); err != nil || verdict == egress.VerdictDeny {
-		x.deny(w, "policy:denied", "this MCP server's host is blocked for this run", http.StatusForbidden)
-		return
-	}
-	if _, denied := p.literalIPGuard(x.req, s.host, s.port); denied != nil {
-		x.deny(w, denied.RuleSource, "this MCP server's address is not reachable from a run", http.StatusForbidden)
-		return
-	}
-	target, _, err := p.egressTarget(s.host, s.port)
-	if err != nil {
-		src := "builtin:private-ip"
-		if errors.Is(err, errHostUnresolved) {
-			src = "builtin:resolve-failed"
-		}
-		x.emit(egress.Deny, src)
-		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
+	target, ok := x.vetTarget(w)
+	if !ok {
 		return
 	}
 	scan, ok := x.scanBody(w, body)
@@ -573,10 +557,8 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	// An MCP server gets the call id on a run with a gateway route, and the identity token only on its own route.
 	p.stripGatewayHeaders(out.Header)
 	if s.grantID != nil {
-		hdr, err := p.mcpCredential(x.r.Context(), s)
-		if err != nil {
-			x.emit(egress.Deny, ruleSourceMCPCredential)
-			p.httpError(w, "the MCP server's credential is unavailable", err, http.StatusBadGateway)
+		hdr, ok := x.credential(w)
+		if !ok {
 			return
 		}
 		out.Header.Set(hdr.name, hdr.value)
@@ -632,6 +614,45 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		return
 	}
 	p.relayStreaming(w, resp)
+}
+
+// vetTarget checks the server's host against the run's policy and the literal-IP guard, then resolves
+// and vets its address (egressTarget). On a refusal it answers w and reports false.
+func (x *mcpExchange) vetTarget(w http.ResponseWriter) (string, bool) {
+	p, s := x.p, x.server
+	// Only an explicit deny stops it here: the builtin evaluator is the only one wired, and it answers
+	// allow or deny, so a verdict that needs a decision cannot reach this check.
+	if verdict, err := p.evaluator.EvaluateHost(x.r.Context(), x.req); err != nil || verdict == egress.VerdictDeny {
+		x.deny(w, "policy:denied", "this MCP server's host is blocked for this run", http.StatusForbidden)
+		return "", false
+	}
+	if _, denied := p.literalIPGuard(x.req, s.host, s.port); denied != nil {
+		x.deny(w, denied.RuleSource, "this MCP server's address is not reachable from a run", http.StatusForbidden)
+		return "", false
+	}
+	target, _, err := p.egressTarget(s.host, s.port)
+	if err != nil {
+		src := "builtin:private-ip"
+		if errors.Is(err, errHostUnresolved) {
+			src = "builtin:resolve-failed"
+		}
+		x.emit(egress.Deny, src)
+		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
+		return "", false
+	}
+	return target, true
+}
+
+// credential is the server's credential header (mcpCredential, held until it nears expiry). On a
+// failure it answers w and reports false.
+func (x *mcpExchange) credential(w http.ResponseWriter) (injectedHeader, bool) {
+	hdr, err := x.p.mcpCredential(x.r.Context(), x.server)
+	if err != nil {
+		x.emit(egress.Deny, ruleSourceMCPCredential)
+		x.p.httpError(w, "the MCP server's credential is unavailable", err, http.StatusBadGateway)
+		return injectedHeader{}, false
+	}
+	return hdr, true
 }
 
 // relayStreaming is relay, flushing each chunk: a streamable HTTP server may

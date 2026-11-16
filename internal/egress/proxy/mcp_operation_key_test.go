@@ -6,7 +6,9 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -494,5 +496,32 @@ func TestMCPOperationKeyDeclineHoldsForTheCall(t *testing.T) {
 	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(5, `{"id":"ENG-2"}`, `"b"`)), "waiting for a person")
 	if rows, _ := cp.snapshot(); len(rows) != 2 {
 		t.Fatalf("rows %d, want other arguments to ask", len(rows))
+	}
+}
+
+// TestMCPOperationKeyUnresolvedServerIsNotRecorded: an approved keyed call whose server's address does
+// not resolve is refused before its send is recorded, so no record stands for a call never sent, and the
+// same call under the same key asks again and is sent once the address resolves.
+func TestMCPOperationKeyUnresolvedServerIsNotRecorded(t *testing.T) {
+	res := &toggleResolver{err: errors.New("no such host")}
+	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__linear__delete_issue", Effect: types.ToolApproveEach}}}, res, nil)
+	f.p.mcp.setApproveEach(&MCPApproveEachConfig{})
+	cp := newOpCP(t, f.up.hitCount)
+	(&eachCP{srv: cp.srv}).wire(t, f.p)
+	cp.approve = true
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", keyedCall(1, `{"id":"ENG-1"}`, `"step-1"`)); rec.Code == http.StatusOK || f.up.hitCount() != 0 {
+		t.Fatalf("answer %d %q, upstream hits %d; want a refusal and no send", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+	if got := cp.records(); len(got) != 0 {
+		t.Fatalf("send records %+v, want none for a call that was not sent", got)
+	}
+	wantDecision(t, f.buf, egress.Deny, "builtin:resolve-failed")
+	res.err, res.ips = nil, []net.IP{net.ParseIP("93.184.216.34")}
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", keyedCall(2, `{"id":"ENG-1"}`, `"step-1"`)); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
+		t.Fatalf("answer %d %q, upstream hits %d; want the call asked again and sent", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+	rows, _ := cp.snapshot()
+	if got := cp.records(); len(rows) != 2 || len(got) != 2 || got[0].id != rows[1].id {
+		t.Fatalf("rows %d, send records %+v; want a second approval and its record only", len(rows), got)
 	}
 }
