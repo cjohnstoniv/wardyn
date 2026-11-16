@@ -11,7 +11,7 @@
 - Experimental, off by default. Tested in CI on kind, Kubernetes v1.30.0 (kind v0.23.0, node image pinned by digest), Calico, confinement class CC1, with agent-sandbox v1.0.9 by digest, whose API is `v1beta1` (beta). Server mode only.
 - The CI job `conformance-k8s-agent-sandbox` runs on train pull requests and pushes to main only. It is not a required check. Its cluster is its own: this page says nothing about the Kubernetes version of Wardyn's plain `conformance-k8s` job.
 - The job checks:
-  - the plain conformance suite plus the backend's own cases, with the backend on;
+  - the plain conformance suite plus the backend's own cases, with the backend on. The job fails unless each backend case it names passes, the keep and warm-pool cases among them;
   - every decision of the two admission policies, on a real API server;
   - each verb in the chart's Role, with `kubectl auth can-i` under a separate account.
 - The suite itself runs as the wardynd ServiceAccount, which is bound to cluster-admin. So the chart's Role is not proven end to end.

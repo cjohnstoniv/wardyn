@@ -113,6 +113,7 @@
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Know what a run can count on, runtime by runtime, and the test that checks each promise | [RUNTIME-CONTRACT.md](RUNTIME-CONTRACT.md) |
 | Find the layers of the code and the interface each extension implements | [EXTENDING.md](EXTENDING.md) |
 | Runnable sample workspaces, one per governance control | [../examples/](../examples/) |
 
