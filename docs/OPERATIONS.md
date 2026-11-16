@@ -133,7 +133,10 @@ copy is permanent.
     capture.
   - In a leader pass a read that outlives its budget is that run's outcome alone: it is logged with the run id, and
     the pass still counts as a success for the `run_output` sweep's health.
-  - A recording store that fails, or a database call that does not answer in time, is still the pass's error.
+  - A recording that cannot be read holds back no other run: the pass reads the rest of its page.
+  - A recording store that fails, or a database call that does not answer in time, is still the pass's error, except
+    for a run whose recording could not be read on a try made 30 minutes or more after it ended: that is the run's
+    outcome alone, logged with the run id.
   - An unfinished claim permits takeover after five minutes, and selection favors never-claimed work, then the oldest
     claim, so one slow cast yields later passes to other runs.
   - This bounds work, not delivery latency or backlog capacity: sustained load can exceed what the leader recovers
@@ -263,8 +266,8 @@ copy is permanent.
   - The sweep every minute resolves a terminal run's pending row, once its claim is five minutes old, the same way: by
     recovery under the same rules, or to a `capture_gap` row.
     - A pending row that waits on the run's recording ends as a `capture_gap` row when the recording was erased, or
-      when one over-budget try (its 10-second read budget) is made 30 minutes or more after the run ended. A later
-      read of the recording that succeeds replaces that row.
+      when one try made 30 minutes or more after the run ended runs over its 10-second read budget or cannot read the
+      recording. A later read of the recording that succeeds replaces that row.
   - Recording uploads commit their recovery obligation before a successful receipt.
     - A restarted leader immediately checks a bounded page of terminal work, then retries every minute; an abandoned
       claim is available after five minutes.
