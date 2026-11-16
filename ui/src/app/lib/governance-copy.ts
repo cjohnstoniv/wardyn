@@ -742,6 +742,8 @@ export const LIMITS_CHIP = {
   PLACEMENT: (placement: string) => `No ${placement} runs`,
   CPU: "Max CPU (millicores)",
   MEMORY: "Max memory (MiB)",
+  // A profile that sets any confinement floor: without it, a profile bounding only floors showed an empty cell.
+  CONFINEMENT_FLOORS: "Confinement floors",
 } as const;
 
 // RL-14 (0.8, #579) — the profile editor's Run limits section

@@ -44,6 +44,7 @@ export function limitChips(limits: GovernanceLimits) {
   if (autonomyLowest) chips.push(LIMITS_CHIP.AUTONOMY(AUTONOMY_META[autonomyLowest].label));
   const runLimits = runLimitsChip(limits);
   if (runLimits) chips.push(runLimits);
+  if (Object.values(limits.confinement_floors ?? {}).some(Boolean)) chips.push(LIMITS_CHIP.CONFINEMENT_FLOORS);
   // 0/absent is no limit for each of these.
   const caps: [string, number | undefined][] = [
     [LIMITS_CHIP.CPU, limits.max_cpu_millis],
@@ -60,7 +61,7 @@ export function limitChips(limits: GovernanceLimits) {
 }
 
 // "None" is a claim that the profile bounds nothing, so it is read from the
-// chips, the run-limit fields and the confinement floors (which draw no chip)
+// chips, the run-limit fields and the confinement floors (one chip for any of them)
 // together, never from one list alone.
 export const limitsBoundNothing = (limits: GovernanceLimits) =>
   limitChips(limits).length === 0 && !setsRunLimits(limits) && !Object.values(limits.confinement_floors ?? {}).some(Boolean);
