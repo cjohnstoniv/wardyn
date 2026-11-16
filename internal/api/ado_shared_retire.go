@@ -128,7 +128,7 @@ func (s *Server) adoGitGrants(ctx context.Context, subject string, needed []need
 			if s.cfg.Store != nil && sc.WorkspaceProviders == nil {
 				var err error
 				if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
-					return nil, http.StatusInternalServerError, fmt.Errorf("get site config: %w", err)
+					return nil, http.StatusInternalServerError, errors.New(loggedMsg(ctx, "get site config", err))
 				}
 			}
 			if adoGrantHost(sc, n.host) {
@@ -161,7 +161,7 @@ func (s *Server) requireADOOwnToken(ctx context.Context, subject string, rows []
 		// A presence check, like the Settings card's: marked, never a value read out.
 		_, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, row.ID)
 		if err != nil {
-			return http.StatusInternalServerError, fmt.Errorf("read own Azure DevOps token: %w", err)
+			return http.StatusInternalServerError, errors.New(loggedMsg(ctx, "read own Azure DevOps token", err))
 		}
 		if found {
 			return 0, nil

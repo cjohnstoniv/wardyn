@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -145,5 +147,42 @@ func TestRequirementWriteRefusal_RunnerBoundFolder(t *testing.T) {
 	r = srv.requirementWriteRefusal(ctx, []types.Workspace{holder, unbound}, mounts, []bool{true}, map[int][]types.Workspace{0: {holder}})
 	if r == nil || r.status != http.StatusUnprocessableEntity || r.reason != string(placement.ReasonPlacementLocalPath) {
 		t.Errorf("holders that disagree on the folder's place = %+v, want 422 %s", r, placement.ReasonPlacementLocalPath)
+	}
+}
+
+// downRefStore is boundRefStore whose runner read fails, as a database that did not answer. The gate reads the
+// runner through store.RunnerStore (boundRunnerRow), so the store must stay one.
+type downRefStore struct{ boundRefStore }
+
+var _ store.RunnerStore = downRefStore{}
+
+func (downRefStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
+	return types.Runner{}, errors.New("store down: dial tcp 10.0.0.5:5432: connection refused")
+}
+
+// A bound folder whose runner cannot be read answers 503 with the runner unavailable at the gate and at the
+// requirements fold's door, and the store's own text stays out of the error its callers write into the body
+// ("workspace: " and the gate's error). Catches: the store's error handed back beside the 503.
+func TestBoundMountAllowed_ARunnerReadThatFailsKeepsTheStoreTextOutOfTheBody(t *testing.T) {
+	assertNoFolderOnThisHost(t)
+	runners := boundRunners{rows: map[uuid.UUID]types.Runner{}}
+	mine := runners.add(ownerMemberSub, types.RunnerOwnerPerson, types.RunnerClaimed)
+	dir := boundLaptopRoot + "/w/app"
+	srv := &Server{cfg: Config{
+		Store:      downRefStore{boundRefStore{wsRefStore: wsRefStore{}, boundRunners: runners}},
+		UserMounts: runner.UserMountPolicy{Roots: []string{boundLaptopRoot}, WritableRoots: []string{boundLaptopRoot + "/w"}},
+	}}
+	rw := false
+	mounts := []types.WorkspaceMount{{Source: dir, Target: composerWorkspaceTarget, ReadOnly: &rw}}
+	holder := types.Workspace{ID: uuid.New(), Name: "holder", OwnedBy: ownerMemberSub, Sources: []types.WorkspaceSource{boundSource(dir, mine)}}
+	ctx := context.Background()
+
+	code, reason, err := srv.boundMountAllowed(ctx, holder, mine, mounts[0])
+	if code != http.StatusServiceUnavailable || reason != reasonWorkspaceSourceRunnerUnavailable || err == nil || err.Error() != "read the folder's runner" {
+		t.Errorf("the gate = %d %s %v; want 503 %s and the read named alone", code, reason, err, reasonWorkspaceSourceRunnerUnavailable)
+	}
+	r := srv.requirementWriteRefusal(ctx, []types.Workspace{holder}, mounts, []bool{true}, map[int][]types.Workspace{0: {holder}})
+	if r == nil || r.status != http.StatusServiceUnavailable || r.reason != reasonWorkspaceSourceRunnerUnavailable || r.Error() != "workspace: read the folder's runner" {
+		t.Errorf("the requirements fold = %+v; want 503 %s answered \"workspace: read the folder's runner\"", r, reasonWorkspaceSourceRunnerUnavailable)
 	}
 }
