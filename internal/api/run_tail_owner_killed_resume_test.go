@@ -14,13 +14,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The tail owner's history tail of a killed run past its keep, which still holds its sandbox ref and whose stored
-// folder record does not decode but holds a resume, ends with that copy back given up, its given_up row saying the
-// record could not be read, and then the ref cleared. The tail owner takes the history tail for a killed run (the
-// record-free checks say it owes nothing), and the stop's give-up at the end of that tail (giveUpFolderStopped)
-// finds the resume without decoding the record. Catches: the tail stopping the sandbox and clearing a killed run's
-// ref with its changes owed and no given_up row.
-func TestTailOwner_AKilledRunsUnreadableRecordHoldingAResumeIsGivenUpAtTheEndOfItsTail(t *testing.T) {
+// The tail owner's tail of a killed run past its keep, which still holds its sandbox ref and whose stored folder
+// record does not decode but holds a resume, gives that copy back up first, its given_up row saying the record could
+// not be read, and only then stops the sandbox and clears the ref. The record-free checks say a killed run owes no
+// pass, and the resume read without decoding the record (unreadOwed) says what it keeps the sandbox for, so its step
+// past the keep is the give-up, as an owed pass's is. Catches: the tail stopping the sandbox and clearing a killed
+// run's ref with its changes owed and no given_up row, and a give-up past the keep that passes a killed run's resume by.
+func TestTailOwner_AKilledRunsUnreadableRecordHoldingAResumeIsGivenUpBeforeItsStop(t *testing.T) {
 	s, cs, audit, run, sb, refAt := endGiveUpFixture(t, types.RunKilled, keptForCopyBack())
 	down := &atomic.Bool{}
 	down.Store(true)
@@ -30,8 +30,8 @@ func TestTailOwner_AKilledRunsUnreadableRecordHoldingAResumeIsGivenUpAtTheEndOfI
 	cs.run.EndedAt = &ended
 	cs.dispatchTestStore.mu.Unlock()
 	cs.giveUpApplies = true
-	if !s.tailRun(context.Background(), run.ID, tailHistory) {
-		t.Fatal("the tail owner did not run the history tail for the killed run past its keep")
+	if !s.tailRun(context.Background(), run.ID, tailGiveUp) {
+		t.Fatal("the tail owner did not give up the killed run's copy back past its keep")
 	}
 	cur, _ := cs.GetRun(context.Background(), run.ID)
 	rows := endGiveUpRows(audit, run.ID, "status_unreadable")

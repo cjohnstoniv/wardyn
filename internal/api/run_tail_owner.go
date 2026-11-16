@@ -260,16 +260,15 @@ func tailSkipped(ctx context.Context, id uuid.UUID, err error) {
 // tailStepOf reads run's record and answers the step it is due for (tailStepFor), with the record and the note
 // its give-up carries (giveUpFolderNoted). A record that cannot be read is an error inside the cap. Past it the
 // step is the give-up, noted folderStatusUnreadable: the statement needs no decoded record, and a record that
-// never reads would otherwise keep its sandbox for ever. Before that, the owed checks that need no record are
-// asked as the readable path asks them (folderOwed on the empty record, which owes whatever has not run: a run
-// that ended, was not killed and holds its ref, with a folder copied back both ways, seeded, and a data_out rule
-// that lets it out); a run they say owes nothing takes the readable path's not-owed step, with no give-up. A run
-// that is gone (store.ErrNotFound) is only an error.
+// never reads would otherwise keep its sandbox for ever. Before that, what the record keeps the sandbox for is
+// asked without decoding it (unreadOwed: the owed checks that need no record, and whether the stored record holds
+// a resume, which keeps a killed run's sandbox too); a run that owes nothing that way takes the readable path's
+// not-owed step, with no give-up. A run that is gone (store.ErrNotFound) is only an error.
 func (s *Server) tailStepOf(ctx context.Context, run types.AgentRun, due store.RunDue) (types.RunLocalFolderStatus, tailStep, string, error) {
 	st, err := s.tailFolderStatus(ctx, run.ID)
 	if err != nil {
 		if due.CapPassed && !errors.Is(err, store.ErrNotFound) {
-			if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
+			if owed, oerr := s.unreadOwed(ctx, run); oerr == nil && !owed {
 				if due.Due {
 					return types.RunLocalFolderStatus{}, tailHistory, "", nil
 				}
@@ -296,7 +295,9 @@ func (s *Server) tailFolderStatus(ctx context.Context, id uuid.UUID) (types.RunL
 
 // tailStepFor is the step run is due for, given its record st and the database's own answers due (whether the
 // run is past its containment due, and past the keep: store.RunDue, from the listing or a re-read, never a
-// server's clock): give up an owed pass whose keep ran out; bring back an owed pass whose keep has not; otherwise
+// server's clock): give up an owed pass whose keep ran out, and a resume no pass will run for (a killed run's, or
+// one whose folder no longer lets a pass back run) once the keep has run out too, since a resume keeps the sandbox
+// (keepsSandboxForFolder) as an owed pass does; bring back an owed pass whose keep has not; otherwise
 // the full tail once the run is past its containment due, which is also the age gate that leaves a fresh end to
 // the ordinary tail. An error is a read that failed, except past the cap, where an owed pass is given up
 // whatever its seed or rule reads, noted folderRuleUnreadable (the read that failed is this one).
@@ -312,6 +313,9 @@ func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.R
 	}
 	if expired {
 		return tailGiveUp, "", nil
+	}
+	if due.CapPassed && st.Resume != nil {
+		return tailGiveUp, "", nil // a resume no pass will run for, past the keep
 	}
 	keep, err := s.folderKeepPermitted(ctx, run, st, due)
 	if err != nil {
