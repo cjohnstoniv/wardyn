@@ -50,6 +50,11 @@ func TestRecordingOutput_AStaleRowOnAnUnreadableRecordingSettlesToAGapAfterTheGi
 			saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","part one marker\n"]`+"\n")
 			unreadable := recording.CastKey(f.run.ID.String(), c.part)
 			rs.open = func(ctx context.Context, key string) (io.ReadCloser, error) {
+				// A cut pass returns without waiting for its read, which may open the store after this subtest
+				// has ended and recreate the run's lock file while TempDir's cleanup removes the directory.
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if key == unreadable {
 					return io.NopCloser(iotest.ErrReader(errors.New("input/output error"))), nil
 				}

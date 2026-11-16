@@ -145,10 +145,12 @@ func TestConfinementFloorIsOneAtEveryDoor(t *testing.T) {
 		}
 	}
 	// Every reader hands over the fold's own fields: its resolved policy, whose minimum no floor has raised, and
-	// its own ceiling. A copy of the spec a door has since changed would name the wrong traits, or none.
+	// its own ceiling. A copy of the spec a door has since changed would name the wrong traits, or none. A waiting
+	// launch reads its own request, q.req, which handleCreateRun copies from the request the fold read once the
+	// fold is done: the same value, and a queuedCreate need not carry the fold's request pointer.
 	const own = "*f.req, f.carriedImage, f.comps, f.spec, f.ceiling"
 	want := map[string]string{"stepPlacement": own, "stepConfinement": own, "runCreateAuditData": own, "handlePreflightRun": own,
-		"auditQueuedCreate": strings.ReplaceAll(own, "f.", "q.f.")}
+		"auditQueuedCreate": strings.Replace(strings.ReplaceAll(own, "f.", "q.f."), "*q.f.req", "q.req", 1)}
 	if !maps.Equal(foldArgs, want) {
 		t.Errorf("the confinement floor is read with %v; want %v", foldArgs, want)
 	}

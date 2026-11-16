@@ -60,6 +60,8 @@ var kernelDoors = map[string][]string{
 	"recordProviderChoice": {"capModelProvider"},
 	// A revive or an extension, re-checked as the run's owner.
 	"ownerCapabilityRefusal": {"d.kind"},
+	// A live credential or gateway mint, re-asking the run's owner the component doors the run was launched through.
+	"componentWithdrawn": {"d.kind"},
 	// Deciding an approval the person's own run raised.
 	"authorizeUserDecision": {"capEgressHost"},
 	// #1197: mayDecide's own read-only mirror of authorizeUserDecision's

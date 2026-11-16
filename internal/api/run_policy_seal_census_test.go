@@ -72,6 +72,7 @@ var lateAddCensus = map[string]int{
 	"workspace_egress.go unionSiteConfigScmHosts":               1,
 	"workspace_egress.go unionWorkspaceEgress":                  3,
 	"workspace_egress_github.go unionDirectGitHubEgress":        1,
+	"workload_policy_pin.go launchPolicyDigest":                 1, // the pin's digest form of a copy of the fold's spec; it returns a digest, never a policy
 }
 
 // unionHelpers are the allowlist and denylist unions; their bodies, and the seal's own, are not sites.

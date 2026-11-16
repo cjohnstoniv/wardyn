@@ -52,6 +52,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"capabilities.go:capAllowed":                               {1, "R: capability admission; the spec it admits meets the boundary at resolve"},
 	"capabilities.go:newCapBatch":                              {1, "R: capability admission; the spec it admits meets the boundary at resolve"},
 	"components_builtin.go:builtinGitHubGrant":                 {1, "D: the built-in GitHub grant clamp; grants meet the boundary at resolve and dispatch"},
+	"component_grant_withdrawn.go:ownerExemptAsAdmin":          {1, "D: a live door's component re-check spares an ungoverned admin owner; the credential is still withheld by the seal's layers, the boundary's first (liveWithholding)"},
 	"compose_setup.go:setupBackendItem":                        {1, "authz-only: a setup row's detail"},
 	"compose_setup.go:setupMemberView":                         {1, "authz-only: the workspace read tier a setup checklist shows"},
 	"deciders_resolve.go:deciderForDecide":                     {1, "A: a security caller still decides when the deciders cannot be read; the boundary hook bounds what is admitted"},
