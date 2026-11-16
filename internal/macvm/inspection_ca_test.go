@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -321,8 +323,9 @@ func TestInspectionCARefusesASymlinkedDirectory(t *testing.T) {
 }
 
 func TestRemoveInspectionCA(t *testing.T) {
+	ctx := context.Background()
 	_, dir := openCA(t)
-	removed, err := macvm.RemoveInspectionCA(dir)
+	removed, err := macvm.RemoveInspectionCA(ctx, dir)
 	if err != nil || !removed {
 		t.Fatalf("remove = %v, %v", removed, err)
 	}
@@ -331,11 +334,78 @@ func TestRemoveInspectionCA(t *testing.T) {
 			t.Errorf("%s: %v", f, err)
 		}
 	}
-	if removed, err := macvm.RemoveInspectionCA(dir); removed || err != nil {
+	if removed, err := macvm.RemoveInspectionCA(ctx, dir); removed || err != nil {
 		t.Errorf("second remove = %v, %v", removed, err)
 	}
-	if removed, err := macvm.RemoveInspectionCA(filepath.Join(t.TempDir(), "none")); removed || err != nil {
+	none := filepath.Join(t.TempDir(), "none")
+	if removed, err := macvm.RemoveInspectionCA(ctx, none); removed || err != nil {
 		t.Errorf("remove of a never-made CA = %v, %v", removed, err)
+	}
+	if _, err := os.Lstat(none); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a remove made the directory: %v", err)
+	}
+}
+
+// A remove waits for the lock a make holds, and a make and a remove racing on one directory leave the CA whole
+// or gone: never a certificate without its key.
+func TestRemoveInspectionCAHoldsTheLock(t *testing.T) {
+	ctx := context.Background()
+	_, dir := openCA(t)
+	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := macvm.RemoveInspectionCA(ctx, dir)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("removed while another holder had the lock (%v)", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "key.pem")); err != nil {
+		t.Errorf("the key went while the lock was held: %v", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 8 {
+				var err error
+				if i%2 == 0 {
+					_, err = macvm.OpenInspectionCA(ctx, dir)
+				} else {
+					_, err = macvm.RemoveInspectionCA(ctx, dir)
+				}
+				if err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	_, kerr := os.Lstat(filepath.Join(dir, "key.pem"))
+	_, cerr := os.Lstat(filepath.Join(dir, "ca.pem"))
+	if (kerr == nil) != (cerr == nil) {
+		t.Errorf("half a CA is left: key %v, certificate %v", kerr, cerr)
 	}
 }
 

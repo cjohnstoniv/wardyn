@@ -130,10 +130,19 @@ func ReadInspectionCA(ctx context.Context, dir string) (*InspectionCA, error) {
 }
 
 // RemoveInspectionCA deletes this Mac's inspection CA in dir, the key first, and says whether there was one.
-// The runner calls it when it starts with the setting off, or on while one of its drive roots holds dir: a key
-// left on disk is one a run's mount could read. A base that trusted the CA keeps the trust of a root nothing can
-// sign for any more.
-func RemoveInspectionCA(dir string) (bool, error) {
+// It holds OpenInspectionCA's lock, so a remove and a make never interleave and leave a certificate without its
+// key. The runner calls it when it starts with the setting off, or on while one of its drive roots holds dir: a
+// key left on disk is one a run's mount could read. A base that trusted the CA keeps the trust of a root nothing
+// can sign for any more.
+func RemoveInspectionCA(ctx context.Context, dir string) (bool, error) {
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	release, err := lockFile(ctx, filepath.Join(dir, ".lock"), true)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	removed := false
 	for _, name := range []string{inspectionCAKey, inspectionCACert} {
 		switch err := os.Remove(filepath.Join(dir, name)); {
