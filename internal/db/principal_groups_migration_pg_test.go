@@ -23,9 +23,9 @@ func TestMigration0290_FillsTheRecordFromTheLastSignIns(t *testing.T) {
 		('sub-ann', '["eng","ops"]', false, $1), ('sub-ben', '[]', true, $1)`, at)
 	// The identity she last signed in with was made first, so made-last cannot stand in for it.
 	pgExec(t, pool, `INSERT INTO principal_identities (principal, issuer, email_lower, last_login_at, created_at) VALUES
-		('sub-ann', 'https://new.example', 'ann@corp.example', $2, $2 - interval '3 days'),
-		('sub-ann', 'https://never.example', 'ann.never@corp.example', NULL, $2 - interval '2 days'),
-		('sub-ann', 'https://old.example', 'ann.old@corp.example', $1, $2 - interval '1 day'),
+		('sub-ann', 'https://new.example', 'ann@corp.example', $2, $2::timestamptz - interval '3 days'),
+		('sub-ann', 'https://never.example', 'ann.never@corp.example', NULL, $2::timestamptz - interval '2 days'),
+		('sub-ann', 'https://old.example', 'ann.old@corp.example', $1, $2::timestamptz - interval '1 day'),
 		('sub-cat', 'https://new.example', 'cat@corp.example', $2, $2)`, at.Add(-time.Hour), at)
 
 	migrateBefore(t, pool, "0291")
