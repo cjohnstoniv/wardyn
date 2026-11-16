@@ -60,6 +60,10 @@ type queueAuthority struct {
 	// BreakGlass is the reason an admin-token launch carried as a break-glass run, so the start
 	// resolves as the break-glass run it was tagged at launch.
 	BreakGlass string `json:"break_glass_reason,omitempty"`
+	// WorkloadOwner and WorkloadName are the workload the launch was for, so the start mints the run
+	// under that workload's SPIFFE ID as an unqueued launch would (withLaunchWorkload); empty otherwise.
+	WorkloadOwner string `json:"workload_owner,omitempty"`
+	WorkloadName  string `json:"workload_name,omitempty"`
 	// Binding is the namespace binding a custom resource's launch was authorised under: the start holds
 	// only while that binding exists (store.QueueStart.Binding).
 	Binding *uuid.UUID `json:"binding,omitempty"`
@@ -89,6 +93,8 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Device = &d.ID
 	}
 	a.BreakGlass = breakGlassReason(ctx)
+	w := launchWorkloadFrom(ctx)
+	a.WorkloadOwner, a.WorkloadName = w.Owner, w.Name
 	if b, ok := launchBindingFrom(ctx); ok {
 		a.Binding = &b
 	}
