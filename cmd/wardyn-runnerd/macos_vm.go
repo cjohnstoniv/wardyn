@@ -140,6 +140,9 @@ type macOSVMSetup struct {
 	owner                      func(os.FileInfo) (int, bool)
 	// fstat replaces fstat(2) in the ledger's root-ownership checks (tests); nil is the real one.
 	fstat func(fd int, name string) (unix.Stat_t, error)
+	// ownsInspectionCA is set by serve alone (enableMacOSVM): only it makes and removes this Mac's inspection
+	// CA. A macos-vm command resolves its own config, which may not be serve's, so it only reads the CA.
+	ownsInspectionCA bool
 }
 
 // macVMDriver is what the macOS VM handle takes from the Docker driver; enableMacOSVM hands it the driver.
@@ -174,6 +177,7 @@ func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 		m.refusal, m.reason = macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
 		return m
 	}
+	m.openInspectionCA(s.settings.inspectionCA, s.settings.driveRoots, s.ownsInspectionCA)
 	l, err := admission.Open(admission.Config{Dir: s.ledgerDir, UID: s.uid, RunnerID: s.runnerID, Host: s.host,
 		DockerMemoryBytes: s.dockerMemory, Volume: s.root, Fstat: s.fstat, FileOwner: func(fi os.FileInfo) int {
 			uid, ok := s.owner(fi)

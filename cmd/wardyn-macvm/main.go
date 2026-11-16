@@ -305,7 +305,7 @@ type jobFlags struct {
 	root, runner, entry, ledgerDir, sockRoot *string
 	slot, cpus                               *int
 	memMiB                                   *uint64
-	baseFile                                 *string
+	baseFile, inspCA                         *string
 }
 
 func newJobFlags(fs *flag.FlagSet) jobFlags {
@@ -319,6 +319,7 @@ func newJobFlags(fs *flag.FlagSet) jobFlags {
 		ledgerDir: fs.String(macvm.FlagLedgerDir, "", "the admission ledger directory (default: the package's)"),
 		sockRoot:  fs.String(macvm.FlagSockRoot, "", "the socket root (default: the package's)"),
 		baseFile:  fs.String(macvm.FlagBaseFile, "", "the install list stage 2 installs into the base as admin (the runner setting macos_vm_base_file)"),
+		inspCA:    fs.String(macvm.FlagInspectionCA, "", "this Mac's inspection CA certificate, which stage 2 adds to the install list (the runner setting macos_vm_inspection_ca)"),
 	}
 }
 
@@ -387,6 +388,11 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	var items macvm.BaseList
 	if *j.baseFile != "" {
 		if items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
+			return nil, err
+		}
+	}
+	if *j.inspCA != "" {
+		if items, err = macvm.WithInspectionCA(items, *j.inspCA); err != nil {
 			return nil, err
 		}
 	}
@@ -611,6 +617,14 @@ func cmdEditBase(ctx context.Context, args []string, d deps) int {
 		// A list that cannot be read stages no profile again: the edit offers none, and they stay staged.
 		if o.Items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
 			o.Log.Warn("wardyn-macvm: edit-base offers no staged profile: the install list could not be read", "err", err.Error())
+		}
+	}
+	if *j.inspCA != "" {
+		// edit-base prints this Mac's CA's subject beside its fingerprint when the base does not trust it yet.
+		if l, caErr := macvm.WithInspectionCA(o.Items, *j.inspCA); caErr != nil {
+			o.Log.Warn("wardyn-macvm: edit-base prints no subject for this Mac's inspection CA: its certificate could not be read", "err", caErr.Error())
+		} else {
+			o.Items = l
 		}
 	}
 	if _, err := macvm.EditBase(ctx, o); err != nil {

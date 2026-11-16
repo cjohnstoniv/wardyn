@@ -76,6 +76,14 @@ type VMMachine struct {
 	// view only. Absent on a background macOS run: the boot predates the ask, so no report can be expected
 	// of it. It chooses a refusal's words and never opens anything.
 	DesktopViewOnlyAsked bool `json:"desktop_view_only_asked,omitempty"`
+	// InspectionCA says what the Mac's inspection CA (the runner setting macos_vm_inspection_ca) did for this run:
+	// InspectionCATrusted when the base the run cloned trusts it, so the proxy's certificates chained to it for the
+	// hosts the run's proxy terminates; InspectionCANotTrusted when that base does not trust it yet;
+	// InspectionCAExpired when the CA is past its validity. Absent when the setting is off, on a run whose proxy
+	// has no CA or terminates no host, and on a Linux VM.
+	InspectionCA string `json:"inspection_ca,omitempty"`
+	// InspectionCASHA256 is that CA's SHA-256 fingerprint, of its DER, with InspectionCA.
+	InspectionCASHA256 string `json:"inspection_ca_sha256,omitempty"`
 }
 
 // MacOSStandardBase is the name of a Mac's first macOS base, the one prepare builds (MAC-B04). A run that
@@ -104,6 +112,13 @@ func MacOSBaseAllowed(allowed []string, base string) bool {
 const (
 	MacVMAccelerator = "vz"
 	MacVMMachineType = "vz-mac"
+)
+
+// VMMachine.InspectionCA values.
+const (
+	InspectionCATrusted    = "trusted"
+	InspectionCANotTrusted = "not_trusted"
+	InspectionCAExpired    = "expired"
 )
 
 // Complete reports whether every field of a Linux VM's machine is set: a VM whose machine cannot be

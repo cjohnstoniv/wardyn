@@ -900,6 +900,7 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 // the offer sizes each guest at the base's minimum until it does.
 func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool, set macOSVMSettings) *macOSVMs {
 	if !on {
+		dropInspectionCA(set)
 		return nil
 	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
@@ -916,7 +917,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
 	}
 	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir), settings: set,
-		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
+		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner, ownsInspectionCA: true})
 	m.helper, err = macVMHelperPath()
 	if err == nil {
 		_, err = os.Stat(m.helper)
@@ -931,7 +932,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 		m.sweepStaging()
 		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
 			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed, OnUnexpectedWindow: unexpectedWindow,
-			KeptConfig: docker.KeptConfig{LimitBytes: m.kept.limit, Tools: newKeptToolsUpdater(m)}}
+			KeptConfig: docker.KeptConfig{LimitBytes: m.kept.limit, Tools: newKeptToolsUpdater(m)}, InspectionCA: m.items.ca}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
