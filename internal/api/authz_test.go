@@ -1035,6 +1035,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"OPTIONS /api/v1/internal/via-org/{grantID}/*":         {class: classInternal},
 	"POST /api/v1/internal/approvals":                      {class: classInternal},
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
+	"POST /api/v1/internal/approvals/{id}/sent":            {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
 	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
 	"POST /api/v1/internal/gateway-identity":               {class: classInternal},

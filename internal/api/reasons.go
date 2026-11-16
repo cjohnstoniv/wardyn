@@ -888,6 +888,14 @@ const (
 	reasonHostCallScopeInvalid = "host_call_scope_invalid"
 )
 
+// A keyed MCP call's operation key, at its raise and at its send record (approvals_mcp_call_send.go).
+const (
+	// 409: the key was already sent in its run's namespace with this call; the body names the approval, sent_at and answered
+	reasonOperationAlreadySent = "operation_already_sent"
+	// 409: the key was already sent in its run's namespace with another call
+	reasonOperationKeyReused = "operation_key_reused"
+)
+
 // The signed audit receipt, checkpoint and key routes (audit_receipt.go).
 const (
 	reasonAuditReceiptRequestInvalid   = "audit_receipt_request_invalid"   // 400: events or one run, in the shapes the route reads
