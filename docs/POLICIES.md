@@ -1244,7 +1244,7 @@ An `approve_each` call can carry an operation key, the `_meta` member `wardyn.de
 
 A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
 
-After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does.
+After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does. A second identical call that waits at the same time as the first may ask a person, and that approval then sends nothing.
 
 
 ### Try approve_each without an MCP server
