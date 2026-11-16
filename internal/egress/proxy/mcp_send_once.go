@@ -3,7 +3,11 @@
 
 package proxy
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // A run with a correlation ID sends each approve_each call at most once per occurrence within that
 // ID (MCPApproveEachConfig.SendOnce). A call without its caller's own operation key is given one made
@@ -24,7 +28,7 @@ import "strconv"
 
 // derivedKeyPrefix begins an operation key made from a call: the prefix, the 64-character hash, a
 // colon and the occurrence, well within types.MaxOperationKeyLen.
-const derivedKeyPrefix = "call:"
+const derivedKeyPrefix = types.DerivedOperationKeyPrefix
 
 // mcpCallOperationKeyMadeText is what the agent reads for a call whose own operation key starts with
 // derivedKeyPrefix.

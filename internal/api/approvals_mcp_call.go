@@ -171,7 +171,7 @@ func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, k
 		key, err := sc.ComputeKey()
 		if errors.Is(err, types.ErrMCPCallTooLarge) {
 			reason, msg = reasonMCPCallTooLarge, tooLarge
-		} else if err == nil && key == sc.CallSHA256 && (sc.OperationKey == "" || types.ValidOperationKey(sc.OperationKey)) {
+		} else if err == nil && key == sc.CallSHA256 && (sc.OperationKey == "" || (types.ValidOperationKey(sc.OperationKey) && types.DerivedOperationKeyFits(sc.OperationKey, sc.CallSHA256))) {
 			if out, ok := canonicalMCPCallScope(sc); ok {
 				return out, s.refuseSentOperation(w, r, sc)
 			}
