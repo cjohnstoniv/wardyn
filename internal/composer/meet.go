@@ -174,6 +174,10 @@ func cloneAuthority(a Authority) Authority {
 		r := *a.Limits.AutonomyRubric
 		out.Limits.AutonomyRubric = &r
 	}
+	if a.Limits.ConfinementFloors != nil {
+		c := *a.Limits.ConfinementFloors
+		out.Limits.ConfinementFloors = &c
+	}
 	return out
 }
 
@@ -242,6 +246,17 @@ func (m *meeter) validatePresence(ov Overlay) {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)
 		}
 	}
+	m.validateConfinementFloors(ov.Limits.ConfinementFloors)
+}
+
+// validateConfinementFloors refuses a floor that names no known confinement class.
+func (m *meeter) validateConfinementFloors(c *types.ConfinementFloors) {
+	if c == nil {
+		return
+	}
+	if err := c.Validate(); err != nil {
+		m.fail(ReasonOverlayInvalid, "confinement_floors", "%v", err)
+	}
 }
 
 // validateNonNegative refuses a negative count or duration. auto_stop_after_sec
@@ -301,6 +316,11 @@ func (m *meeter) checkResult() {
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			m.fail(ReasonOverlayUnsatisfiable, "limits.autonomy_rubric", "%v", err)
+		}
+	}
+	if l.ConfinementFloors != nil {
+		if err := l.ConfinementFloors.Validate(); err != nil {
+			m.fail(ReasonOverlayUnsatisfiable, "limits.confinement_floors", "%v", err)
 		}
 	}
 }

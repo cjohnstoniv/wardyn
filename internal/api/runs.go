@@ -251,7 +251,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
 	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
+	id, err := s.mintRunIdentity(ctx, runID, launchWorkloadFrom(ctx), runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
@@ -607,6 +607,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	createData := createRunAuditData(a.req, f.policyID, a.enforced, a.reqCC, a.jti, a.policyWarns, a.autonomy, a.belowFloor, a.mpChoice)
 	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.created) // the end as stored
 	stampConfinementDefault(createData, a.reqCC, f.confinementDefault)
+	stampConfinementRaisedBy(createData, confinementRaisedBy(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling))
 	if len(a.gw.delivery) > 0 {
 		createData["delivery"] = a.gw.delivery
 	}

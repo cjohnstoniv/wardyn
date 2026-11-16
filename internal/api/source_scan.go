@@ -79,6 +79,9 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		// workspace attaches it, and read only through the handle.
 		dir, derr := s.openScanSource(r.Context(), "", src)
 		if errors.Is(derr, errScanHoldersUnread) {
+			// The row names the read that failed, never the store's text; writeServerError logs the cause.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": errScanHoldersUnread.Error()})))
 			writeServerError(w, r, "scan source", derr)
 			return
 		}
@@ -557,7 +560,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			// member whose workspace attaches it holds it to their roots.
 			dir, err := s.openScanSource(ctx, ws.OwnedBy, src)
 			if errors.Is(err, errScanHoldersUnread) {
-				partialAudit(id, err.Error())
+				partialAudit(id, errScanHoldersUnread.Error()) // the read that failed, never the store's text
 				writeServerError(w, r, "scan source", err)
 				return
 			}

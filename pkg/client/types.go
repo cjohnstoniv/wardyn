@@ -274,6 +274,9 @@ type (
 	// type a caller could not author one at all.
 	AutonomyRubric = types.AutonomyRubric
 
+	// ConfinementFloors is GovernanceLimits.ConfinementFloors's pointed-to type, aliased for the same reason.
+	ConfinementFloors = types.ConfinementFloors
+
 	// AutonomyLevel is one rung on AutonomyRubric's ladder (see the AutonomyL0
 	// .. AutonomyL3 values below).
 	AutonomyLevel = types.AutonomyLevel

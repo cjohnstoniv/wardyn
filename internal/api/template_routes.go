@@ -34,6 +34,7 @@ func (s *Server) mountTemplateRoutes(r, operatorOnly chi.Router) {
 	r.Put("/templates/{id}", s.handleUpdateTemplate)
 	r.Delete("/templates/{id}", s.handleDeleteTemplate)
 	r.Post("/templates/{id}/copy", s.handleCopyTemplate)
+	r.Post("/templates/{id}/policy-check", s.handleTemplatePolicyCheck)
 	operatorOnly.Get("/admin/template-group-admins", s.handleListTemplateGroupAdmins)
 	operatorOnly.Put("/admin/template-group-admins", s.handlePutTemplateGroupAdmin)
 	operatorOnly.Delete("/admin/template-group-admins", s.handleDeleteTemplateGroupAdmin)

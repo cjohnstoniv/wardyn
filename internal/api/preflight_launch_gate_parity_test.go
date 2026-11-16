@@ -158,6 +158,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepNoNetwork", foldCreate | foldPreflight | foldPreview},
+	{"stepPolicyPin", foldCreate | foldPreflight | foldPreview},
 	{"stepHostRulesVM", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
 	{"stepMacWindow", foldCreate | foldPreflight | foldPreview},
@@ -186,12 +187,12 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	t.Run("fold", func(t *testing.T) { checkFoldShape(t, fset, g.steps) })
 
 	create := parseHandler(t, fset, "runs.go", "handleCreateRun")
-	mint := serverCallPos(create, "MintRunIdentity")
+	mint := serverCallPos(create, "mintRunIdentity")
 	if mint == token.NoPos {
-		t.Fatal("handleCreateRun lost MintRunIdentity: re-point the dry-run boundary")
+		t.Fatal("handleCreateRun lost mintRunIdentity: re-point the dry-run boundary")
 	}
 	if fold := g.foldCall(create, foldCreate); fold != nil && fold.Pos() >= mint {
-		t.Error("handleCreateRun folds after MintRunIdentity: every gate must refuse before the mint")
+		t.Error("handleCreateRun folds after mintRunIdentity: every gate must refuse before the mint")
 	}
 	launch := g.calls(create, mint)
 	for _, door := range []struct {

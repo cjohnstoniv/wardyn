@@ -60,8 +60,10 @@ export function limitChips(limits: GovernanceLimits) {
 }
 
 // "None" is a claim that the profile bounds nothing, so it is read from the
-// chips and the run-limit fields together, never from one list alone.
-export const limitsBoundNothing = (limits: GovernanceLimits) => limitChips(limits).length === 0 && !setsRunLimits(limits);
+// chips, the run-limit fields and the confinement floors (which draw no chip)
+// together, never from one list alone.
+export const limitsBoundNothing = (limits: GovernanceLimits) =>
+  limitChips(limits).length === 0 && !setsRunLimits(limits) && !Object.values(limits.confinement_floors ?? {}).some(Boolean);
 
 // What a profile's Limits cell shows: its effective limits (a profile with a base stores `{}` and states
 // what binds in `effective`), or the reason they could not be worked out, never a "None" it did not earn.

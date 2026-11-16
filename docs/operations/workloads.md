@@ -16,6 +16,7 @@
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
 | Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
+| Policy pin | The launch policy digest every launch must resolve to, empty for none. Only `PUT` and `DELETE /workloads/{name}/policy-pin` write it; an apply keeps it. The security tier reading another owner's workload does not get it |
 | Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block, the worse of two with [Wardyn's own check](../SERVICES.md#wardyns-own-check) |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
@@ -64,6 +65,8 @@ intent:
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
 | `wardyn workload restart NAME` | Starts a fresh run of the stored spec, then ends the old one |
+| `wardyn workload pin NAME DIGEST` | Pins your workload to a launch policy digest, the one `wardyn apply --dry-run` prints. A later launch whose policy resolves to another digest is refused; a launch refused as it is made leaves the current run running |
+| `wardyn workload unpin NAME` | Clears the pin |
 | `wardyn workload delete NAME` | The same as `wardyn delete -f`, by name |
 | `wardyn workload binding create\|list\|delete` | Binds a namespace to a service identity. [Security tier](#bind-a-namespace) |
 
@@ -122,10 +125,15 @@ intent:
 | An unchanged spec whose last launch, or queued replacement, was refused | `unchanged` | Launched again, like a restart: the spec is ahead of its run |
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
+- `--dry-run` also prints `launch policy digest: <hex>` under each workload that is owed a launch. That is the digest `wardyn workload pin` takes.
 - The new run is created before the old one is ended. A queued replacement lets the old run serve until the new one runs, unless the old run holds the slot the new one needs.
+- Each run a workload launches carries the SPIFFE ID `spiffe://<trust domain>/workload/<owner>/<name>/run/<run id>` for its life, so a gateway can admit every run of the workload by the ID up to and including `/run/` ([The claims a gateway receives](ai-gateway.md#the-claims-a-gateway-receives)). During a replacement, and longer while the replacement waits in its queue, it and the run it replaces both hold the prefix.
 - A refused launch is not an error: the answer is a `201` when the apply created the workload and a `200` otherwise. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
+- A workload with a policy pin launches only when its policy resolves to the pinned digest. Otherwise the launch is refused with `workload_policy_pin_mismatch`, and `last_refusal` names both digests. A launch refused as it is made starts no run, and the current run keeps running. Pin the new digest to accept the change.
+- The digest covers the stored policy the intent names, or the default, its `inline_policy` and `overrides`, the owner's ceiling, walls and boundary, and what the intent's workspaces, repositories, components, tool rules and size add to them. Known limits lists what it does not cover.
+- A launch that waited in its pool's queue is held to the pin again when it starts. Off the pin, its run ends with that reason.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`. A custom resource's launch whose namespace binding is deleted while its run starts is ended with reason `workload_binding_deleted`.
 - A changed spec applied while an older launch is still starting is launched at once. The older launch's run is ended with reason `workload_replaced`, also when the changed spec's launch is refused.
 - With several runners serving one bound namespace, the runner that last applied a workload is the one whose removals count. If that runner is down but still in the pool, remove it from the pool so another can take over.
@@ -285,10 +293,23 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 - The schema leaves `intent` open on purpose, so `kubectl apply` accepts a spec that Wardyn then marks `Invalid`. Read the status after an apply.
 - A status can lag a change by up to 30 seconds. A report made while the runner's session is down is dropped, and the next full report, at most 10 minutes later, carries it.
 - A change to a binding takes effect at the next report of each resource, not at once.
+- A pin needs the workload, so a new workload's first launch is not held to one.
+- Deleting a workload deletes its pin. A workload applied again under that name starts unpinned. For a custom resource, whoever can delete and re-create the resource can drop the pin this way without the service identity's token. Pin again after the first launch, and watch `workload.delete`.
+- A launch policy digest is comparable within one Wardyn version. An upgrade can change the digest of the same policy, and each pinned workload's next launch is then refused until it is pinned again. After an upgrade, preview each pinned workload with its `restart_key` changed to read its new digest.
+- Any change to the policy a pinned launch resolves refuses it, a narrowing too.
+- The pin does not hold what is added as the run starts, such as hosts from the site configuration, the run's git credentials and its model provider. The run's own `policy_digest` includes them, so it is not the launch policy digest.
+- The digest covers the size a launch asks for, or the default size it gets, within its policy, the owner's ceiling, its pool and the deployment's limits, never the size a runner gives it.
+- The digest does not cover the confinement class a launch gets above its policy's minimum, such as one the organisation's default, the governance profile's confinement floors or the pool's runners set. It does not cover the run's lifetime limit either.
+- A custom resource's workload has no preview. The digest its launch resolves to is named in the refusal a launch off its pin records (`last_refusal`).
+- Only a server of this version or later holds a launch to its pin. While an upgrade rolls out, or after a downgrade, a pinned workload can launch without the check.
+- A launch that was being made, or was waiting in a queue, when the pin was set, changed or cleared keeps the pin it had then, or none.
+- A replacement that waited in the queue of the pool its old run held a slot in has already ended that run. If its start is refused for the pin, the workload has no run until its next launch.
+- `wardyn apply --dry-run` prints a launch policy digest only for a workload that is owed a launch: a new or changed one, or one whose latest spec has not launched. To read the digest of an unchanged workload, dry-run the file with its `restart_key` changed.
+- A launch the dry run refuses before its policy is fully resolved, for example because no runner can take it, shows no digest.
 
 ## Audit
 
-[AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md) has the rows: `workload.apply`, `workload.launch`, `workload.launch_refused`, `workload.replace`, `workload.restart`, `workload.delete`, `workload_binding.create` and `workload_binding.delete`. A row from the resource path carries `via` `k8s` or `k8s_sync`, and the runner, pool, namespace and resource uid.
+[AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md) has the rows: `workload.apply`, `workload.launch`, `workload.launch_refused`, `workload.replace`, `workload.restart`, `workload.delete`, `workload.policy_pin.set`, `workload_binding.create` and `workload_binding.delete`. A row from the resource path carries `via` `k8s` or `k8s_sync`, and the runner, pool, namespace and resource uid.
 
 ## Where it lives
 

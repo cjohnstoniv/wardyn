@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.20). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.21). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -946,9 +946,9 @@ is not the deployment described above.**
 
 - A literal-IP target is denied before policy or approval run (`evaluate` step 0, `literalIPGuard`
   in [`internal/egress/proxy/literal_ip_guard.go`](../internal/egress/proxy/literal_ip_guard.go)) —
-  - in every spelling that guard parses: the canonical one, the `inet_aton` non-canonical IPv4
+  - in every literal spelling, among them the canonical one, the `inet_aton` non-canonical IPv4
     forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`).
-  - The residual below states what that set does not cover.
+  - The residual below states what that bound does not cover.
 - **`no_network`** (the `no-network` wall preset) refuses every request at step 0, before a `via_org`
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
@@ -4192,7 +4192,7 @@ The labelled series, every label, and where its values come from:
 - `wardynd` signs an ES256 token per run and provider, valid for 60 to 600 seconds (600 unless the provider sets `token_lifetime_seconds`) and minted again at half-life (`gatewayidentity.Signer`).
 - `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
 - The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
-- When the gateway asks in the TLS handshake, `wardyn-proxy` also presents a client certificate naming the run (one URI SAN, `spiffe://<trust domain>/agent-run/<run id>`), signed by a CA of its own, `wardyn-gateway-client-ca`, and living no longer than the token (`gatewayCertHolder`, `gatewayidentity.Authority`).
+- When the gateway asks in the TLS handshake, `wardyn-proxy` also presents a client certificate naming the run (one URI SAN, the run's SPIFFE ID: `spiffe://<trust domain>/workload/<owner>/<name>/run/<run id>` for a run a workload launched, `spiffe://<trust domain>/agent-run/<run id>` for any other), signed by a CA of its own, `wardyn-gateway-client-ca`, and living no longer than the token (`gatewayCertHolder`, `gatewayidentity.Authority`).
   - Its key is made in the proxy and never leaves it; wardynd signs the public half after the same checks as a token (`Server.gatewayCertAdmit`).
   - A connection keeps the certificate it opened with, so the token, checked on every call, is what ends a cut run's access within its lifetime.
   - The certificate never stands alone. The proxy presents it on any connection to a route's host and port, and it names only the run, not the person or the audience; a gateway must check the token too.

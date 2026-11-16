@@ -857,6 +857,8 @@ const (
 	reasonWorkloadBindingConflict    = "workload_binding_conflict"     // 409: the namespace is bound on the pool already
 	reasonWorkloadBindingNotFound    = "workload_binding_not_found"    // 404: no such binding
 	reasonWorkloadBindingPoolScope   = "workload_binding_pool_scope"   // 422: the pool is a person's own; a binding names an organization pool only
+	reasonWorkloadPolicyPinMismatch  = "workload_policy_pin_mismatch"  // 409: a launch resolves to another launch policy digest than its workload's pin
+	reasonWorkloadPolicyPinInvalid   = "workload_policy_pin_invalid"   // 400: a pin is not 64 lowercase hex characters
 	// A custom resource's status reason (runner_workloads.go), never an HTTP error reason. A launch records
 	// workload_binding_inactive as its refusal, so a restart's 200 (launch.reason) and last_refusal may carry it.
 	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
@@ -886,6 +888,14 @@ const (
 	reasonKubeCallScopeInvalid = "kube_call_scope_invalid"
 	// 400: a requested_scope naming host and call_sha256 that is not exactly one host rule hold's scope, on tool_call, hashing to its own call_sha256 (approvals_host_call.go)
 	reasonHostCallScopeInvalid = "host_call_scope_invalid"
+)
+
+// A keyed MCP call's operation key, at its raise and at its send record (approvals_mcp_call_send.go).
+const (
+	// 409: the key was already sent in its run's namespace with this call; the body names the approval, sent_at and answered
+	reasonOperationAlreadySent = "operation_already_sent"
+	// 409: the key was already sent in its run's namespace with another call
+	reasonOperationKeyReused = "operation_key_reused"
 )
 
 // The signed audit receipt, checkpoint and key routes (audit_receipt.go).

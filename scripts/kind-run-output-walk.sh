@@ -69,7 +69,7 @@ fi
 
 step "creating ${CLUSTER} (deploy/kind/quickstart.sh)"
 CREATED=1
-deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -30 "${TMPDIR}/quickstart.log" >&2; die "quickstart failed"; }
+deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -n 400 "${TMPDIR}/quickstart.log" >&2; die "quickstart failed"; }
 
 TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 [[ -n "${TOKEN}" ]] || die "could not read the admin token"

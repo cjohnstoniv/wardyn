@@ -906,7 +906,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 	})
 	if err != nil {
 		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
-			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": err.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": sshStartError(ctx, err)})))
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
@@ -971,7 +971,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	if err != nil {
 		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 			fmt.Sprintf("127.0.0.1:%d", m.DestPort), "failure",
-			mustJSON(map[string]any{"port": m.DestPort, "error": err.Error()})))
+			mustJSON(map[string]any{"port": m.DestPort, "error": sshStartError(ctx, err)})))
 		_ = newCh.Reject(ssh.ConnectionFailed, sshExecStreamErrorMessage(err))
 		return
 	}

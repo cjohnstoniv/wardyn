@@ -63,6 +63,24 @@ describe("Folders from your computer", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(C.BACK_FAILED("laptop-7f2 is offline"));
   });
 
+  it("still shows a folder's give-up when its record could not be read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced", record_unreadable: true, fate: "given_up", sandbox_copy: "deleted", last_report: { unsynced: 3, at: AT } });
+    expect(screen.getByText(C.GIVEN_UP)).toBeInTheDocument();
+    expect(screen.getByText(C.FILES("3"))).toBeInTheDocument();
+    expect(screen.getByText(C.GAVE_UP_NO_LIST)).toBeInTheDocument();
+    expect(screen.queryByText(C.MAY_BE_GONE)).toBeNull();
+  });
+
+  it("says when the folder's record could not be read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced", record_unreadable: true, fate: "given_up", sandbox_copy: "deleted", last_report: { unsynced: 3, at: AT } });
+    expect(screen.getByText(C.RECORD_UNREADABLE)).toBeInTheDocument();
+  });
+
+  it("says nothing of the record when it was read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced" });
+    expect(screen.queryByText(C.RECORD_UNREADABLE)).toBeNull();
+  });
+
   describe("a back error that opens with the kept-for-copy-back words", () => {
     const keptWith = (error: string) =>
       show("FAILED", {

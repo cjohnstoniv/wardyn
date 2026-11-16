@@ -403,7 +403,7 @@ func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, r
 	if err != nil {
 		return RunnerRevocation{}, fmt.Errorf("store: begin revoke runner: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+revokeLockTimeout+`'`); err != nil {
 		return RunnerRevocation{}, fmt.Errorf("store: revoke runner lock timeout: %w", err)
 	}

@@ -12,8 +12,8 @@ import (
 
 // meetLimits composes GovernanceLimits: every switch that refuses a request
 // shape only turns on, every size or duration bound takes the smaller positive
-// value (0 is no bound), and the autonomy rubric takes the lower level per
-// field.
+// value (0 is no bound), the autonomy rubric takes the lower level per field,
+// and the confinement floors take the higher class per trait.
 func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	l := &m.out.Limits
 	if o.LocalSelfDefinedComponents != nil {
@@ -72,6 +72,9 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	}
 	if o.AutonomyRubric != nil {
 		m.meetRubric(o.AutonomyRubric)
+	}
+	if o.ConfinementFloors != nil {
+		m.meetConfinementFloors(o.ConfinementFloors)
 	}
 	m.meetRunLimits(o)
 }
@@ -293,4 +296,36 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 		return
 	}
 	l.AutonomyRubric = &b
+}
+
+// meetConfinementFloors takes the higher class per trait: a floor set on one side only takes that side, an
+// overlay floor below the base's widens (refused at write, the base's kept at resolve), and floors that raise
+// nothing stay nil. The detail is meetConfinement's, so the two floors read alike.
+func (m *meeter) meetConfinementFloors(o *types.ConfinementFloors) {
+	l := &m.out.Limits
+	var b types.ConfinementFloors
+	if l.ConfinementFloors != nil {
+		b = *l.ConfinementFloors
+	}
+	for _, f := range []struct {
+		name string
+		base *types.ConfinementClass
+		ov   types.ConfinementClass
+	}{
+		{"own_image", &b.OwnImage, o.OwnImage},
+		{"self_defined_component", &b.SelfDefinedComponent, o.SelfDefinedComponent},
+		{"data_out_open", &b.DataOutOpen, o.DataOutOpen},
+	} {
+		switch br, vr := confinementRank(*f.base), confinementRank(f.ov); {
+		case vr > br:
+			*f.base = f.ov
+		case f.ov != "" && vr < br:
+			m.widen("confinement_floors."+f.name, "%q is below the base's %q", f.ov, *f.base)
+		}
+	}
+	if b == (types.ConfinementFloors{}) {
+		l.ConfinementFloors = nil
+		return
+	}
+	l.ConfinementFloors = &b
 }

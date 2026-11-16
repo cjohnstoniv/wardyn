@@ -5,7 +5,7 @@
 - The gateway is off by default. It exists only when `WARDYN_UI_SANDBOX_LISTEN` is set — see [docs/ENV.md](ENV.md) for all three variables (`WARDYN_UI_SANDBOX_LISTEN`, `WARDYN_UI_SANDBOX_ADVERTISE`, `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). With it unset there is no listener and no new surface: the relay's cookie key is not even generated.
 - It listens on a **second address**, and boot refuses one equal to `-listen` (or to `-ssh-listen`). That is a security control, not a deployment convenience: everything the relay serves is the sandbox's **own** HTML and JavaScript.
 - The only thing keeping that code away from the console's session storage and admin actions is that it arrives on a different browser origin. See [Bounds](#bounds) for what that separation does and does not buy.
-- **Not available on the desktop tier.** See [Deployment](#4-deployment).
+- **Not available on the desktop tier.** See [Deployment](#4-deployment). The [glossary](GLOSSARY.md) tells the UI sandbox gateway apart from the other gateways, proxies and brokers in and around Wardyn.
 
 ## The noVNC image, and what relaying a DESKTOP costs
 
@@ -51,6 +51,7 @@
   Playwright `storageState`).
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
+  An end asked for right after a sign-in began can be refused while the sign-in is still starting, for up to 6 minutes; ask for it again.
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
 - A limit set during a sign-in stops new entry. An open display stays until it

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // hungGiveUpLab is tailLab whose give-up statement never answers: it waits for its context to end, as a statement
@@ -52,5 +54,27 @@ func TestTailOwner_AnAwayGiveUpThatNeverAnswersFreesTheRunLock(t *testing.T) {
 	g.tick()
 	if g.lab.giveUpCount() != 1 || transferAudit(g.audit) != 1 {
 		t.Fatalf("%d give-ups, %d given_up rows on the next tick; want 1, 1", g.lab.giveUpCount(), transferAudit(g.audit))
+	}
+}
+
+// The boot orphan pass's give-up after it stops a sandbox reads the folder record under the run's lock, and that read
+// may never answer: it ends at heldStoreCallBound, decided as a read that failed, and the pass returns with the lock
+// free. The record was final when the keep verdict read it, so the statement finds it final and the ref is cleared
+// with no row. Catches: the give-up called without heldCall's bound, which holds the run's lock and boot for good.
+func TestReconcileOrphanedSandbox_AHungGiveUpReadEndsAtItsBound(t *testing.T) {
+	old := heldStoreCallBound
+	heldStoreCallBound = 50 * time.Millisecond
+	t.Cleanup(func() { heldStoreCallBound = old })
+	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}}
+	s, st, audit, run := unreadFolderServer(t, types.RunCompleted, rn)
+	st.record = types.RunLocalFolderStatus{Back: &types.FolderPassRecord{At: time.Now().UTC()}}
+	st.final = true
+	var once atomic.Bool
+	st.hang = func() bool { return rn.stopCount("sbx") > 0 && once.CompareAndSwap(false, true) }
+	lockFreesWithin(t, s, run.ID, "the boot orphan pass", func(ctx context.Context) { _ = s.reconcileOrphanedSandbox(ctx) })
+	if st.hung.Load() != 1 || rn.stopCount("sbx") != 1 || !slices.Contains(st.clearedRefs, run.ID) ||
+		len(st.liveGiveUps()) != 1 || endGiveUpRows(audit, run.ID, "") != 0 {
+		t.Fatalf("%d hung reads, %d stops, refs cleared %v, %d give-ups, %d rows; want 1, 1, the ref, 1, 0",
+			st.hung.Load(), rn.stopCount("sbx"), st.clearedRefs, len(st.liveGiveUps()), endGiveUpRows(audit, run.ID, ""))
 	}
 }

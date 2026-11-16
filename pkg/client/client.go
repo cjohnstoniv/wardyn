@@ -19,7 +19,7 @@
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
 //     OpenMacWindow, GetMacWindow, GetRunMachine
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
-//   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
+//   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetPolicyDocument, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
@@ -45,7 +45,7 @@
 //     narrow-only walls, built in or kept for a person, a group or the organisation
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
-//     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
+//     ImportTemplate, CheckTemplatePolicy — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
 //     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, PutUnitDeciders, CheckGovernance,
@@ -83,7 +83,7 @@
 //     with MoveToken (POST /api/v1/tokens/{id}/move), and the caller's own tokens CreateAPIToken (a signed-in session only) and
 //     RevokeAPIToken (/api/v1/me/tokens)
 //   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
-//     WorkloadHistory, WorkloadHistoryPage, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
+//     WorkloadHistory, WorkloadHistoryPage, DeleteWorkload, RestartWorkload, PinWorkloadPolicy, UnpinWorkloadPolicy, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin),
 //     SetComponentOwningUnit (security tier) — and, on

@@ -5,6 +5,7 @@
 - An AI gateway such as [agentgateway](https://agentgateway.dev) runs beside Wardyn and serves model and MCP traffic for every caller. [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) says where it fits.
 - This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them.
 - LiteLLM, Portkey, OpenRouter and Presidio have their own page: [Model gateways and detectors](model-gateways.md).
+- The [glossary](../GLOSSARY.md) tells an AI gateway apart from the other gateways, proxies and brokers in and around Wardyn.
 
 ## What the setup is
 
@@ -163,8 +164,14 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 | `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
 | `wardyn_format` | `1` | |
 | `wardyn_delegate` | The portal's id | Present only on a run a portal launched for the person; see [api-tokens.md](api-tokens.md) |
-| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape. On a portal run whose portal named the acting agent it nests that agent: `{"sub": "spiffe://<trust domain>/agent-run/<run id>", "act": {"sub": "<agent>", "iss": "<issuer>"}}` |
+| `wardyn_workload` | The workload that launched the run, as `<owner>/<name>`. The owner is whoever applied it (a person, `service:<name>` or `admin-token`) and may hold `/`; a name never does, so the last `/` splits them. Compare the claim whole | Present only on a run a workload launched, through the API, the CLI or a `WardynWorkload` resource. Fixed for the run's life, as `act.sub` is |
+| `act` | `{"sub": "<the run's SPIFFE ID>"}` | The agent run acting for `sub`, in the run token's shape. On a portal run whose portal named the acting agent it nests that agent: `{"sub": "<the run's SPIFFE ID>", "act": {"sub": "<agent>", "iss": "<issuer>"}}` |
 
+- The run's SPIFFE ID is `spiffe://<trust domain>/workload/<owner>/<name>/run/<run id>` for a run a workload launched, and `spiffe://<trust domain>/agent-run/<run id>` for any other. A run keeps its ID for its life, through renewals and a revive.
+- In the ID, `<owner>` keeps ASCII letters, digits and `-`, and writes every other byte as `_` and its two uppercase hex digits, so `service:ci-bot` is `service_3Aci-bot`. `<name>` is the workload's name.
+- To admit every run of one workload, match the ID's prefix up to and including `/run/`, such as `spiffe://<trust domain>/workload/service_3Aci-bot/nightly/run/`. A prefix that stops at the name also admits a longer name, `web2` for `web`. The last segment is the run's own id: compare the whole ID to tell one run from another.
+- A workload deleted and applied again under its name has the same prefix. During a replacement the run it replaces keeps running until the new one starts, longer while the new one waits in a queue, so for that time two runs hold the prefix.
+- Two namespaces bound to one service identity share one `<owner>/<name>` space, and the prefix does not name the namespace. After one namespace's `web` is deleted, the other's `web` can be created, and its runs carry the prefix admitted for the first. Where a gateway rule keys on the workload, bind one service identity per namespace.
 - The nested agent is provenance. RFC 8693 section 4.1 says prior actors are informational and not to be used in access control decisions, so a gateway rule that reads `act.act.sub` does so on its own judgement.
 - There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
 - A test holds this table equal to the signer's claim struct.
@@ -189,7 +196,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 
 ## When a run's gateway access ends
 
-- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server. A refused mint gives no new token.
+- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server, and for an MCP server's token the components the run carries. A refused mint gives no new token.
 - The bound: within half the token lifetime while wardynd is reachable, and up to the held token's expiry if it is not. Requests already forwarded and open streams run to completion.
 
 | Event | A running run's gateway access |
@@ -199,6 +206,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 | Sponsor suspended or fully revoked | ends: `403` `identity_deactivated` |
 | Sponsor handover | continues; new tokens name the new sponsor |
 | Provider or MCP server changed or turned off | ends: `403` `gateway_identity_changed` |
+| A component the run carries withdrawn from its owner, deleted, or pinned to a unit the run is not in | ends for its MCP servers: `403` `capability_component`, `component_gone` or `component_unit_pinned`; the model provider's continues |
 | Portal revoked | continues, as before |
 | Portal revoked with `cut_in_flight=true` | ends for good: `403` `gateway_access_cut` |
 
@@ -243,7 +251,7 @@ A gateway that asks for a client certificate in the TLS handshake gets one namin
 
 | Part | What it is |
 |---|---|
-| The certificate | An X.509 certificate with one URI SAN, the run's SPIFFE ID `spiffe://<trust domain>/agent-run/<run id>`: the same value as the token's `act.sub`. It is for client authentication only, and it is not a CA. |
+| The certificate | An X.509 certificate with one URI SAN, the run's SPIFFE ID ([The claims a gateway receives](#the-claims-a-gateway-receives)): the same value as the token's `act.sub`. It is for client authentication only, and it is not a CA. |
 | Its key | A P-256 key that `wardyn-proxy` makes in memory. wardynd sees only its public half. |
 | Its lifetime | The shortest `token_lifetime_seconds` among the run's routes, 600 seconds when none is set. The proxy gets a new one on the first new handshake after half-life. |
 | Who signs it | A CA of its own, the secret-store row `wardyn-gateway-client-ca`, apart from the token's signing key. |
@@ -265,7 +273,7 @@ To check it at the gateway:
 - **A gateway that asks only after the handshake gets none.** TLS renegotiation is not supported.
 - **A front that checks against another CA still refuses.** The proxy sends the certificate to a front that only asks when the front names no CA, or names one called the same as Wardyn's, such as another Wardyn install's. If that front then checks against a CA other than this install's, it refuses the connection.
 - **Tested against Go's own TLS server only.** No run against LiteLLM, Portkey, agentgateway, OpenRouter or another named gateway has checked it.
-- **Not SPIRE.** The certificate carries a SPIFFE ID, but Wardyn runs no SPIFFE Workload API and publishes no SPIFFE federation bundle. A gateway that reads a PEM trust bundle can use it.
+- **Not SPIRE.** The certificate carries a SPIFFE ID, but Wardyn runs no SPIFFE Workload API and publishes no SPIFFE federation bundle. A gateway that reads a PEM trust bundle can use it. The run token carries the same ID in its `act.sub`. Every identity provider Wardyn ships must issue these IDs: its conformance tests require them.
 - **The bundle's address is experimental.** Unlike the key set's, it carries no stability promise.
 - **Rotation.** `wardynd -rotate-gateway-identity-key` rotates the CA with the signing key ([The AI gateway client certificate CA](secrets-and-keys.md#the-ai-gateway-client-certificate-ca)).
 

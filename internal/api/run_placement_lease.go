@@ -157,6 +157,11 @@ func (s *Server) leaseRunnerExecution(ctx context.Context, run types.AgentRun, p
 // runner ends its whole session on a LEASE it refuses, dropping every other run on it, so the organisation
 // never sends one: not for a run the runner holds contained, nor one whose token stamp or end is past, nor
 // to a session that is not READY.
+//
+// The stamp and the end are judged on this server's clock, not the database's, though the database stamps
+// both: the runner counts them from the time this server sent in the session's hello
+// (runnerwire.AuthenticateRunner, srvclock.Clock), and only the server holding that session sends its lease,
+// so this clock is the one that predicts the runner's answer.
 func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.AgentRun) (time.Time, error) {
 	switch held, err := st.RunHeldContainedOnRunner(ctx, run.ID); {
 	case err != nil:

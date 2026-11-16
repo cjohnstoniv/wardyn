@@ -77,3 +77,25 @@ func readYAML(t *testing.T, path string, into any) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 }
+
+// TestShutdownBudgetCoversAnSSHDoorsLastRow: a daemon stop waits for the SSH
+// gateway's connections and doors inside WaitBackground (sshGoTracked), so the
+// last audit row each writes is over before the pool closes and the process
+// exits, and a SIGKILL at the grace's end finds none in flight. Each bounds its
+// own work at a stop below that wait's budget: a handshake by its pre-auth
+// deadline plus one authentication store call, a refused connection by its
+// refusal grace, and a door's start-failure row by heldStoreCallBound; a door's
+// last row runs on the stopped daemon's context, so its store write fails at
+// once and the audit spool takes it. Catches: one of those bounds raised past
+// the budget.
+func TestShutdownBudgetCoversAnSSHDoorsLastRow(t *testing.T) {
+	for name, d := range map[string]time.Duration{
+		"a handshake and its authentication call": sshHandshakeTimeout() + sshAuthTimeout,
+		"a refused connection's grace":            sshRefusalGraceFor(),
+		"a start-failure row":                     heldStoreCallBound,
+	} {
+		if d >= backgroundShutdownBudget {
+			t.Errorf("%s is bounded at %s, want below backgroundShutdownBudget (%s)", name, d, backgroundShutdownBudget)
+		}
+	}
+}

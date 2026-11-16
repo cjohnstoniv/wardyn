@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -33,12 +34,16 @@ import (
 //
 // Scope, deliberately narrower than "every writeError call reachable from a
 // 5xx": the status argument must be one of the http.Status5xx identifiers
-// (or a raw 5xx int literal) written AT THE CALL SITE. A few call sites pass
-// a dynamic `code int` that is 4xx on every branch today (validateWorkspaceSources
-// and its siblings, all in workspace_refs.go/inline_policy.go/runs_create.go,
-// verified by hand when this guard was written); this guard does not attempt
-// the dataflow analysis that would be needed to prove that stays true, so it
-// does not watch them. What it does watch — the literal/named-constant
+// (or a raw 5xx int literal) written AT THE CALL SITE. A call site that passes
+// a dynamic `code int` (validateWorkspaceSources and its siblings, in
+// workspace_refs.go, inline_policy.go and runs_create.go) is not proven either
+// way where it writes; its 5xx answers are watched where they are decided
+// instead. A return that hands back a 5xx with err itself, or a fmt.Errorf
+// that wraps it, beside it is flagged (returnsDriverErrorBeside5xx): its
+// caller writes that error's text after its own prefix, so a 5xx decided that
+// way hands back errors.New(loggedMsg(ctx, "<action>", err)). That shape reads
+// names, not types: an error returned under another name is not seen. What it
+// does watch — the literal/named-constant
 // surface — is exactly the shape every site this issue fixed had, and the
 // shape a re-added leak is overwhelmingly likely to take: nobody accidentally
 // routes a hardcoded 500 through three layers of indirection.
@@ -295,11 +300,40 @@ func scanFileForLeaksWith(forwarders map[string]serverErrorForwarder, fset *toke
 					key := fmt.Sprintf("%s:%s:driveBindFailure", name, symbol)
 					found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
 				}
+			case *ast.ReturnStmt:
+				// A 5xx decided here and answered by a caller that writes the returned error's text.
+				if returnsDriverErrorBeside5xx(node) {
+					pos := fset.Position(node.Pos())
+					key := fmt.Sprintf("%s:%s:return", name, symbol)
+					found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+				}
 			}
 			return true
 		})
 	}
 	return found
+}
+
+// returnsDriverErrorBeside5xx reports whether ret hands back a 5xx status (is5xxStatusArg, in any result but the
+// last) with the driver's error as its last result: err itself, or a fmt.Errorf whose format wraps it (%w).
+func returnsDriverErrorBeside5xx(ret *ast.ReturnStmt) bool {
+	n := len(ret.Results)
+	if n < 2 || !slices.ContainsFunc(ret.Results[:n-1], is5xxStatusArg) {
+		return false
+	}
+	switch last := ret.Results[n-1].(type) {
+	case *ast.Ident:
+		return last.Name == "err"
+	case *ast.CallExpr:
+		sel, ok := last.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Errorf" || len(last.Args) == 0 {
+			return false
+		}
+		pkg, isIdent := sel.X.(*ast.Ident)
+		format, isLit := last.Args[0].(*ast.BasicLit)
+		return isIdent && pkg.Name == "fmt" && isLit && strings.Contains(format.Value, "%w")
+	}
+	return false
 }
 
 // TestNoDriverTextInServerErrorBody walks internal/api's non-test sources and
@@ -369,7 +403,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		}
 		for _, snippet := range sites {
 			violations++
-			t.Errorf("%s builds a 5xx body or a run failure hint from err.Error(): %s\n"+
+			t.Errorf("%s builds a 5xx body or a run failure hint from err.Error(), or hands err back beside a 5xx: %s\n"+
 				"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
 				"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
 				"see internal/api/writeservererror.go. If this is deliberately modelled "+
@@ -665,5 +699,61 @@ func (s *Server) c() error { return reviveRefused(http.StatusConflict, "r", "x: 
 	}, fset, "x.go", file, []byte(src))
 	if len(got) != 2 || len(got["x.go:Server.a:reviveRefused"]) != 1 || len(got["x.go:Server.b:refuse"]) != 1 {
 		t.Fatalf("flagged %v, want the 5xx reviveRefused and the refuse, not the 409", got)
+	}
+}
+
+// TestScanFileForLeaks_FlagsADriverErrorReturnedBesideA5xx pins the return shape: a return that hands back a 5xx with
+// err itself, or a fmt.Errorf that wraps it, beside it is flagged, in a function literal too, since its caller writes
+// that error's text into the body. A 4xx beside err, an error built from loggedMsg's text, a sentinel, an error
+// that wraps nothing, and a wrapped error beside no 5xx are not.
+func TestScanFileForLeaks_FlagsADriverErrorReturnedBesideA5xx(t *testing.T) {
+	const src = `package api
+
+func (s *Server) gate(ctx context.Context) (int, string, error) {
+	if err != nil {
+		return http.StatusServiceUnavailable, reasonX, err
+	}
+	return 0, "", nil
+}
+
+func (s *Server) wrapped(ctx context.Context) ([]neededSecret, int, error) {
+	return nil, http.StatusInternalServerError, fmt.Errorf("get site config: %w", err)
+}
+
+func (s *Server) inner(ctx context.Context) error {
+	refuse := func() (int, error) { return http.StatusBadGateway, err }
+	_, rerr := refuse()
+	return rerr
+}
+
+func (s *Server) fine(ctx context.Context) (int, string, error) {
+	if err != nil {
+		return http.StatusServiceUnavailable, reasonX, errors.New(loggedMsg(ctx, "read the folder's runner", err))
+	}
+	if err != nil {
+		return http.StatusUnprocessableEntity, reasonX, err
+	}
+	if err != nil {
+		return http.StatusServiceUnavailable, reasonX, errSecretStoreUnavailable
+	}
+	if err != nil {
+		return http.StatusServiceUnavailable, reasonX, fmt.Errorf("the runner %s is not this owner's", id)
+	}
+	return 0, "", fmt.Errorf("member workspace mount: %w", err)
+}
+`
+	fset := token.NewFileSet()
+	file, perr := parser.ParseFile(fset, "gates.go", src, 0)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	found := scanFileForLeaks(fset, "gates.go", file, []byte(src))
+	for _, key := range []string{"gates.go:Server.gate:return", "gates.go:Server.wrapped:return", "gates.go:Server.inner:return"} {
+		if len(found[key]) != 1 {
+			t.Errorf("want %s flagged once, got %v", key, found)
+		}
+	}
+	if len(found) != 3 {
+		t.Errorf("a return outside the shape was flagged, or another key appeared: %v", found)
 	}
 }

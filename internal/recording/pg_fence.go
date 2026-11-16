@@ -17,7 +17,7 @@ func (s *PGStore) runTx(ctx context.Context, key string, erase bool, fn func(pgx
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // no-op after commit
+	defer db.Rollback(ctx, tx) // no-op after commit
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, db.RecordingLockClass, castRun(key)); err != nil {
 		return fmt.Errorf("recording: lock run: %w", err)
 	}

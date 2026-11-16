@@ -48,7 +48,7 @@ func mcpCallDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope 
 
 // mcpCallScopeKeys are the keys of types.MCPCallScope. encoding/json matches a key in any letter case
 // and keeps the last of a repeat, so each must appear at most once and spelled exactly so.
-var mcpCallScopeKeys = []string{"tool", "mcp_server", "mcp_host", "mcp_tool", "arguments", "extra", "call_sha256", "harness", "hold_seconds"}
+var mcpCallScopeKeys = []string{"tool", "mcp_server", "mcp_host", "mcp_tool", "arguments", "extra", "call_sha256", "harness", "hold_seconds", "operation_key"}
 
 // mcpCallScopeKeysExact reports whether scope is an object whose top-level keys name each of
 // mcpCallScopeKeys at most once and in its own spelling (strings.EqualFold covers every fold
@@ -154,7 +154,9 @@ func mcpCallScopeShaped(scope json.RawMessage) (types.MCPCallScope, bool) {
 // is not its raw tool's, and a call larger than a person can be shown, never truncated. Each refusal
 // is a 400 with an auth.fail row: only a misbehaving proxy writes one. An accepted scope comes back
 // re-marshalled from its typed form with canonical arguments and extra, and the row stores that,
-// never the raw bytes. A scope with none of those keys comes back unchanged.
+// never the raw bytes. A scope with none of those keys comes back unchanged. An operation key that
+// is not one (types.ValidOperationKey) is refused as a bad scope, and a key already sent in the
+// run's namespace is answered 409 with that send instead (refuseSentOperation).
 func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, kind types.ApprovalKind, scope json.RawMessage) (json.RawMessage, bool) {
 	if !mcpCallKeyPresent(scope) {
 		return scope, false
@@ -169,9 +171,9 @@ func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, k
 		key, err := sc.ComputeKey()
 		if errors.Is(err, types.ErrMCPCallTooLarge) {
 			reason, msg = reasonMCPCallTooLarge, tooLarge
-		} else if err == nil && key == sc.CallSHA256 {
+		} else if err == nil && key == sc.CallSHA256 && (sc.OperationKey == "" || types.ValidOperationKey(sc.OperationKey)) {
 			if out, ok := canonicalMCPCallScope(sc); ok {
-				return out, false
+				return out, s.refuseSentOperation(w, r, sc)
 			}
 		}
 	}

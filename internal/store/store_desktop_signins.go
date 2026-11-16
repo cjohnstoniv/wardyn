@@ -35,6 +35,11 @@ type DesktopSigninStore interface {
 	// reason (the first reason stays) and records the stage the end is stuck
 	// at; true when that changed the row's state.
 	RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason, stage string) (bool, error)
+	// ClaimDesktopSigninEnd sets end_stage to claim on an open sign-in whose
+	// end no failure has marked (end_requested unset) and whose end_stage is
+	// still read; false when the row closed, a failure marked it, or another
+	// end changed its end_stage first.
+	ClaimDesktopSigninEnd(ctx context.Context, id uuid.UUID, read, claim string) (bool, error)
 	// EndDesktopSignin closes an open sign-in; false when it was not open.
 	EndDesktopSignin(ctx context.Context, id uuid.UUID, reason string, at time.Time) (bool, error)
 	// RecordDesktopSigninShare inserts one share of an open sign-in.
@@ -144,6 +149,16 @@ func (s PG) RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason, s
 		WHERE id = $1 AND ended_at IS NULL AND (end_requested IS NULL OR end_stage IS DISTINCT FROM $3)`, id, reason, stage)
 	if err != nil {
 		return false, fmt.Errorf("store: request desktop sign-in end: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ClaimDesktopSigninEnd — see DesktopSigninStore.
+func (s PG) ClaimDesktopSigninEnd(ctx context.Context, id uuid.UUID, read, claim string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE desktop_signins SET end_stage = $3
+		WHERE id = $1 AND ended_at IS NULL AND end_requested IS NULL AND COALESCE(end_stage, '') = $2`, id, read, claim)
+	if err != nil {
+		return false, fmt.Errorf("store: claim desktop sign-in end: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }

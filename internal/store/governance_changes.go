@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,7 +95,7 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	if err != nil {
 		return types.GovernanceChange{}, nil, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	lapsedCreates, err := claimCreateName(ctx, tx, ch)
 	if err != nil {
 		return types.GovernanceChange{}, nil, err
@@ -129,7 +130,7 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			// Give the failed transaction's connection back before pendingRefusal asks the pool for one.
-			tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // the transaction has already failed
+			db.Rollback(ctx, tx) // the transaction has already failed
 			return types.GovernanceChange{}, nil, s.pendingRefusal(ctx, ch)
 		}
 		return types.GovernanceChange{}, nil, err
@@ -280,7 +281,7 @@ func (s PG) DecideGovernanceChange(ctx context.Context, id uuid.UUID, d Governan
 	if err != nil {
 		return types.GovernanceChange{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var lapsed bool
 	cur, err := scanGovernanceChangeInto(tx.QueryRow(ctx,
 		`SELECT `+governanceChangeCols+`, expires_at <= now() FROM governance_changes WHERE id = $1 FOR UPDATE`, id), &lapsed)
@@ -339,7 +340,7 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // always rolled back
+	defer db.Rollback(ctx, tx) // always rolled back
 	return fn(tx)
 }
 

@@ -258,7 +258,7 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 	if err != nil {
 		return fmt.Errorf("store: begin refresh identity: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// A live CLI session is re-stamped the same way: the access tokens a refresh mints carry its stamp,
 	// and WARDYN_ROLE_STAMP_TTL reads its identity_stamped_at at every refresh.
 	if _, err = tx.Exec(ctx,

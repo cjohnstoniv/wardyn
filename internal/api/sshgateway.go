@@ -289,7 +289,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		}
 		select {
 		case lim.handshakes <- struct{}{}:
-			sshGo(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
+			s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 		default:
 			lim.leaveSource(src)
 			lim.refused(sshBoundHandshake, maxSSHHandshakes)
@@ -601,7 +601,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		lim.leaveSource(src)
 	})
 	defer release()
+	stopPre := context.AfterFunc(ctx, func() { _ = nc.Close() }) // a stop ends a connection still in its handshake
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
+	stopPre()
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was
 		// reached; a pure transport failure (bad version string, KEX failure)
@@ -649,8 +651,13 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		return // unreachable in practice: sshAuth only succeeds after parsing this
 	}
 
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The connection ends while the daemon runs: the client's end (sshClientClosedFirst). A daemon stop ends ctx
+	// first, so connCtx then keeps ctx's own cause.
+	connCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errSSHChannelClosed)
+	// A daemon stop cancels connCtx with its own cause, which reaches every door's context before the close, then
+	// closes the connection, so its doors end with it and the stop's wait (sshGoTracked) does not wait on the client.
+	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)); _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() {
 		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
@@ -685,7 +692,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 				continue
 			}
 			slot.dataOut = dataOut
-			sshGo(func() {
+			s.sshGoTracked(func() {
 				defer slot.release()
 				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
@@ -699,7 +706,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", s.cfg.SSHMaxSessionsPerRun))
 				continue
 			}
-			sshGo(func() {
+			s.sshGoTracked(func() {
 				defer s.sshReleaseSession(runID)
 				s.handleSSHDirectTCPIP(connCtx, runID, principal, newCh)
 			})

@@ -107,7 +107,7 @@ func (s PG) runOutputTx(ctx context.Context, runID uuid.UUID, shared bool, fn fu
 	if err != nil {
 		return fmt.Errorf("store: run output: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	lock := `SELECT pg_advisory_xact_lock($1, $2)`
 	if shared {
 		lock = `SELECT pg_advisory_xact_lock_shared($1, $2)`
@@ -265,7 +265,7 @@ func (s PG) EraseRunOutputs(ctx context.Context, runIDs []uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("store: erase run outputs: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	for _, id := range ids {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.RunOutputLockClass, runOutputLockKey(id)); err != nil {
 			return fmt.Errorf("store: erase run outputs: lock: %w", err)

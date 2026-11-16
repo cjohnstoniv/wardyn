@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -49,7 +50,7 @@ func auditSplitLegacyMode(f *bootFlags) error {
 	if err != nil {
 		return &exitCodeError{code: exitMigrateFailed, err: fmt.Errorf("begin the split: %w", err)}
 	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck // a committed transaction has nothing to undo; an uncommitted one must
+	defer db.Rollback(ctx, tx) // a committed transaction has nothing to undo; an uncommitted one must
 
 	res, err := store.SplitLegacyAudit(splitCtx, tx)
 	var refused *store.AuditSplitRefused

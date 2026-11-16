@@ -220,7 +220,11 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 	// One row for a run's first token per provider or MCP server on this replica, not one per mint:
 	// a proxy mints several times an hour for as long as the run lasts.
 	if s.gatewayFirstMint(claims.RunID.String(), dest.holder()) {
-		record("success", map[string]any{kind: dest.name(), "jti": signed.ID, "expires_at": expires, "first": true})
+		data := map[string]any{kind: dest.name(), "jti": signed.ID, "expires_at": expires, "first": true}
+		if signed.Workload != "" {
+			data["workload"] = signed.Workload
+		}
+		record("success", data)
 	}
 	writeJSON(w, http.StatusOK, tokenRenewResponse{Token: token, ExpiresAt: expires})
 }
@@ -238,12 +242,16 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 	if signer == nil {
 		return "", gatewayidentity.Claims{}, errors.New("no signing key is stored")
 	}
-	issuer, _, ok := strings.Cut(claims.SPIFFEID, "/agent-run/")
-	if !ok {
-		return "", gatewayidentity.Claims{}, errors.New("the run token names no agent run")
+	id, err := spiffeid.FromString(claims.SPIFFEID)
+	if err != nil {
+		return "", gatewayidentity.Claims{}, err
+	}
+	wl, runID, err := identity.ParseRunPath(id.Path())
+	if err != nil || runID != claims.RunID {
+		return "", gatewayidentity.Claims{}, errors.New("the run token names no run of its own")
 	}
 	c := gatewayidentity.Claims{
-		Issuer:   issuer,
+		Issuer:   id.TrustDomain().IDString(),
 		Audience: dest.audience,
 		Subject:  claims.Sub,
 		Run:      claims.RunID.String(),
@@ -251,6 +259,7 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 		Provider: dest.provider,
 		MCP:      dest.mcp,
 		Sponsor:  sponsor,
+		Workload: wl.String(),
 	}
 	// The portal and the agent it named come from the stored run, never the request, so a revived or
 	// restarted run keeps them. On by default: it grants no reach, the agent is provenance only.

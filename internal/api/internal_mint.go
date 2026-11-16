@@ -248,6 +248,8 @@ type liveGrant struct {
 	found, withheld bool
 	// pinned: withheld because a component the run carries is now pinned to a unit it is not in.
 	pinned bool
+	// withdrawn: the reason a component the run carries no longer stands for its owner, or "".
+	withdrawn string
 }
 
 // liveGrantWithheld reports whether the run is kept from grantID now (#3238): its captured profile as
@@ -279,7 +281,7 @@ func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID
 	if err != nil {
 		return lg, err
 	}
-	lg.found, lg.withheld, lg.pinned = true, w.credentialWithheld(lg.spec), w.pinnedOut != ""
+	lg.found, lg.withheld, lg.pinned, lg.withdrawn = true, w.credentialWithheld(lg.spec), w.pinnedOut != "", w.withdrawn
 	return lg, nil
 }
 
@@ -303,15 +305,17 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 	if p != nil {
 		w.deny = p.Ceiling.DeniedDomains
 	}
-	// A component pin moved after launch: a run with no context has nothing to pin.
-	if run.UnitID != nil {
-		comps, err := s.runComponentSnapshot(ctx, run.ID)
-		if err != nil {
-			return withholding{}, err
-		}
-		if w.pinnedOut, err = s.componentPinnedOut(ctx, run, comps); err != nil {
-			return withholding{}, err
-		}
+	comps, err := s.runComponentSnapshot(ctx, run.ID)
+	if err != nil {
+		return withholding{}, err
+	}
+	// A component pin moved after launch (a run with no context has nothing to pin), or a component
+	// the run carries deleted or no longer its owner's to use since (componentWithdrawn).
+	if w.pinnedOut, err = s.componentPinnedOut(ctx, run, comps); err != nil {
+		return withholding{}, err
+	}
+	if w.withdrawn, err = s.componentWithdrawn(ctx, run, comps); err != nil {
+		return withholding{}, err
 	}
 	return w, nil
 }
@@ -335,11 +339,10 @@ func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, cla
 	if !lg.found || !lg.withheld {
 		return lg.run, false
 	}
-	reason, msg := reasonGrantWithheld,
-		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches"
-	if lg.pinned {
-		reason, msg = reasonComponentUnitPinned,
-			"wardyn: this run is no longer given credentials: a component it carries is now pinned to a unit this run is not in; start a new run in that unit"
+	reason, msg := componentCut(lg.pinned, lg.withdrawn)
+	if reason == "" {
+		reason, msg = reasonGrantWithheld,
+			"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches"
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 		grantID.String(), "denied", mustJSON(map[string]any{
@@ -589,7 +592,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer releaseLease()
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
+	id, err := s.mintRunIdentity(r.Context(), claims.RunID, runWorkloadOf(claims.SPIFFEID, claims.RunID), claims.Sub, sponsor, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return

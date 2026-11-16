@@ -60,9 +60,16 @@ type queueAuthority struct {
 	// BreakGlass is the reason an admin-token launch carried as a break-glass run, so the start
 	// resolves as the break-glass run it was tagged at launch.
 	BreakGlass string `json:"break_glass_reason,omitempty"`
+	// WorkloadOwner and WorkloadName are the workload the launch was for, so the start mints the run
+	// under that workload's SPIFFE ID as an unqueued launch would (withLaunchWorkload); empty otherwise.
+	WorkloadOwner string `json:"workload_owner,omitempty"`
+	WorkloadName  string `json:"workload_name,omitempty"`
 	// Binding is the namespace binding a custom resource's launch was authorised under: the start holds
 	// only while that binding exists (store.QueueStart.Binding).
 	Binding *uuid.UUID `json:"binding,omitempty"`
+	// PolicyPin is the workload's policy pin the launch carried (policyPinOf): the start holds the replayed
+	// fold to it, as the create was held.
+	PolicyPin string `json:"policy_pin,omitempty"`
 }
 
 // captureQueueAuthority reads the launch's identity off the request context.
@@ -86,8 +93,13 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Device = &d.ID
 	}
 	a.BreakGlass = breakGlassReason(ctx)
+	w := launchWorkloadFrom(ctx)
+	a.WorkloadOwner, a.WorkloadName = w.Owner, w.Name
 	if b, ok := launchBindingFrom(ctx); ok {
 		a.Binding = &b
+	}
+	if p := policyPinOf(ctx); p != nil {
+		a.PolicyPin = p.want
 	}
 	return a
 }
@@ -112,6 +124,9 @@ func (a queueAuthority) context(ctx context.Context) context.Context {
 	}
 	if a.BreakGlass != "" {
 		ctx = context.WithValue(ctx, breakGlassKey{}, a.BreakGlass)
+	}
+	if a.PolicyPin != "" {
+		ctx, _ = withPolicyPin(ctx, a.PolicyPin)
 	}
 	return ctx
 }

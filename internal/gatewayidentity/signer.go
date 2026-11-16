@@ -22,11 +22,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 )
 
 const (
@@ -60,6 +63,10 @@ type Claims struct {
 	// Delegate is the id of the portal a delegated run was launched through; empty on a run its person
 	// launched themselves. A flat claim, so a gateway rule needs no walk through act.
 	Delegate string `json:"wardyn_delegate,omitempty"`
+	// Workload is the workload that launched the run, as "<owner>/<name>" (identity.Workload.String); empty
+	// on any other run. A flat claim, so a gateway rule needs no SPIFFE parsing. Sign also names the run
+	// under it in act.sub, the run token's own SPIFFE ID.
+	Workload string `json:"wardyn_workload,omitempty"`
 
 	ID        string   `json:"jti"`
 	IssuedAt  int64    `json:"iat"`
@@ -193,11 +200,34 @@ func (s *Signer) Sign(c Claims, lifetime time.Duration) (string, Claims, error) 
 	c.ExpiresAt = now.Add(lifetime).Unix()
 	c.Format = tokenFormat
 	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run, Act: c.Actor.Act}
+	if c.Workload != "" {
+		sub, err := workloadRunActor(c.Issuer, c.Workload, c.Run)
+		if err != nil {
+			return "", Claims{}, err
+		}
+		c.Actor.Sub = sub
+	}
 	token, err := jwt.Signed(s.signer).Claims(c).Serialize()
 	if err != nil {
 		return "", Claims{}, fmt.Errorf("gateway identity: sign: %w", err)
 	}
 	return token, c, nil
+}
+
+// workloadRunActor is act.sub for a run the workload "<owner>/<name>" launched: the issuer, then the run's
+// SPIFFE ID path (identity.RunPath), split at the last "/" since a workload name holds none. It is the run
+// token's own act.sub, so this token and the run's client certificate name the run alike.
+func workloadRunActor(issuer, workload, run string) (string, error) {
+	i := strings.LastIndex(workload, "/")
+	runID, err := uuid.Parse(run)
+	if i < 0 || err != nil {
+		return "", errors.New("gateway identity: a workload's run needs the workload as <owner>/<name> and a run id")
+	}
+	path, err := identity.RunPath(identity.Workload{Owner: workload[:i], Name: workload[i+1:]}, runID)
+	if err != nil {
+		return "", fmt.Errorf("gateway identity: %w", err)
+	}
+	return issuer + path, nil
 }
 
 // JWKS returns the published key set: the current key and, until its retire

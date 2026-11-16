@@ -35,7 +35,7 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 - [Member drives, team drives and user drives on Kubernetes](#member-drives-team-drives-and-user-drives-on-kubernetes)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree), [Platform tenancy](operations/platform-tenancy.md), [Model gateways and detectors](operations/model-gateways.md)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree), [Platform tenancy](operations/platform-tenancy.md), [Model gateways and detectors](operations/model-gateways.md), [Delegation](operations/delegation.md), [Orchestrators](operations/orchestrators.md)
 - [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
@@ -133,7 +133,10 @@ copy is permanent.
     capture.
   - In a leader pass a read that outlives its budget is that run's outcome alone: it is logged with the run id, and
     the pass still counts as a success for the `run_output` sweep's health.
-  - A recording store that fails, or a database call that does not answer in time, is still the pass's error.
+  - A recording that cannot be read holds back no other run: the pass reads the rest of its page.
+  - A recording store that fails, or a database call that does not answer in time, is still the pass's error, except
+    for a run whose recording could not be read on a try made 30 minutes or more after it ended: that is the run's
+    outcome alone, logged with the run id.
   - An unfinished claim permits takeover after five minutes, and selection favors never-claimed work, then the oldest
     claim, so one slow cast yields later passes to other runs.
   - This bounds work, not delivery latency or backlog capacity: sustained load can exceed what the leader recovers
@@ -263,8 +266,8 @@ copy is permanent.
   - The sweep every minute resolves a terminal run's pending row, once its claim is five minutes old, the same way: by
     recovery under the same rules, or to a `capture_gap` row.
     - A pending row that waits on the run's recording ends as a `capture_gap` row when the recording was erased, or
-      when one over-budget try (its 10-second read budget) is made 30 minutes or more after the run ended. A later
-      read of the recording that succeeds replaces that row.
+      when one try made 30 minutes or more after the run ended runs over its 10-second read budget or cannot read the
+      recording. A later read of the recording that succeeds replaces that row.
   - Recording uploads commit their recovery obligation before a successful receipt.
     - A restarted leader immediately checks a bounded page of terminal work, then retries every minute; an abandoned
       claim is available after five minutes.
@@ -740,8 +743,7 @@ commands are the ones in "Back them up" and "Restore them", and in
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
     `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
   - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
-    `/governance/dry-run`, `/governance/approval-rules/dry-run` and `/templates/import` (it parses a document and
-    stores nothing).
+    `/governance/dry-run`, `/governance/approval-rules/dry-run`, `/templates/import` and `/templates/{id}/policy-check`.
   - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
     change was asked for, not that it happened.
   - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
@@ -1350,12 +1352,12 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, the launch intents of those runs, and the answers kept for their `POST /runs` idempotency keys |
+| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, the correlation ID, operation key and call hash of those runs' MCP call send records, the launch intents of those runs, and the answers kept for their `POST /runs` idempotency keys |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would, and the macOS VM machines they kept, each deleted as their own delete would (`kept_machines` in the row's detail); a drive or machine a run still holds, or whose Mac is away, stays and fails the scope, naming it |
-| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed; an identity unbind's record of them loses the name |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed; the approvals raised in their runs lose the MCP call's operation key; while one of their runs holds two waiting approvals of one call that differ only by that key, this scope fails and a retry finishes it once either is decided or the run ends; a file download they asked for names `erased` as who asked, and while it waits no person can decide it; this scope also fails while that run holds a waiting download of the same file that already names `erased`, and a retry finishes it the same way; an identity unbind's record of them loses the name |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
@@ -1374,6 +1376,8 @@ erases one person's retained records by explicit scope, in one audited act
   service identity keeps its last sponsor.
 - These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
   - `agent_runs.created_by` stays on every run the person created. The scopes blank a run's task, title, description and correlation ID, not its owner, which the run's access check and its 404 for others rest on.
+  - `mcp_call_sends.owner` stays on the send records of the person's runs. It is the same principal as those runs' `created_by`. `run_tasks` overwrites each record's correlation ID, operation key and call hash; its approval, run and times stay.
+  - `approvals.requested_scope` stays on every approval: what was asked about, such as an MCP call's tool and arguments, a host, or a file. `audit_personal_fields` removes an MCP call's operation key from the approvals raised in the person's runs, and names `erased` instead of the person as who asked for a file download.
   - `people` (`principal`, `email`) stays: its unique-email index (`people_email_lower_uniq`) is what stops a second identity taking the address.
   - `principal_identities` (`email_lower`, `scim_user_name`, `scim_external_id`) stays, and a SCIM purge makes it a permanent tombstone so the person cannot be reactivated or sign in again.
   - `ssh_public_keys.principal`, `api_tokens.principal` and `workspaces.owned_by` stay. Reassign a workspace first ([ownership and offboarding](operations/ownership-and-offboarding.md)).
@@ -1399,6 +1403,7 @@ erases one person's retained records by explicit scope, in one audited act
 - An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
 
 - `run_tasks` clears a run's correlation ID. The audit sinks on this replica stop adding it at once, the others within 30 seconds, and copies a sink already exported follow that sink's own retention.
+- `run_tasks` also overwrites the send records of the person's runs (`mcp_call_sends`), a send less than 24 hours old included, so a later MCP call that one of them would have answered is a new call and needs approval.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
@@ -1542,6 +1547,7 @@ erases one person's retained records by explicit scope, in one audited act
    group's object id.
    - A SCIM group removal revokes a person's API tokens only when the token's login-time group snapshot holds that
      `externalId` (compared in lower case).
+   - It also takes that `externalId` (compared in lower case) out of the groups Wardyn recorded at the last sign-in of the person the SCIM user is bound to. A group whose `externalId` is blank takes every group out and marks the record partial. It does the same for their last token exchange through each portal. A running run whose owner held a component only through that group is then refused credentials at its next mint or redeem. Only the person's next sign-in, or their next exchange through that portal, adds a group back.
    - If the app emits group names instead of object ids, no token matches: the removal cuts the person's browser
      sessions only, their API tokens keep the removed group's grants until the next sign-in or
      `WARDYN_ROLE_STAMP_TTL`, and `scim.group.member_remove` reports `tokens_revoked: 0`.
@@ -4139,6 +4145,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0285` (`0285_audit_functions_search_path`) sets the `search_path` of the twelve functions Wardyn ships that run as their owner or set one of their own, `0176`'s two revocation functions among them, to `pg_catalog, pg_temp`, so none of them searches the install's schema, where a role with `CREATE` could add a function they would call. It re-creates the two `0176` functions (`CREATE OR REPLACE`) and alters the rest, each only where the migrator owns it. Any other function, and any of the twelve the migrator does not own, is left as it is, and the boot check reads it as before; no table, row or grant change. A function of your own that a trigger on `audit_events` or its bookkeeping tables runs, and that sets no `search_path`, now runs with this one, so it must name its objects with their schema.
 - `0286` (`0286_run_teardown_holds`) creates `run_teardown_holds`, one row per run whose runner reported, on a state page, a kill or end it refused because it could not see the sandbox stop: the kind, when the runner began holding it and, once the runner reports it finished, when. Only that report clears it. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `run_teardown_holds`. Going back to an earlier release needs a database restore, as after any migration.
 - `0287` (`0287_ado_signin_ends_erased_at`) adds the nullable `ado_signin_ends.erased_at` (`0129`'s table): when an erase of the person's credentials last ended their Azure DevOps sign-in; a disconnect leaves it. The run token sweep deletes their refused token rows created before it once past their valid_to, and also any refused token row whose revoke an erase recorded. A row whose last end was an erase takes that end's time; others stay NULL. No grant changes.
+- `0288` (`0288_mcp_call_sends`) creates `mcp_call_sends`: one row per MCP call a run proxy sent under an operation key, written before the call is sent. It holds the run's owner, the key's scope (the run's correlation ID, else the run), the key, the approval and run it was sent under, the call's hash, the database's time of the send and, once the proxy reports it, when the server answered. A row stands for its key for 24 hours from that time, and the key's next send after that overwrites it. Erasing a person's run tasks overwrites the rows of their runs. No row is deleted. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `mcp_call_sends`. Going back to an earlier release needs a database restore, as after any migration.
+- `0289` (`0289_workload_policy_pin`) adds `workloads.policy_pin` (`0241`'s table), not null, default empty: the launch policy digest every launch of the workload must resolve to, empty for none. Only `PUT` and `DELETE /workloads/{name}/policy-pin` write it. No grant changes.
+- `0290` (`0290_principal_groups`) creates `principal_groups`: a row for each person's last SSO sign-in to Wardyn and for their last token exchange through each portal, with the email, groups and partial-groups flag it carried. Each row also keeps when it was issued (`issued_at`): for a portal exchange, when its token was issued; for an SSO sign-in, the database's time of the sign-in. A token issued before the row's does not replace it, so an older token that is still valid cannot put back a group a newer one dropped. Rows the migration fills have none. A row is written before its session or delegated token is issued, and a sign-in or exchange whose row cannot be written is refused. A SCIM removal of a person from a group takes that group's `externalId` out of every row of the person the SCIM user is bound to; only a sign-in or an exchange adds one. The migration fills the sign-in rows from `key_domain_login_groups` (`0121`'s table) and the email of each person's most recent identity row. Erasing a person's credentials, or purging them, deletes their rows. The migration also grants `SELECT, INSERT, UPDATE, DELETE` on `principal_groups` to every role that was granted `DELETE` on `key_domain_login_groups`, other than that table's owner. A split-role install whose app role is neither one of those roles nor a member of one, and does not pick up new tables through step 4's `ALTER DEFAULT PRIVILEGES`, grants it the same by hand. Until it does, every SSO sign-in and portal token exchange is refused, and so are a SCIM removal from a group and erasing a person's credentials or purging them. A running run that a person owns and that carries a component then gets no credential, no gateway token for an organisation MCP server and no gateway client certificate (`503`). Going back to an earlier release needs a database restore, as after any migration.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

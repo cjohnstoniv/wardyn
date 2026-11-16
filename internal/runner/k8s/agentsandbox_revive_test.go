@@ -72,16 +72,38 @@ func TestCanReplaceProxyRefusesARunNotKept(t *testing.T) {
 
 func TestReplaceProxyOrder(t *testing.T) {
 	k, cs, dyn, ref := keptRun(t)
+	// The replacement reads another IP than the proxy it replaces, so writing back any IP read before the swap fails.
+	created := false
+	cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if pod, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod); ok && pod.Name == proxyPodName(asRunID) {
+			created = true
+		}
+		return false, nil, nil
+	})
+	cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if !created || a.(clienttesting.GetAction).GetName() != proxyPodName(asRunID) {
+			return false, nil, nil
+		}
+		obj, err := cs.Tracker().Get(podsGVR, a.GetNamespace(), proxyPodName(asRunID))
+		if err != nil {
+			return true, nil, err
+		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.PodIP = "10.244.0.9"
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: true}}
+		return true, pod, nil
+	})
 	order := writesInOrder(cs, dyn)
 	if err := k.ReplaceProxy(context.Background(), ref, replaceCfg); err != nil {
 		t.Fatalf("ReplaceProxy: %v", err)
 	}
-	want := []string{"create secrets", "update endpointslices", "delete pods", "create pods", "update endpointslices", "delete-collection secrets"}
+	// The created proxy mounts the run's own Secret, which a replace never deletes.
+	want := []string{"create secrets", "update endpointslices", "delete pods", "create pods", "update endpointslices"}
 	if !slices.Equal(*order, want) {
 		t.Errorf("writes = %v\nwant %v: the agent Sandbox and pod see no write", *order, want)
 	}
-	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.7"}) {
-		t.Errorf("endpoints after the replace = %v, want the new proxy pod's IP", got)
+	if got := sliceIPs(keepSlice(t, cs, asRunID)); !slices.Equal(got, []string{"10.244.0.9"}) {
+		t.Errorf("endpoints after the replace = %v, want the new proxy pod's IP 10.244.0.9, not the old 10.244.0.7", got)
 	}
 }
 
@@ -93,16 +115,20 @@ func TestReplaceProxyUsesTheNewSecretAndLabels(t *testing.T) {
 			t.Fatalf("ReplaceProxy %d: %v", i, err)
 		}
 	}
-	secrets, err := cs.CoreV1().Secrets(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelProxyCfg})
-	if err != nil || len(secrets.Items) != 1 {
-		t.Fatalf("replacement Secrets = %d (err %v), want only the newest", len(secrets.Items), err)
+	names := cfgSecretNames(t, cs)
+	if len(names) != 1 {
+		t.Fatalf("replacement Secrets = %v, want only the newest", names)
 	}
-	newest := secrets.Items[0]
+	obj, err := cs.Tracker().Get(secretsGVR, testNamespace, names[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := obj.(*corev1.Secret)
 	if !strings.HasPrefix(newest.Name, secretName(asRunID)+"-r") || string(newest.Data[proxyConfigSecretKey]) != string(replaceCfg) {
 		t.Errorf("replacement Secret %q holds %q, want the passed config under a -r<stamp> name", newest.Name, newest.Data[proxyConfigSecretKey])
 	}
-	if _, err := cs.CoreV1().Secrets(testNamespace).Get(ctx, secretName(asRunID), metav1.GetOptions{}); err != nil {
-		t.Errorf("the run's own Secret is gone: %v", err)
+	if !secretStored(t, cs, secretName(asRunID)) {
+		t.Error("the run's own Secret is gone")
 	}
 	pod, err := cs.CoreV1().Pods(testNamespace).Get(ctx, proxyPodName(asRunID), metav1.GetOptions{})
 	if err != nil {
@@ -151,6 +177,9 @@ func TestReplaceProxyFailsAfterDeleteWrapsReplaceFailed(t *testing.T) {
 	}
 	if got := sliceIPs(keepSlice(t, cs, asRunID)); len(got) != 0 {
 		t.Errorf("endpoints after the failed replace = %v, want none", got)
+	}
+	if names := cfgSecretNames(t, cs); len(names) != 0 {
+		t.Errorf("replacement config Secrets after the refused create = %v, want none: no pod mounts the one it wrote", names)
 	}
 }
 

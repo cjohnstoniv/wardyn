@@ -311,6 +311,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workload-bindings":        {class: classSecurity},
 	"GET /api/v1/workload-bindings":         {class: classSecurity},
 	"DELETE /api/v1/workload-bindings/{id}": {class: classSecurity},
+	// A workload's policy pin: the caller's own workload only, as the apply.
+	"PUT /api/v1/workloads/{name}/policy-pin":    {class: classMember},
+	"DELETE /api/v1/workloads/{name}/policy-pin": {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -810,6 +813,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/templates/{id}":                      {class: classMember},
 	"DELETE /api/v1/templates/{id}":                   {class: classMember},
 	"POST /api/v1/templates/{id}/copy":                {class: classMember},
+	"POST /api/v1/templates/{id}/policy-check":        {class: classMember},
 	"GET /api/v1/admin/template-group-admins":         {class: classAdmin},
 	"PUT /api/v1/admin/template-group-admins":         {class: classAdmin},
 	"DELETE /api/v1/admin/template-group-admins":      {class: classAdmin},
@@ -1034,6 +1038,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"OPTIONS /api/v1/internal/via-org/{grantID}/*":         {class: classInternal},
 	"POST /api/v1/internal/approvals":                      {class: classInternal},
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
+	"POST /api/v1/internal/approvals/{id}/sent":            {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
 	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
 	"POST /api/v1/internal/gateway-identity":               {class: classInternal},

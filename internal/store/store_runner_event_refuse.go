@@ -62,7 +62,7 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	settled := false
 	if r.ActionID != nil {
 		if settled, err = s.settleRefusedActionTx(ctx, tx, runnerID, *r.ActionID, "org_refused:"+r.Code, prepare); err != nil {

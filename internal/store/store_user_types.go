@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -154,7 +155,7 @@ func (s PG) DeleteUserType(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if _, err := tx.Exec(ctx, userTypeWriteLock, id); err != nil {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}

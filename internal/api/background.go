@@ -38,6 +38,20 @@ func (s *Server) GoBackground(fn func()) {
 	s.goBackground(fn)
 }
 
+// sshGoTracked is sshGo, with its panic containment, for an SSH gateway
+// goroutine that may write an audit row: a connection, and each door that
+// runs a bridge. WaitBackground waits for it, so a daemon stop has that row
+// stored, or spooled by the recorder chain, before the pool closes and the
+// process exits. A stop ends each one: handleSSHConn closes the connection,
+// and every bridge ends with its context.
+func (s *Server) sshGoTracked(fn func()) {
+	s.bg.Add(1)
+	sshGo(func() {
+		defer s.bg.Done()
+		fn()
+	})
+}
+
 // backgroundShutdownBudget bounds WaitBackground. killCascadeTimeout
 // (runs_lifecycle.go) is the longest bound most goroutines tracked by
 // goBackground give themselves internally (killTeardownTail's own
@@ -69,7 +83,8 @@ const backgroundShutdownBudget = killCascadeTimeout + killRevokeTimeout + signIn
 // the termination grace does not grow.
 const BackgroundShutdownBudget = backgroundShutdownBudget
 
-// WaitBackground blocks until every goroutine started through goBackground has
+// WaitBackground blocks until every goroutine started through goBackground or
+// sshGoTracked (an SSH connection, a session channel's door, a port forward) has
 // returned, or until backgroundShutdownBudget elapses — whichever comes first.
 // Bounded because this runs on the shutdown path with an operator waiting: a
 // genuinely wedged teardown (a runner call that never returns) must not turn
@@ -90,7 +105,7 @@ func (s *Server) WaitBackground() {
 	case <-done:
 	case <-time.After(budget):
 		slog.Warn("wardynd: shutdown budget hit with background work (a launch, a teardown, output persistence, "+
-			"or a sweeper or run watcher that did not stop on cancel) still running; abandoning it", slog.Duration("budget", budget))
+			"an SSH connection or door, or a sweeper or run watcher that did not stop on cancel) still running; abandoning it", slog.Duration("budget", budget))
 	}
 }
 

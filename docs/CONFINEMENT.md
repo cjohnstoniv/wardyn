@@ -36,9 +36,12 @@ The shipped example policies use `CC1` because it needs nothing beyond Docker, n
 | `git_pat` and `ssh_key` grants | No floor of their own, so clones still work on a host without KVM | Same file |
 | A component's header credential | Raises the run to `CC3` only when `require_vault_for_credentials` is on; it is `false` by default | [Custom components](operations/custom-components.md) |
 | A governance profile's `min_confinement_class` | A run under the profile below it is raised to it | [`clamp.go`](../internal/composer/clamp.go) |
+| A governance profile's `confinement_floors` | A run with a named trait (`own_image`, `self_defined_component`, `data_out_open`) is raised to that trait's class | [`TraitFloor`](../internal/composer/confinement_floors.go) |
 | A policy's `min_confinement_class` | The run refuses to launch below it | [POLICIES.md](POLICIES.md) |
 | The pool cannot offer the barrier | The pool list's `barrier_options` gives each barrier as `available` or one `reason_code`, and the launch is refused | [Runner pools](operations/runner-pools.md#barriers) |
-| A virtual machine run | It has its own kernel and no barrier | [New run](NEW-RUN.md) |
+| A virtual machine run | It has its own kernel. The runner treats the VM boundary as the `CC3` family, and the run's recorded `confinement_class` stays the class it was launched with | [New run](NEW-RUN.md) |
+
+Every run can run code: Wardyn's tool gate checks a harness's own tools only in a background Claude Code run, and an interactive run or a `task_mode: exec` run is a shell. So a floor for runs that execute code is the profile's or the policy's `min_confinement_class`.
 
 ## A tool-only agent with the thinnest sandbox
 

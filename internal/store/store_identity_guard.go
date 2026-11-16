@@ -156,7 +156,7 @@ func (s PG) guarded(ctx context.Context, fn func(q queryRower) error) error {
 	if err != nil {
 		return fmt.Errorf("store: begin guarded write: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 		return err
 	}

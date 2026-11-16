@@ -4,6 +4,7 @@
 
 - How a run's lease is captured, extended and ended, and what reviving a kept run can and can't do.
 - The full audit contract for every event named here is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `run.end.set`, `run.wait_budget.set`, `run.ended`, `run.ended.expired`, `run.lost`, `run.lost.expired` and `run.revive` rows.
+- [Delegation](delegation.md#when-a-running-run-loses-access) says when a running run loses each kind of access it was given.
 
 ## Capturing the lease
 
@@ -155,6 +156,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused. On Kubernetes, see item 9.
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored with the edit's policy generation, in one write before the new proxy starts, and the organisation's cached engine for the run is retired. The answer waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
+   - That readback does not wait for the agent's own connections. On Docker the replace ends every connection the agent had open through the old proxy, and new ones can fail for a while after the `200`, so retry them. On Kubernetes the edit applies in place (item 9).
 5. Any other end stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. If time runs out during that stop, its folder copy back and sandbox stop finish after the answer. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
@@ -187,6 +189,8 @@ Each edit past the body check writes one `run.egress.edit` row. Proxied connecti
 ## Kubernetes cannot keep, revive, restart or pause a run
 
 The Kubernetes substrate doesn't implement the optional runner capabilities the Docker driver does. An agent pod pins its proxy pod's IP, so there's no "same address, new container" to replace, and a stopped pod is gone, not kept.
+
+The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused.
 
 - A Kubernetes run's end and limits still fire on schedule.
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.

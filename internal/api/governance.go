@@ -289,6 +289,11 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 			return "limits.autonomy_rubric." + err.Error()
 		}
 	}
+	if l.ConfinementFloors != nil {
+		if err := l.ConfinementFloors.Validate(); err != nil {
+			return "limits.confinement_floors." + err.Error()
+		}
+	}
 	return runLimitsRefusal(l.RunLimits)
 }
 

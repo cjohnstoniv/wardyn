@@ -69,12 +69,14 @@ const (
 	ruleSourceMCPListUnreadable = "brokered:mcp:list-unreadable"
 
 	// An approve_each call (mcp_approve_each.go): forwarded once approved, still waiting when its
-	// window ended, declined, closed undecided, or refused before anyone was asked.
+	// window ended, declined, closed undecided, refused before anyone was asked, or already sent
+	// under its operation key (mcp_operation_key.go).
 	ruleSourceMCPApproved        = "brokered:mcp:approved"
 	ruleSourceMCPApprovalWait    = "brokered:mcp:approval-wait"
 	ruleSourceMCPApprovalDenied  = "brokered:mcp:approval-denied"
 	ruleSourceMCPApprovalClosed  = "brokered:mcp:approval-closed"
 	ruleSourceMCPApprovalRefused = "brokered:mcp:approval-refused"
+	ruleSourceMCPApprovalSent    = "brokered:mcp:approval-sent"
 )
 
 // mcpServerKeyRE is a server key: the <server> of mcp__<server>__<tool>, so
@@ -85,9 +87,11 @@ var mcpServerKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type mcpBroker struct {
 	servers  map[string]*mcpServer
 	bindings []MCPBinding
-	// calls and windows are the approve_each state (mcp_approve_each.go).
-	calls   mcpCalls
-	windows map[string]int
+	// calls and windows are the approve_each state (mcp_approve_each.go); sendOnce gives each
+	// keyless approve_each call an operation key made from the call (mcp_send_once.go).
+	calls    mcpCalls
+	windows  map[string]int
+	sendOnce bool
 }
 
 // mcpServer is one server and its credential, resolved on first use.
@@ -186,6 +190,8 @@ type mcpExchange struct {
 	req     egress.Request
 	// approvalID is the approval an approve_each call is forwarded on; nil for any other request.
 	approvalID *uuid.UUID
+	// upstreamAnswered is set once the server answered what forward sent, with any status.
+	upstreamAnswered bool
 }
 
 func (x *mcpExchange) emit(decision egress.Decision, ruleSource string) {
@@ -528,24 +534,8 @@ func writeJSONStatus(w http.ResponseWriter, status int, contentType string, v an
 // and internal hosts as configured). A redirect is refused, never followed.
 func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	p, s := x.p, x.server
-	// Only an explicit deny stops it here: the builtin evaluator is the only one wired, and it answers
-	// allow or deny, so a verdict that needs a decision cannot reach this check.
-	if verdict, err := p.evaluator.EvaluateHost(x.r.Context(), x.req); err != nil || verdict == egress.VerdictDeny {
-		x.deny(w, "policy:denied", "this MCP server's host is blocked for this run", http.StatusForbidden)
-		return
-	}
-	if _, denied := p.literalIPGuard(x.req, s.host, s.port); denied != nil {
-		x.deny(w, denied.RuleSource, "this MCP server's address is not reachable from a run", http.StatusForbidden)
-		return
-	}
-	target, _, err := p.egressTarget(s.host, s.port)
-	if err != nil {
-		src := "builtin:private-ip"
-		if errors.Is(err, errHostUnresolved) {
-			src = "builtin:resolve-failed"
-		}
-		x.emit(egress.Deny, src)
-		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
+	target, ok := x.vetTarget(w)
+	if !ok {
 		return
 	}
 	scan, ok := x.scanBody(w, body)
@@ -567,10 +557,8 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	// An MCP server gets the call id on a run with a gateway route, and the identity token only on its own route.
 	p.stripGatewayHeaders(out.Header)
 	if s.grantID != nil {
-		hdr, err := p.mcpCredential(x.r.Context(), s)
-		if err != nil {
-			x.emit(egress.Deny, ruleSourceMCPCredential)
-			p.httpError(w, "the MCP server's credential is unavailable", err, http.StatusBadGateway)
+		hdr, ok := x.credential(w)
+		if !ok {
 			return
 		}
 		out.Header.Set(hdr.name, hdr.value)
@@ -600,6 +588,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID, Scan: scan}, s.host, "MCP upstream error")
 		return
 	}
+	x.upstreamAnswered = true
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.StatusCode != http.StatusNotModified {
 		// The server was sent the id, so its log and this row join on it.
@@ -625,6 +614,45 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		return
 	}
 	p.relayStreaming(w, resp)
+}
+
+// vetTarget checks the server's host against the run's policy and the literal-IP guard, then resolves
+// and vets its address (egressTarget). On a refusal it answers w and reports false.
+func (x *mcpExchange) vetTarget(w http.ResponseWriter) (string, bool) {
+	p, s := x.p, x.server
+	// Only an explicit deny stops it here: the builtin evaluator is the only one wired, and it answers
+	// allow or deny, so a verdict that needs a decision cannot reach this check.
+	if verdict, err := p.evaluator.EvaluateHost(x.r.Context(), x.req); err != nil || verdict == egress.VerdictDeny {
+		x.deny(w, "policy:denied", "this MCP server's host is blocked for this run", http.StatusForbidden)
+		return "", false
+	}
+	if _, denied := p.literalIPGuard(x.req, s.host, s.port); denied != nil {
+		x.deny(w, denied.RuleSource, "this MCP server's address is not reachable from a run", http.StatusForbidden)
+		return "", false
+	}
+	target, _, err := p.egressTarget(s.host, s.port)
+	if err != nil {
+		src := "builtin:private-ip"
+		if errors.Is(err, errHostUnresolved) {
+			src = "builtin:resolve-failed"
+		}
+		x.emit(egress.Deny, src)
+		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
+		return "", false
+	}
+	return target, true
+}
+
+// credential is the server's credential header (mcpCredential, held until it nears expiry). On a
+// failure it answers w and reports false.
+func (x *mcpExchange) credential(w http.ResponseWriter) (injectedHeader, bool) {
+	hdr, err := x.p.mcpCredential(x.r.Context(), x.server)
+	if err != nil {
+		x.emit(egress.Deny, ruleSourceMCPCredential)
+		x.p.httpError(w, "the MCP server's credential is unavailable", err, http.StatusBadGateway)
+		return injectedHeader{}, false
+	}
+	return hdr, true
 }
 
 // relayStreaming is relay, flushing each chunk: a streamable HTTP server may

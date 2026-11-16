@@ -49,7 +49,7 @@ func seedFreshBoundary(ctx context.Context, db migrationExecutor, fresh bool) er
 	if err != nil {
 		return fmt.Errorf("db: begin the Wardyn boundary seed: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a committed tx makes this a no-op
+	defer Rollback(context.WithoutCancel(ctx), tx) // a committed tx makes this a no-op
 	tag, err := tx.Exec(ctx, `UPDATE governance_boundary
 		SET mode = 'hard_limits', spec = '{"min_confinement_class":"CC1"}', seeded_at = now(), updated_by = 'system', updated_at = now()
 		WHERE singleton AND seeded_at IS NULL`)

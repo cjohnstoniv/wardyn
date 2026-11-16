@@ -30,6 +30,11 @@ func (s FileDownloadScope) Valid() bool {
 		err == nil && len(sum) == 32 && hex.EncodeToString(sum) == s.SHA256 && s.RequestedBy != ""
 }
 
+// FileDownloadAskerErased is RequestedBy once the person who asked is erased (store.PG
+// EraseApprovalDecisionPersonalFields). It keeps the scope Valid, and askedForDownload reads it as every
+// principal, so under a second-human rule no person decides a download whose asker was erased.
+const FileDownloadAskerErased = "erased"
+
 // ParseFileDownloadScope reads a stored scope back: exactly FileDownloadScope's keys, and Valid.
 func ParseFileDownloadScope(raw json.RawMessage) (FileDownloadScope, bool) {
 	var s FileDownloadScope

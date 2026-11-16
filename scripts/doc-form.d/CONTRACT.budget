@@ -1,0 +1,2 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the new page, so growth fails.
+docs/RUNTIME-CONTRACT.md=2064 share=10 # measured: the runtime contract, one table per term group with a column per runtime, the swap proof and how to read a cell

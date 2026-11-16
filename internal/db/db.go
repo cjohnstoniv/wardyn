@@ -284,8 +284,9 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if err != nil {
 		return fmt.Errorf("db: begin audit chain canary: %w", err)
 	}
-	// Background context: a cancelled ctx must still roll the canary row back.
-	defer tx.Rollback(context.Background()) //nolint:errcheck // the canary is never committed
+	// On a bound of its own, not ctx's: an ended ctx must still roll the canary row back and keep the migration
+	// session, which the hardening restore runs on next.
+	defer Rollback(context.WithoutCancel(ctx), tx) // the canary is never committed
 
 	// Same bound and same lock the real writers take, so the canary queues behind a busy chain
 	// instead of waiting for a boot timeout.
@@ -319,7 +320,7 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(row_hash, ''), COALESCE(prev_hash, '')
 		  FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'wardynd', 'audit.chain.canary', 'audit_events', 'success', '', NULL)`).Scan(&rowHash, &prevHash); err != nil {
-		tx.Rollback(context.Background())             //nolint:errcheck // frees db's connection for the read below
+		Rollback(context.WithoutCancel(ctx), tx)      // frees db's connection for the read below
 		pathless, _ := auditPathlessTriggers(ctx, db) // a failed read keeps the message that names the chain trigger
 		return auditCanaryAppendError(pathless, err)
 	}
@@ -368,7 +369,7 @@ func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, erro
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path
+		Rollback(context.WithoutCancel(ctx), tx) // best-effort on the failure path
 		return nil, fmt.Errorf("pin read committed: %w", err)
 	}
 	return tx, nil
@@ -702,7 +703,7 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 	if err != nil {
 		return fmt.Errorf("db: begin tx to restore trigger %s: %w", trigger, err)
 	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path; ctx may already be dead
+	defer Rollback(context.WithoutCancel(ctx), tx) // best-effort on the failure path; ctx may already be dead
 	for _, name := range names {
 		data, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {

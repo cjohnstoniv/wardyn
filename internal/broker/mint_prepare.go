@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -60,7 +61,7 @@ func (b *Broker) mintSnapshot(ctx context.Context, caller *identity.Claims, gran
 	if err != nil {
 		return grantApprovalRow{}, fmt.Errorf("broker: begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	row, _, err := b.checkedMintRow(ctx, tx, caller, grantID, approvalHint)
 	return row, err
 }

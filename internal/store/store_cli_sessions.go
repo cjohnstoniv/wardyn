@@ -239,7 +239,7 @@ func (s PG) cliTx(ctx context.Context, fn func(q pgx.Tx) error) error {
 	if err != nil {
 		return fmt.Errorf("store: begin cli session write: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if guard {
 		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return err

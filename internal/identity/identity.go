@@ -22,7 +22,8 @@ import (
 // Claims is the verified content of a run identity token; the delegation chain is
 // first-class — Sub is the human principal, Act is the agent run.
 type Claims struct {
-	// SPIFFEID is spiffe://<trust-domain>/agent-run/<run-id>.
+	// SPIFFEID is spiffe://<trust-domain> then RunPath's path: /agent-run/<run-id>, or
+	// /workload/<owner>/<name>/run/<run-id> for a run a workload launched.
 	SPIFFEID string
 	RunID    uuid.UUID
 	// Sub is the human principal the run acts on behalf of.

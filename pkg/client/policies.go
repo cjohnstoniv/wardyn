@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -52,6 +53,16 @@ func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.Ru
 // Returns 404/APIError when the policy does not exist.
 func (c *Client) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
 	var out types.RunPolicy
+	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id.String(), nil, &out)
+	return out, err
+}
+
+// GetPolicyDocument fetches a policy by its UUID as the server wrote it, undecoded. GetPolicy decodes
+// into this build's types, which drops a field a newer server knows and this build does not. A caller
+// that must not lose such a field, because it would then read a restriction as absent, decodes this
+// document strictly instead.
+func (c *Client) GetPolicyDocument(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	var out json.RawMessage
 	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id.String(), nil, &out)
 	return out, err
 }

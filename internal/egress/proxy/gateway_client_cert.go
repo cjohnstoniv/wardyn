@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 )
 
 // gatewayCertMintTimeout bounds one certificate mint. It runs inside a TLS
@@ -191,7 +193,7 @@ func (h *gatewayCertHolder) check(certPEM string, expiresAt time.Time, pub *ecds
 	if !pub.Equal(leaf.PublicKey) {
 		return nil, time.Time{}, errors.New("the control plane's gateway client certificate is for another key than this proxy's")
 	}
-	if len(leaf.URIs) != 1 || leaf.URIs[0].Scheme != "spiffe" || leaf.URIs[0].Path != "/agent-run/"+h.run {
+	if len(leaf.URIs) != 1 || leaf.URIs[0].Scheme != "spiffe" || !h.names(leaf.URIs[0].Path) {
 		return nil, time.Time{}, errors.New("the control plane's gateway client certificate names another run")
 	}
 	exp := leaf.NotAfter
@@ -205,4 +207,11 @@ func (h *gatewayCertHolder) check(certPEM string, expiresAt time.Time, pub *ecds
 		exp = limit
 	}
 	return leaf, exp, nil
+}
+
+// names reports whether path is a SPIFFE ID path of this holder's run, either form identity.RunPath
+// writes: the run's own, or the run under the workload that launched it.
+func (h *gatewayCertHolder) names(path string) bool {
+	_, run, err := identity.ParseRunPath(path)
+	return err == nil && run.String() == h.run
 }

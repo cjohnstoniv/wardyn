@@ -160,6 +160,10 @@ type GovernanceLimits struct {
 	// `"autonomy_rubric":{}` on every profile's wire body. Nil means "no
 	// rubric" (resolveRunAutonomy, #97, treats it like no assigned profile).
 	AutonomyRubric *AutonomyRubric `json:"autonomy_rubric,omitempty"`
+	// ConfinementFloors raises a run's minimum confinement class by what the run does (ConfinementFloors). A
+	// POINTER for the same reason as AutonomyRubric; nil raises nothing. It binds the members a profile governs,
+	// as every limit here does, at create, Review and the policy preview.
+	ConfinementFloors *ConfinementFloors `json:"confinement_floors,omitempty"`
 	// RunLimits is embedded, so its seven fields sit flat on the limits wire
 	// object beside the ones above — the same field set a run captures at
 	// create (AgentRun.RunLimits).

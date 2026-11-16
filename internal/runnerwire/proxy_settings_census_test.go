@@ -73,6 +73,9 @@ var proxyNestedSettings = map[string]string{
 	// Dropped, a newer proxy serves the gateway through its generic forwarder with calls the sandbox
 	// signed with the placeholder: they fail at AWS rather than being refused when placed.
 	ProxySettingAWSSigV4Gateways: "AWSSigV4",
+	// Dropped, an older proxy gives no approve_each call a key made from the call, and a retry in a
+	// new run of the same correlation ID is asked about and sent again.
+	ProxySettingMCPSendOnce: "MCPApproveEach",
 	// Dropped, an older proxy allows a literal IP host under allow-all.
 	ProxySettingRefuseIPLiterals: "Policy",
 	// Dropped, an older proxy forwards what the rules deny, with no row.

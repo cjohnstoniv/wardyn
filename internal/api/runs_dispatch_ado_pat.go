@@ -294,7 +294,7 @@ func (s *Server) dispatchRunPAT(ctx context.Context, run types.AgentRun, ado ado
 		return s.refuseADOEntraDispatch(ctx, run, reason, body)
 	}
 	pat, err := s.mintRunPAT(lctx, run.ID, sn, cfg, ado.caps,
-		adoRunPATValidTo(s.cfg.Now(), ado.patHours, run.EndsAt), adoPATMintDispatch)
+		adoRunPATValidTo(s.boundNow(ctx), ado.patHours, run.EndsAt), adoPATMintDispatch)
 	if err == nil {
 		e.owner, e.cur, e.caps = sn.OwnerSubject, pat, slices.Clone(ado.caps)
 		if err = s.saveRunPAT(lctx, run.ID, e); err != nil {
@@ -386,7 +386,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	}
 	row, _ := gitProviderRowByID(sc, sn.ProviderRowID) // driftFrom proved it live with an Entra block
 	ceiling := effectiveADOCeiling(row.Entra, adoCapOf(s.outerLayers(ctx, run)))
-	now := s.cfg.Now()
+	now := s.boundNow(ctx)
 	validTo := adoRunPATValidTo(now, row.Entra.PATHours(), run.EndsAt)
 	stale := e.cur
 	var reason string

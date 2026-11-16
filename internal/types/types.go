@@ -153,7 +153,7 @@ type AgentRun struct {
 	PolicyID         *uuid.UUID       `json:"policy_id,omitempty"`
 	ConfinementClass ConfinementClass `json:"confinement_class"`
 	State            RunState         `json:"state"`
-	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>; empty while QUEUED, written when the run starts
+	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>, or /workload/<owner>/<name>/run/<id> for a workload's run (identity.RunPath); empty while QUEUED, written when the run starts
 	RunnerTarget     string           `json:"runner_target"` // "docker"
 	// Placement is where the sandbox lives (OD-8): remote (the organisation's own
 	// executor), local (a runner the person registered), or empty for a run from

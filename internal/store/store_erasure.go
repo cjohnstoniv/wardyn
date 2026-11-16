@@ -26,7 +26,8 @@ type PersonErasureStore interface {
 	// RunIDsCreatedBy lists every run created_by createdBy.
 	RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID, error)
 	// BlankRunTasks empties the task text, title, description and correlation id of every run
-	// created_by createdBy and returns how many it changed. It never touches updated_at: the idle reaper
+	// created_by createdBy, overwrites the scope, operation key and call hash of those runs' MCP call
+	// send records, and returns how many runs it changed. It never touches updated_at: the idle reaper
 	// reads it.
 	BlankRunTasks(ctx context.Context, createdBy string) (int, error)
 	// PrincipalAliases lists the names the identity directory knows principal
@@ -194,7 +195,15 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	}
 	// The blank marks what it blanks: a waiting run created between the mark's snapshot and this one is
 	// blanked and marked together, so a promoted start of it cannot put its text back.
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '', title = '', description = '', correlation_id = '',
+	// The same statement overwrites the send records of the person's runs (mcp_call_sends): a scope names
+	// the correlation ID and a key is the caller's text, so each row gets a scope no call is ever given, and
+	// an empty key and hash. It runs whether or not a run still has text to blank, so a retried erasure
+	// finishes it. A send still inside its 24 hours is overwritten too: its call is asked about again.
+	tag, err := s.Pool.Exec(ctx, `WITH sends AS (
+			UPDATE mcp_call_sends m SET operation_scope = 'erased:' || gen_random_uuid()::text, operation_key = '', call_sha256 = ''
+			FROM agent_runs r WHERE r.id = m.run_id AND r.created_by = $1
+		)
+		UPDATE agent_runs SET task = '', title = '', description = '', correlation_id = '',
 			tasks_erased_at = CASE WHEN state = ANY($2) THEN COALESCE(tasks_erased_at, now()) ELSE tasks_erased_at END
 		WHERE created_by = $1 AND (task <> '' OR title <> '' OR description <> '' OR correlation_id <> '')`, createdBy, waiting)
 	if err != nil {

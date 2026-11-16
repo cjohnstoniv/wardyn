@@ -104,6 +104,8 @@ type LimitsOverlay struct {
 	DefaultWaitSec             *int            `json:"default_wait_sec,omitempty"`
 	UserChangesLimits          *bool           `json:"user_changes_limits,omitempty"`
 	PauseIdleAfterSec          *int            `json:"pause_idle_after_sec,omitempty"`
+
+	ConfinementFloors *ConfinementFloors `json:"confinement_floors,omitempty"`
 }
 
 // DecodeCeilingOverlay strictly decodes a stored or submitted overlay.

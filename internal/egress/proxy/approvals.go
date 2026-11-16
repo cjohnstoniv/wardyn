@@ -661,6 +661,8 @@ func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID
 	case http.StatusCreated, http.StatusOK:
 	case http.StatusBadRequest, http.StatusForbidden, http.StatusTooManyRequests:
 		return uuid.Nil, &raiseRefusedError{status: resp.StatusCode}
+	case http.StatusConflict: // a keyed MCP call whose operation key was already sent (operationConflict)
+		return uuid.Nil, operationConflict(resp.Body, "raise approval")
 	default:
 		return uuid.Nil, fmt.Errorf("raise approval: status %d", resp.StatusCode)
 	}

@@ -88,6 +88,7 @@
 
 - **One of four is genuinely pluggable.**
 - The strongest thing to say here is the first row: *two implementations, one conformance contract, both enforced in CI* —
+  - The suite runs with different options on each. The Kubernetes driver declares no structural egress, and only the Docker server suite passes a name-lookup probe, so `L0StructuralEgress` and `DNSAudit` skip on Kubernetes, where NetworkPolicy cases check egress instead. [The runtime contract](RUNTIME-CONTRACT.md#the-swap-proof) lists the differences.
   - which is a materially stronger claim than "we have an interface", and it is the only one of the four that has earned it.
 
 ### Physical sandbox
@@ -229,7 +230,7 @@
 
 - shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`, the `k8s` impl under `-tags k8s`; runtime-pluggable + substrate sub-interface).
 - The `k8s` substrate is registered and conformance-green on kind+Calico, but is NOT the shipped out-of-box default (that stays `docker`) and is not at parity with it —
-- no BYOI/devcontainer builds, no `local_dir` mounts, no ground-truth correlator ([`docs/operations/kubernetes-known-gaps.md`](operations/kubernetes-known-gaps.md)'s "Kubernetes: known gaps").
+- no BYOI/devcontainer builds, no `local_dir` mounts, a ground-truth sensor only when you turn it on and run your own Tetragon ([Kubernetes ground truth](operations/kubernetes-ground-truth.md); [`docs/operations/kubernetes-known-gaps.md`](operations/kubernetes-known-gaps.md)'s "Kubernetes: known gaps").
 - The agent-sandbox switch is experimental and covered by its own CI job; it is not part of the shipped default.
 - Non-OCI VMM impl planned.
 

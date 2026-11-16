@@ -59,6 +59,8 @@ func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Get("/workloads/{name}/history", s.handleWorkloadHistory)
 	r.Delete("/workloads/{name}", s.handleDeleteWorkload)
 	r.Post("/workloads/{name}/restart", s.handleRestartWorkload)
+	r.Put("/workloads/{name}/policy-pin", s.handlePutWorkloadPolicyPin)
+	r.Delete("/workloads/{name}/policy-pin", s.handleDeleteWorkloadPolicyPin)
 	// A binding is standing authority over a service identity: the security tier's, applied directly and
 	// audited, as a token move is (workload_bindings.go).
 	securityOps.Post("/workload-bindings", s.handleCreateWorkloadBinding)
@@ -214,7 +216,7 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		out.State += "/" + string(viewServiceHealth(v, st, now)) // the worse of the two readings, as the run list's chip
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
-		out.Digest = v.Digest
+		out.Digest, out.PolicyPin = v.Digest, v.PolicyPin
 	}
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
@@ -346,7 +348,8 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 	if binding != nil {
 		r = r.WithContext(withLaunchBinding(ctx, *binding)) // a run that waits in its queue starts only while it exists
 	}
-	cr, err := workloadCreateRequest(r, claimed)
+	pinned, _ := withPolicyPin(r.Context(), claimed.PolicyPin) // stepPolicyPin refuses a launch off it before the create answers
+	cr, err := workloadCreateRequest(r.WithContext(pinned), claimed)
 	if err != nil {
 		return none, err
 	}
@@ -414,7 +417,7 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 	if err != nil {
 		return nil, err
 	}
-	cr := r.Clone(r.Context())
+	cr := r.Clone(withLaunchWorkload(r.Context(), wl)) // its run is minted under wl's SPIFFE ID
 	cr.Method, cr.URL, cr.RequestURI = http.MethodPost, &url.URL{Path: "/api/v1/runs"}, ""
 	cr.Body, cr.ContentLength, cr.GetBody = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 	cr.Header.Set("Content-Type", "application/json")

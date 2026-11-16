@@ -347,7 +347,7 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		s.ended(ss)
 		return
 	}
-	// pump only returns on a disconnect, so its error is always the reason.
+	// pump returns only with the error that ended the session.
 	err = s.pump(ctx, ss)
 	s.ended(ss)
 	slog.Info("runnerd: decision sink session disconnected", slog.String("run_id", r.id.String()), slog.Any("err", err))

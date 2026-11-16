@@ -39,7 +39,7 @@ func (s *Store) DeleteProviderChanges(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: erase provider history: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if s.owner != "" {
 		if _, err := tx.Exec(ctx, `INSERT INTO secret_owner_generations (owned_by) VALUES ($1) ON CONFLICT (owned_by) DO NOTHING`, s.owner); err != nil {
 			return fmt.Errorf("pg secretstore: erase provider history: %w", err)

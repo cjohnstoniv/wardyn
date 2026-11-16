@@ -93,7 +93,7 @@ func (s PG) WriteGovernanceUnit(ctx context.Context, id uuid.UUID, build Governa
 	if err != nil {
 		return types.GovernanceUnit{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	out, err := WriteGovernanceUnitQ(ctx, tx, id, build)
 	if err != nil {
 		return types.GovernanceUnit{}, err
@@ -336,7 +336,7 @@ func (s PG) DeleteGovernanceUnitNamed(ctx context.Context, id uuid.UUID) (string
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
 		return "", err
 	}
@@ -427,7 +427,7 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 	if err != nil {
 		return types.GovernanceMembership{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	// The locks a held change's approval takes too, in its order: the upsert and that approval never
 	// interleave, and neither does a profile write.
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
@@ -488,7 +488,7 @@ func (s PG) DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types
 	if err != nil {
 		return types.GovernanceMembership{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
 		return types.GovernanceMembership{}, err
 	}

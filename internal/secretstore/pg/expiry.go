@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -87,7 +88,7 @@ func (s *Store) deleteIfExpired(ctx context.Context, owner, name string) (secret
 	if err != nil {
 		return e, false, fmt.Errorf("begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := lockRow(ctx, tx, owner, name); err != nil {
 		return e, false, err
 	}

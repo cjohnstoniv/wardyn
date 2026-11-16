@@ -71,15 +71,33 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced 
 	return nil, reason, err
 }
 
-// errSSHChannelClosed is the cause a session channel's context ends with when its request stream ends while the
-// connection's context is still live: the client closed the channel or its whole connection.
-var errSSHChannelClosed = errors.New("the client closed the SSH channel")
+// errSSHChannelClosed is the cause a door's context ends with when its channel or connection ends while the daemon
+// runs: a session channel's context when its request stream ends while the connection's context is still live,
+// and the connection's context when the connection ends (the client closed it or it dropped, or the gateway
+// closed one that stopped answering or lost its key, sshProbeConn).
+var errSSHChannelClosed = errors.New("the SSH channel or its connection closed")
 
-// sshClientClosedFirst reports whether ctx, a session channel's context, ended because its client closed the channel
-// or its connection (errSSHChannelClosed), not because the daemon stopped, which ends the connection's context and so
-// the channel's with that context's own cause.
+// sshClientClosedFirst reports whether ctx, a door's context (a session channel's, or the connection's for a port
+// forward), ended because its client closed the channel or its connection (errSSHChannelClosed), not because the
+// daemon stopped, which ends the connection's context first and so every door's with that context's own cause.
 func sshClientClosedFirst(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errSSHChannelClosed)
+}
+
+// sshStartCutByClient reports whether err, a door's start error, is the start lock wait or the start that its
+// client's own close cut (sshClientClosedFirst), not one of the fence's own refusals (its wait's bound, the start
+// budget, a lost lock) nor a daemon stop.
+func sshStartCutByClient(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && sshClientClosedFirst(ctx)
+}
+
+// sshStartError is a door's start error as its failure row records it: a start its client's close cut names that
+// close (errSSHChannelClosed), where the start lock's busy sentence would name a cause that was not there.
+func sshStartError(ctx context.Context, err error) string {
+	if sshStartCutByClient(ctx, err) {
+		return errSSHChannelClosed.Error()
+	}
+	return err.Error()
 }
 
 // sftpServerMissing is the image contract a missing sftp-server breaks.
@@ -138,7 +156,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
 		outcome, data := "failure", map[string]any{"error": err.Error()}
-		if errors.Is(err, context.Canceled) && sshClientClosedFirst(ctx) {
+		if sshStartCutByClient(ctx, err) {
 			// A start its client's own close cut is the client's end, as a close under the running process is
 			// (bridgeOutcome): a success that names no error, with nothing moved. Only a wait the channel's end
 			// cut reads so: the fence's own refusals (its wait's bound, the start budget, a lost lock) are never
@@ -168,7 +186,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 // says nothing about the process.
 type bridgeEnd struct {
 	err    error // Wait's own error: no exit was read
-	closed bool  // the session's context had ended by then: the client closed first
+	closed bool  // the client's close had ended the bridge's context by then (sshClientClosedFirst); a daemon stop is not the client's
 }
 
 // noteBridgeEnd keeps how sess.Wait ended in end. ctx is the context the bridge
@@ -180,7 +198,7 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 	noted := *sess
 	noted.Wait = func() (int, error) {
 		code, err := sess.Wait()
-		end.err, end.closed = err, ctx.Err() != nil
+		end.err, end.closed = err, sshClientClosedFirst(ctx)
 		return code, err
 	}
 	return &noted
@@ -195,8 +213,10 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 // process ended (most SFTP libraries close where OpenSSH half-closes and waits;
 // an ssh -L ended with a connection still open) left no exit to read: the
 // session is closed under the process and Wait errs, which is the client's end
-// and not a failed transfer, so the row stays a success. ssh.exec keeps its own
-// rule: the command's exit is the person's, recorded as exit on a success.
+// and not a failed transfer, so the row stays a success.
+// A daemon stop that ends the bridge's context under the process is not the client's end: the process it cut
+// left no exit, so the row is a failure that says so (sshClientClosedFirst tells the two apart).
+// ssh.exec keeps its own rule: the command's exit is the person's, recorded as exit on a success.
 func bridgeOutcome(exit int, end bridgeEnd, process string, extra map[string]any) string {
 	switch {
 	case end.closed, end.err == nil && exit == 0:

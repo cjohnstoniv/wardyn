@@ -569,7 +569,7 @@ What the check does and does not settle:
 ## Your walls
 
 - Your walls are limits you set on every run you start, which only narrow what your organisation allows. They are one private document per signed-in person; no one else reads or edits it, and no admin route reaches it.
-- Set them in **Settings** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
+- Set them in **Settings** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on. A deny, a blocked direction or a withheld credential you add also binds a running run at its next revive and credential mint ([How your walls apply](#how-your-walls-apply)).
 - The admin token, local mode and a service identity are no person, so they have no walls (`400` `walls_need_person`) and none are applied to their runs.
 
 | Knob | Console | Effect on each run you start |
@@ -662,6 +662,24 @@ What the check does and does not settle:
 | Effect | A create or Review with `start_at` is refused `403` `scheduled_runs_denied`, target `runs.schedule`, with an `authz.denied` row naming the knob. A run booked earlier ends `FAILED` `scheduled_runs_denied` at its start time |
 | Not affected | A run with no start time, and operators |
 
+## `confinement_floors`
+
+`confinement_floors` is a limit on a governance profile, not a field of a run's policy. It raises a run's minimum confinement class by what the run does:
+
+- `own_image`: the run uses an image its launcher chose: `image`, an attached workspace's base image, a policy-carried workspace's image, `devcontainer_repo`, or a workspace built from its repository's own devcontainer. It counts a workspace that builds its repository's devcontainer even when no image builder is configured and the run uses the convention image.
+- `self_defined_component`: the run carries a component its launcher defined.
+- `data_out_open`: the run's `data_out` is `allowed` or unset.
+
+Each is `CC1`, `CC2` or `CC3`, or absent; an absent trait raises nothing. A run that has several traits takes the strongest class. A requested `confinement_class` below the raised floor is refused (422 `confinement_class_conflict`).
+
+A composed profile takes the higher class per trait, and an overlay floor below its base's is refused. A restriction does not carry it. Set it with `POST /governance/units` or `PUT /governance/units/{id}` (`limits.confinement_floors`, or `overlay_limits.confinement_floors` on a composed profile), or with `wardyn governance set`; the console shows it in no editor.
+
+The floors bind the runs of whoever the profile governs. An admin's runs are bound only when they are governed ([`WARDYN_GOVERN_ADMIN_RUNS`](ENV.md)); the admin token and local mode resolve no profile, so no floor binds them.
+
+A floor set or raised later does not reach a run that has started: a revived run keeps the class it was created with. A run still waiting in a queue, or booked for later, is checked again when it starts, against the floors as they then stand, and does not start below them.
+
+A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspace step) is not bound either: it takes the strongest class its runner offers.
+
 ## `deny_components` and `deny_model_providers`
 
 `deny_components` and `deny_model_providers` are limits on a governance profile, not fields of a run's policy. Each is a list of ids a run under the profile may not use: stored component ids, and model provider uids.
@@ -710,8 +728,9 @@ What the check does and does not settle:
 - It travels as `decision_scope` (plus `decision_expires_at` for `until`) in the body of `POST /approvals/{id}/approve` and `/deny`, and it is **orthogonal to `first_use_approval` above**.
 - `first_use_approval` decides *whether* an unknown host gets escalated to a human at all; scope decides *how far the human's answer reaches* once given.
 - Omit the field and you get `run` — today's original behavior, unchanged.
-- Only an `egress_domain` approval may carry a non-default scope: a `credential` approval mints exactly once by construction and a `tool_call` is bounded by the composer clamp.
-- A scope on either is refused at write time (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)).
+- Only an `egress_domain` approval may carry any scope. A `credential` approval may carry `run`, the per-run credential lease ([member runs](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)); without it, it mints exactly once by construction. A `tool_call` is bounded by the composer clamp.
+- Any other scope is refused at write time (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)). Some requests set their own: an MCP call, a kubectl change and a download take only `once`, a host request only `run`, and an Azure DevOps access request `once` or `run`.
+- [Delegation](operations/delegation.md) puts each scope in a tier of consent: `always` is standing, `run` and `until` last a session, and `once` is one-time. It also says who may give each and when a running run loses it.
 
 | Scope | Reaches | Where it lives |
 |---|---|---|
@@ -765,8 +784,8 @@ What the check does and does not settle:
 - On HTTPS, `once` releases one CONNECT tunnel — and a single tunnel can carry many requests before the agent closes it, so one grant can cover far more traffic than "once" suggests.
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
 - The copy is literally accurate for HTTPS; for HTTP it undersells rather than oversells — it never claims a grant covers more than it does, only occasionally less.
-- Either way the grant is spent on the approved verdict itself — ahead of the method check, IP vetting, and the dial.
-- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund.
+- Either way the grant is spent on the approved verdict itself — after the method check, but ahead of IP vetting and the dial.
+- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund. The audit row names `builtin:dial-failed` for a failed dial, `builtin:tunnel-failed` for a tunnel that died before an answer, `builtin:private-ip` for a DNS-rebind refusal and `builtin:resolve-failed` for a name that did not resolve. A retry needs a new approval.
 
 **`until` is bounded by the run, and honored against two clocks.**
 
@@ -1208,6 +1227,24 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 - A run is refused when it names a tool of an MCP server that runs in the sandbox: Wardyn can ask only for a server it reaches through the proxy.
 - Codex CLI and a command's harness are not refused, because the proxy pauses the call, not the harness. A `hold` on the same tool still is.
 - An interactive Claude Code run has no gate. Its managed settings carry the rule as `allow` for a remote server turned on for Claude Code, where the proxy asks, and as `deny` otherwise.
+
+An `approve_each` call can carry an operation key, the `_meta` member `wardyn.dev/operation-key`: 1 to 128 ASCII letters, digits or `. _ : / -`, such as the run's correlation ID joined to a step name. The key may not start with `call:`, which is reserved for the keys Wardyn makes. A call with a key is sent at most once in 24 hours.
+- Wardyn records the send before it sends the call and keeps the record on the server, so a revive or a new proxy keeps it.
+- The run proxy checks the server's host against the run's policy, resolves its address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (its body scan or its gateway identity) leaves the record standing for 24 hours.
+- A key's namespace is the run's owner, within the run's correlation ID, else within the run.
+- A call is the same call by its server name, tool, arguments and any other parameters it sends outside `_meta`, not by the host it is sent to.
+- Runs of one owner and one correlation ID share send records. A call sent in one of them is not sent again in another for those 24 hours, even where their policies send that server name to different hosts.
+- For 24 hours after the send, a later call with that key is not asked about or sent. The same call is told the request it was sent under, when, and whether the server's answer was recorded. Another call with that key is refused.
+- After those 24 hours, a call with that key is a new call: it needs an approval again, and its send replaces the record.
+- A call whose send cannot be recorded is not sent.
+- The key is never sent to the MCP server and is not part of what a person approves. A key on a call no `approve_each` rule covers is not read: that call is sent as it is, key included.
+- An approved call that has not been sent has no deadline of its own: its approval holds until the run ends or its proxy is replaced, whichever comes first.
+- An operation key needs this release's run proxy. In a run with no `correlation_id`, an older proxy or runner drops it; a run with one does not start on either. A remote runner older than this release is refused such a run at create (`runner_proxy_setting_unsupported`); upgrade its wardyn-runnerd.
+- Erasing a person's run tasks overwrites their send records at once, so a later call one of them would have answered is asked about again. Erasing their audit fields removes the key from the approvals of their runs.
+
+A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
+
+After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does. A second identical call that waits at the same time as the first may ask a person, and that approval then sends nothing.
 
 
 ### Try approve_each without an MCP server

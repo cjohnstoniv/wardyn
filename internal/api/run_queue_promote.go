@@ -354,6 +354,12 @@ func (s *Server) SweepRunQueue(ctx context.Context) error {
 
 // expireQueued ends each waiting run past its deadline: FAILED queue_timeout, or queue_sign_in_timeout
 // for a scheduled run last held for its owner's sign-in, with run.queue.expire.
+//
+// The deadline is judged on this server's clock because a server's clock stamped it: entry sets queued_at
+// to the run's create time and deadline_at from queued_at and the wait, and queued_at is also the issue
+// time of the authority the run waits with, which queueOwnerLive judges as a time on a server's clock.
+// Neither is a database stamp, so the database's clock would only add its own skew. A run queued on one
+// server and swept on another is judged by the skew between those two servers' clocks.
 func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()

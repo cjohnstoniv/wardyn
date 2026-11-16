@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -412,7 +413,7 @@ func beginReadCommitted(ctx context.Context, pool *pgxpool.Pool) (pgx.Tx, error)
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		_ = tx.Rollback(context.Background())
+		db.Rollback(ctx, tx)
 		return nil, fmt.Errorf("pin read committed: %w", err)
 	}
 	return tx, nil

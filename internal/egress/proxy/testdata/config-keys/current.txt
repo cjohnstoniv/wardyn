@@ -118,6 +118,7 @@ local_models.*.max_context
 local_models.*.max_output
 local_models.*.models
 mcp_approve_each
+mcp_approve_each.send_once
 mcp_approve_each.windows
 mcp_bindings
 mcp_bindings.harness

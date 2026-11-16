@@ -98,6 +98,9 @@ type Workload struct {
 	// Intent is the door-normalised intent; Digest hashes it with RunIn and RestartKey.
 	Intent json.RawMessage
 	Digest string
+	// PolicyPin is the launch policy digest every launch must resolve to, "" for none
+	// (SetWorkloadPolicyPin). An apply never writes it.
+	PolicyPin string
 	// Generation counts digest changes; CurrentGeneration is the one CurrentRunID was launched from.
 	Generation        int64
 	CurrentRunID      *uuid.UUID
@@ -244,7 +247,7 @@ var _ WorkloadStore = PG{}
 
 const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESCE(w.source_namespace, ''), w.source_runner_id,
 	w.k8s_generation, w.description, w.run_in, w.restart_key, w.intent, w.digest, w.generation, w.current_run_id,
-	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at, w.k8s_uid`
+	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at, w.k8s_uid, w.policy_pin`
 
 // workloadViewCols and workloadViewFrom read a workload with its current run. The run's service health is
 // read by name out of the row's JSON, so this query does not depend on the order the migration that adds
@@ -260,7 +263,7 @@ func scanWorkloadInto(row pgx.Row, w *Workload, extra ...any) error {
 	var refusal []byte
 	err := row.Scan(append([]any{&w.ID, &w.Owner, &w.Name, &w.Source, &w.SourcePoolID, &w.SourceNamespace, &w.SourceRunnerID,
 		&w.K8sGeneration, &w.Description, &w.RunIn, &w.RestartKey, &w.Intent, &w.Digest, &w.Generation, &w.CurrentRunID,
-		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt, &w.K8sUID}, extra...)...)
+		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt, &w.K8sUID, &w.PolicyPin}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}

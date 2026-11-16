@@ -147,9 +147,9 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and revoking its credentials was attempted, and a later sweep recovers it", err))
 	case readback:
 	case fate == relostUnknown && unconfirmed:
-		msg = "the revive failed and its lost mark or end did not land, so the run is being lost or ended by another operation; stopping its proxy is not confirmed yet, and a later sweep settles it"
+		msg = "the revive failed and its lost mark or end did not land: a newer revive, or another operation losing or ending the run, may have come first; stopping its proxy is not confirmed yet, and a later sweep settles it"
 	case fate == relostUnknown:
-		msg = "the revive failed and its lost mark or end did not land, so the run is being lost or ended by another operation; a later sweep settles it"
+		msg = "the revive failed and its lost mark or end did not land: a newer revive, or another operation losing or ending the run, may have come first; a later sweep settles it"
 	case fate == relostEnded && unconfirmed:
 		msg = "the revive failed and the run cannot be kept, so it is being ended; stopping its sandbox is not confirmed yet, and a later sweep retries it"
 	case fate == relostEnded:

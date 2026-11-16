@@ -25,6 +25,8 @@ export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
   desktop_signin_image_not_granted: "Sign-ins need the sign-in desktop image, which your access doesn't include.",
   desktop_signin_open: "A sign-in is already open on this run.",
   desktop_signin_not_open: "No sign-in is open on this run.",
+  desktop_signin_starting:
+    "This sign-in is still starting, so it can't be ended yet. Try again; this lasts at most 6 minutes after the sign-in began.",
   desktop_signin_not_holder: "Someone else began this sign-in, so you can't change it.",
   desktop_signin_pause_failed:
     "Wardyn couldn't confirm the agent had stopped, so the sign-in didn't start and the agent carries on. Try again in a moment.",

@@ -277,6 +277,11 @@ type MCPCallScope struct {
 	// HoldSeconds is set when the proxy holds the open request for the answer; absent when the
 	// gate raised the row and the toolgate waits.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
+	// OperationKey is the caller's own key for the operation the call performs, read from
+	// params._meta[MCPOperationKeyMeta]; empty when the call carries none. It is not part of
+	// CallSHA256 and is never sent to the server: a call with a key is sent at most once in its
+	// run's namespace, by a record the control plane keeps (ValidOperationKey).
+	OperationKey string `json:"operation_key,omitempty"`
 }
 
 // ComputeKey recomputes the key from the scope's own fields, so what a person sees is what was

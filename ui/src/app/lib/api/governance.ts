@@ -108,6 +108,9 @@ export interface GovernanceLimits extends RunLimits {
   // still marshals `limits: {}`. Resolution/enforcement land in #97; this
   // mirror exists so the type is in step from the day the field appears.
   autonomy_rubric?: AutonomyRubric;
+  // types.GovernanceLimits.ConfinementFloors: the minimum confinement class per run trait. The console has no
+  // editor for it; seedOverlayLimits moves it whole and limitsBoundNothing counts it.
+  confinement_floors?: { own_image?: ConfinementClass; self_defined_component?: ConfinementClass; data_out_open?: ConfinementClass };
 }
 
 // types.RunLimits (long-holds rev 4 §2.2) — embedded in GovernanceLimits, so

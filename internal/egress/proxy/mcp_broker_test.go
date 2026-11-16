@@ -39,6 +39,8 @@ type mcpUpstream struct {
 	// identity and callID are the gateway headers the last MCP call arrived with; mintBody is
 	// the last gateway identity ask, answered with a token for mintAud.
 	identity, callID, mintBody, mintAud string
+	// credStatus, when set, is the status every credential resolve answers instead of the credential.
+	credStatus int
 }
 
 const mcpServerSecret = "Bearer mcp-server-secret-value"
@@ -50,6 +52,10 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		if strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
+			if u.credStatus != 0 {
+				http.Error(w, "credential unavailable", u.credStatus)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: mcpServerSecret, JTI: "j"})
 			return
 		}
