@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- A `once` egress approval is no longer spent by an HTTPS connection that got nothing back from the far side. That is a failed dial, a configured upstream proxy's refusal of the CONNECT, or an upstream that, after the sandbox's TLS hello, closed or reset without a reply or answered in plaintext. The next request to that host within 60 seconds uses it, once per approval, and the failure's audit row carries the `approval_id` and says so. A TLS alert, a sandbox that closed first, and plain HTTP requests still spend it. Needs the new proxy image.
+
+### Fixed
+
+- On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
+
 ## [0.10.0-rc.22] — 2026-11-16
 
 ### Added

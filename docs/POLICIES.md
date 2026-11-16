@@ -734,7 +734,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 
 | Scope | Reaches | Where it lives |
 |---|---|---|
-| `once` | One connection. The very next attempt re-raises. | The proxy's per-host cache, consumed on first use. |
+| `once` | One connection. The next attempt re-raises; an HTTPS connection that got nothing back gives it back once (below). | The proxy's per-host cache, consumed on first use. |
 | `run` | The rest of this run — **the default**, and the only scope that existed before this table did. | Same cache, held for the run's lifetime. |
 | | **Caveat:** during a `workspace record` session an `egress_domain` approve at this scope ALSO writes a permanent, workspace-wide required `egress:<host>` row that widens every future run of the workspace (see `wait_for_review` above). | |
 | `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
@@ -785,7 +785,15 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
 - The copy is literally accurate for HTTPS; for HTTP it undersells rather than oversells — it never claims a grant covers more than it does, only occasionally less.
 - Either way the grant is spent on the approved verdict itself — after the method check, but ahead of IP vetting and the dial.
-- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund. The audit row names `builtin:dial-failed` for a failed dial, `builtin:tunnel-failed` for a tunnel that died before an answer, `builtin:private-ip` for a DNS-rebind refusal and `builtin:resolve-failed` for a name that did not resolve. A retry needs a new approval.
+- On HTTPS, a CONNECT that got nothing back from the far side gives the grant back once. That covers a failed dial, a configured upstream proxy's refusal of the CONNECT included (`builtin:dial-failed`).
+- Or a tunnel whose upstream, after the sandbox's TLS hello, closed or reset with no byte back, or answered in plaintext that the proxy refused and did not relay (`builtin:tunnel-failed`).
+- That row then carries the `approval_id`, and its `cause` ends with a note that the once approval was not spent. The next request to the host within 60 seconds uses the same approval.
+- One approval comes back at most once, and not when another request to the host raised an approval first; one whose raise failed does not block it. A replaced proxy starts with no approvals cached, so a replace drops it.
+- A request still held on the same approval under `wait_for_review` can take it after the 60 seconds. A proxy image from an earlier release always spends it.
+- Everything else spends it: a DNS-rebind refusal (`builtin:private-ip`), a name that did not resolve (`builtin:resolve-failed`), a TLS alert, which reaches the sandbox, and a tunnel that relayed any answer.
+- So do an upstream that wrote or closed before the sandbox sent anything, and a sandbox that closed first or did not open with TLS.
+- So does a CONNECT the proxy refused at the run's tunnel limit (`builtin:tunnel-limit`), whose `503` asks for a retry.
+- So does a host the proxy terminates TLS for (one a request rule names, a token-injection host, or an LLM host it injects into or inspects), and every plain HTTP request. A retry then needs a new approval.
 
 **`until` is bounded by the run, and honored against two clocks.**
 
