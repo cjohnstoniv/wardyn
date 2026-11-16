@@ -175,7 +175,8 @@ func (s *Server) unreadKeepEnded(ctx context.Context, run types.AgentRun) bool {
 // that owes nothing is final, and any other, or one whose reads fail, has its copy back given up, noted
 // folderStatusUnreadable, with the keep as its cap, so the database applies it only once the keep has run out. The
 // tail owner asks the record-free checks only past the keep (tailStepOf), since inside it the tail owner reads the
-// record again on its next tick, and a killed run's resume is given up here, at the end of the history tail it takes.
+// record again on its next tick; a killed run's resume is given up here, at the end of the history tail it takes
+// inside the keep, and past the keep by the tail owner's own give-up (tailStepFor), before any stop.
 // A folder seed or data_out rule that cannot be read has the copy back given up the same way, noted
 // folderRuleUnreadable, by the statement that also finds a record already final without decoding it. Inside the keep
 // that is not final, so a read that fails for a while throws no count away. Everything after the record read runs on a
