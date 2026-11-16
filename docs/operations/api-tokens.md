@@ -408,6 +408,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running, and read it |
 | `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove a workload (ends its run), or restart it |
 | `POST /workloads/{name}/preview` | what a `PUT` of the same body would do; stores nothing |
+| `PUT`, `DELETE /workloads/{name}/policy-pin` | pin its own workload to the launch policy digest a preview reported, or clear the pin |
 | `POST /templates/import` | the file check `diff` and `apply --dry-run` make; stores nothing |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
