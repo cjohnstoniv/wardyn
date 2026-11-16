@@ -562,3 +562,15 @@ func TestMCPOperationKeyUnresolvedServerIsNotRecorded(t *testing.T) {
 		t.Fatalf("rows %d, send records %+v; want a second approval and its record only", len(rows), got)
 	}
 }
+
+// TestMCPOperationKeyScanRefusalLeavesNoSendRecord: an approved keyed call whose body the content scan blocks is
+// refused before its send is recorded, so its key is not left reading as possibly sent.
+func TestMCPOperationKeyScanRefusalLeavesNoSendRecord(t *testing.T) {
+	f, cp := newOpFixture(t)
+	cp.approve = true
+	f.p.scanner = mcpScanEngine(t, types.LLMInspectionSpec{Mode: "block"})
+	wantScanRefused(t, f, f.post(t, mcpToken("codex-cli"), "linear", keyedCall(1, `{"body":"`+mcpScanMarker+`"}`, `"step-1"`)), 1)
+	if got := cp.records(); len(got) != 0 {
+		t.Fatalf("send records %+v, want none for a body the scan refused", got)
+	}
+}
