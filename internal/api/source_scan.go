@@ -111,6 +111,11 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			// The scan ran and its result could not be saved: a server fault, which a retry may clear.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditPersistFault})))
+			if errors.Is(fault, store.ErrNotFound) {
+				// The source was deleted while its scan ran: not a fault, the row is gone.
+				writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
+				return
+			}
 			writeServerError(w, r, scanAuditPersistFault, fault)
 			return
 		}
@@ -592,6 +597,11 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			}
 			if fault != nil {
 				partialAudit(id, scanAuditPersistFault)
+				if errors.Is(fault, store.ErrNotFound) {
+					// The source was deleted while its scan ran: not a fault, the row is gone.
+					writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
+					return
+				}
 				writeServerError(w, r, scanAuditPersistFault, fault)
 				return
 			}

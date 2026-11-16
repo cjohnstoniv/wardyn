@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,6 +184,22 @@ func TestHandleScanSource(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a local_dir scan whose source went away before its result was saved is a 404", func(t *testing.T) {
+		st := &scanSourceStore{sources: sources(), setErr: fmt.Errorf("set scan result: %w", store.ErrNotFound)}
+		h, srv := newSrv(t, st, false)
+		w := scan(srv, dirID.String())
+		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonSourceNotFound || !strings.Contains(w.Body.String(), "no such source") {
+			t.Fatalf("= %d %s, want 404 %s no such source", w.Code, w.Body.String(), reasonSourceNotFound)
+		}
+		if got := h.auditOutcomes("source.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "source.scan" && !strings.Contains(string(ev.Data), scanAuditPersistFault) {
+				t.Errorf("source.scan row data = %s, want the step %q", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
 	t.Run("repo without a runner is 503", func(t *testing.T) {
 		_, srv := newSrv(t, &scanSourceStore{sources: sources()}, false)
 		if w := scan(srv, repoID.String()); w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonSourceScanNoRunner {
@@ -293,6 +310,22 @@ func TestScanAttachedSourcesOutcomes(t *testing.T) {
 		for _, ev := range h.audit.snapshot() {
 			if ev.Action == "workspace.scan" && (!strings.Contains(string(ev.Data), scanAuditPersistFault) || strings.Contains(string(ev.Data), "db.internal")) {
 				t.Errorf("workspace.scan row data = %s, want the step %q and no store text", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
+	t.Run("a folder whose source went away before its scan result was saved is a 404", func(t *testing.T) {
+		st := base()
+		st.setErr = fmt.Errorf("set scan result: %w", store.ErrNotFound)
+		h, w := run(t, st, false, attach(dirID))
+		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonSourceNotFound || !strings.Contains(w.Body.String(), "no such source") {
+			t.Fatalf("= %d %s, want 404 %s no such source", w.Code, w.Body.String(), reasonSourceNotFound)
+		}
+		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("workspace.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "workspace.scan" && !strings.Contains(string(ev.Data), scanAuditPersistFault) {
+				t.Errorf("workspace.scan row data = %s, want the step %q", ev.Data, scanAuditPersistFault)
 			}
 		}
 	})

@@ -623,6 +623,7 @@ func TestContain_D1FallbackStopsAfterTwoFailures(t *testing.T) {
 		l.ds.owe(row.ID)
 		l.rn.setHook(func(context.Context, string) error { return errContainBoom })
 		l.startStops()
+		defer l.stop() // a failed assertion ends the test before the closing stop below
 		l.item(row)
 		time.Sleep(containTick / 2)
 		l.item(row)
