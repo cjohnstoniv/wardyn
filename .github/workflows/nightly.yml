@@ -2633,8 +2633,11 @@ jobs:
       - name: Octopus scratch merge + stacked-base retarget check
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-          # the check compiles internal/api's tests once per merge tree; the same soft heap limit as the prebuilds
+          # Once per merge tree the check vets the tree under three tag sets and builds internal/api's tests for its
+          # AST guards: the same soft heap limit as the prebuilds, and internal/api compiles and links without DWARF
+          # (scripts/ci-api-prebuild.sh has the figures).
           GOMEMLIMIT: "10GiB"
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: ./scripts/nightly-migration-merge-check.sh --check-only "$RUNNER_TEMP/prs.json"
 
   # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes

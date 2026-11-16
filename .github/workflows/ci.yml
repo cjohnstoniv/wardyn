@@ -364,8 +364,10 @@ jobs:
         if: needs.changes.outputs.backend == 'false'
         env:
           TAGS: ${{ matrix.tags }}
-          # internal/api is a guard package, and this leg has no prebuild: the same soft heap limit as the prebuild
+          # internal/api is a guard package, and this leg has no prebuild: the same soft heap limit as the prebuilds,
+          # and internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures).
           GOMEMLIMIT: "10GiB"
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           set -euo pipefail
           rc=0

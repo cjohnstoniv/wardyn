@@ -197,9 +197,11 @@ build-k8s: ## Build Go binaries with -tags k8s
 	@echo "Building Go binaries (-tags k8s)..."
 	go build -tags k8s ./...
 
+# test and test-docker: internal/api compiles and links without DWARF, as in CI (scripts/ci-api-prebuild.sh has the
+# figures).
 test: ## Run all Go tests
 	@echo "Running Go tests..."
-	WARDYN_TEST_PG= go test ./...
+	WARDYN_TEST_PG= go test -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # Alias kept as a name developers already type: -race rides along INSIDE the
 # three test-report* suites below (see their comments and cover-check), so this
@@ -249,7 +251,7 @@ test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
-	WARDYN_TEST_PG= go test -tags docker ./...
+	WARDYN_TEST_PG= go test -tags docker -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
 # Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
