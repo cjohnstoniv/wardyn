@@ -6,6 +6,7 @@ package api
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"maps"
 	"path/filepath"
@@ -37,7 +38,7 @@ func TestConfinementTraitsFireOnTheirSignal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := runFold{req: &createRunRequest{}, spec: types.RunPolicySpec{DataOut: types.TransferBlocked}}
 			tc.set(&f)
-			if got := f.confinementTraits(); got != tc.want {
+			if got := confinementTraits(*f.req, f.carriedImage, f.comps, f.spec); got != tc.want {
 				t.Errorf("traits = %+v, want %+v", got, tc.want)
 			}
 		})
@@ -53,7 +54,11 @@ func TestConfinementFloorHoldsTheRunToTheTraitFloor(t *testing.T) {
 		spec:    types.RunPolicySpec{MinConfinementClass: types.CC1, DataOut: types.TransferBlocked},
 		ceiling: governanceCeiling{Limits: types.GovernanceLimits{ConfinementFloors: &types.ConfinementFloors{OwnImage: types.CC3}}},
 	}
-	floor := f.confinementFloor()
+	floorOf := func() types.RunPolicySpec {
+		return confinementFloor(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling)
+	}
+	raisedBy := func() []string { return confinementRaisedBy(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling) }
+	floor := floorOf()
 	if floor.MinConfinementClass != types.CC3 || f.spec.MinConfinementClass != types.CC1 {
 		t.Fatalf("floor %q over spec %q; want CC3 over an unchanged CC1", floor.MinConfinementClass, f.spec.MinConfinementClass)
 	}
@@ -63,12 +68,12 @@ func TestConfinementFloorHoldsTheRunToTheTraitFloor(t *testing.T) {
 	if got, _, err := enforcedConfinement(floor, "", []types.ConfinementClass{types.CC1, types.CC2}, "", composer.Baseline{}); err != nil || got != types.CC3 {
 		t.Errorf("a defaulted class = %q, %v; want CC3", got, err)
 	}
-	if by := f.confinementRaisedBy(); !slices.Equal(by, []string{"own_image"}) {
+	if by := raisedBy(); !slices.Equal(by, []string{"own_image"}) {
 		t.Errorf("raised by %v, want [own_image]", by)
 	}
 	f.ceiling.Limits.ConfinementFloors = nil
-	if got := f.confinementFloor().MinConfinementClass; got != types.CC1 || f.confinementRaisedBy() != nil {
-		t.Errorf("with no floors the class is %q raised by %v, want the spec's CC1 raised by none", got, f.confinementRaisedBy())
+	if got := floorOf().MinConfinementClass; got != types.CC1 || raisedBy() != nil {
+		t.Errorf("with no floors the class is %q raised by %v, want the spec's CC1 raised by none", got, raisedBy())
 	}
 }
 
@@ -83,7 +88,8 @@ func TestConfinementFloorIsOneAtEveryDoor(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	specCalls := map[string]int{}     // declaring function -> its calls of confinementFloorSpec
-	floorCalls := map[string][]bool{} // declaring function -> for each f.confinementFloor() call, in a top-level assignment
+	floorCalls := map[string][]bool{} // declaring function -> for each confinementFloor call, in a top-level assignment
+	foldArgs := map[string]string{}   // declaring function -> the arguments of its confinementFloor, traitFloor or confinementRaisedBy call
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -104,11 +110,26 @@ func TestConfinementFloorIsOneAtEveryDoor(t *testing.T) {
 					if !ok {
 						return true
 					}
-					if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "confinementFloorSpec" {
-						specCalls[fn.Name.Name]++
+					id, ok := call.Fun.(*ast.Ident)
+					if !ok {
+						return true
 					}
-					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "confinementFloor" {
+					switch id.Name {
+					case "confinementFloorSpec":
+						specCalls[fn.Name.Name]++
+					case "confinementFloor":
 						floorCalls[fn.Name.Name] = append(floorCalls[fn.Name.Name], assign)
+					}
+					if name != "run_confinement_floors.go" && slices.Contains([]string{"confinementFloor", "traitFloor", "confinementRaisedBy"}, id.Name) {
+						var args []string
+						for _, a := range call.Args {
+							var b strings.Builder
+							if err := printer.Fprint(&b, fset, a); err != nil {
+								t.Fatal(err)
+							}
+							args = append(args, b.String())
+						}
+						foldArgs[fn.Name.Name] = strings.Join(args, ", ")
 					}
 					return true
 				})
@@ -120,8 +141,16 @@ func TestConfinementFloorIsOneAtEveryDoor(t *testing.T) {
 	}
 	for _, step := range []string{"stepPlacement", "stepConfinement"} {
 		if got := floorCalls[step]; !slices.Equal(got, []bool{true}) {
-			t.Errorf("%s reads f.confinementFloor() %d times (in a top-level assignment: %v); want once, in a top-level assignment", step, len(got), got)
+			t.Errorf("%s reads confinementFloor %d times (in a top-level assignment: %v); want once, in a top-level assignment", step, len(got), got)
 		}
+	}
+	// Every reader hands over the fold's own fields: its resolved policy, whose minimum no floor has raised, and
+	// its own ceiling. A copy of the spec a door has since changed would name the wrong traits, or none.
+	const own = "*f.req, f.carriedImage, f.comps, f.spec, f.ceiling"
+	want := map[string]string{"stepPlacement": own, "stepConfinement": own, "runCreateAuditData": own, "handlePreflightRun": own,
+		"auditQueuedCreate": strings.ReplaceAll(own, "f.", "q.f.")}
+	if !maps.Equal(foldArgs, want) {
+		t.Errorf("the confinement floor is read with %v; want %v", foldArgs, want)
 	}
 }
 
