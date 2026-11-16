@@ -107,6 +107,33 @@ func TestTemplatePolicyCheckRefusesABodyWithNoCandidate(t *testing.T) {
 	}
 }
 
+// A caller below the tier that reads a mount's host path or a secret's name is judged against the
+// policy as their own read shows it, so two candidates that differ only in such a value, one the
+// true one and one a guess, get the same answer byte for byte.
+func TestTemplatePolicyCheckConfirmsNoWithheldValue(t *testing.T) {
+	e := newTemplateEnv(t)
+	e.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/operator/creds", Target: "/work"}},
+		LLMInspection:   &types.LLMInspectionSpec{WorkspaceSecretNames: []string{"corp-signing-key"}},
+	}
+	tpl := e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"}, types.TemplateKindTemplate, "recorded", templateIntentEgress)
+	alice := templateCookie(t, "alice", oidc.RoleUser, false, []string{}, false)
+	for _, row := range []struct{ name, right, wrong string }{
+		{"a mount's host path",
+			`{"workspace_mounts":[{"source":"/srv/operator/creds","target":"/work"}]}`,
+			`{"workspace_mounts":[{"source":"/srv/other","target":"/work"}]}`},
+		{"a workspace secret name",
+			`{"llm_inspection":{"workspace_secret_names":["corp-signing-key"]}}`,
+			`{"llm_inspection":{"workspace_secret_names":["other"]}}`},
+	} {
+		statusR, bodyR := e.call(alice, http.MethodPost, "/api/v1/templates/"+tpl.ID.String()+"/policy-check", `{"candidate":`+row.right+`}`)
+		statusW, bodyW := e.call(alice, http.MethodPost, "/api/v1/templates/"+tpl.ID.String()+"/policy-check", `{"candidate":`+row.wrong+`}`)
+		if statusR != http.StatusOK || statusW != http.StatusOK || bodyR != bodyW {
+			t.Errorf("%s: true value %d %s, wrong value %d %s, want two 200s with one body", row.name, statusR, bodyR, statusW, bodyW)
+		}
+	}
+}
+
 // withheldPolicyStore is the template test store with the policy capability enforced and no grant
 // held, so no caller may launch with a stored policy, and with one stored policy to name.
 type withheldPolicyStore struct {

@@ -57,6 +57,9 @@ func (s *Server) handleTemplatePolicyCheck(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	// Judged on the policy this caller's own reads show, never the operator's copy: a verdict on a
+	// mount's host path or a secret's name would confirm a guess of what those reads withhold.
+	effective = redactSpecForRead(effective, s.specReadTierFor(r.Context()))
 	var none types.GovernanceLimits
 	out := client.PolicyCheckResult{Within: composer.Leq(*body.Candidate, effective, none, none), Widenings: []client.PolicyWidening{}}
 	if !out.Within {
