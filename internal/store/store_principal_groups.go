@@ -48,6 +48,31 @@ func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email str
 	return nil
 }
 
+// NarrowPrincipalGroups takes out of principal's record through portal every group a verified token
+// that was refused there no longer carries, and marks the record partial when that token's snapshot was.
+// It only narrows: it never adds a group, and a person with no record through portal keeps none, so a
+// token the door did not admit writes no row. A record that is no list, or from a token issued after
+// issuedAt, is left as it is.
+func (s PG) NarrowPrincipalGroups(ctx context.Context, principal, portal string, groups []string, truncated bool, issuedAt time.Time) error {
+	if groups == nil {
+		groups = []string{}
+	}
+	b, err := json.Marshal(groups)
+	if err != nil {
+		return fmt.Errorf("store: encode sign-in groups: %w", err)
+	}
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE principal_groups p SET groups = COALESCE((
+			SELECT jsonb_agg(x) FROM jsonb_array_elements_text(p.groups) AS x
+			WHERE x IN (SELECT jsonb_array_elements_text($3::jsonb))), '[]'::jsonb),
+			truncated = p.truncated OR $4, issued_at = $5, signed_in_at = now()
+		WHERE p.principal = $1 AND p.portal = $2 AND jsonb_typeof(p.groups) = 'array'
+			AND (p.issued_at IS NULL OR p.issued_at <= $5)`, principal, portal, b, truncated, issuedAt); err != nil {
+		return fmt.Errorf("store: narrow sign-in groups: %w", err)
+	}
+	return nil
+}
+
 // GetPrincipalGroups is principal's record through portal, or ErrNotFound when there is none: no
 // sign-in through that door recorded since the table was filled, or their credentials erased since.
 func (s PG) GetPrincipalGroups(ctx context.Context, principal, portal string) (PrincipalGroups, error) {

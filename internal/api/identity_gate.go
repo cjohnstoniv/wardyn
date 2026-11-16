@@ -37,9 +37,18 @@ type principalGroupsWriter interface {
 	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error
 }
 
+// principalGroupsNarrower is the store that can narrow an existing record of a person's last token
+// exchange through a portal (store.PG.NarrowPrincipalGroups) for an exchange the portal refused.
+type principalGroupsNarrower interface {
+	NarrowPrincipalGroups(ctx context.Context, principal, portal string, groups []string, truncated bool, issuedAt time.Time) error
+}
+
 // The Postgres store keeps the record, so a deployment never issues a session or a portal token without
 // writing it.
-var _ principalGroupsWriter = store.PG{}
+var (
+	_ principalGroupsWriter   = store.PG{}
+	_ principalGroupsNarrower = store.PG{}
+)
 
 type storeIdentityGate struct{ st identityGateStore }
 

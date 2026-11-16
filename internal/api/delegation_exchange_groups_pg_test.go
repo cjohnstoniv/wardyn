@@ -71,6 +71,35 @@ func TestDelegation_AnOlderSubjectTokenKeepsTheNewerRecord(t *testing.T) {
 	}
 }
 
+// An exchange the portal's scope refuses still narrows the portal's record to the groups its verified
+// token carries and adds none; the sign-in's own record is left as it was. (A person with no record
+// through the portal gets none: TestDelegation_ExchangeRecordsThePortalsGroups.)
+func TestDelegation_ARefusedExchangeNarrowsThePortalsRecord(t *testing.T) {
+	e := newDelegationPG(t)
+	ctx := context.Background()
+	id, cred := e.registerPortal(t, delegGroup)
+	if err := e.st.PutPrincipalGroups(ctx, delegPerson, "", delegPersonEmail, []string{"eng"}, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	admitted := e.subjectToken(t, delegPerson, delegPersonEmail, []string{delegGroup, "eng", "ops"}, func(c map[string]any) {
+		c["iat"] = time.Now().Add(-time.Minute).Unix()
+	})
+	if w := e.exchange(t, id, cred, admitted); w.Code != http.StatusOK {
+		t.Fatalf("admitted exchange: %d %s, want 200", w.Code, w.Body)
+	}
+	refused := e.subjectToken(t, delegPerson, delegPersonEmail, []string{"ops", "sales"}, nil)
+	if w := e.exchange(t, id, cred, refused); w.Code != http.StatusForbidden {
+		t.Fatalf("outside the portal's scope: %d %s, want 403", w.Code, w.Body)
+	}
+	got, err := e.st.GetPrincipalGroups(ctx, delegPerson, id.String())
+	if err != nil || !slices.Equal(got.Groups, []string{"ops"}) {
+		t.Fatalf("the portal's record after a refused exchange = %+v, %v; want ops alone", got, err)
+	}
+	if got, err := e.st.GetPrincipalGroups(ctx, delegPerson, ""); err != nil || !slices.Equal(got.Groups, []string{"eng"}) {
+		t.Errorf("the sign-in's own record = %+v, %v; want it untouched", got, err)
+	}
+}
+
 // An exchange whose record cannot be written issues no token: 503 temporarily_unavailable.
 func TestDelegation_ExchangeRefusedWhenTheRecordFails(t *testing.T) {
 	e := newDelegationPG(t)
