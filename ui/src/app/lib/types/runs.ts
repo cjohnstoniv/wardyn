@@ -418,6 +418,10 @@ export interface VMMachine {
   desktop_forced_view_only?: boolean;
   // The dispatch that recorded this boot asked its helper to force that. Absent on a background macOS run: an older boot.
   desktop_view_only_asked?: boolean;
+  // What the Mac's inspection CA did for this run: its base trusts it (the proxy's certificates chain to it), not yet, or it has expired. Absent when the runner setting is off.
+  inspection_ca?: "trusted" | "not_trusted" | "expired";
+  // That CA's SHA-256 fingerprint, with inspection_ca.
+  inspection_ca_sha256?: string;
 }
 
 export interface RunAttention {

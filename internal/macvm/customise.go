@@ -144,6 +144,17 @@ func WithInspectionCA(l BaseList, path string) (BaseList, error) {
 	return l, nil
 }
 
+// reservedItemFor says what an install list name Wardyn keeps for itself is for, or "" for any other name.
+func reservedItemFor(name string) string {
+	switch name {
+	case guestagent.AgentSigningItem:
+		return "the guest agent's signing certificate"
+	case InspectionCAItem:
+		return "this Mac's inspection CA"
+	}
+	return ""
+}
+
 // ParseBaseList parses an install list and checks every item, refusing an unknown field, kind or version.
 func ParseBaseList(b []byte) (BaseList, error) {
 	var l BaseList
@@ -172,10 +183,8 @@ func (it BaseItem) check() error {
 	switch {
 	case !guestagent.ItemNamePattern.MatchString(it.Name):
 		return errors.New("a name is lower-case letters, digits, '.', '_' and '-', at most 64")
-	case it.Name == guestagent.AgentSigningItem:
-		return fmt.Errorf("the name %q is Wardyn's own, for the guest agent's signing certificate", it.Name)
-	case it.Name == InspectionCAItem:
-		return fmt.Errorf("the name %q is Wardyn's own, for this Mac's inspection CA", it.Name)
+	case reservedItemFor(it.Name) != "":
+		return fmt.Errorf("the name %q is Wardyn's own, for %s", it.Name, reservedItemFor(it.Name))
 	case !filepath.IsAbs(it.Path):
 		return errors.New("path must be an absolute path on this Mac")
 	case !sha256Hex.MatchString(it.SHA256):
