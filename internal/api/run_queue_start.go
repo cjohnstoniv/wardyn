@@ -524,7 +524,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		return end
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(st.ctx, run.ID, runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), internalAudience, run.OperatorOwned)
+	id, err := s.mintRunIdentity(st.ctx, run.ID, st.auth.workload(), runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), run.OperatorOwned)
 	if err != nil {
 		slog.ErrorContext(st.base, queueStartFailedLogName+": mint run identity", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}

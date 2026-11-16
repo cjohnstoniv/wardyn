@@ -54,6 +54,15 @@ func (p *recordingIdentity) MintRunIdentity(ctx context.Context, runID uuid.UUID
 	return id, err
 }
 
+// MintWorkloadRunIdentity records a workload's run mint as MintRunIdentity records any other.
+func (p *recordingIdentity) MintWorkloadRunIdentity(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
+	id, err := p.Provider.(identity.WorkloadRunMinter).MintWorkloadRunIdentity(ctx, runID, w, humanSub, sponsor, audience, operatorOwned)
+	p.mu.Lock()
+	p.calls = append(p.calls, mintCall{humanSub: humanSub, sponsor: sponsor, operatorOwned: operatorOwned, token: id.Token})
+	p.mu.Unlock()
+	return id, err
+}
+
 func (p *recordingIdentity) last() mintCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
