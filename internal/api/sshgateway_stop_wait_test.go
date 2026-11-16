@@ -210,7 +210,7 @@ func (r *outcomeRows) outcomes(action string) []string {
 // has been cancelled with the stop's cause (an AfterFunc on connCtx, which is a
 // sibling of each channel's context, not their parent).
 func TestSSHGateway_AStopRecordsEveryOpenChannelAsAFailure(t *testing.T) {
-	const channels, rounds = 10, 30
+	const channels, rounds = 10, 60
 	for round := range rounds {
 		st, run, principal := sshOwnedRunningRun(t)
 		priv, pub := mustSSHKeypair(t)
