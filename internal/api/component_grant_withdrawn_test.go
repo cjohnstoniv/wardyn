@@ -7,10 +7,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -231,7 +233,7 @@ func TestComponentWithdrawnOwnComponentAsksTheFeature(t *testing.T) {
 
 // A record or a row the store cannot read is an error for the door to answer as unread, never an
 // answer; a user type deleted since launch withholds, as it refuses at every other door, whether or not
-// the owner's groups are on record.
+// the owner's groups are on record, and writes no refusal row in the owner's name, who asked for nothing.
 func TestComponentWithdrawnUnreadIsAnErrorAndAGoneTypeWithholds(t *testing.T) {
 	srv, st, run, comps := withdrawnFixture(t)
 	st.grants = []types.CapabilityGrant{componentRow(types.CapabilitySubjectUser, capSub, comps[0], types.CapabilityAllow)}
@@ -255,6 +257,15 @@ func TestComponentWithdrawnUnreadIsAnErrorAndAGoneTypeWithholds(t *testing.T) {
 	wantWithdrawn(t, srv, gone, comps, "user type deleted, on record", reasonOwnerCapabilityComponent)
 	delete(st.records, capSub)
 	wantWithdrawn(t, srv, gone, comps, "user type deleted, no record", reasonOwnerCapabilityComponent)
+	rec := &recRecorder{}
+	srv.cfg.Audit, srv.cfg.Now = rec, time.Now
+	st.records[capSub] = store.PrincipalGroups{Email: capEmail, Groups: []string{}}
+	wantWithdrawn(t, srv, gone, comps, "user type deleted, audited", reasonOwnerCapabilityComponent)
+	for _, ev := range rec.snapshot() {
+		if ev.Action == authz.AuditAction {
+			t.Fatalf("a re-check of a run whose owner's user type is gone wrote %s %s", ev.Action, ev.Data)
+		}
+	}
 }
 
 // A store that keeps no sign-in record asks nothing: a build with no record of who holds what.

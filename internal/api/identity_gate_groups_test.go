@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -25,7 +26,7 @@ type gateGroupsStore struct {
 	gotPartial bool
 }
 
-func (g *gateGroupsStore) PutPrincipalGroups(_ context.Context, principal, portal, email string, groups []string, truncated bool) error {
+func (g *gateGroupsStore) PutPrincipalGroups(_ context.Context, principal, portal, email string, groups []string, truncated bool, _ time.Time) error {
 	g.puts++
 	g.gotPrinc, g.gotPortal, g.gotEmail, g.gotGroups, g.gotPartial = principal, portal, email, groups, truncated
 	return g.putErr

@@ -144,8 +144,13 @@ func (s *Server) handleDeleteWorkloadPolicyPin(w http.ResponseWriter, r *http.Re
 
 // setWorkloadPolicyPin writes pin on the caller's workload of the route's name, records a change as
 // workload.policy_pin.set, and answers the workload as it now reads. A launch already claimed keeps the pin
-// it was claimed with.
+// it was claimed with. A ?owner= naming anyone but the caller reaches no workload: the route never writes
+// the caller's own workload for a call that named another's.
 func (s *Server) setWorkloadPolicyPin(w http.ResponseWriter, r *http.Request, ws store.WorkloadStore, pin string) {
+	if o := r.URL.Query().Get("owner"); o != "" && o != principalFromRequest(r) {
+		writeErrorReason(w, http.StatusNotFound, reasonWorkloadNotFound, workloadNotFoundMsg)
+		return
+	}
 	ps, ok := ws.(store.WorkloadPolicyPins)
 	if !ok {
 		writeErrorReason(w, http.StatusNotImplemented, reasonWorkloadsUnavailable, "workloads require the Postgres store backend")

@@ -7,7 +7,9 @@
 -- a JSON array of strings) and whether that snapshot is partial. The sign-in gate writes the '' row
 -- before a session is issued, and the token exchange writes its portal's row before a delegated token is
 -- issued; either is refused when its row cannot be written. signed_in_at is the database time of that
--- write. A running run's component grants are judged for its owner against the row of the door that
+-- write. issued_at is when the token it came from was issued (the subject token's iat for an exchange,
+-- the sign-in's time for the gate), NULL for a row filled here: a token issued before the row's is not
+-- written over it, so an older token cannot put back a group a newer one no longer carried. A running run's component grants are judged for its owner against the row of the door that
 -- launched it. A SCIM removal from a group takes the group out of every row of the person the SCIM user is
 -- bound to; erasing a person's credentials, and a leaver purge, delete all their rows. No secret.
 --
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS principal_groups (
     groups       JSONB       NOT NULL DEFAULT '[]',
     truncated    BOOLEAN     NOT NULL,
     signed_in_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    issued_at    TIMESTAMPTZ,
     PRIMARY KEY (principal, portal)
 );
 

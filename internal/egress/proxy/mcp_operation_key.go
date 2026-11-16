@@ -130,9 +130,19 @@ func (a *approvalClient) markSent(ctx context.Context, id uuid.UUID, answered bo
 }
 
 // forwardKeyed sends an approved keyed call only once the control plane has recorded its send. A key
-// already sent is answered with that send (refuseSent), and any other failure sends nothing. Once the
-// server answered, with any status, the record is stamped answered; that stamp is best-effort.
+// already sent is answered with that send (refuseSent), and any other failure sends nothing. The
+// server's address and credential are resolved first, so a refusal there leaves no record standing
+// for a call that was never sent; forward checks them again. Once the server answered, with any
+// status, the record is stamped answered; that stamp is best-effort.
 func (x *mcpExchange) forwardKeyed(w http.ResponseWriter, c approveEachCall, id uuid.UUID) {
+	if _, ok := x.vetTarget(w); !ok {
+		return
+	}
+	if x.server.grantID != nil {
+		if _, ok := x.credential(w); !ok {
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(x.r.Context(), approvalCallTimeout)
 	err := x.p.approval.markSent(ctx, id, false)
 	cancel()

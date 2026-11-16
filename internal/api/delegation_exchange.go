@@ -142,6 +142,9 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	// snapshot the person's own token just produced — never anything the
 	// portal says.
 	if !slices.Contains(sess.Groups, d.Group) {
+		if !s.narrowRefusedExchange(w, r, sess, d.ID) {
+			return
+		}
 		// groups_truncated says the snapshot was partial, so the refusal may be the
 		// identity provider's cut rather than the person's membership (#2764).
 		data := map[string]any{"reason": "outside_scope", "group": d.Group}
@@ -165,9 +168,10 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	// The person's email and groups as this exchange carried them go on the record under this portal's id
 	// before the token is issued, and a failed write refuses the exchange: a run this portal launches is
-	// judged by them at the live doors, and a sign-in to Wardyn itself keeps its own record.
+	// judged by them at the live doors, and a sign-in to Wardyn itself keeps its own record. A record from
+	// a subject token issued after this one is kept.
 	if pw, ok := s.cfg.Store.(principalGroupsWriter); ok {
-		if err := pw.PutPrincipalGroups(r.Context(), sess.Sub, d.ID.String(), sess.Email, sess.Groups, sess.GroupsTruncated); err != nil {
+		if err := pw.PutPrincipalGroups(r.Context(), sess.Sub, d.ID.String(), sess.Email, sess.Groups, sess.GroupsTruncated, sess.IssuedAt); err != nil {
 			slog.ErrorContext(r.Context(), "api: record the exchange's groups failed; token exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
 			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")
@@ -199,6 +203,25 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		"token_type":        "Bearer",
 		"expires_in":        int(delegatedTokenTTL / time.Second),
 	})
+}
+
+// narrowRefusedExchange narrows the record of the person's last exchange through portal to the groups a
+// verified subject token the portal's scope refused still carries, before the refusal: the token is the
+// freshest word on what they hold, and no later exchange of theirs through the portal can be admitted to
+// write it. Only an existing record is narrowed (store.PG.NarrowPrincipalGroups), so a person the portal
+// never admitted gets none, and none gains a group. A failed write is answered 503 and reported false.
+func (s *Server) narrowRefusedExchange(w http.ResponseWriter, r *http.Request, sess oidc.Session, portal uuid.UUID) bool {
+	pn, ok := s.cfg.Store.(principalGroupsNarrower)
+	if !ok {
+		return true
+	}
+	if err := pn.NarrowPrincipalGroups(r.Context(), sess.Sub, portal.String(), sess.Groups, sess.GroupsTruncated, sess.IssuedAt); err != nil {
+		slog.ErrorContext(r.Context(), "api: narrow the refused exchange's record failed; token exchange refused", "error", err)
+		s.metrics.authStoreErrorInc()
+		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")
+		return false
+	}
+	return true
 }
 
 // authenticateDelegate is the exchange's client authentication: HTTP Basic,

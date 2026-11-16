@@ -49,11 +49,11 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	ann, ben, dee, cy, eve := identity("sub-ann", "ann@corp.example"), identity("sub-ben", "ben@corp.example"),
 		identity("sub-dee", "dee@corp.example"), identity(nil, "cy@corp.example"), identity("sub-eve", "eve@corp.example")
 	for p, groups := range map[string][]string{"sub-ann": {"eng", "ops"}, "sub-ben": {"eng"}, "sub-cy": {"eng"}, "sub-eve": {"eng", "ops"}} {
-		if err := st.PutPrincipalGroups(ctx, p, "", strings.TrimPrefix(p, "sub-")+"@corp.example", groups, p == "sub-ann"); err != nil {
+		if err := st.PutPrincipalGroups(ctx, p, "", strings.TrimPrefix(p, "sub-")+"@corp.example", groups, p == "sub-ann", now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := st.PutPrincipalGroups(ctx, "sub-ann", portal, "ann@corp.example", []string{"eng", "sales"}, false); err != nil {
+	if err := st.PutPrincipalGroups(ctx, "sub-ann", portal, "ann@corp.example", []string{"eng", "sales"}, false, now); err != nil {
 		t.Fatal(err)
 	}
 	eng, err := st.CreateScimGroup(ctx, " ENG ", "Engineering", now)
@@ -94,8 +94,8 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	if err != nil || !slices.Equal(got.Groups, []string{"ops"}) || !got.Truncated {
 		t.Fatalf("removed from eng: %+v, %v; want ops alone, still partial", got, err)
 	}
-	if got := record("sub-ann", portal); !slices.Equal(got, []string{"sales"}) {
-		t.Errorf("removed from eng, the portal's record: %v, want sales alone", got)
+	if got, err := st.GetPrincipalGroups(ctx, "sub-ann", portal); err != nil || !slices.Equal(got.Groups, []string{"sales"}) || got.Truncated {
+		t.Errorf("removed from eng, the portal's record: %+v, %v; want sales alone, still complete", got, err)
 	}
 	if _, err := st.GetPrincipalGroups(ctx, "sub-dee", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("a person with no record: %v, want still none", err)
@@ -109,7 +109,44 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	if err := st.StartGroupRemoval(ctx, blank.ID, eve); err != nil {
 		t.Fatal(err)
 	}
-	if got := record("sub-eve", ""); got == nil || len(got) != 0 {
-		t.Errorf("removed from a group with a blank id: %v, want no groups (not nil)", got)
+	if got, err := st.GetPrincipalGroups(ctx, "sub-eve", ""); err != nil || got.Groups == nil || len(got.Groups) != 0 || !got.Truncated {
+		t.Errorf("removed from a group with a blank id: %+v, %v; want no groups (not nil), marked partial", got, err)
+	}
+}
+
+// A record whose groups are not a JSON list (here JSON null) is left as it is by a SCIM removal, which
+// still removes the membership: the list step is never asked of it, so it cannot fail the removal.
+func TestPG_PrincipalGroups_ScimRemovalSkipsARecordThatIsNoList(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now()
+	var id uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('sub-ann', 'https://idp.example', 'ann@corp.example') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutPrincipalGroups(ctx, "sub-ann", "", "ann@corp.example", []string{"eng"}, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_groups SET groups = 'null'::jsonb WHERE principal = 'sub-ann'`); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := st.CreateScimGroup(ctx, "eng", "Engineering", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddScimGroupMembers(ctx, eng.ID, []uuid.UUID{id}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartGroupRemoval(ctx, eng.ID, id); err != nil {
+		t.Fatalf("removal with a record that is no list: %v, want it to succeed", err)
+	}
+	var members int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM scim_group_members WHERE group_id = $1 AND identity_id = $2`, eng.ID, id).Scan(&members); err != nil || members != 0 {
+		t.Fatalf("membership rows %d, %v; want the membership removed", members, err)
+	}
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT jsonb_typeof(groups) FROM principal_groups WHERE principal = 'sub-ann'`).Scan(&kind); err != nil || kind != "null" {
+		t.Fatalf("record groups are %q, %v; want JSON null left as it was", kind, err)
 	}
 }
