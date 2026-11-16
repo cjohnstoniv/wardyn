@@ -84,7 +84,14 @@ jobs:
           vm=$!
           start=$SECONDS
           rc=0
-          go "$sub" -toolexec "$RUNNER_TEMP/tx.sh" "$@" 2> "$RUNNER_TEMP/err-$label.txt" || rc=$?
+          if [ "$label" = c ] || [ "$label" = e ]; then
+            /usr/bin/time -v -o "$RUNNER_TEMP/tv-$label.txt" go "$sub" "$@" 2> "$RUNNER_TEMP/err-$label.txt" || rc=$?
+            kb=$(awk -F': ' '/Maximum resident set size/ { print $2 }' "$RUNNER_TEMP/tv-$label.txt")
+            w=$(awk -F': ' '/Elapsed \(wall clock\)/ { print $2 }' "$RUNNER_TEMP/tv-$label.txt")
+            printf 'compile\tgithub.com/cjohnstoniv/wardyn/internal/api\t%s\t%s (largest process of the whole command)\n' "${kb:-0}" "${w:-?}" >> "$TX_LOG"
+          else
+            go "$sub" -toolexec "$RUNNER_TEMP/tx.sh" "$@" 2> "$RUNNER_TEMP/err-$label.txt" || rc=$?
+          fi
           cat "$RUNNER_TEMP/err-$label.txt" >&2
           err=$(grep -v -m3 -e '^#' -e '^$' "$RUNNER_TEMP/err-$label.txt" | tr '\n' ' ' | tr -d ':' | cut -c1-600)
           wall=$((SECONDS - start))
