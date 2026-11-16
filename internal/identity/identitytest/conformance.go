@@ -105,6 +105,7 @@ func RunConformance(t *testing.T, newProvider func(t *testing.T) identity.Provid
 // workloadRunConformance is RunConformance's workload-run case, kept apart so neither function grows
 // past the complexity limit.
 func workloadRunConformance(t *testing.T, p identity.Provider, aud string) {
+	t.Helper()
 	ctx := context.Background()
 	m, ok := p.(identity.WorkloadRunMinter)
 	if !ok {
