@@ -284,8 +284,7 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 		return "", true
 	}
 	if ap.Kind == types.ApprovalFileDownload {
-		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
-			" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it").
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+" is set: a second human must decide this — "+secondHumanDownloadWhy(ap)).
 			OnRun(ap.RunID))
 		return "", false
 	}
@@ -317,4 +316,13 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 		" is set: a second human must decide this — you created this run, so someone else approves or denies its egress").
 		OnRun(ap.RunID).With("host", approvalHost(ap)))
 	return "", false
+}
+
+// secondHumanDownloadWhy is why a second-human rule refuses this decider a download: they asked for it or it is
+// their run's, or its asker was erased and so could be anyone (askedForDownload).
+func secondHumanDownloadWhy(ap types.ApprovalRequest) string {
+	if sc, ok := types.ParseFileDownloadScope(ap.RequestedScope); ok && sc.RequestedBy == types.FileDownloadAskerErased {
+		return "the person who asked for this download was erased, so no person can be told apart from them; only the admin token approves or denies it"
+	}
+	return "you asked for this download or it is your run's, so someone else approves or denies it"
 }

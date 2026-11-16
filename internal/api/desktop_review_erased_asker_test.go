@@ -29,3 +29,18 @@ func TestErasedDownloadAskerCountsAsEveryone(t *testing.T) {
 		t.Fatal("erased: want it reserved, so no person signs in under the erased asker's name")
 	}
 }
+
+// TestSecondHumanDownloadRefusalNamesAnErasedAsker: the second-human refusal of an erased asker's download says only
+// the admin token decides it, and a named asker's keeps its words.
+func TestSecondHumanDownloadRefusalNamesAnErasedAsker(t *testing.T) {
+	download := func(by string) types.ApprovalRequest {
+		return types.ApprovalRequest{Kind: types.ApprovalFileDownload, RequestedScope: json.RawMessage(
+			`{"name":"build.log","bytes":12,"sha256":"` + strings.Repeat("ab", 32) + `","requested_by":"` + by + `"}`)}
+	}
+	if got, want := secondHumanDownloadWhy(download("dana@example.test")), "you asked for this download or it is your run's, so someone else approves or denies it"; got != want {
+		t.Errorf("a named asker: %q, want %q", got, want)
+	}
+	if got := secondHumanDownloadWhy(download(types.FileDownloadAskerErased)); !strings.Contains(got, "was erased") || !strings.Contains(got, "only the admin token") {
+		t.Errorf("an erased asker: %q, want it to say the asker was erased and only the admin token decides", got)
+	}
+}
