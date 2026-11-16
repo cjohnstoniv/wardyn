@@ -203,6 +203,9 @@ export function seedOverlayLimits(limits: GovernanceLimits): Bag {
   const stored = limits as Bag;
   const rubric = Object.fromEntries(Object.entries((stored.autonomy_rubric ?? {}) as Bag).filter(([, lvl]) => lvl));
   if (Object.keys(rubric).length > 0) out.autonomy_rubric = rubric;
+  // The confinement floors have no row of their own: they move whole, so composing never drops a stored floor.
+  const floors = Object.fromEntries(Object.entries((stored.confinement_floors ?? {}) as Bag).filter(([, cc]) => cc));
+  if (Object.keys(floors).length > 0) out.confinement_floors = floors;
   for (const { key, kind } of LIMIT_FIELDS) {
     const v = stored[key];
     if (kind === "list" ? Array.isArray(v) && v.length > 0 : kind === "true" ? v === true : kind === "false" ? v !== true : typeof v === "number" && v > 0) {

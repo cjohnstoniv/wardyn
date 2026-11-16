@@ -40,6 +40,11 @@ describe("limitChips and limitsBoundNothing", () => {
     expect(limitsBoundNothing({})).toBe(true);
     expect(limitsBoundNothing({ max_cpu_millis: 0, deny_placements: [], allowed_macos_bases: [], allowed_models: [] })).toBe(true);
   });
+
+  it("a confinement floor counts though it draws no chip, and floors that raise nothing are None", () => {
+    expect(limitsBoundNothing({ confinement_floors: { own_image: "CC3" } })).toBe(false);
+    expect(limitsBoundNothing({ confinement_floors: {} })).toBe(true);
+  });
 });
 
 describe("the unit deny lists in a composed profile's overlay rows", () => {
