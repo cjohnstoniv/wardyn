@@ -19,11 +19,11 @@ import (
 func workloadCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workload",
-		Short: "List, read, restart and delete stored workloads, and bind namespaces to service identities",
+		Short: "List, read, restart, pin and delete stored workloads, and bind namespaces to service identities",
 		Long: "A workload is a named run that Wardyn keeps running. Create or change one with\n" +
 			"`wardyn apply -f FILE`; these commands read it back and manage it by name.",
 	}
-	cmd.AddCommand(workloadListCmd(client), workloadGetCmd(client), workloadRestartCmd(client), workloadRemoveCmd(client), workloadBindingCmd(client))
+	cmd.AddCommand(workloadListCmd(client), workloadGetCmd(client), workloadRestartCmd(client), workloadRemoveCmd(client), workloadPinCmd(client), workloadUnpinCmd(client), workloadBindingCmd(client))
 	return subcommandGroup(cmd)
 }
 
