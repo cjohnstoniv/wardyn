@@ -25,11 +25,11 @@ import (
 // rootCtx is; stop ends that context, which is a daemon stop. The returned
 // harness dials that listener. WaitBackground's budget is cut to 10s so a stop
 // that never ends fails the test instead of stalling it.
-func stoppableGateway(t *testing.T, st *sshMemStore, fr *sshFakeRunner, rec audit.Recorder) (*sshTestHarness, context.CancelFunc) {
+func stoppableGateway(t *testing.T, st *sshMemStore, fr *sshFakeRunner, rec audit.Recorder, configure ...func(*Config)) (*sshTestHarness, context.CancelFunc) {
 	t.Helper()
 	ctx, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
-	h := newSSHTestHarness(t, st, fr, func(c *Config) { c.BaseCtx, c.Audit = ctx, rec })
+	h := newSSHTestHarness(t, st, fr, append([]func(*Config){func(c *Config) { c.BaseCtx, c.Audit = ctx, rec }}, configure...)...)
 	h.srv.bgWaitBudget = 10 * time.Second
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -204,12 +204,13 @@ func (r *outcomeRows) outcomes(action string) []string {
 // A daemon stop ends every session channel's door with the stop's own cause,
 // before the connection is closed, so each running transfer is recorded as the
 // failure it is and none is read as the client's close, a success. The channels
-// of one connection and the close of that connection are racing contexts, so
-// the check repeats. Catches: a close that can land before a channel's context
+// of one connection and the close of that connection are racing contexts, which
+// more open channels expose more often, so the check opens ten and repeats.
+// Catches: a close that can land before a channel's context
 // has been cancelled with the stop's cause (an AfterFunc on connCtx, which is a
 // sibling of each channel's context, not their parent).
 func TestSSHGateway_AStopRecordsEveryOpenChannelAsAFailure(t *testing.T) {
-	const channels, rounds = 4, 30
+	const channels, rounds = 10, 30
 	for round := range rounds {
 		st, run, principal := sshOwnedRunningRun(t)
 		priv, pub := mustSSHKeypair(t)
@@ -234,7 +235,7 @@ func TestSSHGateway_AStopRecordsEveryOpenChannelAsAFailure(t *testing.T) {
 			}, nil
 		}}
 		rec := &outcomeRows{}
-		h, stop := stoppableGateway(t, st, fr, rec)
+		h, stop := stoppableGateway(t, st, fr, rec, func(c *Config) { c.SSHMaxSessionsPerRun = channels })
 		client, err := sshDial(t, h, run.ID.String(), priv)
 		if err != nil {
 			t.Fatalf("round %d: dial: %v", round, err)
