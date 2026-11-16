@@ -344,12 +344,17 @@ jobs:
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest
@@ -473,6 +478,9 @@ jobs:
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: scripts/ci-api-prebuild.sh 2
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
@@ -485,6 +493,9 @@ jobs:
       # cancelled at its limit with none.
       - name: Whole-tree guard tests (every Go test that reads the repository)
         timeout-minutes: 20
+        env:
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           set -euo pipefail
           vmstat -t 15 &
@@ -1993,10 +2004,15 @@ jobs:
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: scripts/ci-api-prebuild.sh 1 -tags docker
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           vmstat -t 15 &
           vm=$!
@@ -2666,6 +2682,9 @@ jobs:
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: scripts/ci-api-prebuild.sh 2 ${{ matrix.prebuild == 'race' && '-race' || '' }}
       - name: Postgres-gated suite (${{ matrix.shard }})
         env:
@@ -2675,6 +2694,8 @@ jobs:
           # No gate reads a PG shard's coverage (the floor and cover-union take unit,
           # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
           WARDYN_TEST_REPORT_COVER: '0'
+          # The same GOFLAGS as the prebuild above, so the api and race shards reuse its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           vmstat -t 15 &
           vm=$!

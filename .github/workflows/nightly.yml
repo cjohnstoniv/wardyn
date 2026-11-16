@@ -293,11 +293,16 @@ jobs:
           # its starting-heap boost. It cannot hold a compile below its live heap.
           # One worker: no second compile or link runs beside the api one, here beside the agent images in docker.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: scripts/ci-api-prebuild.sh 1 -tags docker
       - name: Docker conformance at CC2 (runsc)
         env:
           WARDYN_TEST_DOCKER: "1"
           WARDYN_TEST_REQUIRE_CLASS: CC2
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         shell: bash # pipefail — see the e2e-live job above
         # vmstat writes to the step log itself, every 15 s, so a runner lost mid-step still leaves its last numbers.
         run: |
@@ -751,6 +756,8 @@ jobs:
           GOMEMLIMIT: "10GiB"
           # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
           WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures).
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         shell: bash
         run: |
           set -euo pipefail
@@ -864,6 +871,8 @@ jobs:
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures).
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         shell: bash
         run: |
           mkdir -p test/reports/go

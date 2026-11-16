@@ -9,6 +9,11 @@
 # that one process's peak, not the sum of the processes; it goes to the log and to a notice whether the compile
 # passes or fails. vmstat writes memory to the log every 15 s, which a runner lost mid-step still leaves. Last, the
 # count of internal/api compiles left for the next step: 0 means the cache holds them all.
+#
+# The callers also set GOFLAGS so internal/api compiles and links without DWARF. Measured on a hosted runner with
+# the race and coverage flags, the test compile's largest process fell from 13.9 to 11.0 GiB and the link's from
+# 3.2 to 2.5 GiB. The count above runs under this step's GOFLAGS, so a next step with another value compiles the
+# package again unseen; the callers give both steps the same value.
 set -euo pipefail
 workers=${1:?usage: ci-api-prebuild.sh <workers> [go test build flags...]}
 shift
