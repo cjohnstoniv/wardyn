@@ -144,6 +144,9 @@ func TestComponentWithdrawnSparesAnUngovernedAdminOwner(t *testing.T) {
 	wantWithdrawn(t, srv, run, comps, "admin by default, complete groups", "")
 	st.records[capSub] = store.PrincipalGroups{Email: capEmail, Groups: []string{"eng"}, Truncated: true}
 	wantWithdrawn(t, srv, run, comps, "admin by default, partial groups", reasonOwnerCapabilityComponent)
+	// The default role never spares an owner with no record: nothing says what they hold.
+	delete(st.records, capSub)
+	wantWithdrawn(t, srv, run, comps, "admin by default, no record", reasonOwnerCapabilityComponent)
 }
 
 // The owner's groups are read from the record of the door that launched the run: a portal's token
