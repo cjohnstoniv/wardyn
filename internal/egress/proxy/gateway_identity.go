@@ -56,6 +56,11 @@ const gatewayComponentCutSentence = "a component this run carries was withdrawn 
 // for (refusalReason). It makes the holder terminal.
 var errGatewayAccessCut = errors.New("the control plane cut this run's gateway access")
 
+// errGatewayComponentCut is a mint refused for a component the run carries (refusalReason's
+// capability_component, component_gone or component_unit_pinned). It is definite while it lasts but not
+// terminal: the holder asks again at its pace, and a grant given back admits the next mint.
+var errGatewayComponentCut = errors.New(gatewayComponentCutSentence)
+
 // maxCutReasonBody bounds how much of a refusal is read for its reason.
 const maxCutReasonBody = 1 << 10
 
@@ -356,6 +361,22 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 			}
 			return false
 		}
+		if errors.Is(err, errGatewayComponentCut) {
+			// Definite until the component's grant comes back: a 403 the SDK does not retry at once, not a 502.
+			if p.sink != nil {
+				log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+				log.GatewayCallID = callID
+				log.Cause = "gateway identity unavailable: " + p.dialFailureCause(err)
+				p.sink.emit(log)
+			}
+			if shape := p.shapeOf(r, host); shape != shapePlain {
+				p.writeBrokeredFault(w, shape, host, brokeredFault{port: port, ruleSource: ruleSource, reason: reasonGatewayComponentCut}, err)
+			} else {
+				w.Header().Set(egressHeaderWardynReason, reasonGatewayComponentCut)
+				http.Error(w, gatewayComponentCutSentence, http.StatusForbidden)
+			}
+			return false
+		}
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
 			log.GatewayCallID = callID
@@ -604,7 +625,7 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 	case reason == reasonGatewayAccessCut:
 		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %w", resp.StatusCode, errGatewayAccessCut)
 	case reason != "":
-		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %s", resp.StatusCode, gatewayComponentCutSentence)
+		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %w", resp.StatusCode, errGatewayComponentCut)
 	default:
 		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d); if the provider was changed or turned off, start a new run", resp.StatusCode)
 	}
