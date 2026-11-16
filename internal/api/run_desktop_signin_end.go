@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -94,6 +95,10 @@ const signinStageEnding = "ending"
 // so this end sent nothing.
 var errSigninEndClaimed = errors.New("another end holds the sign-in")
 
+// errSigninEndUnclaimed: the store could not take this end's claim on the
+// sign-in's row, so this end sent nothing.
+var errSigninEndUnclaimed = errors.New("claim the sign-in's end")
+
 // signinEndClaimLive reports whether endStage is an end's claim whose hold has
 // not passed at now.
 func signinEndClaimLive(endStage string, now time.Time) bool {
@@ -114,10 +119,12 @@ func signinEndClaimLive(endStage string, now time.Time) bool {
 // begin before the claimer closes the row. It returns ctx bounded by
 // signinEndHold, and release, which ends that bound and clears the claim when
 // the end left the row open and unmarked, so the next end need not wait out
-// the hold. errSigninEndClaimed: another end holds the row, or it closed. A
-// store that cannot take the claim cannot close the row either, so the end
-// then runs unclaimed with a release that does nothing: a store fault never
-// leaves the agent stopped.
+// the hold. errSigninEndClaimed: another end holds the row, or it closed.
+// errSigninEndUnclaimed: the claim's write failed. That end sends nothing
+// either, since one failed statement does not mean no other end can claim and
+// close the row, and a later claim (the person's next end, or the sweep's)
+// ends the sign-in. Only abandonDesktopSignin then runs unclaimed, where
+// leaving the agent stopped is the worse outcome.
 func (s *Server) claimSigninEnd(ctx context.Context, st store.DesktopSigninStore, si types.DesktopSignin) (context.Context, func(), error) {
 	now := s.cfg.Now()
 	if signinEndClaimLive(si.EndStage, now) {
@@ -126,7 +133,7 @@ func (s *Server) claimSigninEnd(ctx context.Context, st store.DesktopSigninStore
 	claim := signinStageEnding + ":" + strconv.FormatInt(now.Add(signinEndHold).Unix(), 10)
 	claimed, err := st.ClaimDesktopSigninEnd(ctx, si.ID, si.EndStage, claim)
 	if err != nil {
-		return ctx, func() {}, nil
+		return ctx, nil, fmt.Errorf("%w: %w", errSigninEndUnclaimed, err)
 	}
 	if !claimed {
 		return ctx, nil, errSigninEndClaimed

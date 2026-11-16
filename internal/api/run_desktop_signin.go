@@ -497,7 +497,9 @@ func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, 
 // SIGCONT (continueDesktopSignin), never the helper; a state that cannot be
 // read closes the row with agent_resumed false. It runs on its own
 // bounded context, since the begin's request may be gone.
-// It claims the row first (claimSigninEnd), and leaves the row to another end that holds it.
+// It claims the row first (claimSigninEnd), and leaves the row to another end that holds it. A claim the
+// store could not write runs it unclaimed: only a bare SIGCONT is sent, and a store fault must not leave the
+// agent stopped.
 func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
 	defer cancel()
@@ -506,7 +508,10 @@ func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExece
 		return
 	}
 	ctx, release, err := s.claimSigninEnd(ctx, st, si)
-	if err != nil {
+	switch {
+	case errors.Is(err, errSigninEndUnclaimed):
+		release = func() {}
+	case err != nil:
 		return // another end holds the row and continues the agent, or the row closed
 	}
 	defer release()
@@ -737,8 +742,12 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.finishDesktopSignin(ctx, run, si, signinEndDone, types.ActorHuman, principal); err != nil {
-		if errors.Is(err, errSigninEndClaimed) {
+		switch {
+		case errors.Is(err, errSigninEndClaimed):
 			writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotOpen, "no sign-in is open on this run")
+			return
+		case errors.Is(err, errSigninEndUnclaimed):
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in's end could not be recorded, so nothing was sent; end the sign-in again")
 			return
 		}
 		msg := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
