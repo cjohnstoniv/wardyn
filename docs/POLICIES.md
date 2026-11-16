@@ -1230,6 +1230,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 
 An `approve_each` call can carry an operation key, the `_meta` member `wardyn.dev/operation-key`: 1 to 128 ASCII letters, digits or `. _ : / -`, such as the run's correlation ID joined to a step name. The key may not start with `call:`, which is reserved for the keys Wardyn makes. A call with a key is sent at most once in 24 hours.
 - Wardyn records the send before it sends the call and keeps the record on the server, so a revive or a new proxy keeps it.
+- The run proxy resolves the server's address and reads its credential before the record, so a call refused there leaves no record. One refused after the record (a host deny, its body scan or its gateway identity) leaves the record standing for 24 hours.
 - A key's namespace is the run's owner, within the run's correlation ID, else within the run.
 - A call is the same call by its server name, tool, arguments and any other parameters it sends outside `_meta`, not by the host it is sent to.
 - Runs of one owner and one correlation ID share send records. A call sent in one of them is not sent again in another for those 24 hours, even where their policies send that server name to different hosts.
@@ -1238,7 +1239,7 @@ An `approve_each` call can carry an operation key, the `_meta` member `wardyn.de
 - A call whose send cannot be recorded is not sent.
 - The key is never sent to the MCP server and is not part of what a person approves. A key on a call no `approve_each` rule covers is not read: that call is sent as it is, key included.
 - An approved call that has not been sent has no deadline of its own: its approval holds until the run ends or its proxy is replaced, whichever comes first.
-- An operation key needs this release's run proxy. In a run with no `correlation_id`, an older proxy or runner drops it; a run with one does not start on either.
+- An operation key needs this release's run proxy. In a run with no `correlation_id`, an older proxy or runner drops it; a run with one does not start on either. A remote runner older than this release is refused such a run at create (`runner_proxy_setting_unsupported`); upgrade its wardyn-runnerd.
 - Erasing a person's run tasks overwrites their send records at once, so a later call one of them would have answered is asked about again. Erasing their audit fields removes the key from the approvals of their runs.
 
 A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
