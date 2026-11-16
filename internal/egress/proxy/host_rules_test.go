@@ -637,3 +637,19 @@ func TestViaOrgRefusesDeclaredOverrideTrailers(t *testing.T) {
 		}
 	}
 }
+
+// TestHostRulesRefuseARuleHostOnTheSigninLane: the sign-in lane opens no connection, so a CONNECT to a rule
+// host on it is refused with policy:host-rule-needs-inspection, on a container's proxy and a VM run's.
+func TestHostRulesRefuseARuleHostOnTheSigninLane(t *testing.T) {
+	for _, vm := range []bool{false, true} {
+		rig := newSigninLaneRigFor(t, vm, func(o *Options) {
+			o.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test"},
+				HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: "site.test", Effect: types.HostRuleAllow}}}}})
+			o.MITMHosts = []string{"site.test:443"}
+		})
+		_, _, status := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred))
+		if status != http.StatusForbidden || !strings.Contains(rig.logs.String(), ruleSourceHostRuleNeedsInspection) {
+			t.Errorf("vm=%v: CONNECT = %d, want 403 and a %s row", vm, status, ruleSourceHostRuleNeedsInspection)
+		}
+	}
+}
