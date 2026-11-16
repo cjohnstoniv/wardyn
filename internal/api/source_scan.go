@@ -108,7 +108,8 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			_ = dir.Close()
 		}
 		if fault != nil {
-			// The scan ran and its result could not be saved: a server fault, which a retry may clear.
+			// The scan ran and its result could not be saved: a server fault, which a retry may
+			// clear, or not found when the row is gone.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditPersistFault})))
 			if errors.Is(fault, store.ErrNotFound) {
@@ -241,7 +242,8 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 // the 422 detail (already persisted as status=error) — the same
 // never-a-false-green rule the workspace scan enforces, with the same
 // sealed-daemon diagnosis. A fault is the write of the scanned profile failing:
-// the row keeps its old status, and the caller answers it as a server fault.
+// the row keeps its old status, and the caller answers it as a server fault. A row
+// that is gone is not found for one source, and skipped in a fan-out.
 //
 // Consults the SAME opt-in ADVISORY AI gap-fill the sandboxed repo-scan upload
 // lane does (applyScanAIAdvisor, scanresult.go) — WARDYN_SCAN_AI_ADVISOR
@@ -596,12 +598,11 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				_ = dir.Close()
 			}
 			if fault != nil {
-				partialAudit(id, scanAuditPersistFault)
 				if errors.Is(fault, store.ErrNotFound) {
-					// The source was deleted while its scan ran: not a fault, the row is gone.
-					writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
-					return
+					// Deleted while its scan ran: gone like a dangling attachment, so there is nothing to scan.
+					continue
 				}
+				partialAudit(id, scanAuditPersistFault)
 				writeServerError(w, r, scanAuditPersistFault, fault)
 				return
 			}

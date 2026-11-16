@@ -34,7 +34,8 @@ type scanSourceStore struct {
 	// workspaces and wsListErr answer ListWorkspaces: the workspaces that attach a scanned folder.
 	workspaces []types.Workspace
 	wsListErr  error
-	setErr     error // SetSourceScanResultUnfenced fails with it
+	setErr     error               // SetSourceScanResultUnfenced fails with it
+	setErrFor  map[uuid.UUID]error // and with these, for one source only
 }
 
 func (s *scanSourceStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
@@ -68,6 +69,9 @@ func (s *scanSourceStore) GetSourcesByIDs(_ context.Context, ids []uuid.UUID) (m
 func (s *scanSourceStore) SetSourceScanResultUnfenced(_ context.Context, id uuid.UUID, _ []byte, status types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
 	if s.setErr != nil {
 		return types.Source{}, s.setErr
+	}
+	if err := s.setErrFor[id]; err != nil {
+		return types.Source{}, err
 	}
 	if s.statuses == nil {
 		s.statuses = map[uuid.UUID]types.WorkspaceStatus{}
@@ -186,8 +190,12 @@ func TestHandleScanSource(t *testing.T) {
 	})
 	t.Run("a local_dir scan whose source went away before its result was saved is a 404", func(t *testing.T) {
 		st := &scanSourceStore{sources: sources(), setErr: fmt.Errorf("set scan result: %w", store.ErrNotFound)}
+		logs := captureSlog(t)
 		h, srv := newSrv(t, st, false)
 		w := scan(srv, dirID.String())
+		if strings.Contains(logs.String(), "level=ERROR") {
+			t.Errorf("a source that is gone logged at error level: %s", logs.String())
+		}
 		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonSourceNotFound || !strings.Contains(w.Body.String(), "no such source") {
 			t.Fatalf("= %d %s, want 404 %s no such source", w.Code, w.Body.String(), reasonSourceNotFound)
 		}
@@ -313,20 +321,24 @@ func TestScanAttachedSourcesOutcomes(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a folder whose source went away before its scan result was saved is a 404", func(t *testing.T) {
+	t.Run("a folder whose source went away while its scan result was saved is skipped and the fan-out goes on", func(t *testing.T) {
+		goneID := uuid.New()
 		st := base()
-		st.setErr = fmt.Errorf("set scan result: %w", store.ErrNotFound)
-		h, w := run(t, st, false, attach(dirID))
-		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonSourceNotFound || !strings.Contains(w.Body.String(), "no such source") {
-			t.Fatalf("= %d %s, want 404 %s no such source", w.Code, w.Body.String(), reasonSourceNotFound)
+		st.sources[goneID] = types.Source{ID: goneID, Kind: types.SourceLocalDir, Locator: dir}
+		st.setErrFor = map[uuid.UUID]error{goneID: fmt.Errorf("set scan result: %w", store.ErrNotFound)}
+		logs := captureSlog(t)
+		h, w := run(t, st, false, attach(goneID, dirID))
+		if strings.Contains(logs.String(), "level=ERROR") {
+			t.Errorf("a source that is gone logged at error level: %s", logs.String())
 		}
-		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "failure" {
-			t.Errorf("workspace.scan audit outcomes = %v, want [failure]", got)
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"merged":true}` {
+			t.Fatalf("= %d %s, want 200 with the freshly merged profile", w.Code, w.Body.String())
 		}
-		for _, ev := range h.audit.snapshot() {
-			if ev.Action == "workspace.scan" && !strings.Contains(string(ev.Data), scanAuditPersistFault) {
-				t.Errorf("workspace.scan row data = %s, want the step %q", ev.Data, scanAuditPersistFault)
-			}
+		if st.statuses[dirID] != types.WorkspaceScanned || len(st.statuses) != 1 {
+			t.Errorf("persisted statuses = %v, want only the folder that is still there scanned", st.statuses)
+		}
+		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "success" {
+			t.Errorf("workspace.scan audit outcomes = %v, want [success]: no failure row for the folder that is gone", got)
 		}
 	})
 }
