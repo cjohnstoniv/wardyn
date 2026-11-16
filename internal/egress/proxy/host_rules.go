@@ -68,8 +68,6 @@ func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) 
 	switch {
 	case p.engine && ctx.Value(engineHeldRequest{}) != nil:
 		return "" // the request itself is judged next, in serveMITMRequest (ServeInjected)
-	case p.vm:
-		return "host rules are not judged on a VM run's guest flows"
 	case onSigninLane(ctx):
 		return "the sign-in lane does not open connections, so a rule host is not reached on it"
 	case p.ca == nil:
@@ -259,8 +257,9 @@ func (p *Policy) namesRuleHost(host string) bool {
 	return p != nil && len(p.hostRules) > 0 && types.HostRulesName(p.hostRules, host)
 }
 
-// validateHostRules is the config's check of policy.host_rules: the shape (types.ValidateHostRuleSets),
-// and no rules on a VM run.
+// validateHostRules is the config's check of policy.host_rules: the shape (types.ValidateHostRuleSets). A VM
+// run's guest flows reach the same CONNECT and plain-HTTP paths through the relay (vmnet_flows.go), so its rules
+// load as a container's do.
 func (c *Config) validateHostRules() error {
 	sets := c.Policy.HostRules
 	if len(sets) == 0 {
@@ -268,9 +267,6 @@ func (c *Config) validateHostRules() error {
 	}
 	if err := types.ValidateHostRuleSets(sets); err != nil {
 		return fmt.Errorf("config: policy.%w", err)
-	}
-	if c.VM {
-		return fmt.Errorf("config: policy.host_rules: host rules are not judged on a VM run's guest flows")
 	}
 	return nil
 }
