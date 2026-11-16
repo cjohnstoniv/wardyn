@@ -29,3 +29,5 @@ CREATE TABLE IF NOT EXISTS mcp_call_sends (
     PRIMARY KEY (owner, operation_scope, operation_key)
 );
 CREATE INDEX IF NOT EXISTS mcp_call_sends_approval_idx ON mcp_call_sends (approval_id);
+-- Erasing a person's run tasks finds their runs' rows by run.
+CREATE INDEX IF NOT EXISTS mcp_call_sends_run_idx ON mcp_call_sends (run_id);
