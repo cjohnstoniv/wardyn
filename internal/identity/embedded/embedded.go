@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package embedded implements the default, SPIFFE-shaped JWT-SVID identity
-// provider satisfying identity.Provider. It mints short-lived ES256 JWTs whose
-// subject path is spiffe://<trust-domain>/agent-run/<run-id>, carrying the full
-// delegation chain (human sub, agent-run act, sponsor) for attribution.
+// provider satisfying identity.Provider and identity.WorkloadRunMinter. It mints
+// short-lived ES256 JWTs whose act.sub is the run's SPIFFE ID, at
+// identity.RunPath's path: spiffe://<trust-domain>/agent-run/<run-id>, or
+// spiffe://<trust-domain>/workload/<owner>/<name>/run/<run-id> for a run a
+// workload launched. They carry the full delegation chain (human sub, agent-run
+// act, sponsor) for attribution.
 //
 // INVARIANT (Confinement gating): this provider REFUSES to mint identities for
 // runs whose grants include types.GrantCloudSTS — cloud STS federation
@@ -44,8 +47,9 @@ const (
 	DefaultTrustDomain = "wardyn.local"
 	// tokenTTL is the fixed lifetime of a minted JWT-SVID (1h ceiling).
 	tokenTTL = identity.RunTokenTTL
-	// agentRunPathPrefix builds spiffe://<td>/agent-run/<run-id>.
-	agentRunPathPrefix = "/agent-run/"
+	// maxSPIFFEIDLength is the longest SPIFFE ID this provider issues: the SPIFFE ID
+	// spec's 2048 bytes, the length every relying party must accept.
+	maxSPIFFEIDLength = 2048
 )
 
 // ErrRequiresSPIRE is the typed refusal returned by CheckGrants (and MintRunIdentity)
@@ -150,6 +154,12 @@ func (p *Provider) CheckGrants(grants []types.GrantSpec) error {
 // empty); audience binds the token (RFC 8707); operatorOwned is signed in as
 // Claims.OperatorOwned. It emits an identity.mint audit event (actor_type system).
 func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
+	return p.MintWorkloadRunIdentity(ctx, runID, identity.Workload{}, humanSub, sponsor, audience, operatorOwned)
+}
+
+// MintWorkloadRunIdentity is MintRunIdentity for a run w launched: the token's
+// SPIFFE ID is identity.RunPath's for w and runID. A zero w is MintRunIdentity.
+func (p *Provider) MintWorkloadRunIdentity(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
 	if humanSub == "" {
 		return identity.RunIdentity{}, errors.New("embedded identity: humanSub is required")
 	}
@@ -160,7 +170,7 @@ func (p *Provider) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSu
 		sponsor = humanSub
 	}
 
-	id, err := p.spiffeIDForRun(runID)
+	id, err := p.spiffeIDForRun(w, runID)
 	if err != nil {
 		return identity.RunIdentity{}, err
 	}
@@ -306,25 +316,35 @@ func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) e
 	return nil
 }
 
-func (p *Provider) spiffeIDForRun(runID uuid.UUID) (spiffeid.ID, error) {
-	id, err := spiffeid.FromSegments(p.trustDomain, "agent-run", runID.String())
+func (p *Provider) spiffeIDForRun(w identity.Workload, runID uuid.UUID) (spiffeid.ID, error) {
+	path, err := identity.RunPath(w, runID)
+	var id spiffeid.ID
+	if err == nil {
+		id, err = spiffeid.FromPath(p.trustDomain, path)
+	}
+	if err == nil && len(id.String()) > maxSPIFFEIDLength {
+		err = fmt.Errorf("it is longer than %d bytes", maxSPIFFEIDLength)
+	}
 	if err != nil {
 		return spiffeid.ID{}, fmt.Errorf("embedded identity: build spiffe id for run %s: %w", runID, err)
 	}
 	return id, nil
 }
 
-// spiffeIDString is a best-effort string form for audit actor fields.
+// spiffeIDString is a best-effort string form for audit actor fields: the run's
+// ad-hoc form, since a revoke is given the run alone. Such a row carries the run
+// id, which is what joins it to a workload's run.
 func (p *Provider) spiffeIDString(runID uuid.UUID) string {
-	id, err := p.spiffeIDForRun(runID)
+	id, err := p.spiffeIDForRun(identity.Workload{}, runID)
 	if err != nil {
 		return ""
 	}
 	return id.String()
 }
 
-// runIDFromActor extracts the run UUID from an agent-run SPIFFE ID, verifying
-// the trust domain matches this provider's.
+// runIDFromActor extracts the run UUID from a run's SPIFFE ID, in either form
+// identity.RunPath writes (the run id is its last segment), verifying the trust
+// domain matches this provider's.
 func (p *Provider) runIDFromActor(actor string) (uuid.UUID, error) {
 	id, err := spiffeid.FromString(actor)
 	if err != nil {
@@ -333,13 +353,9 @@ func (p *Provider) runIDFromActor(actor string) (uuid.UUID, error) {
 	if id.TrustDomain() != p.trustDomain {
 		return uuid.Nil, fmt.Errorf("embedded identity: actor trust domain %q does not match %q", id.TrustDomain(), p.trustDomain)
 	}
-	path := id.Path()
-	if len(path) <= len(agentRunPathPrefix) || path[:len(agentRunPathPrefix)] != agentRunPathPrefix {
-		return uuid.Nil, fmt.Errorf("embedded identity: actor path %q is not an agent-run", path)
-	}
-	runID, err := uuid.Parse(path[len(agentRunPathPrefix):])
+	_, runID, err := identity.ParseRunPath(id.Path())
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("embedded identity: actor path %q has invalid run id: %w", path, err)
+		return uuid.Nil, fmt.Errorf("embedded identity: actor: %w", err)
 	}
 	return runID, nil
 }
