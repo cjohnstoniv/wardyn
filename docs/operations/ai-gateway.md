@@ -194,7 +194,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 
 ## When a run's gateway access ends
 
-- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server. A refused mint gives no new token.
+- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server, and for an MCP server's token the components the run carries. A refused mint gives no new token.
 - The bound: within half the token lifetime while wardynd is reachable, and up to the held token's expiry if it is not. Requests already forwarded and open streams run to completion.
 
 | Event | A running run's gateway access |
@@ -204,6 +204,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 | Sponsor suspended or fully revoked | ends: `403` `identity_deactivated` |
 | Sponsor handover | continues; new tokens name the new sponsor |
 | Provider or MCP server changed or turned off | ends: `403` `gateway_identity_changed` |
+| A component the run carries withdrawn from its owner, deleted, or pinned to a unit the run is not in | ends for its MCP servers: `403` `capability_component`, `component_gone` or `component_unit_pinned`; the model provider's continues |
 | Portal revoked | continues, as before |
 | Portal revoked with `cut_in_flight=true` | ends for good: `403` `gateway_access_cut` |
 
