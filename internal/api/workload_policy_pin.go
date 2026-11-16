@@ -33,8 +33,9 @@ import (
 var workloadPolicyPinPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const (
-	workloadPolicyPinMismatchMsg = reasonWorkloadPolicyPinMismatch + ": %s %s"
-	workloadPolicyPinInvalidMsg  = reasonWorkloadPolicyPinInvalid
+	workloadPolicyPinMismatchMsg = "This workload is pinned to launch policy digest %s, but its policy now resolves to %s. " +
+		"Pin the new digest to accept the change."
+	workloadPolicyPinInvalidMsg = "A policy pin is a launch policy digest: 64 lowercase hex characters, as a workload preview's launch.policy_digest shows it."
 )
 
 // policyPinKey carries a workload launch's pin into the create fold: launchClaimed and the preview put it on
