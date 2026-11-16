@@ -51,9 +51,6 @@ const (
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
 
-// workloadApplyOwnerMsg is the refusal of an apply whose ?owner= names anyone but the caller.
-const workloadApplyOwnerMsg = "A workload is applied as its caller's own, so ?owner= may name only the caller."
-
 func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
 	r.Post("/workloads/{name}/preview", s.handlePreviewWorkload)
@@ -147,9 +144,7 @@ func (s *Server) handlePutWorkload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if o := r.URL.Query().Get("owner"); o != "" && o != principalFromRequest(r) {
-		// An apply is always the caller's own (in.Owner below): a ?owner= naming anyone else is refused, not ignored.
-		writeErrorReason(w, http.StatusBadRequest, reasonWorkloadInvalid, workloadApplyOwnerMsg)
+	if refuseForeignApplyOwner(w, r) {
 		return
 	}
 	var req client.WorkloadApplyRequest
