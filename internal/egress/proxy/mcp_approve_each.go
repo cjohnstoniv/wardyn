@@ -74,12 +74,12 @@ const (
 	mcpCallRefusedText  = "Wardyn refused the request for a person's approval of this call (%d), so it was not sent."
 )
 
-// setApproveEach takes the sealed config's windows; nil keeps the defaults.
+// setApproveEach takes the sealed config's windows and send-once switch; nil keeps the defaults.
 func (b *mcpBroker) setApproveEach(c *MCPApproveEachConfig) {
 	if b == nil || c == nil {
 		return
 	}
-	b.windows = c.Windows
+	b.windows, b.sendOnce = c.Windows, c.SendOnce
 }
 
 // window is how long, in seconds, harness's call waits for a person.
@@ -101,6 +101,9 @@ type mcpCalls struct {
 	// seen is each server's raw tool names the broker has been called with (noteTool); the
 	// gate reads it to tell which raw tool a display name stands for.
 	seen map[string]*seenTools
+	// done is, by call hash, the last occurrence of a call under a key made from it that was
+	// recorded as sent or answered as sent (mcp_send_once.go).
+	done map[string]int
 }
 
 // mcpCallKey is one call key's state: its current approval, if any, and the approvals already
@@ -243,6 +246,9 @@ type approveEachCall struct {
 	id    json.RawMessage
 	scope types.MCPCallScope
 	body  []byte // the request the broker sends once the call is approved
+	// occurrence is which occurrence of its call a key made from the call counts this one as; 0
+	// when the call has no such key (mcp_send_once.go).
+	occurrence int
 }
 
 // holdApproveEach answers or forwards a POST holding an approve_each call, and reports whether
@@ -316,6 +322,9 @@ func (x *mcpExchange) readCall(m mcpMessage) (approveEachCall, string, error) {
 			if opKey, keyed = operationKeyOf(raw); !keyed {
 				return approveEachCall{}, mcpCallOperationKeyText, nil
 			}
+			if strings.HasPrefix(opKey, derivedKeyPrefix) { // the form of a key the proxy makes (mcp_send_once.go)
+				return approveEachCall{}, mcpCallOperationKeyMadeText, nil
+			}
 		}
 	}
 	args := params["arguments"]
@@ -337,9 +346,10 @@ func (x *mcpExchange) readCall(m mcpMessage) (approveEachCall, string, error) {
 	} else if err != nil {
 		return approveEachCall{}, "", err
 	}
-	scope.OperationKey = opKey
+	var occurrence int
+	scope.OperationKey, occurrence = x.p.mcp.operationKey(opKey, scope.CallSHA256)
 	canon := func(raw []byte) []byte { out, _ := types.CanonicalJSON(raw); return out } // checked above
-	return approveEachCall{id: m.id, scope: scope, body: buildMCPCall(m.id, canon(params["name"]), scope, canon(progress))}, "", nil
+	return approveEachCall{id: m.id, scope: scope, body: buildMCPCall(m.id, canon(params["name"]), scope, canon(progress)), occurrence: occurrence}, "", nil
 }
 
 // callScope is the scope of one call of srv's raw tool with the given arguments and extra params
@@ -687,6 +697,8 @@ func splitMCPTool(name string) (server, shown string, ok bool) {
 //   - A tool of no attached remote server: DENIED, since nothing could ask with the arguments.
 //   - No usable input, a raw tool the display name does not settle, or a call the broker will
 //     refuse: APPROVED with no row, and the broker asks.
+//   - A call whose operation key was already sent: APPROVED with no row, and the broker answers
+//     it with that send.
 //   - A declined call: DENIED for the rest of the run.
 //   - Else the call's approval is raised (or the open one answered) and its id handed back.
 func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, matched string, input json.RawMessage) {
@@ -709,7 +721,7 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 		passOn()
 		return
 	}
-	calls, key := &p.mcp.calls, scope.CallSHA256
+	calls, key := &p.mcp.calls, mcpTableKey(scope) // the broker's key for the same call, so it spends this approval
 	if !calls.gateEnter(key) {
 		passOn() // no room to remember another call: the broker refuses or asks
 		return
@@ -742,7 +754,11 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 	}
 	id, err := p.raiseMCPCall(r.Context(), scope, uuid.Nil)
 	var refused *raiseRefusedError
+	var sent *operationSentError
 	switch {
+	case errors.As(err, &sent): // its key was already sent: the broker answers the call with that send
+		passOn()
+		return
 	case errors.As(err, &refused):
 		p.emitGateDecision(r, egress.Deny, ruleSourceMCPApprovalRefused, tool, matched, nil)
 		writeToolDecision(w, "DENIED")
@@ -772,7 +788,12 @@ func (p *Proxy) gateScope(srv *mcpServer, r *http.Request, shown string, input j
 		return types.MCPCallScope{}, false
 	}
 	scope, err := p.callScope(srv, p.harnessOf(r), raw, input, nil)
-	return scope, err == nil
+	if err != nil {
+		return types.MCPCallScope{}, false
+	}
+	// The key the broker gives the same call (mcp_send_once.go): the permission tool has no _meta.
+	scope.OperationKey, _ = p.mcp.operationKey("", scope.CallSHA256)
+	return scope, true
 }
 
 // writeGateRow answers the toolgate with the approval to poll.

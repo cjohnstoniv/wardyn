@@ -146,6 +146,7 @@ func (x *mcpExchange) forwardKeyed(w http.ResponseWriter, c approveEachCall, id 
 		writeToolError(w, c.id, mcpCallSendUnrecordedText)
 		return
 	}
+	x.p.mcp.calls.occurred(c.scope.CallSHA256, c.occurrence) // recorded: a repeat is the next occurrence
 	x.approvalID = &id
 	x.forward(w, c.body)
 	if x.upstreamAnswered {
@@ -164,6 +165,7 @@ func (x *mcpExchange) refuseSent(w http.ResponseWriter, c approveEachCall, e *op
 		writeToolError(w, c.id, mcpCallKeyReusedText)
 		return
 	}
+	x.p.mcp.calls.occurred(c.scope.CallSHA256, c.occurrence) // answered as sent: a repeat is the next occurrence
 	x.record(egress.Deny, ruleSourceMCPApprovalSent, e.approvalID, "an operation already sent under this approval")
 	writeToolError(w, c.id, operationSentText(e))
 }
