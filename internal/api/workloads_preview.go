@@ -53,6 +53,11 @@ func (s *Server) handlePreviewWorkload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if o := r.URL.Query().Get("owner"); o != "" && o != principalFromRequest(r) {
+		// A preview is of the caller's own apply (owner below): a ?owner= naming anyone else is refused, as the PUT's is.
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkloadInvalid, workloadApplyOwnerMsg)
+		return
+	}
 	var req client.WorkloadApplyRequest
 	if !decodeStrict(w, r, &req) {
 		return

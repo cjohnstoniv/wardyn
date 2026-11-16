@@ -51,6 +51,9 @@ const (
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
 
+// workloadApplyOwnerMsg is the refusal of an apply whose ?owner= names anyone but the caller.
+const workloadApplyOwnerMsg = "A workload is applied as its caller's own, so ?owner= may name only the caller."
+
 func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
 	r.Post("/workloads/{name}/preview", s.handlePreviewWorkload)
@@ -142,6 +145,11 @@ func writeWorkloadPutError(w http.ResponseWriter, r *http.Request, err error) bo
 func (s *Server) handlePutWorkload(w http.ResponseWriter, r *http.Request) {
 	ws, ok := s.workloadStore(w)
 	if !ok {
+		return
+	}
+	if o := r.URL.Query().Get("owner"); o != "" && o != principalFromRequest(r) {
+		// An apply is always the caller's own (in.Owner below): a ?owner= naming anyone else is refused, not ignored.
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkloadInvalid, workloadApplyOwnerMsg)
 		return
 	}
 	var req client.WorkloadApplyRequest
@@ -343,12 +351,12 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 	if claimed.Source == store.WorkloadSourceK8s && claimed.SourcePoolID == nil {
 		// A custom resource's runs go to its binding's pool only; with the pool gone there is nowhere to go.
 		gone := &runnerpool.Refusal{Reason: runnerpool.ReasonNotFound}
-		return s.refuseWorkloadLaunch(r, ws, claimed, string(gone.Reason), gone.Message())
+		return s.refuseWorkloadLaunch(r, ws, claimed, string(gone.Reason), gone.Message(), nil)
 	}
 	if binding != nil {
 		r = r.WithContext(withLaunchBinding(ctx, *binding)) // a run that waits in its queue starts only while it exists
 	}
-	pinned, _ := withPolicyPin(r.Context(), claimed.PolicyPin) // stepPolicyPin refuses a launch off it before the create answers
+	pinned, pin := withPolicyPin(r.Context(), claimed.PolicyPin) // stepPolicyPin refuses a launch off it before the create answers
 	cr, err := workloadCreateRequest(r.WithContext(pinned), claimed)
 	if err != nil {
 		return none, err
@@ -360,7 +368,7 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 		if reason == "" {
 			reason = reasonInternalError
 		}
-		return s.refuseWorkloadLaunch(r, ws, claimed, reason, workloadRefusalMsg(reason, msg))
+		return s.refuseWorkloadLaunch(r, ws, claimed, reason, workloadRefusalMsg(reason, msg), pin)
 	}
 	var created createRunResponse
 	if err := json.Unmarshal(cw.body, &created); err != nil {
@@ -426,8 +434,8 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 }
 
 // refuseWorkloadLaunch records the claimed launch's refusal, which leaves the current run running, and
-// answers it. A claim that lapsed and was taken by another launch records nothing.
-func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, wl store.Workload, reason, msg string) (client.WorkloadLaunch, error) {
+// answers it, with a pin mismatch's two digests in its audit row. A claim that lapsed and was taken by another launch records nothing.
+func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, wl store.Workload, reason, msg string, pin *policyPinCheck) (client.WorkloadLaunch, error) {
 	ctx := r.Context()
 	err := ws.RecordWorkloadRefusal(ctx, wl.ID, wl.ClaimToken, store.WorkloadRefusal{Generation: wl.Generation, Reason: reason, Message: msg, At: s.cfg.Now().UTC()})
 	switch {
@@ -437,9 +445,13 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 		return client.WorkloadLaunch{}, err
 	}
 	actorType, actor := workloadActorOf(r)
-	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(map[string]any{
-		"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason,
-	})))
+	data := map[string]any{"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason}
+	if pin != nil && reason == reasonWorkloadPolicyPinMismatch {
+		// The pin the launch was held to and the digest its policy resolved to (stepPolicyPin).
+		data["policy_pin"] = pin.want
+		data["policy_digest"] = pin.got
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(data)))
 	return client.WorkloadLaunch{State: client.WorkloadRefused, Reason: reason, Message: msg}, nil
 }
 
@@ -859,6 +871,9 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{"name": removed.Name, "owner": removed.Owner, "source": removed.Source, "via": "api"}
+	if removed.PolicyPin != "" {
+		data["policy_pin"] = removed.PolicyPin // the pin the delete drops: an apply of the same name starts unpinned
+	}
 	if id := removed.CurrentRunID; id != nil {
 		s.endWorkloadRun(r, *id, removed, workloadKillDeleted)
 		data["ended_run_id"] = *id

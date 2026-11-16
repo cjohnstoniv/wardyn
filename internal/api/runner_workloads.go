@@ -288,7 +288,7 @@ func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b 
 	if !found {
 		msg = workloadBindingGoneMsg
 	}
-	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg)
+	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg, nil)
 }
 
 // workloadBindingOf finds, in bindings, the one wl, a custom resource's workload, launches under now: the
@@ -373,6 +373,9 @@ func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr
 		"runner_id": runnerID, "pool_id": b.PoolID, "namespace": removed.SourceNamespace}
 	if uid != "" {
 		data["uid"] = uid
+	}
+	if removed.PolicyPin != "" {
+		data["policy_pin"] = removed.PolicyPin // the pin the delete drops: an apply of the same name starts unpinned
 	}
 	if id := removed.CurrentRunID; id != nil {
 		data["ended_run_id"] = *id
