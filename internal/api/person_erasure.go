@@ -775,7 +775,7 @@ func (s *Server) refuseReservedErasure(w http.ResponseWriter, r *http.Request, a
 	}
 	s.auditOwnerRefusal(r, action, name, reasonReservedPrincipal)
 	writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal,
-		"that names an identity that is not a person (the admin token, a local operator, a device or a portal); nothing was erased")
+		"that names a reserved identity, not a person; nothing was erased")
 	return true
 }
 
