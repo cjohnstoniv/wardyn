@@ -221,3 +221,18 @@ func TestOnceRefund_ASandboxThatClosesFirstSpendsTheGrant(t *testing.T) {
 		t.Fatalf("retry CONNECT answer = %q with %d approvals raised, want a refusal and one new approval", resp, raises.Load())
 	}
 }
+
+// TestOnceRefund_ARefusalRecordedAfterTheRowSpendsTheGrant: the row is classified before the guard records its
+// refusal. The refund follows the row, which says the client closed first.
+func TestOnceRefund_ARefusalRecordedAfterTheRowSpendsTheGrant(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	w := newTunnelWatch(a)
+	w.client.Store(clientTLS)
+	_, refusal := w.failureClass(false, nil)
+	w.refused.Store(&tunnelRefusal{armed: true})
+	if w.answeredNothing(false, refusal) {
+		t.Fatalf("a row with reason %s was given a refund", refusal.Reason)
+	}
+}

@@ -24,10 +24,10 @@ const onceRefundNote = "; the once approval was not spent: the next request to t
 
 // refundOnce gives the once grant of approval id, spent on host, back to the next request for host: its caller saw
 // the use that grant released end before the destination answered. It acts only on the entry exactly as
-// consumeIfOnce left it. A request for host since then raised or polled an approval, and that one is in force. One
-// approval comes back at most maxOnceRefunds times. The entry it writes is a terminal once grant, which every path
-// that serves a grant spends under a.mu (consumeIfOnce), so it goes to one caller at most. It reports whether it
-// gave the grant back.
+// consumeIfOnce left it. A request for host since then that raised or polled an approval puts that one in force;
+// one whose raise failed leaves the entry as it was. One approval comes back at most maxOnceRefunds times. The
+// entry it writes is a terminal once grant, which every path that serves a grant spends under a.mu
+// (consumeIfOnce), so it goes to one caller at most. It reports whether it gave the grant back.
 func (a *approvalClient) refundOnce(host string, id uuid.UUID) bool {
 	if id == uuid.Nil {
 		return false

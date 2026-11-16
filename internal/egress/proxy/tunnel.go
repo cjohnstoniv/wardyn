@@ -363,8 +363,9 @@ func (w *tunnelWatch) answeredNothing(upstreamFirst bool, refusal *egress.Refusa
 	if refusal == nil {
 		return false
 	}
-	if r := w.refused.Load(); r != nil {
-		return r.armed && w.relayed.Load() == 0
+	if refusal.Reason == "upstream_not_tls" {
+		r := w.refused.Load()
+		return r != nil && r.armed && w.relayed.Load() == 0
 	}
 	return upstreamFirst && w.client.Load() == clientTLS &&
 		(refusal.Reason == "connection_reset" || refusal.Reason == "connection_closed")

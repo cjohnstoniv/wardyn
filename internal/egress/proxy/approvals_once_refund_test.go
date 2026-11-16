@@ -256,3 +256,39 @@ func TestRefundOnce_AHeldSiblingTakesItOnce(t *testing.T) {
 		t.Fatal("a second refundOnce of one approval = true, want false")
 	}
 }
+
+// TestRefundOnce_RefusedWhileARaiseIsInFlight: a refund that arrives while another request's raise is in flight (pending
+// claimed, no id yet) is refused, and the raiser keeps its new approval.
+func TestRefundOnce_RefusedWhileARaiseIsInFlight(t *testing.T) {
+	id, newID := uuid.New(), uuid.New()
+	entered, release := make(chan struct{}), make(chan struct{})
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			close(entered)
+			<-release
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: newID, State: types.ApprovalPending})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: id, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce})
+	}))
+	t.Cleanup(cp.Close)
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	seed(ap, "egress.test", hostApproval{state: apApproved, approvalID: id, scope: types.ScopeOnce, lastPoll: time.Now()})
+	if r := ap.Resolve(context.Background(), "egress.test"); r.State != apApproved {
+		t.Fatalf("spend = %+v", r)
+	}
+	done := make(chan resolveResult, 1)
+	go func() { done <- ap.Resolve(context.Background(), "egress.test") }()
+	<-entered
+	got := ap.refundOnce("egress.test", id)
+	close(release)
+	rr := <-done
+	st := cachedEntry(ap, "egress.test")
+	if got {
+		t.Fatalf("refundOnce while a raise is in flight = true; raiser got %+v, entry %+v", rr, st)
+	}
+	if rr.State != apPending || rr.ApprovalID != newID || st.approvalID != newID {
+		t.Fatalf("raiser = %+v entry = %+v, want pending on %s", rr, st, newID)
+	}
+}
