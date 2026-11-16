@@ -63,6 +63,9 @@ type queueAuthority struct {
 	// Binding is the namespace binding a custom resource's launch was authorised under: the start holds
 	// only while that binding exists (store.QueueStart.Binding).
 	Binding *uuid.UUID `json:"binding,omitempty"`
+	// PolicyPin is the workload's policy pin the launch carried (policyPinOf): the start holds the replayed
+	// fold to it, as the create was held.
+	PolicyPin string `json:"policy_pin,omitempty"`
 }
 
 // captureQueueAuthority reads the launch's identity off the request context.
@@ -89,6 +92,9 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 	if b, ok := launchBindingFrom(ctx); ok {
 		a.Binding = &b
 	}
+	if p := policyPinOf(ctx); p != nil {
+		a.PolicyPin = p.want
+	}
 	return a
 }
 
@@ -112,6 +118,9 @@ func (a queueAuthority) context(ctx context.Context) context.Context {
 	}
 	if a.BreakGlass != "" {
 		ctx = context.WithValue(ctx, breakGlassKey{}, a.BreakGlass)
+	}
+	if a.PolicyPin != "" {
+		ctx, _ = withPolicyPin(ctx, a.PolicyPin)
 	}
 	return ctx
 }

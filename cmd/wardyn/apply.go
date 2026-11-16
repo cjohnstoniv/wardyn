@@ -442,6 +442,9 @@ func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocume
 		}
 		if pv != nil {
 			fmt.Fprintf(w, "workload/%s %s\n", d.Name, previewSentence(*pv))
+			if pv.Launch.PolicyDigest != "" {
+				fmt.Fprintf(w, "launch policy digest: %s\n", pv.Launch.PolicyDigest)
+			}
 		} else if !res.differs {
 			fmt.Fprintf(w, "workload/%s unchanged\n", d.Name)
 		}

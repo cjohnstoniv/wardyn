@@ -130,6 +130,7 @@ func TestRunDocumentRequest_MovesPolicyToOverlay(t *testing.T) {
 func TestWorkloadMethods_RequestShape(t *testing.T) {
 	id := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	run := uuid.New()
+	pin := strings.Repeat("ab", 32)
 	applied := `{"workload":{"name":"triage-bot","owner":"alice","source":"api","generation":2,"current_generation":2,"run_id":"` + run.String() + `",` +
 		`"intent":{"task":"t"},"created_at":"0001-01-01T00:00:00Z","updated_at":"0001-01-01T00:00:00Z"},"outcome":"updated","launch":{"state":"launched","run_id":"` + run.String() + `"}}`
 	doc, err := client.ParseWorkload([]byte(workloadNative))
@@ -178,6 +179,20 @@ func TestWorkloadMethods_RequestShape(t *testing.T) {
 			_, err := c.RestartWorkload(context.Background(), "w", "")
 			return err
 		}, "POST", "/api/v1/workloads/w/restart", "", ""},
+		{"PinWorkloadPolicy", 200, `{"name":"w","owner":"alice","source":"api","policy_pin":"` + pin + `"}`, func(c *client.Client) error {
+			got, err := c.PinWorkloadPolicy(context.Background(), "w", pin)
+			if err == nil && got.PolicyPin != pin {
+				t.Errorf("PinWorkloadPolicy = %+v", got)
+			}
+			return err
+		}, "PUT", "/api/v1/workloads/w/policy-pin", "", `{"digest":"` + pin + `"}`},
+		{"UnpinWorkloadPolicy", 200, `{"name":"w","owner":"alice","source":"api"}`, func(c *client.Client) error {
+			got, err := c.UnpinWorkloadPolicy(context.Background(), "w")
+			if err == nil && got.PolicyPin != "" {
+				t.Errorf("UnpinWorkloadPolicy = %+v", got)
+			}
+			return err
+		}, "DELETE", "/api/v1/workloads/w/policy-pin", "", ""},
 		{"CreateWorkloadBinding", 201, `{"id":"` + id.String() + `","pool_id":"` + id.String() + `","namespace":"team-a","service":"bot","sponsor":"alice"}`, func(c *client.Client) error {
 			got, err := c.CreateWorkloadBinding(context.Background(), client.CreateWorkloadBindingRequest{Pool: "prod", Namespace: "team-a", Service: "bot"})
 			if err == nil && (got.ID != id || got.Sponsor != "alice") {
