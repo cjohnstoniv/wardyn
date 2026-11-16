@@ -607,6 +607,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	createData := createRunAuditData(a.req, f.policyID, a.enforced, a.reqCC, a.jti, a.policyWarns, a.autonomy, a.belowFloor, a.mpChoice)
 	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.created) // the end as stored
 	stampConfinementDefault(createData, a.reqCC, f.confinementDefault)
+	stampConfinementRaisedBy(createData, confinementRaisedBy(*f.req, f.carriedImage, f.comps, f.spec, f.ceiling))
 	if len(a.gw.delivery) > 0 {
 		createData["delivery"] = a.gw.delivery
 	}

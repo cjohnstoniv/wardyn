@@ -288,6 +288,11 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     expect(seeded).not.toHaveProperty("user_changes_limits");
   });
 
+  it("a stored confinement floor moves into the overlay whole when the profile is composed", () => {
+    const seeded = seedOverlayLimits({ confinement_floors: { own_image: "CC3", data_out_open: undefined } });
+    expect(seeded.confinement_floors).toEqual({ own_image: "CC3" });
+  });
+
   it("a composed profile can narrow deny_ui_apps, the CPU ceiling and the autonomy rubric", async () => {
     renderEditor(null);
     typeValue(GOV.FIELD_NAME, "Team A");
