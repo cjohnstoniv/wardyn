@@ -270,6 +270,7 @@ var TemplateRoutes = []TemplateRoute{
 	{Route: "PUT /api/v1/templates/{id}", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
 	{Route: "DELETE /api/v1/templates/{id}", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
 	{Route: "POST /api/v1/templates/{id}/copy", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
+	{Route: "POST /api/v1/templates/{id}/policy-check", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierMember, Group: TemplateTierGroupMember},
 	{Route: "POST /api/v1/templates/import", RouterClass: "member"},
 	{Route: "GET /api/v1/admin/template-group-admins", RouterClass: "admin"},
 	{Route: "PUT /api/v1/admin/template-group-admins", RouterClass: "admin"},

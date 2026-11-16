@@ -810,6 +810,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/templates/{id}":                      {class: classMember},
 	"DELETE /api/v1/templates/{id}":                   {class: classMember},
 	"POST /api/v1/templates/{id}/copy":                {class: classMember},
+	"POST /api/v1/templates/{id}/policy-check":        {class: classMember},
 	"GET /api/v1/admin/template-group-admins":         {class: classAdmin},
 	"PUT /api/v1/admin/template-group-admins":         {class: classAdmin},
 	"DELETE /api/v1/admin/template-group-admins":      {class: classAdmin},
