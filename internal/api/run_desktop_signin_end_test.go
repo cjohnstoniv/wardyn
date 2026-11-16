@@ -350,14 +350,14 @@ func TestDesktopSignin_AnEndBeforeTheBeginsStopLeavesTheSignInToTheBegin(t *test
 	}
 }
 
-// signinHang waits for ctx or ten seconds, whichever ends first: when ctx ends first it sets *bounded and answers
+// signinHang waits for ctx or five seconds, whichever ends first: when ctx ends first it sets *bounded and answers
 // ctx's error.
 func signinHang(ctx context.Context, bounded *bool) error {
 	select {
 	case <-ctx.Done():
 		*bounded = true
 		return ctx.Err()
-	case <-time.After(10 * time.Second):
+	case <-time.After(5 * time.Second):
 		return errors.New("never bounded")
 	}
 }
