@@ -41,6 +41,9 @@ type mcpUpstream struct {
 	identity, callID, mintBody, mintAud string
 	// credStatus, when set, is the status every credential resolve answers instead of the credential.
 	credStatus int
+	// mintStatus, when set, is the status every gateway identity ask answers, with mintRefusal as its body.
+	mintStatus  int
+	mintRefusal string
 }
 
 const mcpServerSecret = "Bearer mcp-server-secret-value"
@@ -62,6 +65,11 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 		if r.URL.Path == "/api/v1/internal/gateway-identity" {
 			b, _ := io.ReadAll(r.Body)
 			u.mintBody = string(b)
+			if u.mintStatus != 0 {
+				w.WriteHeader(u.mintStatus)
+				_, _ = io.WriteString(w, u.mintRefusal)
+				return
+			}
 			exp := time.Now().Add(10 * time.Minute)
 			_ = json.NewEncoder(w).Encode(map[string]any{"token": gwidToken(u.mintAud, exp, 1), "expires_at": exp})
 			return

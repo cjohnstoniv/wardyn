@@ -135,7 +135,7 @@ type svidClaims struct {
 }
 
 type actClaim struct {
-	Sub string `json:"sub"` // the agent-run SPIFFE ID
+	Sub string `json:"sub"` // the run's SPIFFE ID, in either form (identity.RunPath)
 }
 
 // CheckGrants returns ErrRequiresSPIRE if any grant requires the spire provider

@@ -50,6 +50,10 @@ const (
 	// that started the run was revoked with its in-flight runs cut. Answered
 	// 403 on every shape, since asking again can only fail the same way.
 	reasonGatewayAccessCut = "gateway_access_cut"
+	// The control plane refused an MCP server's gateway token for a component the run carries: withdrawn from
+	// its owner, deleted, or pinned to a unit the run is not in. Answered 403 on every shape, since asking again
+	// is refused the same until that changes.
+	reasonGatewayComponentCut = "gateway_component_cut"
 )
 
 // egressHeaderWardynReason carries the fixed reason on the forward lane, where
@@ -215,7 +219,7 @@ func classifyUpstreamErr(err error) string {
 // precedent) and any other fault 500, AWS's own InternalServerException.
 func reasonStatus(shape errShape, reason string) int {
 	switch {
-	case reason == reasonEgressDenied || reason == reasonTLSUntrusted || reason == reasonGatewayAccessCut:
+	case reason == reasonEgressDenied || reason == reasonTLSUntrusted || reason == reasonGatewayAccessCut || reason == reasonGatewayComponentCut:
 		return http.StatusForbidden
 	case shape != shapeAWS:
 		return http.StatusBadGateway
@@ -258,6 +262,8 @@ func faultHint(host, reason, ruleSource string, err error) string {
 		return "the sandbox's proxy could not connect to it"
 	case reasonGatewayAccessCut:
 		return gatewayCutSentence
+	case reasonGatewayComponentCut:
+		return gatewayComponentCutSentence
 	case reasonCredentialUnavailable:
 		// On the portal the credential is the owner's SSO session the proxy injects: a
 		// sign-in inside the sandbox is not the fix, so the hint must not read like one.
@@ -371,7 +377,7 @@ func (p *Proxy) writeBrokeredFault(w http.ResponseWriter, shape errShape, host s
 	if reason == "" {
 		reason, cause = classifyUpstreamErr(err), p.causeSentence(err)
 	}
-	if reason == reasonGatewayAccessCut {
+	if reason == reasonGatewayAccessCut || reason == reasonGatewayComponentCut {
 		cause = "" // the hint is the whole sentence
 	}
 	status := reasonStatus(shape, reason)
