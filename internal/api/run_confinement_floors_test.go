@@ -150,3 +150,15 @@ func TestGovernanceLimitsRefusesAnUnknownConfinementFloor(t *testing.T) {
 		t.Errorf("a valid floor is refused: %q", got)
 	}
 }
+
+// TestConfinementRaisedWarning: Review's sentence names the raised class and every trait that raised it, and a
+// run no floor raised gets none.
+func TestConfinementRaisedWarning(t *testing.T) {
+	if got := confinementRaisedWarning(types.CC3, nil); got != nil {
+		t.Errorf("no trait raised: warnings = %q, want none", got)
+	}
+	got := confinementRaisedWarning(types.CC3, []string{"own_image", "data_out_open"})
+	if len(got) != 1 || !strings.Contains(got[0], "CC3") || !strings.Contains(got[0], "own_image, data_out_open") {
+		t.Errorf("warnings = %q, want one sentence naming CC3 and own_image, data_out_open", got)
+	}
+}

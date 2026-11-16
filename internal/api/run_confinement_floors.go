@@ -4,6 +4,9 @@
 package api
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -50,4 +53,13 @@ func stampConfinementRaisedBy(data map[string]any, by []string) {
 	if len(by) > 0 {
 		data["confinement_raised_by"] = by
 	}
+}
+
+// confinementRaisedWarning is Review's sentence for a minimum class the profile's confinement floors raised,
+// naming the traits that did; none when they raised nothing.
+func confinementRaisedWarning(class types.ConfinementClass, by []string) []string {
+	if len(by) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("Your governance profile raises this run's minimum confinement class to %s because of what the run does (confinement_floors: %s).", class, strings.Join(by, ", "))}
 }
