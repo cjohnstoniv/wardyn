@@ -13,7 +13,7 @@ import (
 
 // A failed read of a gone replica's live chunks never becomes a plain gap row, which would delete them.
 // The stale sweep's pass and its give-up for a run whose output waits on its recording
-// (settleStaleRecordingOutput, reasons recording_over_budget and recording_erased) both reach the store
+// (settleStaleRecordingOutput, reasons recording_over_budget, recording_unavailable and recording_erased) both reach the store
 // only through writeGapRow, so after a failed read either one writes the row from the chunks, their
 // bytes included, or, if the read fails again, leaves the pending row and the chunks for the next pass.
 func TestMiscCovChunkSaveFailureKeepsTheChunks(t *testing.T) {
@@ -34,7 +34,7 @@ func TestMiscCovChunkSaveFailureKeepsTheChunks(t *testing.T) {
 			t.Fatalf("audit = %v, want nothing for a try that changed nothing", got)
 		}
 	}
-	for _, next := range []string{"stale_pending", "recording_over_budget", "recording_erased"} {
+	for _, next := range []string{"stale_pending", "recording_over_budget", "recording_unavailable", "recording_erased"} {
 		t.Run("an error then "+next+" writes the row from the chunks", func(t *testing.T) {
 			f, cs := pending(t)
 			cs.saveFn = func(call int) (bool, error) {
