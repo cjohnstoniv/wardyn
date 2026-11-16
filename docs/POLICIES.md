@@ -674,7 +674,9 @@ Each is `CC1`, `CC2` or `CC3`, or absent; an absent trait raises nothing. A run 
 
 A composed profile takes the higher class per trait, and an overlay floor below its base's is refused. A restriction does not carry it. Set it with `POST /governance/units` or `PUT /governance/units/{id}` (`limits.confinement_floors`, or `overlay_limits.confinement_floors` on a composed profile), or with `wardyn governance set`; the console shows it in no editor.
 
-The floors bind the runs of whoever the profile governs. An admin's runs are bound only when they are governed ([`WARDYN_GOVERN_ADMIN_RUNS`](ENV.md)); the admin token and local mode resolve no profile, so no floor binds them. A floor set or raised later does not reach a run that already exists: a revived run keeps the class it was created with.
+The floors bind the runs of whoever the profile governs. An admin's runs are bound only when they are governed ([`WARDYN_GOVERN_ADMIN_RUNS`](ENV.md)); the admin token and local mode resolve no profile, so no floor binds them.
+
+A floor set or raised later does not reach a run that has started: a revived run keeps the class it was created with. A run still waiting in a queue, or booked for later, is checked again when it starts, against the floors as they then stand, and does not start below them.
 
 A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspace step) is not bound either: it takes the strongest class its runner offers.
 
@@ -1234,9 +1236,9 @@ An `approve_each` call can carry an operation key, the `_meta` member `wardyn.de
 - For 24 hours after the send, a later call with that key is not asked about or sent. The same call is told the request it was sent under, when, and whether the server's answer was recorded. Another call with that key is refused.
 - After those 24 hours, a call with that key is a new call: it needs an approval again, and its send replaces the record.
 - A call whose send cannot be recorded is not sent.
-- The key is never sent to the MCP server and is not part of what a person approves.
+- The key is never sent to the MCP server and is not part of what a person approves. A key on a call no `approve_each` rule covers is not read: that call is sent as it is, key included.
 - An approved call that has not been sent has no deadline of its own: its approval holds until the run ends or its proxy is replaced, whichever comes first.
-- An operation key needs this release's run proxy. In a run with no `correlation_id`, an older one drops it; a run with one does not start on it.
+- An operation key needs this release's run proxy. In a run with no `correlation_id`, an older proxy or runner drops it; a run with one does not start on either.
 - Erasing a person's run tasks overwrites their send records at once, so a later call one of them would have answered is asked about again. Erasing their audit fields removes the key from the approvals of their runs.
 
 A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
