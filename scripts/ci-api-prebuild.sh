@@ -35,4 +35,5 @@ fi
 rm -f "$tmp/api.test"
 free -m; df -h /
 [ "$rc" = 0 ] || exit "$rc"
-echo "internal/api compiles left for the next step, testmain aside: $(go test -n "$@" ./internal/api/ 2>&1 | grep '/compile ' | grep -vc -- ' -p main ' || true)"
+n="$(go test -n "$@" ./internal/api/ 2>&1)" || { printf '%s\n' "$n"; echo "::error::go test -n failed, so the compiles left were not counted"; exit 1; }
+echo "internal/api compiles left for the next step, testmain aside: $(grep '/compile ' <<<"$n" | grep -vc -- ' -p main ' || true)"
