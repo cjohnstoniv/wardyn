@@ -320,8 +320,13 @@ func (s *Server) deliverResident(ctx context.Context, run types.AgentRun, policy
 		return refuse(placement.ReasonPlacementCredential, uuid.Nil, "a runner_resident credential needs a run bound to a runner and the Postgres store")
 	}
 	now := s.cfg.Now()
-	notAfter := residentNotAfter(run, now)
-	if !notAfter.After(now.Add(residentMinLife)) {
+	// The value's last read is bounded by the run's cap and end, which the database stamps, so that bound and the
+	// one-minute floor are counted on the database's clock (boundNow), as the proxy's mint of it is
+	// (authorResidentMints). The delivery lease and the erase's first try stay on this server's clock: the erase
+	// sweep (eraseResidentOn) compares them with its own.
+	at := s.boundNow(ctx)
+	notAfter := residentNotAfter(run, at)
+	if !notAfter.After(at.Add(residentMinLife)) {
 		return refuse(placement.ReasonPlacementCredential, uuid.Nil, "the run ends within a minute, too soon to hand its runner a runner_resident credential")
 	}
 	holder := uuid.New()

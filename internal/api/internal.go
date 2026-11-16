@@ -90,16 +90,12 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
 	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 	// decisions are kept on its trail and, as on the runner spool, are not activity.
-	var kind types.MachineKind
-	var over bool
-	if run, ok := liveRunFromContext(r.Context()); ok {
-		kind, over = run.MachineKind, runIsOver(run, s.cfg.Now().UTC())
-	}
-	if s.cfg.Store != nil && !over && s.shouldTouch(runID, kind, dl) {
+	kind, isOver := s.decisionRunOver(r.Context())
+	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if !over && decisionIsActivity(kind, dl) {
+	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -186,6 +182,26 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 	}
 	answerDecisionPost(w, kept)
+}
+
+// decisionRunOver is the liveness gate's run's machine kind, and a check of whether that run is over, read on the
+// database's clock (runIsOverNow) the first time it is asked and not again, so a chatty agent's posts add no read and
+// a decision that needs no touch or stamp reads none. A clock that cannot be read counts as over: neither write is
+// made, and the next due decision reads it again. Without a run from the gate nothing is over.
+func (s *Server) decisionRunOver(ctx context.Context) (types.MachineKind, func() bool) {
+	run, live := liveRunFromContext(ctx)
+	var kind types.MachineKind
+	if live {
+		kind = run.MachineKind
+	}
+	read, over := false, false
+	return kind, func() bool {
+		if live && !read {
+			o, err := s.runIsOverNow(ctx, run)
+			read, over = true, o || err != nil
+		}
+		return over
+	}
 }
 
 // recordLLMScanAudit shares the content-free payload and finding cap with
@@ -359,7 +375,12 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 					if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
 						ownNamespaces = groundtruthRunsNamespaces()
 					}
-					if reason := s.groundtruthPodRefusal(run, pod, ownNamespaces); reason != "" {
+					reason, err := s.groundtruthPodRefusal(r.Context(), run, pod, ownNamespaces)
+					if err != nil {
+						writeServerError(w, r, "read the database's clock", err)
+						return
+					}
+					if reason != "" {
 						ev.RunID = nil
 						ev.Data = downgradeToUnmapped(ev.Data, reason)
 					}
@@ -442,7 +463,8 @@ func groundtruthEventPod(data json.RawMessage) string {
 //	                     places runs in, so it is not a run's pod whatever
 //	                     its name says (see groundtruthRunNamespaces);
 //	run_ended          — the run's pod has been gone for more than
-//	                     groundtruthLateEvents, so a pod re-created under
+//	                     groundtruthLateEvents on the database's clock,
+//	                     which stamps those times, so a pod re-created under
 //	                     the same name after teardown cannot write into it.
 //	                     Gone from the terminal transition (EndedAt, which
 //	                     later writes to the run do not move; UpdatedAt only
@@ -451,11 +473,12 @@ func groundtruthEventPod(data json.RawMessage) string {
 //	                     RUNNING until the ended-run grace, without a pod.
 //
 // ownNamespaces is the control plane's own runs namespace, used for a run on
-// the in-process driver.
-func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, ownNamespaces []string) string {
+// the in-process driver. An error is the database's clock not answering: the
+// caller refuses the batch, as it does a run it cannot read.
+func (s *Server) groundtruthPodRefusal(ctx context.Context, run types.AgentRun, pod string, ownNamespaces []string) (string, error) {
 	ns, _, ok := strings.Cut(pod, "/")
 	if namespaces, known := s.groundtruthRunNamespaces(run, ownNamespaces); known && (!ok || ns == "" || !slices.Contains(namespaces, ns)) {
-		return "namespace_not_runs"
+		return "namespace_not_runs", nil
 	}
 	var gone *time.Time
 	switch {
@@ -466,10 +489,17 @@ func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, ownNamesp
 	case run.LostReason == types.LostEnded && run.LostAt != nil:
 		gone = run.LostAt
 	}
-	if gone != nil && s.cfg.Now().Sub(*gone) > groundtruthLateEvents {
-		return "run_ended"
+	if gone == nil {
+		return "", nil
 	}
-	return ""
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return "", err
+	}
+	if now.Sub(*gone) > groundtruthLateEvents {
+		return "run_ended", nil
+	}
+	return "", nil
 }
 
 // groundtruthRunNamespaces is the namespaces run's pod may be in, and whether

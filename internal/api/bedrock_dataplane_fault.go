@@ -67,10 +67,11 @@ func bedrockRefusalHint(fault string) (string, bool) {
 
 // noteBedrockDataPlaneFault records fault (a class, or "recovered") on the
 // run's failure_hint. Best-effort, like every other hint write. A run that is
-// over (runIsOver) takes it on a write that leaves updated_at, which its tail
-// grace is counted from (runEndedHintSetter), so a late report that carries a
-// fault cannot open that grace again; a store without that write leaves the
-// hint unwritten.
+// over (runIsOverNow, on the database's clock) takes it on a write that leaves
+// updated_at, which its tail grace is counted from (runEndedHintSetter), so a
+// late report that carries a fault cannot open that grace again; a store
+// without that write, or a database clock that cannot be read, leaves the hint
+// unwritten.
 func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID, fault string) {
 	setter, ok := s.cfg.Store.(runFailureHintSetter)
 	if !ok {
@@ -102,7 +103,11 @@ func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID,
 		return
 	}
 	set := setter.SetRunFailureHint
-	if runIsOver(run, s.cfg.Now().UTC()) {
+	over, err := s.runIsOverNow(ctx, run)
+	if err != nil {
+		return // which write leaves the run's tail grace alone cannot be told: the hint waits for the next report
+	}
+	if over {
 		ended, ok := s.cfg.Store.(runEndedHintSetter)
 		if !ok {
 			return

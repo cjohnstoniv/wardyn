@@ -237,13 +237,14 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // verifyRunToken is internalAuth's Verify, with one door more for a run that is over. The run's identity is
 // revoked before its sandbox is stopped (finalizeRunEffects), so the egress proxy's last reports, posted as
 // it drains, arrive on a revoked token. At the decision door alone, a token whose only defect is revocation
-// (identity.RevokedTokenError) is taken for a run that is over (runIsOver), and refuseTerminalRun then holds
-// it to the tail grace like any other: a post inside it is kept as the run's own rows, and a Bedrock data-plane
+// (identity.RevokedTokenError) is taken for a run that is over (runIsOverNow, on the
+// database's clock), and refuseTerminalRun then holds it to the tail grace like any other: a post inside it is kept as the run's own rows, and a Bedrock data-plane
 // refusal on it, or the first clean call after one, can set or clear the run's failure hint, and nothing else
 // (handlePostDecision, noteBedrockDataPlaneFault); one past it is refused, with one row on the run's trail per
 // replica (claimDecisionRefusal) that fails its confined replay (runDecisionPostRefused).
 // Every other door and a run still going (an old token a revive retired) keep the refusal. A run that cannot
-// be read keeps it too, as a retryable one noted on the run's trail (runUnreadableError, refuseRunToken).
+// be read keeps it too, as a retryable one noted on the run's trail (runUnreadableError, refuseRunToken), and so does
+// a database clock that cannot be read.
 func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, error) {
 	claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
 	var revoked *identity.RevokedTokenError
@@ -256,7 +257,14 @@ func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, 
 	if rerr != nil && !errors.Is(rerr, store.ErrNotFound) {
 		return nil, &runUnreadableError{RunID: revoked.Claims.RunID, Err: rerr}
 	}
-	if rerr != nil || !runIsOver(run, s.cfg.Now().UTC()) {
+	if rerr != nil {
+		return nil, err
+	}
+	over, cerr := s.runIsOverNow(r.Context(), run)
+	if cerr != nil {
+		return nil, &runUnreadableError{RunID: revoked.Claims.RunID, Err: cerr}
+	}
+	if !over {
 		return nil, err
 	}
 	return revoked.Claims, nil

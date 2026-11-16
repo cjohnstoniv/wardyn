@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // dbNow is the database's now() for a decision about stored run times: a run's end and keep in the lease sweep,
@@ -56,4 +57,27 @@ func (s *Server) podLifetimeCap(ctx context.Context, capAt time.Time) time.Durat
 		left = capAt.Sub(s.cfg.Now())
 	}
 	return max(left, time.Second)
+}
+
+// runIsOverNow is runIsOver on the database's clock, which stamps lifetime_cap_at. The clock is read only where it
+// decides: a terminal or kept run is over, and a live run with no cap is not, with no read. An error is a clock that
+// could not be read, and no answer.
+func (s *Server) runIsOverNow(ctx context.Context, run types.AgentRun) (bool, error) {
+	if isTerminalRunState(run.State) || runIsKept(run) || run.LifetimeCapAt == nil {
+		return runIsOver(run, time.Time{}), nil
+	}
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return false, err
+	}
+	return runIsOver(run, now), nil
+}
+
+// boundNow is the database's now for a bound handed on (a token's life), and this server's when that clock cannot be
+// read: a bound is never withheld for it, as podLifetimeCap does.
+func (s *Server) boundNow(ctx context.Context) time.Time {
+	if now, err := s.dbNow(ctx); err == nil {
+		return now
+	}
+	return s.cfg.Now()
 }
