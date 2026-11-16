@@ -157,10 +157,11 @@ func (s *Server) ownerExemptAsAdmin(ctx context.Context, run types.AgentRun, a q
 		return false, fmt.Errorf("read the user types: %w", err)
 	}
 	d := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(rows), userTypes, nil, a.Groups, a.Email)
-	if !d.OK() || d.Role != oidc.RoleAdmin || (a.GroupsTruncated && roleIsTheDefault(d)) {
+	if !d.OK() || (a.GroupsTruncated && roleIsTheDefault(d)) {
 		return false, nil
 	}
-	a.Role = oidc.RoleAdmin
+	// The derived role decides through runUngoverned (isOperator), so only an admin is ever spared.
+	a.Role = d.Role
 	return s.runUngoverned(a.context(ctx)), nil
 }
 
