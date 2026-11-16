@@ -144,7 +144,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/foldersync/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -1345,12 +1345,13 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-26.04
-    # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
-    # gained its second fill target AND a margin for the rest of the suite
-    # (TestEphemeralCaseBudgetFitsTheMakefileTimeout), and a job timeout at or below it
-    # would kill the suite mid-verdict instead of letting go test report which case ran
-    # long. The extra 10m is the image builds and the kind/Calico bring-up in front of it.
-    timeout-minutes: 35
+    # 40: the suite step's own go test `-timeout` is CONFORMANCE_K8S_TIMEOUT's 30m default (the Makefile; held by
+    # TestEphemeralCaseBudgetFitsTheMakefileTimeout to the ephemeral-disk case's worst case and a margin for the rest
+    # of the suite), and the job must outlast it by the steps around it: freeing disk, restoring the caches, building
+    # the proxy and agent images, the kind cluster, loading the images, Calico and the run namespace before the suite,
+    # and the report upload after it. A job timeout at or below the suite's would kill the suite mid-verdict instead of
+    # letting go test report which case ran long.
+    timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
