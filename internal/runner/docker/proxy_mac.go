@@ -56,10 +56,16 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	}
 	slog.Warn(msg+" with one the engine chooses; after a replace, a gVisor agent can wait up to a minute before it reaches the new proxy",
 		"run", runID, "err", err)
+	// What the first attempt made is gone, or never was: settle its producer, as every other second start does, so a
+	// runner's sink takes the second attempt's key.
+	if gerr := d.proxyGone(ctx, runID); gerr != nil {
+		return id, sum, err
+	}
 	id2, sum2, err2 := d.startProxyWithMAC(ctx, image, runID, labels, env, prep, ip, nil)
-	if isNameConflict(err2) {
-		// The first attempt's proxy still holds the name, so the second made nothing: the first failure is the
-		// answer. A caller that retries a name conflict would take that proxy for another's.
+	if failed.step == "start" && isNameConflict(err2) {
+		// The start's proxy still holds the name, so the second made nothing: the first failure is the answer. A
+		// caller that retries a name conflict would take that proxy for another's. After a failed create the
+		// name is held by another proxy, and the conflict is the caller's to read.
 		return id, sum, err
 	}
 	return id2, sum2, err2

@@ -130,14 +130,18 @@ func (m macRefusingDocker) ContainerStart(ctx context.Context, id string, opts c
 // TestProxyMAC_AnEngineThatRefusesItStillGetsAProxy: an engine that refuses the run's MAC address, at the create or
 // at the start, still ends with one running proxy. The attempt is made once more without the address, at the
 // sandbox create and at a replace, so the run keeps its egress; only the wait after a replace comes back. Each
-// fallback is a warning that names the run and the step.
+// fallback is a warning that names the run and the step. On a runner, the first attempt's producer is settled in the
+// decision sink before the second attempt takes its key.
 func TestProxyMAC_AnEngineThatRefusesItStillGetsAProxy(t *testing.T) {
 	for _, c := range []struct {
 		name, step string
 		atStart    bool
+		runner     bool
 	}{
-		{"at the create", "creating", false},
-		{"at the start", "starting", true},
+		{"at the create", "creating", false, false},
+		{"at the start", "starting", true, false},
+		{"at the create on a runner", "creating", false, true},
+		{"at the start on a runner", "starting", true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var logs bytes.Buffer
@@ -149,7 +153,12 @@ func TestProxyMAC_AnEngineThatRefusesItStillGetsAProxy(t *testing.T) {
 			f.images["busybox:latest"] = true
 			refused := 0
 			m := macRefusingDocker{fakeDocker: f, atStart: c.atStart, refused: &refused, named: map[string]bool{}}
-			d := newWithClient(m, Config{ProxyImage: "wardyn-proxy:dev"})
+			cfg := Config{ProxyImage: "wardyn-proxy:dev"}
+			if c.runner {
+				cfg.InternalNetwork = "wardyn-internal"
+				cfg.RunnerID, cfg.DecisionSink, cfg.Evidence = "runner-1", newFakeSink(), &memEvidence{m: map[uuid.UUID][]byte{}}
+			}
+			d := newWithClient(m, cfg)
 			ctx := context.Background()
 			spec := testSpec()
 			sb, err := d.CreateSandbox(ctx, spec)
