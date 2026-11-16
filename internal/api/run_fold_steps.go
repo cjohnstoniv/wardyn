@@ -337,7 +337,7 @@ func (s *Server) stepBaseline(f *runFold, rec *foldRecorder) bool {
 // Review reads the advertised classes best-effort for the default class; the
 // preview probes no runner.
 func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
-	floor := confinementFloorSpec(f.spec, f.comps)
+	floor := f.confinementFloor()
 	if f.mode == foldCreate {
 		var ok bool
 		f.enforced, f.confinementDefault, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
@@ -862,7 +862,7 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	}
 	f.keptPin = keptPinOf(resumed)
 	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
-	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
+	in := placementInput{req: f.req, floor: f.confinementFloor(), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
 		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {

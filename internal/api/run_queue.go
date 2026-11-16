@@ -532,6 +532,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	delete(createData, "jti") // nothing is minted while the run waits
 	createData["policy_source"] = q.f.source
 	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
+	stampConfinementRaisedBy(createData, q.f.confinementRaisedBy())
 	createData["end"] = q.f.end.audit(created)
 	q.intent.stamp(createData, created.LaunchIntent != nil)
 	stampDriveAudit(createData, q.f.drives, q.f.keep != nil, created.ID)
