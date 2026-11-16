@@ -17,7 +17,7 @@ export const WORKLOAD_REFUSAL_SENTENCE: Record<string, string> = {
   workload_invalid: "The spec is not a workload Wardyn accepts.",
   workload_source_conflict: "Another writer already owns a workload of this name.",
   workload_cap_reached: "The owner already holds the most workloads allowed.",
-  workload_policy_pin_mismatch: "Its policy now resolves to another launch policy digest than the one it is pinned to, so nothing launches until the pin or the policy changes.",
+  workload_policy_pin_mismatch: "Its policy now resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.",
   service_identity_inactive: "The service identity is suspended or retired, or its sponsor's session is not live.",
   internal_error: "Wardyn failed while launching it.",
   // The pool a launch goes to (internal/runnerpool/reasons.go). A custom resource's runs go to its binding's pool only.

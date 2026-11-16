@@ -108,7 +108,7 @@ export function FileDownloadCard({
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
           <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
-        ) : erased ? null : (
+        ) : erased && item.decidable !== true ? null : (
           <>
             <Button size="sm" variant="info" disabled={!mayAct || busy !== null} onClick={onApprove}>
               {busy === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {MCP.APPROVE}
