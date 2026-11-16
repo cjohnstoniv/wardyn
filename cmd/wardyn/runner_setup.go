@@ -225,10 +225,14 @@ func signInForSetup(cmd *cobra.Command, org string, paste bool) error {
 	if err != nil {
 		return err
 	}
+	// As in `wardyn login`: Write replaces a profile it cannot parse, and login.previous then reports every
+	// store it cannot read.
+	_, profileErr := cliprofile.ReadSessionStore(dir, org)
 	if err := cliprofile.Write(dir, org); err != nil {
 		return err
 	}
-	l := &login{origin: org, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(), paste: paste}
+	l := &login{origin: org, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(), paste: paste,
+		profileUnread: profileErr != nil}
 	return l.signIn(cmd.Context(), nil)
 }
 

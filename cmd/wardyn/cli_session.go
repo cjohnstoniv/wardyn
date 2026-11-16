@@ -227,19 +227,38 @@ func (f fileStore) get(origin string) (cliItem, bool, error) {
 	return it, ok, err
 }
 
-func (f fileStore) put(origin string, it cliItem) error {
+// loadToReplace is the items a put adds to. A damaged file is replaced, as its error says to sign in again, so
+// it gives none. A file that could not be read is left as it is, since it may hold other organisations'
+// sign-ins: load's read errors are *fs.PathError (os.ReadFile), and its damaged-file error is not. A sign-in
+// to the file asks it before the sign-in is created, so a refusal leaves no session behind.
+func (f fileStore) loadToReplace() (map[string]cliItem, error) {
 	items, err := f.load()
+	var unread *fs.PathError
+	if errors.As(err, &unread) {
+		return nil, fmt.Errorf("%w; it may hold other organisations' sign-ins, so it is not replaced: make it readable, then run `wardyn login` again", err)
+	}
 	if err != nil {
 		items = map[string]cliItem{}
+	}
+	return items, nil
+}
+
+// put stores it for origin, as loadToReplace allows.
+func (f fileStore) put(origin string, it cliItem) error {
+	items, err := f.loadToReplace()
+	if err != nil {
+		return err
 	}
 	items[origin] = it
 	return f.save(items)
 }
 
+// del removes origin's item, and the file with the last one. A file it cannot load is left as it is, since it
+// may hold other organisations' sign-ins, and the load error is returned.
 func (f fileStore) del(origin string) error {
 	items, err := f.load()
 	if err != nil {
-		return os.Remove(f.path())
+		return err
 	}
 	if _, ok := items[origin]; !ok {
 		return nil

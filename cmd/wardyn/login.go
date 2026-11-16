@@ -78,6 +78,9 @@ any computer and asks for the code the page shows, where the organisation allows
 			if err != nil {
 				return err
 			}
+			// Write replaces a profile it cannot parse, and with it the record of which store held the sign-in;
+			// login.previous then reports every store it cannot read.
+			_, profileErr := cliprofile.ReadSessionStore(dir, u)
 			if err := cliprofile.Write(dir, u); err != nil {
 				return err
 			}
@@ -89,7 +92,7 @@ any computer and asks for the code the page shows, where the organisation allows
 				return fmt.Errorf(errUnreachable, u, err)
 			}
 			l := &login{origin: u, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(),
-				noBrowser: noBrowser, paste: h.CLIPasteSignIn}
+				noBrowser: noBrowser, paste: h.CLIPasteSignIn, profileUnread: profileErr != nil}
 			if err := otherOrigin(h.CLISignInHealthz, u); err != nil {
 				return err
 			}
@@ -129,6 +132,7 @@ type login struct {
 	out, errOut      io.Writer
 	in               io.Reader
 	noBrowser, paste bool // --no-browser; /healthz.cli_paste_sign_in
+	profileUnread    bool // the CLI profile could not be read before this login replaced it
 }
 
 // stepUp is `login --admin`: a cli_admin token for this computer's live CLI session, signing in first when
@@ -179,6 +183,11 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		return errors.New(errNoBrowserNoPaste)
 	}
 	if kind == types.CLIStoreFile && base == nil {
+		// A file that cannot be read is refused by the put that follows the sign-in; refused here, the server
+		// issues no session that nothing holds.
+		if _, err := (fileStore{l.dir}).loadToReplace(); err != nil {
+			return err
+		}
 		fmt.Fprintf(l.errOut, copyFileStore+"\n", fileStore{l.dir}.path(), inWords(types.CLIFileStoreSessionCap))
 	}
 	verifier := randomB64(32)
@@ -234,16 +243,18 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		it = base.item
 	}
 	it.applyGrant(g)
-	prev, replacing, err := l.store(ctx, kind, it, base != nil)
+	prevs, err := l.store(ctx, kind, it, base != nil)
 	// The browser hears "Signed in" only once the sign-in is stored.
 	finish(err == nil)
 	if err != nil {
 		return err
 	}
-	// The previous session ends only once the new one is stored: ended first, a failed sign-in would
+	// The previous sessions end only once the new one is stored: ended first, a failed sign-in would
 	// leave this computer with none.
-	if replacing && prev.SessionID != g.SessionID {
-		l.endPrevious(ctx, prev, g.AccessToken)
+	for _, prev := range prevs {
+		if prev.SessionID != g.SessionID {
+			l.endPrevious(ctx, prev, g.AccessToken)
+		}
 	}
 	who := whoIs(ctx, l.origin, g.AccessToken)
 	host := l.origin
@@ -258,91 +269,109 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 	return err
 }
 
-// store saves it under cli.lock, as one read-modify-write against the item stored now. A new session
-// replaces the item (and one another store held) and points the profile at kind; it returns the live item
-// it replaced. A step-up keeps the stored item, which a refresh may have rotated while the browser was
-// open, and adds only the cli_admin token to it.
-func (l *login) store(ctx context.Context, kind string, it cliItem, stepUp bool) (prev cliItem, replacing bool, err error) {
+// store saves it under cli.lock, as one read-modify-write against the items stored now. A new session
+// replaces the sign-ins previous finds (overwriting kind's item and deleting another store's) and points
+// the profile at kind; it returns the live ones it replaced. A step-up keeps the stored item, which a
+// refresh may have rotated while the browser was open, and adds only the cli_admin token to it.
+func (l *login) store(ctx context.Context, kind string, it cliItem, stepUp bool) ([]cliItem, error) {
 	unlock, ok, err := lockRefresh(ctx, l.dir)
 	if err != nil {
-		return prev, false, err
+		return nil, err
 	}
 	if !ok {
-		return prev, false, fmt.Errorf(errStoreBusy, l.origin)
+		return nil, fmt.Errorf(errStoreBusy, l.origin)
 	}
 	defer unlock()
 	st := storeFor(kind, l.dir)
 	if stepUp {
 		cur, found, err := st.get(l.origin)
 		if err != nil {
-			return prev, false, err
+			return nil, err
 		}
 		// The same session with the same device key, still live; a replaced or ended one is not restored.
 		if !found || cur.SessionID != it.SessionID || cur.KeySeed != it.KeySeed || cur.endedWhy(cliNow()) != "" {
-			return prev, false, fmt.Errorf(errStepUpLost, l.origin)
+			return nil, fmt.Errorf(errStepUpLost, l.origin)
 		}
 		cur.AdminToken, cur.AdminExpiresAt = it.AdminToken, it.AdminExpiresAt
-		return prev, false, st.put(l.origin, cur)
+		return nil, st.put(l.origin, cur)
 	}
-	old, prev, replacing, readErr := l.previous(kind)
+	found, readErrs, others := l.previous(kind)
 	if err := st.put(l.origin, it); err != nil {
-		return prev, false, err
+		return nil, err
 	}
 	if err := cliprofile.WriteSessionStore(l.dir, l.origin, kind); err != nil {
-		return prev, false, err
+		return nil, err
 	}
 	// The new sign-in stands from here. One that could not be read is never signed out (endPrevious needs
 	// its session), so say so.
-	if readErr != nil {
-		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", readCause(readErr))
+	for _, err := range readErrs {
+		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", readCause(err))
+	}
+	if l.profileUnread && kind == types.CLIStoreFile {
+		fmt.Fprintln(l.errOut, copyKeychainNotRead)
 	}
 	// Another store's item goes only once the new one is stored and the profile names its store: deleted
-	// first, a refused write would leave this computer with no sign-in. Once the profile names kind,
-	// nothing reads the old item.
-	if old != "" && old != kind {
+	// first, a refused write would leave this computer with no sign-in. One that cannot be deleted stays
+	// where a later login reads it (previous).
+	for _, old := range others {
 		if err := storeFor(old, l.dir).del(l.origin); err != nil {
 			where := "the keychain"
 			if old == types.CLIStoreFile {
 				where = fileStore{l.dir}.path()
 			}
-			fmt.Fprintf(l.errOut, copyPreviousNotRemoved+"\n", where, err)
+			fmt.Fprintf(l.errOut, copyPreviousNotRemoved+"\n", where, readCause(err))
 		}
 	}
-	return prev, replacing, nil
+	var live []cliItem
+	for _, p := range found {
+		if p.endedWhy(cliNow()) == "" {
+			live = append(live, p)
+		}
+	}
+	return live, nil
 }
 
-// previous is the sign-in this computer holds for the organisation, which a new one in kind replaces: the
-// store holding it, the item, whether it is live, and the error reading it from the store the profile names.
-// When the profile names no store (a first sign-in, or a profile cliprofile.Write replaced because it could
-// not be read), it is the item found first in kind, whose item the put overwrites, then, when kind is the
-// keychain, in the file; a store that cannot be read is no sign one was stored. When the profile names no
-// store and kind is the file, the keychain is not read: chooseStore picked the file because the keychain
-// could not be read, and reading it again can ask to unlock it while cli.lock is held. A profile that cannot
-// be read now is no error here: WriteSessionStore refuses it, and the login fails.
-func (l *login) previous(kind string) (string, cliItem, bool, error) {
+// previous is what a new sign-in in kind replaces on this computer: the sign-ins found for the organisation,
+// the errors reading a store that may hold one, and the stores other than kind to delete its item from once
+// the new one is stored. It reads kind's store, whose item the put overwrites, and, when kind is the
+// keychain, the file, where a store move it could not finish or a lost profile can leave a sign-in. When kind
+// is the file it reads the keychain only when the profile names it: chooseStore picked the file because the
+// keychain could not be read, and reading it again can ask to unlock it while cli.lock is held; the next login
+// to the keychain reads it. A keychain item is the organisation's alone, so its read error is returned; the
+// file holds every organisation's sign-ins, so its read error is returned only when the profile names the
+// file or could not be read before this login replaced it. A profile that cannot be read now is no error
+// here: WriteSessionStore refuses it, and the login fails.
+func (l *login) previous(kind string) (found []cliItem, readErrs []error, others []string) {
 	named, err := cliprofile.ReadSessionStore(l.dir, l.origin)
 	if err != nil {
-		return "", cliItem{}, false, nil
-	}
-	if named != "" {
-		it, ok, err := storeFor(named, l.dir).get(l.origin)
-		return named, it, ok && it.endedWhy(cliNow()) == "", err
+		return nil, nil, nil
 	}
 	stores := []string{kind}
-	if kind == types.CLIStoreKeychain {
+	switch {
+	case kind == types.CLIStoreKeychain:
 		stores = append(stores, types.CLIStoreFile)
+	case named == types.CLIStoreKeychain:
+		stores = append(stores, types.CLIStoreKeychain)
 	}
 	for _, k := range stores {
-		if it, ok, err := storeFor(k, l.dir).get(l.origin); err == nil && ok {
-			return k, it, it.endedWhy(cliNow()) == "", nil
+		it, ok, err := storeFor(k, l.dir).get(l.origin)
+		if ok {
+			found = append(found, it)
+		}
+		if err != nil && (k == types.CLIStoreKeychain || k == named || l.profileUnread) {
+			readErrs = append(readErrs, err)
+		}
+		if k != kind && (ok || k == named) {
+			others = append(others, k)
 		}
 	}
-	return "", cliItem{}, false, nil
+	return found, readErrs, others
 }
 
 // readCause is err, a store's error reading a sign-in, for a line printed once that item is replaced or
-// removed. A damaged item's error ends with advice to sign in again (keychainStore.get, fileStore.load);
-// by then the damaged item is gone, so the advice is dropped and the damage is put in the past.
+// removed. A damaged item's error ends with advice to sign in again (keychainStore.get, fileStore.load),
+// which no longer applies by then, so the advice is dropped and the damage is put in the past. The damaged
+// item may still be on disk: a login that moved to the keychain leaves a damaged file, and says so.
 func readCause(err error) string {
 	if cut, ok := strings.CutSuffix(err.Error(), errDamagedAdvice); ok {
 		return cut + copyWasDamaged
