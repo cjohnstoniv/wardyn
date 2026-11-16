@@ -476,7 +476,7 @@ func (s *Server) endUnstartedDesktopSignin(ctx context.Context, st store.Desktop
 	defer cancel()
 	_, release, err := s.claimSigninEnd(ctx, st, si)
 	if err != nil {
-		return // another end holds the row and closes it, or no row was written
+		return // another end holds the row and closes it, no row was written, or the claim's write failed (a later end or the sweep ends it)
 	}
 	defer release()
 	if ended, _ := st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now()); ended {

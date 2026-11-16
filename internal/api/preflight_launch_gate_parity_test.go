@@ -41,7 +41,7 @@ import (
 // steps, their order and their doors (wantRunFoldSteps), the loop that runs
 // them, and every place a mode is read.
 //
-// MintRunIdentity is the boundary marker: "it mints nothing, persists nothing,
+// mintRunIdentity is the boundary marker: "it mints nothing, persists nothing,
 // dispatches nothing" is preflight's contract, so everything after the mint is
 // launch-only by construction and out of scope. A missing marker fails loudly
 // rather than silently widening the scan to the whole handler.
