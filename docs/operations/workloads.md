@@ -65,7 +65,7 @@ intent:
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
 | `wardyn workload restart NAME` | Starts a fresh run of the stored spec, then ends the old one |
-| `wardyn workload pin NAME DIGEST` | Pins your workload to a launch policy digest, the one `wardyn apply --dry-run` prints. A later launch whose policy resolves to another digest is refused, and the current run keeps running |
+| `wardyn workload pin NAME DIGEST` | Pins your workload to a launch policy digest, the one `wardyn apply --dry-run` prints. A later launch whose policy resolves to another digest is refused; a launch refused as it is made leaves the current run running |
 | `wardyn workload unpin NAME` | Clears the pin |
 | `wardyn workload delete NAME` | The same as `wardyn delete -f`, by name |
 | `wardyn workload binding create\|list\|delete` | Binds a namespace to a service identity. [Security tier](#bind-a-namespace) |
@@ -294,7 +294,7 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 - A status can lag a change by up to 30 seconds. A report made while the runner's session is down is dropped, and the next full report, at most 10 minutes later, carries it.
 - A change to a binding takes effect at the next report of each resource, not at once.
 - A pin needs the workload, so a new workload's first launch is not held to one.
-- Deleting a workload deletes its pin. A workload applied again under that name starts unpinned.
+- Deleting a workload deletes its pin. A workload applied again under that name starts unpinned. For a custom resource, whoever can delete and re-create the resource can drop the pin this way without the service identity's token. Pin again after the first launch, and watch `workload.delete`.
 - A launch policy digest is comparable within one Wardyn version. An upgrade can change the digest of the same policy, and each pinned workload's next launch is then refused until it is pinned again. After an upgrade, preview each pinned workload with its `restart_key` changed to read its new digest.
 - Any change to the policy a pinned launch resolves refuses it, a narrowing too.
 - The pin does not hold what is added as the run starts, such as hosts from the site configuration, the run's git credentials and its model provider. The run's own `policy_digest` includes them, so it is not the launch policy digest.

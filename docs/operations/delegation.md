@@ -31,7 +31,7 @@ The security tier is a security admin or a super admin ([what admin-only still m
 | A host rule `hold` | The run's owner or the security tier. A unit's `egress_domain` deciders rule governs it | Either second-human switch, `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` |
 | A tool call a `hold` sends to a person | The security tier. On a service identity's run, an approval rule too | No second-human switch names it |
 | A `credential` approval, a held push | The security tier; a person a deciders rule names, never the run's owner | A deciders rule for either kind must set `second_human` |
-| A held file download | The security tier, or a unit's `file_download` deciders. Nobody who created the run or asked decides it | A `file_download` rule is stored with `second_human` |
+| A held file download | The security tier, or a unit's `file_download` deciders. Nobody who created the run or asked decides it; the admin token is the audited break-glass | A `file_download` rule is stored with `second_human` |
 | A first-use host or a held tool call on a service identity's run | An approval rule, in its own name, through every gate a person meets. Never a credential, a push, an Azure DevOps escalation or a person's run | A rule is never a second human |
 | An elevation, an image request | The people the unit's rule names, and always a security admin. Never the person who asked | These rules take no `second_human` |
 | A stored policy | A super admin only | `WARDYN_GOVERNANCE_SECOND_HUMAN` does not hold a policy write |

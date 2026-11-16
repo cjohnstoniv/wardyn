@@ -88,7 +88,7 @@
 
 - **One of four is genuinely pluggable.**
 - The strongest thing to say here is the first row: *two implementations, one conformance contract, both enforced in CI* —
-  - The suite runs with different options on each. Only the Docker suites pass a route probe, and only the Docker server suite a name-lookup probe, so `L0StructuralEgress` and `DNSAudit` skip on Kubernetes, where NetworkPolicy cases check egress instead. [The runtime contract](RUNTIME-CONTRACT.md#the-swap-proof) lists the differences.
+  - The suite runs with different options on each. The Kubernetes driver declares no structural egress, and only the Docker server suite passes a name-lookup probe, so `L0StructuralEgress` and `DNSAudit` skip on Kubernetes, where NetworkPolicy cases check egress instead. [The runtime contract](RUNTIME-CONTRACT.md#the-swap-proof) lists the differences.
   - which is a materially stronger claim than "we have an interface", and it is the only one of the four that has earned it.
 
 ### Physical sandbox

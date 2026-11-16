@@ -38,4 +38,5 @@ A step whose agent calls an MCP tool under an `approve_each` rule can be retried
 - To send the same call again on purpose, start the run with a new `correlation_id`. A run without one asks about and sends each call that has no key of its own, each time. So does a run whose `correlation_id` changes with each attempt, such as a fresh `traceparent`.
 - A client that builds its own MCP request can name the operation itself, in the `_meta` member `wardyn.dev/operation-key`: 1 to 128 ASCII letters, digits or `. _ : / -`. That key is used in place of the one made from the call. In a run without a `correlation_id`, it counts within the run.
 - A key outside that form is refused, and so is one that starts with `call:`, which Wardyn keeps for the keys it makes, or the same key on another call. None of them is sent.
-- Claude Code and Codex CLI cannot put a `_meta` member on a call, so their calls use the key made from the call. The key is never sent to the MCP server, and it is not part of what a person approves.
+- Claude Code and Codex CLI cannot put a `_meta` member on a call, so their calls use the key made from the call. The key of a call an `approve_each` rule covers is never sent to the MCP server, and it is not part of what a person approves.
+- On any other call Wardyn does not read the key: the call is sent as it is, key included, each time.
