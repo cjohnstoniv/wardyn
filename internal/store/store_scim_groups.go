@@ -176,7 +176,7 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 			SELECT jsonb_agg(x) FROM jsonb_array_elements_text(p.groups) AS x
 			WHERE btrim(g.external_id) <> '' AND lower(btrim(x)) <> lower(btrim(g.external_id))), '[]'::jsonb)
 		FROM principal_identities i, scim_groups g
-		WHERE i.id = $2 AND g.id = $1 AND p.principal = i.principal`, groupID, identityID); err != nil {
+		WHERE i.id = $2 AND g.id = $1 AND p.principal = i.principal AND jsonb_typeof(p.groups) = 'array'`, groupID, identityID); err != nil {
 		return fmt.Errorf("store: remove the group from the sign-in record: %w", err)
 	}
 	var existing int
