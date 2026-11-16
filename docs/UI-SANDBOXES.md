@@ -51,6 +51,7 @@
   Playwright `storageState`).
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
+  An end asked for right after a sign-in began can be refused while the sign-in is still starting, for up to 6 minutes; ask for it again.
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
 - A limit set during a sign-in stops new entry. An open display stays until it
