@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestAuditWorkloadDigestsWithheldBelowSuperAdmin: the launch policy digest and pin a workload row carries are
-// served below a super admin without them, named in redacted_fields; every other field is served.
+// TestAuditWorkloadDigestsWithheldBelowSuperAdmin: a workload's digest, launch policy digest or pin that a row
+// carries are served below a super admin without them, named in redacted_fields; every other field is served.
 func TestAuditWorkloadDigestsWithheldBelowSuperAdmin(t *testing.T) {
 	withheld := map[string]bool{"digest": true, "policy_pin": true, "previous": true, "policy_digest": true}
 	for action, data := range map[string]map[string]any{

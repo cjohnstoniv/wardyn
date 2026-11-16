@@ -15,6 +15,7 @@ func TestDerivedOperationKeyFits(t *testing.T) {
 		"calls:1":             true,
 		"call:" + sha + ":1":  true,
 		"call:" + sha + ":12": true,
+		"call:12":             false,
 		"call:":               false,
 		"call:" + sha:         false,
 		"call:" + sha + ":":   false,

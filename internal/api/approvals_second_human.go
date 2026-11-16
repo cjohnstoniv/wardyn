@@ -319,9 +319,13 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 }
 
 // secondHumanDownloadWhy is why a second-human rule refuses this decider a download: they asked for it or it is
-// their run's, or its asker was erased and so could be anyone (askedForDownload).
+// their run's, its asker was erased and so could be anyone (askedForDownload), or its request cannot be read.
 func secondHumanDownloadWhy(ap types.ApprovalRequest) string {
-	if sc, ok := types.ParseFileDownloadScope(ap.RequestedScope); ok && sc.RequestedBy == types.FileDownloadAskerErased {
+	sc, ok := types.ParseFileDownloadScope(ap.RequestedScope)
+	if !ok {
+		return "this download's request cannot be read, so who asked for it is unknown; only the admin token approves or denies it"
+	}
+	if sc.RequestedBy == types.FileDownloadAskerErased {
 		return "the person who asked for this download was erased, so no person can be told apart from them; only the admin token approves or denies it"
 	}
 	return "you asked for this download or it is your run's, so someone else approves or denies it"

@@ -57,7 +57,7 @@ var auditHostViews = map[string]auditHostView{
 	"policy.delete":         {mounts: [][]string{{"before"}}},
 	"preset.create":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
 	"preset.update":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
-	// A workload's launch policy digest and pin: GET /workloads/{name} keeps them to the full tier (workloadOut),
+	// A workload's digest, launch policy digest or pin: GET /workloads/{name} keeps them to the full tier (workloadOut),
 	// since a digest of an intent whose host axis is withheld lets a reader test guesses at it.
 	"workload.apply":          {withhold: []string{"digest"}},
 	"workload.policy_pin.set": {withhold: []string{"policy_pin", "previous"}},

@@ -44,3 +44,13 @@ func TestSecondHumanDownloadRefusalNamesAnErasedAsker(t *testing.T) {
 		t.Errorf("an erased asker: %q, want it to say the asker was erased and only the admin token decides", got)
 	}
 }
+
+// TestSecondHumanDownloadRefusalNamesAnUnreadableRequest: a download whose request does not parse is refused with
+// words that say who asked is unknown and only the admin token decides, not as a named asker's.
+func TestSecondHumanDownloadRefusalNamesAnUnreadableRequest(t *testing.T) {
+	got := secondHumanDownloadWhy(types.ApprovalRequest{Kind: types.ApprovalFileDownload, RequestedScope: json.RawMessage(`{"name":`)})
+	want := "this download's request cannot be read, so who asked for it is unknown; only the admin token approves or denies it"
+	if got != want {
+		t.Errorf("an unreadable request: %q, want %q", got, want)
+	}
+}

@@ -176,12 +176,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 	},
 	// An apply is always the caller's own: a ?owner= naming anyone else is a 400 and nothing is written.
 	"PUT /api/v1/workloads/{name}?owner": {
-		entity: entityPrincipal, readers: []string{"handlePutWorkload"},
+		entity: entityPrincipal, readers: []string{"refuseForeignApplyOwner"},
 		ownAdmitted: true, pinnedBy: "TestPG_WorkloadApply_RefusesAnotherOwnersQuery",
 	},
 	// A preview is of the caller's own apply: a ?owner= naming anyone else is a 400, as the PUT's is.
 	"POST /api/v1/workloads/{name}/preview?owner": {
-		entity: entityPrincipal, readers: []string{"handlePreviewWorkload"},
+		entity: entityPrincipal, readers: []string{"refuseForeignApplyOwner"},
 		ownAdmitted: true, pinnedBy: "TestPG_WorkloadApply_RefusesAnotherOwnersQuery",
 	},
 	// A pin is set only on the caller's own workload: a ?owner= naming anyone else, a sponsor or an
