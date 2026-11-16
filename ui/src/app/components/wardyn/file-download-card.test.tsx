@@ -113,4 +113,15 @@ describe("the file_download card", () => {
     expect(view.container).toHaveTextContent(APPROVAL.CANCELLED_BODY);
     expect(screen.queryByRole("button", { name: APPROVAL_MCP_CALL.APPROVE })).toBeNull();
   });
+
+  it("an erased asker is named in words, and the card offers no decision, since no person can make it", () => {
+    renderCard(row({ requested_by: "dana.reyes@acme.example", requested_scope: scope({ requested_by: "erased" }) }), { canDecide: true });
+    const card = screen.getByTestId("file-download-card");
+    expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toContain(C.ERASED_ASKER);
+    expect(card).toHaveTextContent(C.ERASED_NOTE);
+    expect(card).not.toHaveTextContent(C.WHAT(C.ERASED_ASKER, "build-logs.tar.gz"));
+    expect(card).not.toHaveTextContent(DECIDERS_INBOX.DECIDED_BY_LABEL);
+    expect(within(card).queryByRole("button", { name: /Approve once/ })).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Deny/ })).toBeNull();
+  });
 });

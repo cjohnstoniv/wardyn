@@ -13,6 +13,8 @@ export const FILE_DOWNLOAD_CARD = {
   FIELD_SIZE: "Size",
   FIELD_SHA: "SHA-256",
   FIELD_ASKED_BY: "Asked by",
+  // Who asked, once erasure rewrote the asker (internal/types/file_download.go FileDownloadAskerErased).
+  ERASED_ASKER: "a person since erased",
   SIZE: (size: string, n: string) => `${size} (${n} bytes)`,
   WHAT: (asker: string, name: string) => `${asker} downloads ${name} from this run, once, with exactly the bytes named here.`,
   BLAST:
@@ -20,6 +22,8 @@ export const FILE_DOWNLOAD_CARD = {
   UNDER_BANNER: "Approving lets this one file out once. Asking again needs another yes.",
   ASKER_NOTE:
     "You asked for this download, so someone else must approve it. Once it is approved, download it from the run's Files panel.",
+  // An erased asker could be anyone, so the server lets no person decide the download (desktop_review.go askedForDownload).
+  ERASED_NOTE: "The person who asked for this download was erased and could be anyone, so no person can approve or deny it.",
   LIST_TITLE: (name: string) => `Download ${name}`,
 } as const;
 
