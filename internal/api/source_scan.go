@@ -497,6 +497,60 @@ func (s *Server) scanCredentialRefusal(w http.ResponseWriter, r *http.Request, r
 	return true
 }
 
+// fanoutFolder is how one local folder of the whole-workspace scan ended: scanned, gone from the store while its
+// result was written (skipped like a dangling attachment), or answered, which stops the fan-out.
+type fanoutFolder int
+
+const (
+	fanoutFolderScanned fanoutFolder = iota
+	fanoutFolderGone
+	fanoutFolderStopped
+)
+
+// scanFanoutFolder opens, scans and saves one local folder of scanAttachedSources. Every refusal and fault is
+// answered here, with its audit row from partialAudit, and reported as fanoutFolderStopped.
+func (s *Server) scanFanoutFolder(ctx context.Context, w http.ResponseWriter, r *http.Request, owner string, id uuid.UUID, src types.Source, partialAudit func(uuid.UUID, string)) fanoutFolder {
+	// The member mount gate the run door re-runs (validateWorkspaceSources):
+	// a scan reads the directory host-side, so roots narrowed after
+	// onboarding, or a source repointed since, refuse it here too. A
+	// member's directory is opened at that check and read only through
+	// the handle, so a link swapped in after the check is not read through.
+	// An operator's workspace holds a folder inside a member workspace
+	// root to the same open: the scan lands on the folder's one library
+	// row, which a member's workspace attaching it reads too, and every
+	// member whose workspace attaches it holds it to their roots.
+	dir, err := s.openScanSource(ctx, owner, src)
+	if errors.Is(err, errScanHoldersUnread) {
+		partialAudit(id, errScanHoldersUnread.Error()) // the read that failed, never the store's text
+		writeServerError(w, r, "scan source", err)
+		return fanoutFolderStopped
+	}
+	if err != nil {
+		partialAudit(id, err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, s.scanRefusalFor(r, err))
+		return fanoutFolderStopped
+	}
+	_, _, _, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
+	if dir != nil {
+		_ = dir.Close()
+	}
+	if fault != nil {
+		if errors.Is(fault, store.ErrNotFound) {
+			// Deleted while its scan ran: gone like a dangling attachment, so there is nothing to scan.
+			return fanoutFolderGone
+		}
+		partialAudit(id, scanAuditPersistFault)
+		writeServerError(w, r, scanAuditPersistFault, fault)
+		return fanoutFolderStopped
+	}
+	if !ok {
+		partialAudit(id, detail)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
+		return fanoutFolderStopped
+	}
+	return fanoutFolderScanned
+}
+
 // scanAttachedSources is the whole-workspace scan's attachment-backed branch:
 // fan out over every attached non-ephemeral source — dirs inline, repos as
 // their own governed runs. 202 when anything launched (the workspace's merged
@@ -573,42 +627,10 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				skipped = append(skipped, id)
 				continue
 			}
-			// The member mount gate the run door re-runs (validateWorkspaceSources):
-			// a scan reads the directory host-side, so roots narrowed after
-			// onboarding, or a source repointed since, refuse it here too. A
-			// member's directory is opened at that check and read only through
-			// the handle, so a link swapped in after the check is not read through.
-			// An operator's workspace holds a folder inside a member workspace
-			// root to the same open: the scan lands on the folder's one library
-			// row, which a member's workspace attaching it reads too, and every
-			// member whose workspace attaches it holds it to their roots.
-			dir, err := s.openScanSource(ctx, ws.OwnedBy, src)
-			if errors.Is(err, errScanHoldersUnread) {
-				partialAudit(id, errScanHoldersUnread.Error()) // the read that failed, never the store's text
-				writeServerError(w, r, "scan source", err)
-				return
-			}
-			if err != nil {
-				partialAudit(id, err.Error())
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, s.scanRefusalFor(r, err))
-				return
-			}
-			_, _, _, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
-			if dir != nil {
-				_ = dir.Close()
-			}
-			if fault != nil {
-				if errors.Is(fault, store.ErrNotFound) {
-					// Deleted while its scan ran: gone like a dangling attachment, so there is nothing to scan.
-					continue
-				}
-				partialAudit(id, scanAuditPersistFault)
-				writeServerError(w, r, scanAuditPersistFault, fault)
-				return
-			}
-			if !ok {
-				partialAudit(id, detail)
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
+			switch s.scanFanoutFolder(ctx, w, r, ws.OwnedBy, id, src, partialAudit) {
+			case fanoutFolderGone:
+				continue
+			case fanoutFolderStopped:
 				return
 			}
 			scanned = append(scanned, id)
