@@ -74,6 +74,9 @@ type runnerFile struct {
 	// MacOSVMKeptDiskLimit is the disk, in whole GB as a string, this Mac's kept machines may take in all,
 	// each counted at its worst case; "0" keeps none, and unset is 110 (parseKeptDiskLimit).
 	MacOSVMKeptDiskLimit string `json:"macos_vm_kept_disk_limit_gb,omitempty"`
+	// MacOSVMInspectionCA turns this Mac's inspection CA on ("1"): the base's install list gains it, and once
+	// a base trusts it, it re-issues each macOS VM run's proxy CA. Off when unset, and off deletes it.
+	MacOSVMInspectionCA string `json:"macos_vm_inspection_ca,omitempty"`
 	// DriveRoot lists the folders a drive bound to this runner may mount from, with everything under each:
 	// a JSON array of absolute, cleaned folder paths (parseDriveRoots). None when unset, so no drive mounts here.
 	DriveRoot []string `json:"drive_root,omitempty"`
@@ -138,6 +141,8 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
 	// No flag or environment variable sets it, as macos_vm_base_file. "0" is a value (off), not unset.
 	{name: macOSVMKeptDiskLimitKey, managed: "MacOSVMKeptDiskLimit", file: func(f *runnerFile) *string { return &f.MacOSVMKeptDiskLimit }},
+	// No flag or environment variable sets it, as macos_vm_base_file.
+	{name: "macos_vm_inspection_ca", managed: "MacOSVMInspectionCA", file: func(f *runnerFile) *string { return &f.MacOSVMInspectionCA }},
 	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
 	{name: "substrate", flag: "substrate", def: "docker", file: func(f *runnerFile) *string { return &f.Substrate }},
 }
@@ -180,11 +185,17 @@ func parseKeptDiskLimit(v string) (int64, error) {
 type macOSVMSettings struct {
 	// keptLimit is macos_vm_kept_disk_limit_gb, baseFile macos_vm_base_file and basesDir macos_vm_bases_dir.
 	keptLimit, baseFile, basesDir string
+	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare), which
+	// then neither opens nor removes the CA. driveRoots is drive_root: the CA is not used under one.
+	inspectionCA *bool
+	driveRoots   []string
 }
 
 // macOSVMSettings is c's macOS VM settings.
 func (c runnerConfig) macOSVMSettings() macOSVMSettings {
-	return macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir")}
+	inspectionCA := macOSVMOn(c.get("macos_vm_inspection_ca"))
+	return macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
+		inspectionCA: &inspectionCA, driveRoots: c.field("drive_root").List}
 }
 
 // macOSVMOn reads the macos_vm setting.

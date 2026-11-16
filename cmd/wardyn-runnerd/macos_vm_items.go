@@ -6,8 +6,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -22,18 +26,101 @@ type macOSVMItems struct {
 	file  string
 	err   error
 	asked string
+	// ca is this Mac's inspection CA, which the list gains as its last item (macvm.WithInspectionCA); nil when
+	// macos_vm_inspection_ca is off. caErr says why it could not be opened: then no prepare or tools update
+	// starts, as for a list that cannot be read, since the list it would install is not known.
+	ca    *macvm.InspectionCA
+	caErr error
 }
 
-// baseFileArgs appends the helper's install list flag for a prepare or a tools update to extra: none
-// without the setting.
+// openInspectionCA opens this Mac's inspection CA in the VM directory when macos_vm_inspection_ca is on. on is
+// nil when the caller resolved no settings (setup's prepare): the CA is then neither opened nor removed. owner is
+// the runner's handle (enableMacOSVM): only it makes the CA, and only it removes it, when the setting is off or one
+// of its drive roots is or holds the CA's directory, since a key left on disk is one a run's mount could read. A
+// macos-vm command resolves its own config, which may not be the runner's, so it only reads a CA that is there.
+func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
+	if on == nil {
+		return
+	}
+	dir := m.layout.InspectionCADir()
+	over := ""
+	if *on {
+		over = driveRootOver(dir, driveRoots)
+	}
+	switch {
+	case *on && over == "":
+		open := macvm.OpenInspectionCA
+		if !owner {
+			open = macvm.ReadInspectionCA
+		}
+		ca, err := open(context.Background(), dir)
+		if !owner && errors.Is(err, os.ErrNotExist) {
+			slog.Info("macOS VM base: this Mac's inspection CA is not made yet; the runner makes it at its next start")
+			return
+		}
+		if err != nil {
+			slog.Warn("macOS VM base: this Mac's inspection CA cannot be used; no prepare or tools update starts until it can", "error", err.Error())
+			m.items.caErr = fmt.Errorf("macos_vm_inspection_ca: %w", err)
+			return
+		}
+		m.items.ca = ca
+		return
+	case !owner:
+		return
+	case over != "":
+		slog.Warn("macOS VM base: macos_vm_inspection_ca is treated as off: a drive root holds the VM directory, so a run could mount the CA's key", "drive_root", over)
+	default:
+		// A profile that is there but cannot be read reads as unset, which could turn an organisation's 1 into off.
+		if _, perr := managedPrefErr("MacOSVMInspectionCA"); perr != nil {
+			slog.Warn("macOS VM base: macos_vm_inspection_ca reads as off, but the managed profile could not be read, so this Mac's inspection CA is kept", "error", perr.Error())
+			return
+		}
+	}
+	removed, err := macvm.RemoveInspectionCA(context.Background(), dir)
+	if err != nil {
+		slog.Warn("macOS VM base: this Mac's inspection CA could not be removed", "error", err.Error())
+	} else if removed {
+		slog.Warn("macOS VM base: this Mac's inspection CA was removed; on macOS 26 a base that trusted it stops its tools updates until macos-vm prepare --new-image")
+	}
+}
+
+// driveRootOver is the drive root in roots that is dir or one of its parents; "" when there is none. dir's
+// parent is resolved first, since a mount of any folder above the real one holds the key. Roots are compared as
+// files (os.SameFile), so another spelling of the same folder counts.
+func driveRootOver(dir string, roots []string) string {
+	if resolved, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
+		dir = filepath.Join(resolved, filepath.Base(dir))
+	}
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if di, err := os.Stat(d); err == nil {
+			for _, r := range roots {
+				if ri, rerr := os.Stat(r); rerr == nil && os.SameFile(di, ri) {
+					return r
+				}
+			}
+		}
+		if filepath.Dir(d) == d {
+			return ""
+		}
+	}
+}
+
+// baseFileArgs appends the helper's install list flag for a prepare or a tools update to extra, and this Mac's
+// inspection CA when it is on: none without either setting.
 func (m *macOSVMs) baseFileArgs(extra []string) ([]string, error) {
 	if m.items.err != nil {
 		return nil, fmt.Errorf("macos_vm_base_file: %w", m.items.err)
 	}
-	if m.items.file == "" {
-		return extra, nil
+	if m.items.caErr != nil {
+		return nil, m.items.caErr
 	}
-	return append(extra, "--"+macvm.FlagBaseFile, m.items.file), nil
+	if m.items.file != "" {
+		extra = append(extra, "--"+macvm.FlagBaseFile, m.items.file)
+	}
+	if m.items.ca != nil {
+		extra = append(extra, "--"+macvm.FlagInspectionCA, m.items.ca.CertPath())
+	}
+	return extra, nil
 }
 
 // editItems is the install list flag for an edit-base, whose files stage again the profiles still waiting:
@@ -78,12 +165,23 @@ func (m *macOSVMs) checkItems(man macvm.Manifest) {
 	}
 }
 
-// loadItems reads the install list macos_vm_base_file names: an empty list without the setting.
+// loadItems reads the install list macos_vm_base_file names (empty without the setting), with this Mac's
+// inspection CA as its last item when it is on.
 func (m *macOSVMs) loadItems() (macvm.BaseList, error) {
-	if m.items.file == "" {
-		return macvm.BaseList{}, nil
+	if m.items.caErr != nil {
+		return macvm.BaseList{}, m.items.caErr
 	}
-	return macvm.LoadBaseList(m.items.file)
+	var l macvm.BaseList
+	if m.items.file != "" {
+		var err error
+		if l, err = macvm.LoadBaseList(m.items.file); err != nil {
+			return macvm.BaseList{}, err
+		}
+	}
+	if m.items.ca != nil {
+		return macvm.WithInspectionCA(l, m.items.ca.CertPath())
+	}
+	return l, nil
 }
 
 // driftKey is the drift record's key (askDrift, driftStarted) for the tools update of the base whose
@@ -111,4 +209,21 @@ func baseCustomisation(baseDir string) ([]runnerwire.MacVMItem, *runnerwire.MacV
 	p := rec.Guest
 	return out, &runnerwire.MacVMGuest{OSVersion: p.OSVersion, OSBuild: p.OSBuild, SIP: p.SIP, Gatekeeper: p.Gatekeeper,
 		Profiles: p.Profiles, MDM: p.MDM, OrgCA: p.OrgCA}
+}
+
+// dropInspectionCA is the runner's start with macOS VMs off, when no handle opens: it removes this Mac's
+// inspection CA as openInspectionCA does, with the setting off or under a drive root, and never makes one.
+func dropInspectionCA(set macOSVMSettings) {
+	root, err := macvm.DefaultRoot()
+	if err != nil || set.inspectionCA == nil {
+		return
+	}
+	m := &macOSVMs{layout: macvm.Layout{Root: root}}
+	if _, err := os.Lstat(m.layout.InspectionCADir()); err != nil {
+		return
+	}
+	if *set.inspectionCA && driveRootOver(m.layout.InspectionCADir(), set.driveRoots) == "" {
+		return
+	}
+	m.openInspectionCA(set.inspectionCA, set.driveRoots, true)
 }
