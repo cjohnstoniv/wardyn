@@ -74,6 +74,7 @@ func TestTemplatePolicyCheckFollowsTheReadAuthority(t *testing.T) {
 	for scope, owner := range templateOwners {
 		for _, c := range templateCallerCases {
 			e := newTemplateEnv(t)
+			e.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2}
 			tpl := e.seed(owner, types.TemplateKindTemplate, "seeded", templateIntentEgress)
 			userView := templateCookie(t, c.sub, c.role, c.role == oidc.RoleAdmin, c.groups, false)
 			status, _, body := e.templateCheck(userView, tpl, `{"allowed_domains":["pypi.org"]}`)
@@ -108,28 +109,40 @@ func TestTemplatePolicyCheckRefusesABodyWithNoCandidate(t *testing.T) {
 }
 
 // A caller below the tier that reads a mount's host path or a secret's name is judged against the
-// policy as their own read shows it, so two candidates that differ only in such a value, one the
-// true one and one a guess, get the same answer byte for byte.
+// policy as their own read shows it. Two candidates that differ only in such a value, one the true
+// one and one a guess, get the same answer byte for byte, and both are reported as wider on that
+// field. A candidate that spells the value as the caller's read does is not: the policy's own value
+// reached the check, and it was the redacted one.
 func TestTemplatePolicyCheckConfirmsNoWithheldValue(t *testing.T) {
 	e := newTemplateEnv(t)
 	e.srv.cfg.DefaultPolicy = types.RunPolicySpec{
-		WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/operator/creds", Target: "/work"}},
-		LLMInspection:   &types.LLMInspectionSpec{WorkspaceSecretNames: []string{"corp-signing-key"}},
+		MinConfinementClass: types.CC2,
+		WorkspaceMounts:     []types.WorkspaceMount{{Source: "/srv/operator/creds", Target: "/work"}},
+		LLMInspection:       &types.LLMInspectionSpec{WorkspaceSecretNames: []string{"corp-signing-key"}},
 	}
 	tpl := e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"}, types.TemplateKindTemplate, "recorded", templateIntentEgress)
 	alice := templateCookie(t, "alice", oidc.RoleUser, false, []string{}, false)
-	for _, row := range []struct{ name, right, wrong string }{
-		{"a mount's host path",
+	for _, row := range []struct{ name, field, right, wrong, asRead string }{
+		{"a mount's host path", "workspace_mounts",
 			`{"workspace_mounts":[{"source":"/srv/operator/creds","target":"/work"}]}`,
-			`{"workspace_mounts":[{"source":"/srv/other","target":"/work"}]}`},
-		{"a workspace secret name",
+			`{"workspace_mounts":[{"source":"/srv/other","target":"/work"}]}`,
+			`{"workspace_mounts":[{"source":"` + mountSourceWithheld + `","target":"/work"}]}`},
+		{"a workspace secret name", "llm_inspection",
 			`{"llm_inspection":{"workspace_secret_names":["corp-signing-key"]}}`,
-			`{"llm_inspection":{"workspace_secret_names":["other"]}}`},
+			`{"llm_inspection":{"workspace_secret_names":["other"]}}`,
+			`{"llm_inspection":{"workspace_secret_names":["<1 name(s) redacted>"]}}`},
 	} {
-		statusR, bodyR := e.call(alice, http.MethodPost, "/api/v1/templates/"+tpl.ID.String()+"/policy-check", `{"candidate":`+row.right+`}`)
-		statusW, bodyW := e.call(alice, http.MethodPost, "/api/v1/templates/"+tpl.ID.String()+"/policy-check", `{"candidate":`+row.wrong+`}`)
+		named := `{"field":"` + row.field + `"}`
+		statusR, _, bodyR := e.templateCheck(alice, tpl, row.right)
+		statusW, _, bodyW := e.templateCheck(alice, tpl, row.wrong)
 		if statusR != http.StatusOK || statusW != http.StatusOK || bodyR != bodyW {
 			t.Errorf("%s: true value %d %s, wrong value %d %s, want two 200s with one body", row.name, statusR, bodyR, statusW, bodyW)
+		}
+		if !strings.Contains(bodyR, named) {
+			t.Errorf("%s: the true value is not reported as wider on %s: %s", row.name, row.field, bodyR)
+		}
+		if status, _, body := e.templateCheck(alice, tpl, row.asRead); status != http.StatusOK || strings.Contains(body, named) {
+			t.Errorf("%s: the value as the caller reads it: %d %s, want a 200 that does not name %s", row.name, status, body, row.field)
 		}
 	}
 }
