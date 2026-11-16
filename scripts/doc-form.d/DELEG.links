@@ -1,0 +1,4 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/operations/delegation.md
+docs/operations/orchestrators.md
+docs/GLOSSARY.md

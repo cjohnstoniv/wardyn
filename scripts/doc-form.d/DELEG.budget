@@ -1,0 +1,4 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of each new page, so growth fails.
+docs/operations/delegation.md=1938 share=10 # measured: the three tiers of consent, who may consent to each kind, and when a running run loses each access
+docs/operations/orchestrators.md=958 share=30 # measured: one background run per workflow step, what not to do, and a retried call that needs an approval
+docs/GLOSSARY.md=471 share=10 # measured: each gateway, proxy and broker, what it is, where it runs and its page
