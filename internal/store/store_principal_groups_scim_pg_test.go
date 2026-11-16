@@ -94,8 +94,8 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	if err != nil || !slices.Equal(got.Groups, []string{"ops"}) || !got.Truncated {
 		t.Fatalf("removed from eng: %+v, %v; want ops alone, still partial", got, err)
 	}
-	if got := record("sub-ann", portal); !slices.Equal(got, []string{"sales"}) {
-		t.Errorf("removed from eng, the portal's record: %v, want sales alone", got)
+	if got, err := st.GetPrincipalGroups(ctx, "sub-ann", portal); err != nil || !slices.Equal(got.Groups, []string{"sales"}) || got.Truncated {
+		t.Errorf("removed from eng, the portal's record: %+v, %v; want sales alone, still complete", got, err)
 	}
 	if _, err := st.GetPrincipalGroups(ctx, "sub-dee", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("a person with no record: %v, want still none", err)
@@ -109,7 +109,8 @@ func TestPG_PrincipalGroups_ScimRemovalNarrowsTheRecord(t *testing.T) {
 	if err := st.StartGroupRemoval(ctx, blank.ID, eve); err != nil {
 		t.Fatal(err)
 	}
-	if got := record("sub-eve", ""); got == nil || len(got) != 0 {
-		t.Errorf("removed from a group with a blank id: %v, want no groups (not nil)", got)
+	if got, err := st.GetPrincipalGroups(ctx, "sub-eve", ""); err != nil || got.Groups == nil || len(got.Groups) != 0 || !got.Truncated {
+		t.Errorf("removed from a group with a blank id: %+v, %v; want no groups (not nil), marked partial", got, err)
 	}
 }
+
