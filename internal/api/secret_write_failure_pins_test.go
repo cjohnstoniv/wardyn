@@ -188,15 +188,15 @@ func TestSecretWriteFailure_RowNamesItsWriter(t *testing.T) {
 		if err := srv.probeSecretWrite(context.Background(), awsSSOScope{perUser: true, owner: "bob"}); !errors.Is(err, secretstore.ErrRowNotWritten) {
 			t.Fatalf("probe = %v, want ErrRowNotWritten", err)
 		}
-		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
+		wantWriter(t, lastAuditEvent(t, h.audit.snapshot(), "secret.write"), types.ActorSystem, "wardynd")
 		if err := srv.storeAWSSSOBlob(context.Background(), awsSSOScope{perUser: true, owner: "bob"}, awsSSOBlob{}); !errors.Is(err, secretstore.ErrRowNotWritten) {
 			t.Fatalf("aws sso store = %v, want ErrRowNotWritten", err)
 		}
-		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
+		wantWriter(t, lastAuditEvent(t, h.audit.snapshot(), "secret.write"), types.ActorSystem, "wardynd")
 		if err := srv.storeADOEntraBlob(context.Background(), "alice", "ado-1", adoEntraBlob{}); !errors.Is(err, secretstore.ErrRowNotWritten) {
 			t.Fatalf("ado entra store = %v, want ErrRowNotWritten", err)
 		}
-		wantWriter(t, lastAuditEvent(t, h.audit.events, "secret.write"), types.ActorSystem, "wardynd")
+		wantWriter(t, lastAuditEvent(t, h.audit.snapshot(), "secret.write"), types.ActorSystem, "wardynd")
 	})
 }
 
