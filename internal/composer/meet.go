@@ -246,10 +246,16 @@ func (m *meeter) validatePresence(ov Overlay) {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)
 		}
 	}
-	if c := ov.Limits.ConfinementFloors; c != nil {
-		if err := c.Validate(); err != nil {
-			m.fail(ReasonOverlayInvalid, "confinement_floors", "%v", err)
-		}
+	m.validateConfinementFloors(ov.Limits.ConfinementFloors)
+}
+
+// validateConfinementFloors refuses a floor that names no known confinement class.
+func (m *meeter) validateConfinementFloors(c *types.ConfinementFloors) {
+	if c == nil {
+		return
+	}
+	if err := c.Validate(); err != nil {
+		m.fail(ReasonOverlayInvalid, "confinement_floors", "%v", err)
 	}
 }
 
