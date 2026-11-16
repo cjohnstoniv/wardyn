@@ -610,19 +610,19 @@ func (s signinClaimUnwrittenStore) ClaimDesktopSigninEnd(context.Context, uuid.U
 	return false, errors.New("store: claim refused")
 }
 
-// TestDesktopSignin_AnEndWhoseClaimCannotBeTakenRunsUnclaimed: a store that cannot take the end's claim cannot be
-// blamed on the person's end: it answers 204 and sends the person's stop, resume-agent and SIGCONT, so the agent is
-// never left stopped by a store fault.
-func TestDesktopSignin_AnEndWhoseClaimCannotBeTakenRunsUnclaimed(t *testing.T) {
+// TestDesktopSignin_AnEndWhoseClaimCannotBeTakenSendsNothing: an end whose claim the store cannot write answers 503
+// desktop_signin_unavailable and sends nothing, so a late stop or SIGCONT cannot undo a newer sign-in that another
+// end's claim let begin. The person's next end, or the sweep's, claims and ends it.
+func TestDesktopSignin_AnEndWhoseClaimCannotBeTakenSendsNothing(t *testing.T) {
 	f := newSigninFixture(t)
 	f.begin(t)
 	before := len(f.rn.seen())
 	f.srv.cfg.Store = signinClaimUnwrittenStore{f.st}
 	code, body := f.post(t, "/desktop-signin/end", "")
-	if code != http.StatusNoContent {
-		t.Fatalf("end = %d %s, want 204", code, body)
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonDesktopSigninUnavailable) {
+		t.Fatalf("end = %d %s, want 503 %s", code, body, reasonDesktopSigninUnavailable)
 	}
-	if got, want := f.rn.seen()[before:], []string{"person:stop", "agent:resume-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
-		t.Fatalf("calls = %v, want %v", got, want)
+	if got := f.rn.seen()[before:]; len(got) != 0 {
+		t.Fatalf("calls = %v, want none", got)
 	}
 }
