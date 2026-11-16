@@ -253,13 +253,14 @@ func (d *Driver) notePeersOnly(image string, fellBack bool) {
 	}
 }
 
-// startProxyOn creates the wardyn-proxy sidecar for runID from image on the per-run
+// startProxyWithMAC creates the wardyn-proxy sidecar for runID from image on the per-run
 // network, joins it to the control-plane-facing network, starts it and hands
 // it prep's config on stdin. ip, when valid, is the address it must take on the
-// per-run network (the one the agent's hosts entry pins). On any failure it
-// removes what it created. It answers the container id and the hash of the
-// config written to it (startWithConfig).
-func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, string, error) {
+// per-run network (the one the agent's hosts entry pins), and mac, when set, its
+// MAC address there (startProxyOn). On any failure it removes what it created; a
+// failed create or start is a proxyStepError. It answers the container id and the
+// hash of the config written to it (startWithConfig).
+func (d *Driver) startProxyWithMAC(ctx context.Context, image string, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr, mac network.HardwareAddr) (string, string, error) {
 	cfgJSON := prep.cfgJSON
 	cfg := &container.Config{
 		Image:    image,
@@ -314,20 +315,18 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	if err != nil {
 		return "", "", err
 	}
-	var netCfg *network.NetworkingConfig
+	ep := &network.EndpointSettings{MacAddress: mac}
 	if ip.IsValid() {
-		netCfg = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			internalNetName(runID): {IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: ip}},
-		}}
+		ep.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: ip}
 	}
 	resp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           cfg,
 		HostConfig:       host,
-		NetworkingConfig: netCfg,
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{internalNetName(runID): ep}},
 		Name:             proxyContainerName(runID),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("docker: create proxy: %w", err)
+		return "", "", fmt.Errorf("docker: create proxy: %w", &proxyStepError{step: "create", err: err})
 	}
 	// The rollback has a bound of its own: a revive reaches it under the run's lock (ReplaceProxy), and a remove
 	// that never answers would hold that lock with it.
@@ -407,7 +406,7 @@ func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string
 		}
 	}()
 	if _, err = d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
-		return att, "", fmt.Errorf("docker: start proxy: %w", err)
+		return att, "", fmt.Errorf("docker: start proxy: %w", &proxyStepError{step: "start", err: err})
 	}
 	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
 		return att, "", err
