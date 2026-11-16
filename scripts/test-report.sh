@@ -276,13 +276,13 @@ fi
 if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   DECLARE_FLOOR=0
 fi
-# conformance-docker, conformance-k8s, envbuild and l0-docker have no testfloor.Mark
+# conformance-docker, conformance-k8s, conformance-vm, envbuild and l0-docker have no testfloor.Mark
 # probes of their own (see the REQUIRE_ALL floor right below, which is their
 # equivalent) — the testfloor.Mark floor further down must not run for them,
 # or it would read "no package suite tested calls testfloor.Mark" as a red
 # floor instead of a floor that simply lives elsewhere.
 case "$SUITE" in
-  conformance-docker | conformance-k8s | envbuild | l0-docker) DECLARE_FLOOR=0 ;;
+  conformance-docker | conformance-k8s | conformance-vm | envbuild | l0-docker) DECLARE_FLOOR=0 ;;
 esac
 
 # T-08 (G9): conformance and envbuild have no must-pass floor at all today —
@@ -331,11 +331,22 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     REQUIRE_ALL="$REQUIRE_ALL TestGatewayRecipes_Live"
   fi
+  # Revive after a reboot, which docs/RUNTIME-CONTRACT.md cites as holding. It runs on a fake daemon with no
+  # skip, so every docker suite runs it, WARDYN_TEST_DOCKER or not; named here, a rename goes red.
+  if [ "$SUITE" = "docker" ]; then
+    REQUIRE_ALL="${REQUIRE_ALL:+$REQUIRE_ALL }TestStartSandbox_OnlyBehindARunningProxy"
+  fi
   # #707: `make test-conformance-docker` ran these through a bare
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce'
+  fi
+  # The Linux VM cases docs/RUNTIME-CONTRACT.md cites. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE
+  # are set; ci.yml's vm job, the suite's one caller, builds and sets them, so the floor keys on the suite
+  # alone and a dropped variable goes red as a skip.
+  if [ "$SUITE" = "conformance-vm" ]; then
+    REQUIRE_ALL='TestLinuxVMSandbox TestLinuxVMSandbox/ForwardDialsGuestLoopbackOnly TestLinuxVMDrives'
   fi
   # The SSH gateway's -L forwarding, the editor path over it, the UI relay and the macOS VM Screen Sharing
   # refusal (gateway and guest agent). None needs Postgres or Docker, so they run in the plain unit suite,
