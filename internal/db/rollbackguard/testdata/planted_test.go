@@ -134,3 +134,19 @@ func plantedHiddenName(db pgx.Tx, s store) {
 	xdb, _ := s.conn(context.Background()).Begin(context.Background())
 	_ = xdb.Rollback(context.Background()) // refused
 }
+
+// A method value taken from a local that hides the db package, and the same value passed on.
+func plantedHiddenValue(db pgx.Tx) {
+	undo := db.Rollback
+	again := undo
+	defer undo(context.Background()) // refused
+	defer again(context.TODO())      // refused
+}
+
+// The bounded form's own value: it takes two arguments.
+func plantedBoundedValue(s store) {
+	ctx := context.Background()
+	tx, _ := s.conn(ctx).Begin(ctx)
+	undo := xdb.Rollback
+	defer undo(ctx, tx) // allowed: the bounded form, through a name
+}
