@@ -30,13 +30,15 @@ const (
 		"wider: the check refuses what it cannot prove, so it can fail a candidate that is in fact\n" +
 		"no broader, and never passes one that is broader. Exit 1 with no verdict printed, or any\n" +
 		"other exit code, means the check did not run.\n\n" +
-		"A run template cannot be the --within side: it carries only some policy fields and takes\n" +
-		"the rest from the policy of whoever launches it."
+		"The --within side can also be a run template's id. A template holds only some policy fields\n" +
+		"and takes the rest from the policy your runs start from. The server works out the policy a\n" +
+		"run of the template would start from for you, and checks the candidate against that."
 	policyCheckWithin    = "candidate %s is within %s\n"
 	policyCheckWider     = "candidate %s is not within %s. Wider, or not shown to be no wider:\n"
 	policyCheckNoField   = "  no single field accounts for it; compare the two policies as wholes\n"
 	policyCheckNotWithin = "policy check: the candidate is not within %s"
-	policyCheckNoPolicy  = "no policy has the id %s (a run template cannot be the --within side: pass a stored policy's id or a policy file): %w"
+	policyCheckNoSide    = "no policy or run template you can read has the id %s: %w"
+	policyCheckNoServer  = "no policy has the id %s, and this server cannot check against a run template: pass a stored policy's id or a policy file: %w"
 	policyCheckEmpty     = "the document holds no policy"
 )
 
@@ -55,7 +57,7 @@ func policyCheckCmd(client clientFn) *cobra.Command {
 	var file, within string
 	var asJSON bool
 	check := &cobra.Command{
-		Use:   "check --within <policy-id|file> -f <candidate>",
+		Use:   "check --within <policy-id|template-id|file> -f <candidate>",
 		Short: policyCheckShort,
 		Long:  policyCheckLong,
 		Args:  cobra.NoArgs,
@@ -64,17 +66,9 @@ func policyCheckCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("candidate %s: %w", file, err)
 			}
-			base, err := readCheckWithin(cmd, client, within)
+			res, err := checkWithin(cmd, client, within, cand)
 			if err != nil {
 				return fmt.Errorf("--within %s: %w", within, err)
-			}
-			// The verdict is Leq's alone. The field list only explains a false one.
-			res := policyCheckResult{
-				Within:    composer.Leq(cand, base, types.GovernanceLimits{}, types.GovernanceLimits{}),
-				Widenings: []composer.Widening{},
-			}
-			if !res.Within {
-				res.Widenings = append(res.Widenings, composer.LeqWidenings(cand, base)...)
 			}
 			if asJSON {
 				if err := emitJSON(cmd.OutOrStdout(), res); err != nil {
@@ -90,30 +84,70 @@ func policyCheckCmd(client clientFn) *cobra.Command {
 		},
 	}
 	check.Flags().StringVarP(&file, "file", "f", "", "the candidate: path to a JSON or YAML policy or spec (use '-' for stdin)")
-	check.Flags().StringVar(&within, "within", "", "the policy the candidate must stay within: a stored policy's id, or a path to a JSON or YAML policy or spec")
+	check.Flags().StringVar(&within, "within", "", "the policy the candidate must stay within: a stored policy's id, a run template's id, or a path to a JSON or YAML policy or spec")
 	check.Flags().BoolVar(&asJSON, "json", false, "emit the verdict and the field list as JSON")
 	_ = check.MarkFlagRequired("file")
 	_ = check.MarkFlagRequired("within")
 	return check
 }
 
-// readCheckWithin reads the --within side: a stored policy when the value is a UUID, else a file.
-// The stored policy is read as the server wrote it and decoded strictly, so a field this build does
-// not know refuses the check instead of being dropped and read as an absent restriction.
-func readCheckWithin(cmd *cobra.Command, client clientFn, within string) (types.RunPolicySpec, error) {
+// checkWithin is the verdict on cand against the --within side. A file, or a stored policy when the
+// value is a UUID, is judged here, and the verdict is Leq's alone: the field list only explains a
+// false one. The stored policy is read as the server wrote it and decoded strictly, so a field this
+// build does not know refuses the check instead of being dropped and read as an absent restriction.
+// A UUID that names no stored policy is tried as a run template, which only the server can judge.
+func checkWithin(cmd *cobra.Command, client clientFn, within string, cand types.RunPolicySpec) (policyCheckResult, error) {
+	var base types.RunPolicySpec
 	id, err := uuid.Parse(within)
 	if err != nil {
-		return readCheckSide(nil, within)
-	}
-	raw, err := client().GetPolicyDocument(cmd.Context(), id)
-	var ae *sdk.APIError
-	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
-		return types.RunPolicySpec{}, fmt.Errorf(policyCheckNoPolicy, id, err)
+		base, err = readCheckSide(nil, within)
+	} else {
+		var raw json.RawMessage
+		raw, err = client().GetPolicyDocument(cmd.Context(), id)
+		var ae *sdk.APIError
+		if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+			return checkTemplateWithin(cmd, client, id, cand)
+		}
+		if err == nil {
+			base, err = checkSpecFrom(raw)
+		}
 	}
 	if err != nil {
-		return types.RunPolicySpec{}, err
+		return policyCheckResult{}, err
 	}
-	return checkSpecFrom(raw)
+	res := policyCheckResult{
+		Within:    composer.Leq(cand, base, types.GovernanceLimits{}, types.GovernanceLimits{}),
+		Widenings: []composer.Widening{},
+	}
+	if !res.Within {
+		res.Widenings = append(res.Widenings, composer.LeqWidenings(cand, base)...)
+	}
+	return res, nil
+}
+
+// checkTemplateWithin takes the server's verdict on cand against run template id. A template holds
+// only some policy fields and takes the rest from the policy of whoever launches it, which only the
+// server resolves, so this build keeps no copy of that rule. The template's own 404 means the id names
+// neither a policy nor a template the caller can read. A 404 or 405 with no reason, or a server that
+// keeps no templates, is a server that cannot check against one. A verdict that says within but names
+// a field is read as not within.
+func checkTemplateWithin(cmd *cobra.Command, client clientFn, id uuid.UUID, cand types.RunPolicySpec) (policyCheckResult, error) {
+	got, err := client().CheckTemplatePolicy(cmd.Context(), id, cand)
+	var ae *sdk.APIError
+	switch {
+	case errors.As(err, &ae) && ae.Reason == "template_not_found":
+		return policyCheckResult{}, fmt.Errorf(policyCheckNoSide, id, err)
+	case errors.As(err, &ae) && (ae.Reason == "templates_unavailable" ||
+		ae.Reason == "" && (ae.Status == http.StatusNotFound || ae.Status == http.StatusMethodNotAllowed)):
+		return policyCheckResult{}, fmt.Errorf(policyCheckNoServer, id, err)
+	case err != nil:
+		return policyCheckResult{}, err
+	}
+	res := policyCheckResult{Within: got.Within && len(got.Widenings) == 0, Widenings: []composer.Widening{}}
+	for _, w := range got.Widenings {
+		res.Widenings = append(res.Widenings, composer.Widening(w))
+	}
+	return res, nil
 }
 
 // readCheckSide reads one side from a file, or from in when the path is "-" and in is given.
