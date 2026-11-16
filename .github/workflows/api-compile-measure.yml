@@ -84,7 +84,9 @@ jobs:
           vm=$!
           start=$SECONDS
           rc=0
-          go "$sub" -toolexec "$RUNNER_TEMP/tx.sh" "$@" || rc=$?
+          go "$sub" -toolexec "$RUNNER_TEMP/tx.sh" "$@" 2> "$RUNNER_TEMP/err-$label.txt" || rc=$?
+          cat "$RUNNER_TEMP/err-$label.txt" >&2
+          err=$(grep -v -m3 -e '^#' -e '^$' "$RUNNER_TEMP/err-$label.txt" | tr '\n' ' ' | tr -d ':' | cut -c1-600)
           wall=$((SECONDS - start))
           kill "$vm" 2>/dev/null || true
           wait "$vm" 2>/dev/null || true
@@ -95,7 +97,7 @@ jobs:
           free=$(awk 'NR > 2 && (f == "" || $4 + 0 < f) { f = $4 } END { printf "%d MB", f }' "$RUNNER_TEMP/vm-$label.txt")
           echo "the five largest processes of this phase (tool, package, maximum resident set kB, wall):"
           sort -t "$(printf '\t')" -k3,3nr "$TX_LOG" | head -5
-          echo "::notice title=api measure ($label)::rc $rc; internal/api compile maxRSS $compile; link maxRSS $link; step wall ${wall}s; most swap used $swap; least free $free"
+          echo "::notice title=api measure ($label)::rc $rc; internal/api compile maxRSS $compile; link maxRSS $link; step wall ${wall}s; most swap used $swap; least free $free; first error lines: ${err:-none}"
           printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$rc" "$compile" "$link" "${wall}s" "$swap" >> "$RUNNER_TEMP/phases.tsv"
           exit 0
           EOF
