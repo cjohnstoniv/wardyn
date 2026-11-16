@@ -322,6 +322,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 |---|---|---|
 | `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
+| internal/api's tests build without DWARF | `GOFLAGS` on each step that builds them, [`scripts/ci-api-prebuild.sh`](../scripts/ci-api-prebuild.sh) | A step that reuses a prebuild sets the same `GOFLAGS`, since with any other value it compiles the package again; each prebuild's notice records the compile's largest single process |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files, and `WARDYN_TRUSTED_CA_PATH` to a stand-in for the mounted `/etc/wardyn-trusted-ca.pem`.
@@ -347,7 +348,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-diagrams` | – | pending | pending | 10 |
 | `stop-early-dco` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
-| `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `conformance-k8s` | 58 | 11.2 | 12.8 | 40 |
 | `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 109 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
 | `macos` (not required) | – | pending | pending | 30 |
@@ -429,6 +430,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 - The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
 - The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
+- The `macos` job also runs eighteen folder sync copy pins on an exFAT disk image, which has no hard links, and shows the volume's file numbers as notices. It runs the member-scan letter-case pin after checking that the runner's volume ignores letter case.
   - `macos` is not a required check, but a red `macos` makes the run unusable as release evidence (green-by-tree reads the run's conclusion). It also runs the package postinstall as root against a temp root and reads the ledger back.
   - `macos-xcode-27` runs on a public-preview image with `continue-on-error`, so it is informational and never release evidence.
 
