@@ -42,7 +42,10 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingForgeHosts:     func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
 	runnerwire.ProxySettingAllowedModels:  func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
 	runnerwire.ProxySettingMCPApproveEach: func(pc *runner.ProxyConfig) { pc.MCPApproveEach = &proxy.MCPApproveEachConfig{} },
-	runnerwire.ProxySettingNoNetwork:      func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
+	runnerwire.ProxySettingMCPSendOnce: func(pc *runner.ProxyConfig) {
+		pc.MCPApproveEach = &proxy.MCPApproveEachConfig{SendOnce: true}
+	},
+	runnerwire.ProxySettingNoNetwork: func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
 	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
 		pc.Policy.RefuseIPLiterals, pc.Policy.AllowAllEgress = true, true
 	},
@@ -59,10 +62,14 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 }
 
 // proxySettingsOf is what ProxySettingsSet names for the case name sets: that setting alone, but for
-// a gateway, which a re-signing grant carries, so its own setting comes first.
+// a gateway, which a re-signing grant carries, and send once, which the approve_each marker carries,
+// so the outer setting comes first.
 func proxySettingsOf(name string) []string {
-	if name == runnerwire.ProxySettingAWSSigV4Gateways {
+	switch name {
+	case runnerwire.ProxySettingAWSSigV4Gateways:
 		return []string{runnerwire.ProxySettingAWSSigV4, name}
+	case runnerwire.ProxySettingMCPSendOnce:
+		return []string{runnerwire.ProxySettingMCPApproveEach, name}
 	}
 	return []string{name}
 }
@@ -368,5 +375,34 @@ func TestCreateSandboxRefusesAGatewayOnARunnerWithoutIt(t *testing.T) {
 	create(t, current, withGateway)
 	if sig := current.Fake.Created[0].ProxyConfig.AWSSigV4; sig == nil || len(sig.Gateways) != 1 {
 		t.Fatalf("the runner received aws_sigv4 %+v, want the gateway entry", sig)
+	}
+}
+
+// A runner that carries the approve_each marker but predates send once (it reports mcp_approve_each and
+// not mcp_send_once) would rebuild the marker without it, and its proxy would give no call a key made
+// from the call: a run with send once is refused there before anything is sent, a run without it is
+// admitted, and a runner that names it is sent the run with send once.
+func TestCreateSandboxRefusesSendOnceOnARunnerWithoutIt(t *testing.T) {
+	sendOnce := func(s *runner.SandboxSpec) { proxySettingCases[runnerwire.ProxySettingMCPSendOnce](&s.ProxyConfig) }
+	rig := runnertest.NewRig(t, rid)
+	publishCaps(t, rig, capsWithout(t, runnerwire.ProxySettingMCPSendOnce))
+	spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1}
+	sendOnce(&spec)
+	_, err := rig.Sub.CreateSandbox(ctxT(t), spec)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingMCPSendOnce || !strings.Contains(err.Error(), "too old for mcp_send_once") {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingMCPSendOnce)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	spec.RunID, spec.ProxyConfig.MCPApproveEach = uuid.New(), &proxy.MCPApproveEachConfig{}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("a run without send once was refused: %v", err)
+	}
+	current := runnertest.NewRig(t, rid)
+	create(t, current, sendOnce)
+	if m := current.Fake.Created[0].ProxyConfig.MCPApproveEach; m == nil || !m.SendOnce {
+		t.Fatalf("the runner received mcp_approve_each %+v, want send once", m)
 	}
 }
