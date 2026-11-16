@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	xdb "github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 func planted(ctx, rctx context.Context, tx pgx.Tx, s store) {
@@ -125,4 +126,11 @@ func plantedRangeFieldRebound(ctx context.Context, tx pgx.Tx, s store) {
 	bg, cancel := context.WithTimeout(bg, time.Second)
 	defer cancel()
 	_ = tx.Rollback(bg) // refused: a name given a detached context stays held; the bounded one needs its own name
+}
+
+// A local that hides the db package: db.Rollback takes two arguments, so one argument is a method.
+func plantedHiddenName(db pgx.Tx, s store) {
+	_ = db.Rollback(context.Background()) // refused
+	xdb, _ := s.conn(context.Background()).Begin(context.Background())
+	_ = xdb.Rollback(context.Background()) // refused
 }

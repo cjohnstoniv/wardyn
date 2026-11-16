@@ -7,7 +7,8 @@
 // the same package, known by its name, that returns one, with no context.WithTimeout or context.WithDeadline around
 // it. On a connection that stopped answering, such a rollback waits past every bound its caller set.
 // db.Rollback(ctx, tx) is the bounded form; it is known by the file's own name for internal/db, so it is never
-// matched.
+// matched. It takes two arguments, so a one-argument X.Rollback(A) through that name is a local that hides the
+// package, and is matched.
 //
 // It is its own package so it runs in seconds without compiling internal/store or internal/api. The check reads
 // syntax, not types: it first finds the package's functions that return a context and answer a detached one, then
@@ -18,7 +19,8 @@
 // a detached argument through. A name given a detached context anywhere stays held where a bound is put on it under
 // the same name: the bounded context needs a name of its own. It does not see a context or a method value that
 // reaches the declaration from outside it (a parameter, a struct field or a package-level variable), a method value
-// kept in a slice, map or struct, a helper of another package, or a context package other than the standard one.
+// kept in a slice, map or struct, a method value taken from a local that hides the db package, a helper of another
+// package, or a context package other than the standard one.
 package rollbackguard
 
 import (
@@ -63,6 +65,17 @@ func (f *file) contextFunc(fun ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+// hidesDB reports a one-argument X.Rollback(A) through the file's name for internal/db: db.Rollback takes two, so X
+// is a local name that hides the package.
+func (f *file) hidesDB(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Rollback" || len(call.Args) != 1 {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && f.db[x.Name]
 }
 
 // calleeName answers the name a call's function is spelled with: f for f(...) and x.f(...), "" for anything else.
@@ -262,7 +275,7 @@ func unbounded(t *testing.T, paths []string) map[string][]int {
 		for _, decl := range af.Decls {
 			f.names(decl)
 			ast.Inspect(decl, func(n ast.Node) bool {
-				if call, ok := n.(*ast.CallExpr); ok && f.rollback(call.Fun) && f.detachedArg(call.Args) {
+				if call, ok := n.(*ast.CallExpr); ok && (f.rollback(call.Fun) || f.hidesDB(call)) && f.detachedArg(call.Args) {
 					lines[paths[i]] = append(lines[paths[i]], fset.Position(call.Pos()).Line)
 				}
 				return true
