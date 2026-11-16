@@ -305,7 +305,7 @@ With `macos_vm_inspection_ca` on and the run's base trusting this Mac's CA, the 
 | App or tool | Host marked Inspected | Host marked Tunnel only | Tunnel only, behind a TLS-inspecting proxy |
 |---|---|---|---|
 | Uses only the system trust store: Safari, Electron apps, and Go or Swift tools with no CA file of their own | Fails TLS | Works | Fails TLS until your organisation's root is trusted |
-| Uses only the system trust store, with `macos_vm_inspection_ca` on and the base trusting this Mac's CA | Works | Works | Fails TLS until your organisation's root is trusted |
+| Uses only the system trust store, with `macos_vm_inspection_ca` on and the base trusting this Mac's CA | Works, within the limits below | Works | Fails TLS until your organisation's root is trusted |
 | Reads a CA variable: Node, Python, git, curl and the AWS CLI | Works | Works | Works, with your organisation's root in the [runner's CA bundle](hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner) |
 
 - The chain lasts 7 days, or to the run's maximum lifetime when that comes sooner. A run that outlives it fails TLS to its Inspected hosts again in system-trust apps; CA-bundle tools are unaffected.

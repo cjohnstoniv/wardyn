@@ -1586,7 +1586,7 @@ These risks are **not closed by v1 Wardyn**.
 
 | Area | Residuals |
 |---|---|
-| Model channel and egress | 1, 2, 3, 42, 43, 46, 54, 66, 93 |
+| Model channel and egress | 1, 2, 3, 42, 43, 46, 54, 66, 93, 99 |
 | Isolation and confinement | 4, 5, 6, 10, 12, 47, 53, 74 |
 | Identity, tokens and approvals | 7, 8, 11, 17, 38, 39, 44, 60, 61, 78 |
 | Admin reach and authorization | 9, 14, 15, 16, 20, 23, 24, 27, 30, 31, 55, 92 |
