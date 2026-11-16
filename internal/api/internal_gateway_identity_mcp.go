@@ -139,6 +139,10 @@ func (s *Server) gatewayMintAdmitMCP(ctx context.Context, run types.AgentRun, se
 	case !held:
 		return gatewayDest{}, "", gatewayMCPChanged()
 	}
+	// What the credential mint and redeem ask of the run's components, asked here too (gatewayComponentCut).
+	if ref := s.gatewayComponentCut(ctx, run); ref != nil {
+		return gatewayDest{}, "", ref
+	}
 	// The audience is the sealed one, which the binding has just shown equals the live one; the lifetime is the cap.
 	return gatewayDest{audience: sealed.Audience, mcp: sealed.MCPKey}, sponsor, nil
 }
