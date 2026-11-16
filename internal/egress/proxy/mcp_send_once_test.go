@@ -4,9 +4,12 @@
 package proxy
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,5 +181,80 @@ func TestMCPSendOnceSentAnswerNamingNoApprovalIsNotTrusted(t *testing.T) {
 	}
 	if f.up.hitCount() != 0 || len(cp.records()) != 0 {
 		t.Fatalf("upstream hits %d, records %+v; want nothing sent or recorded", f.up.hitCount(), cp.records())
+	}
+}
+
+// TestMCPIdenticalKeyedCallsWaitingTogetherAskOnce: two identical calls under one operation key (the one send
+// once makes, or the caller's own) that wait at the same time share one request. Once it is approved, one is
+// sent and the other is answered at once that the identical call took the approval: no second request for a
+// person, and one send.
+func TestMCPIdenticalKeyedCallsWaitingTogetherAskOnce(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { holdPollInterval = saved })
+	const args = `{"id":"ENG-1"}`
+	for _, tc := range []struct {
+		name    string
+		fixture func(*testing.T) (*mcpFixture, *opCP)
+		call    func(id int) string
+		opKey   string
+	}{
+		{"send once", newSendOnceFixture, func(id int) string { return eachCall(id, "delete_issue", args) }, derivedKey(t, args, 1)},
+		{"own key", newOpFixture, func(id int) string { return keyedCall(id, args, `"step-1"`) }, "step-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, cp := tc.fixture(t)
+			tableKey := opCallKey(t, args) + "|" + tc.opKey
+			waitFor := func(what string, ok func() bool) {
+				deadline := time.Now().Add(5 * time.Second)
+				for !ok() {
+					if time.Now().After(deadline) {
+						t.Fatalf("timed out waiting for %s", what)
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			posted := func(n int) func() bool {
+				return func() bool {
+					cp.mu.Lock()
+					defer cp.mu.Unlock()
+					return cp.posts >= n
+				}
+			}
+			recs := make([]*httptest.ResponseRecorder, 2)
+			var wg sync.WaitGroup
+			start := func(i int) {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					recs[i] = f.post(t, mcpToken("codex-cli"), "linear", tc.call(i+1))
+				}()
+			}
+			start(0)
+			waitFor("the first call's raise", posted(1))
+			waitFor("the first call's request filed", func() bool {
+				f.p.mcp.calls.mu.Lock()
+				defer f.p.mcp.calls.mu.Unlock()
+				k := f.p.mcp.calls.byKey[tableKey]
+				return k != nil && k.id != uuid.Nil
+			})
+			start(1)
+			waitFor("the second call's rejoin", posted(2))
+			cp.set(0, types.ApprovalApproved)
+			wg.Wait()
+			rows, _ := cp.snapshot()
+			if len(rows) != 1 || f.up.hitCount() != 1 {
+				t.Fatalf("rows %d, upstream hits %d; want one request and one send", len(rows), f.up.hitCount())
+			}
+			var taken []string
+			for _, rec := range recs {
+				if bytes.Contains(rec.Body.Bytes(), []byte(`"isError":true`)) {
+					taken = append(taken, toolResultText(t, rec))
+				}
+			}
+			if want := fmt.Sprintf(mcpCallTakenTogetherText, rows[0].id); len(taken) != 1 || taken[0] != want {
+				t.Fatalf("tool errors %q, want exactly one: %q", taken, want)
+			}
+		})
 	}
 }

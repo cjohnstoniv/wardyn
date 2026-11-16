@@ -74,6 +74,11 @@ const (
 	mcpCallRefusedText  = "Wardyn refused the request for a person's approval of this call (%d), so it was not sent."
 )
 
+// mcpCallTakenTogetherText is what the agent reads for a keyed call (its own operation key, or the one send once
+// makes) that waited on the same request as an identical call under the same key, which took the approval: the
+// other call sends this operation, and this one is not asked about again.
+const mcpCallTakenTogetherText = "An identical call that waited at the same time took this call's approval, under request %s, so Wardyn did not send this one or ask a person again."
+
 // setApproveEach takes the sealed config's windows and send-once switch; nil keeps the defaults.
 func (b *mcpBroker) setApproveEach(c *MCPApproveEachConfig) {
 	if b == nil || c == nil {
@@ -477,6 +482,14 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 				calls.update(key, id, apApproved)
 				if calls.claim(key, id) {
 					x.forwardApproved(w, c, id)
+					return
+				}
+				if c.scope.OperationKey != "" {
+					// A keyed call (its own key, or send once's): the call that took it holds this call's key, so it
+					// sends this operation; asking again would put a person in front of a call its record then answers
+					// as sent.
+					x.record(egress.Deny, ruleSourceMCPApprovalSent, id, "an identical call waiting at the same time took the approval")
+					writeToolError(w, c.id, fmt.Sprintf(mcpCallTakenTogetherText, id))
 					return
 				}
 				// Another call spent it: this one asks again, in its own window.
