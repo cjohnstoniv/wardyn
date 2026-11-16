@@ -15,7 +15,7 @@ import (
 
 // templatePolicyCheckNoCandidateMsg answers a check whose body names no candidate. Read as an empty
 // policy it would be within nearly anything, so a gate would pass on a body that never held one.
-const templatePolicyCheckNoCandidateMsg = "candidate is required: the policy to check against the template"
+const templatePolicyCheckNoCandidateMsg = "A candidate is required: the policy to check against the template"
 
 // handleTemplatePolicyCheck answers POST /api/v1/templates/{id}/policy-check: is the candidate
 // within the template's policy as it resolves for the caller? A template carries some policy keys
