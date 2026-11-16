@@ -1374,7 +1374,7 @@ erases one person's retained records by explicit scope, in one audited act
   service identity keeps its last sponsor.
 - These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
   - `agent_runs.created_by` stays on every run the person created. The scopes blank a run's task, title, description and correlation ID, not its owner, which the run's access check and its 404 for others rest on.
-    - `mcp_call_sends.owner` stays on the send records of the person's runs. It is the same principal as those runs' `created_by`. `run_tasks` overwrites each record's correlation ID, operation key and call hash; its approval, run and times stay.
+  - `mcp_call_sends.owner` stays on the send records of the person's runs. It is the same principal as those runs' `created_by`. `run_tasks` overwrites each record's correlation ID, operation key and call hash; its approval, run and times stay.
   - `people` (`principal`, `email`) stays: its unique-email index (`people_email_lower_uniq`) is what stops a second identity taking the address.
   - `principal_identities` (`email_lower`, `scim_user_name`, `scim_external_id`) stays, and a SCIM purge makes it a permanent tombstone so the person cannot be reactivated or sign in again.
   - `ssh_public_keys.principal`, `api_tokens.principal` and `workspaces.owned_by` stay. Reassign a workspace first ([ownership and offboarding](operations/ownership-and-offboarding.md)).
