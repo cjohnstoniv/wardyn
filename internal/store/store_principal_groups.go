@@ -1,0 +1,64 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The record of each person's last sign-in through each door (migration 0290_principal_groups).
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// PrincipalGroups is what a person's last sign-in through one door carried: the token's email as sent,
+// the group snapshot and whether that snapshot is partial. Groups is nil only for a stored JSON null, which
+// a capability resolution reads as no snapshot at all.
+type PrincipalGroups struct {
+	Email     string
+	Groups    []string
+	Truncated bool
+}
+
+// PutPrincipalGroups records a sign-in's email and group snapshot as principal's through portal ("" for
+// an SSO sign-in to Wardyn itself, else the portal's id), replacing the one before through the same door
+// and stamping the database's time. A nil groups is recorded as none. The sign-in gate and the portal
+// token exchange call it before they issue a session or token and refuse on an error.
+func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool) error {
+	if groups == nil {
+		groups = []string{}
+	}
+	b, err := json.Marshal(groups)
+	if err != nil {
+		return fmt.Errorf("store: encode sign-in groups: %w", err)
+	}
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (principal, portal) DO UPDATE SET email = EXCLUDED.email, groups = EXCLUDED.groups,
+			truncated = EXCLUDED.truncated, signed_in_at = now()`, principal, portal, email, b, truncated); err != nil {
+		return fmt.Errorf("store: record sign-in groups: %w", err)
+	}
+	return nil
+}
+
+// GetPrincipalGroups is principal's record through portal, or ErrNotFound when there is none: no
+// sign-in through that door recorded since the table was filled, or their credentials erased since.
+func (s PG) GetPrincipalGroups(ctx context.Context, principal, portal string) (PrincipalGroups, error) {
+	var (
+		rec PrincipalGroups
+		raw []byte
+	)
+	err := s.Pool.QueryRow(ctx, `SELECT email, groups, truncated FROM principal_groups WHERE principal = $1 AND portal = $2`, principal, portal).
+		Scan(&rec.Email, &raw, &rec.Truncated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PrincipalGroups{}, ErrNotFound
+	}
+	if err != nil {
+		return PrincipalGroups{}, fmt.Errorf("store: read sign-in groups: %w", err)
+	}
+	if err := json.Unmarshal(raw, &rec.Groups); err != nil {
+		return PrincipalGroups{}, fmt.Errorf("store: decode sign-in groups: %w", err)
+	}
+	return rec, nil
+}
