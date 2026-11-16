@@ -937,7 +937,7 @@ func (s *Server) reviveMintIdentity(ctx context.Context, run types.AgentRun) (id
 	if err != nil {
 		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, loggedMsg(ctx, "read run sponsor", err))
 	}
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), sponsor, internalAudience, run.OperatorOwned)
+	id, err := s.mintRunIdentity(ctx, run.ID, runWorkloadOf(run.SPIFFEID, run.ID), runIdentitySubject(ctx, run.CreatedBy), sponsor, run.OperatorOwned)
 	if err != nil {
 		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, loggedMsg(ctx, "mint run identity", err))
 	}
