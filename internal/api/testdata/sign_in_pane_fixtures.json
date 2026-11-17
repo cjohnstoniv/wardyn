@@ -423,6 +423,26 @@
         "user_code": "ABCD-EFGH"
       },
       "ts": "https://ap-southeast-10.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
+    },
+    {
+      "name": "a full-width row whose line end is a lone carriage return so far is still printing",
+      "pane": "\u001b[2;61H\u001b[1K\r\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EF\r",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a link shorter than the row width is not joined to the code prompt under it",
+      "pane": "\u001b[2;200H\u001b[1K\r\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\r\nThen enter the code:\r\n\r\nABCD-EFGH\r\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
     }
   ]
 }

@@ -159,7 +159,8 @@ function codeLineAfter(seg: string): string {
 // (ROW_CLEAR, whose column is the row width), and a link longer than a row
 // split at that width by a line end or the next row's clear (ROW_BREAK).
 // joinRows returns the link starting at start whose first row ends at end,
-// with those rows joined back, and where its last row ends. A row is joined to
+// with those rows joined back, and where its last row ends; width is the
+// column of the last row clear before start (0 for none). A row is joined to
 // the next while it starts a line, is all ASCII and is exactly the row width
 // long, and the next row starts with URL characters. printing is true while a
 // full row's line end or the next row has not arrived. Its twin is
@@ -167,12 +168,12 @@ function codeLineAfter(seg: string): string {
 const ROW_CLEAR = /\x1b\[[0-9]+;([0-9]+)H\x1b\[1K/g;
 const ROW_BREAK = /^(?:\r\n|\x1b\[[0-9]+;[0-9]+H\x1b\[1K\r)/;
 const URL_BODY = new RegExp(`^${URL_BODY_CHARS}+`);
-function joinRows(s: string, start: number, end: number): { link: string; last: number; printing: boolean } {
+function joinRows(s: string, start: number, end: number, width: number): { link: string; last: number; printing: boolean } {
   let link = s.slice(start, end);
   let last = end;
-  const clears = [...s.slice(0, start).matchAll(ROW_CLEAR)];
-  if (clears.length === 0 || (start > 0 && s[start - 1] !== "\n" && s[start - 1] !== "\r")) return { link, last, printing: false };
-  const width = Number(clears[clears.length - 1][1]);
+  // Starting a line is a safety margin: the exact-width rule already keeps a
+  // link that starts mid-row from being joined.
+  if (width === 0 || (start > 0 && s[start - 1] !== "\n" && s[start - 1] !== "\r")) return { link, last, printing: false };
   let row = link;
   while (row.length === width && /^[!-~]+$/.test(row)) {
     const rest = s.slice(last);
@@ -199,12 +200,17 @@ export function extractDeviceSignIn(s: string): { url: string; code: string } | 
   const matches = [...s.matchAll(re)];
   let bestComplete: { url: string; code: string } | null = null; // the latest attempt
   let bestBare: string | null = null; // fallback: first complete match without one
+  // Every row clear, found in one pass; ci walks to the last one before each match.
+  const clears = [...s.matchAll(ROW_CLEAR)];
+  let ci = 0;
+  let width = 0;
   let joined = 0;
   matches.forEach((m, i) => {
+    for (; ci < clears.length && clears[ci].index + clears[ci][0].length <= m.index; ci++) width = Number(clears[ci][1]);
     if (m.index < joined) return; // inside the rows of a link already joined
     const end = m.index + m[0].length;
     if (end >= s.length) return; // still streaming
-    const { link, last, printing } = joinRows(s, m.index, end);
+    const { link, last, printing } = joinRows(s, m.index, end, width);
     if (printing) return;
     joined = last;
     const url = link.replace(/[.,)]+$/, "");

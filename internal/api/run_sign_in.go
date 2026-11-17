@@ -317,6 +317,8 @@ func signInCodeLine(seg string) string {
 func signInJoinRows(text string, start, end int) (link string, last int, printing bool) {
 	link, last = text[start:end], end
 	clears := signInRowClearRe.FindAllStringSubmatchIndex(text[:start], -1)
+	// Starting a line is a safety margin: the exact-width rule already keeps a
+	// link that starts mid-row from being joined.
 	if len(clears) == 0 || (start > 0 && text[start-1] != '\n' && text[start-1] != '\r') {
 		return link, last, false
 	}
