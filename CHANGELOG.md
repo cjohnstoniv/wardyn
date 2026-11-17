@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `deploy/macos-guest/mdm/inspection-ca.mobileconfig.template`, a `com.apple.security.root` profile for one Mac's inspection CA, and a "Managing macOS VMs with MDM" section in the base image page: what an MDM vendor needs, why only MDM delivery gives TLS trust, what the runner package and profile do with no sudo, and the open question of many clones of one enrolled guest.
 - macOS VMs: an opt-in inspection CA per Mac (`macos_vm_inspection_ca`). Trusted once in `macos-vm edit-base`, it lets apps that use only the system trust store reach Inspected hosts. Each such run records `inspection_ca` on its machine.
 
 ### Changed
