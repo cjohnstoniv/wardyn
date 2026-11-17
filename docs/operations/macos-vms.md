@@ -118,6 +118,7 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 - With `macos_vm_inspection_ca` on, once edit-base trusts the CA, it signs each macOS VM run's proxy certificates for the hosts that run's proxy inspects, so apps that use only the system trust store accept them. Off, the runner deletes the CA. It stays off while a drive_root is or holds the VM directory.
 - The runner makes this Mac's inspection CA when it starts with `macos_vm` and `macos_vm_inspection_ca` on, and removes it at every start of a `docker` substrate runner with `macos_vm_inspection_ca` off, whether `macos_vm` is on or not; the `macos-vm` commands only read it.
 - A runner started with `--substrate folders` does not remove it. It refuses `macos-vm.noindex` and anything under it, as it does a credential folder: no listing, no pass, and a pass of the folder above leaves it out. A member's workspace mount refuses it too.
+- A container bind or a share drive refuses the VM directory, a folder under it and one above it, such as the home, by where it really is. A folders runner knows it by name only: if `macos-vm.noindex` links to another volume, share no folder that holds the target.
 - A managed profile that is there but cannot be read keeps a CA that is there and makes none, unless a drive root holds the VM directory: then the CA is removed.
 - `setup` prepares the first base without it; the base gains it at the runner's first tools update. Restart the runner after changing it.
 

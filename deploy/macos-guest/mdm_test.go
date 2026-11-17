@@ -144,7 +144,7 @@ func payload(t *testing.T, doc map[string]any) map[string]any {
 	return p
 }
 
-// Each MDM template is well-formed property lists holding the payload they are for, and every value the
+// Each MDM template is a well-formed property list holding the payload it is for, and every value the
 // organisation fills in is a placeholder, so a template can't be installed unfilled by mistake.
 func TestMDMTemplatesAreWellFormedWithTheirPlaceholders(t *testing.T) {
 	common := []string{"__IDENTIFIER_PREFIX__", "__ORGANIZATION__", "__PAYLOAD_UUID__", "__PROFILE_UUID__"}
@@ -195,7 +195,8 @@ func TestMDMTemplatesAreWellFormedWithTheirPlaceholders(t *testing.T) {
 	if p["PayloadType"] != "com.apple.security.root" {
 		t.Errorf("inspection CA payload type = %v", p["PayloadType"])
 	}
-	if p["PayloadContent"] != "__INSPECTION_CA_DER__" || p["PayloadCertificateFileName"] == "" {
+	name, _ := p["PayloadCertificateFileName"].(string)
+	if p["PayloadContent"] != "__INSPECTION_CA_DER__" || name == "" {
 		t.Errorf("inspection CA payload = %v, want the DER placeholder and a certificate file name", p)
 	}
 	if ca["PayloadIdentifier"] != "__IDENTIFIER_PREFIX__.inspection-ca" {

@@ -233,7 +233,7 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 - `__AGENT_PATH__` is `/usr/local/libexec/wardyn-guest-agent`.
 - `__CODE_REQUIREMENT__` is the agent's designated requirement, `identifier "com.wardyn.guest-agent" and certificate root = H"<SHA-1>"`, where the SHA-1 is that of the signing certificate the runner made on the Mac. `codesign -d -r- /usr/local/libexec/wardyn-guest-agent` in `edit-base`'s admin Terminal prints it after `designated => `. Each Mac has its own.
 - `__INSPECTION_CA_DER__` is this Mac's inspection CA certificate as DER in base64, on one line ([Managing macOS VMs with MDM](#managing-macos-vms-with-mdm)).
-- `profiles install` can't add a profile since Big Sur. Without MDM, use System Settings.
+- `profiles install` can't add a profile since Big Sur. Without MDM, System Settings installs the Setup Assistant profile; the other two are MDM only.
 
 ### Managing macOS VMs with MDM
 
@@ -248,6 +248,7 @@ What an MDM vendor needs from Wardyn, and what is not known yet:
   - Apple's page shows an example for another service. The `SystemPolicyAllFiles` row is Wardyn's, and it has not been checked against that page.
 - **Why MDM.** Apple's rule: on macOS 13 and later, a root installed by hand from a configuration profile is not trusted for TLS by default. A root that a device management service installs is, and its trust settings cannot be changed ([Apple](https://support.apple.com/guide/deployment/intro-to-certificate-management-depb5eff8914/web), [Apple](https://support.apple.com/guide/deployment/certificates-payload-settings-dep91d2eb26/web)).
   - So the CA template fixes TLS only when MDM delivers it. A `profile` item that installs it by hand in `edit-base` does not.
+  - After MDM installs it in the base, a tools update or `edit-base` must read it back `trusted` before runs use it; until then `inspection_ca` reads `not_trusted`.
   - The payload's keys are `PayloadContent` (the certificate) and `PayloadCertificateFileName` ([Apple](https://developer.apple.com/documentation/devicemanagement/certificateroot)).
 - **The blocker.** Each run's guest is an APFS clone of one base. Whether any MDM accepts many clones of one enrolled guest is not known, and Wardyn has not checked Apple's documentation on enrolling a macOS VM.
   - A guest is also an unmanaged device to a sign-in that requires a compliant one ([Guest posture](#guest-posture)).
