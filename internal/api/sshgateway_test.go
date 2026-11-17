@@ -1102,6 +1102,59 @@ func TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel(t *testing.T) {
 	}
 }
 
+// refusingChannel is an eventChannel whose stdout writes fail, as a forwarded channel's do once the
+// client closed it while the connection stayed up.
+type refusingChannel struct{ *eventChannel }
+
+func (refusingChannel) Write([]byte) (int, error) { return 0, errors.New("channel closed") }
+
+// TestSSHGateway_ExecStderrNotAwaitedAfterAChannelWriteFails pins that a channel that refused stdout
+// cannot carry stderr either, so the bridge does not wait out execStderrTailGraceNS for it; and that a
+// stdout READ error still waits, as the last stderr line is then the reason.
+func TestSSHGateway_ExecStderrNotAwaitedAfterAChannelWriteFails(t *testing.T) {
+	t.Run("a channel write error", func(t *testing.T) {
+		srv, _, _, run := newWiredPauseServer(t)
+		stdoutR, stdoutW := io.Pipe()
+		stderrR, stderrW := io.Pipe()
+		t.Cleanup(func() { _ = stdoutW.Close(); _ = stderrW.Close() })
+		go func() { _, _ = stdoutW.Write([]byte("x")) }()
+		sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 0, nil }}
+		ch := newEventChannel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, refusingChannel{ch}, sess, true)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the bridge waited for a stderr that never ends after its channel refused a write")
+		}
+		select {
+		case <-ch.closed:
+		default:
+			t.Error("the channel was not closed")
+		}
+	})
+	t.Run("a stdout read error", func(t *testing.T) {
+		srv, _, _, run := newWiredPauseServer(t)
+		stdoutR, stdoutW := io.Pipe()
+		stderrR, stderrW := io.Pipe()
+		_ = stdoutW.CloseWithError(errors.New("read failed"))
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_, _ = io.WriteString(stderrW, "tail line")
+			_ = stderrW.Close()
+		}()
+		sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 1, nil }}
+		ch := newEventChannel()
+		srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, true)
+		if got := ch.stderrBefore("close"); got != "tail line" {
+			t.Errorf("stderr before Close = %q, want %q", got, "tail line")
+		}
+	})
+}
+
 // stdinRecorder is an exec's stdin that records its half-close and, like a
 // process that exits at the end of its input, ends its stdout then.
 type stdinRecorder struct {
