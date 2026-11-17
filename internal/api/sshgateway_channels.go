@@ -937,6 +937,13 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
+	// The forward's own context, as a session channel's chCtx: the client's close of this channel ends it with the
+	// client's cause, so the bridge closes the relay then, not when the connection ends. A relay parked writing to
+	// an unread pipe (a k8s or VM exec whose channel refused a write) has no other way to reach its Wait.
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(errSSHChannelClosed)
+	ctx = chCtx
+
 	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
@@ -956,7 +963,12 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 	defer channel.Close()
-	go ssh.DiscardRequests(reqs)
+	// The requests end at the client's CHANNEL_CLOSE or the connection's end, never at its EOF: a half-closed
+	// forward still gets its reply.
+	go func() {
+		ssh.DiscardRequests(reqs)
+		chCancel(errSSHChannelClosed)
+	}()
 
 	var end bridgeEnd
 	exit, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noteBridgeEnd(ctx, sess, &end), false)

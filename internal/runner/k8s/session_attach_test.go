@@ -336,3 +336,59 @@ func TestExecStream_SandboxGone(t *testing.T) {
 		})
 	}
 }
+
+// sendingExecutor is an exec whose process sends without end, and which returns its context's error once that
+// context ends, as client-go's SPDY and WebSocket executors do while a copy is still parked.
+type sendingExecutor struct{}
+
+func (sendingExecutor) StreamWithContext(ctx context.Context, opts remotecommand.StreamOptions) error {
+	go func() {
+		chunk := []byte(strings.Repeat("x", 4096))
+		for {
+			if _, err := opts.Stdout.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (e sendingExecutor) Stream(opts remotecommand.StreamOptions) error {
+	return e.StreamWithContext(context.Background(), opts)
+}
+
+// TestExecStream_CloseEndsWaitWithStdoutUnread: a reader that stops reading a sending exec (the SSH forward whose
+// channel refused a write) leaves the stream's copy parked on the unread pipe, so Wait can end only through Close.
+// Close must end it.
+func TestExecStream_CloseEndsWaitWithStdoutUnread(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	d.execFactory = func(string, string, []string, bool, bool) (remotecommand.Executor, error) {
+		return sendingExecutor{}, nil
+	}
+	sess, err := d.ExecStream(context.Background(), ref, runner.ExecSpec{Argv: []string{"socat", "-", "TCP:127.0.0.1:9999"}})
+	if err != nil {
+		t.Fatalf("ExecStream: %v", err)
+	}
+	if _, err := io.ReadFull(sess.Stdout, make([]byte, 1024)); err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	waited := make(chan error, 1)
+	go func() { _, werr := sess.Wait(); waited <- werr }()
+	select {
+	case werr := <-waited:
+		t.Fatalf("Wait returned before Close, with stdout unread: %v", werr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case werr := <-waited:
+		if !errors.Is(werr, context.Canceled) {
+			t.Errorf("Wait after Close = %v, want the stream's cancel", werr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait still blocked after Close with stdout unread")
+	}
+}
