@@ -34,8 +34,9 @@ type localRun struct {
 	Ref             string                       `json:"ref"`
 	Lease           runnerwire.Lease             `json:"lease"`
 	// LapseBy is when Lease lapses on this runner's wall clock, the sooner of its token and ends_at legs, as of
-	// the last lease. A restart's provisional deadline (ProvisionalDeadlines) is never later than it.
-	LapseBy        time.Time             `json:"lapse_by,omitempty"`
+	// the last lease. A restart's provisional deadline (ProvisionalDeadlines) is never later than it or
+	// restart + restartReadyGrace, whichever is later.
+	LapseBy        time.Time             `json:"lapse_by,omitzero"`
 	ProxyStoppedAt *time.Time            `json:"proxy_stopped_at,omitempty"`
 	Exit           *runnerwire.AgentExit `json:"exit,omitempty"`
 	ExitAcked      bool                  `json:"exit_acked,omitempty"`
@@ -69,6 +70,11 @@ type localRun struct {
 	// unsettled output.
 	OutputPending bool `json:"output_pending,omitempty"`
 }
+
+// restartReadyGrace is the least time a restart's provisional deadline leaves a run whose LapseBy passed
+// while runnerd was down. The org's READY re-lease may carry an ends_at extended during the outage or a
+// renewal that raced the crash, and the run is lost if its proxy is stopped before that lease arrives.
+const restartReadyGrace = 10 * time.Minute
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.
 type proxyExit struct {

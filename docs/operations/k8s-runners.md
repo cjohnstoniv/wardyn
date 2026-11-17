@@ -218,7 +218,8 @@
 | Decisions during an outage | Buffered up to the grant: 5,000 records or the byte credit, whichever comes first |
 | Pod lifetime | Both pods end at `sandbox.maxPodLifetime` (default `168h`) at the latest |
 
-- A run survives a runnerd outage if and only if runnerd is READY again, so that the relay forwards, and the proxy's next renew succeeds before its deadline. Boot counts against the budget.
+- A run survives a runnerd outage only if runnerd is READY again, so that the relay forwards, and the proxy's next renew succeeds before its deadline. Boot counts against the budget.
+- Until the organisation leases the run again, a restarted runnerd also stops the proxy on its own. The stop comes at the run's end time or token lapse, whichever is sooner, but no sooner than 10 minutes and no later than one hour after the restart.
 - With healthy renewals the last success is at most about 11 minutes before the crash, so a runner READY again within about 48 minutes keeps its runs. That is an example, not a guarantee.
 - Renewals that were already failing shorten the budget: last success at minute 0, runnerd down from minute 40 to 61, and the run lapses at minute 60.
 - After the deadline the agent stays up without network until runnerd returns, then is contained and the run is lost with reason `outage`. There is no revive on Kubernetes.
