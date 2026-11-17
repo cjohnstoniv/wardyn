@@ -93,18 +93,18 @@ func modelEnvSecretGrant(spec types.RunPolicySpec) (name, secretName string, fou
 const envEnableToolSearch = "ENABLE_TOOL_SEARCH"
 
 // applyClaudeToolSearchDefault turns Claude Code's tool search off for a run whose
-// claude would reach a host that is not first-party Anthropic: the proxy's brokered
-// route (the image's ANTHROPIC_BASE_URL, which the key arm leaves in place), a
-// subscription provider's gateway, or a custom endpoint that sets the variable.
+// claude would reach a host that is not first-party Anthropic: a base URL in the env
+// (a subscription provider's gateway, or a custom endpoint that sets the variable), or
+// no base URL but a model key on a container, which is taken as the claude-code image's
+// proxy route (its own ENV, left in place by the key arm). A container image that sets no
+// Anthropic base URL, such as one built from agent-base, is therefore treated the same.
 // Claude Code 2.1.231 did this itself, for the first-party provider only; later versions
 // dropped the check and would send tool-reference blocks and a beta header a gateway
 // may reject. Bedrock, Foundry and Vertex are left on the CLI default, as are the
-// sign-in task and a run that reaches api.anthropic.com. The default is the last word
-// only when nothing else sets the variable, so call this after every env writer: a
-// component config entry or an env_secret grant for it is kept.
-//
-// The key arm's route is the image's own ENV, so a macOS VM run, whose guest has no such
-// ENV and sets no base URL, is left alone.
+// sign-in task, a base URL on api.anthropic.com, and a virtual machine run with no base
+// URL (its guest gets this env only, no image ENV, so claude reaches the vendor host). The
+// default is the last word only when nothing else sets the variable, so call this after
+// every env writer: a value any of them set for it, a component config entry for one, is kept.
 func applyClaudeToolSearchDefault(run types.AgentRun, env map[string]string) {
 	if _, set := env[envEnableToolSearch]; set || run.Task == harnessLoginTask {
 		return
@@ -116,10 +116,10 @@ func applyClaudeToolSearchDefault(run types.AgentRun, env map[string]string) {
 	}
 	base := env[envAnthropicBaseURL]
 	if base == "" {
-		if env[envAnthropicAPIKey] == "" || run.MachineKind.IsMacOSVM() {
+		if env[envAnthropicAPIKey] == "" || run.MachineKind.IsVM() {
 			return
 		}
-	} else if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Hostname(), "api.anthropic.com") {
+	} else if u, err := url.Parse(base); err == nil && strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), "api.anthropic.com") {
 		return
 	}
 	env[envEnableToolSearch] = "false"

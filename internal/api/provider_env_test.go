@@ -273,7 +273,8 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 		lane   providerLane
 		run    types.AgentRun
 		preset map[string]string // set before the default is applied: an operator's own value
-		want   string            // "" = the variable is absent
+		want   string            // "" = the variable is absent; a preset ENABLE_TOOL_SEARCH, even empty, is expected as set
+		wired  map[string]string // what the arm itself must have set, so an absent result is not a bare env
 	}{
 		{name: "api key", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"}, want: "false"},
 		{name: "custom endpoint", lane: customEndpoint, run: types.AgentRun{Agent: "claude-code"}, want: "false"},
@@ -281,19 +282,33 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 		{name: "subscription behind a gateway", lane: subLane(gateway), run: types.AgentRun{Agent: "claude-code"}, want: "false"},
 		{name: "subscription direct", lane: subscription, run: types.AgentRun{Agent: "claude-code"}},
 		{name: "subscription set to the vendor host", lane: subLane(vendorBase), run: types.AgentRun{Agent: "claude-code"}},
-		{name: "bedrock sso", lane: sso, run: types.AgentRun{Agent: "claude-code"}},
-		{name: "bedrock key", lane: bearer, run: types.AgentRun{Agent: "claude-code"}},
-		{name: "foundry", lane: foundry, run: types.AgentRun{Agent: "claude-code"}},
+		{name: "bedrock sso", lane: sso, run: types.AgentRun{Agent: "claude-code"}, wired: map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}},
+		{name: "bedrock key", lane: bearer, run: types.AgentRun{Agent: "claude-code"}, wired: map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}},
+		{name: "foundry", lane: foundry, run: types.AgentRun{Agent: "claude-code"}, wired: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "1"}},
 		// Foundry and Bedrock stay on the default even when a base URL is also set; only the provider decides.
 		{name: "foundry with a base URL", lane: foundry, run: types.AgentRun{Agent: "claude-code"},
 			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
 		{name: "bedrock with a base URL", lane: sso, run: types.AgentRun{Agent: "claude-code"},
 			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+		{name: "vertex with a base URL", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"CLAUDE_CODE_USE_VERTEX": "1", "ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
 		{name: "sign-in task", run: types.AgentRun{Agent: "claude-code", Task: harnessLoginTask}},
-		{name: "macOS VM, no brokered route", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code", MachineKind: types.MachineMacOSVM}},
+		{name: "sign-in task with a base URL", run: types.AgentRun{Agent: "claude-code", Task: harnessLoginTask},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+		{name: "macOS VM, no base URL", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code", MachineKind: types.MachineMacOSVM}},
+		{name: "Linux VM, no base URL", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code", MachineKind: types.MachineLinuxVM}},
+		{name: "Linux VM behind a gateway", lane: subLane(gateway), run: types.AgentRun{Agent: "claude-code", MachineKind: types.MachineLinuxVM}, want: "false"},
+		{name: "host in capitals with a port", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://API.Anthropic.com:443/v1"}},
+		{name: "vendor host in a query", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.example?x=@api.anthropic.com"}, want: "false"},
+		{name: "vendor host with a trailing dot", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://api.anthropic.com."}},
 		{name: "codex harness", lane: openai, run: types.AgentRun{Agent: "codex-cli"}},
 		{name: "operator value kept", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
-			preset: map[string]string{"ENABLE_TOOL_SEARCH": "true"}, want: "true"},
+			preset: map[string]string{"ENABLE_TOOL_SEARCH": "true"}},
+		{name: "operator value empty is kept", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ENABLE_TOOL_SEARCH": ""}},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
@@ -306,9 +321,18 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 			}
 			maps.Copy(env, r.preset)
 			applyClaudeToolSearchDefault(r.run, env)
+			for k, v := range r.wired {
+				if env[k] != v {
+					t.Fatalf("the arm set %s = %q, want %q: the row proves nothing (env %v)", k, env[k], v, env)
+				}
+			}
 			got, set := env["ENABLE_TOOL_SEARCH"]
-			if r.want == "" && set || r.want != "" && got != r.want {
-				t.Errorf("ENABLE_TOOL_SEARCH = %q (set %v), want %q (env %v)", got, set, r.want, env)
+			want, wantSet := r.want, r.want != ""
+			if v, ok := r.preset["ENABLE_TOOL_SEARCH"]; ok {
+				want, wantSet = v, true
+			}
+			if set != wantSet || got != want {
+				t.Errorf("ENABLE_TOOL_SEARCH = %q (set %v), want %q (set %v) (env %v)", got, set, want, wantSet, env)
 			}
 		})
 	}
