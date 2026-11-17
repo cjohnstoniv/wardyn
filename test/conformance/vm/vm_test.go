@@ -8,7 +8,8 @@
 // wardyn-proxy. It builds nothing: set WARDYN_TEST_VM_QEMU_IMAGE (deploy/runner/vm-qemu),
 // WARDYN_TEST_VM_GUEST_IMAGE (deploy/images/vm-linux) and WARDYN_TEST_VM_PROXY_IMAGE
 // (deploy/compose/Dockerfile.proxy, which carries the relay), on a host with /dev/kvm and a local
-// Docker engine. The one allowed host is an origin on the proxy's network; nothing else is reachable.
+// Docker engine. The allowed hosts are one origin on the proxy's network, under two names (one with host
+// rules); nothing else is reachable.
 package vm
 
 import (
@@ -151,7 +152,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cli.Close()
-	// The proxy's own network, internal, with the origin on it: the allowed host, and the only one.
+	// The proxy's own network, internal, with the origin on it: the allowed host, and the only one. Its second
+	// name, rules.test, is the run's rule host.
 	upNet := "wardyn-vmconf-up-" + uuid.NewString()[:8]
 	if _, err := cli.NetworkCreate(ctx, upNet, dockerclient.NetworkCreateOptions{Driver: "bridge", Internal: true,
 		IPAM: &network.IPAM{Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix(upSubnet)}}}}); err != nil {
@@ -161,10 +163,10 @@ func TestLinuxVMSandbox(t *testing.T) {
 	origin, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 		Name: upNet + "-origin",
 		Config: &container.Config{Image: "busybox:latest", Cmd: []string{"sh", "-c",
-			"mkdir -p /www && echo origin-ok > /www/index.html && exec httpd -f -p 80 -h /www"}},
+			"mkdir -p /www/public && echo origin-ok > /www/index.html && echo rules-ok > /www/public/ok && exec httpd -f -p 80 -h /www"}},
 		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(upNet)},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{upNet: {
-			Aliases: []string{"origin.test"}, IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr(originIP)}}}},
+			Aliases: []string{"origin.test", "rules.test"}, IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr(originIP)}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +215,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 		RunID: uuid.New(), Image: guestImage, MachineKind: types.MachineLinuxVM, ConfinementClass: types.CC1,
 		Env: map[string]string{"WARDYN_CONFORMANCE": "vm"},
 		ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080", Policy: types.RunPolicySpec{
-			AllowedDomains: []string{"origin.test"}, FirstUseApproval: types.FirstUseAlwaysDeny, MinConfinementClass: types.CC1}},
+			AllowedDomains: []string{"origin.test", "rules.test"}, FirstUseApproval: types.FirstUseAlwaysDeny, MinConfinementClass: types.CC1,
+			HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: "rules.test", Methods: []string{"GET"}, Paths: []string{"/public"}, Effect: types.HostRuleAllow}}}}}},
 		Resources:  runner.Resources{CPUMillis: 2000, MemoryMiB: 2048},
 		Mounts:     []runner.Mount{{Source: ws, Target: "/home/agent/work", ReadOnly: true}, {Source: rw, Target: "/home/agent/rw"}},
 		ExecOutput: out,
@@ -507,6 +510,62 @@ func TestLinuxVMSandbox(t *testing.T) {
 		script := "(" + listener + " >/dev/null 2>&1 &); sleep 1; printf 'ping\\n' | " + agent + " forward 7777"
 		if code, o := run(t, d, sb.Ref, script); code != 0 || !strings.Contains(o, "echo:ping") {
 			t.Errorf("forward to the guest's loopback listener = %d %q, want 0 and echo:ping", code, o)
+		}
+	})
+
+	// Host rules on a VM run (docs/POLICIES.md), judged by the run's proxy as a container run's are. The
+	// guest's plain HTTP to the rule host is judged by method and path: the allowed GET reaches the origin,
+	// and a path or method no rule allows is answered 403 by the proxy (the origin would answer 404 or 501).
+	// The run has no interception certificate, so HTTPS to the rule host is refused at the relay's ask. A
+	// hold needs a control plane to answer it, and this suite has none.
+	t.Run("HostRulesJudgedInTheGuest", func(t *testing.T) {
+		for _, c := range []struct{ method, path, status, body string }{
+			{"GET", "/public/ok", "200", "rules-ok"},
+			{"GET", "/admin", "403", ""},
+			{"DELETE", "/public/ok", "403", ""},
+		} {
+			_, o := run(t, d, sb.Ref, `exec 3<>/dev/tcp/rules.test/80 && printf '`+c.method+` `+c.path+
+				` HTTP/1.0\r\nHost: rules.test\r\n\r\n' >&3 && timeout 20 cat <&3`)
+			status := ""
+			if f := strings.Fields(strings.SplitN(o, "\n", 2)[0]); len(f) > 1 {
+				status = f[1]
+			}
+			if status != c.status || !strings.Contains(o, c.body) {
+				t.Errorf("%s %s to the rule host from the guest: status %q in %q, want %s", c.method, c.path, status, o, c.status)
+			}
+		}
+		if code, o := run(t, d, sb.Ref, `timeout 15 bash -c '</dev/tcp/rules.test/443' && exit 0; exit 7`); code != 7 {
+			t.Errorf("HTTPS to the rule host with no interception certificate = %d %q, want refused", code, o)
+		}
+		// The proxy's rows: the allow, both refusals as policy:host-rule, and the HTTPS refusal.
+		want := map[string]bool{"allow GET /public/ok": false, "policy:host-rule GET /admin": false,
+			"policy:host-rule DELETE /public/ok": false, "policy:host-rule-needs-inspection 443": false}
+		for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(time.Second) {
+			for _, r := range decisions(t, cli, spec.RunID) {
+				req, _ := r["request"].(map[string]any)
+				if host, _ := req["Host"].(string); host != "rules.test" {
+					continue
+				}
+				src, _ := r["rule_source"].(string)
+				method, _ := req["Method"].(string)
+				path, _ := req["Path"].(string)
+				switch {
+				case r["decision"] == "allow" && method == "GET" && path == "/public/ok":
+					want["allow GET /public/ok"] = true
+				case r["decision"] == "deny" && src == "policy:host-rule":
+					want[src+" "+method+" "+path] = true
+				case r["decision"] == "deny" && src == "policy:host-rule-needs-inspection":
+					want[fmt.Sprint(src, " ", req["Port"])] = true
+				}
+			}
+			if !strings.Contains(fmt.Sprint(want), "false") || time.Now().After(deadline) {
+				break
+			}
+		}
+		for k, seen := range want {
+			if !seen {
+				t.Errorf("no %s row for rules.test in the proxy's log", k)
+			}
 		}
 	})
 
