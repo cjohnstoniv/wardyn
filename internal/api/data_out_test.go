@@ -603,3 +603,75 @@ func TestDataOutReviveKeepsTheRunsOwnRules(t *testing.T) {
 		t.Errorf("an unreadable recorded policy still replaced the proxy (%d) or wrote a generation", len(f.rr.replaced))
 	}
 }
+
+// dataOutGenerationStore is the revive fixture's generation store with the agent_runs.data_out column: every
+// run it reads carries row, nil for none.
+type dataOutGenerationStore struct {
+	*generationStore
+	row *types.TransferRule
+}
+
+var _ store.RunDataOuts = (*dataOutGenerationStore)(nil)
+
+func (s *dataOutGenerationStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.generationStore.GetRun(ctx, id)
+	run.DataOut = s.row
+	return run, err
+}
+
+func (*dataOutGenerationStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// TestDataOutReviveCarriesTheStricterRule: on a store that keeps the column, a revive's new generation takes
+// the stricter of the run row's data_out and the recorded policy's, and the recorded policy's recording. A run
+// with neither carries blocked: it was dispatched, and its rule is unknown. A pruned recorded policy leaves
+// the recording the stored config holds, which is none.
+func TestDataOutReviveCarriesTheStricterRule(t *testing.T) {
+	rule := func(r types.TransferRule) *types.TransferRule { return &r }
+	allowed, review, blocked := rule(types.TransferAllowed), rule(types.TransferReview), rule(types.TransferBlocked)
+	rec := types.RecordingScreenActions
+	for _, tc := range []struct {
+		name     string
+		row, env *types.TransferRule
+		want     types.TransferRule
+		wantRec  types.RecordingLevel
+	}{
+		{"no row, envelope pruned", nil, nil, types.TransferBlocked, ""},
+		{"no row, envelope allowed", nil, allowed, types.TransferAllowed, rec},
+		{"no row, envelope review", nil, review, types.TransferReview, rec},
+		{"row allowed, envelope pruned", allowed, nil, types.TransferAllowed, ""},
+		{"row allowed, envelope allowed", allowed, allowed, types.TransferAllowed, rec},
+		{"row allowed, envelope review", allowed, review, types.TransferReview, rec},
+		{"row blocked, envelope pruned", blocked, nil, types.TransferBlocked, ""},
+		{"row blocked, envelope allowed", blocked, allowed, types.TransferBlocked, rec},
+		{"row blocked, envelope review", blocked, review, types.TransferBlocked, rec},
+	} {
+		f, gs, _ := newGenerationFixture(t)
+		runID := f.run.ID
+		if tc.env != nil {
+			data, _ := json.Marshal(effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{DataOut: *tc.env, Recording: rec}})
+			gs.recorded = []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}
+		}
+		f.srv.cfg.Store = &dataOutGenerationStore{generationStore: gs, row: tc.row}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Errorf("%s: revive code %d, want 200", tc.name, code)
+			continue
+		}
+		gens := f.audit.eventsFor(runID, "run.policy.generation")
+		if len(gens) != 1 {
+			t.Errorf("%s: run.policy.generation rows = %d, want 1", tc.name, len(gens))
+			continue
+		}
+		var got struct {
+			Policy types.RunPolicySpec `json:"policy"`
+		}
+		if err := json.Unmarshal(gens[0].Data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Policy.DataOut.DataOut() != tc.want || got.Policy.Recording != tc.wantRec {
+			t.Errorf("%s: the new generation holds data_out %q and recording %q, want %q and %q",
+				tc.name, got.Policy.DataOut, got.Policy.Recording, tc.want, tc.wantRec)
+		}
+	}
+}
