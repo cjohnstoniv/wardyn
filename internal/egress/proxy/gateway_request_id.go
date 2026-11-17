@@ -20,8 +20,8 @@ const gatewayRequestIDMax = 128
 var gatewayRequestIDHeaders = []string{"Request-Id", "X-Request-Id", "X-Amzn-Requestid"}
 
 // gatewayRequestID is the id the upstream's answer h carries, or "" when it carries none or
-// the value is longer than gatewayRequestIDMax or holds anything but printable ASCII (0x20
-// to 0x7e). A header with an empty value counts as absent. For a name sent twice, the first
+// the value is longer than gatewayRequestIDMax, holds anything but printable ASCII (0x20
+// to 0x7e), or holds no letter or digit. A header with an empty value counts as absent. For a name sent twice, the first
 // value is the one read. The first header present, in gatewayRequestIDHeaders' order,
 // decides, so a bad value is dropped and never replaced by a later header's. It reads the
 // answer only: a header the sandbox sent is not an input here.
@@ -34,10 +34,15 @@ func gatewayRequestID(h http.Header) string {
 		if len(v) > gatewayRequestIDMax {
 			return ""
 		}
+		alnum := false
 		for i := range len(v) {
 			if v[i] < 0x20 || v[i] > 0x7e {
 				return ""
 			}
+			alnum = alnum || v[i] >= '0' && v[i] <= '9' || v[i] >= 'a' && v[i] <= 'z' || v[i] >= 'A' && v[i] <= 'Z'
+		}
+		if !alnum { // nothing to tell it from a sandbox value that was stripped to punctuation
+			return ""
 		}
 		return v
 	}
@@ -62,8 +67,8 @@ func stripSandboxRequestIDs(h http.Header) {
 // an id in it, marks the id as the sandbox's own.
 const gatewayRequestIDAffixMin = 16
 
-// sandboxValueBuf bounds the normalised form kept of one sandbox header value, so a long value
-// costs a scan and no allocation; the part past it is not compared.
+// sandboxValueBuf is the normalised length of one sandbox header value that is held in a stack
+// buffer; a longer value is normalised whole into an allocation, so no length skips a check.
 const sandboxValueBuf = 512
 
 // appendNormalised appends s to dst in its normalised form (lower-case, only [a-z0-9]), up to
@@ -90,7 +95,7 @@ func appendNormalised(dst []byte, s string) ([]byte, bool) {
 // request carried. The proxy forwards the sandbox's headers upstream as it forwards any other
 // (the request-id names are stripped on a gateway route, but any other header may be copied
 // into x-request-id, with the case, the punctuation or the length changed). Both sides are
-// compared in normalised form (lower-case, only [a-z0-9]). It is true when the id equals any
+// compared in normalised form (lower-case, only [a-z0-9]), and only header values are compared, not the query, path or body. It is true when the id equals any
 // value of ANY header in r, or any comma element of the id does; or the id contains a sandbox
 // value, or a sandbox value contains the id, once the shorter is gatewayRequestIDAffixMin
 // characters or more. r nil has none, and an id with nothing to compare has no echo.
@@ -114,17 +119,18 @@ func sandboxRequestIDEcho(r *http.Request, id string) bool {
 	for _, vs := range r.Header {
 		for _, v := range vs {
 			vn, partial := appendNormalised(buf[:0], v)
+			if partial { // slow path: a long value, normalised whole
+				vn, _ = appendNormalised(make([]byte, 0, len(v)), v)
+			}
 			if len(vn) == 0 {
 				continue
 			}
-			if !partial {
-				if bytes.Equal(vn, idN) || len(vn) >= gatewayRequestIDAffixMin && bytes.Contains(idN, vn) {
+			if bytes.Equal(vn, idN) || len(vn) >= gatewayRequestIDAffixMin && bytes.Contains(idN, vn) {
+				return true
+			}
+			for _, en := range elements {
+				if bytes.Equal(vn, en) {
 					return true
-				}
-				for _, en := range elements {
-					if bytes.Equal(vn, en) {
-						return true
-					}
 				}
 			}
 			if len(idN) >= gatewayRequestIDAffixMin && bytes.Contains(vn, idN) {

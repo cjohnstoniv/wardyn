@@ -6,9 +6,11 @@ package proxy
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -206,6 +208,8 @@ func TestGatewayRequestID_Value(t *testing.T) {
 		{"boundary space is printable", http.Header{"X-Request-Id": {"a b"}}, "a b"},
 		{"boundary tilde is printable", http.Header{"X-Request-Id": {"a~b"}}, "a~b"},
 		{"x-request-id before x-amzn-requestid", http.Header{"X-Request-Id": {"plain"}, "X-Amzn-Requestid": {"amzn"}}, "plain"},
+		{"punctuation only", http.Header{"X-Request-Id": {"-_-@@-_-"}}, ""},
+		{"punctuation only is not replaced by a later header", http.Header{"Request-Id": {"..."}, "X-Request-Id": {"second"}}, ""},
 		{"empty value counts as absent", http.Header{"Request-Id": {""}, "X-Request-Id": {"second"}}, "second"},
 		{"first value of a duplicate name", http.Header{"X-Request-Id": {"one", "two"}}, "one"},
 		{"first present header decides", http.Header{"Request-Id": {"first"}, "X-Request-Id": {"second"}}, "first"},
@@ -586,16 +590,109 @@ func TestGatewayRequestID_ReverseContainmentFloor(t *testing.T) {
 	}
 }
 
-// A long sandbox value costs a scan and no allocation, and an id inside its first 512 normalised
-// characters is still found.
+// A sandbox value over the stack buffer is normalised whole: an id after 600 characters is still
+// found, equal or contained. REVERT PROOF: comparing only the buffered part fails here.
 func TestGatewayRequestID_LongSandboxValue(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "https://gw.corp.test/v1", nil)
 	r.Header.Set("X-Long", strings.Repeat("!", 600)+"abcdefghijklmnop"+strings.Repeat("z", 600))
-	if !sandboxRequestIDEcho(r, "abcdefghijklmnop") {
-		t.Error("an id inside a long value was not found")
+	r.Header.Set("Cookie", strings.Repeat("a1", 300)+"; rid=Q7rT9xKm2WpL4vNs8Zd1")
+	for id, want := range map[string]bool{
+		"abcdefghijklmnop":      true,
+		"Q7rT9xKm2WpL4vNs8Zd1":  true, // the 20-character id at the end of a 600-character cookie
+		"other-gateway-id-0001": false,
+		"q7rt9xkm2wpl4vns8zd2":  false,
+	} {
+		if got := sandboxRequestIDEcho(r, id); got != want {
+			t.Errorf("sandboxRequestIDEcho(%q) = %v, want %v", id, got, want)
+		}
 	}
-	if sandboxRequestIDEcho(r, "other-gateway-id-0001") {
-		t.Error("an unrelated id matched a long value")
+}
+
+// A gateway that answers the id at the end of a long sandbox header (a cookie over the stack
+// buffer) records none, on every lane.
+func TestGatewayRequestID_IDInsideALongSandboxHeaderIsDropped(t *testing.T) {
+	cookie := strings.Repeat("a1", 300) + "; rid=Q7rT9xKm2WpL4vNs8Zd1"
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Id", "Q7rT9xKm2WpL4vNs8Zd1")
+		_, _ = w.Write([]byte("ok"))
+	}
+	for lane, send := range gwrLanes(g, t, "Cookie", cookie) {
+		g.buf.Reset()
+		if rec := send(); rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d: %s", lane, rec.Code, rec.Body)
+		}
+		if got, present := gwrAllowRow(t, lane, gwcidRows(t, g.buf))["gateway_request_id"]; present {
+			t.Errorf("%s: row carries gateway_request_id %v, an id from the sandbox's cookie", lane, got)
+		}
+	}
+}
+
+// A copy of a sandbox header that holds only punctuation is no id: it is dropped on every lane.
+// REVERT PROOF: removing the no-letter-or-digit drop in gatewayRequestID records it.
+func TestGatewayRequestID_PunctuationOnlyIDIsDropped(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", r.Header.Get("X-Correlation-Id"))
+		_, _ = w.Write([]byte("ok"))
+	}
+	for lane, send := range gwrLanes(g, t, "X-Correlation-Id", "-_-@@-_-") {
+		g.buf.Reset()
+		if rec := send(); rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d: %s", lane, rec.Code, rec.Body)
+		}
+		if got, present := gwrAllowRow(t, lane, gwcidRows(t, g.buf))["gateway_request_id"]; present {
+			t.Errorf("%s: row carries gateway_request_id %q", lane, got)
+		}
+	}
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.github.test"}}, nil, nil)
+	f.p.mcp = newMCPBroker([]MCPServerConfig{{Key: "github", URL: "https://mcp.github.test/mcp"}}, []MCPBinding{mcpBindingFor("claude-code", "github")})
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", r.Header.Get("X-Correlation-Id"))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	t.Cleanup(backend.Close)
+	f.p.dial = redirectDial(upstreamAddr(backend))
+	f.p.gatewayRoutes = gwidRoutes()
+	if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit, "X-Correlation-Id", "-_-@@-_-"); rec.Code != http.StatusOK {
+		t.Fatalf("mcp: %d %s", rec.Code, rec.Body)
+	}
+	if got, present := gwcidRows(t, f.buf)[0]["gateway_request_id"]; present {
+		t.Errorf("mcp: row carries gateway_request_id %q", got)
+	}
+}
+
+// A request id the sandbox sends as a trailer on the plain lane is not forwarded either. REVERT
+// PROOF: deleting the trailer strip in forwardPlainGatewayRoute leaves it at the gateway.
+func TestGatewayRequestID_SandboxTrailerIsNotForwarded(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	var mu sync.Mutex
+	var trailer http.Header
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		trailer = r.Trailer.Clone()
+		mu.Unlock()
+		_, _ = w.Write([]byte("ok"))
+	}
+	for name, key := range map[string]string{"dash": "X-Request-Id", "underscore": "X_Request_Id", "amzn": "X-Amzn-Requestid", "other": "X-Kept-Trailer"} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://"+gwidHost+"/v1/messages", strings.NewReader(`{"hi":1}`))
+			req.ContentLength = -1
+			req.TransferEncoding = []string{"chunked"}
+			req.Trailer = http.Header{key: {"sandbox-trailer-0001"}}
+			rec := httptest.NewRecorder()
+			g.p.servePlain(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			got := len(trailer.Values(key)) > 0 || len(gwrRequestIDNames(trailer)) > 0
+			if got != (name == "other") {
+				t.Errorf("trailer %s at the gateway = %v (names %v), want kept only for the unrelated one", key, trailer, gwrRequestIDNames(trailer))
+			}
+		})
 	}
 }
 
