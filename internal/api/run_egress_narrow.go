@@ -54,9 +54,11 @@ const (
 	// narrowRunnerOldPodMsg is a runner's Unsupported: its proxy pod lacks the live deny list or its image the
 	// narrowing, the pod is not running, or the runner has no matching record of the base it started it with.
 	narrowRunnerOldPodMsg = "This run's proxy can't be narrowed while it runs, so nothing changed: a runner older than 0.10.1 or an older image started it, it is not running, or its runner cannot prove it still runs the config it was started with. Start a new run with the narrower policy, and update the runner first if it is older than 0.10.1."
-	// narrowRunnerRetryMsg names the runner of an edit nothing reached: it is offline, or has not reported its
-	// capabilities since wardynd started, so whether it narrows in place is not known yet.
-	narrowRunnerRetryMsg = "The runner on %s is not connected or has not reported what it supports since Wardyn restarted, so nothing changed. Try again in a few seconds."
+	// narrowRunnerAwayMsg names the runner of an edit nothing reached because it is offline, or has not reported
+	// its capabilities since wardynd started, so whether it narrows in place is not known yet.
+	narrowRunnerAwayMsg = "The runner on %s is not connected or has not reported what it supports since Wardyn restarted, so nothing changed. Try again in a few seconds."
+	// narrowRunnerPodMsg names a connected runner whose own read of the run's proxy pod failed before any exec.
+	narrowRunnerPodMsg = "The runner on %s could not reach this run's proxy pod; try again, and if it keeps failing, check that the pod is running."
 )
 
 // egressEditInPlace marks an edit that narrowed the proxy in place instead of replacing it.
@@ -177,6 +179,18 @@ func (s *Server) narrowRunnerName(ctx context.Context, id uuid.UUID) string {
 	return "its computer"
 }
 
+// narrowRunnerNotReached is the answer text for a runner run's edit that reached nothing, by cause: the runner
+// away (offline, or its caps not known since this server started), or a connected runner that could not
+// reach the proxy pod (its namespace lookup, pod read or executor build failed).
+func (s *Server) narrowRunnerNotReached(ctx context.Context, run types.AgentRun, err error) string {
+	id := *run.RunnerID
+	msg := narrowRunnerPodMsg
+	if _, known := s.runnerLastCaps(id); !known || errors.Is(err, runner.ErrRunnerOffline) {
+		msg = narrowRunnerAwayMsg
+	}
+	return fmt.Sprintf(msg, s.narrowRunnerName(ctx, id))
+}
+
 // narrowProbeRefusal is the answer for a probe or locked read of the proxy that failed.
 func (s *Server) narrowProbeRefusal(ctx context.Context, run types.AgentRun, err error) *reviveError {
 	onRunner := run.RunnerID != nil
@@ -189,7 +203,7 @@ func (s *Server) narrowProbeRefusal(ctx context.Context, run types.AgentRun, err
 		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, narrowRetryMsg)
 	case onRunner && (errors.Is(err, runner.ErrNarrowNotSent) || errors.Is(err, runner.ErrRunnerOffline)):
 		slog.InfoContext(ctx, "api: a runner run's proxy was not reached for an egress edit", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, fmt.Sprintf(narrowRunnerRetryMsg, s.narrowRunnerName(ctx, *run.RunnerID)))
+		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, s.narrowRunnerNotReached(ctx, run, err))
 	case errors.Is(err, runner.ErrNarrowNotSent):
 		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, narrowRetryMsg)
 	}
@@ -514,7 +528,10 @@ func (ne *narrowEdit) deliver(ctx context.Context) (reviveResult, *reviveError) 
 		errors.Is(nerr, runner.ErrNarrowNotListening), errors.Is(nerr, runner.ErrNarrowNotSent):
 		// Nothing was delivered, so the start is abandoned and the generation undone.
 		msg := "the run's proxy refused the edit, so nothing changed"
-		if errors.Is(nerr, runner.ErrNarrowNotListening) || errors.Is(nerr, runner.ErrNarrowNotSent) {
+		switch {
+		case ne.onRunner && errors.Is(nerr, runner.ErrNarrowNotSent):
+			msg = ne.s.narrowRunnerNotReached(ctx, ne.run, nerr)
+		case errors.Is(nerr, runner.ErrNarrowNotListening) || errors.Is(nerr, runner.ErrNarrowNotSent):
 			msg = narrowRetryMsg
 		}
 		return ne.undo(ctx, nerr, msg)

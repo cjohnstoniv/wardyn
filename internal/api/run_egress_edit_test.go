@@ -369,7 +369,7 @@ func TestEgressEdit_UnsupportedSaysWhatToDo(t *testing.T) {
 	}{
 		{"container run on a runner that can keep a sandbox", types.AgentRun{RunnerID: &kept}, fmt.Sprintf(egressEditUpdateRunnerMsg, "build-mac")},
 		{"the same runner with no name", types.AgentRun{RunnerID: &unnamed}, fmt.Sprintf(egressEditUpdateRunnerMsg, "its computer")},
-		{"Kubernetes runner older than 0.10.1", types.AgentRun{RunnerID: &unkept}, fmt.Sprintf(egressEditUpdateRunnerMsg, "build-mac")},
+		{"Kubernetes runner older than 0.10.1", types.AgentRun{RunnerID: &unkept}, fmt.Sprintf(egressEditUpdateK8sRunnerMsg, "build-mac")},
 		{"Kubernetes runner that narrows in place", types.AgentRun{RunnerID: &narrows}, egressEditUnsupportedMsg},
 		{"a VM run on that runner", types.AgentRun{RunnerID: &kept, MachineKind: types.MachineMacOSVM}, egressEditUnsupportedMsg},
 		{"no runner id", types.AgentRun{}, egressEditUnsupportedMsg},

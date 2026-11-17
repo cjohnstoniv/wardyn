@@ -168,7 +168,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 10. wardynd gives the proxy 15 seconds to apply the edit (25 on a runner) and 60 seconds more to confirm it. Any edit answers within 8 minutes, not counting a stalled database read. If the edit may have reached the proxy but is not confirmed, the run is stopped:
     - on wardynd's own cluster, at once;
     - on a runner, when the runner takes the stop. While the runner is away the answer is `503 egress_edit_containment_unresolved`, and the proxy keeps its last list until the stop lands or it lapses, an hour after its last renew.
-11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). So it is when its runner is offline or has not reported what it supports since wardynd restarted, and that answer names the runner. Send the edit again.
+11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). So it is when its runner is offline, has not reported what it supports since wardynd restarted, or cannot reach the run's proxy pod, and that answer names the runner. Send the edit again.
 12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
     - the run started before 0.10.0-rc.20, or its proxy image is older;
     - the run is on a Docker runner that cannot replace its proxy under a generation, or on a Kubernetes runner older than 0.10.1, or its proxy pod was started by one;

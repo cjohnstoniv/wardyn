@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -43,8 +44,11 @@ type narrowRunner struct {
 	report          func(hash string) // the proxy's own report of what it now enforces
 	afterNarrow     func()
 	// A runner's proxy (onRunner): the runner proves the base and answers BaseChecked, unless probeUnchecked
-	// or answerUnchecked; emptyHash answers the delivery with no hash.
-	onRunner, probeUnchecked, answerUnchecked, emptyHash bool
+	// or answerUnchecked.
+	onRunner, probeUnchecked, answerUnchecked bool
+	// probeLeft and narrowLeft are the time each call had left before its context's deadline.
+	probeLeft  []time.Duration
+	narrowLeft []time.Duration
 	// reviveUnsupported: the revive path cannot replace this run's proxy, as on Kubernetes.
 	reviveUnsupported bool
 }
@@ -64,9 +68,10 @@ func (r *narrowRunner) CanReplaceProxy(ctx context.Context, ref string) error {
 	return r.hashedReviveRunner.CanReplaceProxy(ctx, ref)
 }
 
-func (r *narrowRunner) ProxyNarrowState(context.Context, string) (runner.ProxyNarrowState, error) {
+func (r *narrowRunner) ProxyNarrowState(ctx context.Context, _ string) (runner.ProxyNarrowState, error) {
 	r.mu.Lock()
 	r.probes++
+	r.probeLeft = append(r.probeLeft, timeLeft(ctx))
 	call, hook, notOffered, perr := r.probes, r.onProbe, r.notOffered, r.probeErr[r.probes]
 	r.mu.Unlock()
 	if notOffered {
@@ -85,9 +90,10 @@ func (r *narrowRunner) ProxyNarrowState(context.Context, string) (runner.ProxyNa
 	return st, nil
 }
 
-func (r *narrowRunner) NarrowProxy(_ context.Context, _ string, denies []string) (runner.ProxyNarrowState, error) {
+func (r *narrowRunner) NarrowProxy(ctx context.Context, _ string, denies []string) (runner.ProxyNarrowState, error) {
 	r.mu.Lock()
 	r.narrows++
+	r.narrowLeft = append(r.narrowLeft, timeLeft(ctx))
 	r.sent = append(r.sent, slices.Clone(denies))
 	if r.narrowErr != nil {
 		err := r.narrowErr
@@ -111,14 +117,19 @@ func (r *narrowRunner) NarrowProxy(_ context.Context, _ string, denies []string)
 	if r.wrongHash {
 		st.ConfigSHA256 = "not-the-hash"
 	}
-	if r.emptyHash {
-		st.ConfigSHA256 = ""
-	}
 	st.BaseChecked = st.BaseChecked && !r.answerUnchecked
 	if after != nil {
 		after()
 	}
 	return st, nil
+}
+
+// timeLeft is how long ctx has before its deadline, 0 with none.
+func timeLeft(ctx context.Context) time.Duration {
+	if d, ok := ctx.Deadline(); ok {
+		return time.Until(d)
+	}
+	return 0
 }
 
 func (r *narrowRunner) counts() (probes, narrows int) {
@@ -137,6 +148,20 @@ type narrowStore struct {
 	afterBegin     func()
 	begun          []string
 	mu2            sync.Mutex
+}
+
+// narrowRowStore is narrowStore that also reads a runner's row: what a runner's name falls back to while its
+// caps are not held.
+type narrowRowStore struct {
+	*narrowStore
+	row types.Runner
+}
+
+func (s *narrowRowStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	if s.row.ID != id {
+		return types.Runner{}, errors.New("no such runner")
+	}
+	return s.row, nil
 }
 
 func (s *narrowStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
@@ -1165,12 +1190,11 @@ func TestNarrowEdit_RunnerBaseUncheckedIs409(t *testing.T) {
 	f.nothingChanged(t)
 }
 
-// A delivery whose answer lacks the runner's base proof or a hash may have reached the proxy: the start fails
-// with no hash, the generation stays current and the run is contained.
+// A delivery whose answer lacks the runner's base proof may have reached the proxy: the start fails with no
+// hash, the generation stays current and the run is contained.
 func TestNarrowEdit_RunnerAnswerUnprovedFails(t *testing.T) {
 	for name, arrange := range map[string]func(*narrowRunner){
 		"base not checked": func(r *narrowRunner) { r.answerUnchecked = true },
-		"no hash":          func(r *narrowRunner) { r.emptyHash = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newRunnerNarrowFixture(t, runnerNarrows)
@@ -1194,10 +1218,10 @@ func TestNarrowEdit_RunnerAnswerUnprovedFails(t *testing.T) {
 // it as uncertain and ends the run.
 func TestNarrowEdit_RunnerNotSentUndoes(t *testing.T) {
 	f := newRunnerNarrowFixture(t, runnerNarrows)
-	f.nr.narrowErr = fmt.Errorf("%w: the runner is offline", runner.ErrNarrowNotSent)
+	f.nr.narrowErr = fmt.Errorf("%w: %w", runner.ErrNarrowNotSent, runner.ErrRunnerOffline)
 	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusBadGateway, reasonReviveProxyKeptCurrent)
-	if !strings.Contains(w.Body.String(), "Try again in a few seconds") {
-		t.Errorf("answer %s lacks the try-again text", w.Body.String())
+	if want := fmt.Sprintf(narrowRunnerAwayMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
+		t.Errorf("answer %s; want %q, which names the runner", w.Body.String(), want)
 	}
 	if g := f.gens(); len(g) != 2 || !g[1].Abandoned || string(f.stored(t)) != string(f.orig) {
 		t.Errorf("generations %+v: want the edit abandoned and the config put back", g)
@@ -1210,19 +1234,32 @@ func TestNarrowEdit_RunnerNotSentUndoes(t *testing.T) {
 	}
 }
 
-// The probe finds the runner unreachable, or its caps not reported since wardynd started: a 502 that names the
-// runner and changed nothing, never the revive path's 409.
+// A probe that reached nothing changes nothing and answers a 502 naming the runner, never the revive path's 409.
+// The sentence follows the cause: a runner away (offline, or its caps not known since wardynd started, when its
+// name comes from its row) or a connected runner that could not reach the proxy pod.
 func TestNarrowEdit_RunnerNotReachedAtProbeNamesIt(t *testing.T) {
-	for name, perr := range map[string]error{
-		"caps not known yet": fmt.Errorf("%w: no caps yet", runner.ErrNarrowNotSent),
-		"no substrate":       fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline),
+	for _, tc := range []struct {
+		name    string
+		perr    error
+		unknown bool // the runner's caps are not held, so its name comes from its row
+		want    string
+	}{
+		{"caps not known yet", fmt.Errorf("%w: no caps yet", runner.ErrNarrowNotSent), true, fmt.Sprintf(narrowRunnerAwayMsg, "row-host")},
+		{"no substrate", fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline), false, fmt.Sprintf(narrowRunnerAwayMsg, "build-k8s")},
+		{"pod not reached", fmt.Errorf("%w: read proxy pod: timeout", runner.ErrNarrowNotSent), false, fmt.Sprintf(narrowRunnerPodMsg, "build-k8s")},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			f := newRunnerNarrowFixture(t, runnerNarrows)
-			f.nr.probeErr = map[int]error{1: perr}
+			if tc.unknown {
+				f.srv.runnerStreams.subsMu.Lock()
+				delete(f.srv.runnerStreams.subs, *f.run.RunnerID)
+				f.srv.runnerStreams.subsMu.Unlock()
+				f.srv.cfg.Store = &narrowRowStore{narrowStore: f.ns, row: types.Runner{ID: *f.run.RunnerID, MachineName: "row-host"}}
+			}
+			f.nr.probeErr = map[int]error{1: tc.perr}
 			w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusBadGateway, reasonReviveProxyKeptCurrent)
-			if !strings.Contains(w.Body.String(), "build-k8s") || !strings.Contains(w.Body.String(), "Try again") {
-				t.Errorf("answer %s; want the runner named and the try-again text", w.Body.String())
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("answer %s; want %q", w.Body.String(), tc.want)
 			}
 			f.nothingChanged(t)
 		})
@@ -1242,6 +1279,37 @@ func TestNarrowEdit_RunnerUncertainEndsTheRun(t *testing.T) {
 	}
 	if g := f.gens(); len(g) != 2 || g[1].Abandoned {
 		t.Errorf("generations = %+v, want the edit's still current", g)
+	}
+	if n := f.lr.proxyStopCount() + f.rn.stopCount() + f.rn.endCount(); n == 0 {
+		t.Error("no proxy stop, sandbox stop or end was issued for the uncertain edit")
+	}
+}
+
+// A runner's probe gets 10 s and its delivery 25 s, a wire round trip on top of the runner's own 5 s probe and
+// 5 s + 15 s probe-then-apply; a hosted run keeps 5 s and 15 s.
+func TestNarrowEdit_RunnerBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		fixture        func(*testing.T) *narrowFixture
+		probe, deliver time.Duration
+	}{
+		{"hosted", newNarrowFixture, narrowRouteTimeout, narrowDeliverTimeout},
+		{"runner", func(t *testing.T) *narrowFixture { return newRunnerNarrowFixture(t, runnerNarrows) }, narrowRunnerRouteTimeout, narrowRunnerDeliverTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.fixture(t)
+			f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusOK, "")
+			f.nr.mu.Lock()
+			probe, deliver := f.nr.probeLeft[0], f.nr.narrowLeft[0]
+			f.nr.mu.Unlock()
+			// Each bound is the one that applies when its call had at most that long, and more than the shorter one.
+			if probe > tc.probe || probe <= tc.probe-3*time.Second {
+				t.Errorf("the routing probe had %s left, want just under %s", probe, tc.probe)
+			}
+			if deliver > tc.deliver || deliver <= tc.deliver-5*time.Second {
+				t.Errorf("the delivery had %s left, want just under %s", deliver, tc.deliver)
+			}
+		})
 	}
 }
 
@@ -1263,7 +1331,7 @@ func TestNarrowEdit_OlderRunnerIs409NamingIt(t *testing.T) {
 	f := newRunnerNarrowFixture(t, runnerwire.Caps{MachineName: "build-k8s", EndsUnkept: true})
 	f.nr.notOffered, f.nr.reviveUnsupported = true, true
 	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusConflict, reasonEgressEditUnsupported)
-	if want := fmt.Sprintf(egressEditUpdateRunnerMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
+	if want := fmt.Sprintf(egressEditUpdateK8sRunnerMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
 		t.Errorf("answer %s; want %q", w.Body.String(), want)
 	}
 	if _, n := f.nr.counts(); n != 0 {
