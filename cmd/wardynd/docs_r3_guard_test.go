@@ -576,7 +576,7 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 		"WITHOUT \\`-coverpkg\\`",
 	)
 	mustSay(t, gen, "scripts/test-gaps.sh (report template)",
-		"no test anywhere in the tree reaches it",
+		"no test anywhere in the tree reaches it, not merely",
 		"WITH \\`-coverpkg=./...\\`",
 		"## Untested — no test in the tree reaches these",
 	)
