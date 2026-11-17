@@ -116,8 +116,8 @@ func TestDispatch_UnrecordedSandboxRef(t *testing.T) {
 			}
 			if ev := findTeardownError(audit.events, run.ID); (ev != nil) != (tc.stopErr != nil) {
 				t.Errorf("teardown_error row = %v, want one exactly when the stop failed", ev)
-			} else if ev != nil && (ev.Action != "run.create" || !strings.Contains(string(ev.Data), "daemon unreachable")) {
-				t.Errorf("teardown_error row = %s %s, want run.create carrying the stop's error", ev.Action, ev.Data)
+			} else if ev != nil && (ev.Action != "run.create" || !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepStopSandbox+`"`)) {
+				t.Errorf("teardown_error row = %s %s, want run.create naming the stop step", ev.Action, ev.Data)
 			}
 		})
 	}

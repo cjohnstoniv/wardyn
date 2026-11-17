@@ -214,7 +214,7 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 	outcome, data := "success", map[string]any{"session": session, "key": key, "bytes": len(doc), "format": "novnc-playback",
 		"clipboard_omitted": rec.ClipboardOmitted()}
 	if err != nil {
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStep(ctx, auditStepSaveRecording, err, slog.String("run_id", run.ID.String()))
 	}
 	// A recorder that met a message it could not follow, or whose relay refused the stream (Stop), stopped
 	// keeping frames: the stored cast is shorter than the session, so the write row says where it ends rather

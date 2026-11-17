@@ -59,7 +59,7 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 // (replaceRevivedProxyHashed), so the start is not abandoned again here, on the claim's longer bound.
 func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string, gen int, source []byte,
 	retiring, freshJTI string, renewed renewedTokens, err error) (reviveResult, *reviveError) {
-	data["error"] = err.Error()
+	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
 	if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 		// The old proxy was never touched (an image that cannot be pulled, a
 		// failed inspect): a live run keeps it, renewing its own token. Only
@@ -96,7 +96,7 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 	// Only now, behind the new proxy. A failed start is lost (reboot) again,
 	// which stops the new proxy with the agent.
 	if err := s.startRevivedAgent(runnerCtx, starter, run); err != nil {
-		data["error"] = "start agent: " + err.Error()
+		data["error"] = auditStepReviveStart
 		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveAgentStartFailedLost,
 			"the run's agent could not be started, so the run is stopped and lost until revived", err)
 	}

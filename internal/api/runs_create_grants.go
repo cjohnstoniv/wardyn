@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -232,7 +233,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			} else {
 				s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
 					grantID.String(), "failure", mustJSON(map[string]any{
-						"error": "api_key grant scope invalid, injection skipped: " + derr.Error(),
+						"error": auditStep(ctx, auditStepGrantScope, derr, slog.String("run_id", runID.String())),
 					})))
 			}
 		}

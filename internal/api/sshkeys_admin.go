@@ -68,7 +68,7 @@ func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string, resolve
 	data := map[string]any{"scope": scope, "count": count}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStep(ctx, auditStepDeleteSSHKeys, err)
 	}
 	if refusal != "" {
 		outcome, data["reason"] = "failure", refusal

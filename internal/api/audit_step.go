@@ -94,3 +94,26 @@ func agentPolicyAuditError(ctx context.Context, runID uuid.UUID, err error) stri
 	}
 	return auditStep(ctx, auditStepPolicyBuild, err, slog.String("run_id", runID.String()))
 }
+
+// The failed step an assignment-form row names (data["error"] = step), beside the consts above.
+const (
+	auditStepClaimDispatch   = "Claim run for dispatch"
+	auditStepContainStop     = "Stop kept run's agent"
+	auditStepDeleteSSHKeys   = "Delete SSH keys"
+	auditStepGrantScope      = "Read api_key grant scope"
+	auditStepMarkRunning     = "Mark run running"
+	auditStepReplaceThenRest = "Replace run's proxy, then restore its lost mark"
+	auditStepReplaceThenUndo = "Replace run's proxy, then undo its policy generation"
+	auditStepReviveReplace   = "Replace run's proxy"
+	auditStepReviveStart     = "Start revived agent"
+	auditStepRevokeSessions  = "Revoke sessions"
+	auditStepRunnerCaps      = "Read runner capabilities"
+	auditStepSaveRecording   = "Save recording"
+	auditStepSignOut         = "Sign out session"
+	auditStepStopSandbox     = "Stop sandbox"
+	auditStepStopAgain       = "Stop agent again"
+	auditStepThawAgent       = "Thaw agent"
+	auditStepTrackBuild      = "Track run build"
+	auditStepPolicyGenRecord = "Record policy generation"
+	auditStepPolicyGenUndo   = "Undo policy generation"
+)

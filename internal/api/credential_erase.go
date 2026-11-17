@@ -350,7 +350,7 @@ func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store,
 		return
 	} else if err != nil {
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStepDeleteExpired
 	}
 	s.adoEntraTokens.forget(owner)
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", name, outcome,

@@ -529,7 +529,7 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		var saveErr, declined bool
 		for _, row := range castRows(t, f, agentCastSession) {
 			e, _ := row["error"].(string)
-			saveErr = saveErr || (row["outcome"] == "failure" && strings.Contains(e, "recording store full"))
+			saveErr = saveErr || (row["outcome"] == "failure" && e == auditStepSaveRecording)
 			declined = declined || (row["outcome"] == "failure" && row["reason"] == "save_failed")
 		}
 		if !saveErr || !declined {

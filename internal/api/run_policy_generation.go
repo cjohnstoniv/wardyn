@@ -69,9 +69,9 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 // expected is the generation the revive read: its lost mark lands only while that is still the newest.
 func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun, expected int, data map[string]any, actorType types.ActorType, actor, retiring, fresh string, renewed renewedTokens, err error) *reviveError {
 	undoFailed := errors.Is(err, errPolicyNotAbandoned)
-	data["error"] = "record the run's policy generation: " + err.Error()
+	data["error"] = auditStep(ctx, auditStepPolicyGenRecord, err, slog.String("run_id", run.ID.String()))
 	if undoFailed {
-		data["error"] = "undo the run's policy generation: " + err.Error()
+		data["error"] = auditStepPolicyGenUndo
 	}
 	if run.LostAt == nil && !undoFailed {
 		// The claim's bound may have run out; the audit and the lineage restore take a bound of their own.
@@ -174,7 +174,7 @@ func (s *Server) reviveExpectedGeneration(ctx context.Context, runID uuid.UUID) 
 // replaced: the old proxy (or the newer revive's) is left as it is, the run's lineage restored, and the
 // answer is the kept proxy's.
 func (s *Server) revivePolicyMoved(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, fresh string, renewed renewedTokens, err error) *reviveError {
-	data["error"] = "the run changed since this revive read its policy generation (another revive started or abandoned one, or the run was lost or left RUNNING): " + err.Error()
+	data["error"] = "the run changed since this revive read its policy generation (another revive started or abandoned one, or the run was lost or left RUNNING)"
 	// The claim's bound may have run out; the audit and the lineage restore take a bound of their own.
 	kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
@@ -192,7 +192,7 @@ func (s *Server) revivePolicyMoved(ctx context.Context, run types.AgentRun, data
 // attempted instead.
 func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, retiring string,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
-	data["error"] = err.Error()
+	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
 	// The generation is abandoned first, so the failure row carries the one that still applies.
 	noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
@@ -211,7 +211,7 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	if aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
 		// stop attempted, fenced on fence, never answered kept-current.
-		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
+		data["error"] = auditStep(ctx, auditStepReplaceThenUndo, errors.Join(err, aerr), slog.String("run_id", run.ID.String()))
 		s.liveRevived.Delete(run.ID)
 		s.revokeRetiringToken(cctx, retiring, run.ID)
 		s.revokeRenewedTokens(cctx, run.ID, renewed.ids(), fresh)
@@ -305,7 +305,7 @@ func (s *Server) reviveLostFate(ctx context.Context, run types.AgentRun) (*store
 // (gen 0, or no store.RunLoserAtGeneration) is put back to lost the same way.
 func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, fate *store.RunLostFate, data map[string]any, actorType types.ActorType, actor string,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
-	data["error"] = err.Error()
+	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
 	s.abandonProxyStart(ctx, run.ID, start)
 	noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
 	if aerr != nil {
@@ -326,7 +326,7 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 	applied, werr := s.fenced(ctx, run.ID, func() (bool, error) { return fl.RestoreRunLostFateAtGeneration(ctx, run.ID, gen, *fate) })
 	switch {
 	case werr != nil:
-		data["error"] = err.Error() + "; restoring its lost mark failed: " + werr.Error()
+		data["error"] = auditStep(ctx, auditStepReplaceThenRest, errors.Join(err, werr), slog.String("run_id", run.ID.String()))
 		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost, lostMsg, err)
 	case !applied:
 		data["superseded"] = true

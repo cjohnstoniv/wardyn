@@ -294,7 +294,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		settleAfterTeardown(ctx, func(ctx context.Context) {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(map[string]any{
-					"sandbox_ref": ref, "teardown_error": serr.Error(),
+					"sandbox_ref": ref, "teardown_error": auditStep(ctx, auditStepStopSandbox, serr, slog.String("run_id", runID.String())),
 				})))
 		})
 	}

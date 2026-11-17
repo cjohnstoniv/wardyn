@@ -283,8 +283,8 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev.Action != "run.dispatch" || ev.Outcome != "failure" {
 		t.Errorf("teardown_error must be audited under the phase's action as a failure, got %s/%s", ev.Action, ev.Outcome)
 	}
-	if !strings.Contains(string(ev.Data), "daemon unreachable") {
-		t.Errorf("the teardown_error must carry the real error text, got %s", ev.Data)
+	if !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepStopSandbox+`"`) || strings.Contains(string(ev.Data), "daemon unreachable") {
+		t.Errorf("the teardown_error must name the step, never the error's text, got %s", ev.Data)
 	}
 	// HONESTY: never assert a containment step that was not observed.
 	for i := range audit.events {
@@ -338,8 +338,8 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev == nil {
 		t.Fatalf("a failed teardown on the exec-failure path must be audited with teardown_error; the run is FAILED (terminal) so no boot reconciles the live sandbox — events=%s", auditDump(audit.events, run.ID))
 	}
-	if !strings.Contains(string(ev.Data), "no such container") {
-		t.Errorf("the teardown_error must carry the real error text, got %s", ev.Data)
+	if !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepStopSandbox+`"`) || strings.Contains(string(ev.Data), "no such container") {
+		t.Errorf("the teardown_error must name the step, never the error's text, got %s", ev.Data)
 	}
 }
 

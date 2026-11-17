@@ -609,8 +609,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	startBuild := func(fields map[string]any) (buildCtx context.Context, end func(), ok bool) {
 		buildCtx, end, live, err := s.trackRunBuild(ctx, runID)
 		if err != nil {
-			fields["error"] = err.Error()
-			buildFailed(fields)
+			fields["error"] = auditStep(ctx, auditStepTrackBuild, err, slog.String("run_id", runID.String()))
+			buildFailed(fields, err.Error())
 		}
 		return buildCtx, end, live
 	}

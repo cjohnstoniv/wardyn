@@ -463,7 +463,7 @@ func (s *Server) supersededBy(ctx context.Context, w http.ResponseWriter, run ty
 // error and both pauses' paused_at; nothing retries the stop.
 func (s *Server) restopFailed(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
 	cur store.DesktopVMSignIns, err error, data map[string]any) {
-	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, err.Error()
+	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, auditStep(ctx, auditStepStopAgain, err, slog.String("run_id", run.ID.String()))
 	s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure", mustJSON(data)))
 	writeDesktopPauseFailed(w, http.StatusBadGateway)
 }
