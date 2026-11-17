@@ -618,9 +618,16 @@ What the check does and does not settle:
 - Four are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push), `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers) and `no-network` (no network). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
 - `network: none` is `wall_preset: no-network`, which is `sealed` with no network at all:
   - A run that would need a host is refused `422` `no_network_needs_egress`, at create, Review and the preview alike, naming each source. A harness whose model is reached over the network is refused.
-  - The one exception is the model provider's choice. At create and Review, two refusals come first:
+  - The one exception is the model provider's choice. At create and Review, these refusals come first, in this order (the preview makes the same ones, but leaves an unnamed choice open):
+    - `model_provider` is not a provider id (`400`), or is set on a run that calls no model (`400`).
+    - The deployment's model providers cannot be read (`503`).
+    - `model_provider` names one and the deployment has none (`422`).
+    - Two attached workspaces pin different providers (`422` `workspace_pin_conflict`).
+    - The provider named or pinned is missing, turned off or not available to the harness, or a default is turned off (`422`). A pin you are not granted is `403`.
     - More than one provider serves the harness, and none is named or the default (`422`).
     - None is granted to you (`403`).
+    - The policy grants an `env_secret` that sets a model credential variable (`422`).
+    - Each other harness is judged the same way. Then an AWS sign-in on a harness that does not start the run is refused (`422` `request_field_unavailable`), and so are two harnesses whose providers share a host (`422` `harness_providers_conflict`).
   - The preview leaves that choice open and answers `no_network_needs_egress`. Your model sign-in is never read before `no_network_needs_egress`.
   - A repository to clone is a source, a brokered GitHub one too. The policy's git grants are one only with a repository, and a component only when it needs a host.
   - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
