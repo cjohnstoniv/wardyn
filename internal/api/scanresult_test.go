@@ -272,3 +272,38 @@ func TestUploadScanResult_MalformedFactsAuditTheStepNotTheText(t *testing.T) {
 		t.Errorf("log = %q, want the parser's error the audit row leaves out", logs.String())
 	}
 }
+
+// TestUploadScanResult_HugeNumberLogsABoundedError: a number that overflows a field is quoted whole by the
+// parser; the log line keeps only its first bytes, and the 400 and the audit row are as before.
+func TestUploadScanResult_HugeNumberLogsABoundedError(t *testing.T) {
+	logs := captureSlog(t)
+	h := newHarness(t)
+	sourceID, runID := uuid.New(), uuid.New()
+	st := &sourceScanUploadStore{run: types.AgentRun{ID: runID, Task: "source scan", SourceID: &sourceID}}
+	srv := New(baseTestConfig(h, st))
+	body := `{"build_memory_mib":` + strings.Repeat("9", 100000) + `}`
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+runID.String(), h.mintRunToken(t, runID), body)
+	if w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonScanFactsInvalid {
+		t.Fatalf("= %d, want 400 %s", w.Code, reasonScanFactsInvalid)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "cannot unmarshal") || !strings.Contains(got, "…") {
+		t.Errorf("log = %q, want the clipped parser error with its marker", got)
+	}
+	if len(got) > maxScanFactsLoggedErrBytes+512 {
+		t.Errorf("log line = %d bytes, want the error bounded near %d", len(got), maxScanFactsLoggedErrBytes)
+	}
+}
+
+func TestClipForLog(t *testing.T) {
+	if got := clipForLog("short", 8); got != "short" {
+		t.Errorf("short = %q", got)
+	}
+	if got := clipForLog("abcdefghij", 4); got != "abcd…" {
+		t.Errorf("cut = %q, want abcd…", got)
+	}
+	// "é" is two bytes: a cut at 3 inside the second "é" drops it whole rather than splitting it.
+	if got := clipForLog("ééé", 3); got != "é…" {
+		t.Errorf("multibyte = %q, want é…", got)
+	}
+}

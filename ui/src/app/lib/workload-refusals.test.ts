@@ -37,6 +37,12 @@ describe("workload refusal sentences", () => {
     for (const reason of carried) expect(WORKLOAD_REFUSAL_SENTENCE[reason], reason).toBeTruthy();
   });
 
+  it("the pin-mismatch sentence says its words", () => {
+    expect(WORKLOAD_REFUSAL_SENTENCE.workload_policy_pin_mismatch).toBe(
+      "Its policy now resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.",
+    );
+  });
+
   it("every runner pool reason is told", () => {
     const go = readFileSync(join(repoRoot(), "internal/runnerpool/reasons.go"), "utf8");
     const block = /ReasonInvalid[\s\S]*?ReasonFull\s+Reason\s*=\s*"[a-z_]+"/.exec(go)?.[0] ?? "";

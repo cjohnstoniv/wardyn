@@ -189,13 +189,34 @@ type macOSVMSettings struct {
 	// then neither opens nor removes the CA. driveRoots is drive_root: the CA is not used under one.
 	inspectionCA *bool
 	driveRoots   []string
+	// inspectionCAUnknown is set when the value is neither on nor off. inspectionCA is then false, but the CA is
+	// removed only where a drive root is over it: with none, the key is kept (openInspectionCA).
+	inspectionCAUnknown *unknownCA
 }
+
+// unknownCA is a macos_vm_inspection_ca value macOSVMKnown refuses, and the source that gave it.
+type unknownCA struct{ value, source string }
 
 // macOSVMSettings is c's macOS VM settings.
 func (c runnerConfig) macOSVMSettings() macOSVMSettings {
-	inspectionCA := macOSVMOn(c.get("macos_vm_inspection_ca"))
-	return macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
-		inspectionCA: &inspectionCA, driveRoots: c.field("drive_root").List}
+	ca := c.field("macos_vm_inspection_ca")
+	set := macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
+		driveRoots: c.field("drive_root").List}
+	on := macOSVMOn(ca.Value)
+	set.inspectionCA = &on
+	if !macOSVMKnown(ca.Value) {
+		set.inspectionCAUnknown = &unknownCA{value: ca.Value, source: ca.Source}
+	}
+	return set
+}
+
+// macOSVMKnown is whether v is a spelling of on or off: empty (unset, so off), 0, 1, true, false, on, off, yes or no.
+func macOSVMKnown(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "1", "true", "false", "on", "off", "yes", "no":
+		return true
+	}
+	return false
 }
 
 // macOSVMOn reads the macos_vm setting.
@@ -567,6 +588,9 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if _, err := parseKeptDiskLimit(f.MacOSVMKeptDiskLimit); err != nil {
 		return err
+	}
+	if !macOSVMKnown(f.MacOSVMInspectionCA) {
+		return fmt.Errorf("macos_vm_inspection_ca: %q is not 1, 0, true, false, on, off, yes or no", strings.TrimSpace(f.MacOSVMInspectionCA))
 	}
 	if _, err := parseRelayWant(f.RelayListen, f.RelayHostTarget); err != nil {
 		return fmt.Errorf("relay_listen / relay_host_target: %w", err)
