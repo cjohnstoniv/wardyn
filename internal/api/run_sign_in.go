@@ -227,10 +227,21 @@ func (s *Server) readSignInPane(ctx context.Context, run types.AgentRun) (out []
 }
 
 var (
-	// The hosts and the URL character class are extractDeviceVerificationUrl's
-	// (login-pty-extract.ts): the IAM Identity Center device endpoint and an
-	// access portal, and no whitespace, quote, angle bracket or control byte.
-	signInURLRe = regexp.MustCompile(`(?i)https://(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)/[^\s'"<>\x00-\x1f\x7f]*`)
+	// The hosts and the URL character class are extractDeviceSignIn's
+	// (login-pty-extract.ts): the IAM Identity Center device endpoint, an
+	// access portal, and the regional sign-in page's authorize path (the link
+	// newer IAM Identity Center sends, which carries no code), and no
+	// whitespace, quote, angle bracket or control byte.
+	signInURLRe = regexp.MustCompile(`(?i)https://(?:(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)/|[a-z]{2}(?:-gov)?-[a-z]+-[0-9]\.signin\.aws/platform/authorize\?)[^\s'"<>\x00-\x1f\x7f]*`)
+	// signInPlatformRe is that sign-in page's link alone: its code is the
+	// pane's line after signInCodePrompt (signInCodeLine).
+	signInPlatformRe = regexp.MustCompile(`(?i)^https://[a-z]{2}(?:-gov)?-[a-z]+-[0-9]\.signin\.aws/platform/authorize\?`)
+	// A terminal's row moves end a line, a cursor-forward is a space, and any
+	// other escape is dropped, so a redrawn pane reads as its rows.
+	signInRowMoveRe = regexp.MustCompile(`\x1b\[[0-9;]*[HfdBE]`)
+	signInForwardRe = regexp.MustCompile(`\x1b\[[0-9;]*C`)
+	signInEscapeRe  = regexp.MustCompile(`\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)?|\[[0-9;:?]*[ -/]*[@-~]|[@-Z\\-_])`)
+	signInLineEndRe = regexp.MustCompile(`\r\n|\r|\n`)
 	// signInCodeRe is deviceCodeOf's (signin-progress.tsx); signInCodeShape is
 	// the strict half: groups of letters and digits joined by dashes.
 	signInCodeRe    = regexp.MustCompile(`[?&]user_code=([^&#\s]+)`)
@@ -256,23 +267,68 @@ var signInEndLines = []string{
 // signInURLMaxLen bounds what a waiting answer may carry.
 const signInURLMaxLen = 512
 
-// parseSignInPane returns the latest attempt's pre-filled verification URL and
-// its code, when nothing after that URL ends the attempt. The latest wins, so
-// an earlier attempt's code is never returned, except over a truncated repaint
-// of the same attempt (a strict prefix of the URL already seen), which a tmux
-// redraw can leave behind.
+// signInCodePrompt is the AWS CLI's line before the code it prints.
+const signInCodePrompt = "Then enter the code:"
+
+// signInCodeLine returns the first non-empty line after a signInCodePrompt
+// line in seg (the pane after a link, up to the next link), when it has the
+// code's shape and its line has ended; "" otherwise, so a code still printing
+// is never taken. Its twin is codeLineAfter (login-pty-extract.ts).
+func signInCodeLine(seg string) string {
+	seg = signInRowMoveRe.ReplaceAllString(seg, "\n")
+	seg = signInForwardRe.ReplaceAllString(seg, " ")
+	seg = signInEscapeRe.ReplaceAllString(seg, "")
+	lines := signInLineEndRe.Split(seg, -1)
+	asked := false
+	for _, l := range lines[:len(lines)-1] { // the last piece has no line end yet
+		l = strings.Join(strings.Fields(l), " ")
+		switch {
+		case l == "":
+		case asked:
+			if signInCodeShape.MatchString(l) {
+				return l
+			}
+			return ""
+		case l == signInCodePrompt:
+			asked = true
+		}
+	}
+	return ""
+}
+
+// parseSignInPane returns the latest attempt's verification URL and its code,
+// when nothing after that URL ends the attempt. An attempt is a pre-filled
+// link (user_code=), or a sign-in page link with no user_code= once the code
+// line after it has printed (signInCodeLine). The latest wins, so an earlier
+// attempt's code is never returned, except over a truncated repaint of the
+// same attempt (a strict prefix of the URL already seen), which a tmux redraw
+// can leave behind.
 func parseSignInPane(pane []byte) (link, code string, ok bool) {
 	text := string(pane)
-	best, bestEnd := "", -1
-	for _, loc := range signInURLRe.FindAllStringIndex(text, -1) {
+	best, bestCode, bestEnd := "", "", -1
+	locs := signInURLRe.FindAllStringIndex(text, -1)
+	for i, loc := range locs {
 		if loc[1] >= len(text) {
 			continue // still printing
 		}
 		u := strings.TrimRight(text[loc[0]:loc[1]], ".,)")
-		if !strings.Contains(u, "user_code=") || (len(u) < len(best) && strings.HasPrefix(best, u)) {
+		c, attempt := "", strings.Contains(u, "user_code=")
+		if attempt {
+			if m := signInCodeRe.FindStringSubmatch(u); m != nil {
+				c = m[1]
+			}
+		} else if signInPlatformRe.MatchString(u) {
+			next := len(text)
+			if i+1 < len(locs) {
+				next = locs[i+1][0]
+			}
+			c = signInCodeLine(text[loc[1]:next])
+			attempt = c != ""
+		}
+		if !attempt || (len(u) < len(best) && strings.HasPrefix(best, u)) {
 			continue
 		}
-		best, bestEnd = u, loc[1]
+		best, bestCode, bestEnd = u, c, loc[1]
 	}
 	if best == "" || len(best) > signInURLMaxLen {
 		return "", "", false
@@ -283,12 +339,11 @@ func parseSignInPane(pane []byte) (link, code string, ok bool) {
 			return "", "", false
 		}
 	}
-	m := signInCodeRe.FindStringSubmatch(best)
-	if m == nil || !signInCodeShape.MatchString(m[1]) {
+	if !signInCodeShape.MatchString(bestCode) {
 		return "", "", false
 	}
 	if parsed, err := url.Parse(best); err != nil || parsed.Scheme != "https" {
 		return "", "", false
 	}
-	return best, m[1], true
+	return best, bestCode, true
 }

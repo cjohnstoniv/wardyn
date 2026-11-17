@@ -114,23 +114,72 @@ export function extractAuthUrl(s: string): string | null {
 // parser reads too). (The alternative — requiring a fixed code shape — ties
 // this to AWS's current `XXXX-XXXX` format; the buffer already holds the
 // evidence to pick correctly without assuming that.)
+//
+// Newer IAM Identity Center sends a regional sign-in page instead,
+// `https://<region>.signin.aws/platform/authorize?…`, whose link carries no
+// code: the CLI prints the code on its own line after "Then enter the code:".
+// That link is an attempt only once that line has printed in the code's shape
+// (codeLineAfter); it is never the bare fallback. The hosts, this rule and the
+// latest-wins rule must agree with the server's parseSignInPane
+// (internal/api/run_sign_in.go), which the shared cases pin.
 export function extractDeviceVerificationUrl(s: string): string | null {
+  return extractDeviceSignIn(s)?.url ?? null;
+}
+
+// The regional sign-in page's link alone, and the code's shape
+// (signInPlatformRe and signInCodeShape in run_sign_in.go).
+const PLATFORM_LINK = /^https:\/\/[a-z]{2}(?:-gov)?-[a-z]+-[0-9]\.signin\.aws\/platform\/authorize\?/i;
+const CODE_SHAPE = /^[A-Za-z0-9]{1,16}(?:-[A-Za-z0-9]{1,16}){0,3}$/;
+const CODE_PROMPT = "Then enter the code:";
+
+// codeLineAfter returns the first non-empty line after a CODE_PROMPT line in
+// seg (the output after a link, up to the next link), when it has the code's
+// shape and its line has ended; "" otherwise, so a code still streaming is
+// never taken. A row move ends a line, a cursor-forward is a space and any
+// other escape is dropped, so a tmux redraw reads as its rows.
+function codeLineAfter(seg: string): string {
+  const lines = seg
+    .replace(/\x1b\[[0-9;]*[HfdBE]/g, "\n")
+    .replace(/\x1b\[[0-9;]*C/g, " ")
+    .replace(ANSI_ESCAPES, "")
+    .split(/\r\n|\r|\n/);
+  let asked = false;
+  for (const raw of lines.slice(0, -1)) {
+    const line = raw.trim().split(/\s+/).join(" ");
+    if (line === "") continue;
+    if (asked) return CODE_SHAPE.test(line) ? line : "";
+    if (line === CODE_PROMPT) asked = true;
+  }
+  return "";
+}
+
+// extractDeviceSignIn is extractDeviceVerificationUrl's link with its code:
+// user_code= from a pre-filled link, the code line for a sign-in page link,
+// and "" for the bare fallback. Exported for tests.
+export function extractDeviceSignIn(s: string): { url: string; code: string } | null {
   const re = new RegExp(
-    `https://(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/${URL_BODY_CHARS}*`,
+    `https://(?:(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/|[a-z]{2}(?:-gov)?-[a-z]+-[0-9]\\.signin\\.aws/platform/authorize\\?)${URL_BODY_CHARS}*`,
     "gi",
   );
-  let bestComplete: string | null = null; // the latest attempt's user_code= candidate
+  const matches = [...s.matchAll(re)];
+  let bestComplete: { url: string; code: string } | null = null; // the latest attempt
   let bestBare: string | null = null; // fallback: first complete match without one
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index + m[0].length >= s.length) continue; // still streaming
+  matches.forEach((m, i) => {
+    const end = m.index + m[0].length;
+    if (end >= s.length) return; // still streaming
     const url = m[0].replace(/[.,)]+$/, "");
+    let code = "";
     if (url.includes("user_code=")) {
-      const truncatedRepaint = !!bestComplete && url.length < bestComplete.length && bestComplete.startsWith(url);
-      if (!truncatedRepaint) bestComplete = url;
-    } else if (!bestBare) {
-      bestBare = url;
+      code = /[?&]user_code=([^&#\s]+)/.exec(url)?.[1] ?? "";
+    } else if (PLATFORM_LINK.test(url)) {
+      code = codeLineAfter(s.slice(end, matches[i + 1]?.index ?? s.length));
+      if (!code) return;
+    } else {
+      if (!bestBare) bestBare = url;
+      return;
     }
-  }
-  return bestComplete ?? bestBare;
+    const truncatedRepaint = !!bestComplete && url.length < bestComplete.url.length && bestComplete.url.startsWith(url);
+    if (!truncatedRepaint) bestComplete = { url, code };
+  });
+  return bestComplete ?? (bestBare ? { url: bestBare, code: "" } : null);
 }
