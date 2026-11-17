@@ -168,9 +168,31 @@ func (s *Server) mintCLIAdmin(w http.ResponseWriter, r *http.Request, si store.C
 }
 
 // cliSessionInvalid is the one 401 a refresh gives for an unknown, ended, expired, idle, cut or reused
-// session and for a bad proof, so the route is not an oracle for which.
+// session and for a bad proof, so the route is not an oracle for which. Past the device proof,
+// refuseRefresh may add the end (cliSessionEndDetail); the sentence and the reason never change.
 func cliSessionInvalid(w http.ResponseWriter) {
-	writeErrorReason(w, http.StatusUnauthorized, reasonCLISessionInvalid, "this CLI sign-in has ended: run wardyn login again")
+	cliSessionRefused(w, "")
+}
+
+// cliSessionRefused is cliSessionInvalid's 401 with detail naming the session's end ("" names none).
+func cliSessionRefused(w http.ResponseWriter, detail string) {
+	writeJSON(w, http.StatusUnauthorized, errorBody{Error: "this CLI sign-in has ended: run wardyn login again",
+		Reason: reasonCLISessionInvalid, Detail: detail})
+}
+
+// cliSessionEndDetail is the end a refused refresh may name to the device that proved its key: a sign-out
+// of this session, its lifetime, or its idle lifetime. reason is refuseRefresh's ("ended" reads the row's
+// own end). A revoke, a cut, a deactivation and a reuse name nothing, so the refresh never tells a device
+// that may be stolen that a person or an admin acted against it.
+func cliSessionEndDetail(sess store.CLISessionRow, reason string) string {
+	if reason == "ended" {
+		reason = sess.EndReason
+	}
+	switch reason {
+	case types.CLISessionEndSignedOut, types.CLISessionEndExpired, types.CLISessionEndIdle:
+		return reason
+	}
+	return ""
 }
 
 // auditRefreshRefused writes one cli.session.refresh_refused row.
@@ -263,7 +285,7 @@ func cliRefreshRateLimited(w http.ResponseWriter) {
 }
 
 // refuseRefresh ends sess for reason when that is an end reason it does not carry yet, writes the
-// refusal row and answers the generic 401.
+// refusal row and answers the 401, naming the end when cliSessionEndDetail allows it.
 func (s *Server) refuseRefresh(w http.ResponseWriter, r *http.Request, sess store.CLISessionRow, reason string, now time.Time) {
 	if sess.EndedAt == nil && reason != "ended" {
 		if err := s.endCLISessionAt(r, sess, reason, now); err != nil {
@@ -272,7 +294,7 @@ func (s *Server) refuseRefresh(w http.ResponseWriter, r *http.Request, sess stor
 		}
 	}
 	s.auditRefreshRefused(r, sess, reason)
-	cliSessionInvalid(w)
+	cliSessionRefused(w, cliSessionEndDetail(sess, reason))
 }
 
 // cliReuseDetected ends sess, revoking its tokens, after a refresh with a valid device proof presented a
