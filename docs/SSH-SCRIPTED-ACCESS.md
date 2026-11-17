@@ -93,7 +93,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   the key.
 - A key registered with the deployment's admin token can never
   satisfy that for a human's run — `POST /me/ssh-keys` 422s the attempt
-  outright once OIDC is configured ([§1](SSH.md#1-register-a-public-key)).
+  outright once OIDC is configured ([Register a public key](SSH.md#1-register-a-public-key)).
 - Point
   `wardyn ssh-key ensure` and `wardyn run` at your **own** API token
   (`WARDYN_TOKEN`) rather than `WARDYN_ADMIN_TOKEN`, or register the key from
