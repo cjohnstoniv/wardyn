@@ -385,22 +385,60 @@ const (
 
 // bootEgressTrustYes moves the trust prompt's pointer to "Yes, I trust this
 // folder" and reports whether it got there, without pressing Enter. The
-// prompt opens on "No, exit" and ignores keys for a moment after it opens, so
-// the screen is read before every move, and a move is sent only while the
-// pointer still sits on No: one move past Yes would wrap back to No.
+// prompt opens on "No, exit", ignores keys for a moment after it opens, and
+// wraps from Yes back to No, so a move waits up to 10 s for new output and is
+// resent only when nothing redrew, and Yes counts only once the stream has
+// been quiet for 1 s with the pointer still on Yes (no move still in flight).
 func bootEgressTrustYes(t *testing.T, sess runner.Session, tail *bootEgressTail) bool {
 	t.Helper()
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		switch bootEgressTrustPointer(tail.rendered()) {
 		case bootEgressTrustYesOption:
-			return true
+			if tail.settle(time.Second, 5*time.Second) && bootEgressTrustPointer(tail.rendered()) == bootEgressTrustYesOption {
+				return true
+			}
 		case bootEgressTrustNoOption:
+			before := tail.size()
 			if _, err := sess.Write([]byte("\x1b[B")); err != nil { // ArrowDown
 				t.Fatalf("send ArrowDown on the trust prompt: %v", err)
 			}
-			time.Sleep(1500 * time.Millisecond) // let the redraw land before reading again
+			if tail.grew(before, 10*time.Second) {
+				tail.settle(time.Second, 5*time.Second) // let the redraw finish before reading again
+			}
 		default:
 			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return false
+}
+
+// size is how many bytes the PTY has delivered so far.
+func (tl *bootEgressTail) size() int {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return tl.buf.Len()
+}
+
+// grew reports whether the PTY delivered more than n bytes within d.
+func (tl *bootEgressTail) grew(n int, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if tl.size() > n {
+			return true
+		}
+	}
+	return tl.size() > n
+}
+
+// settle waits until the PTY has delivered nothing new for quiet, at most limit,
+// and reports whether it went that quiet.
+func (tl *bootEgressTail) settle(quiet, limit time.Duration) bool {
+	last, since := tl.size(), time.Now()
+	for deadline := time.Now().Add(limit); time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		if n := tl.size(); n != last {
+			last, since = n, time.Now()
+		} else if time.Since(since) >= quiet {
+			return true
 		}
 	}
 	return false
