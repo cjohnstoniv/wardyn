@@ -217,8 +217,9 @@ func TestPG_RunWatcherLease_LeavesUpdatedAtAlone(t *testing.T) {
 
 // TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder pins the claim of a run on a registered
 // runner: only a replica holding that runner's session takes it, however stale the lease, and nobody
-// does while the runner has no session. A run never exec'd is the exception: the sweep's strand guard
-// ends it without a probe, so any replica takes it, and a runner that never returns cannot strand it.
+// does while the runner has no session. A run never exec'd is the exception, so any replica takes it: the
+// sweep's strand guard needs no probe; an organisation pool's run is ended with its runner offline, and a
+// person's own runner's run is left to that runner as before.
 // An interactive macOS VM run whose prep was interrupted is the other: failInterruptedMacPreps ends it.
 func TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder(t *testing.T) {
 	pool := runsPGPool(t)
@@ -270,21 +271,27 @@ func TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder(t *testing.T) {
 	}
 
 	macPrep := onRunner("", true)
+	// A non-interactive row keeps task '': the strand guard needs a task, so no arm but the macOS one could take it.
 	for _, c := range []struct {
-		kind   types.MachineKind
-		detail string
-		want   bool
+		state       types.RunState
+		interactive bool
+		kind        types.MachineKind
+		detail      string
+		want        bool
 	}{
-		{types.MachineMacOSVM, types.RunStatusDetailMacPrepRunning, true},
-		{types.MachineMacOSVM, "prep: done", false},
-		{types.MachineLinuxVM, types.RunStatusDetailMacPrepRunning, false},
+		{types.RunRunning, true, types.MachineMacOSVM, types.RunStatusDetailMacPrepRunning, true},
+		{types.RunRunning, true, types.MachineMacOSVM, "prep: done", false},
+		{types.RunRunning, true, types.MachineLinuxVM, types.RunStatusDetailMacPrepRunning, false},
+		{types.RunStarting, true, types.MachineMacOSVM, types.RunStatusDetailMacPrepRunning, false},
+		{types.RunRunning, false, types.MachineMacOSVM, types.RunStatusDetailMacPrepRunning, false},
 	} {
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET machine_kind=$1, status_detail=$2 WHERE id=$3`, string(c.kind), c.detail, macPrep.ID); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state=$1, interactive=$2, task='', machine_kind=$3, status_detail=$4 WHERE id=$5`,
+			string(c.state), c.interactive, string(c.kind), c.detail, macPrep.ID); err != nil {
 			t.Fatal(err)
 		}
 		if got := claims("other-session", macPrep.ID, other); got != c.want {
-			t.Errorf("interactive %s run with status detail %q: claimed by a replica not holding its runner = %v, want %v",
-				c.kind, c.detail, got, c.want)
+			t.Errorf("%s run (interactive %v) on %s with status detail %q: claimed by a replica not holding its runner = %v, want %v",
+				c.state, c.interactive, c.kind, c.detail, got, c.want)
 		}
 	}
 }

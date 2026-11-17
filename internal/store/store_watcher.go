@@ -77,8 +77,9 @@ const nonTerminalRunStates = `'QUEUED','PENDING','STARTING','RUNNING','WAITING_F
 // runners whose session this replica holds: no other replica can probe its sandbox,
 // so a claim there would only delay the holder's by one stale window. The ref names
 // the runner (a pool's run routes by it too, whatever its placement). The exception
-// is the sweep's strand guard, a run never exec'd, which needs no probe and is ended
-// with its runner offline, so a runner that never returns does not strand it.
+// is the sweep's strand guard, a run never exec'd, which needs no probe; an organisation
+// pool's run is ended with its runner offline, and a person's own runner's run is left
+// to that runner as before.
 // An interrupted macOS VM prep is the other exception, ended without a probe by failInterruptedMacPreps.
 func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration, heldRunners []uuid.UUID) ([]types.AgentRun, error) {
 	if staleAfter < 0 {
