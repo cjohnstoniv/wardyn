@@ -672,12 +672,12 @@ func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
 			t.Fatalf("X-Keep = %q, want it relayed — only hop-by-hop headers may be dropped", got)
 		}
 		if got := rec.Header().Get("Connection"); got != "" {
-			t.Fatalf("Connection = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+			t.Fatalf("Connection = %q, want it stripped (RFC 7230 section 6.1 hop-by-hop)", got)
 		}
 		// A fixed-list name the transport does NOT fold away, so this arm is
 		// relay's own work in every row.
 		if got := rec.Header().Get("Keep-Alive"); got != "" {
-			t.Fatalf("Keep-Alive = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+			t.Fatalf("Keep-Alive = %q, want it stripped (RFC 7230 section 6.1 hop-by-hop)", got)
 		}
 		if got := rec.Header().Get("X-Hop"); got != want.wantXHop {
 			t.Fatalf("X-Hop = %q, want %q", got, want.wantXHop)
