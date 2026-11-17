@@ -382,6 +382,7 @@ func TestBuildWorkspace_RescanAfterARefreshIsNotDone(t *testing.T) {
 // reply lost, and the workspace then names that image.
 func TestBuildWorkspace_RefreshThatCannotRecordItsImageFails(t *testing.T) {
 	for _, lands := range []bool{false, true} {
+		logs := captureSlog(t)
 		ws := refreshDoneWorkspace(t)
 		f := newBuildRefreshFixture(t, ws, &refreshBuilder{pinningBuilder: *resolvingBuilder()})
 		f.b.found = true
@@ -396,8 +397,8 @@ func TestBuildWorkspace_RefreshThatCannotRecordItsImageFails(t *testing.T) {
 		if lands && (len(refs) != 1 || f.st.row().ImageRef != refs[0]) {
 			t.Errorf("lands=%v: the workspace names %q, want the refresh's image %v, which is still there", lands, f.st.row().ImageRef, refs)
 		}
-		if got := f.get(t); got.State != "failed" || !strings.Contains(got.Detail, "store down") {
-			t.Errorf("lands=%v: GET /build = %+v, want failed naming the write error", lands, got)
+		if got := f.get(t); got.State != "failed" || got.Detail != refreshNotRecordedMsg || !strings.Contains(logs.String(), "store down") {
+			t.Errorf("lands=%v: GET /build = %+v, want failed with %q and the write error in the log", lands, got, refreshNotRecordedMsg)
 		}
 		if ev, data := f.refreshRow(t); ev.Outcome != "failure" || data["reason"] != "build_failed" {
 			t.Errorf("lands=%v: refresh row = %s %v, want a build_failed failure", lands, ev.Outcome, data)

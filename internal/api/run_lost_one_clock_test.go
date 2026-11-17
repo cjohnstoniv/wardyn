@@ -405,7 +405,7 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenAndTheEndDoesNotLand(t *testing.T
 		lostError   any // the run.lost row's lost_error
 		outcome     string
 	}{
-		{"the end fails: its error, unresolved, retried", errEnd, "unresolved", errEnd.Error(), "failure"},
+		{"the end fails: its error, unresolved, retried", errEnd, "unresolved", auditStepStopLost, "failure"},
 		{"the end is queued: pending on the runner, no lost_error", runner.ErrPendingOnRunner, "pending_runner", nil, "success"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -427,7 +427,11 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenAndTheEndDoesNotLand(t *testing.T
 				t.Errorf("run.lost %s, data %v; want outcome %s, containment %s, kept true, lost_error %v",
 					rows[0].Outcome, data, c.outcome, c.containment, c.lostError)
 			}
-			if want, _ := c.lostError.(string); f.st.containmentError() != want {
+			want := ""
+			if c.lostError != nil {
+				want = errEnd.Error() // the run's own containment_error column keeps the cause; the row names the step
+			}
+			if f.st.containmentError() != want {
 				t.Errorf("containment_error = %q, want %q", f.st.containmentError(), want)
 			}
 			f.sweep(t)
