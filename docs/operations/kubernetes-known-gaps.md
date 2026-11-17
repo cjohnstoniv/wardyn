@@ -69,7 +69,8 @@
 - On a Kubernetes runner, the kill deletes the proxy pod and waits up to 25 seconds for proof that it stopped, then does the same for the agent pod.
 - On a Kubernetes runner, the kill answers 202 with `teardown` `confirming` when both pods were deleted and only that proof is missing, or both are proven stopped and every pod left is terminating. The confirm then runs as above.
 - A kill on a Kubernetes runner still answers 500 when its two waits together outlast the kill's 30-second budget, because the runner answers too late. A slow proxy pod with an agent pod proven stopped quickly can still answer 202.
-- It also answers 500 when both pods have passed their delete bounds without that proof. A pod that went without it, a reused node name and a changed node record answer 500 too: only a person's record releases those. So do a Kubernetes API or runner error and an older runner.
+- It also answers 500 when both pods have passed their delete bounds without that proof (`pending_delete`), on a Kubernetes API or runner error, and on an older runner.
+- A pod that went without that proof, a reused node name, a changed node record, a different execution and a pod the pod garbage collector marked answer 500 too. Only a person's record or an operator's out-of-service taint releases those.
 
 ## Eviction, priority and run count
 

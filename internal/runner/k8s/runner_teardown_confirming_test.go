@@ -164,9 +164,10 @@ func TestRunnerKillErrorsAreNotConfirming(t *testing.T) {
 	noPoliciesDropped(t, h2)
 }
 
-// A final verdict (a reused node name, a changed node record tuple, a different execution) can be released
-// only by a person's record, so no later status read proves it: the agent_only hold it leaves keeps its
-// plain typed answer and is not confirming.
+// A final verdict (a reused node name, a changed node record tuple, a different execution, the pod GC's
+// mark, a closing anchor on another Node, a pod whose main containers never started with no causal node)
+// is released only by a person's record or an operator's taint, so no later status read proves it: the
+// agent_only hold it leaves keeps its plain typed answer and is not confirming.
 func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
 	for name, setup := range map[string]func(*testing.T, *runnerHarness){
 		"node name reused": func(t *testing.T, h *runnerHarness) {
@@ -182,6 +183,38 @@ func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
 				ev.Pods[componentProxy].Containers[proxyContainerName].Latched = []string{"containerd://p2"}
 			})
 			h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+		},
+		"pod GC mark": func(t *testing.T, h *runnerHarness) {
+			h.onDelete = func(p *corev1.Pod) {
+				terminate(p, "containerd://p1")
+				p.Status.Phase = corev1.PodFailed
+				p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{Type: corev1.DisruptionTarget, Status: corev1.ConditionTrue, Reason: reasonDeletionByPodGC})
+			}
+		},
+		"closing anchor on another Node": func(t *testing.T, h *runnerHarness) {
+			h.evidence(t, func(ev *runEvidence) {
+				ev.Pods[componentProxy].Closing = &nodeHolder{Node: runner.NodeSample{Name: "n1", UID: "uid-n1-other", MachineID: "m1", SystemUUID: "s1", InternalIP: "10.0.0.5"}}
+			})
+			h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+		},
+		"main never started, no causal node": func(t *testing.T, h *runnerHarness) {
+			pod, err := h.cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(h.runID), metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: proxyContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}}}
+			if err := h.cs.Tracker().Update(podsGVR, pod, testNamespace); err != nil {
+				t.Fatal(err)
+			}
+			h.evidence(t, func(ev *runEvidence) {
+				pe := ev.Pods[componentProxy]
+				pe.Assoc = assocU3
+				delete(pe.Containers, proxyContainerName)
+			})
+			h.onDelete = func(p *corev1.Pod) {
+				p.Status.Phase = corev1.PodFailed
+				p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{Type: corev1.PodInitialized, Status: corev1.ConditionFalse})
+			}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

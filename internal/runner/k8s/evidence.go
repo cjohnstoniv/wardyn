@@ -303,7 +303,8 @@ type verdict struct {
 	arm   string
 	tiers map[string]string
 	why   string
-	// final: no later status read can make this pod's evidence; only a person's record releases the run.
+	// final: no later status read can make this pod's evidence; only a person's record, or an operator's
+	// out-of-service taint on the causal machine, releases it.
 	final bool
 }
 
@@ -392,10 +393,36 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 	if terminal.why != "" {
 		return terminal
 	}
+	if arm, _ := unstartedArm(pod, pe.clean); arm != "" && pe.tier2Never() {
+		return verdict{why: "main containers never started and the pod has no causal node: tier 2 can never bind it", final: true}
+	}
 	return verdict{why: "no arm holds: termination unknown"}
 }
 
-const whyDifferentExecution = "a container ID differs from its baseline or is latched: a different execution"
+const (
+	whyDifferentExecution = "a container ID differs from its baseline or is latched: a different execution"
+	whyPodGC              = "Failed by the pod garbage collector, never by the kubelet: its Node is gone"
+	whyNeverBound         = "a terminated container no tier can ever bind: the association or the closing anchor rules it out"
+)
+
+// tier1Never reports that tier 1 can never hold for the pod. The association is made once (associate,
+// on the first bound read) and the closing anchor is taken once (closingList), so a pod with no anchor,
+// an association that is neither causal nor u1, or a closing anchor naming no Node or another Node
+// stays unbound by tier 1.
+func (pe *podEvidence) tier1Never() bool {
+	if pe.PostBind == nil {
+		return false
+	}
+	a := pe.anchor()
+	if a == nil || (pe.Assoc != assocCausal && pe.Assoc != assocU1) {
+		return true
+	}
+	return pe.Closing != nil && (pe.Closing.None || pe.Closing.Node.UID != a.UID || !sameAnchorIdentity(pe.Closing.Node, *a))
+}
+
+// tier2Never reports that tier 2 can never hold for the pod: its association, made once, gave it no
+// causal node.
+func (pe *podEvidence) tier2Never() bool { return pe.PostBind != nil && pe.causalUID() == "" }
 
 // terminalArm is arm (a): the kubelet's terminal status for the recorded pod UID, every container
 // terminated, no DeletionByPodGC, and every container bound by tier 1 or tier 2.
@@ -404,12 +431,13 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 		return verdict{}
 	}
 	if podGCMarked(pod) {
-		return verdict{}
+		return verdict{why: whyPodGC, final: true}
 	}
 	inits, mains := specContainerNames(pod)
 	statuses := statusByName(pod)
 	t1, t2 := pe.tier1Pod(post), pe.tier2Node(pod, post)
 	tiers := map[string]string{}
+	unbound := false
 	for _, name := range slices.Concat(inits, mains) {
 		cs, ok := statuses[name]
 		if !ok || cs.State.Terminated == nil {
@@ -420,9 +448,18 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 			return verdict{why: whyDifferentExecution, final: true}
 		}
 		if tier == "" {
-			return verdict{}
+			// containerTier's split: an anchored container with a terminated ID binds only by tier 1.
+			c := pe.Containers[name]
+			byTier1 := c != nil && c.Anchored && c.Baseline != "" && cs.State.Terminated.ContainerID != ""
+			if (byTier1 && pe.tier1Never()) || (!byTier1 && pe.tier2Never()) {
+				return verdict{why: whyNeverBound, final: true}
+			}
+			unbound = true
 		}
 		tiers[name] = tier
+	}
+	if unbound {
+		return verdict{}
 	}
 	return verdict{arm: armTerminal, tiers: tiers}
 }

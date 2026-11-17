@@ -1,6 +1,8 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build k8s
+
 package k8s
 
 import (
@@ -19,9 +21,10 @@ type vanishedError struct{ err error }
 func (e vanishedError) Error() string { return e.err.Error() }
 func (e vanishedError) Unwrap() error { return e.err }
 
-// unprovableError is checkOnce's answer for a verdict no later status read can turn into evidence (a
-// final verdict: no read of the recorded UID, a changed node record tuple, a reused node name, a
-// different execution): only a person's record releases the run. It still wraps errTerminationUnknown;
+// unprovableError is checkOnce's answer for a final verdict, which no later status read can turn into
+// evidence (no read of the recorded UID, a changed node record tuple, a reused node name, a different
+// execution, the pod GC's mark, a pod no tier can ever bind): only a person's record, or an operator's
+// out-of-service taint on the causal machine, releases it. It still wraps errTerminationUnknown;
 // stillStopping does not count it as a pod that is still stopping.
 type unprovableError struct{ err error }
 
