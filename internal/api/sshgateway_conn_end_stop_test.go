@@ -17,16 +17,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// acceptedForward is a direct-tcpip open the gateway accepts onto ch.
+// acceptedForward is a direct-tcpip open the gateway accepts onto ch. Its request stream is reqs, which the test
+// closes only after the connection's end, as x/crypto closes a channel's requests at its close or the connection's.
 type acceptedForward struct {
 	forwardOpen
-	ch ssh.Channel
+	ch   ssh.Channel
+	reqs chan *ssh.Request
 }
 
 func (c *acceptedForward) Accept() (ssh.Channel, <-chan *ssh.Request, error) {
-	reqs := make(chan *ssh.Request)
-	close(reqs)
-	return c.ch, reqs, nil
+	return c.ch, c.reqs, nil
 }
 
 // readSignal is a bridged process's stdout that runs first on the bridge's first read of it: the start, with
@@ -46,13 +46,14 @@ func (r readSignal) Read(p []byte) (int, error) {
 // close under the same running process stays the client's end, a success that names no error. Catches: any end of
 // the bridge's context read as the client's close, which records a transfer the stop cut as a success.
 func TestSSHGateway_ADaemonStopUnderARunningBridgeIsAFailure(t *testing.T) {
-	sftp := func(srv *Server, ctx context.Context, runID uuid.UUID, principal string) {
+	sftp := func(srv *Server, ctx context.Context, runID uuid.UUID, principal string, _ chan *ssh.Request) {
 		srv.bridgeSSHSFTP(ctx, runID, principal, &stubChannel{})
 	}
-	forward := func(srv *Server, ctx context.Context, runID uuid.UUID, principal string) {
+	forward := func(srv *Server, ctx context.Context, runID uuid.UUID, principal string, reqs chan *ssh.Request) {
 		srv.handleSSHDirectTCPIP(ctx, runID, principal, &acceptedForward{
 			forwardOpen: forwardOpen{extra: ssh.Marshal(sshDirectTCPIPMsg{DestHost: "127.0.0.1", DestPort: 9999})},
 			ch:          &stubChannel{},
+			reqs:        reqs,
 		})
 	}
 	for _, c := range []struct {
@@ -60,7 +61,7 @@ func TestSSHGateway_ADaemonStopUnderARunningBridgeIsAFailure(t *testing.T) {
 		shutdown     bool
 		outcome      string
 		wantErr      any
-		door         func(srv *Server, ctx context.Context, runID uuid.UUID, principal string)
+		door         func(srv *Server, ctx context.Context, runID uuid.UUID, principal string, reqs chan *ssh.Request)
 	}{
 		{"sftp, the daemon stopped", "ssh.sftp.transfer", true, "failure", "sftp-server ended without an exit status", sftp},
 		{"sftp, the client closed", "ssh.sftp.transfer", false, "success", nil, sftp},
@@ -91,7 +92,8 @@ func TestSSHGateway_ADaemonStopUnderARunningBridgeIsAFailure(t *testing.T) {
 			ctx, closeCtx := context.WithCancelCause(conn)
 			defer closeCtx(nil)
 			done := make(chan struct{})
-			go func() { defer close(done); c.door(srv, ctx, run.ID, principal) }()
+			reqs := make(chan *ssh.Request)
+			go func() { defer close(done); c.door(srv, ctx, run.ID, principal, reqs) }()
 			select {
 			case <-bridging:
 			case <-time.After(10 * time.Second):
@@ -101,6 +103,7 @@ func TestSSHGateway_ADaemonStopUnderARunningBridgeIsAFailure(t *testing.T) {
 				stop()
 			}
 			closeCtx(errSSHChannelClosed)
+			close(reqs)
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
