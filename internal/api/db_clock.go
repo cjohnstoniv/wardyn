@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -80,4 +81,18 @@ func (s *Server) boundNow(ctx context.Context) time.Time {
 		return now
 	}
 	return s.cfg.Now()
+}
+
+// capturedAfter reports whether a sign-in this server captured at capturedAt (its own clock, Config.Now) came after
+// at, a time the database stamped: an approval's requested_at. The capture is moved onto the database's clock through
+// an anchor read here, the database's clock first and this server's after it, so the delay between the two reads
+// moves the capture earlier, never later, and a capture before the raise never counts. A database clock that cannot
+// be read answers false: the request stays pending, and the next read or sign-in asks again.
+func (s *Server) capturedAfter(ctx context.Context, capturedAt, at time.Time) bool {
+	dbAt, err := s.dbNow(ctx)
+	if err != nil {
+		return false
+	}
+	anchor := db.AppClockAnchor{DatabaseAt: dbAt, AppAt: s.cfg.Now()}
+	return anchor.Translate(capturedAt).After(at)
 }
