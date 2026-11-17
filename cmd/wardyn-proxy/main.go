@@ -165,8 +165,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The agent's resolver on k8s and Docker runs, when the runner set it: a listener that refuses every query
-	// and writes its row, except AAAA for its own name, which gets an empty answer and no row
+	// The agent's resolver on k8s and Docker runs, when the runner set it: a listener that answers REFUSED to
+	// each one-question query and writes its row (the first per name and type each second, repeats counted on
+	// its next row, at most 64 rows a second), except a standard AAAA query for its own name, which gets an empty answer and
+	// no row; a message that does not parse, or asks other than one question, gets no reply and no row
 	// (internal/egress/proxy/dns_audit.go). A runner that asked for it gets a failed start
 	// rather than an agent whose lookups go unanswered and unrecorded.
 	if addr := os.Getenv(proxy.DNSListenEnv); addr != "" {
