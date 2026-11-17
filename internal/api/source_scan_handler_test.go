@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,8 @@ type scanSourceStore struct {
 	// workspaces and wsListErr answer ListWorkspaces: the workspaces that attach a scanned folder.
 	workspaces []types.Workspace
 	wsListErr  error
+	setErr     error               // SetSourceScanResultUnfenced fails with it
+	setErrFor  map[uuid.UUID]error // and with these, for one source only
 }
 
 func (s *scanSourceStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
@@ -64,6 +67,12 @@ func (s *scanSourceStore) GetSourcesByIDs(_ context.Context, ids []uuid.UUID) (m
 }
 
 func (s *scanSourceStore) SetSourceScanResultUnfenced(_ context.Context, id uuid.UUID, _ []byte, status types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	if s.setErr != nil {
+		return types.Source{}, s.setErr
+	}
+	if err := s.setErrFor[id]; err != nil {
+		return types.Source{}, err
+	}
 	if s.statuses == nil {
 		s.statuses = map[uuid.UUID]types.WorkspaceStatus{}
 	}
@@ -163,6 +172,42 @@ func TestHandleScanSource(t *testing.T) {
 			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
 		}
 	})
+	t.Run("a local_dir scan whose result cannot be saved is a 500 naming the step, never the store's text", func(t *testing.T) {
+		st := &scanSourceStore{sources: sources(), setErr: errors.New("write to db.internal:5432 refused")}
+		h, srv := newSrv(t, st, false)
+		w := scan(srv, dirID.String())
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || !strings.Contains(w.Body.String(), scanAuditPersistFault) || strings.Contains(w.Body.String(), "db.internal") {
+			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
+		}
+		if got := h.auditOutcomes("source.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "source.scan" && (!strings.Contains(string(ev.Data), scanAuditPersistFault) || strings.Contains(string(ev.Data), "db.internal")) {
+				t.Errorf("source.scan row data = %s, want the step %q and no store text", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
+	t.Run("a local_dir scan whose source went away before its result was saved is a 404", func(t *testing.T) {
+		st := &scanSourceStore{sources: sources(), setErr: fmt.Errorf("set scan result: %w", store.ErrNotFound)}
+		logs := captureSlog(t)
+		h, srv := newSrv(t, st, false)
+		w := scan(srv, dirID.String())
+		if strings.Contains(logs.String(), "level=ERROR") {
+			t.Errorf("a source that is gone logged at error level: %s", logs.String())
+		}
+		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonSourceNotFound || !strings.Contains(w.Body.String(), "no such source") {
+			t.Fatalf("= %d %s, want 404 %s no such source", w.Code, w.Body.String(), reasonSourceNotFound)
+		}
+		if got := h.auditOutcomes("source.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("source.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "source.scan" && !strings.Contains(string(ev.Data), scanAuditPersistFault) {
+				t.Errorf("source.scan row data = %s, want the step %q", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
 	t.Run("repo without a runner is 503", func(t *testing.T) {
 		_, srv := newSrv(t, &scanSourceStore{sources: sources()}, false)
 		if w := scan(srv, repoID.String()); w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonSourceScanNoRunner {
@@ -258,6 +303,42 @@ func TestScanAttachedSourcesOutcomes(t *testing.T) {
 		st.freshErr = errors.New("db down")
 		if _, w := run(t, st, false, attach(dirID)); w.Code != http.StatusInternalServerError {
 			t.Errorf("= %d %s, want 500", w.Code, w.Body.String())
+		}
+	})
+	t.Run("a folder whose scan result cannot be saved stops the fan-out with a 500 naming the step", func(t *testing.T) {
+		st := base()
+		st.setErr = errors.New("write to db.internal:5432 refused")
+		h, w := run(t, st, false, attach(dirID))
+		if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonInternalError || !strings.Contains(w.Body.String(), scanAuditPersistFault) || strings.Contains(w.Body.String(), "db.internal") {
+			t.Fatalf("= %d %s, want 500 %s without the store's text", w.Code, w.Body.String(), reasonInternalError)
+		}
+		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "failure" {
+			t.Errorf("workspace.scan audit outcomes = %v, want [failure]", got)
+		}
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "workspace.scan" && (!strings.Contains(string(ev.Data), scanAuditPersistFault) || strings.Contains(string(ev.Data), "db.internal")) {
+				t.Errorf("workspace.scan row data = %s, want the step %q and no store text", ev.Data, scanAuditPersistFault)
+			}
+		}
+	})
+	t.Run("a folder whose source went away while its scan result was saved is skipped and the fan-out goes on", func(t *testing.T) {
+		goneID := uuid.New()
+		st := base()
+		st.sources[goneID] = types.Source{ID: goneID, Kind: types.SourceLocalDir, Locator: dir}
+		st.setErrFor = map[uuid.UUID]error{goneID: fmt.Errorf("set scan result: %w", store.ErrNotFound)}
+		logs := captureSlog(t)
+		h, w := run(t, st, false, attach(goneID, dirID))
+		if strings.Contains(logs.String(), "level=ERROR") {
+			t.Errorf("a source that is gone logged at error level: %s", logs.String())
+		}
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"merged":true}` {
+			t.Fatalf("= %d %s, want 200 with the freshly merged profile", w.Code, w.Body.String())
+		}
+		if st.statuses[dirID] != types.WorkspaceScanned || len(st.statuses) != 1 {
+			t.Errorf("persisted statuses = %v, want only the folder that is still there scanned", st.statuses)
+		}
+		if got := h.auditOutcomes("workspace.scan"); len(got) != 1 || got[0] != "success" {
+			t.Errorf("workspace.scan audit outcomes = %v, want [success]: no failure row for the folder that is gone", got)
 		}
 	})
 }

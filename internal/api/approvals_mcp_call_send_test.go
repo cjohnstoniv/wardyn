@@ -193,6 +193,32 @@ func TestMadeKeyOfItsOwnCallIsRaised(t *testing.T) {
 	}
 }
 
+// TestSendRecordRefusesARowWhoseMadeKeyIsNotItsCalls: an approved row whose operation key has the made form but
+// another call's hash, as one raised before the raise refused it may hold, records no send (404); a row under
+// its call's own made key records as any key does.
+func TestSendRecordRefusesARowWhoseMadeKeyIsNotItsCalls(t *testing.T) {
+	f := newSendFixture(t)
+	_, tok := f.run(t, "alice", "job-7")
+	id := f.approved(t, tok, keyedScope(t, `{"id":1}`, "step-1"))
+	f.aap.mu.Lock()
+	row := f.aap.byID[id]
+	row.RequestedScope = json.RawMessage(keyedScope(t, `{"id":1}`, "call:"+strings.Repeat("0", 64)+":1"))
+	f.aap.byID[id] = row
+	f.aap.mu.Unlock()
+	if w := f.sent(t, tok, id, false); w.Code != http.StatusNotFound || errorReason(w) != reasonApprovalNotFound {
+		t.Fatalf("record under another call's made key = %d %s, want 404 %s", w.Code, w.Body.String(), reasonApprovalNotFound)
+	}
+	if _, recs := f.st.count(); recs != 0 {
+		t.Fatalf("%d sends recorded, want none", recs)
+	}
+	var sc types.MCPCallScope
+	if err := json.Unmarshal([]byte(keyedScope(t, `{"id":2}`, "")), &sc); err != nil {
+		t.Fatal(err)
+	}
+	own := f.approved(t, tok, keyedScope(t, `{"id":2}`, "call:"+sc.CallSHA256+":1"))
+	sentAnswer(t, f.sent(t, tok, own, false), http.StatusOK)
+}
+
 // TestKeyedMCPCallIsSentOnceInItsNamespace: the first send record of a key is a 200 naming its approval; a
 // second record, the same approval's own included, is a 409 naming the first; a raise of the same call with
 // the key is answered 409 with that send and raises nothing, and says answered once the stamp is in.

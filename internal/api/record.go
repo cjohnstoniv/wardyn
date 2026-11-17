@@ -273,6 +273,28 @@ func writeSourceLaunchRefusal(w http.ResponseWriter, lerr error) bool {
 	return false
 }
 
+// recordAuditLaunchFault is a run.record.start failure row's detail for a launch handleRecordWorkspace hands to
+// writeServerError: a store or driver error can name hosts, users and databases, so the row names the step and
+// that writer logs the cause. A cap or capacity refusal that writer answers is named by the step too.
+const recordAuditLaunchFault = "launch record run"
+
+// recordLaunchAuditDetail is a run.record.start failure row's detail: for each error handleRecordWorkspace
+// answers with its own text, that text, which the caller already reads; recordAuditLaunchFault for the rest.
+func recordLaunchAuditDetail(lerr error) string {
+	var mount *sourceRefusal
+	var signIn *gitCredentialRefusalError
+	switch {
+	case errors.As(lerr, &mount),
+		errors.As(lerr, &signIn),
+		errors.Is(lerr, errWorkspaceSourceTarget), errors.Is(lerr, errAgentNotEnabled),
+		errors.Is(lerr, errModelProviderRefused), errors.Is(lerr, errRepoURLUserinfo),
+		errors.Is(lerr, errRepoNotAdmitted), errors.Is(lerr, errRecordCeilingLimit),
+		errors.Is(lerr, errGroupsSnapshotStale):
+		return lerr.Error()
+	}
+	return recordAuditLaunchFault
+}
+
 // handleRecordWorkspace launches one named OPEN recording sandbox:
 // POST /workspaces/{id}/record {"name": "...", "confined": false}
 // ("task_key" is accepted as a deprecated alias for name). The operator drives
@@ -376,7 +398,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// mapping is a tail decision; the record of the attempt is not.
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure",
-			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": lerr.Error()})))
+			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": recordLaunchAuditDetail(lerr)})))
 		if writeSourceLaunchRefusal(w, lerr) {
 			return
 		}

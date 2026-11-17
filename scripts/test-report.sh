@@ -314,6 +314,11 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
       REQUIRE_ALL="$REQUIRE_ALL TestAgentSandboxGoneAfterTeardown TestAgentSandboxNetworkPolicyFirst"
     fi
   fi
+  # The ephemeral-disk case's image and environment skips are in its nested cases, and a skipped nested case
+  # leaves its parent passing: each one is named, so a skip of any of them goes red.
+  if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+    REQUIRE_ALL="$REQUIRE_ALL TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Tmp TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Workdir TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Cache TestConformanceK8s/EphemeralDiskLimit/AnOversizedLimitStillSchedules"
+  fi
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI TestFinalizeBase_IDEqualsTheDaemonsAuxID'
   fi

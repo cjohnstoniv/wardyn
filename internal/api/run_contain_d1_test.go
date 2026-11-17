@@ -623,9 +623,13 @@ func TestContain_D1FallbackStopsAfterTwoFailures(t *testing.T) {
 		l.ds.owe(row.ID)
 		l.rn.setHook(func(context.Context, string) error { return errContainBoom })
 		l.startStops()
+		defer l.stop() // a failed assertion ends the test before the closing stop below
 		l.item(row)
 		time.Sleep(containTick / 2)
 		l.item(row)
+		// The cut's call goroutine takes its count off the run's claim just after the item has its answer
+		// (containCallWithin): wait for every goroutine to park, so the read below is the item's outcome.
+		synctest.Wait()
 		if got := l.stopQueue(); got != 0 || l.busy(row.ID) {
 			t.Fatalf("after a second failure tau/2 on: stop queue %d, busy %v; want nothing handed off", got, l.busy(row.ID))
 		}
@@ -2200,6 +2204,7 @@ func TestContain_PassInFlightSkipIsNotAFailure(t *testing.T) {
 			t.Errorf("the hook answered %v, want errPassInFlight as a skip", got)
 		}
 		l.item(row)
+		synctest.Wait() // the visit's call goroutine has taken its count off the claim
 		if n := l.st.stampWrites(); n != 0 {
 			t.Errorf("stamp writes = %d, want none for a skip", n)
 		}
