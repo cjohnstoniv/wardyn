@@ -160,6 +160,7 @@ func TestEffectivePolicy_GenerationKeepsTheStricterDataOut(t *testing.T) {
 		{a, "", a}, {a, a, a}, {a, r, r}, {a, b, b},
 		{r, "", r}, {r, a, r}, {r, r, r}, {r, b, b},
 		{b, "", b}, {b, a, b}, {b, r, b}, {b, b, b},
+		{"", "", a},
 	} {
 		srv, st := pvFixture(t, &capStore{})
 		dispatched, edited := genViewDispatched, genViewRevived
