@@ -966,6 +966,126 @@ func TestSSHGateway_StderrDrainedBeforeStdout(t *testing.T) {
 	}
 }
 
+// eventChannel is the part of ssh.Channel the exec bridge touches, recording
+// the order of what the bridge does to it: each stderr write, the exit-status
+// request and the Close.
+type eventChannel struct {
+	ssh.Channel
+	mu     sync.Mutex
+	events []string
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newEventChannel() *eventChannel { return &eventChannel{closed: make(chan struct{})} }
+
+func (c *eventChannel) record(e string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, e)
+}
+
+func (c *eventChannel) Write(p []byte) (int, error) { return len(p), nil }
+func (c *eventChannel) Stderr() io.ReadWriter       { return eventChannelErr{c} }
+func (c *eventChannel) SendRequest(name string, _ bool, _ []byte) (bool, error) {
+	c.record(name)
+	return true, nil
+}
+func (c *eventChannel) Close() error {
+	c.once.Do(func() { c.record("close"); close(c.closed) })
+	return nil
+}
+
+// stderrBefore returns the stderr written before the first event named stop,
+// or all of it when stop never happened.
+func (c *eventChannel) stderrBefore(stop string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var b strings.Builder
+	for _, e := range c.events {
+		if e == stop {
+			break
+		}
+		if rest, ok := strings.CutPrefix(e, "stderr:"); ok {
+			b.WriteString(rest)
+		}
+	}
+	return b.String()
+}
+
+type eventChannelErr struct{ c *eventChannel }
+
+func (e eventChannelErr) Write(p []byte) (int, error) {
+	e.c.record("stderr:" + string(p))
+	return len(p), nil
+}
+func (e eventChannelErr) Read([]byte) (int, error) { return 0, io.EOF }
+
+// TestSSHGateway_ExecStderrTailBeforeExitStatus pins that a command's last
+// stderr bytes reach the channel before the exit status and the Close: stdout
+// ends first, stderr's tail lands later, and Wait is already done. The old
+// order sent exit-status and closed the channel as soon as stdout ended, so
+// the tail was lost.
+func TestSSHGateway_ExecStderrTailBeforeExitStatus(t *testing.T) {
+	for _, sendExit := range []bool{true, false} {
+		t.Run("sendExit="+map[bool]string{true: "true", false: "false"}[sendExit], func(t *testing.T) {
+			srv, _, _, run := newWiredPauseServer(t)
+			stdoutR, stdoutW := io.Pipe()
+			stderrR, stderrW := io.Pipe()
+			_ = stdoutW.Close()
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				_, _ = io.WriteString(stderrW, "tail line")
+				_ = stderrW.Close()
+			}()
+			sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 1, nil }}
+			ch := newEventChannel()
+			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, sendExit)
+
+			if got := ch.stderrBefore("close"); got != "tail line" {
+				t.Errorf("stderr before Close = %q, want %q", got, "tail line")
+			}
+			if sendExit {
+				if got := ch.stderrBefore("exit-status"); got != "tail line" {
+					t.Errorf("stderr before exit-status = %q, want %q", got, "tail line")
+				}
+			}
+		})
+	}
+}
+
+// TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel pins the bound on
+// that wait: a stderr that never ends must not keep the bridge, and so the
+// run's channel slot, past execStderrTailGrace.
+func TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel(t *testing.T) {
+	old := execStderrTailGrace
+	execStderrTailGrace = 50 * time.Millisecond
+	t.Cleanup(func() { execStderrTailGrace = old })
+
+	srv, _, _, run := newWiredPauseServer(t)
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	_ = stdoutW.Close()
+	t.Cleanup(func() { _ = stderrW.Close() })
+	sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 0, nil }}
+	ch := newEventChannel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, true)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the bridge never returned with a stderr that never ends")
+	}
+	select {
+	case <-ch.closed:
+	default:
+		t.Error("the channel was not closed")
+	}
+}
+
 // TestSSHGateway_ExecStreamUnsupportedIsCleanError pins the post-brief
 // context: runner.ErrExecStreamUnsupported maps to a clean channel error
 // (nonzero exit + a message), never a hang.
