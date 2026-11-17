@@ -4,7 +4,9 @@
 package approval_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -144,5 +146,69 @@ func TestExpireStale_PagesTheStaleSet(t *testing.T) {
 	}
 	if got, _ := f.GetApproval(ctx, fresh.ID); got.State != types.ApprovalPending {
 		t.Fatalf("fresh approval is %s, want it left pending", got.State)
+	}
+}
+
+// dbClockStore is fakeStore on a database clock of its own: DatabaseNow answers at, or fails with err.
+type dbClockStore struct {
+	*fakeStore
+	at  time.Time
+	err error
+}
+
+func (s dbClockStore) DatabaseNow(context.Context) (time.Time, error) { return s.at, s.err }
+
+// TestExpireStale_CutoffIsOnTheDatabaseClock: the sweep's now is the database's, the clock that stamps requested_at
+// and the run times expires_at comes from. skew is this process's clock less the database's. Catches: a now on this
+// process's clock, which expires a row skew early when this process runs ahead and skew late when it runs behind.
+func TestExpireStale_CutoffIsOnTheDatabaseClock(t *testing.T) {
+	const window = time.Hour
+	for _, skew := range []time.Duration{-30 * time.Second, 0, 30 * time.Second} {
+		for _, tc := range []struct {
+			name string
+			// requested is when the row was raised, and expires its own expiry when set, from the database's now.
+			requested time.Duration
+			expires   *time.Duration
+			want      bool
+		}{
+			{"raised 5s before the cutoff", -window - 5*time.Second, nil, true},
+			{"raised 5s after the cutoff", -window + 5*time.Second, nil, false},
+			{"its own expiry 5s ago", -time.Minute, new(-5 * time.Second), true},
+			{"its own expiry in 5s", -time.Minute, new(5 * time.Second), false},
+		} {
+			t.Run(fmt.Sprintf("skew %s, %s", skew, tc.name), func(t *testing.T) {
+				dbAt := time.Now().UTC().Add(-skew)
+				ap := types.ApprovalRequest{ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+					State: types.ApprovalPending, RequestedAt: dbAt.Add(tc.requested)}
+				if tc.expires != nil {
+					ap.ExpiresAt = new(dbAt.Add(*tc.expires))
+				}
+				f := &fakeStore{}
+				if _, err := f.CreateApproval(t.Context(), ap); err != nil {
+					t.Fatal(err)
+				}
+				n, err := approval.ExpireStale(t.Context(), dbClockStore{fakeStore: f, at: dbAt}, window)
+				if err != nil || (n == 1) != tc.want {
+					t.Fatalf("expired %d, err %v; want expired=%v", n, err, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// TestExpireStale_UnreadableDatabaseClockExpiresNothing: a database clock that cannot be read fails the tick and
+// expires nothing, and a store that answers zero has this process's clock stand in.
+func TestExpireStale_UnreadableDatabaseClockExpiresNothing(t *testing.T) {
+	read := errors.New("database clock: connection reset")
+	f := &fakeStore{}
+	if _, err := f.CreateApproval(t.Context(), types.ApprovalRequest{ID: uuid.New(), RunID: uuid.New(),
+		Kind: types.ApprovalEgressDomain, State: types.ApprovalPending, RequestedAt: time.Now().UTC().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := approval.ExpireStale(t.Context(), dbClockStore{fakeStore: f, err: read}, time.Hour); !errors.Is(err, read) || n != 0 || f.decideCalls != 0 {
+		t.Fatalf("expired %d with %d decides, err %v; want none and the read's error", n, f.decideCalls, err)
+	}
+	if n, err := approval.ExpireStale(t.Context(), dbClockStore{fakeStore: f}, time.Hour); err != nil || n != 1 {
+		t.Fatalf("a zero database clock: expired %d, err %v; want 1 on this process's clock", n, err)
 	}
 }

@@ -269,7 +269,10 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 // happens to meet a terminal row — that would count retries, not outcomes.
 // Kept as a separate function so every existing caller's signature is unchanged.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[string]int, error) {
-	now := time.Now().UTC()
+	now, err := sweepNow(ctx, st)
+	if err != nil {
+		return 0, map[string]int{}, err
+	}
 	cutoff := now.Add(-olderThan)
 
 	expired := 0
@@ -295,6 +298,30 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 		}
 		after = batch[len(batch)-1].ID
 	}
+}
+
+// databaseClock is the optional read of the database's clock a store offers (store.PG's DatabaseNow).
+type databaseClock interface {
+	DatabaseNow(ctx context.Context) (time.Time, error)
+}
+
+// sweepNow is the expiry sweep's now: the database's clock where the store reads it, since the database stamps
+// requested_at and the run times expires_at is computed from, so the cutoff and the rows are read on one clock. A store
+// without the read, or one that answers zero (the tests' fakes), has this process's clock stand in. A failed read is
+// returned: the sweep expires nothing this tick, and the next tick reads the clock again.
+func sweepNow(ctx context.Context, st Store) (time.Time, error) {
+	c, ok := st.(databaseClock)
+	if !ok {
+		return time.Now().UTC(), nil
+	}
+	at, err := c.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("approval: read the database clock for expiry: %w", err)
+	}
+	if at.IsZero() {
+		return time.Now().UTC(), nil
+	}
+	return at.UTC(), nil
 }
 
 // expireBatch is how many pending rows one sweep page reads.
