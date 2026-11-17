@@ -67,9 +67,9 @@ func TestPG_ApprovalRejoinStampsOnlyTheRunsPendingRow(t *testing.T) {
 	}
 }
 
-// TestPG_ApprovalRejoinNeverPrecedesRequestedAt: requested_at is written by the replica that raised
-// the row, so a replica whose clock runs ahead leaves it later than the database's now(). The rejoin
-// stamp is the database's clock, floored at requested_at, so it never orders before the row it rejoins.
+// TestPG_ApprovalRejoinNeverPrecedesRequestedAt: requested_at is the database's clock unless a caller
+// stores an explicit time, and this one stores a time an hour ahead of now(). The rejoin stamp is the
+// database's clock, floored at requested_at, so it never orders before the row it rejoins.
 func TestPG_ApprovalRejoinNeverPrecedesRequestedAt(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()

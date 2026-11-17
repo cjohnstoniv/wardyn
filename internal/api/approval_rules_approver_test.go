@@ -162,6 +162,9 @@ type fsmStore struct{ a *ruleApprovals }
 func (f fsmStore) CreateApproval(_ context.Context, ap types.ApprovalRequest) (types.ApprovalRequest, error) {
 	f.a.mu.Lock()
 	defer f.a.mu.Unlock()
+	if ap.RequestedAt.IsZero() {
+		ap.RequestedAt = time.Now().UTC()
+	}
 	f.a.byID[ap.ID] = ap
 	return ap, nil
 }

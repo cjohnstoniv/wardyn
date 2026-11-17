@@ -14,8 +14,8 @@ import (
 
 // StampApprovalRejoin records that a held request re-entered the hold on approval id, and returns
 // the row. The stamp is the database's clock, never a replica's, and never earlier than
-// requested_at (which the raising replica wrote), so a skewed replica cannot order a rejoin before
-// the row it rejoins. Only a PENDING row of runID and kind is stamped; for any other ok is false,
+// requested_at (which the database wrote too, unless a caller stored an explicit time), so a skewed
+// replica cannot order a rejoin before the row it rejoins. Only a PENDING row of runID and kind is stamped; for any other ok is false,
 // so a rejoin never reaches another run's row or one already decided.
 func (s PG) StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
 	const q = `

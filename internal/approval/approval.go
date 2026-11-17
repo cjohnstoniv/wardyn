@@ -34,6 +34,8 @@ var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 
 // Store is the narrow persistence interface the approval FSM needs.
 type Store interface {
+	// CreateApproval persists a new approval. A zero RequestedAt means the store stamps it with its own
+	// clock (the database's, for the PG store); RequestApproval always passes zero.
 	CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error)
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	// ListExpiredPendingApprovals returns up to limit PENDING approvals whose id sorts after afterID
