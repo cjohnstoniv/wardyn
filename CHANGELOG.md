@@ -25,15 +25,23 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - In a `run.record.start` row, a record launch refusal the route answers in its own words keeps that sentence; every other failure, a run-cap or host-capacity refusal included, names the step.
 - A `workspace.requirement.write` row for a requirements write the store failed says `Requirements at their key cap`, `Workspace not found` or `Store error`, never the store's text.
 - A `workspace.egress.approve` or `workspace.egress.deny` row for an `always` decision whose egress list write the store failed, written either when the decision is made or when the boot re-apply replays it, now says `Egress list at its cap or edited since the decision`, `Workspace not found` or `Store error`, never the store's text. The server log keeps the cause of a `Store error`.
+- A second identical MCP call under the same operation key (its own, or the one send once makes) that waits at the same time as the first no longer asks a person: once one is approved and sent, the other is told so.
+- While a component a run carries keeps its MCP servers from a gateway token, the sandbox gets `403` `gateway_component_cut` instead of a `502` `credential_unavailable` that SDKs retry. Needs the new proxy image.
+- `POST /api/v1/workloads/{name}/preview` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`), as the apply does.
+- `PUT /api/v1/workloads/{name}` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`); it used to be ignored.
 
 ### Fixed
 
 - A CONNECT tunnel that ended before any reply could leave a `builtin:tunnel-failed` audit row naming the wrong side. When the sandbox sent its first bytes and closed, and the upstream hung up in answer, the row could say the upstream closed or reset without answering. When the upstream closed or reset first and the sandbox closed in answer, it could say the client closed before any reply. Where a reset was involved, the row's `refusal` was wrong with it. The row now names the side whose stream ended first. Needs the new proxy image.
 - On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
+- An approved MCP call with an operation key whose body the content scan blocks is refused before its send is recorded, so its key no longer reads as possibly sent. Needs the new proxy image.
+- An SSO sign-in now always replaces the groups recorded at the person's last sign-in, also after the database's clock stepped back.
 
 ### Security
 
 - The send record of an MCP call refuses an approval whose operation key starts `call:` but is not the key made from that call (`404`).
+- The audit feed no longer serves a workload's digest, launch policy digest or pin below a super admin; an offline receipt verifier older than this release refuses a receipt that holds such a withheld workload row, so verify new receipts with this release's verifier.
+- The control plane refuses a raised MCP call whose operation key starts `call:` but is not the key made from that call (`400` `mcp_call_scope_invalid`).
 
 ### Before you upgrade
 
