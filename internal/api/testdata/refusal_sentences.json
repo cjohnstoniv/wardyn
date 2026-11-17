@@ -602,12 +602,12 @@
   {
     "reason": "second_human_required",
     "target": "id.String()",
-    "sentence": "sw + \" is set: a second human must decide this — it is your run's request, so someone else approves or denies it\""
+    "sentence": "sw + \" is set: a second human must decide this — \" + secondHumanDownloadWhy(ap)"
   },
   {
     "reason": "second_human_required",
     "target": "id.String()",
-    "sentence": "sw + \" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it\""
+    "sentence": "sw + \" is set: a second human must decide this — it is your run's request, so someone else approves or denies it\""
   },
   {
     "reason": "second_human_required",
