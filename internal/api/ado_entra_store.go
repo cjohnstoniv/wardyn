@@ -183,6 +183,10 @@ type adoEntraBlob struct {
 	// binding still holds without another sign-in.
 	Subject    string    `json:"subject"`
 	CapturedAt time.Time `json:"captured_at"`
+	// CapturedDBAt is CapturedAt on the database's clock, read by the server that captured the sign-in
+	// (databaseStamp), so any server can compare it with a database stamp such as requested_at. Absent on a
+	// capture stored before it existed, or when that clock could not be read: signedInAfter then falls back.
+	CapturedDBAt time.Time `json:"captured_db_at,omitzero"`
 	// Source names HOW this credential arrived, so a review can tell a
 	// browser sign-in from anything added later. One value today.
 	Source string `json:"source"`
@@ -217,6 +221,15 @@ type adoEntraBlob struct {
 // signInEnded reports whether the last renewal found this sign-in unusable
 // until the person signs in again.
 func (b adoEntraBlob) signInEnded() bool { return !b.DeadAt.IsZero() }
+
+// signedInAfter reports whether b was captured after at, a database stamp (an approval's requested_at): by the
+// capture's own database stamp where it has one, whichever server reads it, else through capturedAfter.
+func (s *Server) signedInAfter(ctx context.Context, b adoEntraBlob, at time.Time) bool {
+	if !b.CapturedDBAt.IsZero() {
+		return b.CapturedDBAt.After(at)
+	}
+	return s.capturedAfter(ctx, b.CapturedAt, at)
+}
 
 // adoEntraSourceSignIn is the only capture source in 0.7.10: the interactive
 // browser sign-in this package serves.

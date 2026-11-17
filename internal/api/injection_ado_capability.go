@@ -445,10 +445,10 @@ func (s *Server) reconcileADOReauth(ctx context.Context, ap types.ApprovalReques
 		return ap, false
 	}
 	// Generation: only a sign-in captured AFTER the raise, both read on the
-	// database's clock (capturedAfter), answers it, and only one no renewal has
+	// database's clock (signedInAfter), answers it, and only one no renewal has
 	// since found ended.
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, sc.ProviderID)
-	if err != nil || !found || blob.signInEnded() || !s.capturedAfter(ctx, blob.CapturedAt, ap.RequestedAt) {
+	if err != nil || !found || blob.signInEnded() || !s.signedInAfter(ctx, blob, ap.RequestedAt) {
 		return ap, false
 	}
 	if !subsetOf(sc.Scopes, blob.Scopes) {
