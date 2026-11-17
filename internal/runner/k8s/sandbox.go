@@ -273,6 +273,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
+	if d.runnerMode() {
+		if err := d.recordProxyBase(spec.RunID, proxyJSON); err != nil {
+			return fail(err)
+		}
+	}
 	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
