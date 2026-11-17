@@ -996,6 +996,13 @@ func (c *eventChannel) Close() error {
 	return nil
 }
 
+// saw reports whether an event named e was recorded.
+func (c *eventChannel) saw(e string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Contains(c.events, e)
+}
+
 // stderrBefore returns the stderr written before the first event named stop,
 // or all of it when stop never happened.
 func (c *eventChannel) stderrBefore(stop string) string {
@@ -1042,6 +1049,9 @@ func TestSSHGateway_ExecStderrTailBeforeExitStatus(t *testing.T) {
 			ch := newEventChannel()
 			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, sendExit)
 
+			if !ch.saw("close") || (sendExit && !ch.saw("exit-status")) {
+				t.Fatalf("events = %q, want a close, and an exit-status when sendExit", ch.events)
+			}
 			if got := ch.stderrBefore("close"); got != "tail line" {
 				t.Errorf("stderr before Close = %q, want %q", got, "tail line")
 			}
@@ -1056,11 +1066,10 @@ func TestSSHGateway_ExecStderrTailBeforeExitStatus(t *testing.T) {
 
 // TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel pins the bound on
 // that wait: a stderr that never ends must not keep the bridge, and so the
-// run's channel slot, past execStderrTailGrace.
+// run's channel slot, past execStderrTailGraceNS.
 func TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel(t *testing.T) {
-	old := execStderrTailGrace
-	execStderrTailGrace = 50 * time.Millisecond
-	t.Cleanup(func() { execStderrTailGrace = old })
+	old := execStderrTailGraceNS.Swap(int64(50 * time.Millisecond))
+	t.Cleanup(func() { execStderrTailGraceNS.Store(old) })
 
 	srv, _, _, run := newWiredPauseServer(t)
 	stdoutR, stdoutW := io.Pipe()
