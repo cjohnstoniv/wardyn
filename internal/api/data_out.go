@@ -39,11 +39,17 @@ func validateDataOut(r types.TransferRule) error {
 }
 
 // runDataOutRule is the run's data_out rule from its policy envelope, "" read as allowed. found is false for a
-// run that recorded no envelope, which carries no rule.
+// run that recorded no envelope, which carries no rule. A run whose current policy generation's row cannot be
+// read is blocked, found: the generation's rule is unknown, a generation only tightens data_out, so the true
+// rule is at least the resolved one, and the strictest is the only one that cannot let content out.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
-	envelope, _, found, err := s.runEffectivePolicy(ctx, runID)
+	envelope, _, found, unread, err := s.runEffectivePolicyGen(ctx, runID)
 	if err != nil {
 		return types.TransferAllowed, false, err
+	}
+	if unread > 0 {
+		slog.WarnContext(ctx, "wardynd: a run's current policy generation could not be read; its data_out rule is blocked", "run_id", runID, "generation", unread)
+		return types.TransferBlocked, true, nil
 	}
 	if !found {
 		// A run with no recorded policy (its audit rows were pruned) carries no rule; refusing it would close output and replay on every pruned run.

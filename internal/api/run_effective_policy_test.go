@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -174,5 +176,85 @@ func TestEffectivePolicy_GenerationKeepsTheStricterDataOut(t *testing.T) {
 		if rule, found, err := srv.runDataOutRule(context.Background(), run.ID); err != nil || !found || rule != c.want {
 			t.Errorf("resolved %q, generation %q: data_out = %q (found %v, err %v), want %q", c.resolved, c.gen, rule, found, err, c.want)
 		}
+	}
+}
+
+// dataOutGenFixture is a running run dispatched with data_out allowed, whose current policy generation is 2.
+// withRow records the generation's row as a revive does (advanceRunPolicyGeneration), with the rule edited;
+// without it the store advanced and the audit row did not land, which that write allows.
+func dataOutGenFixture(t *testing.T, withRow bool, edited types.TransferRule) (*Server, types.AgentRun) {
+	t.Helper()
+	srv, st := pvFixture(t, &capStore{})
+	dispatched := genViewDispatched
+	dispatched.DataOut = types.TransferAllowed
+	gs := &genViewStore{pvStore: st, state: types.RunPolicyState{Digest: dispatched.Digest()}}
+	srv.cfg.Store = gs
+	run := st.seedRun(pvOwner, types.RunRunning)
+	st.rows(run.ID, pvResolve(dispatched, false))
+	if withRow {
+		revised := genViewRevived
+		revised.DataOut = edited
+		if g, err := srv.advanceRunPolicyGeneration(context.Background(), run, revised, "", renewedTokens{}, "jti-revived", store.PolicySlot{Generation: 1}, nil); err != nil || g != 2 {
+			t.Fatalf("advance = %d, %v; want generation 2", g, err)
+		}
+		return srv, run
+	}
+	gs.state, _ = gs.state.Advance(genViewRevived.Digest(), nil, "jti-revived")
+	if gen := gs.state.CurrentGeneration(); gen != 2 {
+		t.Fatalf("current generation = %d, want 2", gen)
+	}
+	return srv, run
+}
+
+// A run whose current generation's row did not land has an unknown data_out rule, and the dispatch rule may
+// be looser than the one it enforces: it reads blocked, a door refuses it, and a revive or an edit is
+// refused rather than carrying "" (allowed).
+func TestDataOutRule_UnreadableGenerationRowIsBlocked(t *testing.T) {
+	srv, run := dataOutGenFixture(t, false, "")
+	ctx := context.Background()
+	if rule, found, err := srv.runDataOutRule(ctx, run.ID); err != nil || !found || rule != types.TransferBlocked {
+		t.Errorf("data_out with no generation row = %q (found %v, err %v), want blocked, found", rule, found, err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/output", nil)
+	if !srv.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, false) || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonDataOutBlocked) {
+		t.Errorf("output with no generation row: %d %s, want 403 %s", w.Code, w.Body.String(), reasonDataOutBlocked)
+	}
+	var policy types.RunPolicySpec
+	re := srv.reviveCarryRecordedRules(ctx, run.ID, &policy)
+	if re == nil || re.status != http.StatusServiceUnavailable || re.reason != reasonReviveConfigUnreadable || !strings.Contains(re.msg, "policy generation") {
+		t.Fatalf("revive carry with no generation row = %+v, want 503 %s naming the generation", re, reasonReviveConfigUnreadable)
+	}
+	if policy.DataOut != "" {
+		t.Errorf("refused revive still carried data_out %q", policy.DataOut)
+	}
+}
+
+// With the generation's row present the rule is that row's, stricter than the resolved one, and a revive carries it.
+func TestDataOutRule_GenerationRowStillRead(t *testing.T) {
+	srv, run := dataOutGenFixture(t, true, types.TransferReview)
+	ctx := context.Background()
+	if rule, found, err := srv.runDataOutRule(ctx, run.ID); err != nil || !found || rule != types.TransferReview {
+		t.Errorf("data_out with the generation row = %q (found %v, err %v), want review, found", rule, found, err)
+	}
+	var policy types.RunPolicySpec
+	if re := srv.reviveCarryRecordedRules(ctx, run.ID, &policy); re != nil || policy.DataOut != types.TransferReview {
+		t.Errorf("revive carry = %+v, data_out %q; want no refusal and review", re, policy.DataOut)
+	}
+}
+
+// A run whose audit rows were pruned has no envelope, so no rule: allowed, not found, whatever its generation.
+func TestDataOutRule_PrunedRunIsAllowed(t *testing.T) {
+	srv, st := pvFixture(t, &capStore{})
+	gs := &genViewStore{pvStore: st}
+	gs.state, _ = gs.state.Advance(genViewRevived.Digest(), nil, "jti-revived")
+	srv.cfg.Store = gs
+	run := st.seedRun(pvOwner, types.RunRunning)
+	ctx := context.Background()
+	if rule, found, err := srv.runDataOutRule(ctx, run.ID); err != nil || found || rule != types.TransferAllowed {
+		t.Errorf("data_out of a pruned run = %q (found %v, err %v), want allowed, not found", rule, found, err)
+	}
+	if re := srv.reviveCarryRecordedRules(ctx, run.ID, &types.RunPolicySpec{}); re != nil {
+		t.Errorf("revive carry of a pruned run = %+v, want nil", re)
 	}
 }
