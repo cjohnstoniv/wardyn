@@ -1136,30 +1136,73 @@ func TestPassBack_ABusyQuiescedDockerSandboxIsKeptWithAResumeAndNoStall(t *testi
 	}
 }
 
-// A record at generation 0 reads the same settled count (0) whether or not its folder was seeded, and only a
-// seed makes its last pass open: with one, an older runner gets no pass and the sandbox is kept; with none,
-// the record is settled and the pass is sent at once.
-func TestPassBack_AGenerationZeroRecordIsOpenOnlyWithASeed(t *testing.T) {
+// A record at generation 0 reads the same settled count (0) with or without a seed, and only a seed makes its
+// last pass open: with none, the record is settled and an older runner is sent the pass at once.
+func TestPassBack_AGenerationZeroRecordWithNoSeedIsSettledAndItsPassIsSent(t *testing.T) {
 	f := newPassFixture(t, 0, 0, nil)
-	f.runnerAs(t, &olderRunnerCaps)
-	seen := passSeen(f.sb)
-	if st := f.cs.folderStatus(); st.Gen != st.Settled || st.Seed == nil {
-		t.Fatalf("record %+v, want gen and settled both 0 with a seed", st)
-	}
-	if !f.back() || seen.Load() {
-		t.Fatalf("pass %v; want no pass and the sandbox kept for a seeded gen 0 record", seen.Load())
-	}
-	if st := f.cs.folderStatus(); st.Gen != 0 || st.Settled != 0 || st.Resume == nil {
-		t.Errorf("record %+v, want it still at gen 0, settled 0, with a resume", st)
-	}
-
-	f = newPassFixture(t, 0, 0, nil)
 	f.set(func(st *types.RunLocalFolderStatus) { st.Seed = nil })
 	f.runnerAs(t, &olderRunnerCaps)
-	seen = passSeen(f.sb)
+	seen := passSeen(f.sb)
+	if st := f.cs.folderStatus(); st.Gen != 0 || st.Settled != 0 || st.Seed != nil {
+		t.Fatalf("record %+v, want gen and settled both 0 and no seed", st)
+	}
 	f.back()
 	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 {
 		t.Errorf("pass %v, record %+v; want the pass sent at once, at gen 1, settled", seen.Load(), st)
+	}
+}
+
+// An open pass found past generation 0 on a sandbox that cannot be kept (its egress cannot be cut) is stopped
+// with its changes not brought back, and its record is not settled at the visit: it stays at gen 2 with gen 1
+// settled, since the runner never answered for the pass at gen 2. At gen 0 a settled and an unsettled write
+// both read 0, so only a later generation tells them apart.
+func TestPassBack_AnOpenPassPastGenerationZeroOnAnUnholdableSandboxStaysUnsettled(t *testing.T) {
+	f := newPassFixture(t, 2, 1, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	f.sb.proxyErr = errors.New("the proxy is wedged")
+	seen := passSeen(f.sb)
+	if f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+	}
+	st := f.cs.folderStatus()
+	if want := "no pass ran; the runner may still be running its last pass back"; st.Back == nil || !strings.Contains(st.Back.Error, want) || st.Resume != nil {
+		t.Errorf("record %+v, want no resume and the error naming %q", st, want)
+	}
+	if st.Gen != 2 || st.Settled != 1 {
+		t.Errorf("record %+v, want gen 2 with only gen 1 settled", st)
+	}
+}
+
+// The record a first pass back leaves while it is still running on an updated runner, when its tail is retried
+// before the pass returns: gen 2 with gen 1 settled, and no resume. The retry's pass is refused as busy, so it
+// is kept with a resume and no stall counted, the sandbox not stopped nor its ref cleared, and the record is
+// settled at the retry's own generation, 3.
+func TestPassBack_ABusyRetryOfAnUnsettledPassIsKeptAtItsOwnGeneration(t *testing.T) {
+	f := newPassFixture(t, 2, 1, nil)
+	f.runnerAs(t, &onePerRunnerCaps)
+	f.s.cfg.Store = refStore{f.cs}
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.SandboxRef = "sbx"
+	ds.mu.Unlock()
+	f.holdsAPass(t)
+	if err := f.finalizeWithin(30 * time.Second); !errors.Is(err, errComputerFolderResumes) {
+		t.Fatalf("finalize = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	if n := f.sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times at a busy visit, want 0", n)
+	}
+	ds.mu.Lock()
+	ref := ds.run.SandboxRef
+	ds.mu.Unlock()
+	if ref != "sbx" {
+		t.Errorf("sandbox ref = %q, want it kept", ref)
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 0 || st.Gen != 3 || st.Settled != 3 || st.Back != nil {
+		t.Errorf("record %+v, want gen 3 settled with a resume, no stall and no back", st)
+	}
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
 	}
 }
 
@@ -1173,6 +1216,7 @@ func TestPassBack_ARecordWithAnUnsettledLastPassAndNoResumeIsKeptUntilItsBound(t
 	f.runnerAs(t, &olderRunnerCaps)
 	seen := passSeen(f.sb)
 	sent := f.cs.folderStatus().GenAt
+	f.advance(time.Minute)
 	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
 		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
 	}
