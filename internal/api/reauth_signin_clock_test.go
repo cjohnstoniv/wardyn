@@ -47,7 +47,7 @@ var signInClockRows = []struct {
 }
 
 // signInClockRaise is the raise every row is timed from, on the database's clock; the gate runs a minute later.
-var signInClockRaise = time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+var signInClockRaise = time.Now().UTC().Truncate(time.Second)
 
 // stampCapture writes the row's capture times into blob: CapturedAt on the capturing server's clock, and
 // CapturedDBAt on the database's when the row is stamped.
