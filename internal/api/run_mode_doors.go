@@ -116,8 +116,8 @@ var backgroundDoors = []backgroundDoor{
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: reads (including recording
-// replay), lifecycle changes (end, title, kill, resume, revive, bring-back, node record), and the two
-// writes that open nothing, profile synthesis and the live egress narrowing. All stay available to a background run.
+// replay), lifecycle changes (end, title, kill, resume, revive, bring-back), and three writes that open
+// nothing: profile synthesis, the live egress narrowing and a security operator's node record. All stay available to a background run.
 var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}":                     "read the run",
 	"GET /runs/{id}/ado-tokens":          "read",
