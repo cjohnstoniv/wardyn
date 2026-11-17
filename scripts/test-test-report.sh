@@ -290,7 +290,10 @@ sandbox_names=(TestAgentSandboxGoneAfterTeardown TestAgentSandboxNetworkPolicyFi
 floor_each "conformance-docker" conformance-docker WARDYN_TEST_DOCKER=1 "${docker_names[@]}"
 floor_each "conformance-k8s" conformance-k8s WARDYN_TEST_K8S=1 "${k8s_names[@]}" "${eph_names[@]}"
 # The agent-sandbox pair is required only where the lane declares it.
-floor_each "AGENT_SANDBOX" conformance-k8s "WARDYN_TEST_K8S=1 WARDYN_TEST_K8S_AGENT_SANDBOX=1" "${k8s_names[@]}" "${eph_names[@]}" "${sandbox_names[@]}"
+for t in "${sandbox_names[@]}"; do
+  floor_case "AGENT_SANDBOX" conformance-k8s "${t}" "WARDYN_TEST_K8S=1 WARDYN_TEST_K8S_AGENT_SANDBOX=1" "${k8s_names[@]}" "${eph_names[@]}" "${sandbox_names[@]}"
+done
+ok "floor AGENT_SANDBOX: each of its ${#sandbox_names[@]} names must pass (skipped and absent both fail)"
 floor_events "${tmp}/floor.json" conformance-k8s - "${k8s_names[@]}" "${eph_names[@]}"
 log="$(floor_run conformance-k8s "${tmp}/floor.json" WARDYN_TEST_K8S=1)" || fail "AGENT_SANDBOX unset: the pair must not be required, got: ${log}"
 ok "floor AGENT_SANDBOX: the pair is not required while WARDYN_TEST_K8S_AGENT_SANDBOX is unset"
@@ -299,6 +302,10 @@ floor_each "envbuild" envbuild WARDYN_TEST_DOCKER=1 "${build_names[@]}"
 # and the revive case always.
 floor_each "docker" docker "WARDYN_TEST_DOCKER=1 GITHUB_ACTIONS=true" "${aws_names[@]}" TestGatewayRecipes_Live TestStartSandbox_OnlyBehindARunningProxy
 floor_each "docker revive" docker "" TestStartSandbox_OnlyBehindARunningProxy
+# The gateway recipes are required only on the hosted runner: with Docker declared and no GITHUB_ACTIONS they are not.
+floor_events "${tmp}/floor.json" docker - "${aws_names[@]}" TestStartSandbox_OnlyBehindARunningProxy
+log="$(floor_run docker "${tmp}/floor.json" WARDYN_TEST_DOCKER=1)" || fail "GITHUB_ACTIONS unset: TestGatewayRecipes_Live must not be required, got: ${log}"
+ok "floor docker: TestGatewayRecipes_Live is not required while GITHUB_ACTIONS is unset"
 floor_each "l0-docker" l0-docker WARDYN_TEST_DOCKER=1 "${l0_names[@]}"
 floor_each "conformance-vm" conformance-vm "" "${vm_names[@]}"
 floor_each "unit" unit "" "${unit_names[@]}"
