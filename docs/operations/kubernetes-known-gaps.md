@@ -63,7 +63,8 @@
 
 - A kill deletes the run's pods and waits up to 25 seconds for them to go; the network policies and the per-run Secret stay until they have.
 - If every pod is already terminating when the wait ends, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
-- Wardyn retries the stop in the background and writes one `run.kill.confirm` row within 60 seconds of the kill. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref and the terminal sandbox sweep retries it.
+- Wardyn retries the stop in the background and writes one `run.kill.confirm` row within 60 seconds of the kill. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref.
+- Once the pods are gone, the label sweep removes the Secret and the NetworkPolicies, the next daemon start clears the ref, and a repeat of the kill completes it at once.
 - A pod that is not terminating, or a Kubernetes API error, still answers 500 and the kill can be retried.
 
 ## Eviction, priority and run count

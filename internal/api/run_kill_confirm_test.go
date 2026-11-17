@@ -70,6 +70,13 @@ func (r *confirmRunner) KillSandbox(context.Context, string) error {
 	return r.last
 }
 
+// release makes every later KillSandbox answer nil.
+func (r *confirmRunner) release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.script, r.last = nil, nil
+}
+
 var errStillTerminating = fmt.Errorf("k8s: teardown: %w: 2 pods terminating", runner.ErrTeardownConfirming)
 
 type confirmRig struct {
@@ -181,14 +188,16 @@ func TestKillRun_ConfirmingForeverWritesOneFailureAtTheBound(t *testing.T) {
 }
 
 // TestKillRun_SecondKillDuringConfirmStartsNoSecondLoop: a second kill while the confirm runs answers the
-// same 202 and starts nothing; the window ends in one row, not two.
+// same 202 and starts nothing; the confirm ends in one row, not two. The window is long and the stop is
+// released only after the second kill, so the first loop is certainly still running when it arrives.
 func TestKillRun_SecondKillDuringConfirmStartsNoSecondLoop(t *testing.T) {
-	r := newConfirmRig(t, 300*time.Millisecond, nil, errStillTerminating)
+	r := newConfirmRig(t, 30*time.Second, nil, errStillTerminating)
 
 	first, second := r.kill(t), r.kill(t)
 	if first["teardown"] != "confirming" || second["teardown"] != "confirming" {
 		t.Fatalf("kill bodies = %v and %v, want both teardown confirming", first, second)
 	}
+	r.rr.release()
 	r.settle(t)
 	r.srv.WaitBackground()
 	if rows := r.rows("run.kill.confirm"); len(rows) != 1 {
@@ -199,4 +208,28 @@ func TestKillRun_SecondKillDuringConfirmStartsNoSecondLoop(t *testing.T) {
 func confirmDataHas(data []byte, key, want string) bool {
 	var m map[string]any
 	return json.Unmarshal(data, &m) == nil && m[key] == want
+}
+
+// TestKillTeardownTail_NoConfirmCarrierKeepsTheFailure: only a person's kill asks for the background
+// confirm. Any other kill (the lifetime kill, the sweep's recovered tail, a workload or SCIM end) whose
+// stop answers ErrTeardownConfirming still records the failed step and a failure row, and sets no
+// sandbox_stop, so its caller's failure handling and the sweep's retry stay as they were.
+func TestKillTeardownTail_NoConfirmCarrierKeepsTheFailure(t *testing.T) {
+	r := newConfirmRig(t, 5*time.Second, nil, errStillTerminating)
+
+	data := r.srv.killTeardownTail(context.Background(), r.st.run, types.ActorSystem, "test", nil, true)
+
+	if data["runner_error"] == nil {
+		t.Errorf("killData = %v, want the runner_error failure for a kill with no confirm carrier", data)
+	}
+	kills := r.rows("run.kill")
+	if len(kills) != 1 || kills[0].Outcome != "failure" || confirmDataHas(kills[0].Data, "sandbox_stop", "confirming") {
+		t.Errorf("run.kill rows = %+v, want one failure row with no sandbox_stop confirming", kills)
+	}
+	if got := r.st.ref(); got != "sbx-1" {
+		t.Errorf("sandbox ref = %q, want it kept", got)
+	}
+	if _, running := killConfirms.Load(r.runID); running || len(r.rows("run.kill.confirm")) != 0 {
+		t.Error("a background confirm started for a kill that did not ask for one")
+	}
 }

@@ -20,8 +20,10 @@ import (
 // when its wait runs out (runner.ErrTeardownConfirming). That is not a failure: the run is KILLED, the
 // revocations ran, and the kill answers 202 with `teardown: confirming`. startKillConfirm then re-runs the
 // idempotent sandbox kill in the background until the pods are gone or killConfirmWindow from the kill's
-// start has passed, and writes one run.kill.confirm row either way. The terminal sweep stays the backstop
-// for a ref the confirm leaves held.
+// start has passed, and writes one run.kill.confirm row either way. A ref the confirm leaves held is
+// followed up by the orphan label sweep (the Secret and the NetworkPolicies, once the pods are gone), the
+// boot pass (reconcileOrphanedSandbox clears the ref) and a repeat of the kill. The terminal sandbox sweep
+// does not retry it: the kill's success row settles that sweep.
 
 // killConfirmWindow is how long after the kill's start the background confirm keeps trying; killConfirmRetry
 // is its wait between tries. Variables so a test can shorten them.
@@ -53,12 +55,15 @@ func withKillConfirm(ctx context.Context) context.Context {
 	return context.WithValue(ctx, killConfirmKey{}, &killConfirm{start: time.Now()})
 }
 
-// markKillConfirming is killTeardownTail's note that the sandbox stop is not yet confirmed; a no-op on a
-// cascade whose caller did not ask (withKillConfirm).
-func markKillConfirming(ctx context.Context) {
-	if kc, ok := ctx.Value(killConfirmKey{}).(*killConfirm); ok {
+// markKillConfirming is killTeardownTail's note that the sandbox stop is not yet confirmed. It reports
+// whether the cascade's caller asked for a confirm (withKillConfirm): only a person's kill does, and any
+// other kill keeps treating the unconfirmed stop as the failed step it was.
+func markKillConfirming(ctx context.Context) bool {
+	kc, ok := ctx.Value(killConfirmKey{}).(*killConfirm)
+	if ok {
 		kc.confirming.Store(true)
 	}
+	return ok
 }
 
 // writeKillAccepted is handleKillRun's 202: a kill whose sandbox stop is still being confirmed says so and
@@ -86,7 +91,7 @@ func (s *Server) startKillConfirm(run types.AgentRun, start time.Time) {
 
 // confirmKillStop retries the run's sandbox kill until it answers nil (success), a failure, or the window
 // from start ends (failure). A daemon shutdown ends it with no row: the run still holds its ref and the
-// terminal sweep finds it.
+// next boot pass (reconcileOrphanedSandbox) finds it.
 func (s *Server) confirmKillStop(run types.AgentRun, start time.Time, window, retry time.Duration) {
 	ctx, cancel := context.WithDeadline(s.cfg.BaseCtx, start.Add(window))
 	defer cancel()
@@ -102,7 +107,9 @@ func (s *Server) confirmKillStop(run types.AgentRun, start time.Time, window, re
 		}
 		select {
 		case <-ctx.Done():
-			s.recordKillConfirm(run, start, err)
+			if s.cfg.BaseCtx.Err() == nil {
+				s.recordKillConfirm(run, start, err)
+			}
 			return
 		case <-time.After(retry):
 		}
@@ -117,17 +124,14 @@ func (s *Server) tryKillConfirm(ctx context.Context, run types.AgentRun) error {
 		return errKillConfirmBusy
 	}
 	defer unlock()
-	ref := run.SandboxRef
-	if cur, err := s.cfg.Store.GetRun(lctx, run.ID); err == nil {
-		if cur.SandboxRef == "" {
-			return nil // a second kill or the sweep confirmed it first
-		}
-		ref = cur.SandboxRef
+	cur, err := s.cfg.Store.GetRun(lctx, run.ID)
+	if err != nil {
+		return errKillConfirmBusy // not read: try again, never on the pre-cascade copy's ref
 	}
-	if ref == "" {
-		return nil
+	if cur.SandboxRef == "" {
+		return nil // a second kill or the boot pass confirmed it first
 	}
-	kerr := s.cfg.Runner.KillSandbox(lctx, ref)
+	kerr := s.cfg.Runner.KillSandbox(lctx, cur.SandboxRef)
 	if kerr == nil {
 		if c, ok := s.cfg.Store.(sandboxRefRetainingClearer); ok {
 			_ = c.ClearSandboxRefRetaining(lctx, run.ID)

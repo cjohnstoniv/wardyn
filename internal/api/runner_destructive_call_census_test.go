@@ -90,6 +90,8 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/runs_lifecycle.go", "Server.stopSandboxOrAudit", "StopSandbox"}: {1, "unguarded: K11, K12"},
 	// The kill.
 	{"internal/api/runs_lifecycle.go", "Server.killTeardownTail", "KillSandbox"}: {1, guardNotReplaceable},
+	// The kill's background confirm, under the run's lock with the run read again.
+	{"internal/api/run_kill_confirm.go", "Server.tryKillConfirm", "KillSandbox"}: {1, guardHeldReread},
 	// teardownOrAudit's verb, called only while the lock is not lost; boundedTeardown's wrap of it is reached only
 	// through that call.
 	{"internal/api/run_lock_lost.go", "teardownUnlessLost", "teardown"}: {1, guardChecked},

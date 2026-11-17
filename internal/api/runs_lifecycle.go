@@ -859,9 +859,8 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 		if kerr = s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
-			} else if queuedOK && errors.Is(kerr, runner.ErrTeardownConfirming) {
-				confirming = true // the pods are terminating: no failure, and the ref stays
-				markKillConfirming(ctx)
+			} else if queuedOK && errors.Is(kerr, runner.ErrTeardownConfirming) && markKillConfirming(ctx) {
+				confirming = true // a person's kill, pods terminating: no failure, and the ref stays
 			} else {
 				killData["runner_error"] = auditStep(ctx, auditStepKillSandbox, kerr, slog.String("run_id", id.String()))
 			}
