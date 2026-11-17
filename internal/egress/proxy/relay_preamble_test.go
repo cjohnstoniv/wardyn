@@ -10,6 +10,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,8 +20,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // headConn serves the bytes the preamble listener did not take off the front.
@@ -186,10 +192,17 @@ func TestRelayPreambleIgnoresEnvProxy(t *testing.T) {
 	if tr := client.Transport.(*http.Transport); tr.Proxy != nil {
 		t.Fatal("control-plane transport has a Proxy function; it must ignore HTTPS_PROXY")
 	}
-	get(t, client, "https://"+cpAddr+"/")
-
+	client.Timeout = 3 * time.Second // a request sent to the environment proxy never answers
+	resp, err := client.Get("https://" + cpAddr + "/")
+	if err == nil {
+		_ = resp.Body.Close()
+		client.CloseIdleConnections()
+	}
 	if got := envProxy.recorded(); len(got) != 0 {
 		t.Fatalf("the environment proxy took %d connection(s); the control-plane client must not use it", len(got))
+	}
+	if err != nil {
+		t.Fatalf("GET: %v", err)
 	}
 	heads := hl.recorded()
 	if len(heads) != 1 || heads[0][0] != relayPreambleMagic || heads[0][1] != relayPreambleVersion {
@@ -275,6 +288,88 @@ func TestConfigRelayKeyNeverPrints(t *testing.T) {
 	for _, leak := range []string{good, string(testRelayKey()), raw, fmt.Sprint(testRelayKey())} {
 		if strings.Contains(out.String(), leak) {
 			t.Fatalf("a dump of the config carries the relay key (%q)", leak[:8])
+		}
+	}
+}
+
+// controlTransportProxy is a proxy whose control-plane transport carries relay, pointed at srv.
+func controlTransportProxy(srv *httptest.Server, tlsCfg *tls.Config, relay *relayPreamble) *Proxy {
+	return newProxy(Options{ControlPlaneURL: srv.URL, RunToken: newTokenSource("tok"), Resolver: publicResolver{},
+		ControlTLS: tlsCfg, RelayPreamble: relay})
+}
+
+func TestRelayPreambleOnLocalRouteControlTransport(t *testing.T) {
+	srv, hl, tlsCfg := tlsControlPlane(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	key := testRelayKey()
+	p := controlTransportProxy(srv, tlsCfg, &relayPreamble{addr: strings.TrimPrefix(srv.URL, "https://"), key: key})
+	resp, err := p.forwardToControlPlane(context.Background(), http.MethodGet, "/x", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	p.controlTransport.CloseIdleConnections()
+	heads := hl.recorded()
+	if want := append([]byte{0x57, 0x01}, key...); len(heads) != 1 || !bytes.Equal(heads[0], want) {
+		t.Fatalf("local-route connection opened with %x, want %x", heads, want)
+	}
+	if p.controlTransport.Proxy != nil {
+		t.Fatal("control transport has a Proxy function")
+	}
+}
+
+func TestRelayPreambleNotOnLocalRouteToOtherAddress(t *testing.T) {
+	srv, hl, tlsCfg := tlsControlPlane(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	p := controlTransportProxy(srv, tlsCfg, &relayPreamble{addr: "cp.invalid:443", key: testRelayKey()})
+	resp, err := p.forwardToControlPlane(context.Background(), http.MethodGet, "/x", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	p.controlTransport.CloseIdleConnections()
+	if heads := hl.recorded(); len(heads) != 1 || heads[0][0] != 0x16 {
+		t.Fatalf("connection to another address opened with %x, want the 0x16 ClientHello", heads)
+	}
+}
+
+// NewServer reads relay_key from the config and gives the preamble to both control-plane clients: the
+// startup credential resolve rides the first, a local-route forward the second.
+func TestRelayPreambleNewServerBothControlPlaneClients(t *testing.T) {
+	grant := uuid.New()
+	srv, hl, _ := tlsControlPlane(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer x"})
+	}))
+	cfg := &Config{
+		RunID: uuid.New(), ControlPlaneURL: srv.URL, RunToken: "tok", Listen: "127.0.0.1:0",
+		ControlPlaneCAPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})),
+		Policy:            types.RunPolicySpec{AllowedDomains: []string{"example.com"}},
+		Injection:         []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "example.com"}, GrantID: grant}},
+		RelayKey:          relayKeyValue(base64.StdEncoding.EncodeToString(testRelayKey())),
+	}
+	if err := cfg.applyDefaultsAndValidate(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(context.Background(), cfg, nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = s.Shutdown(ctx)
+	})
+	resp, err := s.proxy.forwardToControlPlane(context.Background(), http.MethodGet, "/x", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	want := append([]byte{0x57, 0x01}, testRelayKey()...)
+	heads := hl.recorded()
+	if len(heads) < 2 {
+		t.Fatalf("control plane saw %d connection(s), want one from each client", len(heads))
+	}
+	for _, h := range heads {
+		if !bytes.Equal(h, want) {
+			t.Fatalf("a control-plane connection opened with %x, want the preamble", h)
 		}
 	}
 }

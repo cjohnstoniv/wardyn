@@ -344,6 +344,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		UpstreamNoProxy:      cfg.UpstreamProxyNoProxy,
 		TLSClientConfig:      tlsCfg,
 		ControlTLS:           cpTLS,
+		RelayPreamble:        relay,
 		InternalHosts:        cfg.InternalHosts,
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMChannelHosts:      cfg.LLMChannelHosts,
