@@ -127,13 +127,6 @@ describe("deriveIntegrations — network topology is not an integration", () => 
     expect(Object.keys(data)).toEqual(["scm"]);
   });
 
-  it("the legacy artifact_overrides map derives nothing either", () => {
-    const siteConfig: SiteConfig = {
-      artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" } },
-    };
-    const data = deriveIntegrations(baseStatus(), siteConfig, []);
-    expect(data.scm).toHaveLength(0);
-  });
 });
 
 // proxyBannerNeeded, blastRadius, describePosture and the whole

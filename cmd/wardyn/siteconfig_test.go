@@ -1,12 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//lint:file-ignore SA1019 TestSiteConfigSet_AcceptsLegacyArtifactOverrides reads
-// the deprecated SiteConfig.ArtifactOverrides on purpose: it proves `wardyn
-// site-config set` still FORWARDS a legacy artifact_overrides document to the
-// server, which is the only way the server-side fold can happen at all. Same
-// reason internal/api/site_config_test.go carries this directive.
-
 package main
 
 import (
@@ -19,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,20 +76,23 @@ func TestSiteConfigSet_RejectsUnknownField(t *testing.T) {
 	}
 }
 
-// TestSiteConfigSet_AcceptsLegacyArtifactOverrides: strictness must not break
-// the documented legacy round-trip — artifact_overrides is still a real (if
-// deprecated) field, folded server-side, so a document saved before
-// egress_redirects existed still applies.
-func TestSiteConfigSet_AcceptsLegacyArtifactOverrides(t *testing.T) {
+// TestSiteConfigSet_RefusesArtifactOverrides: artifact_overrides is no longer a
+// SiteConfig field, so the strict decode refuses a document that still carries
+// it, naming the key, before any request reaches the server.
+func TestSiteConfigSet_RefusesArtifactOverrides(t *testing.T) {
 	var got types.SiteConfig
 	srv := applyServer(t, &got)
 
-	if _, _, err := runSiteConfigSet(t, srv.URL,
-		`{"artifact_overrides":{"npm":{"base_url":"https://nexus.corp/npm"}}}`); err != nil {
-		t.Fatalf("apply rejected a legacy artifact_overrides document: %v", err)
+	_, _, err := runSiteConfigSet(t, srv.URL,
+		`{"artifact_overrides":{"npm":{"base_url":"https://nexus.corp/npm"}}}`)
+	if err == nil {
+		t.Fatalf("apply accepted a legacy artifact_overrides document and PUT %+v", got)
 	}
-	if len(got.ArtifactOverrides) != 1 {
-		t.Errorf("server received %+v, want artifact_overrides forwarded for the server-side fold", got)
+	if !strings.Contains(err.Error(), "artifact_overrides") {
+		t.Errorf("error = %v, want it to name artifact_overrides", err)
+	}
+	if !reflect.DeepEqual(got, types.SiteConfig{}) {
+		t.Errorf("server received %+v, want nothing", got)
 	}
 }
 

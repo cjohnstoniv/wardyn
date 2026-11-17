@@ -3558,12 +3558,9 @@ With `local.allow_on_laptop_runners: true` (off by default; set it with the swit
 
 ### Upgrading from `artifact_overrides`
 
-- A site-config document saved before this shipped used `artifact_overrides: {"npm": {"base_url": "..."}, ...}`.
-- Migration `0030` rewrites the one stored row automatically on the first boot after upgrade — nothing to do for what's already in Postgres.
-- `PUT /site-config` (and so `wardyn site-config set`) still accepts a legacy `artifact_overrides` body **for one release**, folding it into `egress_redirects` before validating.
-- `set` replaces the *whole* document, so an operator re-applying a file saved before this release would otherwise silently wipe the proxy and every redirect rather than just fail to update them.
-- A body that sets both fields is rejected (400) rather than guessed at.
-- `wardyn site-config get` after upgrading no longer returns `artifact_overrides` — re-save the file then.
+- A site-config document saved before 0.4 used `artifact_overrides: {"npm": {"base_url": "..."}, ...}`.
+- Migration `0030` rewrote the stored row on the first boot after that upgrade.
+- `PUT /site-config` and `wardyn site-config set` refuse a body or file that still has `artifact_overrides` (400 `site_config_request_invalid`, naming the field). Rewrite the file as `egress_redirects`, or run `wardyn site-config get` and save its output.
 - A PUT that does not MENTION a field added after v0.6.6 (`internal_hosts`, `upstream_proxy_no_proxy`) leaves the stored value alone rather than clearing it.
 - So an older SDK/CLI's get-edit-apply round trip can no longer erase a field its struct has no name for (`carryForwardUnnamedSiteConfigFields`, [`internal/api/site_config.go`](../internal/api/site_config.go)).
 - To clear one deliberately, send it explicitly as `[]` or `null` — the body naming a field is what decides it.

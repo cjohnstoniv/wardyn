@@ -1,18 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//lint:file-ignore SA1019 This file CONTAINS the compatibility fold: it reads
-// the deprecated SiteConfig.ArtifactOverrides field precisely so a PUT body (or
-// a `wardyn site-config set` file) saved before EgressRedirects existed keeps
-// working. foldLegacyArtifactOverrides is the fold; deprecating the field is
-// what tells NEW callers to use EgressRedirects instead.
-
 package api
 
 import (
 	"cmp"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -23,36 +16,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// validArtifactEcosystems is the closed set of ArtifactOverrides keys (the
+// validArtifactEcosystems is the closed set of EgressRedirect.Ecosystem values (the
 // ecosystems Wardyn has emit-time config support for — npm/pip/cargo/maven/go
 // each get their own registry config file, nuget its own).
 var validArtifactEcosystems = map[string]bool{
 	"npm": true, "pip": true, "cargo": true, "maven": true, "go": true, "nuget": true,
 }
 
-// ecosystemPublicURL maps an ArtifactOverride ecosystem key to the PUBLIC
-// registry URL it redirects away from — used ONLY by foldLegacyArtifactOverrides
-// to synthesize an EgressRedirect.From for a legacy ArtifactOverride (which had
-// no From field of its own: it was implicitly "whatever that ecosystem's public
-// registry is"). Copied verbatim into migration 0030's SQL (Postgres can't call
-// Go), so keep the two in sync. Hosts match what workspacescan.PublicRegistryHosts
-// already treats as each ecosystem's public registry (grepped, not invented);
-// see 0030_egress_redirects.sql for the full per-ecosystem citation.
-var ecosystemPublicURL = map[string]string{
-	"npm":   "https://registry.npmjs.org/",
-	"pip":   "https://pypi.org/simple/",
-	"cargo": "https://index.crates.io/",
-	"maven": "https://repo.maven.apache.org/maven2/",
-	"go":    "https://proxy.golang.org",
-	"nuget": "https://api.nuget.org/v3/index.json",
-}
-
 // PUT /site-config refusal bodies.
 const (
-	// legacyArtifactOverridesUnknownEcosystemRefusal names the offending key
-	// directly, before the generic "invalid from \"\"" refusal two guards
-	// later could ever fire for it.
-	legacyArtifactOverridesUnknownEcosystemRefusal = "artifact_overrides.%s: unknown ecosystem"
 	// egressRedirectDuplicateFromRefusal rejects a duplicate From:
 	// findEgressRedirect resolves the first match only, so a second row
 	// sharing a From would silently never fire.
@@ -220,11 +192,6 @@ func validateRedirectToken(i int, red types.EgressRedirect) error {
 // egress-redirect ecosystems must be one of the closed set. Fail closed — this
 // is operator-wide config every run inherits (SSRF/injection hardening per the
 // plan's security disposition).
-//
-// Callers MUST run foldLegacyArtifactOverrides first: this function validates
-// EgressRedirects only, never the deprecated ArtifactOverrides (by the time
-// anything reaches here, a legacy body has already been folded into the one
-// canonical shape).
 func validateSiteConfig(cfg types.SiteConfig) error {
 	if cfg.UpstreamProxySecretRef != "" && !validSecretRef(cfg.UpstreamProxySecretRef) {
 		return fmt.Errorf("upstream_proxy_secret_ref: invalid or reserved secret name %q", cfg.UpstreamProxySecretRef)
@@ -283,7 +250,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			// Ecosystem tier: To is interpolated as a real base URL into a
 			// per-tool config file (.npmrc/pip.conf/.cargo/config.toml/
 			// .m2/settings.xml/NuGet.Config) or GOPROXY env — exactly what
-			// ArtifactOverride.BaseURL required, or the emitted config is
+			// an ecosystem base URL requires, or the emitted config is
 			// silently non-functional (e.g. an npm registry with no scheme).
 			if !validSiteURL(red.To) {
 				return fmt.Errorf("egress_redirects[%d]: invalid to %q (an ecosystem row needs a full http(s) URL)", i, red.To)
@@ -392,52 +359,6 @@ func goChecksumDBOffHosts(redirects []types.EgressRedirect) []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
-// into EgressRedirects for exactly ONE release: PUT /site-config is a
-// whole-document replace and `wardyn site-config set` takes a file an
-// operator may have saved in the old shape — without this fold, applying a
-// saved-and-reapplied legacy document would silently WIPE every redirect
-// (decodeStrict still accepts the field on the wire since the deprecated
-// struct field still exists; nothing else ever reads it back into
-// EgressRedirects). Rejects a body that sets BOTH fields — ambiguous which one
-// is authoritative — rather than guessing.
-//
-// Each folded entry's From is looked up per ecosystem exactly like migration
-// 0030 does at the storage layer for the row already on disk, and entries are
-// emitted in SORTED ecosystem-key order so the shared-host "first sighted
-// wins" dedup (artifactMirrorRows, planArtifactRedirect) resolves identically
-// to the old map-iteration code — this determinism is what makes the fold
-// byte-identical to the pre-refactor behavior. cfg.ArtifactOverrides is always
-// cleared before returning: only the folded shape is ever persisted.
-func foldLegacyArtifactOverrides(cfg *types.SiteConfig) error {
-	if len(cfg.ArtifactOverrides) == 0 {
-		return nil
-	}
-	if len(cfg.EgressRedirects) > 0 {
-		return fmt.Errorf("artifact_overrides and egress_redirects must not both be set — artifact_overrides is deprecated, migrate to egress_redirects")
-	}
-	for _, eco := range slices.Sorted(maps.Keys(cfg.ArtifactOverrides)) {
-		// Reject an unknown ecosystem key HERE, naming the offending
-		// key. Left unchecked, ecosystemPublicURL[eco] resolves to "" for an
-		// unknown eco, and the fold emits a redirect whose From is empty —
-		// validateSiteConfig's very next pass then 400s it as
-		// `egress_redirects[0]: invalid from ""`, an accurate but useless
-		// message that never says WHICH artifact_overrides key was wrong or
-		// that "unknown ecosystem" (the check that exists for exactly this,
-		// two guards down) was unreachable behind it.
-		if !validArtifactEcosystems[eco] {
-			return fmt.Errorf(legacyArtifactOverridesUnknownEcosystemRefusal, eco)
-		}
-		ov := cfg.ArtifactOverrides[eco]
-		cfg.EgressRedirects = append(cfg.EgressRedirects, types.EgressRedirect{
-			From: ecosystemPublicURL[eco], To: ov.BaseURL,
-			TokenSecretRef: ov.TokenSecretRef, Ecosystem: eco,
-		})
-	}
-	cfg.ArtifactOverrides = nil
-	return nil
 }
 
 // danglingSiteConfigSecretRefs returns the sorted, de-duplicated names of every
@@ -662,11 +583,6 @@ func (s *Server) validateSiteConfigBody(cfg types.SiteConfig) ([]string, error) 
 // carry-forward). GET emits that key, so refusing it broke the very round-trip
 // above — and refusing it can protect nothing the carry-forward does not.
 //
-// A legacy body's artifact_overrides is folded into egress_redirects
-// (foldLegacyArtifactOverrides) before validation, so a document saved before
-// EgressRedirects existed keeps applying rather than 400ing or silently
-// dropping every redirect.
-//
 // If-Match (etag.go) is optional optimistic concurrency on top of this
 // whole-document replace: an absent header behaves exactly as before (this is
 // additive), a present one that no longer matches the document's CURRENT
@@ -684,10 +600,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRequestInvalid, msg)
-		return
-	}
-	if err := foldLegacyArtifactOverrides(&cfg); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigArtifactOverrideInvalid, err.Error())
 		return
 	}
 	if len(cfg.Integrations) > 0 {

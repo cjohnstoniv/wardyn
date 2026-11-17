@@ -337,7 +337,6 @@ const (
 
 	// GET/PUT /site-config.
 	reasonSiteConfigRequestInvalid          = "site_config_request_invalid"            // the PUT body did not decode
-	reasonSiteConfigArtifactOverrideInvalid = "site_config_artifact_override_invalid"  // a legacy artifact-override field fails validation
 	reasonSiteConfigIntegrationsViaOwnRoute = "site_config_integrations_via_own_route" // integrations were named inline instead of through their own endpoints
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
