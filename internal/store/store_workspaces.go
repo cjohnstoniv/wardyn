@@ -357,13 +357,17 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" (or, with a decided-at, a newer list edit).
-		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
-			if decidedAt != nil {
-				return types.Workspace{}, fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
-			}
+		// A read that fails for another reason is returned as itself, not as a workspace that is gone.
+		_, gerr := s.GetWorkspace(ctx, id)
+		switch {
+		case gerr == nil && decidedAt != nil:
+			return types.Workspace{}, fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
+		case gerr == nil:
 			return types.Workspace{}, ErrConflict
+		case errors.Is(gerr, ErrNotFound):
+			return types.Workspace{}, ErrNotFound
 		}
-		return types.Workspace{}, ErrNotFound
+		return types.Workspace{}, fmt.Errorf("store: read workspace after an egress-list write missed: %w", gerr)
 	}
 	if err != nil {
 		return types.Workspace{}, err
