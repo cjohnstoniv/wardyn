@@ -9,6 +9,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -467,5 +469,75 @@ func TestOnceRefund_ARequestToTheHostMidRetryDoesNotLoseTheName(t *testing.T) {
 	}
 	if failed[0].ApprovalID == nil {
 		t.Errorf("the retry went ahead on given-back approval %s but its dial-failed row has approval_id null (a request to the same host resolved during its dial)", id)
+	}
+}
+
+// A first use (not given back) spent by a TLS alert leaves its tunnel-failed row with approval_id null.
+func TestOnceRefund_AFirstUseSpentByAnAlertKeepsItsRowNull(t *testing.T) {
+	hello := func(c net.Conn) bool { _, err := io.ReadFull(c, make([]byte, len(fakeClientHello))); return err == nil }
+	id := uuid.New()
+	p, _ := onceProxy(t, id, redirectDial(upstreamThat(t, func(c net.Conn) {
+		if hello(c) {
+			_, _ = c.Write(plaintextAlert)
+		}
+	})))
+	proxyURL, done := serveTunnelProxy(t, p)
+	conn, resp := connectThrough(t, proxyURL, onceHost+":443")
+	if !strings.HasPrefix(resp, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT = %q", resp)
+	}
+	_, _ = conn.Write(fakeClientHello)
+	_ = readToEnd(t, conn)
+	_ = conn.Close()
+	rows := tunnelFailedRows(awaitDecision(t, p, done))
+	if len(rows) != 1 || rows[0].ApprovalID != nil {
+		t.Fatalf("first-use spent rows = %+v, want one with approval_id null", rows)
+	}
+}
+
+// The terminated tunnel's client handshake row names the approval only for a given-back use.
+func TestOnceRefund_TheMITMHandshakeRowNamesAGivenBackUse(t *testing.T) {
+	id := uuid.New()
+	for _, c := range []struct {
+		name string
+		seen *egress.DecisionLog
+		want bool
+	}{
+		{"given-back use", &egress.DecisionLog{ApprovalID: &id, GivenBackUse: true}, true},
+		{"first use", &egress.DecisionLog{ApprovalID: &id}, false},
+		{"no seen (via_org)", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, _, _ := mitmProxy(t, "alert", captureUpstream(t, true, "ok").srv)
+			done := make(chan struct{}, 4)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p.mitmConnect(w, r, anthropicHost, 443, c.seen)
+				done <- struct{}{}
+			}))
+			t.Cleanup(srv.Close)
+			conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = conn.Write([]byte("CONNECT " + anthropicHost + ":443 HTTP/1.1\r\nHost: " + anthropicHost + ":443\r\n\r\n"))
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			b := make([]byte, 512)
+			n, _ := conn.Read(b)
+			if !strings.HasPrefix(string(b[:n]), "HTTP/1.1 200") {
+				t.Fatalf("answer %q", b[:n])
+			}
+			_, _ = conn.Write([]byte("\x16\x03\x01\x00\x05" + clientMarker))
+			_ = conn.Close()
+			rows := tunnelFailedRows(awaitDecision(t, p, done))
+			if len(rows) != 1 {
+				t.Fatalf("rows = %+v", rows)
+			}
+			if got := rows[0].ApprovalID != nil && *rows[0].ApprovalID == id; got != c.want {
+				t.Fatalf("approval_id named = %v, want %v (row %+v)", got, c.want, rows[0])
+			}
+			if strings.HasSuffix(rows[0].Cause, onceRefundNote) {
+				t.Fatalf("handshake row carries the not-spent note")
+			}
+		})
 	}
 }
