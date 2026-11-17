@@ -108,8 +108,8 @@ func foldAuditReasonTables(t *testing.T, lines []string) []string {
 			if strings.HasPrefix(lines[j], "| Reason |") || strings.HasPrefix(lines[j], "|---") {
 				continue
 			}
-			if len(cells) < 4 {
-				t.Fatalf("docs/AUDIT-ACTIONS.md:%d: a reasons row has %d cells, want Reason | When", j+1, len(cells)-2)
+			if len(cells) != 4 {
+				t.Fatalf("docs/AUDIT-ACTIONS.md:%d: a reasons row has %d cells, want Reason | When (a pipe in a cell would hide the rest of it from these guards)", j+1, len(cells)-2)
 			}
 			whens = append(whens, strings.TrimSpace(cells[2]))
 		}
