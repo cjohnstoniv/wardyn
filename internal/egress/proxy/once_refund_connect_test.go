@@ -222,6 +222,48 @@ func TestOnceRefund_ASandboxThatClosesFirstSpendsTheGrant(t *testing.T) {
 	}
 }
 
+// closeHooks runs onCloseWrite when tunnel half-closes the connection and onClose when it closes it.
+type closeHooks struct {
+	net.Conn
+	onCloseWrite, onClose func()
+}
+
+func (c *closeHooks) CloseWrite() error {
+	if c.onCloseWrite != nil {
+		c.onCloseWrite()
+	}
+	return nil
+}
+
+func (c *closeHooks) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.Conn.Close()
+}
+
+// TestOnceRefund_TheSandboxsCloseIsReportedAsTheFirst: tunnel reports the sandbox side when the sandbox closed
+// first, though the half-close that passes its close on makes the upstream hang up, and the sandbox side's copy
+// reports only after the upstream side's has. Taken from the order of the reports, the row said the upstream closed
+// without answering and the once grant was given back.
+func TestOnceRefund_TheSandboxsCloseIsReportedAsTheFirst(t *testing.T) {
+	client, sandbox := net.Pipe()
+	upstream, peer := net.Pipe()
+	closed := make(chan struct{})
+	a := &closeHooks{Conn: client, onClose: func() { close(closed) }}
+	b := &closeHooks{Conn: upstream, onCloseWrite: func() {
+		_ = peer.Close()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+		}
+	}}
+	_ = sandbox.Close()
+	if first, _ := tunnel(a, b); first != net.Conn(a) {
+		t.Fatal("tunnel reported the upstream side first, want the sandbox side that closed first")
+	}
+}
+
 // TestOnceRefund_ARefusalRecordedAfterTheRowSpendsTheGrant: the row is classified before the guard records its
 // refusal. The refund follows the row, which says the client closed first.
 func TestOnceRefund_ARefusalRecordedAfterTheRowSpendsTheGrant(t *testing.T) {

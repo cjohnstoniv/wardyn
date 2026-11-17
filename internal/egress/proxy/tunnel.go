@@ -64,26 +64,34 @@ const resolveBypassedCause = "this name is on the upstream proxy's bypass list, 
 // can never block on a receiver that has already left.
 //
 // It returns the SOURCE of the direction that finished first, and the error
-// that ended it (nil for a clean end of stream).
+// that ended it (nil for a clean end of stream). That direction is claimed
+// when its copy ends, before its half-close: the half-close tells the other
+// peer this side is done, and a peer that closes in answer (an upstream that
+// reads to EOF after the sandbox's hello and hangs up) can end the other copy
+// before this one reports. Taken from the order of the reports, the sandbox's
+// own close would read as the upstream's.
 func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	type end struct {
 		src net.Conn
 		err error
 	}
-	done := make(chan end, 2)
+	var ended atomic.Pointer[end]
+	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		_, err := io.Copy(dst, src)
+		ended.CompareAndSwap(nil, &end{src, err})
 		// Half-close the write side if supported so the peer sees EOF.
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
-		done <- end{src, err}
+		done <- struct{}{}
 	}
 	go cp(a, b)
 	go cp(b, a)
-	e := <-done
+	<-done
 	_ = a.Close()
 	_ = b.Close()
+	e := ended.Load()
 	return e.src, e.err
 }
 
