@@ -223,16 +223,50 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 
 ### MDM templates
 
-`deploy/macos-guest/mdm/` holds two profile templates for organisations with MDM. Copy one and replace each `__PLACEHOLDER__`.
+`deploy/macos-guest/mdm/` holds three profile templates for organisations with MDM. Copy one and replace each `__PLACEHOLDER__`.
 
 | Template | Does | How it installs |
 |---|---|---|
 | `setup-assistant.mobileconfig.template` | Skips the macOS 26 Setup Assistant panes (`SkipSetupItems`) | By hand or MDM. As a `profile` item, one approval in `edit-base` installs it, and the base keeps it |
 | `full-disk-access.mobileconfig.template` | Grants the guest agent Full Disk Access (a TCC payload) | MDM only |
+| `inspection-ca.mobileconfig.template` | Installs this Mac's inspection CA as a trusted root (a `com.apple.security.root` payload) | MDM only, for TLS trust ([Managing macOS VMs with MDM](#managing-macos-vms-with-mdm)) |
 
 - `__AGENT_PATH__` is `/usr/local/libexec/wardyn-guest-agent`.
 - `__CODE_REQUIREMENT__` is the agent's designated requirement, `identifier "com.wardyn.guest-agent" and certificate root = H"<SHA-1>"`, where the SHA-1 is that of the signing certificate the runner made on the Mac. `codesign -d -r- /usr/local/libexec/wardyn-guest-agent` in `edit-base`'s admin Terminal prints it after `designated => `. Each Mac has its own.
-- `profiles install` can't add either profile since Big Sur. Without MDM, use System Settings.
+- `__INSPECTION_CA_DER__` is this Mac's inspection CA certificate as DER in base64, on one line ([Managing macOS VMs with MDM](#managing-macos-vms-with-mdm)).
+- `profiles install` can't add a profile since Big Sur. Without MDM, System Settings installs the Setup Assistant profile; the other two are MDM only.
+
+### Managing macOS VMs with MDM
+
+What an MDM vendor needs from Wardyn, and what is not known yet:
+
+- **Enrollment.** The guest must be enrolled with user-approved MDM. Apple's Privacy Preferences Policy Control payload needs it, and cannot be installed by hand ([Apple](https://developer.apple.com/documentation/devicemanagement/privacypreferencespolicycontrol)).
+- **The CA payload.** One `com.apple.security.root` payload per Mac, holding that Mac's inspection CA, from `inspection-ca.mobileconfig.template`. Its profile identifier is `__IDENTIFIER_PREFIX__.inspection-ca`.
+  - Turn on `macos_vm_inspection_ca` and start the runner. It makes the CA, and `ca.pem` is in `inspection-ca` in the VM directory of the runner's login.
+  - Get its DER in base64: `openssl x509 -in "$HOME/Library/Application Support/Wardyn/macos-vm.noindex/inspection-ca/ca.pem" -outform der | base64 | tr -d '\n'`.
+  - Put the output in `__INSPECTION_CA_DER__`. Each Mac has its own CA, so each needs its own profile. Rotating the CA ([above](#the-organisation-ca)) needs a new profile.
+- **The Full Disk Access payload.** The `full-disk-access.mobileconfig.template` payload, with the code requirement of the agent's signing certificate on that Mac (`__CODE_REQUIREMENT__`, above). It is a `com.apple.TCC.configuration-profile-policy` payload.
+  - Apple's page shows an example for another service. The `SystemPolicyAllFiles` row is Wardyn's, and it has not been checked against that page.
+- **Why MDM.** Apple's rule: on macOS 13 and later, a root installed by hand from a configuration profile is not trusted for TLS by default. A root that a device management service installs is, and its trust settings cannot be changed ([Apple](https://support.apple.com/guide/deployment/intro-to-certificate-management-depb5eff8914/web), [Apple](https://support.apple.com/guide/deployment/certificates-payload-settings-dep91d2eb26/web)).
+  - So the CA template fixes TLS only when MDM delivers it. A `profile` item that installs it by hand in `edit-base` does not.
+  - After MDM installs it in the base, a tools update or `edit-base` must read it back `trusted` before runs use it; until then `inspection_ca` reads `not_trusted`.
+  - The payload's keys are `PayloadContent` (the certificate) and `PayloadCertificateFileName` ([Apple](https://developer.apple.com/documentation/devicemanagement/certificateroot)).
+- **The blocker.** Each run's guest is an APFS clone of one base. Whether any MDM accepts many clones of one enrolled guest is not known, and Wardyn has not checked Apple's documentation on enrolling a macOS VM.
+  - A guest is also an unmanaged device to a sign-in that requires a compliant one ([Guest posture](#guest-posture)).
+  - Without MDM, use this Mac's own CA, trusted once in `edit-base` ([above](#customising-the-base)).
+
+The Mac side, through MDM today:
+
+- **Needs no sudo from the Mac's person.** Push `wardyn-runnerd.pkg` with an MDM policy or script that runs `installer` as root ([Installing with a macOS package and MDM](hybrid-laptops.md#installing-with-a-macos-package-and-mdm)). Push the managed preferences profile with the keys `MacOSVM`, `MDMManaged`, `MacOSVMInspectionCA`, `MacOSVMBaseFile` and `MacOSVMBasesDir`.
+  - The base's install list is a file on the Mac, and `MacOSVMBaseFile` names it. Deliver the list and the files it pins with the same MDM, and prepare installs them into the guest as admin.
+- **Still by a person on the Mac.** Registering the runner needs their single-use token, and they run `wardyn-runnerd macos-vm prepare` in Terminal while on power ([macOS VM sandboxes on a managed Mac](hybrid-laptops.md#macos-vm-sandboxes-on-a-managed-mac)). On macOS 26, prepare refuses sudo.
+  - Wardyn ships no self-service catalogue entry for these commands; whether your MDM's catalogue can run them for the person is untested.
+
+The guest side:
+
+- **On macOS 26,** a person creates `wardyn-admin` by hand during prepare, with the one-time code as its password ([Setup by hand](#setup-by-hand)).
+- **On macOS 27,** Apple's unattended setup creates `wardyn-admin` with a random password made for this prepare ([Preparing the base image](#preparing-the-base-image)).
+- On either, `edit-base` is how an admin trusts a root or approves a profile by hand.
 
 ### Guest posture
 

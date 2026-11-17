@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Installs this Mac's Wardyn inspection CA as a trusted root in the guest. macOS trusts a root for TLS without a
+  person only when MDM installs it: a root a person installs from a profile is not trusted for TLS on macOS 13
+  and later. Use this template through MDM only, on a guest enrolled with user-approved MDM.
+  One profile per Mac, since each Mac has its own CA.
+  Replace each __PLACEHOLDER__ before use. __INSPECTION_CA_DER__ is this Mac's inspection CA certificate,
+  ca.pem in the Mac's VM directory under inspection-ca, as DER in base64 on one line:
+  openssl x509 -in ca.pem -outform der | base64 | tr -d '\n'
+-->
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadIdentifier</key>
+	<string>__IDENTIFIER_PREFIX__.inspection-ca</string>
+	<key>PayloadUUID</key>
+	<string>__PROFILE_UUID__</string>
+	<key>PayloadDisplayName</key>
+	<string>Wardyn macOS VM: inspection CA</string>
+	<key>PayloadOrganization</key>
+	<string>__ORGANIZATION__</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>__IDENTIFIER_PREFIX__.inspection-ca.root</string>
+			<key>PayloadUUID</key>
+			<string>__PAYLOAD_UUID__</string>
+			<key>PayloadDisplayName</key>
+			<string>Wardyn inspection CA (this Mac)</string>
+			<key>PayloadCertificateFileName</key>
+			<string>wardyn-inspection-ca.cer</string>
+			<key>PayloadContent</key>
+			<data>__INSPECTION_CA_DER__</data>
+		</dict>
+	</array>
+</dict>
+</plist>

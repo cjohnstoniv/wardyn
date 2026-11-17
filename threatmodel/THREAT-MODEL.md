@@ -1184,7 +1184,7 @@ ADMIN pre-authorized** —
     list).
   - And it must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.azure`,
     `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`,
-    `.git-credentials`, `.git/config`, `Library/Keychains`).
+    `.git-credentials`, `.git/config`, `Library/Keychains`, `macos-vm.noindex`).
 - Unset roots = **no member host mounts at all**.
 - Writability is a SECOND, narrower allowlist (`WARDYN_USER_WRITABLE_ROOTS` minus
   `WARDYN_USER_WRITABLE_DENY`, deny first and winning); both unset = every member mount

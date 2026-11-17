@@ -82,6 +82,16 @@ func TestServeHTTPRefusals(t *testing.T) {
 			}
 		}
 	}
+	// A target that does not start with / has no path to forward: OPTIONS * is answered 400, never forwarded.
+	for _, raw := range []string{
+		"OPTIONS * HTTP/1.1\r\nHost: origin.test\r\n\r\n",
+		"GET * HTTP/1.1\r\nHost: origin.test\r\n\r\n",
+	} {
+		reason, reply := serveOnce(t, raw, never)
+		if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 400") {
+			t.Errorf("%q: reason %q reply %q, want a 400", raw, reason, reply)
+		}
+	}
 	reason, reply := serveOnce(t, "GET / HTTP/1.1\r\nHost: origin.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", never)
 	if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 501") {
 		t.Errorf("upgrade: reason %q reply %q", reason, reply)
@@ -89,5 +99,19 @@ func TestServeHTTPRefusals(t *testing.T) {
 	reason, reply = serveOnce(t, "CONNECT origin.test:80 HTTP/1.1\r\nHost: origin.test:80\r\n\r\n", never)
 	if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 405") {
 		t.Errorf("connect: reason %q reply %q", reason, reply)
+	}
+}
+
+// An absolute-form target naming the resolved name is still carried: only a target with no path to join is refused.
+func TestServeHTTPForwardsAbsoluteFormTarget(t *testing.T) {
+	var got string
+	rt := rtFunc(func(r *http.Request) (*http.Response, error) {
+		got = r.URL.String()
+		return &http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+	})
+	reason, reply := serveOnce(t, "GET http://origin.test/x?y=1 HTTP/1.1\r\nHost: origin.test\r\nConnection: close\r\n\r\n", rt)
+	if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 200") || got != "http://origin.test/x?y=1" {
+		t.Errorf("reason %q reply %q forwarded %q", reason, reply, got)
 	}
 }

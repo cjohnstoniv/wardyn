@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `deploy/macos-guest/mdm/inspection-ca.mobileconfig.template`, a `com.apple.security.root` profile for one Mac's inspection CA, and a "Managing macOS VMs with MDM" section in the base image page: what an MDM vendor needs, why only MDM delivery gives TLS trust, what the runner package and profile do with no sudo, and the open question of many clones of one enrolled guest.
 - macOS VMs: an opt-in inspection CA per Mac (`macos_vm_inspection_ca`). Trusted once in `macos-vm edit-base`, it lets apps that use only the system trust store reach Inspected hosts. Each such run records `inspection_ca` on its machine.
 
 ### Changed
@@ -42,9 +43,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
 - An approved MCP call with an operation key whose body the content scan blocks is refused before its send is recorded, so its key no longer reads as possibly sent. Needs the new proxy image.
 - An SSO sign-in now always replaces the groups recorded at the person's last sign-in, also after the database's clock stepped back.
+- A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
 
 ### Security
 
+- A member's workspace mount and a folder pass refuse the macOS VM directory, `macos-vm.noindex`, and anything under it, as they refuse a credential folder. It holds every run's disk and the guest agent's and the inspection CA's keys. A pass of the folder above it leaves it out. A container bind, or a share drive's bind, also refuses a folder that is, is under or contains that directory, such as the home or `~/Library`, by where it really is: a VM directory linked to another volume is held there too.
+- A folder pass of a folder such as `~/Library` or `~/.config` now leaves out `Keychains`, `gh` and `gcloud` under it, as a deeper pass already did.
 - The send record of an MCP call refuses an approval whose operation key starts `call:` but is not the key made from that call (`404`).
 - The audit feed no longer serves a workload's digest, launch policy digest or pin below a super admin; an offline receipt verifier older than this release refuses a receipt that holds such a withheld workload row, so verify new receipts with this release's verifier.
 - The control plane refuses a raised MCP call whose operation key starts `call:` but is not the key made from that call (`400` `mcp_call_scope_invalid`).

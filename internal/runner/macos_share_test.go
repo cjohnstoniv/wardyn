@@ -76,6 +76,69 @@ func TestMacProtectedOverlapMissingRootBehindALink(t *testing.T) {
 	}
 }
 
+// A container bind may neither be, sit under nor contain the runner's macOS VM directory, whatever the
+// spelling: a parent, an upper-case name, a link to it or to its parent, and a VM directory that is itself a
+// link to another volume. A sibling stays allowed, and so does everything when there is no VM directory.
+func TestCheckBindOutsideMacVMDir(t *testing.T) {
+	home := realTemp(t)
+	support := filepath.Join(home, "Library", "Application Support", "Wardyn")
+	vm := filepath.Join(support, "macos-vm.noindex")
+	mkdirs(t, filepath.Join(vm, "runs", "x"), filepath.Join(support, "other"), filepath.Join(home, "proj"))
+	elsewhere := realTemp(t)
+	mkdirs(t, filepath.Join(elsewhere, "vms", "runs"), filepath.Join(elsewhere, "docs"))
+	linked := filepath.Join(home, "linked-vm")
+	mkdirs(t, linked)
+	for name, target := range map[string]string{
+		filepath.Join(home, "to-vm"):      vm,
+		filepath.Join(home, "to-support"): support,
+		filepath.Join(home, "to-home"):    home,
+		filepath.Join(linked, "vm"):       filepath.Join(elsewhere, "vms"),
+	} {
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name, src string
+		ok        bool
+	}{
+		{"the VM directory", vm, false},
+		{"a file under it", filepath.Join(vm, "runs", "x", "disk.img"), false},
+		{"its parent", support, false},
+		{"the home", home, false},
+		{"upper case", filepath.Join(home, "LIBRARY", "APPLICATION SUPPORT", "WARDYN", "MACOS-VM.NOINDEX"), false},
+		{"a link to it", filepath.Join(home, "to-vm"), false},
+		{"a link to its parent", filepath.Join(home, "to-support"), false},
+		{"a link to the home", filepath.Join(home, "to-home"), false},
+		{"a sibling", filepath.Join(support, "other"), true},
+		{"another folder of the home", filepath.Join(home, "proj"), true},
+		{"a prefix sibling", vm + "2", true},
+	} {
+		if err := CheckBindOutsideMacVMDir(c.src, vm); (err == nil) != c.ok {
+			t.Errorf("%s (%s): err = %v, want ok %v", c.name, c.src, err, c.ok)
+		}
+	}
+	// The VM directory is a link to another volume: the real location is held, and a sibling there is not.
+	for name, src := range map[string]string{
+		"the real location":    filepath.Join(elsewhere, "vms"),
+		"under the real place": filepath.Join(elsewhere, "vms", "runs"),
+		"the volume above it":  elsewhere,
+	} {
+		if err := CheckBindOutsideMacVMDir(src, filepath.Join(linked, "vm")); err == nil {
+			t.Errorf("linked VM directory, %s: bind accepted", name)
+		}
+	}
+	if err := CheckBindOutsideMacVMDir(filepath.Join(elsewhere, "docs"), filepath.Join(linked, "vm")); err != nil {
+		t.Errorf("linked VM directory, a sibling on its volume: %v", err)
+	}
+	// No VM directory on this runner: nothing is refused for it.
+	for _, vmDir := range []string{"", filepath.Join(home, "no-such", "macos-vm.noindex")} {
+		if err := CheckBindOutsideMacVMDir(home, vmDir); err != nil {
+			t.Errorf("VM directory %q does not exist: %v", vmDir, err)
+		}
+	}
+}
+
 func TestCheckMacShareSource(t *testing.T) {
 	home := realTemp(t)
 	roots, wroots := filepath.Join(home, "roots"), filepath.Join(home, "roots", "w")

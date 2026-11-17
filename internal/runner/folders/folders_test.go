@@ -152,6 +152,38 @@ func TestList_SurveyLeavesOutACredentialFolderInside(t *testing.T) {
 	}
 }
 
+// A pair of names that spans the chosen folder and what is under it is a credential folder too: a pass of
+// ~/Library leaves out Keychains, and a pass of ~/.config leaves out gh, as a pass of the folder above does.
+func TestList_SurveyLeavesOutAPairThatSpansTheFolder(t *testing.T) {
+	h := home(t)
+	put(t, filepath.Join(h, "Library", "Keychains", "login.keychain-db"), "fixture: not a real key")
+	put(t, filepath.Join(h, "Library", "Preferences", "x.plist"), "p")
+	put(t, filepath.Join(h, ".config", "gh", "hosts.yml"), "fixture: not a real token")
+	put(t, filepath.Join(h, ".config", "gcloud", "credentials.db"), "fixture: not a real key")
+	put(t, filepath.Join(h, ".config", "editor", "settings.json"), "{}")
+	put(t, filepath.Join(h, "proj", "Library", "Keychains", "x"), "fixture: not a real key")
+	put(t, filepath.Join(h, "proj", "main.go"), "package main\n")
+	s := newServer(t, h)
+	for _, c := range []struct {
+		path    string
+		files   int
+		leftOut string
+	}{
+		{filepath.Join(h, "Library"), 1, "Keychains"},
+		{filepath.Join(h, ".config"), 1, "gh"},
+		{filepath.Join(h, ".config"), 1, "gcloud"},
+		{filepath.Join(h, "proj"), 1, ""},
+	} {
+		got, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: c.path, Survey: true})
+		if err != nil || got.Survey == nil || got.Survey.Files != c.files || (c.leftOut != "" && !slices.Contains(got.Survey.LeftOut, c.leftOut)) {
+			t.Errorf("survey of %s = %+v, %v, want %d file with %s left out", c.path, got.Survey, err, c.files, c.leftOut)
+		}
+	}
+	if _, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: filepath.Join(h, "Library", "Keychains")}); !refused(err) {
+		t.Errorf("a listing of Library/Keychains: err = %v, want a refusal", err)
+	}
+}
+
 func TestList_SurveyCountsWhatAPassWouldSend(t *testing.T) {
 	h := home(t)
 	app := filepath.Join(h, "code", "app")
@@ -328,5 +360,36 @@ func TestSyncFolder_RefusesASandboxWithoutTheFolderAndAPathOutsideTheRoots(t *te
 		if _, err := sub.SyncFolder(context.Background(), args); !refused(err) {
 			t.Errorf("%s: err = %v, want a refusal", name, err)
 		}
+	}
+}
+
+// The macOS VM directory holds every run's disk and the signing and inspection CA keys, so a folder
+// pass, a listing and a root refuse it and anything under it, like a credential folder.
+func TestFolder_RefusesTheMacOSVMDirectory(t *testing.T) {
+	h := home(t)
+	vm := filepath.Join(h, "Library", "Application Support", "Wardyn", "macos-vm.noindex")
+	put(t, filepath.Join(vm, "inspection-ca", "key.pem"), "fixture: not a real key")
+	put(t, filepath.Join(vm, "agent-signing", "key.pem"), "fixture: not a real key")
+	s := newServer(t, h)
+	sub := wire(t, s)
+	for name, p := range map[string]string{
+		"the VM directory":        vm,
+		"a folder under it":       filepath.Join(vm, "inspection-ca"),
+		"another folder under it": filepath.Join(vm, "agent-signing"),
+	} {
+		if _, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: p}); !refused(err) {
+			t.Errorf("a listing of %s: err = %v, want a refusal", name, err)
+		}
+		args := runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: p, RemoteDir: "/home/agent/work"}
+		if _, err := sub.SyncFolder(context.Background(), args); !refused(err) {
+			t.Errorf("a folder pass of %s: err = %v, want a refusal", name, err)
+		}
+	}
+	if _, err := New(context.Background(), []string{vm}, t.TempDir()); err == nil {
+		t.Error("the VM directory was accepted as a shared root")
+	}
+	// A pass of Wardyn itself names what is inside it from below Wardyn: the VM directory still never crosses.
+	if !credentialUnder(filepath.Join(h, "Library", "Application Support", "Wardyn"))("macos-vm.noindex/runs/x/disk.img") {
+		t.Error("a file of the VM directory, named from the folder above it, was not left out of a pass")
 	}
 }

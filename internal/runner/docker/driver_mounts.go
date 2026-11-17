@@ -16,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/volume"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -90,6 +91,9 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		if err := d.boundMountAllowed(m); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
+		if err := runner.CheckBindOutsideMacVMDir(m.Source, d.macVMDir()); err != nil {
+			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
 		if onRunner := d.cfg.RunnerID != ""; onRunner || (memberRoots != nil && m.MemberAuthored) {
 			writable, ownRoots := d.memberBindLimits(spec, m)
 			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable, ownRoots); err != nil {
@@ -158,6 +162,16 @@ func (d *Driver) boundMountAllowed(m runner.Mount) error {
 		return errors.New("a runner binds only a member's folder bound to it")
 	}
 	return nil
+}
+
+// macVMDir is the macOS VM directory this runner uses: the configured one while macOS VM sandboxes are
+// on, else the default under the login's home. It may not exist, and then no bind is refused for it.
+func (d *Driver) macVMDir() string {
+	if c := d.macVMConfig(); c != nil && c.Layout.Root != "" {
+		return c.Layout.Root
+	}
+	root, _ := macvm.DefaultRoot()
+	return root
 }
 
 // memberBindLimits is the writable ceiling and own roots a member folder is held to at bind. On a runner
@@ -255,8 +269,13 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 	case types.DriveBackendHostPath:
 		// The SHARE bind, converted here only. Every check on its source is hostPathDriveReal's, which a
 		// macOS VM's shared folder runs too.
-		if _, err := d.hostPathDriveReal(drive); err != nil {
+		real, err := d.hostPathDriveReal(drive)
+		if err != nil {
 			return nil, nil, err
+		}
+		if err := runner.CheckBindOutsideMacVMDir(real, d.macVMDir()); err != nil {
+			return nil, nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+				runner.RefuseUserDriveBind(drive, drive.ObjectName, real, runner.DriveSourceRefused, err))
 		}
 		return []mount.Mount{{
 			Type:        mount.TypeBind,
