@@ -175,6 +175,7 @@ func TestProxyRelay_WarnsOnANonLoopbackBind(t *testing.T) {
 		{"127.0.0.1", false},
 		{"::1", false},
 		{"localhost", false},
+		{" LOCALHOST ", false},
 	} {
 		got := relayExposureWarning(tc.addr)
 		if (got != "") != tc.warn {

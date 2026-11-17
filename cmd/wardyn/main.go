@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/google/uuid"
@@ -222,7 +222,7 @@ func plaintextHost(rawURL string) string {
 		return ""
 	}
 	host := u.Hostname()
-	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+	if loopback.Host(host) {
 		return ""
 	}
 	return host
