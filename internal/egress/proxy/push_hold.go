@@ -372,6 +372,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 	if p.approval == nil {
 		return refuse(ruleSourceGitPushHeld, headline+", and this proxy has no way to ask for one", "retry the push")
 	}
+	hold = holdWithin(hold, p.approval.holdCeiling) // an engine's push hold ends before the relay's idle cut
 	ctx, cancel := context.WithTimeout(r.Context(), hold)
 	defer cancel()
 	if id != uuid.Nil {

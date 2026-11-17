@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -219,6 +220,10 @@ type ViaOrgEngineOptions struct {
 	Client   *http.Client
 	Dial     func(ctx context.Context, network, addr string) (net.Conn, error)
 	LookupIP func(host string) ([]net.IP, error)
+	// HoldCeiling is the longest hold the engine raises (re-auth, capability and
+	// push approvals): the caller sets it under the relay's idle cut, so a held
+	// request ends with the hold's own sentence, not a reset stream. 0 keeps the knobs.
+	HoldCeiling time.Duration
 }
 
 type lookupFunc func(host string) ([]net.IP, error)
@@ -229,7 +234,7 @@ func (f lookupFunc) LookupIP(host string) ([]net.IP, error) { return f(host) }
 // run's via_org rules. It starts no token renewer or activity reporter: every
 // forwarded request carries the run's live token, which the client presents.
 func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions) (*ViaOrgEngine, error) {
-	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New()}
+	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New(), holdCeiling: opts.HoldCeiling}
 	if opts.LookupIP != nil {
 		h.res = lookupFunc(opts.LookupIP)
 	}

@@ -220,6 +220,17 @@ type reauthCoordinator struct {
 	// standing is what a person approved "for this run" mid-run, on top of the
 	// run's dispatch-time grant. Only ever grows.
 	standing map[adoscope.Capability]bool
+	// ceiling is the longest hold this coordinator opens, set once before the
+	// proxy serves (serverHooks.holdCeiling); 0 keeps the knobs.
+	ceiling time.Duration
+}
+
+// holdWithin is budget under ceiling; a ceiling of 0 leaves it alone.
+func holdWithin(budget, ceiling time.Duration) time.Duration {
+	if ceiling <= 0 {
+		return budget
+	}
+	return min(budget, ceiling)
 }
 
 func newReauthCoordinator() *reauthCoordinator {
@@ -245,7 +256,7 @@ func (c *reauthCoordinator) admit(approvalID uuid.UUID, budget time.Duration) (w
 // admitCapability is admit for an Azure DevOps escalation: its own budget, and
 // the re-resolve ask the workflow ends with.
 func (c *reauthCoordinator) admitCapability(approvalID uuid.UUID, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
-	return c.admitWith(approvalID, capabilityHoldBudget(), query)
+	return c.admitWith(approvalID, holdWithin(capabilityHoldBudget(), c.ceiling), query)
 }
 
 func (c *reauthCoordinator) admitWith(approvalID uuid.UUID, budget time.Duration, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
