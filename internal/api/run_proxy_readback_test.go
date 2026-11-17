@@ -1243,6 +1243,27 @@ func TestReadback_DispatchWithoutHashStopsAtOnce(t *testing.T) {
 	}
 }
 
+// A start read as legacy stays unconfirmed even when the driver answers a hash and the proxy reports the same one,
+// so a mode read before the runner or its image changed never enforces a start. The other stale read, an expected
+// start answered with no hash, fails closed (TestReadback_DispatchWithoutHashStopsAtOnce).
+func TestReadback_LegacyStartNeverEnforcesAHash(t *testing.T) {
+	sha := hashHex([]byte("final bytes"))
+	d := newDispatchReadback(t, sha, true)
+	d.srv.cfg.ProxyImage = "ghcr.io/example/wardyn-proxy:0.10.0-rc.17"
+	done := make(chan struct{})
+	go func() { d.dispatch(); close(done) }()
+	<-d.rn.started
+	postLoaded(t, d.srv, d.run.ID, d.jti, sha)
+	close(d.rn.release)
+	<-done
+	if p := d.st.get(d.run.ID, 1); p.Mode != store.ProxyStartLegacy || p.State != types.ProxyStartUnconfirmed {
+		t.Fatalf("start = %s/%s, want legacy/unconfirmed", p.Mode, p.State)
+	}
+	if got := d.st.State(); got == types.RunFailed {
+		t.Fatal("a legacy start runs unconfirmed; it must not fail the run")
+	}
+}
+
 // The create is still blocked after its proxy started: the proxy's report is held (202, pending, no
 // deadline); the create then answers the matching hash, the start is enforced and the run runs. The
 // address it answered is stored; the run's JSON never carries it.
