@@ -56,7 +56,12 @@ done
 want() { case " $SUITES " in *" $1 "*) return 0 ;; esac; return 1; }
 CALICO_VERSION="${K6_CALICO_VERSION:-v3.28.0}"
 CLUSTER="wardyn-k6-$$"
-TAG="k6-$$"
+# K6_IMAGE_TAG names the images this run builds (default: one per process). The relay-key arm of
+# pod-ip-reuse-after-stop runs only when it is a release tag at or after the first release that sends
+# the key; K6_REQUIRE_RELAY_KEY=1 makes that arm fail instead of skip. The images stay on this host
+# and in the kind nodes: nothing here pushes them.
+TAG="${K6_IMAGE_TAG:-k6-$$}"
+case "$TAG" in *[!A-Za-z0-9_.-]* | [.-]*) die "K6_IMAGE_TAG '$TAG' is not a docker tag" ;; esac
 RUNNERD_IMAGE="wardyn/wardyn-runnerd:$TAG"
 PROXY_IMAGE="wardyn/wardyn-proxy:$TAG"
 WARDYND_IMAGE="wardyn/wardynd:$TAG"
@@ -630,6 +635,7 @@ K6_RUNNERD_DEPLOY=$DEPLOY
 K6_ARCH=$ARCH
 K6_AGENT_IMAGE=$AGENT_IMAGE
 WARDYN_PROXY_IMAGE=$PROXY_IMAGE
+K6_REQUIRE_RELAY_KEY=${K6_REQUIRE_RELAY_KEY:-}
 K6_ORG_ADDR=$CP_IP:$ORG_PORT
 K6_ORG_ADMIN_TOKEN=$ADMIN_TOKEN
 K6_ORG_SEC_TOKEN=$SEC_TOKEN

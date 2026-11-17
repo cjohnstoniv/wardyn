@@ -1991,6 +1991,12 @@ jobs:
           K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
           K6_NODE_IMAGES: kindest/node:${{ matrix.kubelet }}
           K6_SUITES: ${{ matrix.suite }}
+          # A release-shaped tag, so the proxy image counts as one that sends the relay key and the
+          # relay-key arm of pod-ip-reuse-after-stop runs; REQUIRE makes a skip of it a failure. No
+          # real release has this tag, as the never-pulled cases need a pull that fails. The images are
+          # built on this runner and loaded into kind: nothing pushes them.
+          K6_IMAGE_TAG: 0.11.0-rc.999
+          K6_REQUIRE_RELAY_KEY: "1"
         shell: bash
         run: |
           set +e

@@ -513,7 +513,11 @@ func casePodIPReuse(t *testing.T, e *env) {
 
 	t.Run("relay-key-arm", func(t *testing.T) {
 		if !keyed {
-			t.Skipf("relay-key arm not run: proxy image %s is not a release at or after %s", e.proxyImage, relayPreambleRelease)
+			why := fmt.Sprintf("proxy image %s (tag %q) is not a release at or after %s", e.proxyImage, imageTagOf(e.proxyImage), relayPreambleRelease)
+			if os.Getenv("K6_REQUIRE_RELAY_KEY") == "1" {
+				t.Fatalf("relay-key arm required (K6_REQUIRE_RELAY_KEY=1) but %s: set K6_IMAGE_TAG to a release tag", why)
+			}
+			t.Skipf("relay-key arm not run: %s", why)
 		}
 		e.relayKeyArm(t, pending, id, oldKey, ip)
 	})
@@ -541,15 +545,20 @@ func releaseParts(tag string) ([4]int, bool) {
 	return p, true
 }
 
-// relayKeyedImage reports whether image is a release tag at or after relayPreambleRelease, as the
-// Driver reads it: a digest pin or a development tag is not judged, and the Driver keeps the address rule.
-func relayKeyedImage(image string) bool {
+// imageTagOf is image's tag, "" when it has none (a bare name or a digest pin).
+func imageTagOf(image string) string {
 	ref, _, _ := strings.Cut(image, "@")
 	i := strings.LastIndex(ref, ":")
 	if i < 0 || strings.Contains(ref[i:], "/") {
-		return false
+		return ""
 	}
-	have, ok := releaseParts(ref[i+1:])
+	return ref[i+1:]
+}
+
+// relayKeyedImage reports whether image is a release tag at or after relayPreambleRelease, as the
+// Driver reads it: a digest pin or a development tag is not judged, and the Driver keeps the address rule.
+func relayKeyedImage(image string) bool {
+	have, ok := releaseParts(imageTagOf(image))
 	if !ok {
 		return false
 	}
