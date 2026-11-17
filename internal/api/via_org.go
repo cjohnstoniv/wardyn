@@ -337,11 +337,7 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	}
 	routes := cfg.ViaOrgRoutes
 	cfg.ViaOrgRoutes = nil
-	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, proxy.ViaOrgEngineOptions{
-		Client: &http.Client{Transport: viaOrgTransport{s: s, run: run}},
-		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
-		HoldCeiling: viaOrgHoldCeiling,
-	})
+	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, s.viaOrgEngineOptions(run))
 	if err != nil {
 		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
 			// The build read the setting itself, after this one: a refusal is remembered only when both
@@ -364,6 +360,16 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	run.idleSince = time.Now() // a fresh engine is not idle: it has the whole timeout to admit its stream
 	run.smu.Unlock()
 	return run.engine, routes, nil
+}
+
+// viaOrgEngineOptions are an engine's dependencies: the in-process client, the dial and lookup that guard the
+// destination, and the per-request hold ceiling (an engine with none budgets nothing).
+func (s *Server) viaOrgEngineOptions(run *viaOrgRun) proxy.ViaOrgEngineOptions {
+	return proxy.ViaOrgEngineOptions{
+		Client: &http.Client{Transport: viaOrgTransport{s: s, run: run}},
+		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
+		HoldCeiling: viaOrgHoldCeiling,
+	}
 }
 
 // viaOrgHoldCeiling is the longest one request waits on the engine in all (first-use, push, capability, re-auth and mint

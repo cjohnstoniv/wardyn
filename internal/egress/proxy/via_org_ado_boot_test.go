@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,5 +64,14 @@ func TestBuildInjector_LazyADOCredentialForAnEngine(t *testing.T) {
 	}
 	if org.injections != 2 {
 		t.Fatalf("%d resolves after first use, want 2", org.injections)
+	}
+}
+
+// No engine is built with a kubectl grant: its door's own hold plus the request budget would pass the relay's idle cut.
+func TestNewViaOrgEngine_RefusesAKubeAPIGrant(t *testing.T) {
+	cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", KubeAPI: &KubeAPIGrant{}}
+	e, err := NewViaOrgEngine(t.Context(), cfg, ViaOrgEngineOptions{Client: &http.Client{Transport: &fakeOrg{}}})
+	if !errors.Is(err, ErrViaOrgKubeAPI) || e != nil {
+		t.Fatalf("engine %v err %v, want ErrViaOrgKubeAPI", e, err)
 	}
 }

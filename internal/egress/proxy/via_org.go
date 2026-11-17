@@ -264,6 +264,11 @@ func (f lookupFunc) LookupIP(host string) ([]net.IP, error) { return f(host) }
 // run's via_org rules. It starts no token renewer or activity reporter: every
 // forwarded request carries the run's live token, which the client presents.
 func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions) (*ViaOrgEngine, error) {
+	// The kubectl door holds past the engine's request budget (its own 90 s hold on top of the ceiling would pass the
+	// relay's idle cut), and the organisation serves it no route: a config that carries it is refused, not trimmed.
+	if cfg.KubeAPI != nil {
+		return nil, ErrViaOrgKubeAPI
+	}
 	// An Azure DevOps credential never travels without its gate: the token bounds nothing on its own.
 	ado := newADOGrantsByHost(cfg.ADOGrant)
 	for _, in := range cfg.Injection {
@@ -288,6 +293,9 @@ func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions)
 	}
 	return &ViaOrgEngine{srv: srv, holdCeiling: opts.HoldCeiling}, nil
 }
+
+// ErrViaOrgKubeAPI refuses an engine config that carries a kubectl grant.
+var ErrViaOrgKubeAPI = errors.New("via_org: an engine serves no kubectl grant")
 
 // ErrViaOrgADOUngated refuses an engine config whose Azure DevOps credential has no Azure DevOps grant for its host.
 var ErrViaOrgADOUngated = errors.New("via_org: an Azure DevOps credential with no Azure DevOps grant for its host")

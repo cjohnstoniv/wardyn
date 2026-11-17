@@ -154,8 +154,7 @@ type adoEntraRun struct {
 	// residentOptIn is this row's ADOEntraConfig.RunnerResident: the opt-in
 	// belongs to the connection that admits the run, never to the deployment.
 	residentOptIn bool
-	// viaOrgOptIn is this row's ADOEntraConfig.RunnerViaOrg: the connection's switch allowing its minted tokens on
-	// runners via the organisation; it too belongs to the connection that admits the run.
+	// viaOrgOptIn is this row's ADOEntraConfig.RunnerViaOrg, the connection's switch for via_org delivery.
 	viaOrgOptIn bool
 }
 
@@ -736,11 +735,8 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, capRefused.reason, capRefused.detail)
 	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
-	if !ok {
-		return adoEntraLane{injections: injections}, false
-	}
-	// A via_org grant is recorded now: its runner and the proxy image must forward /wardyn/git/.
-	if !s.viaOrgADORunnerReady(ctx, run) {
+	// A via_org grant is recorded by now: its runner and the proxy image must forward /wardyn/git/.
+	if !ok || !s.viaOrgADORunnerReady(ctx, run) {
 		return adoEntraLane{injections: injections}, false
 	}
 	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{

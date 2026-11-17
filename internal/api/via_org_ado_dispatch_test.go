@@ -262,6 +262,10 @@ func TestViaOrgHoldCeiling(t *testing.T) {
 	if viaOrgHoldCeiling != 540*time.Second {
 		t.Fatalf("hold ceiling %s, want 540s", viaOrgHoldCeiling)
 	}
+	srv, _, _, _ := localDispatchFixture(t, types.PlacementLocal)
+	if got := srv.viaOrgEngineOptions(&viaOrgRun{}).HoldCeiling; got != viaOrgHoldCeiling {
+		t.Fatalf("an engine is built with hold ceiling %s, want %s", got, viaOrgHoldCeiling)
+	}
 }
 
 // A run with a via_org Azure DevOps grant is refused once its runner does not say it forwards /wardyn/git/ or the
