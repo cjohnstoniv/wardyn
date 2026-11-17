@@ -212,7 +212,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, ops, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	removes, renames := ops.counts()
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut, "remove_requests": removes, "rename_requests": renames}
-	outcome := pass.outcome(bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra), extra) // a sync session keeps its rule: any nonzero exit
+	outcome := pass.outcome(bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra), extra) // a sync session keeps its rule: any nonzero exit, or a started pass the client never accounted for
 	record(outcome, extra)
 }
 

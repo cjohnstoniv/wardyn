@@ -283,7 +283,7 @@ func TestSSHSyncPassStartOpensAPass(t *testing.T) {
 	if pass.outcome("success", map[string]any{}) != "success" {
 		t.Error("a session with no reports lost its success")
 	}
-	if !took(pass, map[string]any{"started": true}) {
+	if !took(pass, map[string]any{"started": true, "complete": true}) {
 		t.Fatal("a start report on a started sync was refused")
 	}
 	if ls.seed.SeededAt != nil || ls.seed.Error != "" {
