@@ -125,6 +125,23 @@ describe("LoginSandboxNote — the waiting sign-in strip", () => {
     expect(strip.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // Owner report (rc.24): the button went away once IAM Identity Center sent its regional sign-in page,
+  // a link with no user_code=, because the server's read never answered waiting for it. The answer here
+  // is the server's own for the adopter's pane, from the shared cases its parser is pinned on.
+  it("shows the Open button for the sign-in page link IAM Identity Center sends, with the pane's code", async () => {
+    const answer = answerOf("the sign-in page link AWS IAM Identity Center sends");
+    getMock.mockResolvedValue(answer);
+    view(mine());
+    await tick(0);
+    expect(answer.verification_url).toMatch(/^https:\/\/us-east-1\.signin\.aws\/platform\/authorize\?/);
+    const open = screen.getByRole("link", { name: RUN_SIGN_IN.OPEN });
+    expect(open).toHaveAttribute("href", answer.verification_url);
+    expect(open).toHaveAttribute("target", "_blank");
+    expect(open).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByLabelText(RUN_SIGN_IN.CODE_LABEL)).toHaveTextContent("ABCD-EFGH");
+    expect(screen.getByRole("status")).toHaveTextContent("Opens us-east-1.signin.aws");
+  });
+
   // The grace is counted from when reading began (ad3ea0338), not from the run's creation, so a run
   // created an hour ago is still read for the grace once it is on the page.
   it("a first not_waiting answer adds nothing; an old run is read for the grace from read start, then not again", async () => {
