@@ -254,11 +254,9 @@ test-docker: ## Run all Go tests with -tags docker
 	WARDYN_TEST_PG= go test -tags docker -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
-# Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
-# from the union coverage profile. Run after cover-check when the inventory
-# should track a change; the doc states its own regeneration command, which is
-# the wiring whose absence got the last copy deleted as unmaintainable.
-test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
+# Writes test/reports/go/TEST-GAPS.md (the triaged untested-exported-func
+# inventory, gitignored) from the union coverage profile. Run after cover-check.
+test-gaps: ## Write test/reports/go/TEST-GAPS.md from test/reports/go coverage output
 	./scripts/test-gaps.sh
 
 # Emits per-suite artifacts under test/reports/go/<suite>/. See

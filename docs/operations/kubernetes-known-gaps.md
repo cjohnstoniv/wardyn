@@ -90,7 +90,7 @@ A run's `disk_mib` is the agent container's `resources.limits[ephemeral-storage]
 - The volumes are writable without `FSGroup`: the kubelet creates an `emptyDir` root-owned but `0777`.
 
 > [!NOTE]
-> **What the proof does not cover:** the kind conformance evidence is from the busybox conformance-agent image on runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and Kata. The live kind SSO walk exercises a real `agent-run` boot (the aws-sso sign-in sandbox and a real claude-code run) on the `emptyDir`-backed `/tmp` and `/home/agent/work`, on runc. It is manual and self-skipping, not CI (see [`docs/TEST-GAPS.md`](../TEST-GAPS.md)).
+> **What the proof does not cover:** the kind conformance evidence is from the busybox conformance-agent image on runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and Kata. The live kind SSO walk exercises a real `agent-run` boot (the aws-sso sign-in sandbox and a real claude-code run) on the `emptyDir`-backed `/tmp` and `/home/agent/work`, on runc. It is manual and self-skipping, not CI.
 
 ### The mechanism's remaining gap
 

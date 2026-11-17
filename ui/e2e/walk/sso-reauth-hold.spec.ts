@@ -702,12 +702,11 @@ async function fastHold(
 // flight writes nothing until the NEXT caller reads the terminal result; that
 // caller is the observer (credhold.go's CAS on `reported`), so the row is
 // drivable with a prompt sent after the budget — both attempts here asserted
-// it too early (docs/TEST-GAPS.md). The sibling negative — killing a held run
+// it too early. The sibling negative — killing a held run
 // — needs no such timing and is green, so the hold's OTHER ending is covered
 // live.
 //
 // Pinned hermetically instead: the proxy's own credhold tests own this path.
-// Recorded in docs/TEST-GAPS.md.
 test.fixme("negative (credential-reauth-hold): a hold nobody answers times out, and the request stays open", async ({
   page,
   request,

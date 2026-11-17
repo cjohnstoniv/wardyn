@@ -208,7 +208,7 @@ func TestPG_ListRunsPage_BoundAndWindow(t *testing.T) {
 // and approvals carry no created_by of their own — the ownership lives one table
 // over, on agent_runs. So the whole member-tier guarantee ("you see approvals on
 // runs you created, and no others") is one JOIN predicate, and nothing exercised
-// it: docs/TEST-GAPS.md listed ListApprovalsPageByRunCreator as untested in both
+// it: the test-gaps report (`make test-gaps`) listed ListApprovalsPageByRunCreator as untested in both
 // the union and the Postgres lane, and the api-side test above drives a fixture
 // double rather than this SQL.
 //

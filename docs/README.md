@@ -129,7 +129,6 @@
 | Write or edit a doc: form, size caps, links, visuals | [STYLE.md](STYLE.md) |
 | Design or review a console screen | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
 | Read a design note, current or a record | [design/README.md](design/README.md) |
-| See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
 | Prepare or cut a release | [../RELEASING.md](../RELEASING.md#how-a-release-is-prepared) |
 | Record or re-record the demo video series | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) |
