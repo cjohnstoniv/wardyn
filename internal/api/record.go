@@ -276,7 +276,7 @@ func writeSourceLaunchRefusal(w http.ResponseWriter, lerr error) bool {
 // recordAuditLaunchFault is a run.record.start failure row's detail for a launch handleRecordWorkspace hands to
 // writeServerError: a store or driver error can name hosts, users and databases, so the row names the step and
 // that writer logs the cause. A cap or capacity refusal that writer answers is named by the step too.
-const recordAuditLaunchFault = "launch record run"
+const recordAuditLaunchFault = "Launch record run"
 
 // recordLaunchAuditDetail is a run.record.start failure row's detail: for each error handleRecordWorkspace
 // answers with its own text, that text, which the caller already reads; recordAuditLaunchFault for the rest.

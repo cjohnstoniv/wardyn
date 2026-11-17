@@ -357,7 +357,7 @@ func TestReconcileLeavesAnAlreadyHeldVerdictAlone(t *testing.T) {
 }
 
 // TestBootHealEgressWriteFailureNamesItsClass: a boot re-apply the store fails leaves one failure row whose detail
-// is the class the store's sentinel tells apart, or "store error" for any other failure, and never the store's
+// is the class the store's sentinel tells apart, or "Store error" for any other failure, and never the store's
 // text, which only the server log keeps.
 func TestBootHealEgressWriteFailureNamesItsClass(t *testing.T) {
 	const host = "registry.npmjs.org"

@@ -29,15 +29,15 @@ import (
 
 // writebackAuditRunUnread is a write-back failure row's detail when the run could not be read: a store error can
 // name hosts, users and databases, so the row names the step and the log keeps the cause.
-const writebackAuditRunUnread = "read run"
+const writebackAuditRunUnread = "Read run"
 
 // The requirements write's failure classes, each a failure row's detail. The store tells the first two apart
 // (store.ErrConflict at the key cap, store.ErrNotFound for a workspace that is not there); the third is any
 // other store failure, whose text can name hosts and databases, so only the server log keeps it.
 const (
-	writebackAuditRequirementsFull = "requirements at their key cap"
-	writebackAuditWorkspaceGone    = "workspace not found"
-	writebackAuditStoreError       = "store error"
+	writebackAuditRequirementsFull = "Requirements at their key cap"
+	writebackAuditWorkspaceGone    = "Workspace not found"
+	writebackAuditStoreError       = "Store error"
 )
 
 // writebackMergeAuditDetail is the failure row's detail for a requirements write the store failed.
@@ -53,7 +53,7 @@ func writebackMergeAuditDetail(err error) string {
 
 // writebackAuditEgressRefused is an `always` decision's failure row detail when the store's guard refused the
 // list write: the list is at its cap, or was edited after the decision.
-const writebackAuditEgressRefused = "egress list at its cap or edited since the decision"
+const writebackAuditEgressRefused = "Egress list at its cap or edited since the decision"
 
 // writebackEgressAuditDetail is the failure row's detail for an egress list write the store failed.
 func writebackEgressAuditDetail(err error) string {

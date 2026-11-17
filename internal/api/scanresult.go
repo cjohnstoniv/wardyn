@@ -20,7 +20,7 @@ import (
 
 // scanAuditFactsUnparsed is a source.scan failure row's detail for an upload that is not scan facts: the
 // parser's text quotes bytes the sandbox chose, so the row names the step and the log keeps the error.
-const scanAuditFactsUnparsed = "parse scan facts"
+const scanAuditFactsUnparsed = "Parse scan facts"
 
 // maxScanResultUploadBytes caps a single scan-result PUT. ScanFacts is already
 // bounded on the producing side (internal/workspacescan manifest-count + per-file

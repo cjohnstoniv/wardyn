@@ -233,7 +233,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 }
 
 // TestLearnVerifyEgressMergeFailureNamesItsClass: a requirements write the store fails leaves one failure row
-// whose detail is the class the store's sentinel tells apart, or "store error" for any other failure, and never
+// whose detail is the class the store's sentinel tells apart, or "Store error" for any other failure, and never
 // the store's text, which only the server log keeps.
 func TestLearnVerifyEgressMergeFailureNamesItsClass(t *testing.T) {
 	raw := errors.New("write to db.internal:5432 refused")
@@ -287,7 +287,7 @@ func (s r3bEgressWriteErrStore) AddWorkspaceEgressDecision(context.Context, uuid
 }
 
 // TestEgressDecisionWriteFailureNamesItsClass: an `always` decision whose egress list write the store fails leaves
-// one failure row whose detail is the class the store's sentinel tells apart, or "store error" for any other
+// one failure row whose detail is the class the store's sentinel tells apart, or "Store error" for any other
 // failure, and never the store's text, which only the server log keeps.
 func TestEgressDecisionWriteFailureNamesItsClass(t *testing.T) {
 	raw := errors.New("write to db.internal:5432 refused")

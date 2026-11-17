@@ -23,9 +23,9 @@ import (
 // The detail of a source.scan failure row the server caused names the step that failed, never the error's text:
 // a store or driver error can name hosts, users and databases. writeServerError and the log keep the cause.
 const (
-	scanAuditLaunchFault  = "launch scan run"
-	scanAuditRunnerUnread = "read the folder's runner"
-	scanAuditPersistFault = "persist scan profile"
+	scanAuditLaunchFault  = "Launch scan run"
+	scanAuditRunnerUnread = "Read the folder's runner"
+	scanAuditPersistFault = "Persist scan profile"
 )
 
 // source_scan.go — the tier-1 scan: a SOURCE scans itself. This is what

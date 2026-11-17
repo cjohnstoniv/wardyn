@@ -23,8 +23,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `POST /api/v1/workspaces/{id}/scan` answers the same fault as a `500`, where it answered `422`. It skips a folder deleted while it was scanned, as it skips an attachment that no longer exists, instead of ending the scan.
 - A `source.scan` row for an upload that is not scan facts, a `workspace.requirement.write` row for a run that could not be read, and a `run.record.start` row for a launch the server failed now name the step that failed, never the error's text; the server log keeps the cause.
 - In a `run.record.start` row, a record launch refusal the route answers in its own words keeps that sentence; every other failure, a run-cap or host-capacity refusal included, names the step.
-- A `workspace.requirement.write` row for a requirements write the store failed says `requirements at their key cap`, `workspace not found` or `store error`, never the store's text.
-- A `workspace.egress.approve` or `workspace.egress.deny` row for an `always` decision whose egress list write the store failed, written either when the decision is made or when the boot re-apply replays it, now says `egress list at its cap or edited since the decision`, `workspace not found` or `store error`, never the store's text. The server log keeps the cause of a `store error`.
+- A `workspace.requirement.write` row for a requirements write the store failed says `Requirements at their key cap`, `Workspace not found` or `Store error`, never the store's text.
+- A `workspace.egress.approve` or `workspace.egress.deny` row for an `always` decision whose egress list write the store failed, written either when the decision is made or when the boot re-apply replays it, now says `Egress list at its cap or edited since the decision`, `Workspace not found` or `Store error`, never the store's text. The server log keeps the cause of a `Store error`.
 
 ### Fixed
 
