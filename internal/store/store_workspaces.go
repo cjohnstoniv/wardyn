@@ -210,9 +210,8 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 	switch {
 	case errors.Is(err, ErrNotFound) && seen != nil:
 		// A guard miss and a missing row look the same to the UPDATE.
-		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
-			return types.Workspace{}, ErrWorkspaceStale
-		}
+		_, gerr := s.GetWorkspace(ctx, id)
+		return types.Workspace{}, missReadErr(gerr, ErrWorkspaceStale, "workspace after a guarded update missed")
 	case isUniqueViolation(err):
 		return types.Workspace{}, ErrConflict
 	}
@@ -279,9 +278,8 @@ func (s PG) setEgressList(ctx context.Context, id uuid.UUID, col string, param a
 		param, id, seen))
 	if errors.Is(err, ErrNotFound) && seen != nil {
 		// A guard miss and a missing row look the same to the UPDATE.
-		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
-			return types.Workspace{}, ErrWorkspaceStale
-		}
+		_, gerr := s.GetWorkspace(ctx, id)
+		return types.Workspace{}, missReadErr(gerr, ErrWorkspaceStale, "workspace after a guarded egress-list write missed")
 	}
 	return out, err
 }
@@ -357,17 +355,12 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" (or, with a decided-at, a newer list edit).
-		// A read that fails for another reason is returned as itself, not as a workspace that is gone.
-		_, gerr := s.GetWorkspace(ctx, id)
-		switch {
-		case gerr == nil && decidedAt != nil:
-			return types.Workspace{}, fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
-		case gerr == nil:
-			return types.Workspace{}, ErrConflict
-		case errors.Is(gerr, ErrNotFound):
-			return types.Workspace{}, ErrNotFound
+		held := error(ErrConflict)
+		if decidedAt != nil {
+			held = fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
 		}
-		return types.Workspace{}, fmt.Errorf("store: read workspace after an egress-list write missed: %w", gerr)
+		_, gerr := s.GetWorkspace(ctx, id)
+		return types.Workspace{}, missReadErr(gerr, held, "workspace after an egress-list write missed")
 	}
 	if err != nil {
 		return types.Workspace{}, err
