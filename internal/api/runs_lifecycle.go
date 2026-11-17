@@ -293,6 +293,11 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 
 // teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
 func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
+	return s.teardownOrAuditStep(ctx, runID, ref, action, auditStepStopSandbox, teardown)
+}
+
+// teardownOrAuditStep is teardownOrAudit with the step its failure row's teardown_error names.
+func (s *Server) teardownOrAuditStep(ctx context.Context, runID uuid.UUID, ref, action, step string, teardown func(context.Context, string) error) bool {
 	serr := teardownUnlessLost(ctx, ref, teardown)
 	if serr == nil {
 		return true
@@ -303,7 +308,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		settleAfterTeardown(ctx, func(ctx context.Context) {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(map[string]any{
-					"sandbox_ref": ref, "teardown_error": auditStep(ctx, auditStepStopSandbox, serr, slog.String("run_id", runID.String())),
+					"sandbox_ref": ref, "teardown_error": auditStep(ctx, step, serr, slog.String("run_id", runID.String())),
 				})))
 		})
 	}

@@ -11,15 +11,31 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // auditStep returns step for an audit row's `error` field and logs err beside it. A store, driver or runner
 // error can name hosts, users, databases and bytes a sandbox chose, so the row says which step failed and the
-// server log keeps the cause. attrs are slog attributes that say which run or workspace it was.
+// server log keeps the cause. A runner's refusal is the exception: its sentence is worded by Wardyn's own runner
+// and says what to do (runnerRefusal), so the row keeps it. attrs are slog attributes that say which run or
+// workspace it was.
 func auditStep(ctx context.Context, step string, err error, attrs ...any) string {
 	slog.ErrorContext(ctx, "wardynd: an audit row names this failed step; the cause is here",
 		append(attrs, slog.String("step", step), slog.Any("err", err))...)
+	if sentence, ok := runnerRefusal(err); ok {
+		return sentence
+	}
 	return step
+}
+
+// runnerRefusal is the sentence of a runner's refusal (runnerwire.Refuse, a typed refused reply), such as "this
+// runner does not support the BYOI selftest; upgrade it to run BYOI images", and whether err carries one.
+func runnerRefusal(err error) (string, bool) {
+	var we *runnerwire.Error
+	if errors.As(err, &we) && we.Code == runnerwire.CodeRefused && we.Message != "" {
+		return we.Message, true
+	}
+	return "", false
 }
 
 // The failed step a row's `error` field names, for the failures auditStep or a log already beside the row
@@ -138,12 +154,14 @@ const (
 	auditStepEndSandbox       = "End sandbox"
 	auditStepKillSandbox      = "Kill sandbox"
 	auditStepReadFolderRecord = "Read computer folder record"
+	auditStepReadLostEnd      = "Read lost run's end"
 	auditStepRecordImage      = "Record workspace image"
 	auditStepRevokeBroker     = "Revoke broker credentials"
 	auditStepRevokeIdentity   = "Revoke run identity"
 	auditStepSetSandboxRef    = "Record sandbox ref"
 	auditStepStopFailedProxy  = "Stop failed proxy start"
 	auditStepStopLost         = "Stop lost sandbox"
+	auditStepCutAgent         = "Cut run's agent off" // a fence or a proxy stop, the sandbox left as it is
 )
 
 // auditEndError is an end or lost row's `end_error` or `lost_error`: the sentence of a substrate that cannot keep

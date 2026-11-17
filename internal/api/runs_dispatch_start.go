@@ -86,10 +86,14 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 			if s.byoiExecLessRefused(ctx, run, ref) {
 				return
 			}
-			if !s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */) {
+			if passed, refusal := s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */); !passed {
 				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-				s.failAndRevoke(ctx, run.ID, types.RunRunning,
-					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")
+				hint := "the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)"
+				if refusal != "" {
+					// The runner refused the selftest itself: its sentence says what to do (upgrade it), not the image.
+					hint = "the BYOI selftest could not run: " + refusal
+				}
+				s.failAndRevoke(ctx, run.ID, types.RunRunning, hint)
 				return
 			}
 		}

@@ -198,7 +198,7 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
 		if errors.Is(err, errLostEndUnread) {
-			data["lost_error"] = auditEndError(ctx, run.ID, auditStepStopLost, err) // the end could not be read beside the queued cut: keep why
+			data["lost_error"] = auditEndError(ctx, run.ID, auditStepReadLostEnd, err) // the end could not be read beside the queued cut: keep why
 		}
 	} else if err != nil {
 		data["lost_error"] = auditEndError(ctx, run.ID, auditStepStopLost, err)

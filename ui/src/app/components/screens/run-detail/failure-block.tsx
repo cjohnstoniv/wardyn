@@ -312,10 +312,11 @@ export function RunFailureBlock({
     void refresh();
   }, [credential, refresh]);
   if (!ending) return null;
-  // The audit row of a dispatch or build failure names only the step that failed ("Create sandbox");
-  // the cause is the run's own failure_hint, the line the CLI prints. The row's text stands in only
-  // for a run with no hint (an older server).
-  const cause = (dispatchFailure || ending.kind === "image") && run.failure_hint ? run.failure_hint : ending.detail;
+  // The audit row of a dispatch, build or selftest failure names only the step that failed ("Create
+  // sandbox"); the cause is the run's own failure_hint, the line the CLI prints. The row's text stands in
+  // only for a run with no hint (an older server).
+  const hintIsCause = dispatchFailure || ending.kind === "image" || ending.kind === "selftest";
+  const cause = hintIsCause && run.failure_hint ? run.failure_hint : ending.detail;
   // A kill Wardyn made itself for a desktop sign-in says why in words, not as its reason code.
   const signinLine = ending.kind === "killed" ? desktopSigninReasonLine(ending.detail) : undefined;
   const copy =
@@ -364,15 +365,15 @@ export function RunFailureBlock({
               ending (image/selftest/killed/auto_stop) `copy.happened` +
               `cause` already say the same thing in the vocabulary
               that kind owns — printing failure_hint too would be the same
-              fact stated three times (for image and the dispatch kinds it
-              IS `cause`, the mono line below). For `unknown` (D9's class) copy is
-              undefined, so this is the ONLY line — still the real prose,
-              never invented. */}
+              fact stated three times (for image, selftest and the dispatch kinds
+              it IS `cause`, the mono line below). For `unknown` (an ending no
+              kind names) copy is undefined, so this is the ONLY line — still
+              the real prose, never invented. */}
           {!copy && run.failure_hint && (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{run.failure_hint}</p>
           )}
           {/* The failing step's OWN words, mono because it is a wire value
-              (§3) — the run's failure_hint, the line the CLI's runFailureReason prints.
+              — the run's failure_hint, the line the CLI's runFailureReason prints.
               Under an unrecognised ending there is no copy block at all, so
               this never appears without a cause naming it. */}
           {signinLine ? (

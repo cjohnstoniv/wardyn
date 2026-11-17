@@ -329,8 +329,8 @@ func TestLoseRunStopped_AQueuedCutAndAnUnreadEndRecordTheReadError(t *testing.T)
 	if data["containment"] != "pending_runner" {
 		t.Errorf("containment = %v, want pending_runner", data["containment"])
 	}
-	// The row names the failed step; the read's error ("database down") is in the server log.
-	if msg, _ := data["lost_error"].(string); msg != auditStepStopLost || !strings.Contains(logs.String(), "database down") {
+	// The row names the failed read of the run's end; the read's error ("database down") is in the server log.
+	if msg, _ := data["lost_error"].(string); msg != auditStepReadLostEnd || !strings.Contains(logs.String(), "database down") {
 		t.Errorf("lost_error = %q, log %q, want the step and the read's error logged", data["lost_error"], logs.String())
 	}
 }

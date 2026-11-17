@@ -473,9 +473,9 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 	case errors.Is(err, runner.ErrEndUnsupported):
 		return errProxyAloneUnsupported
 	default:
-		// teardownOrAudit is called only for the failure row: its teardown answers the stop's own error, so it
-		// never reports the stop confirmed.
-		s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
+		// teardownOrAuditStep is called only for the failure row: its teardown answers the stop's own error, so it
+		// never reports the stop confirmed. The row names the cut, not a sandbox stop.
+		s.teardownOrAuditStep(ctx, runID, ref, action, auditStepCutAgent, func(context.Context, string) error { return err })
 	}
 	return errProxyStopUnconfirmed
 }
@@ -743,7 +743,11 @@ func (s *Server) auditReadbackFailure(ctx context.Context, ch store.ProxyStartCh
 		"reason": ch.Reason, "stopped": c.Contained,
 		"expected_sha256": ch.Start.ExpectedSHA256, "reported_sha256": ch.Start.ReportedSHA256,
 	}
-	if c.Err != nil {
+	switch {
+	case errors.Is(c.Err, errRunOpBusy):
+		// The server's own sentence: another operation held the run's lock, and the sweep retries.
+		data["containment_error"] = errRunOpBusy.Error()
+	case c.Err != nil:
 		data["containment_error"] = auditStep(ctx, auditStepStopFailedProxy, c.Err, slog.String("run_id", ch.Start.RunID.String()))
 	}
 	s.auditReadback(ctx, ch.Start.RunID, "run.policy.unconfirmed", "failure", ch.Start.Generation, data)

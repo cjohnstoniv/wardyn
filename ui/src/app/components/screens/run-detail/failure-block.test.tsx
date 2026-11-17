@@ -417,6 +417,21 @@ describe("RunFailureBlock", () => {
     expect(screen.queryByText(/The audit row carries the builder's full output/)).toBeNull();
   });
 
+  // A selftest row whose error names only the step ("Run selftest exec") gives way to the run's hint too.
+  it("selftest WITH a run.failure_hint: the hint is the cause line; the row's step is not shown", () => {
+    const HINT = "the BYOI selftest could not run: this runner does not support the BYOI selftest; upgrade it to run BYOI images";
+    render(
+      <RunFailureBlock
+        run={{ ...run("FAILED"), failure_hint: HINT }}
+        audit={[ev("run.selftest", "failure", { data: { error: "Run selftest exec", fail_closed: true } })]}
+        onGoAudit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "selftest");
+    expect(screen.getAllByText(HINT)).toHaveLength(1);
+    expect(screen.queryByText("Run selftest exec")).toBeNull();
+  });
+
   it("image with no run.failure_hint falls back to the row's own words", () => {
     renderBlock("FAILED", [ev("run.build", "failure", { data: { error: "step 4/9: npm ci exited 1" } })]);
     expect(screen.getByText("step 4/9: npm ci exited 1")).toBeInTheDocument();
