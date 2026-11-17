@@ -21,6 +21,7 @@ func TestProxyHostnames(t *testing.T) {
 		{"http://proxy.corp.example", []string{"wardyn-proxy", "proxy.corp.example"}},
 		{"http://10.1.2.3:3128", []string{"wardyn-proxy"}},
 		{"http://[2001:db8::1]:3128", []string{"wardyn-proxy"}},
+		{"http://github.com:2001:db8::3128", []string{"wardyn-proxy"}},
 		{"http://%zz", []string{"wardyn-proxy"}},
 		{"not a url", []string{"wardyn-proxy"}},
 	} {

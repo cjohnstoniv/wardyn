@@ -138,9 +138,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.DesktopSignins {
 		agentHost.Tmpfs[runner.SigninStorePath] = runner.SigninStoreTmpfs
 	}
-	// Pin the proxy's IP so the agent resolves "wardyn-proxy", and the sandbox proxy URL's own name when it names
-	// another, without the embedded DNS (required under gVisor). The ONLY host entries the agent gets — NOT
-	// host.docker.internal, proxy-only.
+	// Pin the proxy's IP ("wardyn-proxy:<ip>", and the sandbox proxy URL's own name at the same IP when it names
+	// another) so the agent resolves it without the embedded DNS (required under gVisor). The ONLY host entries the
+	// agent gets — NOT host.docker.internal, proxy-only.
 	for _, name := range runner.ProxyHostnames(spec.Env) {
 		agentHost.ExtraHosts = append(agentHost.ExtraHosts, name+":"+proxyIP)
 	}
