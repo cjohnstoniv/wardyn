@@ -623,9 +623,9 @@ func mergeMissErr(gerr error) error {
 	case gerr == nil:
 		return ErrConflict
 	case errors.Is(gerr, ErrNotFound):
-		return fmt.Errorf("store: read workspace after a requirements merge missed: %w", gerr)
+		return ErrNotFound
 	}
-	return ErrNotFound
+	return fmt.Errorf("store: read workspace after a requirements merge missed: %w", gerr)
 }
 
 // Hydration: attachments → the derived view
