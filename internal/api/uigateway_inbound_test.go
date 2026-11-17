@@ -442,6 +442,24 @@ func TestUIGateway_InboundRunBucketIsSharedByCallers(t *testing.T) {
 	}
 }
 
+// TestUIGateway_InboundBothBucketsEmptyNamesTheRun: when a call finds the run's bucket and its own caller's both
+// empty, the refusal names the run's, which is checked first.
+func TestUIGateway_InboundBothBucketsEmptyNamesTheRun(t *testing.T) {
+	h, _ := inboundHarness(t)
+	for i := range int(inboundRunBurst) {
+		principal := "bob"
+		if i >= int(inboundCallerBurst) {
+			principal = fmt.Sprintf("p%d", i)
+		}
+		if refused, _ := h.srv.uiInbound.take(h.run.ID, principal, h.clock.now(), ""); refused != "" {
+			t.Fatalf("call %d was refused by %q within both bursts", i+1, refused)
+		}
+	}
+	if refused, _ := h.srv.uiInbound.take(h.run.ID, "bob", h.clock.now(), ""); refused != "run" {
+		t.Errorf("a call with both buckets empty was refused by %q, want \"run\"", refused)
+	}
+}
+
 // TestUIGateway_InboundCallerRateLimit: a caller who spreads calls over many runs is bound by their own
 // bucket, however full each run's is; another caller, and the run's own bucket, are untouched by it.
 func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
