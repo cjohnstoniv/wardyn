@@ -1253,7 +1253,9 @@ func TestReadback_LegacyStartNeverEnforcesAHash(t *testing.T) {
 	done := make(chan struct{})
 	go func() { d.dispatch(); close(done) }()
 	<-d.rn.started
-	postLoaded(t, d.srv, d.run.ID, d.jti, sha)
+	if code, state := postLoaded(t, d.srv, d.run.ID, d.jti, sha); code != http.StatusAccepted || state != "pending" {
+		t.Fatalf("report during a legacy create: %d %q, want 202 pending", code, state)
+	}
 	close(d.rn.release)
 	<-done
 	if p := d.st.get(d.run.ID, 1); p.Mode != store.ProxyStartLegacy || p.State != types.ProxyStartUnconfirmed {
