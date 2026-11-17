@@ -153,6 +153,8 @@ const KILL_PARTIAL_SCRATCH =
 const KILL_CONFIRMING_TODO = "This page updates when Wardyn records the result (run.kill.confirm in the audit log).";
 const KILL_UNCONFIRMED_TODO =
   "The run.kill row says the stop was still being confirmed, and no run.kill.confirm row records a result.";
+// A run.kill row whose sandbox_stop is neither absent, queued nor still being confirmed (a revoked runner's sweep).
+const KILL_OTHER_STOP_TODO = "The run.kill row does not record a finished stop.";
 const KILL_CONFIRM_FAILED_ROW =
   "The run.kill.confirm row names the step that failed — read it before treating this run as contained.";
 
@@ -202,6 +204,7 @@ function killedCopy(
   localRunner: string | undefined,
   runner: string,
   confirmFailed = false,
+  otherStop = false,
 ): EndingCopy {
   // The stop waits in the offline runner's queue: credentials are gone, the sandbox is not yet.
   if (evidence === "queued") {
@@ -221,7 +224,7 @@ function killedCopy(
     return {
       happened: (elapsed) =>
         `An operator killed this run ${elapsed} in, and its credentials are revoked, but Wardyn has no record that the sandbox stopped. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.`,
-      todo: [KILL_UNCONFIRMED_TODO, KILL_PARTIAL_RETRY, KILL_PARTIAL_SCRATCH, ...heldLines(held)],
+      todo: [otherStop ? KILL_OTHER_STOP_TODO : KILL_UNCONFIRMED_TODO, KILL_PARTIAL_RETRY, KILL_PARTIAL_SCRATCH, ...heldLines(held)],
     };
   }
   if (evidence === "partial") {
@@ -360,6 +363,7 @@ export function RunFailureBlock({
             run.placement === "local" ? runnerLabel(run) : undefined,
             runnerLabel(run),
             ending.confirmFailed,
+            ending.otherStop,
           )
       : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one

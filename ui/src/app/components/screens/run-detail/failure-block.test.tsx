@@ -289,6 +289,8 @@ describe("RunFailureBlock", () => {
     it("an unknown sandbox_stop value reads as unconfirmed, not stopped and removed", () => {
       renderBlock("KILLED", [ev("run.kill", "success", { data: { sandbox_stop: "runner_revoked" } })]);
       expect(screen.getByText(C2)).toBeInTheDocument();
+      expect(screen.getByText("The run.kill row does not record a finished stop.")).toBeInTheDocument();
+      expect(screen.queryByText(/still being confirmed/)).not.toBeInTheDocument();
       expect(screen.queryByText(/stopped and removed/)).not.toBeInTheDocument();
       expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unconfirmed");
     });

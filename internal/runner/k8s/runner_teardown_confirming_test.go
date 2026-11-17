@@ -169,6 +169,15 @@ func TestRunnerKillErrorsAreNotConfirming(t *testing.T) {
 // is released only by a person's record or an operator's taint, so no later status read proves it: the
 // agent_only hold it leaves keeps its plain typed answer and is not confirming.
 func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
+	// Each case's own verdict, so a case that went final for another reason does not pass.
+	reasons := map[string]string{
+		"node name reused":                   "node name reused",
+		"node record tuple changed":          "no longer matches the run's",
+		"different execution":                whyDifferentExecution,
+		"pod GC mark":                        whyPodGC,
+		"closing anchor on another Node":     whyNeverBound,
+		"main never started, no causal node": "tier 2 can never bind it",
+	}
 	for name, setup := range map[string]func(*testing.T, *runnerHarness){
 		"node name reused": func(t *testing.T, h *runnerHarness) {
 			h.evidence(t, func(ev *runEvidence) {
@@ -228,6 +237,9 @@ func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
 			}
 			if !errors.As(err, new(unprovableError)) {
 				t.Errorf("kill = %v, want the final verdict's unprovableError in the chain", err)
+			}
+			if want := reasons[name]; want == "" || !strings.Contains(err.Error(), want) {
+				t.Errorf("kill = %v, want the reason %q", err, want)
 			}
 			noPoliciesDropped(t, h)
 		})

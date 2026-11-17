@@ -22,10 +22,15 @@ func (e vanishedError) Error() string { return e.err.Error() }
 func (e vanishedError) Unwrap() error { return e.err }
 
 // unprovableError is checkOnce's answer for a final verdict, which no later status read can turn into
-// evidence (no read of the recorded UID, a changed node record tuple, a reused node name, a different
-// execution, the pod GC's mark, a pod no tier can ever bind): only a person's record, or an operator's
-// out-of-service taint on the causal machine, releases it. It still wraps errTerminationUnknown;
-// stillStopping does not count it as a pod that is still stopping.
+// evidence. What releases it depends on the verdict (evaluate):
+//   - no read of the recorded UID: nothing; it returns before the record and the taint are checked;
+//   - a changed node record tuple: a new record for the new tuple; a reused node name: a two-person node
+//     powered off record. Both return before the taint is checked;
+//   - a different execution, the pod GC's mark, a container no tier can ever bind: a person's record, or an
+//     operator's out-of-service taint on the pod's causal machine;
+//   - main containers never started with no causal node: a person's record only (there is no machine to taint).
+//
+// It still wraps errTerminationUnknown; stillStopping does not count it as a pod that is still stopping.
 type unprovableError struct{ err error }
 
 func (e unprovableError) Error() string { return e.err.Error() }

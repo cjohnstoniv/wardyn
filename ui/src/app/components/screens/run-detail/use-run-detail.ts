@@ -103,7 +103,7 @@ export function useRunDetail(id: string) {
   // state). A generation counter drops an older read that answers after a newer
   // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
   // read is "couldn't read which credentials".
-  const settleSince = React.useRef<number | null>(null);
+  const settleSince = React.useRef<{ kill: string; since: number } | null>(null);
   // The run whose computer folder this page is waiting on, and since when the wait is a bounded one.
   const folderWait = React.useRef<{ id: string; since: number | null } | null>(null);
   const endingGen = React.useRef(0);
@@ -314,7 +314,8 @@ export function useRunDetail(id: string) {
   const held =
     mintAudit === undefined ? undefined : heldCredentials(grantsReadable ? grants : undefined, mintAudit ?? undefined);
   // What the trail alone proves, before the page's wait decides a stop still being confirmed.
-  const trailEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
+  const trailEnding = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents) : undefined;
+  const trailEvidence = trailEnding?.evidence;
   // The server marks a run KILLED BEFORE it writes the run.kill row
   // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
   // whose trail can still settle for two minutes, counted on THIS page's clock
@@ -324,10 +325,14 @@ export function useRunDetail(id: string) {
   // read is retried on the same polls (load re-calls loadEnding). A stop still
   // being confirmed waits the same way for its run.kill.confirm row; a kill row
   // that is final but proves nothing (unconfirmed) has nothing left to wait for.
+  // Each run.kill row gets its own wait: a kill made after an earlier wait ran
+  // out (a 202 still confirming, or another failed step) starts the clock again,
+  // so polling resumes and its result is read without a reload.
   const unconfirmedKill =
     run?.state === "KILLED" && trailEvidence !== "confirmed" && trailEvidence !== "queued" && trailEvidence !== "unconfirmed";
-  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
-  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
+  const killKey = trailEnding?.killId ?? "";
+  if (unconfirmedKill && settleSince.current?.kill !== killKey) settleSince.current = { kill: killKey, since: Date.now() };
+  const killSettling = unconfirmedKill && Date.now() - (settleSince.current?.since ?? Date.now()) < KILL_SETTLE_MS;
   // The wait ran out with no confirm row: Wardyn has no record that the sandbox stopped.
   const killConfirmWaitOver = trailEvidence === "confirming" && !killSettling;
   const killEvidence = killConfirmWaitOver ? "unconfirmed" : trailEvidence;

@@ -56,6 +56,10 @@ export type RunEndingFacts = RunEnding & {
   runnerRevoked?: { online: boolean };
   /** For a `partial` kill: the failed step is on the run.kill.confirm row, not the run.kill row. */
   confirmFailed?: boolean;
+  /** For an `unconfirmed` kill: the run.kill row records a sandbox_stop other than one still being confirmed. */
+  otherStop?: boolean;
+  /** For `killed`: the id of the run.kill row that decided it, so each kill gets its own wait on the run page. */
+  killId?: string;
 };
 
 export type SpooledEgressDecision = EgressDecision & { spooled_at?: string; spool_full?: boolean };
@@ -297,9 +301,10 @@ export function runEndingFromAudit(
         time: kill.time,
         evidence: kill.outcome === "success" ? "confirmed" : "partial",
         runnerRevoked: { online: kill.data?.runner_online === true },
+        killId: kill.id,
       };
     }
-    const base = from("killed", kill, "run.kill");
+    const base: RunEndingFacts = { ...from("killed", kill, "run.kill"), killId: kill?.id };
     if (!kill) return { ...base, evidence: "unknown" };
     if (kill.outcome !== "success") return { ...base, evidence: "partial" };
     // A success with no sandbox_stop is a stop the kill saw finish.
@@ -309,7 +314,7 @@ export function runEndingFromAudit(
     if (stop === "queued") return { ...base, evidence: "queued" };
     // Any other value claims nothing about the sandbox (a revoked runner's sweep writes "runner_revoked"):
     // fail closed rather than say it stopped.
-    if (stop !== "confirming") return { ...base, evidence: "unconfirmed" };
+    if (stop !== "confirming") return { ...base, evidence: "unconfirmed", otherStop: true };
     // The sandbox was still stopping when the kill finished, and Wardyn confirms the stop later on its own
     // run.kill.confirm row (internal/api/run_kill_confirm.go). Only a row at or after this kill answers it: a
     // kill made during a confirm writes no new confirm row, and that confirm's row still lands after it. No

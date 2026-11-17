@@ -303,8 +303,8 @@ type verdict struct {
 	arm   string
 	tiers map[string]string
 	why   string
-	// final: no later status read can make this pod's evidence; only a person's record, or an operator's
-	// out-of-service taint on the causal machine, releases it.
+	// final: no later status read can make this pod's evidence. Which record or taint releases it, if
+	// any, depends on the verdict (see unprovableError).
 	final bool
 }
 
@@ -401,7 +401,7 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 
 const (
 	whyDifferentExecution = "a container ID differs from its baseline or is latched: a different execution"
-	whyPodGC              = "Failed by the pod garbage collector, never by the kubelet: its Node is gone"
+	whyPodGC              = "Failed by the pod garbage collector, never by the kubelet: its Node is gone or out of service"
 	whyNeverBound         = "a terminated container no tier can ever bind: the association or the closing anchor rules it out"
 )
 
