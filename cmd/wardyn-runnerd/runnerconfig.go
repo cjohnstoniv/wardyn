@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -186,26 +185,28 @@ func parseKeptDiskLimit(v string) (int64, error) {
 type macOSVMSettings struct {
 	// keptLimit is macos_vm_kept_disk_limit_gb, baseFile macos_vm_base_file and basesDir macos_vm_bases_dir.
 	keptLimit, baseFile, basesDir string
-	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare) or the
-	// value is not one macOSVMKnown reads, which then neither opens nor removes the CA. driveRoots is drive_root:
-	// the CA is not used under one.
+	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare), which
+	// then neither opens nor removes the CA. driveRoots is drive_root: the CA is not used under one.
 	inspectionCA *bool
 	driveRoots   []string
+	// inspectionCAUnknown is set when the value is neither on nor off. inspectionCA is then false, but the CA is
+	// removed only where a drive root is over it: with none, the key is kept (openInspectionCA).
+	inspectionCAUnknown *unknownCA
 }
+
+// unknownCA is a macos_vm_inspection_ca value macOSVMKnown refuses, and the source that gave it.
+type unknownCA struct{ value, source string }
 
 // macOSVMSettings is c's macOS VM settings.
 func (c runnerConfig) macOSVMSettings() macOSVMSettings {
 	ca := c.field("macos_vm_inspection_ca")
 	set := macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
 		driveRoots: c.field("drive_root").List}
-	if !macOSVMKnown(ca.Value) {
-		// Off removes the key, which on macOS 26 costs a prepare --new-image; a value that is neither on nor off keeps it.
-		slog.Warn("macOS VM base: macos_vm_inspection_ca is not 1, 0, true, false, on, off, yes or no, so this Mac's inspection CA is neither made nor removed",
-			"value", ca.Value, "source", ca.Source)
-		return set
-	}
 	on := macOSVMOn(ca.Value)
 	set.inspectionCA = &on
+	if !macOSVMKnown(ca.Value) {
+		set.inspectionCAUnknown = &unknownCA{value: ca.Value, source: ca.Source}
+	}
 	return set
 }
 

@@ -34,11 +34,13 @@ type macOSVMItems struct {
 }
 
 // openInspectionCA opens this Mac's inspection CA in the VM directory when macos_vm_inspection_ca is on. on is
-// nil when the caller resolved no settings (setup's prepare) or the setting is neither on nor off: the CA is then
-// neither opened nor removed. owner is the runner's handle (enableMacOSVM): only it makes the CA, and only it removes it, when the setting is off or one
-// of its drive roots is or holds the CA's directory, since a key left on disk is one a run's mount could read. A
-// macos-vm command resolves its own config, which may not be the runner's, so it only reads a CA that is there.
-func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
+// nil when the caller resolved no settings (setup's prepare): the CA is then neither opened nor removed. unknown
+// is set when the setting is neither on nor off: it reads as off, except that the key is kept, and a warning
+// logged, where off would remove it for no reason but the setting. owner is the runner's handle (enableMacOSVM):
+// only it makes the CA, and only it removes it, when the setting is off or one of its drive roots is or holds the
+// CA's directory, since a key left on disk is one a run's mount could read. A macos-vm command resolves its own
+// config, which may not be the runner's, so it only reads a CA that is there.
+func (m *macOSVMs) openInspectionCA(on *bool, unknown *unknownCA, driveRoots []string, owner bool) {
 	if on == nil {
 		return
 	}
@@ -77,6 +79,11 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 	case over != "":
 		slog.Warn("macOS VM base: this Mac's inspection CA is not kept: a drive root holds the VM directory, so a run could mount the CA's key", "drive_root", over)
 	default:
+		if unknown != nil {
+			slog.Warn("macOS VM base: macos_vm_inspection_ca is not 1, 0, true, false, on, off, yes or no, so this Mac's inspection CA is not used, and is neither made nor removed",
+				"value", unknown.value, "source", unknown.source)
+			return
+		}
 		// A profile that is there but cannot be read reads as unset, which could turn an organisation's 1 into off.
 		if _, perr := managedPrefErr("MacOSVMInspectionCA"); perr != nil {
 			slog.Warn("macOS VM base: macos_vm_inspection_ca reads as off, but the managed profile could not be read, so this Mac's inspection CA is kept", "error", perr.Error())
@@ -237,5 +244,5 @@ func dropInspectionCA(set macOSVMSettings) {
 	if *set.inspectionCA && driveRootOver(m.layout.InspectionCADir(), set.driveRoots) == "" {
 		return
 	}
-	m.openInspectionCA(set.inspectionCA, set.driveRoots, true)
+	m.openInspectionCA(set.inspectionCA, set.inspectionCAUnknown, set.driveRoots, true)
 }

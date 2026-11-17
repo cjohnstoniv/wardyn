@@ -177,7 +177,7 @@ func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 		m.refusal, m.reason = macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
 		return m
 	}
-	m.openInspectionCA(s.settings.inspectionCA, s.settings.driveRoots, s.ownsInspectionCA)
+	m.openInspectionCA(s.settings.inspectionCA, s.settings.inspectionCAUnknown, s.settings.driveRoots, s.ownsInspectionCA)
 	l, err := admission.Open(admission.Config{Dir: s.ledgerDir, UID: s.uid, RunnerID: s.runnerID, Host: s.host,
 		DockerMemoryBytes: s.dockerMemory, Volume: s.root, Fstat: s.fstat, FileOwner: func(fi os.FileInfo) int {
 			uid, ok := s.owner(fi)

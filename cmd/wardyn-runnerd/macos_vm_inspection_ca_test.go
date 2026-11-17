@@ -77,7 +77,7 @@ func inspectionCAJobRig(t *testing.T) (*macLedgerRig, *macOSVMs, string) {
 func TestMacOSVMInspectionCAJoinsEveryListJob(t *testing.T) {
 	_, m, args := inspectionCAJobRig(t)
 	on := true
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	if m.items.ca == nil || m.items.caErr != nil {
 		t.Fatalf("ca %v, error %v", m.items.ca, m.items.caErr)
 	}
@@ -124,11 +124,11 @@ func TestMacOSVMInspectionCAExcludesTheDirectoryBeforeTheKey(t *testing.T) {
 		return nil
 	}
 	on := true
-	m.openInspectionCA(&on, nil, false)
+	m.openInspectionCA(&on, nil, nil, false)
 	if len(got) != 0 {
 		t.Fatalf("a read-only start excluded %q", got)
 	}
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	if m.items.ca == nil || !slices.Equal(got, []string{m.layout.Root}) {
 		t.Fatalf("ca %v, exclusions %q, want [%s]", m.items.ca, got, m.layout.Root)
 	}
@@ -144,7 +144,7 @@ func TestMacOSVMInspectionCAThatCannotOpenStartsNoListJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	on := true
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	if m.items.ca != nil || m.items.caErr == nil || !strings.Contains(m.items.caErr.Error(), "macos_vm_inspection_ca") {
 		t.Fatalf("ca %v, error %v", m.items.ca, m.items.caErr)
 	}
@@ -164,16 +164,16 @@ func TestMacOSVMInspectionCAOffRemovesTheKey(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on, off := true, false
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	inspectionCAGone(t, m, false, "on")
 	m.items = macOSVMItems{}
-	m.openInspectionCA(nil, nil, true) // setup's prepare resolves no settings
+	m.openInspectionCA(nil, nil, nil, true) // setup's prepare resolves no settings
 	inspectionCAGone(t, m, false, "no settings")
 	if m.items.ca != nil {
 		t.Error("no settings opened a CA")
 	}
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&off, nil, true)
+	m.openInspectionCA(&off, nil, nil, true)
 	inspectionCAGone(t, m, true, "off")
 	if m.items.ca != nil || m.items.caErr != nil {
 		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
@@ -192,13 +192,13 @@ func TestMacOSVMInspectionCAUnderADriveRootStaysOff(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on := true
-	m.openInspectionCA(&on, []string{t.TempDir()}, true)
+	m.openInspectionCA(&on, nil, []string{t.TempDir()}, true)
 	if m.items.ca == nil {
 		t.Fatalf("a drive root elsewhere kept the CA off: %v", m.items.caErr)
 	}
 	for _, roots := range [][]string{{filepath.Dir(m.layout.Root)}, {m.layout.InspectionCADir()}} {
 		m.items = macOSVMItems{}
-		m.openInspectionCA(&on, roots, true)
+		m.openInspectionCA(&on, nil, roots, true)
 		if m.items.ca != nil || m.items.caErr != nil {
 			t.Errorf("%q: ca %v, error %v", roots, m.items.ca, m.items.caErr)
 		}
@@ -207,7 +207,7 @@ func TestMacOSVMInspectionCAUnderADriveRootStaysOff(t *testing.T) {
 			t.Errorf("%q: edit-base still passes the CA", roots)
 		}
 		m.items = macOSVMItems{}
-		m.openInspectionCA(&on, nil, true) // makes a new CA
+		m.openInspectionCA(&on, nil, nil, true) // makes a new CA
 		inspectionCAGone(t, m, false, "made again")
 	}
 }
@@ -227,7 +227,7 @@ func TestMacOSVMInspectionCAUnderADriveRootThroughASymlinkStaysOff(t *testing.T)
 	r.root = filepath.Join(link, "macos-vm.noindex")
 	m := r.open(t)
 	on := true
-	m.openInspectionCA(&on, []string{real}, true)
+	m.openInspectionCA(&on, nil, []string{real}, true)
 	if m.items.ca != nil {
 		t.Error("a CA opened under a drive root")
 	}
@@ -242,7 +242,7 @@ func TestMacOSVMInspectionCACommandOffLeavesTheKey(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on, off := true, false
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	k, c := inspectionCAFiles(m)
 	keyBefore, err := os.ReadFile(k)
 	if err != nil {
@@ -264,7 +264,7 @@ func TestMacOSVMInspectionCACommandOffLeavesTheKey(t *testing.T) {
 		}
 	}
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&off, nil, false)
+	m.openInspectionCA(&off, nil, nil, false)
 	same("a command's off")
 	if m.items.ca != nil {
 		t.Error("a command's off opened a CA")
@@ -272,7 +272,7 @@ func TestMacOSVMInspectionCACommandOffLeavesTheKey(t *testing.T) {
 	if slices.Contains(m.editItems(), "--"+macvm.FlagInspectionCA) {
 		t.Error("a command's off passes the CA")
 	}
-	m.openInspectionCA(&on, []string{filepath.Dir(m.layout.Root)}, false)
+	m.openInspectionCA(&on, nil, []string{filepath.Dir(m.layout.Root)}, false)
 	same("a command's on under a drive root")
 }
 
@@ -281,7 +281,7 @@ func TestMacOSVMInspectionCACommandOnMakesNone(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on := true
-	m.openInspectionCA(&on, nil, false)
+	m.openInspectionCA(&on, nil, nil, false)
 	inspectionCAGone(t, m, true, "a command's on")
 	if m.items.ca != nil || m.items.caErr != nil {
 		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
@@ -289,13 +289,13 @@ func TestMacOSVMInspectionCACommandOnMakesNone(t *testing.T) {
 	if l, err := m.loadItems(); err != nil || len(l.Items) != 0 {
 		t.Errorf("loadItems: %v, %d items", err, len(l.Items))
 	}
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	if m.items.ca == nil {
 		t.Fatalf("the runner made no CA: %v", m.items.caErr)
 	}
 	fp := m.items.ca.Fingerprint()
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&on, nil, false)
+	m.openInspectionCA(&on, nil, nil, false)
 	if m.items.ca == nil || m.items.ca.Fingerprint() != fp {
 		t.Fatalf("a command did not read the runner's CA: %v", m.items.caErr)
 	}
@@ -310,7 +310,7 @@ func TestMacOSVMInspectionCAOffKeepsTheKeyWhenTheProfileCannotBeRead(t *testing.
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on, off := true, false
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	inspectionCAGone(t, m, false, "on")
 	oldOS, oldExtract := prefsOS, prefsExtract
 	restore := func() { prefsOS, prefsExtract = oldOS, oldExtract }
@@ -318,15 +318,15 @@ func TestMacOSVMInspectionCAOffKeepsTheKeyWhenTheProfileCannotBeRead(t *testing.
 	prefsOS = "darwin"
 	prefsExtract = func(string, string) (string, error) { return "", errors.New("unreadable") }
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&off, nil, true)
+	m.openInspectionCA(&off, nil, nil, true)
 	inspectionCAGone(t, m, false, "off, profile unreadable")
 	// A drive root over the VM directory outranks the unreadable profile: the key goes.
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&off, []string{filepath.Dir(m.layout.Root)}, true)
+	m.openInspectionCA(&off, nil, []string{filepath.Dir(m.layout.Root)}, true)
 	inspectionCAGone(t, m, true, "off, profile unreadable, drive root over")
 	restore()
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&off, nil, true)
+	m.openInspectionCA(&off, nil, nil, true)
 	inspectionCAGone(t, m, true, "off, profile readable")
 }
 
@@ -335,7 +335,7 @@ func TestMacOSVMInspectionCADriveRootNamingTheNotYetMadeFolderStaysOff(t *testin
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on := true
-	m.openInspectionCA(&on, []string{m.layout.InspectionCADir()}, true)
+	m.openInspectionCA(&on, nil, []string{m.layout.InspectionCADir()}, true)
 	if m.items.ca != nil || m.items.caErr != nil {
 		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
 	}
@@ -353,7 +353,7 @@ func TestMacOSVMInspectionCADriveRootNamingTheNotYetMadeFolderStaysOff(t *testin
 	}
 	r.root = filepath.Join(link, "macos-vm.noindex")
 	m = r.open(t)
-	m.openInspectionCA(&on, []string{m.layout.InspectionCADir()}, true)
+	m.openInspectionCA(&on, nil, []string{m.layout.InspectionCADir()}, true)
 	if m.items.ca != nil || m.items.caErr != nil {
 		t.Errorf("through a symlink: ca %v, error %v", m.items.ca, m.items.caErr)
 	}
@@ -370,7 +370,7 @@ func TestMacOSVMInspectionCAUnreadableProfileMakesNone(t *testing.T) {
 	t.Cleanup(func() { prefsOS, prefsExtract = oldOS, oldExtract })
 	prefsOS = "darwin"
 	prefsExtract = func(string, string) (string, error) { return "", errors.New("unreadable") }
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	inspectionCAGone(t, m, true, "unreadable profile, no CA")
 	if m.items.ca != nil || m.items.caErr != nil {
 		t.Errorf("ca %v, error %v", m.items.ca, m.items.caErr)
@@ -382,12 +382,12 @@ func TestMacOSVMInspectionCAUnreadableProfileMakesNone(t *testing.T) {
 		t.Errorf("loadItems: %v, %d items", err, len(l.Items))
 	}
 	prefsOS, prefsExtract = oldOS, oldExtract
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	inspectionCAGone(t, m, false, "profile readable")
 	prefsOS = "darwin"
 	prefsExtract = func(string, string) (string, error) { return "", errors.New("unreadable") }
 	m.items = macOSVMItems{}
-	m.openInspectionCA(&on, nil, true)
+	m.openInspectionCA(&on, nil, nil, true)
 	if m.items.ca == nil {
 		t.Errorf("an existing CA was not read: %v", m.items.caErr)
 	}
@@ -531,40 +531,106 @@ func TestCheckRunnerFileInspectionCA(t *testing.T) {
 	}
 }
 
-// A managed preference (the key has no flag or environment variable) or a file value that is neither on nor off
-// keeps this Mac's key, and says so once; 0 and off still remove it.
+// managedInspectionCA is the settings a managed value resolves to (the key has no flag or environment variable).
+func managedInspectionCA(v string) macOSVMSettings {
+	return resolveRunnerConfig(inputs(nil, nil, map[string]string{"MacOSVMInspectionCA": v}, runnerFile{})).macOSVMSettings()
+}
+
+// A managed preference or a file value that is neither on nor off reads as off, except that with no drive root
+// over the VM directory the runner keeps this Mac's key and says so once: removing it costs a new base on
+// macOS 26. Under a drive root it is removed as for off, and a macos-vm command touches nothing. 0, off and 1
+// behave as before.
 func TestMacOSVMInspectionCAUnknownValueKeepsTheKey(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	on := true
-	m.openInspectionCA(&on, nil, true)
-	inspectionCAGone(t, m, false, "made")
+	open := func(set macOSVMSettings, roots []string, owner bool) string {
+		logs := captureRunnerLog(t)
+		m.items = macOSVMItems{}
+		m.openInspectionCA(set.inspectionCA, set.inspectionCAUnknown, roots, owner)
+		return logs.String()
+	}
+	remake := func() {
+		m.items = macOSVMItems{}
+		m.openInspectionCA(&on, nil, nil, true)
+		inspectionCAGone(t, m, false, "made")
+	}
+	over := []string{filepath.Dir(m.layout.Root)}
 	for _, v := range []string{"enabled", "2"} {
 		for name, in := range map[string]runnerInputs{
 			"managed": inputs(nil, nil, map[string]string{"MacOSVMInspectionCA": v}, runnerFile{}),
 			"file":    inputs(nil, nil, nil, runnerFile{MacOSVMInspectionCA: v}),
 		} {
-			logs := captureRunnerLog(t)
+			what := name + " " + v
 			set := resolveRunnerConfig(in).macOSVMSettings()
-			if set.inspectionCA != nil {
-				t.Fatalf("%s %q: settings say %v, want none", name, v, *set.inspectionCA)
+			if set.inspectionCA == nil || *set.inspectionCA || set.inspectionCAUnknown == nil || set.inspectionCAUnknown.value != v {
+				t.Fatalf("%s: settings %v, unknown %v, want off and unknown", what, set.inspectionCA, set.inspectionCAUnknown)
 			}
-			if got := logs.String(); strings.Count(got, "neither made nor removed") != 1 || !strings.Contains(got, v) {
-				t.Errorf("%s %q: log %q, want one warning naming the value", name, v, got)
+			remake()
+			if got := open(set, nil, true); strings.Count(got, "neither made nor removed") != 1 || !strings.Contains(got, v) {
+				t.Errorf("%s: log %q, want one warning naming the value", what, got)
 			}
-			m.items = macOSVMItems{}
-			m.openInspectionCA(set.inspectionCA, nil, true)
-			inspectionCAGone(t, m, false, name+" "+v)
+			inspectionCAGone(t, m, false, what+", owner, no drive root")
+			if got := open(set, over, true); strings.Contains(got, "neither made nor removed") {
+				t.Errorf("%s: under a drive root the key is removed, but the log says it is not: %q", what, got)
+			}
+			inspectionCAGone(t, m, true, what+", owner, drive root over")
+			remake()
+			if got := open(set, nil, false); got != "" {
+				t.Errorf("%s: a command logged %q", what, got)
+			}
+			inspectionCAGone(t, m, false, what+", a command")
+			if got := open(set, over, false); got != "" {
+				t.Errorf("%s: a command under a drive root logged %q", what, got)
+			}
+			inspectionCAGone(t, m, false, what+", a command, drive root over")
 		}
 	}
 	for _, v := range []string{"0", "off"} {
-		set := resolveRunnerConfig(inputs(nil, nil, map[string]string{"MacOSVMInspectionCA": v}, runnerFile{})).macOSVMSettings()
-		if set.inspectionCA == nil || *set.inspectionCA {
-			t.Fatalf("%q: settings say %v, want off", v, set.inspectionCA)
+		set := managedInspectionCA(v)
+		if set.inspectionCA == nil || *set.inspectionCA || set.inspectionCAUnknown != nil {
+			t.Fatalf("%q: settings %v, unknown %v, want off", v, set.inspectionCA, set.inspectionCAUnknown)
 		}
-		m.items = macOSVMItems{}
-		m.openInspectionCA(set.inspectionCA, nil, true)
+		remake()
+		if got := open(set, nil, true); strings.Contains(got, "neither made nor removed") {
+			t.Errorf("%q: log %q", v, got)
+		}
 		inspectionCAGone(t, m, true, v)
-		m.openInspectionCA(&on, nil, true) // make it again for the next value
+	}
+	set := managedInspectionCA("1")
+	if set.inspectionCA == nil || !*set.inspectionCA || set.inspectionCAUnknown != nil {
+		t.Fatalf("1: settings %v, unknown %v, want on", set.inspectionCA, set.inspectionCAUnknown)
+	}
+	remake()
+	open(set, nil, true)
+	inspectionCAGone(t, m, false, "1")
+}
+
+// With macOS VMs off, an unknown value keeps the key except under a drive root, as with them on.
+func TestMacOSVMInspectionCAUnknownValueDroppedWithMacOSVMsOff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := macvm.Layout{Root: root}.InspectionCADir()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.OpenInspectionCA(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	has := func() bool { _, err := os.Lstat(filepath.Join(dir, "key.pem")); return err == nil }
+	set := managedInspectionCA("enabled")
+	logs := captureRunnerLog(t)
+	dropInspectionCA(set)
+	if !has() || strings.Count(logs.String(), "neither made nor removed") != 1 {
+		t.Errorf("no drive root: key kept %v, log %q", has(), logs.String())
+	}
+	set.driveRoots = []string{home}
+	dropInspectionCA(set)
+	if has() {
+		t.Error("kept under a drive root")
 	}
 }

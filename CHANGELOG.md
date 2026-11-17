@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- macOS VMs: an opt-in inspection CA per Mac (`macos_vm_inspection_ca`). Trusted once in `macos-vm edit-base`, it lets apps that use only the system trust store reach Inspected hosts. Each such run records `inspection_ca` on its machine.
+- macOS VMs: an opt-in inspection CA per Mac (`macos_vm_inspection_ca`). Trusted once in `macos-vm edit-base`, it lets apps that use only the system trust store reach Inspected hosts. Each such run records `inspection_ca` on its machine. runnerd.json refuses a value other than 1, 0, true, false, on, off, yes or no. A managed value outside that list leaves the CA unused and keeps its key, unless a drive root is or holds the VM directory.
 
 ### Changed
 
@@ -40,7 +40,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
 - An approved MCP call with an operation key whose body the content scan blocks is refused before its send is recorded, so its key no longer reads as possibly sent. Needs the new proxy image.
 - An SSO sign-in now always replaces the groups recorded at the person's last sign-in, also after the database's clock stepped back.
-- The runner refuses a `macos_vm_inspection_ca` in runnerd.json that is not 1, 0, true, false, on, off, yes or no, and a managed or environment value outside that list keeps the Mac's inspection CA, where any such value read as off and deleted it.
 
 ### Security
 
