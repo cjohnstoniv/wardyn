@@ -6,12 +6,17 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -82,16 +87,21 @@ func TestAPIKeyApprovalHeldGrantLeftAloneUntilChanged(t *testing.T) {
 // the grant still launches, and the key is left out of the run (the grant is
 // never on the proxy's list: TestPersistRunGrantsLeavesApprovalGatedKeyOffTheProxy).
 func TestPolicyOverlayGatedAPIKeyLaunches(t *testing.T) {
-	srv, _ := ovOverlayFixture(t)
+	srv, st := ovOverlayFixture(t)
+	st.capStore.enf = nil                              // as TestPolicyIDWithOverridesParity: no capability enforcement on the grant
 	legacy := &srv.cfg.DefaultPolicy.EligibleGrants[0] // shared with the member's ceiling
 	legacy.RequiresApproval = true
 	body := ovOverlayBody(`{"eligible_grants":[{"kind":"api_key","requires_approval":true,"ttl_seconds":60,` +
 		`"scope":{"host":"api.anthropic.com","secret_name":"` + govCorpSecret + `"}}]}`)
 	_, created, _ := ovDoorSpecs(t, srv, body)
+	gated := 0
 	for _, g := range created.EligibleGrants {
-		if g.Kind == types.GrantAPIKey && !g.RequiresApproval {
-			t.Errorf("created grant %+v, want the approval kept on", g)
+		if g.Kind == types.GrantAPIKey && g.RequiresApproval {
+			gated++
 		}
+	}
+	if gated != 1 {
+		t.Errorf("created grants %+v, want exactly one api_key with approval on", created.EligibleGrants)
 	}
 }
 
@@ -203,5 +213,90 @@ func TestTemplateSaveGatedAPIKey(t *testing.T) {
 	}
 	if diags := save([]types.GrantSpec{grant}); len(diags) != 0 {
 		t.Errorf("the stored revision held it (scope keys reordered): diagnostics %v, want accepted", diagReasons(diags))
+	}
+}
+
+const apiKeyApprovalMsg = "api_key cannot require approval"
+
+// gatedGrantJSON is a gated api_key grant as a request spells it, its scope keys in an order the
+// stored one is not in.
+const gatedGrantJSON = `{"kind":"api_key","requires_approval":true,"ttl_seconds":%d,` +
+	`"scope":{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}}`
+
+// A policy saved before the rule keeps its gated api_key grant, and an update that leaves the grant
+// unchanged saves; one that adds or changes a gated grant is refused. A create holds nothing.
+func TestPolicyUpdateGatedAPIKeyHeldGrant(t *testing.T) {
+	h := newHarness(t)
+	ms := &memPolicyStore{rows: map[uuid.UUID]types.RunPolicy{}}
+	srv := New(baseTestConfig(h, ms))
+	id, seen := uuid.New(), time.Now().UTC()
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	ms.rows[id] = types.RunPolicy{ID: id, Name: "legacy", UpdatedAt: seen,
+		Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{legacy}}}
+	spec := func(ttl int) string {
+		return `{"min_confinement_class":"CC2","eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}`
+	}
+	path := "/api/v1/policies/" + id.String()
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut("legacy", seen, spec(300))); w.Code != http.StatusOK {
+		t.Errorf("update leaving the gated grant unchanged = %d %s, want 200", w.Code, w.Body.String())
+	}
+	seen = ms.rows[id].UpdatedAt
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut("legacy", seen, spec(60))); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("update changing the gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{"name":"fresh","spec":`+spec(300)+`}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("create with a gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
+
+// A standalone profile ceiling saved before the rule keeps its gated api_key grant: a write that
+// leaves it unchanged is not refused for it (scope keys in another order included); a changed one is.
+func TestStandaloneCeilingGatedAPIKeyHeldGrant(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	s.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{legacy}
+	stored := govCovStandalone(govCovTop, "top", "pypi.org")
+	stored.Ceiling.EligibleGrants = []types.GrantSpec{legacy}
+	body := func(ttl int) string {
+		return `{"name":"top","ceiling":{"min_confinement_class":"CC2","allowed_domains":["pypi.org"],"eligible_grants":[` +
+			strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+	}
+	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(300)); err != nil && strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("unchanged gated grant: %v, want it not refused", err)
+	}
+	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(60)); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: %v, want the approval refusal", err)
+	}
+	if err := govCovBuildErr(t, s, nil, govCovTop, body(300)); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("a create with a gated grant: %v, want the approval refusal", err)
+	}
+}
+
+// A boundary saved before the rule keeps its gated api_key grant: a PUT that leaves it unchanged
+// is not refused for it; one that changes it, or a boundary that held none, is.
+func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	put := func(stored []types.GrantSpec, ttl int) *httptest.ResponseRecorder {
+		var spec types.BoundarySpec
+		if stored != nil {
+			spec.EligibleGrants = &stored
+		}
+		srv := &Server{cfg: Config{Store: hardBoundary(spec)}}
+		body := `{"mode":"hard_limits","spec":{"eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+		w := httptest.NewRecorder()
+		srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(body)))
+		return w
+	}
+	if w := put([]types.GrantSpec{legacy}, 300); strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("unchanged gated grant = %d %s, want it not refused", w.Code, w.Body.String())
+	}
+	if w := put([]types.GrantSpec{legacy}, 60); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+	if w := put(nil, 300); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("boundary that held none = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
 	}
 }

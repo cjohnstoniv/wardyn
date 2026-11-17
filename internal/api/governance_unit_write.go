@@ -208,7 +208,9 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 		if req.keepsSecrets {
 			spec = withoutKeptSecrets(spec)
 		}
-		if err := validateAuthoredPolicySpec(spec); err != nil {
+		// The api_key approval rule is judged by buildGovernanceUnit against the stored row, which a
+		// decode cannot see; every write, dry run and replay of a standalone ceiling reaches it.
+		if err := validateAuthoredSpecBase(spec); err != nil {
 			return governanceUnitRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -635,7 +637,7 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		req.Ceiling.WorkspaceMounts = out
 		keep.ceiling, keep.setsHostPath = held, sets
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
-		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
+		if err := validateAuthoredPolicySpecHolding(req.Ceiling, s.storedCeilingGrants(all, id)); err != nil {
 			return p, nil, keep, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the

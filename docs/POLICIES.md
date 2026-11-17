@@ -876,7 +876,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, `env_secret`, or `file_secret`. Anything else is rejected. |
 | `scope` | object | — | Kind-specific; see the table below. |
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
-| `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. Refused when saved on `api_key`, `env_secret` and `file_secret`, which no approval can gate. A launch never refuses it. |
+| `requires_approval` | `bool` | `false` | Force a human approval before the broker mints. `api_key`: refused when a save adds or changes it, never at launch. `env_secret`, `file_secret`: refused wherever a policy is validated, a launch included. |
 | `owner_only` | `bool` | `false` | For a grant that names a stored secret, resolves it from the run owner's own row only, never the operator's; refused on `github_token` and `cloud_sts`. See [`owner_only`](#owner_only). |
 | `owner_only_refs` | `[string]` | `[]` | `owner_only` for the named secrets alone. See [`owner_only_refs`](#owner_only_refs). |
 
@@ -942,11 +942,12 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - Set it for an https-only vendor the proxy has no table for, which is the one case those rules cannot tell apart from a legitimately plaintext internal connector.
 - It is part of the pairing too, so a member cannot keep the operator's blessed `(host, secret, header, format)` and drop the TLS requirement.
 - Proxy-side injection only: Wardyn places no copy in the sandbox, though a host that echoes request headers can return the value ([CREDENTIALS.md](CREDENTIALS.md#residuals)).
-- `requires_approval` is refused when a policy, preset, template, ceiling or governance overlay that adds it is saved:
+- `requires_approval` is refused when a policy, ceiling, boundary, preset, template or governance overlay save adds or changes it:
   - every door that injects a key drops an approval-gated grant, so no run could use it;
   - a launch that carries one, inline or by overlay, runs with the key left out;
-  - anything saved earlier, the default policy file included, still loads and runs, and its key is never injected;
-  - a ceiling saved before this release that requires approval on an `api_key` leaves that key out of runs, so edit the ceiling.
+  - anything saved earlier, the default policy file included, still loads, runs and can be edited while that grant is unchanged, and its key is never injected;
+  - a ceiling saved before this release that requires approval on an `api_key` leaves that key out of runs, so edit the ceiling;
+  - a recording proposal is clamped to your ceiling, so a ceiling grant that requires approval makes saving the recording refuse its `api_key` until the ceiling or the grant is fixed.
 - `shared` in the scope is set by Wardyn for an organisation component's secret and never authored: every policy door refuses it.
 - Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused.
 

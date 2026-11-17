@@ -48,7 +48,7 @@ Because the control plane answers each time the proxy asks, it can also renew or
 - On a kubectl row, a 10-minute token of the row's service account is minted with the cluster's TokenRequest API ([`internal/api/injection_kubectl_cli.go#mintKubectlToken`](../internal/api/injection_kubectl_cli.go)).
 - On an Azure DevOps `minted_pat` row, a token is created for the run and revoked on pause and at the run's end ([How a run's token lives](AZURE-DEVOPS.md#how-a-runs-token-lives-minted_pat)).
 - A stored key is read again on a short lease ([`internal/api/injection.go#Server.storedKeyExpiry`](../internal/api/injection.go)).
-- An approval-gated `api_key` grant is refused when a policy, preset, template, ceiling or governance overlay that adds it is saved:
+- An approval-gated `api_key` grant is refused when a policy, ceiling, boundary, preset, template or governance overlay save adds or changes it:
   - a launch that carries one, inline or by overlay, runs with the key left out;
   - one saved earlier is never added: Wardyn leaves it off the rules the proxy loads at start ([`internal/api/runs_create_grants.go#Server.persistRunGrants`](../internal/api/runs_create_grants.go), [`internal/egress/proxy/server.go#newServer`](../internal/egress/proxy/server.go)), and its mint answers without the key ([`internal/broker/broker_mint_kinds.go#Broker.mintAPIKey`](../internal/broker/broker_mint_kinds.go)). No run can use that key.
 - The proxy asks again from `5m` before the lease ends, on the next request ([`internal/egress/proxy/inject.go#injectRefreshMargin`](../internal/egress/proxy/inject.go)).
