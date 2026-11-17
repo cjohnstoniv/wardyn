@@ -19,10 +19,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A `once` egress approval is no longer spent by an HTTPS connection that got nothing back from the far side. That is a failed dial, a configured upstream proxy's refusal of the CONNECT, or an upstream that, after the sandbox's TLS hello, closed or reset without a reply or answered in plaintext. The next request to that host within 60 seconds uses it, once per approval, and the failure's audit row carries the `approval_id` and says so. A TLS alert, a sandbox that closed first, and plain HTTP requests still spend it. Needs the new proxy image.
 - VM runs (`linux_vm`, `macos_vm`) accept `host_rules`. The guest's requests to a rule host are judged as a container's are, and the `host_rules_need_inspected_vm` refusal is gone.
+- `POST /api/v1/sources/{id}/scan` answers a folder scan whose result could not be saved as a server fault, `500` `internal_error`, which a retry may clear, and `404` `source_not_found` when the source was deleted while the scan ran. It answered `422` `source_scan_failed`, which reads as the folder failing its scan.
+- `POST /api/v1/workspaces/{id}/scan` answers the same fault as a `500`, where it answered `422`. It skips a folder deleted while it was scanned, as it skips an attachment that no longer exists, instead of ending the scan.
+- A `source.scan` row for an upload that is not scan facts, a `workspace.requirement.write` row for a run that could not be read, and a `run.record.start` row for a launch the server failed now name the step that failed, never the error's text; the server log keeps the cause.
+- In a `run.record.start` row, a record launch refusal the route answers in its own words keeps that sentence; every other failure, a run-cap or host-capacity refusal included, names the step.
+- A `workspace.requirement.write` row for a requirements write the store failed says `requirements at their key cap`, `workspace not found` or `store error`, never the store's text.
+- A `workspace.egress.approve` or `workspace.egress.deny` row for an `always` decision whose egress list write the store failed, written either when the decision is made or when the boot re-apply replays it, now says `egress list at its cap or edited since the decision`, `workspace not found` or `store error`, never the store's text. The server log keeps the cause of a `store error`.
 
 ### Fixed
 
 - On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
+
+### Security
+
+- The send record of an MCP call refuses an approval whose operation key starts `call:` but is not the key made from that call (`404`).
 
 ### Before you upgrade
 
