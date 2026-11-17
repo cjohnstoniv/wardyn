@@ -79,6 +79,7 @@ const nonTerminalRunStates = `'QUEUED','PENDING','STARTING','RUNNING','WAITING_F
 // the runner (a pool's run routes by it too, whatever its placement). The exception
 // is the sweep's strand guard, a run never exec'd, which needs no probe and is ended
 // with its runner offline, so a runner that never returns does not strand it.
+// An interrupted macOS VM prep is the other exception, ended without a probe by failInterruptedMacPreps.
 func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration, heldRunners []uuid.UUID) ([]types.AgentRun, error) {
 	if staleAfter < 0 {
 		// Duration.String() renders "-1m30s" but ::interval binds the sign only
@@ -98,9 +99,11 @@ func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter 
 		  AND lost_at IS NULL
 		  AND (sandbox_ref NOT LIKE 'runner:%'
 		       OR split_part(sandbox_ref, '/', 1) = ANY($3::text[])
-		       OR (NOT interactive AND task <> '' AND agent_exec_id = ''))
+		       OR (NOT interactive AND task <> '' AND agent_exec_id = '')
+		       OR (interactive AND state = 'RUNNING' AND machine_kind = $5 AND status_detail = $4))
 		RETURNING ` + runCols
-	return collect(ctx, s.Pool, "claim", "stale run watchers", q, []any{owner, staleAfter.String(), held}, scanRun)
+	args := []any{owner, staleAfter.String(), held, types.RunStatusDetailMacPrepRunning, string(types.MachineMacOSVM)}
+	return collect(ctx, s.Pool, "claim", "stale run watchers", q, args, scanRun)
 }
 
 // ReleaseUncreatedRunWatcher clears id's lease owner while no sandbox is recorded for it: the

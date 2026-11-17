@@ -219,6 +219,7 @@ func TestPG_RunWatcherLease_LeavesUpdatedAtAlone(t *testing.T) {
 // runner: only a replica holding that runner's session takes it, however stale the lease, and nobody
 // does while the runner has no session. A run never exec'd is the exception: the sweep's strand guard
 // ends it without a probe, so any replica takes it, and a runner that never returns cannot strand it.
+// An interactive macOS VM run whose prep was interrupted is the other: failInterruptedMacPreps ends it.
 func TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder(t *testing.T) {
 	pool := runsPGPool(t)
 	st := store.NewPG(pool)
@@ -266,5 +267,24 @@ func TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder(t *testing.T) {
 	}
 	if onContainer := watchedRun(t, ctx, pool, types.RunRunning); !claims("no-session", onContainer.ID) {
 		t.Error("a run on no runner was not claimed by a replica holding no session")
+	}
+
+	macPrep := onRunner("", true)
+	for _, c := range []struct {
+		kind   types.MachineKind
+		detail string
+		want   bool
+	}{
+		{types.MachineMacOSVM, types.RunStatusDetailMacPrepRunning, true},
+		{types.MachineMacOSVM, "prep: done", false},
+		{types.MachineLinuxVM, types.RunStatusDetailMacPrepRunning, false},
+	} {
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET machine_kind=$1, status_detail=$2 WHERE id=$3`, string(c.kind), c.detail, macPrep.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := claims("other-session", macPrep.ID, other); got != c.want {
+			t.Errorf("interactive %s run with status detail %q: claimed by a replica not holding its runner = %v, want %v",
+				c.kind, c.detail, got, c.want)
+		}
 	}
 }
