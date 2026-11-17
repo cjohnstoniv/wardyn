@@ -1098,6 +1098,13 @@ func TestRecordStartStampsTheCrossUserMarker(t *testing.T) {
 			t.Errorf("failure emit carries no workspace_owner=%q: %s — an auditor filtering for cross-user admin "+
 				"access misses this launch and must join workspace_id back out of band", owner, evs[0].Data)
 		}
+		var d map[string]any
+		if err := json.Unmarshal(evs[0].Data, &d); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		if d["detail"] != recordAuditLaunchFault {
+			t.Errorf("failure emit detail = %v, want %q: the class, never the store's text", d["detail"], recordAuditLaunchFault)
+		}
 	})
 
 	// A REFUSED source target must still be recorded. The 422 branch was added

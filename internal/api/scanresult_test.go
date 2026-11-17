@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -242,6 +243,7 @@ func TestUploadScanResult_SupersededSourceFenced(t *testing.T) {
 // TestUploadScanResult_MalformedFactsAuditTheStepNotTheText: an upload that is not scan facts is a 400, and its
 // source.scan failure row names the failed step, never the parser's text, which quotes the sandbox's bytes.
 func TestUploadScanResult_MalformedFactsAuditTheStepNotTheText(t *testing.T) {
+	logs := captureSlog(t)
 	h := newHarness(t)
 	sourceID, runID := uuid.New(), uuid.New()
 	st := &sourceScanUploadStore{run: types.AgentRun{ID: runID, Task: "source scan", SourceID: &sourceID}}
@@ -265,5 +267,8 @@ func TestUploadScanResult_MalformedFactsAuditTheStepNotTheText(t *testing.T) {
 	}
 	if fails != 1 {
 		t.Errorf("source.scan failure rows = %d, want 1", fails)
+	}
+	if !strings.Contains(logs.String(), "cannot unmarshal") {
+		t.Errorf("log = %q, want the parser's error the audit row leaves out", logs.String())
 	}
 }

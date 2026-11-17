@@ -113,6 +113,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 	}
 
 	t.Run("GetRun failure audits the miss", func(t *testing.T) {
+		logs := captureSlog(t)
 		h, fake, srv, runID := unreadable(t)
 		srv.learnVerifyEgress(context.Background(), decided(runID), types.ActorHuman, "admin@corp.example")
 		if len(fake.ws.Requirements) != 0 {
@@ -127,6 +128,9 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		// carries.
 		if detail := r3bAuditDetail(t, fails[0]); detail == "" || detail == "invalid or empty host in requested_scope" {
 			t.Errorf("failure row detail = %q, want the run-read step", detail)
+		}
+		if !strings.Contains(logs.String(), "connection reset by peer") {
+			t.Errorf("log = %q, want the store's error the audit row leaves out", logs.String())
 		}
 	})
 
