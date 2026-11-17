@@ -4,15 +4,18 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -228,10 +231,11 @@ func TestSSHChannelSwitch_SyncIsRefusedWithSFTPOff(t *testing.T) {
 }
 
 // TestRunExecFollowsTheChannelSwitch: POST /runs/{id}/exec is the SSH exec channel over HTTP, so it is refused
-// when exec is left out (409 run_exec_unavailable, the gateway's sentence, one channel_off row, no runner call)
-// and runs when exec is listed or no list is set.
+// when exec is left out (409 run_exec_off, its own sentence, one channel_off row naming the caller's actor type,
+// no runner call) and runs when exec is listed or no list is set. The caller is a person through the router and
+// the admin token through the handler, so the row's actor type is told apart from a hard-coded human.
 func TestRunExecFollowsTheChannelSwitch(t *testing.T) {
-	const sentence = "wardyn: this deployment's SSH gateway does not serve commands (exec) (WARDYN_SSH_CHANNELS)"
+	const sentence = "Commands are off on this deployment: its operator left exec out of WARDYN_SSH_CHANNELS."
 	for _, tc := range []struct {
 		name     string
 		channels map[string]bool
@@ -254,14 +258,35 @@ func TestRunExecFollowsTheChannelSwitch(t *testing.T) {
 				}
 				return
 			}
-			if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || execError(t, w) != sentence {
-				t.Errorf("POST /exec = %d %s, want 409 %s with %q", w.Code, w.Body, reasonRunExecUnavailable, sentence)
+			if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecOff || execError(t, w) != sentence {
+				t.Errorf("POST /exec = %d %s, want 409 %s with %q", w.Code, w.Body, reasonRunExecOff, sentence)
 			}
 			if n := e.execs.Load(); n != 0 {
 				t.Errorf("the runner was called %d times through an exec that is off", n)
 			}
 			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"channel_type":"exec"`) || !strings.Contains(string(rows[0].Data), `"reason":"channel_off"`) {
 				t.Errorf("ssh.channel.reject rows = %v, want one channel_off row with channel_type exec", rows)
+			} else if rows[0].ActorType != types.ActorHuman {
+				t.Errorf("a person's refusal row has actor type %q, want %q", rows[0].ActorType, types.ActorHuman)
+			}
+			// The admin token, straight to the handler: it enters its own run only when the run is operator-owned.
+			e.ast.mu.Lock()
+			run := e.ast.runs[e.id]
+			run.OperatorOwned = true
+			e.ast.runs[e.id] = run
+			e.ast.mu.Unlock()
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("id", e.id.String())
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+e.id.String()+"/exec", strings.NewReader(`{"command":"id"}`))
+			r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+			rec := httptest.NewRecorder()
+			e.srv.handleRunExec(rec, r)
+			if rec.Code != http.StatusConflict || wireReason(t, rec) != reasonRunExecOff {
+				t.Fatalf("the admin token's POST /exec = %d %s, want 409 %s", rec.Code, rec.Body, reasonRunExecOff)
+			}
+			rows = execRows(e.h.audit.snapshot(), "ssh.channel.reject")
+			if len(rows) != 2 || rows[1].ActorType != types.ActorSystem || rows[1].Actor != adminTokenPrincipal {
+				t.Errorf("rows after the admin token's refusal = %v, want a second row with actor type %q for %q", rows, types.ActorSystem, adminTokenPrincipal)
 			}
 		})
 	}

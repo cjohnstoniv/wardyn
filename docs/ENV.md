@@ -1888,12 +1888,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Which kinds of SSH channel the gateway serves (flag `-ssh-channels`): `shell` (a terminal), `exec` (a command), `sftp` (file transfer) and `forward` (`-L` port forwarding).
 - Unset serves all four, as before. Set, only the listed kinds are served; any other is refused with one sentence and one `ssh.channel.reject` row (reason `channel_off`).
-- `sftp` also covers `wardyn sync`, which runs the same sftp-server; `sync` is not a name to list. `exec` also covers `POST /runs/{id}/exec`, the same command over HTTP, which is refused with `409 run_exec_unavailable` and the same sentence.
+- `sftp` also covers `wardyn sync`, which runs the same sftp-server; `sync` is not a name to list. `exec` also covers `POST /runs/{id}/exec`, the same command over HTTP, which is refused with `409 run_exec_off` and its own sentence.
 - An empty value is the same as unset.
 - `exec` covers more than it says: while it is listed, a client can still start a shell, run `sftp-server` and relay ports through a command, so leaving out `shell`, `sftp` or `forward` alone does not stop them. Only leaving out `exec` narrows those. The console's terminal is not an SSH gateway channel and is not covered.
 - It only narrows. It adds no credential path, and the per-run `data_out` rule still applies to what it serves.
 - Boot refuses an unknown name or an empty item.
-- `/healthz` lists the served kinds as `ssh.channels`, and `wardyn run ssh`, `exec`, `forward`, `editor` and `sync` stop with one line before they dial when they need a kind that is off. `editor` needs all four.
+- `/healthz` lists the served kinds as `ssh.channels`, and `wardyn run ssh`, `exec`, `forward` and `editor`, and `wardyn sync`, stop with one line before they dial when they need a kind that is off. `editor` needs all four.
 - See [SSH.md](SSH.md).
 
 ### `WARDYN_SYNC_DENY`

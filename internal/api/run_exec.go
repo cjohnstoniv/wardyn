@@ -53,6 +53,9 @@ const (
 	runExecStreamCap = 1 << 20
 	// runExecDataOutMsg is sshDataOutRefused's sentence for this door.
 	runExecDataOutMsg = "This run's data_out rule (%s) keeps content in, so commands are off; the terminal still works."
+	// runExecChannelOffMsg answers a deployment whose operator left exec out of WARDYN_SSH_CHANNELS: sshChannelOffMsg's
+	// sentence for this door.
+	runExecChannelOffMsg = "Commands are off on this deployment: its operator left exec out of WARDYN_SSH_CHANNELS."
 	// runExecSandboxGoneMsg answers a run whose sandbox went away between the state check and the exec.
 	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
 	// runExecBusyMsg answers a run already holding its most SSH channels and commands at once.
@@ -87,9 +90,9 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if !s.sshChannelOn(sshKindExec) {
 		// This door is the SSH exec channel over HTTP, so a deployment that leaves exec out of
 		// WARDYN_SSH_CHANNELS leaves it out here, with the sentence and the row the gateway gives.
-		_, actor := actorFromRequest(r)
-		s.sshAuditChannelOff(r.Context(), run.ID, actor, string(sshKindExec))
-		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, sshChannelOffMsg(sshKindExec))
+		at, actor := actorFromRequest(r)
+		s.sshAuditChannelOff(r.Context(), run.ID, at, actor, string(sshKindExec))
+		writeErrorReason(w, http.StatusConflict, reasonRunExecOff, runExecChannelOffMsg)
 		return
 	}
 	var req client.ExecRequest

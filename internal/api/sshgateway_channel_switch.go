@@ -53,9 +53,10 @@ func sshChannelOffMsg(k sshChannelKind) string {
 	return "wardyn: this deployment's SSH gateway does not serve " + word + " (WARDYN_SSH_CHANNELS)"
 }
 
-// sshAuditChannelOff writes the ssh.channel.reject row for a channel the switch turned off.
-func (s *Server) sshAuditChannelOff(ctx context.Context, runID uuid.UUID, principal, channelType string) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
+// sshAuditChannelOff writes the ssh.channel.reject row for a channel the switch turned off, as the actor type at:
+// the gateway's callers are people, the REST exec door's may be a service or the admin token.
+func (s *Server) sshAuditChannelOff(ctx context.Context, runID uuid.UUID, at types.ActorType, principal, channelType string) {
+	s.recordAudit(ctx, s.auditEvent(&runID, at, principal, "ssh.channel.reject",
 		runID.String(), "failure", mustJSON(map[string]any{
 			"channel_type": channelType, "reason": "channel_off",
 		})))
@@ -64,7 +65,7 @@ func (s *Server) sshAuditChannelOff(ctx context.Context, runID uuid.UUID, princi
 // sshRefuseForward refuses a direct-tcpip channel when forward is off, else applies the data_out rule.
 func (s *Server) sshRefuseForward(ctx context.Context, runID uuid.UUID, principal string, ch ssh.NewChannel, rule types.TransferRule) bool {
 	if !s.sshChannelOn(sshKindForward) {
-		s.sshAuditChannelOff(ctx, runID, principal, "direct-tcpip")
+		s.sshAuditChannelOff(ctx, runID, types.ActorHuman, principal, "direct-tcpip")
 		_ = ch.Reject(ssh.Prohibited, sshChannelOffMsg(sshKindForward))
 		return true
 	}
@@ -108,7 +109,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // text and closed, which frees the sync slot it was holding.
 func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string, kind sshChannelKind) bool {
 	if !g.s.sshChannelOn(kind) {
-		g.s.sshAuditChannelOff(g.ctx, g.runID, g.principal, string(kind))
+		g.s.sshAuditChannelOff(g.ctx, g.runID, types.ActorHuman, g.principal, string(kind))
 		if kind == sshKindSync {
 			// Acked, then ended with the sentence, as the sync cap is: the sync client stops on a false reply
 			// before it reads the channel's stderr.

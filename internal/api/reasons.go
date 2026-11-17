@@ -806,6 +806,7 @@ const (
 	reasonRunExecInvalid     = "run_exec_invalid"     // command is empty or over 128 KiB, or timeout_sec is outside 1 to 300
 	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, or paused and not resumed
 	reasonRunExecFailed      = "run_exec_failed"      // the runner could not start the command, or lost it before it ended
+	reasonRunExecOff         = "run_exec_off"         // 409: the operator left exec out of WARDYN_SSH_CHANNELS, so commands are off for the deployment
 	reasonRunExecBusy        = "run_exec_busy"        // 429: the run already holds its most SSH channels and commands at once (WARDYN_SSH_MAX_SESSIONS_PER_RUN)
 	reasonAuditUnavailable   = "audit_unavailable"    // strict audit is on and the change's intent row could not be written first; nothing was changed
 )
