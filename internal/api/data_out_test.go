@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -324,12 +325,14 @@ func TestDataOutBringBackRefused(t *testing.T) {
 	}
 }
 
-// dataOutFolderStore is a computer-folder store whose run records a policy envelope with spec.
+// dataOutFolderStore is a computer-folder store whose run records a policy envelope with spec. It keeps the
+// run row's data_out rule (store.RunDataOuts): row is that rule, nil for a run from before the column.
 type dataOutFolderStore struct {
 	refStore
 	spec       types.RunPolicySpec
 	readErr    error // every read fails with it
 	noEnvelope bool  // the run's log holds no envelope
+	row        *types.TransferRule
 }
 
 func (s dataOutFolderStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
@@ -340,41 +343,127 @@ func (s dataOutFolderStore) QueryAuditEvents(_ context.Context, runID uuid.UUID,
 	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
-// TestDataOutNoRecordIsAllowedAndReadErrorIs503: a run with no recorded policy (its audit rows were pruned)
-// carries no rule, so output, web apps and the bring-back read it as allowed; a store that cannot answer
-// refuses each of them with 503 data_out_unreadable.
-func TestDataOutNoRecordIsAllowedAndReadErrorIs503(t *testing.T) {
+func (s dataOutFolderStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.refStore.GetRun(ctx, id)
+	if s.row != nil {
+		run.DataOut = s.row
+	}
+	return run, err
+}
+
+func (dataOutFolderStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// dataOutRowStore is a store that keeps the run row's data_out rule (store.RunDataOuts): every run it reads
+// carries row, nil for a run from before the column.
+type dataOutRowStore struct {
+	store.Store
+	row *types.TransferRule
+}
+
+func (s *dataOutRowStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.Store.GetRun(ctx, id)
+	run.DataOut = s.row
+	return run, err
+}
+
+func (*dataOutRowStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// dataOutDoors asks the three doors the rule closes: the owner's output read, a web app other than the desktop,
+// and the owner's computer-folder bring-back. env is the recorded envelope's rule, nil for a run whose policy
+// rows retention pruned; row is the run row's rule, nil for a run from before the column; keeps is whether the
+// store keeps the column. It returns whether each door was refused by the rule.
+func dataOutDoors(t *testing.T, env, row *types.TransferRule, keeps bool) (output, app, folder bool) {
+	t.Helper()
+	spec := types.RunPolicySpec{}
+	if env != nil {
+		spec.DataOut = *env
+	}
+	wrap := func(st store.Store) store.Store {
+		if keeps {
+			return &dataOutRowStore{Store: st, row: row}
+		}
+		return st
+	}
+
+	srv, _, seed := runOutputServer(t)
+	srv.cfg.Store = wrap(&envelopeStore{Store: srv.cfg.Store, spec: spec, noEnvelope: env == nil})
+	id := seed(types.AgentRun{State: types.RunCompleted})
+	code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
+	output = code == http.StatusForbidden && refusal.Reason == reasonDataOutBlocked
+
+	h := newUIHarness(t, okBackend())
+	h.srv.cfg.Store = wrap(&envelopeStore{Store: h.srv.cfg.Store, spec: spec, noEnvelope: env == nil})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session", nil)
+	w := httptest.NewRecorder()
+	app = h.srv.refuseAppDataOut(w, r, h.run, "code") && w.Code == http.StatusForbidden
+
+	if keeps {
+		s, _, _, run, _, _ := bringBackFixture(t)
+		s.cfg.Store = dataOutFolderStore{refStore: s.cfg.Store.(refStore), spec: spec, noEnvelope: env == nil, row: row}
+		folder = bringBack(t, s, bringBackOwnerSession(t), run).reason() == reasonDataOutBlocked
+	}
+	return output, app, folder
+}
+
+// TestDataOutRunRowRuleOutlivesRetention: the run row keeps the data_out rule, so a run whose policy rows
+// retention pruned keeps it on output, web apps and the bring-back (review and blocked refuse, allowed opens),
+// and the row wins over an envelope that says otherwise. A run from before the column (no rule on its row)
+// reads its envelope, and one with no envelope either keeps its content in. A store that keeps no column
+// reads the envelope alone, as before.
+func TestDataOutRunRowRuleOutlivesRetention(t *testing.T) {
+	rule := func(r types.TransferRule) *types.TransferRule { return &r }
+	allowed, review, blocked := rule(types.TransferAllowed), rule(types.TransferReview), rule(types.TransferBlocked)
+	for _, tc := range []struct {
+		name     string
+		env, row *types.TransferRule
+		keeps    bool
+		refused  bool
+	}{
+		{"row blocked, envelope pruned", nil, blocked, true, true},
+		{"row review, envelope pruned", nil, review, true, true},
+		{"row allowed, envelope pruned", nil, allowed, true, false},
+		{"row blocked, envelope allowed", allowed, blocked, true, true},
+		{"no row, envelope blocked", blocked, nil, true, true},
+		{"no row, envelope review", review, nil, true, true},
+		{"no row, envelope allowed", allowed, nil, true, false},
+		{"no row, envelope pruned", nil, nil, true, true},
+		{"no column, envelope pruned", nil, nil, false, false},
+		{"no column, envelope blocked", blocked, nil, false, true},
+	} {
+		output, app, folder := dataOutDoors(t, tc.env, tc.row, tc.keeps)
+		if output != tc.refused || app != tc.refused {
+			t.Errorf("%s: output refused %v, web app refused %v, want %v", tc.name, output, app, tc.refused)
+		}
+		if tc.keeps && folder != tc.refused {
+			t.Errorf("%s: bring-back refused %v, want %v", tc.name, folder, tc.refused)
+		}
+	}
+}
+
+// TestDataOutReadErrorIs503: a store that cannot answer refuses output, web apps and the bring-back with 503
+// data_out_unreadable.
+func TestDataOutReadErrorIs503(t *testing.T) {
 	readErr := errors.New("audit store unavailable")
 
-	srv, id := dataOutRunOutput(t, types.TransferBlocked, nil)
-	srv.cfg.Store.(*envelopeStore).noEnvelope = true
-	if code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t)); code == http.StatusForbidden || code == http.StatusServiceUnavailable {
-		t.Errorf("output with no recorded policy = %d %q, want the output's own answer", code, refusal.Reason)
-	}
-	srv.cfg.Store.(*envelopeStore).noEnvelope, srv.cfg.Store.(*envelopeStore).readErr = false, readErr
+	srv, id := dataOutRunOutput(t, types.TransferBlocked, readErr)
 	if code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t)); code != http.StatusServiceUnavailable || refusal.Reason != reasonDataOutUnreadable {
 		t.Errorf("output with a read error = %d %q, want 503 %s", code, refusal.Reason, reasonDataOutUnreadable)
 	}
 
 	h := newUIHarness(t, okBackend())
-	h.srv.cfg.Store = &envelopeStore{Store: h.srv.cfg.Store, noEnvelope: true}
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session", nil)
-	if w := httptest.NewRecorder(); h.srv.refuseAppDataOut(w, r, h.run, "code") {
-		t.Errorf("a web app with no recorded policy was refused: %d %s", w.Code, w.Body.String())
-	}
 	h.srv.cfg.Store = &envelopeStore{Store: h.srv.cfg.Store, readErr: readErr}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session", nil)
 	w := httptest.NewRecorder()
 	if !h.srv.refuseAppDataOut(w, r, h.run, "code") || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonDataOutUnreadable) {
 		t.Errorf("a web app with a read error: %d %s, want 503 %s", w.Code, w.Body.String(), reasonDataOutUnreadable)
 	}
 
 	s, _, _, run, _, _ := bringBackFixture(t)
-	base := s.cfg.Store.(refStore)
-	s.cfg.Store = dataOutFolderStore{refStore: base, noEnvelope: true}
-	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.reason() == reasonDataOutBlocked || res.reason() == reasonDataOutUnreadable {
-		t.Errorf("bring-back with no recorded policy = %d %s, want the rule not to refuse it", res.code, res.body)
-	}
-	s.cfg.Store = dataOutFolderStore{refStore: base, readErr: readErr}
+	s.cfg.Store = dataOutFolderStore{refStore: s.cfg.Store.(refStore), readErr: readErr}
 	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusServiceUnavailable || res.reason() != reasonDataOutUnreadable {
 		t.Errorf("bring-back with a read error = %d %s, want 503 %s", res.code, res.body, reasonDataOutUnreadable)
 	}

@@ -49,6 +49,15 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 	if err != nil {
 		return 0, err
 	}
+	// A revive's seal may make data_out stricter: the run's row takes it before the generation is current, so
+	// no door reads a looser rule than the generation records. An egress edit's policy carries no data_out (its
+	// config's is blanked) and changes none, so it leaves the row as it is. The row is never lowered: a
+	// generation abandoned below keeps its stricter rule there.
+	if policy.DataOut != "" {
+		if err := s.raiseRunDataOut(ctx, run.ID, policy.DataOut); err != nil {
+			return 0, err
+		}
+	}
 	spec := auditablePolicy(policy)
 	gen, err := st.AdvanceRunPolicyGeneration(ctx, run.ID, expected, spec.Digest(), retired, fresh, sealed)
 	if err != nil {

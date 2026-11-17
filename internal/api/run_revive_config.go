@@ -240,9 +240,10 @@ func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Con
 // reviveCarryRecordedRules gives the revived policy the rules the stored proxy config leaves off, data_out and
 // recording (sidecarPolicy blanks both: the proxy enforces neither), from the policy the run is recorded
 // under now, so the re-seal and the new generation start from the run's own rules. Without it a revive
-// would keep only what an outer layer imposes. A store that keeps no generations has no new row to carry
-// them into, and a run with no recorded policy keeps what the stored config holds. A recorded policy that
-// cannot be read refuses the revive.
+// would keep only what an outer layer imposes. data_out is the rule the doors read (runDataOutRule): the
+// run row's when it keeps one, which retention cannot prune. A store that keeps no generations has no new
+// row to carry them into, and a run with no recorded policy keeps what the stored config holds, data_out
+// aside. A recorded policy that cannot be read refuses the revive.
 func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, cfg *proxy.Config) *reviveError {
 	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
 		return nil
@@ -251,9 +252,17 @@ func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, 
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's recorded policy", err))
 	}
-	if !ok {
-		return nil
+	if ok {
+		cfg.Policy.DataOut, cfg.Policy.Recording = envelope.DataOut, envelope.Recording
 	}
-	cfg.Policy.DataOut, cfg.Policy.Recording = envelope.DataOut, envelope.Recording
+	stored, keeps, err := s.storedRunDataOut(ctx, runID)
+	switch {
+	case err != nil:
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's data_out rule", err))
+	case stored != nil && *stored != cfg.Policy.DataOut.DataOut():
+		cfg.Policy.DataOut = *stored
+	case stored == nil && !ok && keeps:
+		cfg.Policy.DataOut = dataOutUnrecorded
+	}
 	return nil
 }
