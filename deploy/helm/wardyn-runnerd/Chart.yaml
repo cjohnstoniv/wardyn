@@ -2,8 +2,8 @@ apiVersion: v2
 name: wardyn-runnerd
 description: Organisation-owned Wardyn runner that places runs as pods in a dedicated runs namespace
 type: application
-version: 0.10.0-rc.22
-appVersion: 0.10.0-rc.22
+version: 0.10.0-rc.23
+appVersion: 0.10.0-rc.23
 keywords:
   - governance
   - sandbox

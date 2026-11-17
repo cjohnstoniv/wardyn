@@ -28,6 +28,7 @@
 | **v0.10.0-rc.20** | rc.20: ended runs cut off the network, Kubernetes live network edits that narrow the running proxy, No network below the proxy on Kubernetes where NetworkPolicy is enforced, and an opt-in macOS Setup Assistant carry-over. | **Shipped (pre-alpha)** — `v0.10.0-rc.20`, 2026-11-12 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.21** | rc.21: time limits on steps under run locks, folder copy backs kept or recorded as given up, secret saves that no longer overwrite another's, gateway client certificates, experimental Kubernetes warm pools, and Go 1.27. | **Shipped (pre-alpha)** — `v0.10.0-rc.21`, 2026-11-15 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.22** | rc.22: `wardyn policy check --within`, send-once operation keys for approve_each calls, confinement floors, workload policy pins and identities, a runtime contract page, and component grant withdrawals that reach running runs. | **Shipped (pre-alpha)** — `v0.10.0-rc.22`, 2026-11-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.23** | rc.23: a macOS VM inspection CA with an MDM profile template, `host_rules` for VM runs, a `once` approval a failed HTTPS connection no longer spends, and no repeat prompt for an identical concurrent MCP call. | **Shipped (pre-alpha)** — `v0.10.0-rc.23`, 2026-11-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
