@@ -40,7 +40,8 @@ func viaOrgADOPlan(origin CredentialOrigin, policy DeliveryPolicy) (LocalPlan, u
 	}, grant
 }
 
-// Value-list rows 2, 3, 5, 6, 7, 8, 11 and 12 as one table: LocalEligibility is the planner's door.
+// The via_org delivery decision for a minted Azure DevOps token, one table at LocalEligibility, the planner's door: the
+// switch, the runner's owner, trust class, floor and posture, and the bearer and own_pat modes.
 func TestLocalEligibility_ADOViaOrgMatrix(t *testing.T) {
 	requirePosture := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeViaOrg, RequirePosture: &PostureRequirement{DiskEncrypted: true}}}}
 	for _, tc := range []struct {
@@ -89,7 +90,7 @@ func TestLocalEligibility_ADOViaOrgMatrix(t *testing.T) {
 	}
 }
 
-// Row 4 and 10: resident is unchanged, an org runner never holds the token and a person's runner with the opt-in does.
+// Resident is unchanged: an org runner never holds the token and a person's runner with the opt-in does.
 func TestLocalEligibility_ADOResidentUnchangedByViaOrg(t *testing.T) {
 	resident := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}}
 	optIn := CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}
@@ -108,7 +109,8 @@ func TestLocalEligibility_ADOResidentUnchangedByViaOrg(t *testing.T) {
 	}
 }
 
-// Rows 1, 8 and 9 at the policy's doors: Validate, CheckBuildable.
+// The policy's doors, Validate and CheckBuildable: a global via_org row is accepted, require_posture is allowed on it, and
+// a per-trust override is refused.
 func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 	var none DeliveryPolicy
 	if err := viaOrgADOPolicy.Validate(); err != nil {
@@ -133,7 +135,7 @@ func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 			t.Errorf("%s: %v, want ErrInvalidPolicy", name, err)
 		}
 	}
-	// Row 9: never per trust class.
+	// Never per trust class.
 	for _, trust := range []types.RunnerTrustClass{types.RunnerTrustPersonal, types.RunnerTrustOrgCluster} {
 		byTrust := DeliveryPolicy{ByTrust: map[types.RunnerTrustClass]TrustPolicy{trust: {Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeViaOrg}}}}}
 		if err := byTrust.Validate(); !errors.Is(err, ErrInvalidPolicy) {
@@ -149,7 +151,7 @@ func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 	}
 }
 
-// Row 21: an ADO origin is never an eligible_grants entry delivered via_org. That holds because classify.go has no
+// An Azure DevOps origin is never an eligible_grants entry delivered via_org. That holds because classify.go has no
 // Brokered api_key row for the eligible_grants walk (GrantKind api_key rows are own and operator only), not because
 // ViaOrgADOAdmits refuses: on an empty plan it admits, which the last assertion records so that a future Brokered
 // api_key row fails here.
@@ -185,6 +187,35 @@ func TestLocalEligibility_ADOMixedDeliveryRefuses(t *testing.T) {
 	p.Origins["ProxyConfig.Injection[1]"] = own
 	if _, r := LocalEligibility(p); r != nil {
 		t.Fatalf("own injection on another host: %+v, want admitted", r)
+	}
+}
+
+// A git PAT grant on the gate's host is served by the runner's own broker lane, never the organisation's gate, so it is
+// refused beside a via_org gate however the host is spelled; the proxy keys its host tables with spaces trimmed.
+func TestLocalEligibility_ADOMixedDeliveryRefusesAGitPATGrantOnTheGateHost(t *testing.T) {
+	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassGitPATBroker, Stored: true, OwnNamespace: true, OwnerOnly: true}
+	for _, key := range []string{adoHost, " Dev.Azure.Com ", "dev.azure.com."} {
+		p, _ := viaOrgADOPlan(adoViaOrgOrigin, viaOrgADOPolicy)
+		p.Spec.ProxyConfig.PATGrants = map[string]proxy.PATGrant{key: {}}
+		p.Origins["ProxyConfig.PATGrants["+key+"]"] = own
+		_, r := LocalEligibility(p)
+		if r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.PATGrants["+key+"]" || !strings.Contains(r.Detail, "mixed Azure DevOps delivery") {
+			t.Errorf("PATGrants key %q: refusal %+v, want the mixed-delivery refusal at the grant", key, r)
+		}
+	}
+	// A grant on another host is not on the gate's hosts, and with no via_org gate the grant is not mixed with anything.
+	p, _ := viaOrgADOPlan(adoViaOrgOrigin, viaOrgADOPolicy)
+	p.Spec.ProxyConfig.PATGrants = map[string]proxy.PATGrant{"git.example": {}}
+	p.Origins["ProxyConfig.PATGrants[git.example]"] = own
+	if _, r := LocalEligibility(p); r != nil && strings.Contains(r.Detail, "mixed Azure DevOps delivery") {
+		t.Errorf("a PAT grant on another host: %+v, want no mixed-delivery refusal", r)
+	}
+	// An injection spelled with spaces and capitals is the gate's host too.
+	p, _ = viaOrgADOPlan(adoViaOrgOrigin, viaOrgADOPolicy)
+	p.Spec.ProxyConfig.Injection = append(p.Spec.ProxyConfig.Injection, runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: " DEV.azure.com ", Header: "Authorization", SecretName: "mine"}})
+	p.Origins["ProxyConfig.Injection[1]"] = CredentialOrigin{Class: ClassOwn, Delivery: ClassAPIKey, GrantKind: types.GrantAPIKey, Stored: true, OwnNamespace: true, OwnerOnly: true}
+	if _, r := LocalEligibility(p); r == nil || r.Field != "ProxyConfig.Injection[1]" || !strings.Contains(r.Detail, "mixed Azure DevOps delivery") {
+		t.Errorf("an injection on a padded spelling of the gate host: %+v, want the mixed-delivery refusal", r)
 	}
 }
 
