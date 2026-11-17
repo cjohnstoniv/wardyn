@@ -73,6 +73,7 @@ import {
   SEEN_URL,
   WALK_PROVIDER,
   WALK_PROVIDER_NAME,
+  chooseTrustYes,
   dexSignIn,
   launchFromReview,
   makeMemberActionable,
@@ -304,17 +305,9 @@ async function startInteractiveRun(page: Page, title: string): Promise<{ id: str
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
-  // The dialog ignores keys for a moment after it opens, so the screen is read
-  // first and the pointer moved only while it still sits on No; a move is never
-  // sent past Yes.
+  // chooseTrustYes: the dialog opens on No, ignores keys at first and wraps past Yes.
   await screen.click();
-  await expect
-    .poll(async () => {
-      const text = await termText(screen).catch(() => "");
-      if (/❯ No, exit/.test(text)) await page.keyboard.press("ArrowDown");
-      return text;
-    }, { timeout: 30_000, intervals: [500] })
-    .toMatch(/❯ Yes, I trust this folder/);
+  await chooseTrustYes(page, screen);
   await page.keyboard.press("Enter");
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })

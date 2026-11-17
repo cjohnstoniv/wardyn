@@ -104,6 +104,7 @@ import {
   WALK_PROVIDER_NAME,
   awaitCapture,
   awaitSelfRunStarted,
+  chooseTrustYes,
   dexSignIn,
   dexSignOut,
   launchAgentRun,
@@ -880,18 +881,10 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   expect(trustScreen).not.toContain("Choose the text style");
   expect(trustScreen).not.toContain("Security notes");
 
-  // Step 5 — choose "Yes, I trust this folder", then ONE Enter. The dialog
-  // ignores keys for a moment after it opens, so the screen is read first and
-  // the pointer moved only while it still sits on No; a move is never sent past
-  // Yes.
+  // Step 5 — choose "Yes, I trust this folder" (chooseTrustYes: the dialog
+  // opens on No, ignores keys at first and wraps past Yes), then ONE Enter.
   await screen.click();
-  await expect
-    .poll(async () => {
-      const text = await termText(screen).catch(() => "");
-      if (/❯ No, exit/.test(text)) await page.keyboard.press("ArrowDown");
-      return text;
-    }, { timeout: 30_000, intervals: [500] })
-    .toMatch(/❯ Yes, I trust this folder/);
+  await chooseTrustYes(page, screen);
   await page.keyboard.press("Enter");
 
   // Step 6 — the CLI's own input prompt, on the Bedrock lane.

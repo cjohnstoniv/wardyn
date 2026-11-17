@@ -735,3 +735,27 @@ export async function signInThroughPane(page: Page, openPane: (p: Page) => Promi
     }, { timeout: LOGIN_DONE })
     .toBe(true);
 }
+
+/** Move Claude Code's workspace-trust prompt to "Yes, I trust this folder" without pressing Enter. The
+ *  prompt opens on "No, exit", ignores keys for a moment after it opens, and wraps from Yes back to No, so:
+ *  - each move waits up to 10 s for the screen to change, and a move is resent only when nothing redrew;
+ *  - Yes counts only once the screen has stayed unchanged for 1 s, so no move is still in flight.
+ *  Fails when the pointer has not settled on Yes within 30 s. */
+export async function chooseTrustYes(page: Page, screen: Locator): Promise<void> {
+  const read = async () => await termText(screen).catch(() => "");
+  const deadline = Date.now() + 30_000;
+  let settled = false;
+  while (!settled && Date.now() < deadline) {
+    const text = await read();
+    if (/❯ Yes, I trust this folder/.test(text)) {
+      await page.waitForTimeout(1_000);
+      settled = (await read()) === text;
+    } else if (/❯ No, exit/.test(text)) {
+      await page.keyboard.press("ArrowDown");
+      for (const until = Date.now() + 10_000; Date.now() < until && (await read()) === text; ) await page.waitForTimeout(250);
+    } else {
+      await page.waitForTimeout(500);
+    }
+  }
+  expect(settled, `the trust prompt never settled on "Yes, I trust this folder"; screen:\n${await read()}`).toBe(true);
+}
