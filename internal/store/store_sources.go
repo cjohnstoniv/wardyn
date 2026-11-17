@@ -605,15 +605,27 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 		RETURNING `+wsReadCols, id, patch))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" for the caller.
-		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
-			return types.Workspace{}, ErrConflict
-		}
-		return types.Workspace{}, ErrNotFound
+		_, gerr := s.GetWorkspace(ctx, id)
+		return types.Workspace{}, mergeMissErr(gerr)
 	}
 	if err != nil {
 		return types.Workspace{}, err
 	}
 	return s.hydrated(ctx, ws)
+}
+
+// mergeMissErr is the error for a requirements merge whose guarded UPDATE matched no row, given the
+// error of the workspace read that follows it: no error means the row exists, so the cap refused it;
+// a missing row is ErrNotFound; any other read failure is returned as itself, so a transient fault is not
+// reported as a workspace that is gone.
+func mergeMissErr(gerr error) error {
+	switch {
+	case gerr == nil:
+		return ErrConflict
+	case errors.Is(gerr, ErrNotFound):
+		return fmt.Errorf("store: read workspace after a requirements merge missed: %w", gerr)
+	}
+	return ErrNotFound
 }
 
 // Hydration: attachments → the derived view
