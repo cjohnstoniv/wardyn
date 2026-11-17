@@ -828,9 +828,9 @@ func releaseParts(v string) [4]int {
 }
 
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
-// (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2), hard_deny (§5.3) and, when the proxy
-// image sends the relay preamble, the run's relay_key (relayKeyed). The proxy decodes strictly, so
-// a proxy that does not know a key refuses to start.
+// (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2) and hard_deny (§5.3). The proxy
+// decodes strictly, so a proxy that does not know a key refuses to start.
+// It adds the run's relay_key too when the proxy image sends the relay preamble (relayKeyed).
 func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byte) ([]byte, error) {
 	if !d.runnerMode() {
 		return b, nil
