@@ -1098,3 +1098,102 @@ func TestFolderPassOnce_AnUnconfirmedPassOnAnUnholdableSandboxStopsOnce(t *testi
 		t.Errorf("record %+v, agent stops %d; want gen 1 unsettled and the agent not stopped alone", st, ag.stops)
 	}
 }
+
+// A pass back the runner refuses as busy, found on a sandbox the server's Docker can quiesce (no runner, no
+// virtual machine), keeps it: it was quiesced before the pass was sent, so it needs no agent stop of its own,
+// and the record keeps a resume with no stall counted, neither the sandbox stopped nor its ref cleared.
+func TestPassBack_ABusyQuiescedDockerSandboxIsKeptWithAResumeAndNoStall(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	f.s.cfg.Store = refStore{f.cs}
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.SandboxRef = "sbx"
+	ds.mu.Unlock()
+	f.holdsAPass(t)
+	if err := f.finalizeWithin(30 * time.Second); !errors.Is(err, errComputerFolderResumes) {
+		t.Fatalf("finalize = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	if !f.sb.proxyStopped.Load() || !f.sb.agentKilled.Load() {
+		t.Errorf("proxy stopped %v, agent killed %v; want the sandbox quiesced before the pass was sent", f.sb.proxyStopped.Load(), f.sb.agentKilled.Load())
+	}
+	if n := f.sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times at a busy visit on a quiesced sandbox, want 0", n)
+	}
+	ds.mu.Lock()
+	ref := ds.run.SandboxRef
+	ds.mu.Unlock()
+	if ref != "sbx" {
+		t.Errorf("sandbox ref = %q, want it kept", ref)
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 0 || st.Gen != 2 || st.Settled != 2 || st.Back != nil {
+		t.Errorf("record %+v, want gen 2 settled with a resume, no stall and no back", st)
+	}
+	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", "tries again"); ev == nil || ev.Outcome != "failure" {
+		t.Error("the busy visit is not audited")
+	}
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
+	}
+}
+
+// A record at generation 0 reads the same settled count (0) whether or not its folder was seeded, and only a
+// seed makes its last pass open: with one, an older runner gets no pass and the sandbox is kept; with none,
+// the record is settled and the pass is sent at once.
+func TestPassBack_AGenerationZeroRecordIsOpenOnlyWithASeed(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	if st := f.cs.folderStatus(); st.Gen != st.Settled || st.Seed == nil {
+		t.Fatalf("record %+v, want gen and settled both 0 with a seed", st)
+	}
+	if !f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox kept for a seeded gen 0 record", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 0 || st.Settled != 0 || st.Resume == nil {
+		t.Errorf("record %+v, want it still at gen 0, settled 0, with a resume", st)
+	}
+
+	f = newPassFixture(t, 0, 0, nil)
+	f.set(func(st *types.RunLocalFolderStatus) { st.Seed = nil })
+	f.runnerAs(t, &olderRunnerCaps)
+	seen = passSeen(f.sb)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 {
+		t.Errorf("pass %v, record %+v; want the pass sent at once, at gen 1, settled", seen.Load(), st)
+	}
+}
+
+// A record left at gen 2 with only gen 1 settled and no resume, as when the owner that sent gen 2 died before
+// it kept anything, is open to an older runner until oldPassBound has passed since it was sent: its first
+// visit stops the agent and egress and keeps the sandbox with a resume, at gen 2 with the same send time and
+// the same settled count, and sends no pass; past the bound the pass is sent. A record already past the
+// bound at its first visit gets the pass at once.
+func TestPassBack_ARecordWithAnUnsettledLastPassAndNoResumeIsKeptUntilItsBound(t *testing.T) {
+	f := newPassFixture(t, 2, 1, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	sent := f.cs.folderStatus().GenAt
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if !f.sb.proxyStopped.Load() || !f.sb.agentKilled.Load() {
+		t.Errorf("proxy stopped %v, agent killed %v; want both before the keep", f.sb.proxyStopped.Load(), f.sb.agentKilled.Load())
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Gen != 2 || st.Settled != 1 || !st.GenAt.Equal(sent) {
+		t.Errorf("record %+v, want a resume at gen 2, settled 1, with the send time %v", st, sent)
+	}
+	f.advance(oldPassBound)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
+		t.Errorf("pass %v, record %+v; want the pass sent past the bound, at gen 3, settled", seen.Load(), st)
+	}
+
+	f = newPassFixture(t, 2, 1, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	seen = passSeen(f.sb)
+	f.advance(oldPassBound)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
+		t.Errorf("pass %v, record %+v; want the pass sent at once past the bound, at gen 3, settled", seen.Load(), st)
+	}
+}
