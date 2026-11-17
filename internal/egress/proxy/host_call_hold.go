@@ -187,7 +187,7 @@ func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope type
 	if p.approval == nil {
 		return false, refused("this proxy has no way to ask", hostCallNoAskText)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), hostCallWindow*hostCallSecond)
+	ctx, cancel := context.WithTimeout(r.Context(), holdFor(r.Context(), hostCallWindow*hostCallSecond)) // under a via_org engine, what is left of this request's hold time
 	defer cancel()
 	if id != uuid.Nil {
 		// A retry rejoining the pending request: the console reads it as held for this window too.
