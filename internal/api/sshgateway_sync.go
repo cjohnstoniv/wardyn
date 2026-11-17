@@ -212,7 +212,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, ops, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	removes, renames := ops.counts()
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut, "remove_requests": removes, "rename_requests": renames}
-	outcome := bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra) // a sync session keeps its rule: any nonzero exit
+	outcome := pass.outcome(bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra), extra) // a sync session keeps its rule: any nonzero exit
 	record(outcome, extra)
 }
 
@@ -221,12 +221,16 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 // gateway cannot see in the sftp bytes. Its laptop deletes are summed into the
 // session's ssh.sync.transfer row, and a complete pass (or a failed one) is the
 // first sync of a run's local folder landing (or failing; run_local_folder.go).
+// A newer client also sends one with started before each pass: sftp has no end
+// marker, and a connection cut mid-pass can let sftp-server see a plain EOF and
+// exit 0, so only a start with no account after it tells the row the pass was cut.
 const sshSyncPassRequest = "wardyn-sync-pass"
 
 // maxSyncPassReport bounds one report's JSON.
 const maxSyncPassReport = 4096
 
 type sshSyncPassReport struct {
+	Started         bool   `json:"started"`
 	Complete        bool   `json:"complete"`
 	Error           string `json:"error"`
 	DeletedOnLaptop int    `json:"deleted_on_laptop"`
@@ -238,12 +242,27 @@ type sshSyncPass struct {
 	mu      sync.Mutex
 	dir     string
 	deletes int
+	open    bool // a start report with no account of that pass after it
 }
 
 func (p *sshSyncPass) start(dir string) {
 	p.mu.Lock()
 	p.dir = dir
 	p.mu.Unlock()
+}
+
+// outcome is the row's outcome given the client's reports: a success becomes a
+// failure when a pass the client started was never accounted for. A client that
+// sends no start report keeps the exit's outcome.
+func (p *sshSyncPass) outcome(outcome string, extra map[string]any) string {
+	p.mu.Lock()
+	open := p.open
+	p.mu.Unlock()
+	if outcome == "success" && open {
+		extra["error"] = "the session ended before its sync pass finished"
+		return "failure"
+	}
+	return outcome
 }
 
 func (p *sshSyncPass) laptopDeletes() int {
@@ -266,12 +285,13 @@ func (s *Server) sshSyncPassReported(ctx context.Context, runID uuid.UUID, princ
 	dir := pass.dir
 	if dir != "" {
 		pass.deletes = min(pass.deletes+r.DeletedOnLaptop, maxSyncEntriesReported)
+		pass.open = r.Started
 	}
 	pass.mu.Unlock()
 	if dir == "" {
 		return false
 	}
-	if r.Complete || r.Error != "" {
+	if !r.Started && (r.Complete || r.Error != "") {
 		s.localFolderPassed(ctx, runID, principal, dir, r.Complete, r.Error)
 	}
 	return true
