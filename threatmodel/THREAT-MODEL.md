@@ -3284,7 +3284,7 @@ These risks are **not closed by v1 Wardyn**.
 
     - Each macOS VM run's proxy CA is re-issued under a root every trusting guest on that Mac accepts.
     - The re-issued CA permits only the hosts that run's proxy terminates (and, where one of them sits under another, the outer host's other subdomains) and no IP address, and lasts 7 days at most, so a leaked run key passes only for hosts its own proxy inspects (on any port, in any trusting guest on that Mac), and not for long.
-    - The root's key is a plain file of the runner login in the VM directory: excluded from Time Machine (any other backup tool copies it off the Mac), deleted when the runner starts with the setting off, unless the managed profile cannot be read, and never used while one of the runner's drive roots holds it.
+    - The root's key is a plain file of the runner login in the VM directory: excluded from Time Machine (the runner logs a warning when it cannot set that; any other backup tool copies it off the Mac), deleted when a `docker` substrate runner that reaches Docker starts with the setting off, unless the managed profile cannot be read, and never used while one of the runner's drive roots holds it.
     - Any process of that login, or root, can read it and sign for any name on every trusting guest for the CA's five years.
     - There is no revocation: recovery is deleting the key, `prepare --new-image`, and starting kept machines fresh. A deleted key stays in the Mac's local snapshots for up to 24 hours.
     - Whether macOS enforces the name constraints is not yet shown on a Mac.

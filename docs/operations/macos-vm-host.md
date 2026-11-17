@@ -106,7 +106,7 @@
 
 | Where | What Wardyn does |
 |---|---|
-| `~/Library/Application Support/Wardyn/macos-vm.noindex/` | The `.noindex` name keeps Spotlight out. The first prepare also adds a Time Machine exclusion for this directory, which follows it |
+| `~/Library/Application Support/Wardyn/macos-vm.noindex/` | The `.noindex` name keeps Spotlight out. The first prepare, or a runner start that makes the inspection CA, also adds a Time Machine exclusion for this directory, which follows it |
 | Any other setting | Nothing. Wardyn changes no other backup, snapshot or index setting |
 
 - When a run ends, Wardyn deletes its run directory and clone from the Mac's volume. The end-of-run line says deleted only after that succeeds, else pending, then failed with the reason.

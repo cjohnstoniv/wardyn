@@ -53,6 +53,7 @@ export function FileDownloadCard({
   const asker = !item.requested_by && !!principal && scope.requested_by === principal;
   const name = escapeUnsafeRunes(scope.name);
   // Erasure rewrites the asker to "erased" (internal/types/file_download.go FileDownloadAskerErased): say so in words.
+  // Every person is refused its decision; the admin token is the break-glass the server lets decide it.
   const erased = scope.requested_by === "erased";
   const askedBy = erased ? C.ERASED_ASKER : escapeUnsafeRunes(scope.requested_by);
   const own = !item.requested_by && !securityOperator;
@@ -108,7 +109,7 @@ export function FileDownloadCard({
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
           <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
-        ) : erased ? null : (
+        ) : erased && principal !== "admin-token" ? null : (
           <>
             <Button size="sm" variant="info" disabled={!mayAct || busy !== null} onClick={onApprove}>
               {busy === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {MCP.APPROVE}
