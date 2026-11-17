@@ -3558,7 +3558,7 @@ With `local.allow_on_laptop_runners: true` (off by default; set it with the swit
 
 ### Upgrading from `artifact_overrides`
 
-- A site-config document saved before 0.4 used `artifact_overrides: {"npm": {"base_url": "..."}, ...}`.
+- A site-config document saved before 0.4.5 used `artifact_overrides: {"npm": {"base_url": "..."}, ...}`.
 - Migration `0030` rewrote the stored row on the first boot after that upgrade.
 - `PUT /site-config` and `wardyn site-config set` refuse a body or file that still has `artifact_overrides` (400 `site_config_request_invalid`, naming the field). Rewrite the file as `egress_redirects`, or run `wardyn site-config get` and save its output.
 - A PUT that does not MENTION a field added after v0.6.6 (`internal_hosts`, `upstream_proxy_no_proxy`) leaves the stored value alone rather than clearing it.
