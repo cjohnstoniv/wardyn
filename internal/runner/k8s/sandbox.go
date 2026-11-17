@@ -270,7 +270,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(fmt.Errorf("k8s: build proxy config: %w", err))
 	}
-	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
+	var keyed bool
+	if proxyJSON, keyed, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
 	d.warnOlderProxy()
@@ -325,7 +326,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
-	if err := d.relayIPRefusal(spec.RunID, proxyIP); err != nil {
+	if err := d.relayIPRefusal(spec.RunID, proxyIP, keyed); err != nil {
 		// Contained before it ever opens, rather than running to its deadline.
 		return fail(err)
 	}
@@ -830,26 +831,31 @@ func releaseParts(v string) [4]int {
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
 // (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2) and hard_deny (§5.3). The proxy
 // decodes strictly, so a proxy that does not know a key refuses to start.
-// It adds the run's relay_key too when the proxy image sends the relay preamble (relayKeyed).
-func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byte) ([]byte, error) {
+// It adds the run's relay_key too when the proxy image sends the relay preamble (relayKeyed), and
+// reports whether it did.
+func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byte) ([]byte, bool, error) {
 	if !d.runnerMode() {
-		return b, nil
+		return b, false, nil
 	}
 	b, err := runner.WithTrustedCA(b, d.cfg.TrustedCAPEM)
 	if err != nil {
-		return nil, fmt.Errorf("k8s: proxy trusted CA: %w", err)
+		return nil, false, fmt.Errorf("k8s: proxy trusted CA: %w", err)
 	}
 	sink, err := d.openSink(runID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	keys := d.runnerProxyKeys(sink)
-	if d.relayKeyed() {
+	keyed := d.relayKeyed()
+	if keyed {
 		if keys["relay_key"], err = d.openRelayKey(runID); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return runner.WithProxyConfigKeys(b, keys)
+	if b, err = runner.WithProxyConfigKeys(b, keys); err != nil {
+		return nil, false, err
+	}
+	return b, keyed, nil
 }
 
 // openSink makes the run's sink key, persists its hash in the run's record, then registers it with

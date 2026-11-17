@@ -854,7 +854,7 @@ func TestRunnerProxyConfigKeys(t *testing.T) {
 		t.Fatalf("CreateSandbox with no decision sink: %v", err)
 	}
 	h.d.cfg.Sink = &fakeSink{h: h}
-	b, err := h.d.runnerProxyConfig(ctx, h.runID, []byte(`{"run_id":"x"}`))
+	b, _, err := h.d.runnerProxyConfig(ctx, h.runID, []byte(`{"run_id":"x"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

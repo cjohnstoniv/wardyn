@@ -18,7 +18,7 @@ import (
 func TestRunnerProxyConfigChainsTheRunnersUpstream(t *testing.T) {
 	h, _ := sinkHarness(t)
 	h.d.cfg.UpstreamProxyURL = "http://proxy.corp.example:3128"
-	out, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"upstream_proxy_url":"http://stale.example:1"}`))
+	out, _, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"upstream_proxy_url":"http://stale.example:1"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestRunnerProxyConfigChainsTheRunnersUpstream(t *testing.T) {
 	}
 
 	h2, _ := sinkHarness(t)
-	out, err = h2.d.runnerProxyConfig(context.Background(), h2.runID, []byte(`{"self_lapse":false}`))
+	out, _, err = h2.d.runnerProxyConfig(context.Background(), h2.runID, []byte(`{"self_lapse":false}`))
 	if err != nil {
 		t.Fatal(err)
 	}

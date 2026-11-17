@@ -69,19 +69,58 @@ func relayKeyHash(ev *runEvidence) ([32]byte, bool) {
 }
 
 // relayIPRefusal is the create check on a new proxy pod's IP (runner mode): an IP a fenced run still
-// holds refuses the run, unless the run's record holds its relay key hash, since the relay admits
-// that run's proxy by its key and still refuses an unkeyed connection from the fenced IP. A record
-// that cannot be read refuses.
-func (d *Driver) relayIPRefusal(runID uuid.UUID, proxyIP string) error {
+// holds refuses the run, unless this create keyed its proxy, the runner still keys proxies, and
+// keyedOnFencedIP admits it. The relay still refuses an unkeyed connection from the fenced IP.
+func (d *Driver) relayIPRefusal(runID uuid.UUID, proxyIP string, keyed bool) error {
 	if !d.runnerMode() || d.cfg.IPFenced == nil || !d.cfg.IPFenced(proxyIP) {
 		return nil
 	}
-	if ev, err := d.loadEvidence(runID); err == nil {
-		if _, ok := relayKeyHash(ev); ok {
-			return nil
-		}
+	if keyed && d.relayKeyed() && d.keyedOnFencedIP(runID, proxyIP) {
+		return nil
 	}
 	return fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced)
+}
+
+// keyedOnFencedIP reports whether a keyed run may start on an IP fenced runs still hold: its record
+// holds a well-formed relay key hash and its proxy's node, and every run fenced on the IP recorded
+// its own proxy on that same node. Only the same node is admitted: with cluster-wide IPAM the IP can
+// be handed to a pod on another node while the fenced proxy still runs, and the new run's agent,
+// sent to that IP, could reach it. A different or unknown node, or a record that cannot be read,
+// refuses.
+func (d *Driver) keyedOnFencedIP(runID uuid.UUID, proxyIP string) bool {
+	if d.cfg.FencedRuns == nil {
+		return false
+	}
+	ev, err := d.loadEvidence(runID)
+	if err != nil {
+		return false
+	}
+	node := proxyNode(ev)
+	if _, ok := relayKeyHash(ev); !ok || node == "" {
+		return false
+	}
+	fenced := d.cfg.FencedRuns(proxyIP)
+	if len(fenced) == 0 {
+		return false
+	}
+	for _, f := range fenced {
+		if f == runID {
+			return false
+		}
+		fev, err := d.loadEvidence(f)
+		if err != nil || proxyNode(fev) != node {
+			return false
+		}
+	}
+	return true
+}
+
+// proxyNode is the node the run's record holds for its proxy pod, "" when none is recorded.
+func proxyNode(ev *runEvidence) string {
+	if p := ev.Pods[componentProxy]; p != nil {
+		return p.NodeName
+	}
+	return ""
 }
 
 // ReplayRelayKeys hands the relay each run's persisted relay key hash again. runnerd calls it at

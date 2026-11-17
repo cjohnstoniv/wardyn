@@ -173,6 +173,9 @@ type Config struct {
 	// the relay admits a connection opening with the relay preamble as that run only with that key.
 	// Called once the hash is durable, before the proxy pod exists. Nil gives no run a relay key.
 	RelayKey func(runID uuid.UUID, hash [32]byte)
+	// FencedRuns lists the runs whose fence still refuses a proxy IP (the relay's): a keyed run starts
+	// on that IP only when each of them recorded its proxy on the new proxy's node.
+	FencedRuns func(ip string) []uuid.UUID
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
 	// refuses to create a sandbox while it is nil (the sink did not start).
 	Sink DecisionSink

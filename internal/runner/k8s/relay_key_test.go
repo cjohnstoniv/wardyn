@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -100,9 +99,9 @@ func TestRelayKeyedByProxyRelease(t *testing.T) {
 // a failed save hands the relay nothing.
 func TestRunnerRelayKeyPersistedBeforeHandOff(t *testing.T) {
 	h, keys := keyedHarness(t)
-	out, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`))
-	if err != nil {
-		t.Fatal(err)
+	out, keyed, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`))
+	if err != nil || !keyed {
+		t.Fatalf("keyed %v: %v", keyed, err)
 	}
 	var cfg struct {
 		RelayKey string `json:"relay_key"`
@@ -123,7 +122,7 @@ func TestRunnerRelayKeyPersistedBeforeHandOff(t *testing.T) {
 
 	h2, keys2 := keyedHarness(t)
 	h2.ev.failSave = func(b []byte) bool { return bytes.Contains(b, []byte("relay_key_hash")) }
-	if _, err := h2.d.runnerProxyConfig(context.Background(), h2.runID, []byte(`{"run_id":"x"}`)); err == nil || len(keys2.events) != 0 {
+	if _, _, err := h2.d.runnerProxyConfig(context.Background(), h2.runID, []byte(`{"run_id":"x"}`)); err == nil || len(keys2.events) != 0 {
 		t.Fatalf("a failed save still handed the relay a key: %v %v", err, keys2.events)
 	}
 }
@@ -133,59 +132,129 @@ func TestRunnerRelayKeyPersistedBeforeHandOff(t *testing.T) {
 func TestRunnerUnkeyedProxyGetsNoRelayKey(t *testing.T) {
 	h, keys := keyedHarness(t)
 	h.d.cfg.ProxyImage = testProxyRepo + ":0.10.0"
-	out, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`))
+	out, keyed, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := h.ev.LoadEvidence(h.runID)
-	if bytes.Contains(out, []byte("relay_key")) || bytes.Contains(b, []byte("relay_key_hash")) || len(keys.events) != 0 {
+	if keyed || bytes.Contains(out, []byte("relay_key")) || bytes.Contains(b, []byte("relay_key_hash")) || len(keys.events) != 0 {
 		t.Fatalf("an older proxy was keyed: config %s record %s events %v", out, b, keys.events)
 	}
 }
 
-// TestRunnerRelayIPRefusal: the create check refuses a proxy IP a fenced run still holds, exactly as
-// before, unless the run's record holds a well-formed relay key hash.
+// relayRecord is a run record holding hash as its relay key hash and node as its proxy's node.
+func relayRecord(hash, node string) []byte {
+	ev := &runEvidence{RelayKeyHash: hash, Pods: map[string]*podEvidence{}}
+	if node != "" {
+		ev.Pods[componentProxy] = &podEvidence{Name: "wardyn-proxy-x", NodeName: node}
+	}
+	b, _ := json.Marshal(ev)
+	return b
+}
+
+// TestRunnerRelayIPRefusal: the create check refuses a proxy IP a fenced run still holds, as before,
+// unless this create keyed its proxy, the runner still keys proxies, the run's record holds a
+// well-formed hash and its proxy's node, and every run fenced on the IP recorded its proxy on that
+// node. "!" stands for a fenced run's record that cannot be read.
 func TestRunnerRelayIPRefusal(t *testing.T) {
 	hash := sha256.Sum256([]byte("k"))
+	good := hex.EncodeToString(hash[:])
 	for _, c := range []struct {
-		name    string
-		server  bool
-		unwired bool
-		fenced  bool
-		record  string
-		refused bool
+		name     string
+		unfenced bool
+		unkeyed  bool // the create did not key the proxy
+		unhooked bool // RelayKey nil
+		image    string
+		record   []byte // the run's own record; nil is none
+		fNodes   []string
+		noFRuns  bool // FencedRuns nil
+		server   bool
+		unwired  bool // IPFenced nil
+		admitted bool
 	}{
-		{name: "unfenced IP, unkeyed", record: `{}`},
-		{name: "unfenced IP, keyed", record: `{"relay_key_hash":"` + hex.EncodeToString(hash[:]) + `"}`},
-		{name: "fenced IP, unkeyed", fenced: true, record: `{}`, refused: true},
-		{name: "fenced IP, no record", fenced: true, refused: true},
-		{name: "fenced IP, keyed", fenced: true, record: `{"relay_key_hash":"` + hex.EncodeToString(hash[:]) + `"}`},
-		{name: "fenced IP, short hash", fenced: true, record: `{"relay_key_hash":"abcd"}`, refused: true},
-		{name: "fenced IP, unreadable record", fenced: true, record: `{`, refused: true},
-		{name: "fenced IP, server mode", server: true, fenced: true, record: `{}`},
-		{name: "IPFenced unwired", unwired: true, record: `{}`},
+		{name: "unfenced IP, unkeyed", unfenced: true, unkeyed: true, record: relayRecord("", "n1"), admitted: true},
+		{name: "unfenced IP, keyed", unfenced: true, record: relayRecord(good, "n1"), fNodes: []string{"n2"}, admitted: true},
+		{name: "fenced IP, unkeyed", unkeyed: true, record: relayRecord("", "n1"), fNodes: []string{"n1"}},
+		{name: "fenced IP, no record", unkeyed: true, fNodes: []string{"n1"}},
+		{name: "fenced IP, keyed, same node", record: relayRecord(good, "n1"), fNodes: []string{"n1"}, admitted: true},
+		{name: "fenced IP, keyed, fenced run on another node", record: relayRecord(good, "n1"), fNodes: []string{"n2"}},
+		{name: "fenced IP, keyed, fenced run's node unknown", record: relayRecord(good, "n1"), fNodes: []string{""}},
+		{name: "fenced IP, keyed, own node unknown", record: relayRecord(good, ""), fNodes: []string{"n1"}},
+		{name: "fenced IP, keyed, both nodes unknown", record: relayRecord(good, ""), fNodes: []string{""}},
+		{name: "fenced IP, keyed, fenced run's record unreadable", record: relayRecord(good, "n1"), fNodes: []string{"!"}},
+		{name: "fenced IP, keyed, one of two fenced runs on another node", record: relayRecord(good, "n1"), fNodes: []string{"n1", "n2"}},
+		{name: "fenced IP, keyed, FencedRuns unwired", record: relayRecord(good, "n1"), fNodes: []string{"n1"}, noFRuns: true},
+		{name: "fenced IP, keyed, no fenced run listed", record: relayRecord(good, "n1")},
+		{name: "fenced IP, hash present, create did not key", unkeyed: true, record: relayRecord(good, "n1"), fNodes: []string{"n1"}},
+		{name: "fenced IP, hash present, RelayKey nil", unhooked: true, record: relayRecord(good, "n1"), fNodes: []string{"n1"}},
+		{name: "fenced IP, hash present, image now unkeyed", image: testProxyRepo + ":0.10.0", record: relayRecord(good, "n1"), fNodes: []string{"n1"}},
+		{name: "fenced IP, short hash", record: relayRecord("abcd", "n1"), fNodes: []string{"n1"}},
+		{name: "fenced IP, own record unreadable", record: []byte(`{`), fNodes: []string{"n1"}},
+		{name: "fenced IP, server mode", server: true, unkeyed: true, record: relayRecord("", ""), admitted: true},
+		{name: "IPFenced unwired", unwired: true, unkeyed: true, record: relayRecord("", ""), admitted: true},
 	} {
 		h := newRunnerHarness(t)
-		if c.record != "" {
-			h.ev.m[h.runID] = []byte(c.record)
+		h.d.cfg.ProxyImage = testProxyRepo + ":" + relayPreambleRelease
+		if c.image != "" {
+			h.d.cfg.ProxyImage = c.image
 		}
-		h.d.cfg.IPFenced = func(ip string) bool { return c.fenced && ip == testProxyIP }
+		if !c.unhooked {
+			wireRelayKeys(h)
+		}
+		if c.record != nil {
+			h.ev.m[h.runID] = c.record
+		}
+		var fenced []uuid.UUID
+		for _, n := range c.fNodes {
+			id := uuid.New()
+			fenced = append(fenced, id)
+			h.ev.m[id] = relayRecord("", n)
+			if n == "!" {
+				h.ev.m[id] = []byte(`{`)
+			}
+		}
+		h.d.cfg.IPFenced = func(ip string) bool { return !c.unfenced && ip == testProxyIP }
 		if c.unwired {
 			h.d.cfg.IPFenced = nil
+		}
+		if !c.noFRuns {
+			h.d.cfg.FencedRuns = func(string) []uuid.UUID { return fenced }
 		}
 		if c.server {
 			h.d.cfg.RunnerID = ""
 		}
-		err := h.d.relayIPRefusal(h.runID, testProxyIP)
-		if c.refused != errors.Is(err, runner.ErrRelayIPFenced) || !c.refused && err != nil {
-			t.Errorf("%s: %v, refused want %v", c.name, err, c.refused)
+		err := h.d.relayIPRefusal(h.runID, testProxyIP, !c.unkeyed)
+		if c.admitted && err != nil || !c.admitted && !errors.Is(err, runner.ErrRelayIPFenced) {
+			t.Errorf("%s: %v, admitted want %v", c.name, err, c.admitted)
 		}
 	}
 }
 
+// TestRunnerKeyedOnFencedIPReadsTheBoundNode: the node the check compares is the one the start wait's
+// bound read recorded for the run's proxy (observePod), not one it is told.
+func TestRunnerKeyedOnFencedIPReadsTheBoundNode(t *testing.T) {
+	h, _ := keyedHarness(t)
+	if _, _, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.boundProxy(t) // the proxy, bound to n1, read through its create-side bracket
+	f := uuid.New()
+	h.d.cfg.IPFenced = func(string) bool { return true }
+	h.d.cfg.FencedRuns = func(string) []uuid.UUID { return []uuid.UUID{f} }
+	h.ev.m[f] = relayRecord("", "n1")
+	if err := h.d.relayIPRefusal(h.runID, testProxyIP, true); err != nil {
+		t.Fatalf("fenced run on the bound node: %v", err)
+	}
+	h.ev.m[f] = relayRecord("", "n2")
+	if err := h.d.relayIPRefusal(h.runID, testProxyIP, true); !errors.Is(err, runner.ErrRelayIPFenced) {
+		t.Fatalf("fenced run on another node: %v, want relay_ip_fenced", err)
+	}
+}
+
 // TestRunnerCreateOnFencedIP: a create whose new proxy pod reports an IP still fenced for another run
-// is refused when its proxy is unkeyed, as before, and starts when it is keyed, with the Secret's
-// relay_key matching the hash the relay holds.
+// is refused when its proxy is unkeyed, as before. A keyed create runs the keyed check (its key is
+// made and handed over) and is refused too here: the fake's proxy pod is bound to no node, so the
+// node rule cannot hold.
 func TestRunnerCreateOnFencedIP(t *testing.T) {
 	for _, keyed := range []bool{false, true} {
 		px := httptest.NewServer(http.NotFoundHandler())
@@ -194,6 +263,9 @@ func TestRunnerCreateOnFencedIP(t *testing.T) {
 		h.d.cfg.Sink = &fakeSink{h: h}
 		h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
 		h.d.cfg.IPFenced = func(string) bool { return true }
+		f := uuid.New()
+		h.ev.m[f] = relayRecord("", "n1")
+		h.d.cfg.FencedRuns = func(string) []uuid.UUID { return []uuid.UUID{f} }
 		var keys *relayKeys
 		if keyed {
 			keys = wireRelayKeys(h)
@@ -206,30 +278,11 @@ func TestRunnerCreateOnFencedIP(t *testing.T) {
 		_, err := h.d.CreateSandbox(ctx, spec)
 		cancel()
 		px.Close()
-		if !keyed {
-			if !errors.Is(err, runner.ErrRelayIPFenced) {
-				t.Fatalf("unkeyed create on a fenced IP: %v, want relay_ip_fenced", err)
-			}
-			continue
+		if !errors.Is(err, runner.ErrRelayIPFenced) {
+			t.Fatalf("keyed %v create on a fenced IP: %v, want relay_ip_fenced", keyed, err)
 		}
-		if err != nil {
-			t.Fatalf("keyed create on a fenced IP: %v", err)
-		}
-		secrets, err := h.cs.CoreV1().Secrets("").List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var cfg struct {
-			RelayKey string `json:"relay_key"`
-		}
-		for _, s := range secrets.Items {
-			if s.Name == secretName(spec.RunID) {
-				_ = json.Unmarshal(s.Data[proxyConfigSecretKey], &cfg)
-			}
-		}
-		key, _ := base64.StdEncoding.DecodeString(cfg.RelayKey)
-		if len(key) != relayKeyLen || keys.got[spec.RunID] != sha256.Sum256(key) {
-			t.Fatalf("Secret relay_key %q does not match the hash the relay holds", cfg.RelayKey)
+		if keyed && len(keys.got) != 1 {
+			t.Fatalf("the keyed create handed the relay %d keys, want 1", len(keys.got))
 		}
 	}
 }
@@ -238,7 +291,7 @@ func TestRunnerCreateOnFencedIP(t *testing.T) {
 // fenced run's; a run with none is skipped and a malformed one is an error that stops no other.
 func TestRunnerReplayRelayKeys(t *testing.T) {
 	h, _ := keyedHarness(t)
-	if _, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`)); err != nil {
+	if _, _, err := h.d.runnerProxyConfig(context.Background(), h.runID, []byte(`{"run_id":"x"}`)); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := h.ev.LoadEvidence(h.runID)
