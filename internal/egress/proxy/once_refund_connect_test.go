@@ -126,6 +126,67 @@ func TestOnceRefund_AFailedDialKeepsTheGrantForTheRetry(t *testing.T) {
 	}
 }
 
+// TestOnceRefund_TheRetryRowNamesTheApprovalItWentOn: the request that goes ahead on a once approval given back
+// carries its approval_id in its row, whatever comes of it: a retry that connects, and a retry whose dial fails
+// again (the approval is spent, no second give-back). A request with no approval has none, failing or not.
+func TestOnceRefund_TheRetryRowNamesTheApprovalItWentOn(t *testing.T) {
+	id := uuid.New()
+	for _, c := range []struct {
+		name      string
+		failFirst int32
+		wantRetry string
+	}{
+		{"the retry connects", 1, "approval:" + id.String()},
+		{"the retry fails again", 2, "builtin:dial-failed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, _ := onceProxy(t, id, dialFailingFirst(c.failFirst, quietUpstream(t)))
+			proxyURL, done := serveTunnelProxy(t, p)
+
+			conn, _ := connectThrough(t, proxyURL, onceHost+":443")
+			_ = conn.Close()
+			first := awaitDecision(t, p, done)
+			if len(first) == 0 || first[len(first)-1].ApprovalID == nil || *first[len(first)-1].ApprovalID != id {
+				t.Fatalf("first try rows = %+v, want the failure to name approval %s", first, id)
+			}
+
+			conn, _ = connectThrough(t, proxyURL, onceHost+":443")
+			_ = conn.Close()
+			var retry *egress.DecisionLog
+			for _, d := range awaitDecision(t, p, done) {
+				if d.RuleSource == c.wantRetry {
+					retry = &d
+				}
+			}
+			if retry == nil || retry.ApprovalID == nil || *retry.ApprovalID != id {
+				t.Fatalf("retry row (rule_source %s) = %+v, want approval_id %s", c.wantRetry, retry, id)
+			}
+		})
+	}
+
+	t.Run("a request with no approval has no approval_id", func(t *testing.T) {
+		p := newProxy(Options{
+			RunID:    uuid.New(),
+			Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{onceHost}}),
+			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Resolver: publicResolver{},
+			Dial:     dialFailingFirst(1, quietUpstream(t)),
+		})
+		proxyURL, done := serveTunnelProxy(t, p)
+		conn, _ := connectThrough(t, proxyURL, onceHost+":443")
+		_ = conn.Close()
+		var failed []egress.DecisionLog
+		for _, d := range awaitDecision(t, p, done) {
+			if d.RuleSource == "builtin:dial-failed" {
+				failed = append(failed, d)
+			}
+		}
+		if len(failed) != 1 || failed[0].ApprovalID != nil {
+			t.Fatalf("dial-failed rows = %+v, want one with approval_id null", failed)
+		}
+	})
+}
+
 // TestOnceRefund_AnUpstreamThatAnsweredNothingKeepsTheGrant: a tunnel released by a once approval, after the
 // sandbox's TLS hello, whose upstream closed with no byte back or answered in plaintext that the proxy refused and
 // did not relay, gives the approval back, and the retry is released by it with nothing raised. The rest spend it:
