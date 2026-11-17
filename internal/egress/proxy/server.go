@@ -74,8 +74,6 @@ type serverHooks struct {
 	res     resolver
 	engine  bool
 	maskKey uuid.UUID // where this server's secrets are filed (procMaskFor)
-	// holdCeiling is the longest hold an engine raises (ViaOrgEngineOptions.HoldCeiling); 0 keeps the knobs, and a sidecar sets none.
-	holdCeiling time.Duration
 	// lapseClock and lapseTune replace the self-lapse clock and renew cadence
 	// in tests; zero values are CLOCK_BOOTTIME and the design's cadence.
 	lapseClock bootClock
@@ -270,7 +268,6 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		return nil, fmt.Errorf("build injector: %w", err)
 	}
 	inj.setLLMHeaders(cfg.LLMHeaders)
-	inj.reauth.ceiling = hooks.holdCeiling
 
 	scanner, deferred, err := buildScanners(ctx, cfg, hooks.maskKey)
 	if err != nil {
@@ -303,7 +300,6 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
 	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
 	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
-	ap.capHolds(hooks.holdCeiling)
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system
 	// roots for THIS sidecar's egress TLS. Each transport that may EDIT it

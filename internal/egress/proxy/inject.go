@@ -291,7 +291,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
 				errReauthEnded{reason: "this proxy has no re-auth hold lane"})
 		}
-		wf, fresh, admitted := i.reauth.admit(pending.approvalID, holdWithin(credentialReauthBudget(), i.reauth.ceiling))
+		wf, fresh, admitted := i.reauth.admit(pending.approvalID, holdFor(ctx, credentialReauthBudget()))
 		if !admitted {
 			e.reMu.Unlock()
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthCapped)

@@ -69,8 +69,6 @@ type approvalClient struct {
 	// holdTimeout / holdSem bound wait_for_review holds (see ResolveWait).
 	holdTimeout time.Duration
 	holdSem     chan struct{}
-	// holdCeiling is the longest hold a via_org engine raises (capHolds); 0 for a sidecar.
-	holdCeiling time.Duration
 
 	mu    sync.Mutex
 	hosts map[string]*hostApproval
@@ -222,14 +220,6 @@ func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client 
 	}
 }
 
-// capHolds puts ceiling over every hold this client's proxy raises: the
-// wait_for_review hold, and the push hold, which awaitPushDecision reads from
-// holdCeiling. Called once at NewServer, after configureHold; 0 changes nothing.
-func (a *approvalClient) capHolds(ceiling time.Duration) {
-	a.holdCeiling = ceiling
-	a.holdTimeout = holdWithin(a.holdTimeout, ceiling)
-}
-
 // configureHold sets the wait_for_review mode + hold limits, called once at
 // NewServer. timeout<=0 / maxHolds<=0 keep the defaults (what production
 // always passes; only tests set limits).
@@ -326,7 +316,8 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	// Deriving ctx once and passing it to every Resolve/raise/poll below puts
 	// everything inside that one budget; the result on expiry is unchanged:
 	// pending, fail closed.
-	ctx, cancel := context.WithTimeout(ctx, a.holdTimeout)
+	hold := holdFor(ctx, a.holdTimeout) // under a via_org engine, what is left of this request's hold time
+	ctx, cancel := context.WithTimeout(ctx, hold)
 	defer cancel()
 
 	// First resolve raises the approval (or returns a cached terminal state).
@@ -360,7 +351,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		a.rejoin(ctx, host, r.ApprovalID)
 	}
 
-	timeout := time.NewTimer(a.holdTimeout)
+	timeout := time.NewTimer(hold)
 	defer timeout.Stop()
 	ticker := time.NewTicker(holdPollInterval)
 	defer ticker.Stop()

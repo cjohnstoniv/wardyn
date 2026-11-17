@@ -210,8 +210,9 @@ func copyStreamed(w http.ResponseWriter, resp *http.Response) {
 // whose control-plane calls (decisions, approvals, injection, mint) ride the
 // caller's in-process client.
 type ViaOrgEngine struct {
-	srv    *Server
-	closed atomic.Bool
+	srv         *Server
+	holdCeiling time.Duration // ViaOrgEngineOptions.HoldCeiling, stamped on each request as its hold budget
+	closed      atomic.Bool
 }
 
 // ViaOrgEngineOptions are an engine's dependencies. Client is the in-process
@@ -220,9 +221,9 @@ type ViaOrgEngineOptions struct {
 	Client   *http.Client
 	Dial     func(ctx context.Context, network, addr string) (net.Conn, error)
 	LookupIP func(host string) ([]net.IP, error)
-	// HoldCeiling is the longest hold the engine raises (re-auth, capability and
-	// push approvals): the caller sets it under the relay's idle cut, so a held
-	// request ends with the hold's own sentence, not a reset stream. 0 keeps the knobs.
+	// HoldCeiling bounds the total hold time of one request on the engine (first-use, push,
+	// capability, re-auth and mint approvals together): the caller sets it under the relay's idle
+	// cut, so a held request ends with the hold's own sentence, not a reset stream. 0 keeps the knobs.
 	HoldCeiling time.Duration
 }
 
@@ -234,7 +235,7 @@ func (f lookupFunc) LookupIP(host string) ([]net.IP, error) { return f(host) }
 // run's via_org rules. It starts no token renewer or activity reporter: every
 // forwarded request carries the run's live token, which the client presents.
 func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions) (*ViaOrgEngine, error) {
-	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New(), holdCeiling: opts.HoldCeiling}
+	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New()}
 	if opts.LookupIP != nil {
 		h.res = lookupFunc(opts.LookupIP)
 	}
@@ -246,7 +247,7 @@ func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions)
 		procRegistry.Evict(h.maskKey)
 		return nil, err
 	}
-	return &ViaOrgEngine{srv: srv}, nil
+	return &ViaOrgEngine{srv: srv, holdCeiling: opts.HoldCeiling}, nil
 }
 
 // errViaOrgCleartext refuses a destination this engine would reach in
@@ -259,7 +260,7 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
-	r = trackNetworkBody(r)
+	r = withHoldBudget(trackNetworkBody(r), e.holdCeiling)
 	defer interruptBodyReadOnCancel(w, r)()
 	host = hostKey(host) // the grant's destination as stored: the engine's tables are keyed in this one spelling
 	if e.refuseClosed(w) {
@@ -301,7 +302,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
-	r = trackNetworkBody(r)
+	r = withHoldBudget(trackNetworkBody(r), e.holdCeiling)
 	defer interruptBodyReadOnCancel(w, r)()
 	if e.refuseClosed(w) {
 		return
