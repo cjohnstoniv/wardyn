@@ -151,3 +151,27 @@ func TestEffectivePolicy_CurrentGenerationPastTheFirstRows(t *testing.T) {
 	reviseGenView(t, srv, run)
 	wantEffectivePolicy(t, srv, run, genViewRevived)
 }
+
+// An in-place Kubernetes egress edit records its proxy's policy as the next generation, and that policy
+// never carries data_out: the run keeps the stricter of its resolved rule and the generation's.
+func TestEffectivePolicy_GenerationKeepsTheStricterDataOut(t *testing.T) {
+	const a, r, b = types.TransferAllowed, types.TransferReview, types.TransferBlocked
+	for _, c := range []struct{ resolved, gen, want types.TransferRule }{
+		{a, "", a}, {a, a, a}, {a, r, r}, {a, b, b},
+		{r, "", r}, {r, a, r}, {r, r, r}, {r, b, b},
+		{b, "", b}, {b, a, b}, {b, r, b}, {b, b, b},
+	} {
+		srv, st := pvFixture(t, &capStore{})
+		dispatched, edited := genViewDispatched, genViewRevived
+		dispatched.DataOut, edited.DataOut = c.resolved, c.gen
+		srv.cfg.Store = &genViewStore{pvStore: st, state: types.RunPolicyState{Digest: dispatched.Digest()}}
+		run := st.seedRun(pvOwner, types.RunRunning)
+		st.rows(run.ID, pvResolve(dispatched, false))
+		if g, err := srv.advanceRunPolicyGeneration(context.Background(), run, edited, "", renewedTokens{}, "jti-edited", store.PolicySlot{Generation: 1}, nil); err != nil || g != 2 {
+			t.Fatalf("advance = %d, %v; want generation 2", g, err)
+		}
+		if rule, found, err := srv.runDataOutRule(context.Background(), run.ID); err != nil || !found || rule != c.want {
+			t.Errorf("resolved %q, generation %q: data_out = %q (found %v, err %v), want %q", c.resolved, c.gen, rule, found, err, c.want)
+		}
+	}
+}
