@@ -320,7 +320,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
-| `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`). A VM run needs it as `http://host:3128`, the port Wardyn's proxy listens on, and refuses any other form |
+| `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`). A host name in it is mapped to the run's own proxy in every sandbox. A VM run needs it as `http://host:3128`, the port Wardyn's proxy listens on, and refuses any other form |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
 | `WARDYN_GROUNDTRUTH_TOKEN_SECRET` | string | (unset = off) | Kubernetes sensor: `<namespace>/<name>` of the Secret it mounts. wardynd, run in the cluster, patches `token` and `control-plane-ca.pem` into it, needing `patch` on that Secret only. Never with `WARDYN_GROUNDTRUTH_TOKEN_FILE`. While set, CC2/CC3 runs get a `kernel.sensor.bypass` row |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
@@ -2524,7 +2524,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner/docker`) |
+| `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner`, `internal/runner/docker`) |
 | `WARDYN_RUN_ID` | string | (unset) | this run's id, injected into sidecar/sandbox |
 | `WARDYN_REPO_URL` | string | (unset) | repo clone URL for the run |
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |

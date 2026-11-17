@@ -138,9 +138,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.DesktopSignins {
 		agentHost.Tmpfs[runner.SigninStorePath] = runner.SigninStoreTmpfs
 	}
-	// Pin the proxy's IP so the agent resolves "wardyn-proxy" without the embedded DNS (required
-	// under gVisor). The ONLY host entry the agent gets — NOT host.docker.internal, proxy-only.
-	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
+	// Pin the proxy's IP so the agent resolves "wardyn-proxy", and the sandbox proxy URL's own name when it names
+	// another, without the embedded DNS (required under gVisor). The ONLY host entries the agent gets — NOT
+	// host.docker.internal, proxy-only.
+	for _, name := range runner.ProxyHostnames(spec.Env) {
+		agentHost.ExtraHosts = append(agentHost.ExtraHosts, name+":"+proxyIP)
+	}
 	// The drive's read-only bind asks for a RECURSIVELY read-only mount only where the runtime this
 	// container will actually run on declares support; under one that doesn't (gVisor, CC2), asking
 	// refuses the create outright — see driveBindOptions.

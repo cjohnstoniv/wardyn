@@ -123,6 +123,33 @@ func TestCreateSandbox_AgentResolverIsTheProxy(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ProxyURLHostIsPinned: a sandbox proxy URL that names another host has that name pinned to the
+// run's proxy beside wardyn-proxy, since the agent's only nameserver answers no query; an address literal adds none.
+func TestCreateSandbox_ProxyURLHostIsPinned(t *testing.T) {
+	for url, want := range map[string][]string{
+		"http://Proxy.Corp.Example:3128": {"wardyn-proxy", "proxy.corp.example"},
+		"http://10.1.2.3:3128":           {"wardyn-proxy"},
+	} {
+		d, f := dnsTestDriver(Config{})
+		spec := testSpec()
+		spec.Env = map[string]string{"WARDYN_PROXY_URL": url}
+		if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+			t.Fatalf("%s: CreateSandbox: %v", url, err)
+		}
+		agent := f.containers[agentContainerName(spec.RunID)]
+		ip := proxyIPOf(t, agent)
+		var names []string
+		for _, h := range agent.host.ExtraHosts {
+			if name, ok := strings.CutSuffix(h, ":"+ip); ok {
+				names = append(names, name)
+			}
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("%s: agent hosts %v pin %v to the proxy, want %v", url, agent.host.ExtraHosts, names, want)
+		}
+	}
+}
+
 // TestCreateSandbox_ExecLessAgentCarriesTheResolver: the krun path stashes the agent's config until Exec, and the
 // resolver mount is in what it stashed.
 func TestCreateSandbox_ExecLessAgentCarriesTheResolver(t *testing.T) {

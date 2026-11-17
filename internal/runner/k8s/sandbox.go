@@ -334,9 +334,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 
-	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
-	// the resolved IP (its only route there, since the agent NetworkPolicy
-	// allows no DNS at all).
+	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" (and the
+	// sandbox proxy URL's own name, runner.ProxyHostnames) to the resolved IP (its only
+	// route there, since the agent NetworkPolicy allows no DNS at all).
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = d.interactiveIdleCmd(spec)
@@ -356,7 +356,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod's (buildProxyPod).
-			HostAliases:                  []corev1.HostAlias{{IP: proxyAddr, Hostnames: []string{"wardyn-proxy"}}},
+			HostAliases:                  []corev1.HostAlias{{IP: proxyAddr, Hostnames: runner.ProxyHostnames(spec.Env)}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
 			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
 			// listener answers every query REFUSED and records it, except AAAA
