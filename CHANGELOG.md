@@ -29,6 +29,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - While a component a run carries keeps its MCP servers from a gateway token, the sandbox gets `403` `gateway_component_cut` instead of a `502` `credential_unavailable` that SDKs retry. Needs the new proxy image.
 - `POST /api/v1/workloads/{name}/preview` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`), as the apply does.
 - `PUT /api/v1/workloads/{name}` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`); it used to be ignored.
+- A file download whose asker was erased reads `a person since erased` in the console. Its card offers no Approve or Deny unless the server says the caller may still decide it.
+- A workload launch refused for a policy pin mismatch now says why in the console: its policy resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.
+- A limits list shows a `Confinement floors` chip for a policy or profile that sets at least one confinement floor.
 
 ### Fixed
 
