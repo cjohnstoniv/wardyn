@@ -105,28 +105,46 @@ func macProtectedOverlap(real string, protected []string) error {
 	return nil
 }
 
-// CheckBindOutsideMacVMDir refuses a container bind of src when src is, sits under, or contains vmDir, the
-// runner's macOS VM directory: it holds every run's disk, the guest agent's signing key and the Mac's
-// inspection CA key. Both sides are resolved through their symlinks (resolveEntry), so a VM directory
-// linked to another volume is held by where it is, not by what it is called, and a parent of it, such as
-// the home, is refused as well. A VM directory that does not exist on this machine refuses nothing.
-func CheckBindOutsideMacVMDir(src, vmDir string) error {
-	if vmDir == "" {
-		return nil
+// MacVMDirError is CheckBindOutsideMacVMDirs' refusal. Its sentence names no path: a member reads it as the
+// run's failure hint, and a path would tell them that a VM directory exists and where it is linked. Src and
+// Dir are for the caller's log.
+type MacVMDirError struct {
+	Src, Dir string // the bind's resolved source, and the protected directory's resolved location
+	Inside   bool   // Src is Dir or inside it; false: Src contains Dir
+}
+
+func (e *MacVMDirError) Error() string {
+	if e.Inside {
+		return "this folder is, or is inside, a directory the macOS VM runner keeps for its own use, which a container may not mount"
 	}
-	canon, err := filepath.EvalSymlinks(vmDir)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil
-	case err != nil:
-		canon = resolveEntry(vmDir)
-	}
+	return "this folder contains a directory the macOS VM runner keeps for its own use, which a container may not mount"
+}
+
+// CheckBindOutsideMacVMDirs refuses a container bind of src when src is, sits under, or contains any of dirs,
+// the runner's macOS VM directories: the VM root, which holds every run's disk, the guest agent's signing key
+// and the Mac's inspection CA key, and the admission ledger and socket directories, which the VM shares keep
+// out too. Both sides are resolved through their symlinks (resolveEntry), so a directory linked to another
+// volume is held by where it is, not by what it is called, and a parent of it, such as the home, is refused
+// as well. A directory that does not exist on this machine refuses nothing. The error is a *MacVMDirError.
+func CheckBindOutsideMacVMDirs(src string, dirs ...string) error {
 	real := resolveEntry(src)
-	switch {
-	case foldWithin(canon, real):
-		return fmt.Errorf("mount source %q is the macOS VM directory %q or inside it, and that directory holds every run's disk and keys", real, canon)
-	case foldWithin(real, canon):
-		return fmt.Errorf("mount source %q contains the macOS VM directory %q, which holds every run's disk and keys", real, canon)
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		canon, err := filepath.EvalSymlinks(dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			canon = resolveEntry(dir)
+		}
+		switch {
+		case foldWithin(canon, real):
+			return &MacVMDirError{Src: real, Dir: canon, Inside: true}
+		case foldWithin(real, canon):
+			return &MacVMDirError{Src: real, Dir: canon}
+		}
 	}
 	return nil
 }

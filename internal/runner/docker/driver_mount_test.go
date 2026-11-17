@@ -19,6 +19,7 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -986,4 +987,52 @@ func TestCreateSandbox_DriveRefusalsNeverNameAHostPath(t *testing.T) {
 			t.Errorf("refusal = %q, want it to name the drive", err)
 		}
 	})
+}
+
+// The macOS VM directory and the ledger and socket directories beside it are held out of every container
+// bind, on both paths that make one: a workspace mount (agentMounts) and a share drive. A runner's default VM
+// directory is under the login's home, so HOME decides where it is; the home, which contains it, is refused,
+// and a sibling folder is not. The refusal is a sentence with no path (it becomes the run's failure hint),
+// which agentMounts runs after the member gate. Hosted-only: -tags docker.
+func TestCreateSandbox_MacVMDirIsRefusedAsABind(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, sibling := filepath.Join(base, "home"), filepath.Join(base, "sibling")
+	vm := filepath.Join(home, "Library", "Application Support", "Wardyn", "macos-vm.noindex")
+	for _, dir := range []string{vm, sibling} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	want := []string{vm, admission.DefaultDir, admission.DefaultSockDir}
+	if got := newTestDriver(newFakeDocker()).macVMBindDirs(); !slices.Equal(got, want) {
+		t.Fatalf("the protected directories = %q, want %q", got, want)
+	}
+
+	for _, tc := range []struct {
+		src string
+		ok  bool
+	}{{home, false}, {vm, false}, {sibling, true}} {
+		_, err := createWithMounts(t, []runner.Mount{{Source: tc.src, Target: "/work/x"}})
+		if (err == nil) != tc.ok {
+			t.Errorf("workspace mount %s: err = %v, want ok %v", tc.src, err, tc.ok)
+		}
+		if tc.src == vm {
+			// A drive named macos-vm.noindex is refused, by that member-visible name, before this check.
+			continue
+		}
+		// A share drive's bind: its root is the folder above the drive's directory.
+		drive := hostPathDrive(tc.src)
+		drive.HomeName = filepath.Base(tc.src)
+		_, _, err = createWithDrive(t, drive, []string{filepath.Dir(tc.src)})
+		if (err == nil) != tc.ok {
+			t.Errorf("share drive %s: err = %v, want ok %v", tc.src, err, tc.ok)
+		}
+		if err != nil && strings.Contains(err.Error(), base) {
+			t.Errorf("refusal of %s names a path: %v", tc.src, err)
+		}
+	}
 }
