@@ -33,6 +33,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A file download whose asker was erased reads `a person since erased` in the console. Its card offers no Approve or Deny: no person can decide it, and the admin token decides it through the API or the CLI.
 - A workload launch refused for a policy pin mismatch now says why in the console: its policy resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.
 - A governance profile's limits show a `Confinement floors` chip when the profile sets at least one confinement floor.
+- A macOS VM run's inspection CA copy also names the hosts only the organisation's sealed host rules name, so apps that use only the system trust store reach them. The run's Policy tab and `wardyn run policy` mark such a host Inspected, since the proxy opens it. Needs the new runner and server.
 
 ### Fixed
 

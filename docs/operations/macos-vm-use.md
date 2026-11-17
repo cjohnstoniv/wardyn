@@ -311,7 +311,7 @@ With `macos_vm_inspection_ca` on and the run's base trusting this Mac's CA, the 
 - The chain lasts 7 days, or to the run's maximum lifetime when that comes sooner. A run that outlives it fails TLS to its Inspected hosts again in system-trust apps; CA-bundle tools are unaffected.
 - `trusted` is what the guest answered at the base's last tools update or `edit-base`, not a check when the run starts.
 - A kept machine made before its base trusted the CA does not gain the trust on macOS 26. After `edit-base`, start it with `--resume-machine <id|name> --fresh`.
-- A host only the organisation's sealed host rules name is inspected but is not among the chain's names, so system-trust apps fail TLS to it. Where one Inspected host sits under another (`example.com` and `api.example.com`), the outer host's other subdomains are also among them.
+- A host only the organisation's sealed host rules name is Inspected, and is among the chain's names as the run's own Inspected hosts are. Where one Inspected host sits under another (`example.com` and `api.example.com`), the outer host's other subdomains are also among them.
 - A host whose name is not plain ASCII letters, digits, `-` and `_` in dot-separated labels, such as an internationalised name as written in the policy, is not among the chain's names either. So system-trust apps fail TLS to it.
 - A host given as an IP address is not among the chain's names: the chain permits no address, so system-trust apps fail TLS to it.
 - `inspection_ca` reads `not_trusted` on a base that does not trust the CA yet, and `expired` once the CA's five years have passed. An expired CA signs nothing: rotate it.
