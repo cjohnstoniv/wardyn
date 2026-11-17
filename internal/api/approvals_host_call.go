@@ -36,8 +36,8 @@ var hostCallScopeKeys = []string{"host", "method", "path", "call_sha256", "hold_
 // hostCallKeysPresent reports whether scope is an object with a top-level key that folds to host, one
 // that folds to call_sha256 and one that folds to method or path, read from the keys alone, as
 // kubeCallKeyPresent reads its own: they pick the strict host call path. A host alone is an egress_domain
-// scope, and passes on; a host and a hash with neither method nor path is an MCP call's scope, whose own
-// check refuses the stray host (refuseBadMCPCallScope).
+// scope, and passes on; a host and a hash with neither method nor path goes to
+// the MCP call check, whose exact-key walk refuses the stray host (mcpCallScopeKeysExact).
 func hostCallKeysPresent(scope json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {

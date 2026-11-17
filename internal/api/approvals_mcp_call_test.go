@@ -258,6 +258,8 @@ func TestInternalRaiseRefusesMCPCallHashMismatch(t *testing.T) {
 		"upper-case key":    with(func(m map[string]any) { delete(m, "call_sha256"); m["CALL_SHA256"] = strings.Repeat("0", 64) }),
 		"repeated arg key":  strings.Replace(string(good), `"arguments":{"id":1}`, `"arguments":{"id":1,"id":2}`, 1),
 		"arguments not obj": with(func(m map[string]any) { m["arguments"] = "x" }),
+		"a stray host":      with(func(m map[string]any) { m["host"] = "jira.example" }),
+		"an unknown key":    with(func(m map[string]any) { m["note"] = "approve me" }),
 	} {
 		t.Run(name, func(t *testing.T) {
 			raiseMCPRefused(t, types.ApprovalToolCall, scope, "mcp_call_scope_invalid")
