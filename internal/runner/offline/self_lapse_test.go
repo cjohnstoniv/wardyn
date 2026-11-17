@@ -155,12 +155,47 @@ func TestProvisionalDeadlineKeepsEndsAtAfterRestart(t *testing.T) {
 func TestProvisionalDeadlineKeepsTokenLegAfterRestart(t *testing.T) {
 	m, sub, elapsed, org := managerFixture(t)
 	base, id := m.now(), uuid.New()
-	// The token leg is RunTokenLapseAfter (1h5m) less the 50m since the renewal: 15m.
-	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(-50 * time.Minute), EndsAt: org.Add(3 * time.Hour)})
+	// The token leg is RunTokenLapseAfter (1h5m) less the 40m since the renewal: 25m.
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(-40 * time.Minute), EndsAt: org.Add(3 * time.Hour)})
 	*elapsed = 10 * time.Minute
 	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
 	expectStops(t, restarted, sub, 0)
-	*elapsed = 16 * time.Minute
+	*elapsed = 24 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 26 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlineKeepsRenewalAfterRestart: a renewal after the create moves the saved bound with it.
+func TestProvisionalDeadlineKeepsRenewalAfterRestart(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(3 * time.Hour)})
+	*elapsed = 50 * time.Minute
+	// The renewal moves the token leg from base+1h5m to base+1h55m.
+	if err := m.Lease(context.Background(), runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(50 * time.Minute), EndsAt: org.Add(3 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	*elapsed = 70 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 114 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 116 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlinePassedLapseByGetsReadyGrace: a LapseBy that passed during the downtime still
+// leaves restartReadyGrace for the org's READY re-lease.
+func TestProvisionalDeadlinePassedLapseByGetsReadyGrace(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(20 * time.Minute)})
+	*elapsed = 30 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	*elapsed = 39 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 41 * time.Minute
 	expectStops(t, restarted, sub, 1)
 }
 

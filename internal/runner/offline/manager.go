@@ -747,8 +747,8 @@ func (m *Manager) clearPending() {
 }
 
 // SetOptions applies Options before Run starts. ProxySelfLapses needs a substrate that observes its
-// proxies, and gives every run that has no deadline yet (a restart) a provisional one, restart +
-// RunTokenTTL: a cleanup bound, never sent to the proxy, which never clears an obligation. Call
+// proxies, and lets ProvisionalDeadlines give every run that has no deadline yet (a restart) a
+// provisional one: a cleanup bound, never sent to the proxy, which never clears an obligation. Call
 // ObserveProxies first, so a run whose proxy already exited or is still Pending past its start
 // timeout gets its obligation instead (P4).
 func (m *Manager) SetOptions(o Options) error {
@@ -767,9 +767,9 @@ func (m *Manager) SetOptions(o Options) error {
 	return nil
 }
 
-// ProvisionalDeadlines gives each held run with no deadline and no obligation the provisional
-// cleanup deadline restart + RunTokenTTL, or the deadline its last lease gave (LapseBy) when that is
-// sooner (design K1 §6.2 "After a restart"). The org's next lease replaces it.
+// ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional cleanup
+// deadline: the sooner of restart + RunTokenTTL and its last lease's LapseBy, but never before restart
+// + restartReadyGrace (design K1 section 6.2 "After a restart"). The org's next lease replaces it.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -783,7 +783,7 @@ func (m *Manager) ProvisionalDeadlines() {
 		}
 		left := identity.RunTokenTTL
 		if !r.LapseBy.IsZero() {
-			left = min(left, r.LapseBy.Sub(now))
+			left = min(left, max(r.LapseBy.Sub(now), restartReadyGrace))
 		}
 		m.deadlines[id] = deadline{receipt: now, tokenLeft: left}
 	}
