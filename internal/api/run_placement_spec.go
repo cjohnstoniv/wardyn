@@ -60,7 +60,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		// A personal component name stays out of the append-only record and the failure hint.
 		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail
 		if ref.Reason != placement.ReasonPlacementComponentSelfDefine {
-			data["field"], hint = ref.Field, "This run was not launched on your own runner: "+ref.Field+": "+ref.Detail
+			data["field"], hint = ref.Field, "This run was not launched on your own runner: "+ref.Sentence()
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)

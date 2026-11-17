@@ -160,6 +160,16 @@ func laptopLocalModel(p LocalPlan, base string) bool {
 	return ok && s.AllowOnLaptopRunners && p.OwnerKind == types.RunnerOwnerPerson
 }
 
+// gatewayIdentityDetail is the refusal of a run identity route on a runner: what sends the
+// identity, by the name the run knows it by, and where it can run instead.
+func gatewayIdentityDetail(rt proxy.GatewayIdentityRoute) string {
+	what := fmt.Sprintf("the MCP server %q", rt.MCPKey)
+	if rt.MCPKey == "" {
+		what = fmt.Sprintf("the model provider %q", rt.ProviderID)
+	}
+	return what + " sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners: remove it from this run, or run this on a remote-hosted runner"
+}
+
 // viaOrgGitHubHost is the destination of a brokered GitHub grant's /wardyn/gh/ route.
 const viaOrgGitHubHost = "github.com"
 
@@ -216,10 +226,14 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		return nil
 	},
 	// The token on these routes comes from the organisation's control plane
-	// through a mint no runner relays, so a run that needs it is refused.
+	// through a mint no runner relays, so a run that needs it is refused. Create,
+	// Review and dispatch all ask this gate, so the refusal names the route's
+	// server or provider rather than the field (Refusal.Sentence).
 	"ProxyConfig.GatewayIdentity": func(p LocalPlan) *Refusal {
-		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
-			return refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", "credential variant has no permitted local rule")
+		if routes := p.Spec.ProxyConfig.GatewayIdentity; len(routes) > 0 {
+			r := refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", gatewayIdentityDetail(routes[0]))
+			r.named = true
+			return r
 		}
 		return nil
 	},

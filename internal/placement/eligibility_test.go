@@ -107,6 +107,20 @@ func TestLocalEligibilityRefusesAGatewayIdentityRoute(t *testing.T) {
 	if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.GatewayIdentity" {
 		t.Fatalf("refusal %v, want placement_credential on ProxyConfig.GatewayIdentity", r)
 	}
+	// A person reads the route's provider or MCP server by name, and never the field.
+	for _, tc := range []struct {
+		route proxy.GatewayIdentityRoute
+		names string
+	}{
+		{proxy.GatewayIdentityRoute{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}, `the model provider "p"`},
+		{proxy.GatewayIdentityRoute{Host: "mcp.corp.example", Port: 443, MCPKey: "tools", Audience: "a"}, `the MCP server "tools"`},
+	} {
+		p.Spec.ProxyConfig.GatewayIdentity = []proxy.GatewayIdentityRoute{tc.route}
+		_, r := LocalEligibility(p)
+		if r == nil || !strings.HasPrefix(r.Sentence(), tc.names+" sends your organisation's run identity") || strings.Contains(r.Sentence(), "ProxyConfig") {
+			t.Errorf("sentence %v, want it to name %s", r, tc.names)
+		}
+	}
 	p.Spec.ProxyConfig.GatewayIdentity = nil
 	if _, r := LocalEligibility(p); r != nil {
 		t.Fatalf("a plan with no route was refused: %v", r)
