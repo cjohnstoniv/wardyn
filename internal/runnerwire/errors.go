@@ -28,6 +28,7 @@ const (
 	CodeFolderPassBusy       Code = "folder_pass_busy"
 	CodeProxyFenced          Code = "proxy_fenced"
 	CodeProxyGenerationNewer Code = "proxy_generation_newer"
+	CodeTeardownConfirming   Code = "teardown_confirming"
 	CodeRefused              Code = "refused"
 	CodeInternal             Code = "internal"
 )
@@ -49,6 +50,9 @@ var codeSentinels = []struct {
 	{CodeFolderPassBusy, runner.ErrFolderPassBusy},
 	{CodeProxyFenced, runner.ErrProxyFenced},
 	{CodeProxyGenerationNewer, runner.ErrProxyGenerationNewer},
+	// Last, so a chain that also holds an earlier sentinel keeps that code. An organisation older than this
+	// code reads it as internal (Err), the answer it had before.
+	{CodeTeardownConfirming, runner.ErrTeardownConfirming},
 }
 
 // Valid reports whether c is in the closed list.

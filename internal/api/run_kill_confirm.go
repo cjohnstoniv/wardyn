@@ -17,8 +17,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A person's kill on the in-process Kubernetes runner can find the sandbox's pods already terminating
-// when its wait runs out (runner.ErrTeardownConfirming). That is not a failure: the run is KILLED, the
+// A person's kill on Kubernetes, in process or on a Kubernetes runner (whose answer crosses the wire as
+// teardown_confirming), can find the sandbox's pods already terminating when its wait runs out
+// (runner.ErrTeardownConfirming). That is not a failure: the run is KILLED, the
 // revocations ran, and the kill answers 202 with `teardown: confirming`. startKillConfirm then re-runs the
 // idempotent sandbox kill in the background until the pods are gone or killConfirmWindow from the kill's
 // start has passed, and writes one run.kill.confirm row either way. A ref the confirm leaves held is
