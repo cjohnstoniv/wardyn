@@ -157,6 +157,15 @@ apply_anthropic_mode() {
             export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-wardyn-proxy-injected}"
             ;;
     esac
+    # Tool search stays OFF when claude talks to a host that is not first-party
+    # Anthropic (Wardyn's proxy route, an operator gateway or a custom endpoint),
+    # as it was in 2.1.231: later versions dropped the CLI's own check for this
+    # and would send tool-reference blocks and a beta header a gateway may reject.
+    # A value already set (even empty) is the operator's choice and is kept.
+    if [[ -n "${ANTHROPIC_BASE_URL:-}" && -z "${ENABLE_TOOL_SEARCH+x}" \
+       && "$(url_host "$ANTHROPIC_BASE_URL")" != "api.anthropic.com" ]]; then
+        export ENABLE_TOOL_SEARCH=false
+    fi
 }
 
 # ── SSH SCM lane (git-over-SSH clone via SSH-over-443) ────────────────────────
@@ -308,6 +317,40 @@ if [[ "${1:-}" == "--selftest" ]]; then
     else
         echo "  ~/.claude creds: ABSENT (no subscription OAuth creds mounted)"
     fi
+    echo "--- tool search default (apply_anthropic_mode run in a subshell per row) ---"
+    ts_home="$(mktemp -d)"
+    mkdir -p "$ts_home/.claude"
+    # mode (subscription|bedrock|apikey) | ANTHROPIC_BASE_URL | preset ENABLE_TOOL_SEARCH ("-" = unset) | want
+    while IFS='|' read -r ts_mode ts_url ts_preset ts_want; do
+        ts_got="$(
+            export HOME="$ts_home" CLAUDE_CONFIG_DIR="$ts_home/.claude"
+            unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL ENABLE_TOOL_SEARCH
+            case "$ts_mode" in
+                subscription) : > "$ts_home/.claude/.credentials.json" ;;
+                bedrock) export CLAUDE_CODE_USE_BEDROCK=1 ;;
+            esac
+            [[ "$ts_url" == "-" ]] || export ANTHROPIC_BASE_URL="$ts_url"
+            [[ "$ts_preset" == "-" ]] || export ENABLE_TOOL_SEARCH="$ts_preset"
+            apply_anthropic_mode
+            printf '%s' "${ENABLE_TOOL_SEARCH-unset}"
+        )" || ts_got="error"
+        rm -f "$ts_home/.claude/.credentials.json"
+        if [[ "$ts_got" == "$ts_want" ]]; then
+            echo "  ok   $ts_mode url=$ts_url preset=$ts_preset -> ENABLE_TOOL_SEARCH=$ts_got"
+        else
+            echo "  BAD  $ts_mode url=$ts_url preset=$ts_preset -> ENABLE_TOOL_SEARCH=$ts_got (want $ts_want)" >&2
+            ok=0
+        fi
+    done <<'TS_ROWS'
+apikey|http://wardyn-proxy:3128/wardyn/llm/anthropic|-|false
+apikey|http://wardyn-proxy:3128/wardyn/llm/anthropic|true|true
+subscription|https://gateway.example.com|-|false
+subscription|-|-|unset
+subscription|https://api.anthropic.com|-|unset
+bedrock|http://wardyn-proxy:3128/wardyn/llm/anthropic|-|unset
+TS_ROWS
+    rm -rf "$ts_home"
+    unset ts_home ts_mode ts_url ts_preset ts_want ts_got
     selftest_report_repo_and_git || ok=0
     echo "--- SSH SCM lane (selftest never opens the ssh agent) ---"
     echo "  WARDYN_SSH_GRANTS=${WARDYN_SSH_GRANTS:-<unset (no ssh_key grants)>}"
