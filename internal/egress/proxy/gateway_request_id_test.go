@@ -4,6 +4,8 @@
 package proxy
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -198,6 +200,11 @@ func TestGatewayRequestID_Value(t *testing.T) {
 		{"newline", http.Header{"X-Request-Id": {"ab\ncd"}}, ""},
 		{"delete", http.Header{"X-Request-Id": {"ab\x7fcd"}}, ""},
 		{"non-ASCII", http.Header{"X-Request-Id": {"café"}}, ""},
+		{"boundary space is printable", http.Header{"X-Request-Id": {"a b"}}, "a b"},
+		{"boundary tilde is printable", http.Header{"X-Request-Id": {"a~b"}}, "a~b"},
+		{"x-request-id before x-amzn-requestid", http.Header{"X-Request-Id": {"plain"}, "X-Amzn-Requestid": {"amzn"}}, "plain"},
+		{"empty value counts as absent", http.Header{"Request-Id": {""}, "X-Request-Id": {"second"}}, "second"},
+		{"first value of a duplicate name", http.Header{"X-Request-Id": {"one", "two"}}, "one"},
 		{"first present header decides", http.Header{"Request-Id": {"first"}, "X-Request-Id": {"second"}}, "first"},
 		{"a bad first header is not replaced by a later one", http.Header{"Request-Id": {"a\x01"}, "X-Request-Id": {"second"}}, ""},
 	} {
@@ -213,14 +220,186 @@ func TestGatewayRequestID_Value(t *testing.T) {
 func TestGatewayRequestID_StampNeedsAGatewayAttemptAndAnAnswer(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"X-Request-Id": {"req-1"}}}
 	direct := egress.DecisionLog{}
-	stampGatewayRequestID(&direct, resp)
+	stampGatewayRequestID(&direct, nil, resp)
 	gated := egress.DecisionLog{GatewayCallID: "call-1"}
-	stampGatewayRequestID(&gated, nil)
+	stampGatewayRequestID(&gated, nil, nil)
 	if direct.GatewayRequestID != "" || gated.GatewayRequestID != "" {
 		t.Errorf("stamped without a gateway attempt and an answer: %q, %q", direct.GatewayRequestID, gated.GatewayRequestID)
 	}
-	stampGatewayRequestID(&gated, resp)
+	stampGatewayRequestID(&gated, nil, resp)
 	if gated.GatewayRequestID != "req-1" {
 		t.Errorf("gateway attempt not stamped: %q", gated.GatewayRequestID)
+	}
+}
+
+// gwrEchoRespond is a gateway that hands the sandbox's request ids back on its answer, the way
+// a gateway that echoes request headers does.
+func gwrEchoRespond(w http.ResponseWriter, r *http.Request) {
+	for _, name := range []string{"Request-Id", "X-Request-Id", "X-Amzn-Requestid"} {
+		if v := r.Header.Get(name); v != "" {
+			w.Header().Set(name, v)
+		}
+	}
+	_, _ = w.Write([]byte("ok"))
+}
+
+// A gateway that echoes the sandbox's request ids does not let the sandbox forge the field: the
+// echoed value is dropped on every lane, however the echo is spread over the headers. REVERT
+// PROOF: removing the equality drop in stampGatewayRequestID, or comparing against another
+// request than the sandbox's, puts the sandbox's id on the row and fails here.
+func TestGatewayRequestID_EchoedSandboxIDIsDropped(t *testing.T) {
+	for name, respond := range map[string]func(http.ResponseWriter, *http.Request){
+		"echoes every header": gwrEchoRespond,
+		"echoes Request-Id and sets its own X-Request-Id": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Request-Id", r.Header.Get("Request-Id"))
+			w.Header().Set("X-Request-Id", "gateway-own")
+			_, _ = w.Write([]byte("ok"))
+		},
+		"echoes X-Request-Id only": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Request-Id", r.Header.Get("X-Request-Id"))
+			_, _ = w.Write([]byte("ok"))
+		},
+		"echoes X-Amzn-Requestid only": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Amzn-Requestid", r.Header.Get("X-Amzn-Requestid"))
+			_, _ = w.Write([]byte("ok"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.gw.respond = respond
+			for lane, send := range gwrLanes(g, t) {
+				g.buf.Reset()
+				if rec := send(); rec.Code != http.StatusOK {
+					t.Fatalf("%s: status %d: %s", lane, rec.Code, rec.Body)
+				}
+				if got, present := gwrAllowRow(t, lane, gwcidRows(t, g.buf))["gateway_request_id"]; present {
+					t.Errorf("%s: row carries gateway_request_id %v, the sandbox's own echoed id", lane, got)
+				}
+			}
+			f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.github.test"}}, nil, nil)
+			f.p.mcp = newMCPBroker([]MCPServerConfig{{Key: "github", URL: "https://mcp.github.test/mcp"}}, []MCPBinding{mcpBindingFor("claude-code", "github")})
+			backend := httptest.NewTLSServer(http.HandlerFunc(respond))
+			t.Cleanup(backend.Close)
+			f.p.dial = redirectDial(upstreamAddr(backend))
+			f.p.gatewayRoutes = gwidRoutes()
+			if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit, "Request-Id", gwrSandboxID, "X-Request-Id", gwrSandboxID, "X-Amzn-Requestid", gwrSandboxID); rec.Code != http.StatusOK {
+				t.Fatalf("mcp: %d %s", rec.Code, rec.Body)
+			}
+			if got, present := gwcidRows(t, f.buf)[0]["gateway_request_id"]; present {
+				t.Errorf("mcp: row carries gateway_request_id %v, the sandbox's own echoed id", got)
+			}
+		})
+	}
+}
+
+// A gateway that sets an id of its own, different from the one the sandbox sent, is recorded.
+func TestGatewayRequestID_AnIDDifferentFromTheSandboxsIsKept(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Request-Id", "gateway-own")
+		_, _ = w.Write([]byte("ok"))
+	}
+	for lane, send := range gwrLanes(g, t) {
+		g.buf.Reset()
+		if rec := send(); rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", lane, rec.Code)
+		}
+		if got := gwrAllowRow(t, lane, gwcidRows(t, g.buf))["gateway_request_id"]; got != "gateway-own" {
+			t.Errorf("%s: gateway_request_id = %v, want the gateway's own", lane, got)
+		}
+	}
+}
+
+// The helper's own rule: an exact match of any value of any of the three names, after the trim.
+func TestGatewayRequestID_SandboxEchoMatch(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "https://gw.corp.test/v1", nil)
+	r.Header.Add("X-Amzn-Requestid", "one")
+	r.Header.Add("X-Amzn-Requestid", " two\t")
+	for id, want := range map[string]bool{"one": true, "two": true, "One": false, "on": false, "three": false} {
+		if got := sandboxRequestIDEcho(r, id); got != want {
+			t.Errorf("sandboxRequestIDEcho(%q) = %v, want %v", id, got, want)
+		}
+	}
+	if sandboxRequestIDEcho(nil, "one") {
+		t.Error("a nil request matched")
+	}
+}
+
+// The re-signed Bedrock gateway route reads X-Amzn-Requestid off the answer, and drops the
+// sandbox's own value when the gateway echoes it. REVERT PROOF: dropping the stamp in pat_api.go
+// leaves the first case without the field.
+func TestGatewayRequestID_ReSignedBedrockGatewayRoute(t *testing.T) {
+	for name, tc := range map[string]struct {
+		respond func(http.ResponseWriter, *http.Request)
+		want    string
+	}{
+		"the answer's id": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Amzn-Requestid", "0b1c-4d5e")
+			_, _ = w.Write([]byte("{}"))
+		}, "0b1c-4d5e"},
+		"the sandbox's id echoed": {func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Amzn-Requestid", r.Header.Get("X-Amzn-Requestid"))
+			_, _ = w.Write([]byte("{}"))
+		}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newSGWHarness(t)
+			g.respond = tc.respond
+			forged := map[string]string{"Content-Type": "application/json", "X-Amzn-Requestid": gwrSandboxID}
+			if rec := g.send(t, sgwRequest(t, sgwHost, sgwPrefix+"/model/anthropic.claude-x:0/converse", `{}`, forged), sgwHost); rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body)
+			}
+			got, present := gwrAllowRow(t, name, gwcidRows(t, bytes.NewBufferString(g.log())))["gateway_request_id"]
+			if tc.want == "" && present || tc.want != "" && got != tc.want {
+				t.Errorf("gateway_request_id = %v (present %v), want %q", got, present, tc.want)
+			}
+		})
+	}
+}
+
+// An MCP server that answers with a redirect names its id on the deny row, as the allow row does.
+// REVERT PROOF: dropping the stamp on the redirect deny in mcp_broker.go fails here.
+func TestGatewayRequestID_MCPRedirectDenyRowCarriesIt(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.github.test"}}, nil, nil)
+	f.p.mcp = newMCPBroker([]MCPServerConfig{{Key: "github", URL: "https://mcp.github.test/mcp"}}, []MCPBinding{mcpBindingFor("claude-code", "github")})
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Id", "mcp-redirect-1")
+		w.Header().Set("Location", "https://mcp.github.test/elsewhere")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(backend.Close)
+	f.p.dial = redirectDial(upstreamAddr(backend))
+	f.p.gatewayRoutes = gwidRoutes()
+	if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit, "X-Request-Id", gwrSandboxID); rec.Code != http.StatusBadGateway {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if got := gwcidRows(t, f.buf)[0]["gateway_request_id"]; got != "mcp-redirect-1" {
+		t.Errorf("redirect deny row gateway_request_id = %v, want the answer's", got)
+	}
+}
+
+// A gateway answer the proxy will not relay (a content encoding it cannot scrub) still names its
+// id on the deny row. REVERT PROOF: dropping the stamp in relayGatewayRoute fails here.
+func TestGatewayRequestID_RelayRefusalRowCarriesIt(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "br") // gzip would be undone by the transport, which asked for it itself
+		w.Header().Set("X-Request-Id", "relay-refused-1")
+		_, _ = w.Write([]byte("x"))
+	}
+	for lane, send := range gwrLanes(g, t) {
+		g.buf.Reset()
+		if rec := send(); rec.Code != http.StatusBadGateway {
+			t.Fatalf("%s: status %d", lane, rec.Code)
+		}
+		var got []any
+		for _, row := range gwcidRows(t, g.buf) {
+			if row["decision"] == string(egress.Deny) && strings.Contains(fmt.Sprint(row["cause"]), "Content-Encoding") {
+				got = append(got, row["gateway_request_id"])
+			}
+		}
+		if len(got) != 1 || got[0] != "relay-refused-1" {
+			t.Errorf("%s: relay-refusal row ids %v, want the answer's", lane, got)
+		}
 	}
 }

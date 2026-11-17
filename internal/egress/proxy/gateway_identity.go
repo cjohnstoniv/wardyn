@@ -408,7 +408,7 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
 			log.Cause = cause
 			log.GatewayCallID = callID
-			stampGatewayRequestID(&log, resp)
+			stampGatewayRequestID(&log, r, resp)
 			p.sink.emit(log)
 		}
 		p.httpErrorShaped(w, p.shapeOf(r, host), host, "the gateway's answer was not relayed", errors.New(cause), http.StatusBadGateway,

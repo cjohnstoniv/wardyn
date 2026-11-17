@@ -336,7 +336,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
 	allow.GatewayCallID = callID
-	stampGatewayRequestID(&allow, resp)
+	stampGatewayRequestID(&allow, r, resp)
 	allow.ApprovalID = d.approvalID
 	p.emitDialledAllow(allow, host)
 	if d.sign != nil && bedrockServiceLabel(p.sigv4.scopes[hostKey(host)].service) {

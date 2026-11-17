@@ -4329,7 +4329,7 @@ The labelled series, every label, and where its values come from:
 
 - A run with a route is refused on a person's own runner, and the mint is not relayed (`relayedInternalRoutes`).
 - It goes to a remote executor only if that executor reports the setting. An older executor would drop the route and send the sandbox's own header, so the run is refused there rather than sent unsigned.
-- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` on its spooled decision rows. A control plane from before that field decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
+- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` and `gateway_request_id` on its spooled decision rows. A control plane from before those fields decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
 
 ### Known latent vulnerabilities
 
