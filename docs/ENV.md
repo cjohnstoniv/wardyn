@@ -793,7 +793,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The sign-in sandbox is an ordinary run, so the ratio applies to its own limits (`WARDYN_HARNESS_LOGIN_CPU_MILLIS` / `_MEMORY_MIB`, default `500` / `512`) the same way.
 - The proxy sidecar's size (`WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`) is not scaled: it always counts in full against the node.
 - Worked example: limits of `2000` milli-CPU and `4096` MiB with a ratio of `0.5` give requests of `1000` and `2048`. A node with 16000 milli-CPU free fits 8 such agent pods by CPU where equal requests fit 4, before the proxy's `500` / `256` per run is counted.
-- The price is overcommit: if every pod runs at its limit, the node holds half what they asked for, so CPU is throttled and memory pressure evicts or OOM-kills. Start near `1` and lower it only while real usage sits well below limits.
+- The price is overcommit: at a ratio of `0.5`, pods that all run at their limits use twice what the scheduler counted for them, so CPU is throttled and memory pressure evicts or OOM-kills. Start near `1` and lower it only while real usage sits well below limits.
 
 ### `WARDYN_HARNESS_LOGIN_CPU_MILLIS`
 
