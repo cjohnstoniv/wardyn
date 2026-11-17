@@ -787,7 +787,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 - Either way the grant is spent on the approved verdict itself — after the method check, but ahead of IP vetting and the dial.
 - On HTTPS, a CONNECT that got nothing back from the far side gives the grant back once. That covers a failed dial, a configured upstream proxy's refusal of the CONNECT included (`builtin:dial-failed`).
 - Or a tunnel whose upstream, after the sandbox's TLS hello, closed or reset with no byte back, or answered in plaintext that the proxy refused and did not relay (`builtin:tunnel-failed`).
-- That row then carries the `approval_id`, and its `cause` ends with a note that the once approval was not spent. The next request to the host within 60 seconds uses the same approval.
+- That row then carries the `approval_id`, and its `cause` ends with a note that the once approval was not spent. The next request to the host within 60 seconds uses the same approval. A retry that reaches the proxy before that row is written asks again.
 - One approval comes back at most once, and not when another request to the host raised an approval first; one whose raise had already failed without a refusal does not block it. A replaced proxy starts with no approvals cached, so a replace drops it.
 - A request still held on the same approval under `wait_for_review` can take it after the 60 seconds. A proxy image from an earlier release always spends it.
 - Everything else spends it: a DNS-rebind refusal (`builtin:private-ip`), a name that did not resolve (`builtin:resolve-failed`), a TLS alert, which reaches the sandbox, and a tunnel that relayed any answer.
