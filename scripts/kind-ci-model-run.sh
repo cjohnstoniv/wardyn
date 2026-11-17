@@ -47,6 +47,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   skip_lane "kind-ci-model-run: set WARDYN_TEST_K8S=1 to run the cluster-dependent CI model run (skipping)."
@@ -98,16 +100,7 @@ ADMIN_TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardy
   -o jsonpath='{.data.admin-token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
 [[ -n "${ADMIN_TOKEN}" ]] || die "could not read the admin token from Secret wardyn-auth"
 
-api() { # METHOD PATH [BODY] -> HTTP code; body in ${TMPDIR}/resp.json
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE_URL}/api/v1${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' -d "${body}"
-  else
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE_URL}/api/v1${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE_URL}/api/v1" "${ADMIN_TOKEN}" "${TMPDIR}/resp.json" "${CURL_MAX_TIME}" "$@"; } # METHOD PATH [BODY] -> HTTP code; body in ${TMPDIR}/resp.json
 must() { # WANT_CODE WHAT METHOD PATH [BODY]
   local want="$1" what="$2" code
   shift 2

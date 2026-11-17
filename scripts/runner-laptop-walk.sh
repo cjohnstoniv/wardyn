@@ -50,6 +50,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 
 [[ "${WARDYN_TEST_DOCKER:-}" == "1" ]] || skip_lane "runner-laptop-walk: set WARDYN_TEST_DOCKER=1 to run it (skipping)."
 for bin in docker curl jq go openssl ss; do
@@ -108,11 +110,7 @@ compose() {
 }
 
 # api TOKEN METHOD PATH [BODY] -> body in $TMP/resp.json, status on stdout.
-api() {
-  local args=(-sS --max-time 15 -o "${TMP}/resp.json" -w '%{http_code}' -X "$2" "${ORG_URL}$3" -H "Authorization: Bearer $1")
-  [[ -n "${4:-}" ]] && args+=(-H "Content-Type: application/json" -d "$4")
-  curl "${args[@]}"
-}
+api() { walk_api "${ORG_URL}" "$1" "${TMP}/resp.json" 15 "${@:2}"; }
 psql1() { od exec "${PG_CONTAINER}" psql -U wardyn -d wardyn -tAc "$1"; }
 w() { WARDYN_URL="${ORG_URL}" WARDYN_TOKEN="${MEMBER_TOKEN}" "${TMP}/wardyn" "$@"; }
 runnerd() { DOCKER_HOST="${RUNNER_DOCKER}" "${TMP}/wardyn-runnerd" "$@"; }
