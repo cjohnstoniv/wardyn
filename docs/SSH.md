@@ -419,7 +419,7 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
   the subsystem's backing process.
 - See [Image contract](#image-contract-byoi) if this 404s.
 - **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
-- After each pass the client sends a `wardyn-sync-pass` request, its own account of the pass. Its laptop deletes join the audit row; a complete pass [releases a held agent](#hold-the-agent-for-a-local-folder).
+- After each pass the client sends a `wardyn-sync-pass` request, its own account of the pass. Its laptop deletes join the audit row; a complete pass [releases a held agent](#hold-the-agent-for-a-local-folder). Before each pass the client sends one with `started`; a session that ends with a started pass not yet accounted for records a failure.
   - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
 
 ### Sync a directory (`wardyn sync`)
