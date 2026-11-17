@@ -348,8 +348,8 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce'
   fi
-  # The four Linux VM cases: three docs/RUNTIME-CONTRACT.md cites, and the guest proof of docs/POLICIES.md's VM
-  # host rules. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE are set; ci.yml's vm job, the suite's
+  # The four Linux VM cases: three docs/RUNTIME-CONTRACT.md cites, and the guest proof that docs/POLICIES.md's VM
+  # host rules judge plain HTTP. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE are set; ci.yml's vm job, the suite's
   # one caller, builds and sets them, so the floor keys on the suite alone and a dropped variable goes red as a
   # skip.
   if [ "$SUITE" = "conformance-vm" ]; then
