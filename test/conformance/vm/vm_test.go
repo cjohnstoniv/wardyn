@@ -517,7 +517,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 	// guest's plain HTTP to the rule host is judged by method and path: the allowed GET reaches the origin,
 	// and a path or method no rule allows is answered 403 by the proxy (the origin would answer 404 or 501).
 	// The run has no interception certificate, so HTTPS to the rule host is refused at the relay's ask. A
-	// hold needs a control plane to answer it, and this suite has none.
+	// hold needs a control plane to answer it, and this suite has none. It runs after the row sweep above,
+	// which takes every allow to be origin.test's and every proxy deny to carry a relay flow.
 	t.Run("HostRulesJudgedInTheGuest", func(t *testing.T) {
 		for _, c := range []struct{ method, path, status, body string }{
 			{"GET", "/public/ok", "200", "rules-ok"},
