@@ -79,6 +79,8 @@ case "$1 $2" in
     if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -vE '^(install-cli\.|SHA256SUMS\.sigstore\.json$|wardyn-windows-)' "${DIR}/want-ver0.txt"; elif [ -n "${NO_WINDOWS:-}" ]; then grep -v '^wardyn-windows-' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
+  "release list")
+    echo "${RELEASE_LATEST-v${VER}}" ;;
   "release download")
     pats=()
     while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; [ "$1" = "--pattern" ] && pats+=("$2"); shift; done
@@ -243,6 +245,14 @@ RELEASE_PRERELEASE=false run 0.10.0-rc.14 v0.10.0-rc.14 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release state: prerelease=false draft=false (want prerelease=true draft=false)$' >/dev/null || fail "V=0.10.0-rc.14 published as a final was accepted: rc=${rc}"
 RELEASE_DRAFT=true run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release state: prerelease=false draft=true ' >/dev/null || fail "V=0.10.0 still a draft was accepted: rc=${rc}"
+RELEASE_LATEST=v0.9.9 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL latest release: v0.9.9 (want v0.10.0 or a newer release)$' >/dev/null || fail "V=0.10.0 published but not Latest was accepted: rc=${rc}"
+RELEASE_LATEST='' run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL latest release: none ' >/dev/null || fail "V=0.10.0 with no Latest release was accepted: rc=${rc}"
+RELEASE_LATEST=v0.10.1 run 0.10.0 v0.10.0 bundle
+[ "${rc}" = 0 ] || fail "V=0.10.0 with a newer Latest (v0.10.1) exited ${rc}: $(printf '%s' "${out}" | grep -i latest)"
+run 0.10.0 v0.10.0 bundle
+printf '%s' "${out}" | grep '^OK   latest release (v0.10.0)$' >/dev/null || fail "V=0.10.0 as Latest did not report it: $(printf '%s' "${out}" | grep -i latest)"
 RELEASE_PRERELEASE=true run 0.9.5 v0.9.5 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.5 (cut before the state was held) exited ${rc} over its state: $(printf '%s' "${out}" | tail -3)"
 pass "a final is published and not a prerelease, and an RC is a prerelease, from 0.10.0 on"

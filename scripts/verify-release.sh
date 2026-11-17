@@ -71,6 +71,11 @@ if [ "$(printf '%s\n' "${V%%-*}" 0.10.0 | sort -V | head -1)" = 0.10.0 ]; then
   state=$(head -1 "$OUT/assets.txt" | sed -n 's/^\(prerelease=[^ ]* draft=[^ ]*\) .*/\1/p')
   want="prerelease=false draft=false"; [[ "$V" == *-* ]] && want="prerelease=true draft=false"
   if [[ "$state" == "$want" ]]; then echo "OK   release state ($state)"; else echo "FAIL release state: $state (want $want)"; fails=$((fails+1)); fi
+  # A final must also be Latest, or a release at or after it must be (a patch to an older line is not Latest).
+  if [[ "$V" != *-* ]]; then
+    latest=$(gh release list --repo cjohnstoniv/wardyn --limit 100 --json tagName,isLatest --jq '.[]|select(.isLatest)|.tagName' | head -1)
+    if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$V" | sort -V | tail -1)" = "${latest#v}" ]; then echo "OK   latest release ($latest)"; else echo "FAIL latest release: ${latest:-none} (want $TAG or a newer release)"; fails=$((fails+1)); fi
+  fi
 fi
 expected=$({ for img in $IMAGES; do echo "sbom-$img.cdx.json"; done; echo "$WANT"; echo "wardyn-$V.tgz"; } | sort -u)
 have=$(tail -n +2 "$OUT/assets.txt" | sort -u)
