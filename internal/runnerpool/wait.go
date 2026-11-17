@@ -78,12 +78,14 @@ func WaitRunnersAtLimitMsg(pool, example, limit string) string {
 }
 
 // WaitNoRunnerFreeMsg is the sentence of a queued run no runner of its owner can take yet.
+// No server answer carries it: the console words the wait, and this copy is the Go side of the golden.
 func WaitNoRunnerFreeMsg(pool string) string {
 	return fmt.Sprintf("None of your runners in %s is online. This run starts when one is.", pool)
 }
 
 // WaitRecordingStoreOffMsg is the sentence of a queued run held because recording is required and the
 // organisation keeps no session recordings.
+// No server answer carries it: the console words the wait, and this copy is the Go side of the golden.
 func WaitRecordingStoreOffMsg() string {
 	return "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on."
 }
