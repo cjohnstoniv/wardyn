@@ -644,6 +644,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	killerType, killer := actorFromRequest(r)
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	cascadeCtx = withKillConfirm(cascadeCtx)
 
 	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer, notStarted)
 	if errors.Is(serr, errKillRunStarted) {
@@ -676,7 +677,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "state": types.RunKilled})
+	s.writeKillAccepted(cascadeCtx, w, run)
 }
 
 // killCASAttempts bounds handleKillRun's re-reads: one per forward move a live run can make under the
@@ -851,13 +852,16 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 		return s.killQueuedTail(ctx, run, killerType, killer, extra)
 	}
 	killData := map[string]any{}
-	queued := false
+	queued, confirming := false, false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	var kerr error
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr = s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
+			} else if queuedOK && errors.Is(kerr, runner.ErrTeardownConfirming) {
+				confirming = true // the pods are terminating: no failure, and the ref stays
+				markKillConfirming(ctx)
 			} else {
 				killData["runner_error"] = auditStep(ctx, auditStepKillSandbox, kerr, slog.String("run_id", id.String()))
 			}
@@ -919,6 +923,8 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	maps.Copy(data, extra)
 	if queued {
 		data["sandbox_stop"] = "queued"
+	} else if confirming {
+		data["sandbox_stop"] = "confirming"
 	}
 	// On revokeCtx, not ctx: a slow kill leaves ctx expired, and the audit row and the reconciles below
 	// would then write and read nothing. It is detached and already bounded, and it shares the

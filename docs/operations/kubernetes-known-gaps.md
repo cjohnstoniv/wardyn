@@ -59,6 +59,13 @@
 - If your DNS pods carry other labels, it matches nothing and DNS falls back to the broad rule.
 - Check with `kubectl -n kube-system get pods --show-labels`.
 
+## Killing a run
+
+- A kill deletes the run's pods and waits up to 25 seconds for them to go; the network policies and the per-run Secret stay until they have.
+- If every pod is already terminating when the wait ends, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
+- Wardyn retries the stop in the background and writes one `run.kill.confirm` row within 60 seconds of the kill. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref and the terminal sandbox sweep retries it.
+- A pod that is not terminating, or a Kubernetes API error, still answers 500 and the kill can be retried.
+
 ## Eviction, priority and run count
 
 - **Eviction and priority.** Sandbox pods take `k8s.sandbox.priorityClassName` and `k8s.sandbox.podAnnotations` (`WARDYN_K8S_SANDBOX_PLACEMENT`, [docs/ENV.md](../ENV.md)).
