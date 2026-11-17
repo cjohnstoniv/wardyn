@@ -259,8 +259,8 @@ func TestOnceRefund_TheSandboxsCloseIsReportedAsTheFirst(t *testing.T) {
 		}
 	}}
 	_ = sandbox.Close()
-	if first, _ := tunnel(a, b); first != net.Conn(a) {
-		t.Fatal("tunnel reported the upstream side first, want the sandbox side that closed first")
+	if first, err := tunnel(a, b); first != net.Conn(a) || err != nil {
+		t.Fatalf("tunnel first = %v, err = %v: want the sandbox side that closed first, with no error", first, err)
 	}
 }
 

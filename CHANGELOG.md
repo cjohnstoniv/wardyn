@@ -28,6 +28,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A CONNECT tunnel that ended before any reply could leave a `builtin:tunnel-failed` audit row naming the wrong side. When the sandbox sent its first bytes and closed, and the upstream hung up in answer, the row could say the upstream closed or reset without answering. When the upstream closed or reset first and the sandbox closed in answer, it could say the client closed before any reply. Where a reset was involved, the row's `refusal` was wrong with it. The row now names the side whose stream ended first. Needs the new proxy image.
 - On the Docker runner, a sandbox reaches its proxy as soon as a live egress edit or a revive answers. Every proxy of a run now takes the same MAC address on the run's network, so a gVisor sandbox no longer loses egress for up to a minute after its proxy is replaced. Update the runner to get it. A run started on an earlier runner waits once more, at its first replace after the update. When the proxy's create or start fails with the address, the runner logs a warning and tries once more without one. A run whose proxy was made that way keeps the wait at that replace and at its next one.
 
 ### Security
