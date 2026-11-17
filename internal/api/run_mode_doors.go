@@ -115,8 +115,9 @@ var backgroundDoors = []backgroundDoor{
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
 
-// passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
-// read, or change the run's lifecycle, and stay available to a background run.
+// passiveRunRoutes are the /runs/{id} routes that are not interactive doors: reads (including recording
+// replay), lifecycle changes (end, title, kill, resume, revive, bring-back, node record), and the two
+// writes that open nothing, profile synthesis and the live egress narrowing. All stay available to a background run.
 var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}":                     "read the run",
 	"GET /runs/{id}/ado-tokens":          "read",
