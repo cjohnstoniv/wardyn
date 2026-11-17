@@ -38,3 +38,33 @@ func TestPersistRunGrantsLeavesApprovalGatedKeyOffTheProxy(t *testing.T) {
 		}
 	}
 }
+
+// TestProbeAndRecordInjectionsSkipApprovalGatedKey: the site-config probe and
+// the record launch wire api_key injections by their own loops, and both leave
+// an approval-gated grant off, as persistRunGrants does. The same grant without
+// approval is wired.
+func TestProbeAndRecordInjectionsSkipApprovalGatedKey(t *testing.T) {
+	for _, gated := range []bool{false, true} {
+		srv, _, _ := govEscapeFixture(t, &capStore{})
+		grants := []types.GrantSpec{{Kind: types.GrantAPIKey, RequiresApproval: gated,
+			Scope: mustJSON(map[string]any{"host": "api.example.test", "header": "x-api-key", "secret_name": govCorpSecret})}}
+		want := 1
+		if gated {
+			want = 0
+		}
+		probe, err := srv.probeInjections(context.Background(), uuid.New(), grants)
+		if err != nil {
+			t.Fatalf("requires_approval=%v: probeInjections: %v", gated, err)
+		}
+		if len(probe) != want {
+			t.Errorf("requires_approval=%v: probeInjections = %+v, want %d", gated, probe, want)
+		}
+		record, err := srv.mintRecordAPIKeyInjections(context.Background(), uuid.New(), time.Now().UTC(), grants)
+		if err != nil {
+			t.Fatalf("requires_approval=%v: mintRecordAPIKeyInjections: %v", gated, err)
+		}
+		if len(record) != want {
+			t.Errorf("requires_approval=%v: mintRecordAPIKeyInjections = %+v, want %d", gated, record, want)
+		}
+	}
+}

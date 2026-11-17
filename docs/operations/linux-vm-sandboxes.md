@@ -188,7 +188,10 @@
 | The VM's first lease has lapsed when it would start | Refused "runner create requires a live initial lease", as for a container. Nothing is created |
 | The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
 | The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
-| A credential the proxy injects | Read again every 10 or 15 minutes, or at a token's expiry when sooner. Dropped 15 minutes past its lease if it cannot be read |
+| A header credential the proxy injects (a stored key, a provider key, a sign-in token) | Asked again from 5 minutes before its lease ends, on a request. If it cannot be read, added up to 15 minutes past the lease, then dropped |
+| A Git broker token (GitHub App, or `git_pat` through the PAT broker) | Used until 30 seconds before its own expiry, at most 1 hour. No grace |
+| The SSH agent key | Held until the proxy stops, at 1h5m offline |
+| An MCP credential | Refused from 5 minutes before its lease ends. No grace |
 | The VM's audit spool fills (50,000 decisions, or about 29 MiB once the proxy is refused) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
 
 - These rules apply only on a runner that offers Linux VM sandboxes. A container run keeps the hold-then-`503` for a full spool.
