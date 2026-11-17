@@ -29,6 +29,9 @@ type CredentialOrigin struct {
 	// ResidentOptIn is an Azure DevOps connection's admin opt-in to
 	// runner_resident (types.ADOEntraConfig.RunnerResident); off by default.
 	ResidentOptIn bool
+	// ViaOrgOptIn is an Azure DevOps connection's admin switch allowing its minted tokens on runners via the
+	// organisation (types.ADOEntraConfig.RunnerViaOrg); off by default.
+	ViaOrgOptIn bool
 }
 
 // CredentialIntent records a resolved credential-producing configuration before mint.
@@ -209,6 +212,9 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
 			mode := p.Delivery.ForTrust(row.Delivery, p.Trust).Mode
 			if viaOrgAdmits(row, mode) {
+				if row.Delivery == ClassADOMintedPAT {
+					return ViaOrgADOAdmits(origin, p, path)
+				}
 				return nil
 			}
 			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
@@ -269,6 +275,26 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
+	return postureRefusal(class, cp, p, path)
+}
+
+// ViaOrgADOAdmits is the via_org gate for an Azure DevOps minted token (owner rulings 2026-11-17): the token stays in
+// the organisation, and the run is judged as runner_resident is, except that any runner owner is served (the token
+// never reaches the runner). The connection's via_org switch is its consent; runner_resident is not needed.
+func ViaOrgADOAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal {
+	switch {
+	case !p.Trust.Valid():
+		return refuse(ReasonPlacementCredential, path, "an Azure DevOps minted token is never delivered to a runner of unknown trust class")
+	case !origin.ViaOrgOptIn:
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection does not allow its tokens on runners via the organisation, or its token mode is not minted_pat")
+	case p.ConfinementFloor != "":
+		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for an Azure DevOps minted token")
+	}
+	return postureRefusal(ClassADOMintedPAT, p.Delivery.ForTrust(ClassADOMintedPAT, p.Trust), p, path)
+}
+
+// postureRefusal is the refusal of a runner whose reported posture does not meet cp's require_posture, or nil.
+func postureRefusal(class string, cp ClassPolicy, p LocalPlan, path string) *Refusal {
 	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
 	case len(unmet) == 0:
 	case p.Posture == nil:

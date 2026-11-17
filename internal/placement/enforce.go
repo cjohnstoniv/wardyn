@@ -68,6 +68,13 @@ var strippers = map[string]stripper{
 				!slices.ContainsFunc(s.ProxyConfig.ViaOrgRoutes, func(r proxy.ViaOrgRoute) bool { return h == r.Host })
 		})
 	},
+	// A via_org Azure DevOps grant's gate runs in the organisation's engine: the laptop copy keeps none, so its proxy
+	// forwards /wardyn/git/ for the grant's hosts instead of serving it. Dispatch keeps it in the sealed row only.
+	"ProxyConfig.ADOGrant": func(p LocalPlan, s *runner.SandboxSpec) {
+		if viaOrgPath(p, "ProxyConfig.ADOGrant") {
+			s.ProxyConfig.ADOGrant = nil
+		}
+	},
 	// Every grant left in the policy was proven own and OwnerOnly, or via_org,
 	// by the credential classification that ran first. A via_org grant leaves
 	// the policy and keeps only its grant id and host (stripViaOrg).

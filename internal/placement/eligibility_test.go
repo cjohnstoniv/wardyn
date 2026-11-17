@@ -79,6 +79,9 @@ func TestLocalEligibilityNotDeliveredSentences(t *testing.T) {
 			{"unknown trust", map[string]ClassPolicy{c.class: {Mode: ModeRefuse}}, "",
 				c.class + " credential is not delivered to a local runner of trust class unknown (a runner of unknown trust class gets via_org delivery only)"},
 		} {
+			if tc.name == "via_org" && c.class == ClassADOMintedPAT {
+				continue // built: ado_via_org_test.go judges it
+			}
 			p := LocalPlan{Delivery: DeliveryPolicy{Classes: tc.policy}, Trust: tc.trust}
 			r := classifyCredential(c.entries, c.path, CredentialOrigin{Class: ClassBrokered, Delivery: c.class}, p, reflect.Value{})
 			if r == nil || r.Reason != ReasonPlacementCredential || r.Field != c.path || r.Detail != tc.want {

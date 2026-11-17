@@ -265,8 +265,8 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 		if !slices.Contains(classModes[class], cp.Mode) {
 			return fmt.Errorf("%w: class %q cannot be delivered as %q (allowed: %s)", ErrInvalidPolicy, name, cp.Mode, joinModes(classModes[class]))
 		}
-		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident {
-			return fmt.Errorf("%w: class %q has require_posture without mode %q", ErrInvalidPolicy, name, ModeRunnerResident)
+		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident && !(class == ClassADOMintedPAT && cp.Mode == ModeViaOrg) {
+			return fmt.Errorf("%w: class %q has require_posture without mode %q (or %q for %q)", ErrInvalidPolicy, name, ModeRunnerResident, ModeViaOrg, ClassADOMintedPAT)
 		}
 	}
 	return nil
