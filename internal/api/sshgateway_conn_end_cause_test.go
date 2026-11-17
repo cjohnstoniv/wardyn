@@ -127,11 +127,13 @@ func TestSSHGateway_BridgeOutcomeIsJudgedWhenOutputEnds(t *testing.T) {
 		cancelAtWait bool // the client closes between stdout's end and Wait
 		stdoutErr    error
 		code         int
+		waitErr      error // Wait bound to the ended context reads no exit
 		want         string
 	}{
 		"exits 0, no close": {stdoutErr: io.EOF, want: "success"},
-		"exits 1 and the client closes in the stderr wait": {stdoutErr: io.EOF, cancelAtWait: true, code: 1, want: "failure"},
-		"the client closes while the process writes":       {cancelAtRead: true, stdoutErr: errors.New("closed"), cancelAtWait: true, code: 1, want: "success"},
+		"exits 1 and the client closes in the stderr wait":               {stdoutErr: io.EOF, cancelAtWait: true, code: 1, want: "failure"},
+		"the client closes while the process writes":                     {cancelAtRead: true, stdoutErr: errors.New("closed"), cancelAtWait: true, code: 1, want: "success"},
+		"a clean end, then the client closes before Wait reads the exit": {stdoutErr: io.EOF, cancelAtWait: true, waitErr: context.Canceled, want: "success"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
@@ -147,15 +149,15 @@ func TestSSHGateway_BridgeOutcomeIsJudgedWhenOutputEnds(t *testing.T) {
 					if tc.cancelAtWait {
 						cancel(errSSHChannelClosed)
 					}
-					return tc.code, nil
+					return tc.code, tc.waitErr
 				},
 			}
 			var end bridgeEnd
 			noted := noteBridgeEnd(ctx, sess, &end)
 			_, _ = io.Copy(io.Discard, noted.Stdout)
 			code, err := noted.Wait()
-			if err != nil {
-				t.Fatalf("Wait = %v", err)
+			if err != tc.waitErr {
+				t.Fatalf("Wait = %v, want %v", err, tc.waitErr)
 			}
 			if got := bridgeOutcome(code, end, "sftp-server", map[string]any{}); got != tc.want {
 				t.Errorf("outcome = %q, want %q (end=%+v)", got, tc.want, end)

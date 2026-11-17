@@ -204,8 +204,11 @@ type bridgeEnd struct {
 // noteBridgeEnd keeps how sess ended in end. ctx is the context the bridge runs
 // on. end.closed is read when the process's output ends (its Stdout's first read
 // error), before the bridge waits for the process's stderr, so a client that
-// closes during that wait does not turn a failed process into a client's end;
-// with no Stdout it is read as Wait returns. end.err is Wait's own error.
+// closes during that wait does not turn a failed process into a client's end.
+// It is read again as Wait returns when Wait erred (a Wait bound to the ended
+// context reads no exit, so the close is all there is to judge by), when there
+// is no Stdout, or when the copy stopped without a read error. end.err is Wait's
+// own error.
 func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd) *runner.ExecSession {
 	if sess.Wait == nil {
 		return sess
@@ -219,7 +222,7 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 	noted.Wait = func() (int, error) {
 		code, err := sess.Wait()
 		end.err = err
-		if out == nil || !out.noted {
+		if err != nil || out == nil || !out.noted {
 			end.closed = sshClientClosedFirst(ctx)
 		}
 		return code, err
@@ -228,8 +231,9 @@ func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd
 }
 
 // endNoteReader notes in end.closed, at its first read error (EOF or not),
-// whether the client's close had ended ctx. sshBridgeExecSession reads Stdout to
-// its end and then calls Wait on one goroutine, in that order: no lock is needed.
+// whether the client's close had ended ctx. sshBridgeExecSession copies Stdout
+// until the copy ends and then calls Wait on one goroutine, in that order: no
+// lock is needed.
 type endNoteReader struct {
 	r     io.Reader
 	ctx   context.Context
