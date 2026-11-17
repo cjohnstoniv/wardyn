@@ -25,7 +25,7 @@ func TestSSHCommands_RefuseAKindTheGatewayDoesNotServe(t *testing.T) {
 	}{
 		{"exec", `["forward","sftp","shell"]`, "commands (exec)"},
 		{"forward", `["exec","sftp","shell"]`, "port forwarding"},
-		{"editor", `["exec","shell"]`, "file transfer (sftp), port forwarding"},
+		{"editor", `["exec","shell"]`, "file transfer (sftp) or port forwarding"},
 		{"ssh", `["exec","forward","sftp"]`, "a terminal"},
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
@@ -33,12 +33,13 @@ func TestSSHCommands_RefuseAKindTheGatewayDoesNotServe(t *testing.T) {
 			log := fakeSSH(t, "0")
 			f := newGatewayFixture(t, channelsHealthz(`,"channels":`+tc.channels), oneKey)
 			var err error
-			if tc.verb == "ssh" {
+			switch tc.verb {
+			case "ssh":
 				_, err = runGateway(t, sshCmd, f, "", testRunID)
-			} else {
+			default:
 				_, err = resolveSSHAccess(context.Background(), &sdk.Client{BaseURL: f.url}, tc.verb, testRunID, false)
 			}
-			want := tc.verb + ": this deployment's SSH gateway does not serve " + tc.off + " (WARDYN_SSH_CHANNELS); ask your Wardyn admin"
+			want := tc.verb + ": this deployment's SSH gateway does not serve " + tc.off + " (WARDYN_SSH_CHANNELS); ask your operator"
 			if err == nil || err.Error() != want {
 				t.Fatalf("error = %v, want %q", err, want)
 			}
@@ -74,5 +75,45 @@ func TestSSHCommands_ServedKindsAndOlderServersGoOn(t *testing.T) {
 	}
 	if args := readArgs(t, log); !strings.Contains(strings.Join(args, " "), testRunID+"@gw.example.com") {
 		t.Errorf("ssh argv = %q, want it to dial the gateway", args)
+	}
+}
+
+// TestSSHCommands_PrintConfigAndJSONDoNotDial: --print, --config and --json only show the target, so they go on
+// with shell off; so does a connect against a server that publishes no channels list (an older server).
+func TestSSHCommands_PrintConfigAndJSONDoNotDial(t *testing.T) {
+	homeWithKey(t, false)
+	log := fakeSSH(t, "0")
+	f := newGatewayFixture(t, channelsHealthz(`,"channels":["exec","forward","sftp"]`), oneKey)
+	for _, flag := range []string{"--print", "--config", "--json"} {
+		out, err := runGateway(t, sshCmd, f, "", testRunID, flag)
+		if err != nil {
+			t.Errorf("%s with shell off: %v (%s)", flag, err, out)
+		}
+	}
+	neverRan(t, log)
+
+	old := newGatewayFixture(t, channelsHealthz(``), oneKey)
+	if _, err := runGateway(t, sshCmd, old, "", testRunID); err != nil {
+		t.Errorf("ssh against a server with no channels list: %v", err)
+	}
+	if args := readArgs(t, log); !strings.Contains(strings.Join(args, " "), testRunID+"@gw.example.com") {
+		t.Errorf("ssh argv = %q, want it to dial the gateway", args)
+	}
+}
+
+// TestSyncCommand_RefusesWhenSFTPIsOff: wardyn sync runs the gateway's sftp-server, so it follows sftp; it stops
+// with one line before it dials or reads the run's sync rules.
+func TestSyncCommand_RefusesWhenSFTPIsOff(t *testing.T) {
+	homeWithKey(t, false)
+	f := newGatewayFixture(t, channelsHealthz(`,"channels":["exec","forward","shell"]`), oneKey)
+	cmd := syncCmd(func() *sdk.Client { return &sdk.Client{BaseURL: f.url} })
+	cmd.SetArgs([]string{testRunID, t.TempDir()})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	want := "sync: this deployment's SSH gateway does not serve file transfer (sftp) (WARDYN_SSH_CHANNELS); ask your operator"
+	if err := cmd.Execute(); err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if n := f.others.Load(); n != 0 {
+		t.Errorf("%d requests beyond /healthz before the refusal", n)
 	}
 }

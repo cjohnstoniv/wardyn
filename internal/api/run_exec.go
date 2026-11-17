@@ -84,6 +84,14 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
 		return
 	}
+	if !s.sshChannelOn(sshKindExec) {
+		// This door is the SSH exec channel over HTTP, so a deployment that leaves exec out of
+		// WARDYN_SSH_CHANNELS leaves it out here, with the sentence and the row the gateway gives.
+		_, actor := actorFromRequest(r)
+		s.sshAuditChannelOff(r.Context(), run.ID, actor, string(sshKindExec))
+		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, sshChannelOffMsg(sshKindExec))
+		return
+	}
 	var req client.ExecRequest
 	if !decodeStrict(w, r, &req) {
 		return

@@ -215,7 +215,7 @@ Host wardyn-<run-id>
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
   - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
-    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
+    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset. Leaving `exec` out of `WARDYN_SSH_CHANNELS` turns it off.
     - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
@@ -227,7 +227,7 @@ Host wardyn-<run-id>
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
-- An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials, and `wardyn sync` is always served ([ENV.md](ENV.md#wardyn_ssh_channels)).
+- An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials. `sftp` also covers `wardyn sync`, and `exec` also covers `POST /runs/{id}/exec` ([ENV.md](ENV.md#wardyn_ssh_channels)).
 - When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 
 ### Without SSH: `wardyn attach`

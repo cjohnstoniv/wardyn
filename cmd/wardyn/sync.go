@@ -183,6 +183,9 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
+	if err := refuseSSHChannelsOff("sync", gw); err != nil {
+		return err
+	}
 	if gw.proxy != "" && !f.advertisedProxy {
 		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
 			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))

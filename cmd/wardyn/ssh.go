@@ -252,10 +252,10 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	return runSSHBinary(cmd.Context(), sshConnArgs(gw, runID, localSSHKey()))
 }
 
-// sshVerbNeeds is the channel kinds each ssh-backed command opens, and sshKindWords what each is called to a
+// sshVerbNeeds is the channel kinds each ssh-backed command opens (sync opens the sftp-server), and sshKindWords what each is called to a
 // person (the same words the gateway's own refusal uses).
 var sshVerbNeeds = map[string][]string{
-	"ssh": {"shell"}, "exec": {"exec"}, "forward": {"forward"}, "editor": {"shell", "exec", "sftp", "forward"},
+	"ssh": {"shell"}, "exec": {"exec"}, "forward": {"forward"}, "editor": {"shell", "exec", "sftp", "forward"}, "sync": {"sftp"},
 }
 
 var sshKindWords = map[string]string{
@@ -277,7 +277,7 @@ func refuseSSHChannelsOff(verb string, gw sshGateway) error {
 	if len(off) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s: this deployment's SSH gateway does not serve %s (WARDYN_SSH_CHANNELS); ask your Wardyn admin", verb, strings.Join(off, ", "))
+	return fmt.Errorf("%s: this deployment's SSH gateway does not serve %s (WARDYN_SSH_CHANNELS); ask your operator", verb, strings.Join(off, " or "))
 }
 
 // sshAccess is what `run exec|forward|editor` check before they touch ssh(1).

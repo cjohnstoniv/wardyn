@@ -14,7 +14,7 @@ import (
 )
 
 // sshChannelKind is one thing the gateway serves, as WARDYN_SSH_CHANNELS names it. sshKindSync (the
-// wardyn-sync subsystem) is not a name an operator can list: it is always served.
+// wardyn-sync subsystem) is not a name an operator can list: it runs the same sftp-server, so it follows sftp.
 type sshChannelKind string
 
 const (
@@ -28,10 +28,13 @@ const (
 // sshServedKinds is the names WARDYN_SSH_CHANNELS accepts, sorted.
 var sshServedKinds = []sshChannelKind{sshKindExec, sshKindForward, sshKindSFTP, sshKindShell}
 
-// sshChannelOn reports whether the gateway serves k: sync always, every kind when no list is set, else
-// the listed ones.
+// sshChannelOn reports whether the gateway serves k: every kind when no list is set, else the listed ones.
+// Sync answers as sftp.
 func (s *Server) sshChannelOn(k sshChannelKind) bool {
-	return k == sshKindSync || s.cfg.SSHChannels == nil || s.cfg.SSHChannels[string(k)]
+	if k == sshKindSync {
+		k = sshKindSFTP
+	}
+	return s.cfg.SSHChannels == nil || s.cfg.SSHChannels[string(k)]
 }
 
 // sshChannelOffMsg is the one sentence a refused channel gets.
@@ -42,12 +45,12 @@ func sshChannelOffMsg(k sshChannelKind) string {
 		word = "a terminal"
 	case sshKindExec:
 		word = "commands (exec)"
-	case sshKindSFTP:
+	case sshKindSFTP, sshKindSync:
 		word = "file transfer (sftp)"
 	case sshKindForward:
 		word = "port forwarding"
 	}
-	return "this deployment's SSH gateway does not serve " + word + " (WARDYN_SSH_CHANNELS)"
+	return "wardyn: this deployment's SSH gateway does not serve " + word + " (WARDYN_SSH_CHANNELS)"
 }
 
 // sshAuditChannelOff writes the ssh.channel.reject row for a channel the switch turned off.
@@ -98,16 +101,25 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 	return out
 }
 
-// mayDispatch first refuses a kind WARDYN_SSH_CHANNELS leaves out (replied false, the one sentence on the
-// channel, one ssh.channel.reject row). It then refuses (and replies false to) a second dispatch, and — when
+// mayDispatch first refuses a kind WARDYN_SSH_CHANNELS leaves out (the one sentence on the channel, then a
+// false reply, or for sync an ack and then the sentence, as the sync cap does; one ssh.channel.reject row). It then refuses (and replies false to) a second dispatch, and — when
 // shared is set — one a sync-only channel (admitted past the shared cap, see
 // sshOpenSlot) may not make: that one is audited once, answered with the cap
 // text and closed, which frees the sync slot it was holding.
 func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string, kind sshChannelKind) bool {
 	if !g.s.sshChannelOn(kind) {
-		_ = req.Reply(false, nil)
-		sendChannelError(g.channel, sshChannelOffMsg(kind))
 		g.s.sshAuditChannelOff(g.ctx, g.runID, g.principal, string(kind))
+		if kind == sshKindSync {
+			// Acked, then ended with the sentence, as the sync cap is: the sync client stops on a false reply
+			// before it reads the channel's stderr.
+			_ = req.Reply(true, nil)
+			sendChannelError(g.channel, sshChannelOffMsg(kind))
+			return false
+		}
+		// The sentence first, as sshDataOutRefused writes it: a reply after the close is dropped, so a client
+		// reads the sentence and the exit status and not only a failed request.
+		sendChannelError(g.channel, sshChannelOffMsg(kind))
+		_ = req.Reply(false, nil)
 		return false
 	}
 	if g.started || g.s.sshDataOutRefused(g, path) {
