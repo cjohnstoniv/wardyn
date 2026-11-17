@@ -177,6 +177,21 @@ func TestParseSignInPane_RowClearsScannedOnce(t *testing.T) {
 	}
 }
 
+// A pane at the cap of full-width link rows still printing parses in linear
+// time: the link still printing runs to the end, so the parser stops there
+// instead of re-joining it from each later row (that took 40 s a read).
+func TestParseSignInPane_PrintingRowsJoinedOnce(t *testing.T) {
+	head, row := "\x1b[2;23H\x1b[1K\r\n", "https://a.awsapps.com/x\r\n"
+	pane := []byte(head + strings.Repeat(row, (signInPaneMaxBytes-len(head)-12)/len(row)) + "https://a.aw")
+	start := time.Now()
+	if _, _, ok := parseSignInPane(pane); ok {
+		t.Fatal("a link still printing is waiting")
+	}
+	if d, limit := time.Since(start), 100*time.Millisecond*raceSlowdown; d > limit {
+		t.Fatalf("a %d-byte pane of full-width rows took %v to parse, want under %v", len(pane), d, limit)
+	}
+}
+
 // Every completion or failure line the parser stops at is printed, verbatim,
 // by the source it names.
 func TestSignInPane_EndLinesMatchTheirSources(t *testing.T) {

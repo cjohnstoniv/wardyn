@@ -127,6 +127,18 @@ describe("extractDeviceVerificationUrl", () => {
     const buf = `${CLEAN}\x1b[25;1HABCD1234 is not part of the link\r\n`;
     expect(extractDeviceVerificationUrl(buf)).toBe(CLEAN);
   });
+
+  // The link still printing runs to the end of the buffer, so the scan stops
+  // there instead of re-joining it from each later row (about half a second
+  // for 64 KiB before).
+  it("reads 64 KiB of full-width link rows still printing in linear time", () => {
+    const head = "\x1b[2;23H\x1b[1K\r\n";
+    const row = "https://a.awsapps.com/x\r\n";
+    const buf = head + row.repeat(Math.floor((65536 - head.length - 12) / row.length)) + "https://a.aw";
+    const start = performance.now();
+    expect(extractDeviceSignIn(buf)).toBeNull();
+    expect(performance.now() - start).toBeLessThan(100);
+  });
 });
 
 // wardyn-aws-sso prints `<failMarker> <sentence>\n` on a refused capture — a

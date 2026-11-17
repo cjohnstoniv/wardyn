@@ -121,8 +121,9 @@ export function extractAuthUrl(s: string): string | null {
 // That link is an attempt only once that line has printed in the code's shape
 // (codeLineAfter); it is never the bare fallback. The hosts, this rule and the
 // latest-wins rule must agree with the server's parseSignInPane
-// (internal/api/run_sign_in.go), which the shared cases pin. The scheme and
-// host match in any ASCII case: without the `u` flag, `i` folds no non-ASCII
+// (internal/api/run_sign_in.go), which the shared cases pin. Every letter the
+// link patterns name (scheme, host and the /platform/authorize path alike)
+// matches in any ASCII case: without the `u` flag, `i` folds no non-ASCII
 // letter (ſ, the Kelvin sign) onto an ASCII one, as the server's ASCII
 // lower-casing does not.
 export function extractDeviceVerificationUrl(s: string): string | null {
@@ -207,13 +208,20 @@ export function extractDeviceSignIn(s: string): { url: string; code: string } | 
   let ci = 0;
   let width = 0;
   let joined = 0;
+  let done = false;
   matches.forEach((m, i) => {
+    if (done) return;
     for (; ci < clears.length && clears[ci].index + clears[ci][0].length <= m.index; ci++) width = Number(clears[ci][1]);
     if (m.index < joined) return; // inside the rows of a link already joined
     const end = m.index + m[0].length;
     if (end >= s.length) return; // still streaming
     const { link, last, printing } = joinRows(s, m.index, end, width);
-    if (printing) return;
+    // A link still printing runs to the end of the buffer, so every later link
+    // is inside it; going on would re-join each of its rows.
+    if (printing) {
+      done = true;
+      return;
+    }
     joined = last;
     const url = link.replace(/[.,)]+$/, "");
     let code = "";

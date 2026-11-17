@@ -233,9 +233,10 @@ var (
 	// access portal, and the regional sign-in page's authorize path (the link
 	// newer IAM Identity Center sends, which carries no code), and no
 	// whitespace, quote, angle bracket or control byte. They run over
-	// signInASCIILower's copy of the pane, so the scheme and host match in any
-	// ASCII case, as the console's `i` flag does; no (?i), which folds ſ to s
-	// and the Kelvin sign to k.
+	// signInASCIILower's copy of the pane, so every letter they name (scheme,
+	// host and the /platform/authorize path alike) matches in any ASCII case,
+	// as the console's `i` flag does; no (?i), which folds ſ to s and the
+	// Kelvin sign to k.
 	signInURLRe = regexp.MustCompile(`https://(?:(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)/|[a-z0-9-]+\.signin\.aws/platform/authorize\?)[^\s'"<>\x00-\x1f\x7f]*`)
 	// signInPlatformRe is that sign-in page's link alone: its code is the
 	// pane's line after signInCodePrompt (signInCodeLine).
@@ -336,23 +337,28 @@ func signInJoinRows(text string, start, end, width int) (link string, last int, 
 	if width == 0 || (start > 0 && text[start-1] != '\n' && text[start-1] != '\r') {
 		return link, last, false
 	}
+	// A builder, not link+row: a pane of thousands of full-width rows would
+	// copy the growing link once per row.
+	var b strings.Builder
+	b.WriteString(link)
 	for row := link; len(row) == width && signInASCIIRe.MatchString(row); {
 		rest := text[last:]
 		br := signInRowBreakRe.FindString(rest)
 		if br == "" {
 			// A line end cut off at the end of what has arrived.
-			return link, last, rest == "\r" || (len(rest) < 16 && !strings.ContainsAny(rest, "\r\n"))
+			return b.String(), last, rest == "\r" || (len(rest) < 16 && !strings.ContainsAny(rest, "\r\n"))
 		}
 		row = signInURLBodyRe.FindString(rest[len(br):])
 		if len(br)+len(row) >= len(rest) {
-			return link, last, true
+			return b.String(), last, true
 		}
 		if row == "" {
 			break
 		}
-		link, last = link+row, last+len(br)+len(row)
+		b.WriteString(row)
+		last += len(br) + len(row)
 	}
-	return link, last, false
+	return b.String(), last, false
 }
 
 // parseSignInPane returns the latest attempt's verification URL and its code,
@@ -382,7 +388,9 @@ func parseSignInPane(pane []byte) (link, code string, ok bool) {
 		}
 		raw, last, printing := signInJoinRows(text, loc[0], loc[1], width)
 		if printing {
-			continue
+			// A link still printing runs to the end of the pane, so every later
+			// link is inside it; going on would re-join each of its rows.
+			break
 		}
 		joined = last
 		u := strings.TrimRight(raw, ".,)")
