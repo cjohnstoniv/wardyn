@@ -45,12 +45,50 @@ fake_cli() {
 # the run launches bypass (a CLI where bypass beats ask), or $FAKE_REPO_ALLOW_WINS is set and the workspace
 # carries a permissions.allow (a CLI where a repository allow lifts a managed ask); $FAKE_NO_RESULT makes it
 # print no result event at all (a CLI that cannot run the stub). A stub run prints the stub's WebFetch call
-# (toolu_probe1) first, except with $FAKE_WEBFETCH_UNCALLED (a CLI that never calls WebFetch), or with
-# $FAKE_DEFERS_WEBFETCH when the run lacks ENABLE_TOOL_SEARCH=false (a CLI that defers WebFetch, as 2.1.3xx does).
+# (toolu_probe1) first, except with $FAKE_WEBFETCH_UNCALLED (a CLI that never calls WebFetch) or with
+# $FAKE_UNCALLED_WITH_FILE (all: every run with the managed file; bypass: only those that launch bypass).
+# With $FAKE_DEFERS_WEBFETCH, a run that lacks ENABLE_TOOL_SEARCH=false (a CLI that defers WebFetch, as 2.1.3xx
+# does) calls WebFetch only if the probe's own stand-in, driven offline by drive-stub.js, asks for ToolSearch,
+# then for WebFetch once ToolSearch has answered and the tools list WebFetch, then stops once WebFetch has answered;
+# $FAKE_NO_TOOLSEARCH makes that run uncalled (a CLI whose ToolSearch never surfaces WebFetch).
 mkdir -p "$TMP/bin"
+cat > "$TMP/bin/drive-stub.js" <<'JS'
+// drive-stub.js <stub.js>: load the stand-in with http.createServer captured (nothing listens), replay the
+// three requests a deferring CLI sends, and print toolu_probe1 when the stand-in answers each as it must.
+const http = require("http");
+const { EventEmitter } = require("events");
+let handler;
+http.createServer = (h) => { handler = h; return { listen() {} }; };
+require(process.argv[2]);
+const ask = (body) => new Promise((done) => {
+  const req = new EventEmitter(); req.url = "/v1/messages?beta=true";
+  handler(req, { writeHead() {}, end: (s) => done(s) });
+  req.emit("data", JSON.stringify(body)); req.emit("end");
+});
+const block = (sse) => {
+  const data = sse.split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
+  const start = data.find((d) => d.type === "content_block_start").content_block;
+  const delta = data.find((d) => d.type === "content_block_delta").delta;
+  return { ...start, input: delta.partial_json ? JSON.parse(delta.partial_json) : undefined };
+};
+const tools = (...names) => names.map((name) => ({ name }));
+const turn = (b) => ({ role: "assistant", content: [{ type: "tool_use", id: b.id, name: b.name, input: b.input }] });
+const result = (id) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "" }] });
+(async () => {
+  const msgs = [{ role: "user", content: "run the probe" }];
+  const a = block(await ask({ tools: tools("Bash", "ToolSearch"), messages: msgs }));
+  if (a.name !== "ToolSearch" || a.id !== "toolu_probe0" || a.input.query !== "select:WebFetch") return;
+  msgs.push(turn(a), result("toolu_probe0"));
+  const b = block(await ask({ tools: tools("Bash", "ToolSearch", "WebFetch"), messages: msgs }));
+  if (b.name !== "WebFetch" || b.id !== "toolu_probe1") return;
+  msgs.push(turn(b), result("toolu_probe1"));
+  const c = block(await ask({ tools: tools("Bash", "ToolSearch", "WebFetch"), messages: msgs }));
+  if (c.type === "text") console.log("toolu_probe1");
+})();
+JS
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
-for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; *:/probe/stub.js:ro) st=1 ;; *:/ws:ro) w="${a%%:*}" ;; --dangerously-skip-permissions) skip=1 ;; bypassPermissions) by=1 ;; manual) man=1 ;; ENABLE_TOOL_SEARCH=false) nots=1 ;; esac; done
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; *:/probe/stub.js:ro) st="${a%%:*}" ;; *:/ws:ro) w="${a%%:*}" ;; --dangerously-skip-permissions) skip=1 ;; bypassPermissions) by=1 ;; manual) man=1 ;; ENABLE_TOOL_SEARCH=false) nots=1 ;; esac; done
 if [ -n "${m:-}" ]; then
     [ -z "${FAKE_NO_HOOK:-}" ] || exit 1
     if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
@@ -58,7 +96,13 @@ if [ -n "${m:-}" ]; then
 fi
 if [ -n "${st:-}" ]; then
     [ -z "${FAKE_NO_RESULT:-}" ] || exit 1
-    if [ -n "${FAKE_WEBFETCH_UNCALLED:-}" ] || { [ -n "${FAKE_DEFERS_WEBFETCH:-}" ] && [ -z "${nots:-}" ]; }; then echo '{"type":"result","permission_denials":[]}'; exit 1; fi
+    uncalled=""
+    [ -z "${FAKE_WEBFETCH_UNCALLED:-}" ] || uncalled=1
+    if [ -n "${d:-}" ]; then case "${FAKE_UNCALLED_WITH_FILE:-}" in all) uncalled=1 ;; bypass) [ -z "${skip:-}" ] || uncalled=1 ;; esac; fi
+    if [ -n "${FAKE_DEFERS_WEBFETCH:-}" ] && [ -z "${nots:-}" ]; then
+        if [ -n "${FAKE_NO_TOOLSEARCH:-}" ] || [ "$(node "$(dirname "$0")/drive-stub.js" "$st")" != toolu_probe1 ]; then uncalled=1; fi
+    fi
+    if [ -n "$uncalled" ]; then echo '{"type":"result","permission_denials":[]}'; exit 1; fi
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_probe1","name":"WebFetch","input":{}}]}}'
     denied=""
     if [ -n "${d:-}" ] && sed -n '/"ask": \[/,/\]/p' "$d/managed-settings.json" | grep -q '"WebFetch"'; then denied=1; fi
@@ -209,9 +253,24 @@ if out="$(FAKE_WEBFETCH_UNCALLED=1 probe)"; then fail "a CLI that never calls We
 grep -q "(got: uncalled) — the ask-under-bypass check would pass vacuously" <<<"$out" || fail "an uncalled WebFetch must be named; got: $out"
 echo "ok  a control where WebFetch is never called fails"
 
-# 8l. A CLI that defers WebFetch behind tool search => the probe turns tool search off and still proves the rules.
-out="$(FAKE_DEFERS_WEBFETCH=1 probe)" || fail "a CLI that defers WebFetch must still PASS (the probe sets ENABLE_TOOL_SEARCH=false); got: $out"
-echo "ok  a CLI that defers WebFetch is still probed"
+# 8l. A CLI that defers WebFetch behind tool search => both arms still reach it: `off` lists it, and at the
+# default the stand-in surfaces it through ToolSearch first.
+out="$(FAKE_DEFERS_WEBFETCH=1 probe)" || fail "a CLI that defers WebFetch must still PASS (off lists it; default goes through ToolSearch); got: $out"
+echo "ok  a CLI that defers WebFetch is still probed, with tool search off and at its default"
+
+# 8n. A deferring CLI whose ToolSearch never surfaces WebFetch => the default arm fails and says so; the off arm
+# (which lists WebFetch) has already passed.
+if out="$(FAKE_DEFERS_WEBFETCH=1 FAKE_NO_TOOLSEARCH=1 probe)"; then fail "a default-arm run that never reaches WebFetch must FAIL"; fi
+grep -q "tool search default: WebFetch did not run under --dangerously-skip-permissions without a managed file (got: uncalled)" <<<"$out" || fail "the default arm's uncalled control must be named; got: $out"
+echo "ok  a default-arm run that never reaches WebFetch fails"
+
+# 8m. A CLI that never calls WebFetch with the managed file in place => each assertion names the document and
+# says uncalled, never "ran" or a pass. `all` stops at L0's repository-allow run; `bypass` at the first bypass run.
+if out="$(FAKE_UNCALLED_WITH_FILE=all probe)"; then fail "a managed run that never calls WebFetch must FAIL"; fi
+grep -q "tool search off: attended-rules/L0.json: WebFetch was not refused with a repository permissions.allow although the file sets allowManagedPermissionRulesOnly and asks for it (got: uncalled)" <<<"$out" || fail "an uncalled repository-allow run must be named; got: $out"
+if out="$(FAKE_UNCALLED_WITH_FILE=bypass probe)"; then fail "a managed bypass run that never calls WebFetch must FAIL"; fi
+grep -q "tool search off: attended-rules/L2-locked.json: WebFetch was not refused under --dangerously-skip-permissions although the file's permissions.ask names it (got: uncalled)" <<<"$out" || fail "an uncalled ask-under-bypass run must be named; got: $out"
+echo "ok  a managed run that never calls WebFetch fails, naming the document"
 
 # 8j. No attended-rules document asks for WebFetch => fail: the ask and repository-allow checks would prove nothing.
 cp -r "$TMP/internal/agentpolicy" "$TMP/internal/agentpolicy.bak"
