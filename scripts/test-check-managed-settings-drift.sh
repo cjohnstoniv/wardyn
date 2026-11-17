@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
+command -v node >/dev/null || fail "node is required: drive-stub.js runs the probe's WebFetch stand-in offline (cases 8l and 8n)"
 
 mkdir -p "$TMP/scripts" "$TMP/deploy/images/claude-code" "$TMP/internal"
 cp "$ROOT/scripts/check-managed-settings-drift.sh" "$TMP/scripts/"
@@ -51,6 +52,8 @@ fake_cli() {
 # does) calls WebFetch only if the probe's own stand-in, driven offline by drive-stub.js, asks for ToolSearch,
 # then for WebFetch once ToolSearch has answered and the tools list WebFetch, then stops once WebFetch has answered;
 # $FAKE_NO_TOOLSEARCH makes that run uncalled (a CLI whose ToolSearch never surfaces WebFetch).
+# $FAKE_TOOLSEARCH_DENIED_WITH_FILE makes a run that lacks ENABLE_TOOL_SEARCH=false and carries the managed file
+# report a refused ToolSearch (input "select:WebFetch") and no WebFetch call at all.
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/drive-stub.js" <<'JS'
 // drive-stub.js <stub.js>: load the stand-in with http.createServer captured (nothing listens), replay the
@@ -79,6 +82,8 @@ const result = (id) => ({ role: "user", content: [{ type: "tool_result", tool_us
   const a = block(await ask({ tools: tools("Bash", "ToolSearch"), messages: msgs }));
   if (a.name !== "ToolSearch" || a.id !== "toolu_probe0" || a.input.query !== "select:WebFetch") return;
   msgs.push(turn(a), result("toolu_probe0"));
+  const n = block(await ask({ tools: tools("Bash", "ToolSearch"), messages: msgs }));
+  if (n.type !== "text") return; // ToolSearch answered without WebFetch: stop, never search again
   const b = block(await ask({ tools: tools("Bash", "ToolSearch", "WebFetch"), messages: msgs }));
   if (b.name !== "WebFetch" || b.id !== "toolu_probe1") return;
   msgs.push(turn(b), result("toolu_probe1"));
@@ -103,6 +108,9 @@ if [ -n "${st:-}" ]; then
         if [ -n "${FAKE_NO_TOOLSEARCH:-}" ] || [ "$(node "$(dirname "$0")/drive-stub.js" "$st")" != toolu_probe1 ]; then uncalled=1; fi
     fi
     if [ -n "$uncalled" ]; then echo '{"type":"result","permission_denials":[]}'; exit 1; fi
+    if [ -n "${FAKE_TOOLSEARCH_DENIED_WITH_FILE:-}" ] && [ -n "${d:-}" ] && [ -z "${nots:-}" ]; then
+        echo '{"type":"result","permission_denials":[{"tool_name":"ToolSearch","tool_use_id":"toolu_probe0","tool_input":{"query":"select:WebFetch","max_results":1}}]}'; exit 1
+    fi
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_probe1","name":"WebFetch","input":{}}]}}'
     denied=""
     if [ -n "${d:-}" ] && sed -n '/"ask": \[/,/\]/p' "$d/managed-settings.json" | grep -q '"WebFetch"'; then denied=1; fi
@@ -263,6 +271,11 @@ echo "ok  a CLI that defers WebFetch is still probed, with tool search off and a
 if out="$(FAKE_DEFERS_WEBFETCH=1 FAKE_NO_TOOLSEARCH=1 probe)"; then fail "a default-arm run that never reaches WebFetch must FAIL"; fi
 grep -q "tool search default: WebFetch did not run under --dangerously-skip-permissions without a managed file (got: uncalled)" <<<"$out" || fail "the default arm's uncalled control must be named; got: $out"
 echo "ok  a default-arm run that never reaches WebFetch fails"
+
+# 8o. A refused ToolSearch is not a refused WebFetch: its input names WebFetch, but WebFetch was never called.
+if out="$(FAKE_TOOLSEARCH_DENIED_WITH_FILE=1 probe)"; then fail "a managed run whose only denial is ToolSearch must FAIL"; fi
+grep -q "tool search default: attended-rules/L0.json: WebFetch was not refused with a repository permissions.allow although the file sets allowManagedPermissionRulesOnly and asks for it (got: uncalled)" <<<"$out" || fail "a ToolSearch-only denial must read as uncalled; got: $out"
+echo "ok  a ToolSearch-only denial does not count as a WebFetch refusal"
 
 # 8m. A CLI that never calls WebFetch with the managed file in place => each assertion names the document and
 # says uncalled, never "ran" or a pass. `all` stops at L0's repository-allow run; `bypass` at the first bypass run.

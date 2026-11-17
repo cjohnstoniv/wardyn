@@ -223,6 +223,7 @@ echo "ok: Claude Code $pin drops every built-in tool the attended-rules document
 # tool such as WebFetch is left out of the tools until tool search surfaces it, even behind a local
 # ANTHROPIC_BASE_URL, so the stand-in first calls ToolSearch (toolu_probe0) for WebFetch, then WebFetch.
 # `ran` needs the stand-in's WebFetch call (toolu_probe1) in the stream; a run that never called it is `uncalled`.
+# `denied` needs a denial whose tool_name is WebFetch: a refused ToolSearch carries "select:WebFetch" in its input.
 mkdir -p "$tmp/ws-empty" "$tmp/ws-allow/.claude"
 echo '{"permissions":{"allow":["WebFetch"]}}' > "$tmp/ws-allow/.claude/settings.json"
 echo '{"hasCompletedOnboarding":true,"projects":{"/ws":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' > "$tmp/claude.json"
@@ -263,7 +264,7 @@ webfetch_of() { # <arm: off | default> <settings dir or ""> <workspace dir> [cla
         -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token ${env[@]+"${env[@]}"} \
         --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" || true)"
     denials="$(grep -oE '"permission_denials":\[[^]]*\]' <<<"$out" | head -1 || true)"
-    case "$denials" in "") ;; *WebFetch*) echo denied ;; *) if grep -qF '"toolu_probe1"' <<<"$out"; then echo ran; else echo uncalled; fi ;; esac
+    case "$denials" in "") ;; *'"tool_name":"WebFetch"'*) echo denied ;; *) if grep -qF '"toolu_probe1"' <<<"$out"; then echo ran; else echo uncalled; fi ;; esac
 }
 for arm in off default; do
     got="$(webfetch_of "$arm" "" "$tmp/ws-empty" --dangerously-skip-permissions)"
