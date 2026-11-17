@@ -10,10 +10,10 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 import { RUN_SIGN_IN } from "../src/app/components/wardyn/copy/run-sign-in";
 import { AWS_SSO_LOGIN_AGENT, HARNESS_LOGIN_TASK } from "../src/app/components/screens/run-detail/sign-in-run";
 
-// Owner report (rc.24): the run page's Open button on an AWS sign-in sandbox went away. The strip
-// draws it only when the server's sign-in read answers waiting, and that read never did for the
-// regional sign-in page newer IAM Identity Center sends (https://<region>.signin.aws/platform/…,
-// no user_code=, the code on its own line). The answer served here is the server's own for that
+// The run page's Open button on an AWS sign-in sandbox, for the regional sign-in page. The strip
+// draws it only when the server's sign-in read answers waiting, which it does for the regional
+// sign-in page newer IAM Identity Center sends (https://<region>.signin.aws/platform/…, no
+// user_code=, the code on its own line) once that code line has printed. The answer served here is the server's own for that
 // pane, from the shared cases its parser is pinned on (internal/api/testdata/sign_in_pane_fixtures.json).
 //
 // HERMETIC: the daemon runs `-runner none`, so a seeded run is dressed as a RUNNING aws-sso login

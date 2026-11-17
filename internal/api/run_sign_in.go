@@ -232,8 +232,10 @@ var (
 	// (login-pty-extract.ts): the IAM Identity Center device endpoint, an
 	// access portal, and the regional sign-in page's authorize path (the link
 	// newer IAM Identity Center sends, which carries no code), and no
-	// whitespace, quote, angle bracket or control byte. Lower-case ASCII only,
-	// with no (?i): Go folds ſ to s and the Kelvin sign to k.
+	// whitespace, quote, angle bracket or control byte. They run over
+	// signInASCIILower's copy of the pane, so the scheme and host match in any
+	// ASCII case, as the console's `i` flag does; no (?i), which folds ſ to s
+	// and the Kelvin sign to k.
 	signInURLRe = regexp.MustCompile(`https://(?:(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)/|[a-z0-9-]+\.signin\.aws/platform/authorize\?)[^\s'"<>\x00-\x1f\x7f]*`)
 	// signInPlatformRe is that sign-in page's link alone: its code is the
 	// pane's line after signInCodePrompt (signInCodeLine).
@@ -308,22 +310,32 @@ func signInCodeLine(seg string) string {
 	return ""
 }
 
+// signInASCIILower lower-cases A-Z only, so every index into it is an index
+// into s.
+func signInASCIILower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 // signInJoinRows returns the link that starts at start and whose first row
 // ends at end, with any rows tmux split it into joined back (signInRowClearRe),
-// and where its last row ends. A row is joined to the next while it starts a
+// and where its last row ends; width is the column of the last row clear
+// before start (0 for none). A row is joined to the next while it starts a
 // line, is all ASCII and is exactly the row width long, and the next row
 // starts with URL characters. printing is true while a full row's line end or
 // the next row has not arrived. Its twin is joinRows (login-pty-extract.ts).
-func signInJoinRows(text string, start, end int) (link string, last int, printing bool) {
+func signInJoinRows(text string, start, end, width int) (link string, last int, printing bool) {
 	link, last = text[start:end], end
-	clears := signInRowClearRe.FindAllStringSubmatchIndex(text[:start], -1)
 	// Starting a line is a safety margin: the exact-width rule already keeps a
 	// link that starts mid-row from being joined.
-	if len(clears) == 0 || (start > 0 && text[start-1] != '\n' && text[start-1] != '\r') {
+	if width == 0 || (start > 0 && text[start-1] != '\n' && text[start-1] != '\r') {
 		return link, last, false
 	}
-	c := clears[len(clears)-1]
-	width, _ := strconv.Atoi(text[c[2]:c[3]])
 	for row := link; len(row) == width && signInASCIIRe.MatchString(row); {
 		rest := text[last:]
 		br := signInRowBreakRe.FindString(rest)
@@ -353,16 +365,22 @@ func signInJoinRows(text string, start, end int) (link string, last int, printin
 func parseSignInPane(pane []byte) (link, code string, ok bool) {
 	text := string(pane)
 	best, bestCode, bestEnd := "", "", -1
-	locs := signInURLRe.FindAllStringIndex(text, -1)
-	joined := 0
+	locs := signInURLRe.FindAllStringIndex(signInASCIILower(text), -1)
+	// Every row clear, found in one pass; ci walks to the last one before each
+	// link, so a pane of many clears and links is not rescanned per link.
+	clears := signInRowClearRe.FindAllStringSubmatchIndex(text, -1)
+	ci, width, joined := 0, 0, 0
 	for i, loc := range locs {
+		for ; ci < len(clears) && clears[ci][1] <= loc[0]; ci++ {
+			width, _ = strconv.Atoi(text[clears[ci][2]:clears[ci][3]])
+		}
 		if loc[0] < joined {
 			continue // inside the rows of a link already joined
 		}
 		if loc[1] >= len(text) {
 			continue // still printing
 		}
-		raw, last, printing := signInJoinRows(text, loc[0], loc[1])
+		raw, last, printing := signInJoinRows(text, loc[0], loc[1], width)
 		if printing {
 			continue
 		}
@@ -373,7 +391,7 @@ func parseSignInPane(pane []byte) (link, code string, ok bool) {
 			if m := signInCodeRe.FindStringSubmatch(u); m != nil {
 				c = m[1]
 			}
-		} else if signInPlatformRe.MatchString(u) {
+		} else if signInPlatformRe.MatchString(signInASCIILower(u)) {
 			next := len(text)
 			for _, l := range locs[i+1:] {
 				if l[0] >= last {

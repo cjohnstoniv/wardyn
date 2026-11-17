@@ -338,13 +338,15 @@
       "ts": null
     },
     {
-      "name": "an upper-case sign-in host is not the sign-in link",
+      "name": "an upper-case sign-in host is the sign-in link: host names ignore case",
       "pane": "Please visit the following URL:\n\nhttps://US-EAST-1.SIGNIN.AWS/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
       "sign_in_process": true,
       "go": {
-        "state": "not_waiting"
+        "state": "waiting",
+        "verification_url": "https://US-EAST-1.SIGNIN.AWS/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
       },
-      "ts": null
+      "ts": "https://US-EAST-1.SIGNIN.AWS/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
     },
     {
       "name": "a NEL after the code prompt does not arm the code",
@@ -443,6 +445,26 @@
         "user_code": "ABCD-EFGH"
       },
       "ts": "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
+    },
+    {
+      "name": "a mixed-case device endpoint link is the sign-in link, as before",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nHTTPS://Device.SSO.US-EAST-1.AmazonAWS.com/?user_code=ABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "HTTPS://Device.SSO.US-EAST-1.AmazonAWS.com/?user_code=ABCD-EFGH",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "HTTPS://Device.SSO.US-EAST-1.AmazonAWS.com/?user_code=ABCD-EFGH"
+    },
+    {
+      "name": "an upper-case look-alike of the sign-in host is not the sign-in link",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://US-EAST-1.SIGNIN.AWS.EVIL.EXAMPLE/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
     }
   ]
 }

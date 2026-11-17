@@ -121,15 +121,17 @@ export function extractAuthUrl(s: string): string | null {
 // That link is an attempt only once that line has printed in the code's shape
 // (codeLineAfter); it is never the bare fallback. The hosts, this rule and the
 // latest-wins rule must agree with the server's parseSignInPane
-// (internal/api/run_sign_in.go), which the shared cases pin. The hosts match
-// lower-case ASCII only (no `i` flag), as the server's do.
+// (internal/api/run_sign_in.go), which the shared cases pin. The scheme and
+// host match in any ASCII case: without the `u` flag, `i` folds no non-ASCII
+// letter (ſ, the Kelvin sign) onto an ASCII one, as the server's ASCII
+// lower-casing does not.
 export function extractDeviceVerificationUrl(s: string): string | null {
   return extractDeviceSignIn(s)?.url ?? null;
 }
 
 // The regional sign-in page's link alone, and the code's shape
 // (signInPlatformRe and signInCodeShape in run_sign_in.go).
-const PLATFORM_LINK = /^https:\/\/[a-z0-9-]+\.signin\.aws\/platform\/authorize\?/;
+const PLATFORM_LINK = /^https:\/\/[a-z0-9-]+\.signin\.aws\/platform\/authorize\?/i;
 const CODE_SHAPE = /^[A-Za-z0-9]{1,16}(?:-[A-Za-z0-9]{1,16}){0,3}$/;
 const CODE_PROMPT = "Then enter the code:";
 
@@ -195,7 +197,7 @@ function joinRows(s: string, start: number, end: number, width: number): { link:
 export function extractDeviceSignIn(s: string): { url: string; code: string } | null {
   const re = new RegExp(
     `https://(?:(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/|[a-z0-9-]+\\.signin\\.aws/platform/authorize\\?)${URL_BODY_CHARS}*`,
-    "g",
+    "gi",
   );
   const matches = [...s.matchAll(re)];
   let bestComplete: { url: string; code: string } | null = null; // the latest attempt
