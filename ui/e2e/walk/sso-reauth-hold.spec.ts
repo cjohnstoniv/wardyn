@@ -290,8 +290,9 @@ const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);
  *
  *  The step list is the W0 spike's, pre-declared (see the recovery file's case
  *  H): with `hasCompletedOnboarding` seeded the only screen left is the
- *  workspace-trust one, whose default option is already the accepting one, so
- *  ONE bare Enter clears it. */
+ *  workspace-trust one. It opens on "No, exit", so the pointer is moved to
+ *  "Yes, I trust this folder" first (as the recovery file's step 5 does), and
+ *  then ONE Enter clears it. */
 async function startInteractiveRun(page: Page, title: string): Promise<{ id: string; screen: ReturnType<Page["locator"]> }> {
   await page.goto("/runs/new");
   await walkNewRunToReview(page, { mode: "interactive", startsWithRun: true });
@@ -303,7 +304,17 @@ async function startInteractiveRun(page: Page, title: string): Promise<{ id: str
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
+  // The dialog ignores keys for a moment after it opens, so the screen is read
+  // first and the pointer moved only while it still sits on No; a move is never
+  // sent past Yes.
   await screen.click();
+  await expect
+    .poll(async () => {
+      const text = await termText(screen).catch(() => "");
+      if (/❯ No, exit/.test(text)) await page.keyboard.press("ArrowDown");
+      return text;
+    }, { timeout: 30_000, intervals: [500] })
+    .toMatch(/❯ Yes, I trust this folder/);
   await page.keyboard.press("Enter");
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })
