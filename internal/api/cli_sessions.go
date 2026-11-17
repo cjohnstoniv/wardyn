@@ -183,7 +183,7 @@ func cliSessionRefused(w http.ResponseWriter, detail string) {
 // cliSessionEndDetail is the end a refused refresh may name to the device that proved its key: a sign-out
 // of this session, its lifetime, or its idle lifetime. reason is refuseRefresh's ("ended" reads the row's
 // own end). A revoke, a cut, a deactivation and a reuse name nothing, so the refresh never tells a device
-// that may be stolen that a person or an admin acted against it.
+// that may be stolen that an admin or a security control acted against it. A sign-out of its own row is named.
 func cliSessionEndDetail(sess store.CLISessionRow, reason string) string {
 	if reason == "ended" {
 		reason = sess.EndReason
