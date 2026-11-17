@@ -198,22 +198,51 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 // says nothing about the process.
 type bridgeEnd struct {
 	err    error // Wait's own error: no exit was read
-	closed bool  // the client's close had ended the bridge's context by then (sshClientClosedFirst); a daemon stop is not the client's
+	closed bool  // the client's close had ended the bridge's context when the process's output ended (sshClientClosedFirst), before the bridge waited for its stderr; a daemon stop is not the client's
 }
 
-// noteBridgeEnd keeps how sess.Wait ended in end. ctx is the context the bridge
-// runs on, read as Wait returns, before the bridge closes the channel itself.
+// noteBridgeEnd keeps how sess ended in end. ctx is the context the bridge runs
+// on. end.closed is read when the process's output ends (its Stdout's first read
+// error), before the bridge waits for the process's stderr, so a client that
+// closes during that wait does not turn a failed process into a client's end;
+// with no Stdout it is read as Wait returns. end.err is Wait's own error.
 func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd) *runner.ExecSession {
 	if sess.Wait == nil {
 		return sess
 	}
 	noted := *sess
+	var out *endNoteReader
+	if sess.Stdout != nil {
+		out = &endNoteReader{r: sess.Stdout, ctx: ctx, end: end}
+		noted.Stdout = out
+	}
 	noted.Wait = func() (int, error) {
 		code, err := sess.Wait()
-		end.err, end.closed = err, sshClientClosedFirst(ctx)
+		end.err = err
+		if out == nil || !out.noted {
+			end.closed = sshClientClosedFirst(ctx)
+		}
 		return code, err
 	}
 	return &noted
+}
+
+// endNoteReader notes in end.closed, at its first read error (EOF or not),
+// whether the client's close had ended ctx. sshBridgeExecSession reads Stdout to
+// its end and then calls Wait on one goroutine, in that order: no lock is needed.
+type endNoteReader struct {
+	r     io.Reader
+	ctx   context.Context
+	end   *bridgeEnd
+	noted bool
+}
+
+func (e *endNoteReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && !e.noted {
+		e.end.closed, e.noted = sshClientClosedFirst(e.ctx), true
+	}
+	return n, err
 }
 
 // bridgeOutcome is the audit outcome of a bridge whose process is the gateway's

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -105,6 +106,59 @@ func TestSSHGateway_AConnectionEndIsTheClientsClose(t *testing.T) {
 			}
 			if d := sshAuditData(t, ev); d["error"] != c.wantErr {
 				t.Errorf("row data = %v, want error %v", d, c.wantErr)
+			}
+		})
+	}
+}
+
+// readFunc is a process's stdout whose reads a test scripts.
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }
+
+// TestSSHGateway_BridgeOutcomeIsJudgedWhenOutputEnds drives noteBridgeEnd the way
+// sshBridgeExecSession does (Stdout to its end, then Wait): a client that closes
+// after the process's output ended, while the bridge waits out its stderr, did
+// not end a process that had already failed; one that closed while the process
+// was still writing did.
+func TestSSHGateway_BridgeOutcomeIsJudgedWhenOutputEnds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cancelAtRead bool // the client closes before stdout's read returns
+		cancelAtWait bool // the client closes between stdout's end and Wait
+		stdoutErr    error
+		code         int
+		want         string
+	}{
+		"exits 0, no close": {stdoutErr: io.EOF, want: "success"},
+		"exits 1 and the client closes in the stderr wait": {stdoutErr: io.EOF, cancelAtWait: true, code: 1, want: "failure"},
+		"the client closes while the process writes":       {cancelAtRead: true, stdoutErr: errors.New("closed"), cancelAtWait: true, code: 1, want: "success"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			sess := &runner.ExecSession{
+				Stdout: readFunc(func([]byte) (int, error) {
+					if tc.cancelAtRead {
+						cancel(errSSHChannelClosed)
+					}
+					return 0, tc.stdoutErr
+				}),
+				Wait: func() (int, error) {
+					if tc.cancelAtWait {
+						cancel(errSSHChannelClosed)
+					}
+					return tc.code, nil
+				},
+			}
+			var end bridgeEnd
+			noted := noteBridgeEnd(ctx, sess, &end)
+			_, _ = io.Copy(io.Discard, noted.Stdout)
+			code, err := noted.Wait()
+			if err != nil {
+				t.Fatalf("Wait = %v", err)
+			}
+			if got := bridgeOutcome(code, end, "sftp-server", map[string]any{}); got != tc.want {
+				t.Errorf("outcome = %q, want %q (end=%+v)", got, tc.want, end)
 			}
 		})
 	}
