@@ -53,7 +53,7 @@ func workloadDocumentFor(name, description, runIn, restartKey string, intent jso
 
 // handlePreviewWorkload is POST /workloads/{name}/preview: what the same body to PUT /workloads/{name}
 // would do for the caller. It takes the PUT's own steps and stops before the first write: the strict decode
-// and normalizeWorkload, the caller as the owner (there is no ?owner=), PlanWorkloadPut for the store's
+// and normalizeWorkload, the caller as the owner (a ?owner= naming anyone else is refused, as on PUT), PlanWorkloadPut for the store's
 // answer, and, when a launch is owed, the preflight of the request the launch would make
 // (workloadCreateRequest). It stores nothing and claims no launch. The one write it can cause is
 // preflight's own: a refusal at a gate that audits leaves the dry-run-marked row a refused preflight leaves.
