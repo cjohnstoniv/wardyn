@@ -149,7 +149,10 @@ func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 	}
 }
 
-// Row 21: an ADO origin is never an eligible_grants entry delivered via_org, even on a runner the plan would admit.
+// Row 21: an ADO origin is never an eligible_grants entry delivered via_org. That holds because classify.go has no
+// Brokered api_key row for the eligible_grants walk (GrantKind api_key rows are own and operator only), not because
+// ViaOrgADOAdmits refuses: on an empty plan it admits, which the last assertion records so that a future Brokered
+// api_key row fails here.
 func TestViaOrgGrant_ADOOriginIsNeverAnEligibleGrant(t *testing.T) {
 	for _, trust := range []types.RunnerTrustClass{"", types.RunnerTrustPersonal, types.RunnerTrustOrgCluster} {
 		for _, o := range []CredentialOrigin{adoOrigin, adoViaOrgOrigin} {
@@ -157,6 +160,31 @@ func TestViaOrgGrant_ADOOriginIsNeverAnEligibleGrant(t *testing.T) {
 				t.Errorf("trust %q origin %+v: ViaOrgGrant true", trust, o)
 			}
 		}
+	}
+	if r := ViaOrgADOAdmits(adoViaOrgOrigin, LocalPlan{Delivery: viaOrgADOPolicy, Trust: types.RunnerTrustPersonal}, "x"); r != nil {
+		t.Errorf("ViaOrgADOAdmits on an empty plan with the switch on refused: %+v", r)
+	}
+	if ViaOrgGrant(adoViaOrgOrigin, viaOrgADOPolicy, types.RunnerTrustPersonal) {
+		t.Error("ViaOrgGrant true for an ADO origin on an empty plan with the switch on")
+	}
+}
+
+// An own-PAT injection on the gate's host beside a via_org gate would lose its gate when the laptop copy drops the
+// gate, so the plan is refused naming the mixed delivery.
+func TestLocalEligibility_ADOMixedDeliveryRefuses(t *testing.T) {
+	p, _ := viaOrgADOPlan(adoViaOrgOrigin, viaOrgADOPolicy)
+	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassAPIKey, GrantKind: types.GrantAPIKey, Stored: true, OwnNamespace: true, OwnerOnly: true}
+	p.Origins["ProxyConfig.Injection[0]"] = own
+	_, r := LocalEligibility(p)
+	if r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.Injection[0]" || !strings.Contains(r.Detail, "mixed Azure DevOps delivery") {
+		t.Fatalf("refusal %+v, want the mixed-delivery refusal at the injection", r)
+	}
+	// An own injection on another host is not on the gate's hosts: admitted.
+	p, _ = viaOrgADOPlan(adoViaOrgOrigin, viaOrgADOPolicy)
+	p.Spec.ProxyConfig.Injection = append(p.Spec.ProxyConfig.Injection, runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.other.example", Header: "Authorization", SecretName: "mine"}})
+	p.Origins["ProxyConfig.Injection[1]"] = own
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("own injection on another host: %+v, want admitted", r)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -121,6 +122,9 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 			return runner.SandboxSpec{}, r
 		}
 	}
+	if r := mixedADODelivery(p); r != nil {
+		return runner.SandboxSpec{}, r
+	}
 	out, r := enforceTable(Entries, p)
 	if r != nil {
 		return runner.SandboxSpec{}, r
@@ -138,16 +142,36 @@ func trustName(t types.RunnerTrustClass) string {
 	return string(t)
 }
 
+// mixedADODelivery refuses a plan whose Azure DevOps gate is delivered via_org while an injection on one of the
+// gate's hosts is not: the laptop copy drops the gate with the via_org routes, which would leave that injection
+// (an own PAT, say) with no gate.
+func mixedADODelivery(p LocalPlan) *Refusal {
+	const path = "ProxyConfig.ADOGrant"
+	gate := p.Spec.ProxyConfig.ADOGrant
+	if gate == nil || !viaOrgPath(p, path) {
+		return nil
+	}
+	for i, in := range p.Spec.ProxyConfig.Injection {
+		ipath := indexed("ProxyConfig.Injection", i)
+		if slices.ContainsFunc(gate.Hosts, func(h string) bool { return domainmatch.CanonHost(h) == domainmatch.CanonHost(in.Rule.Host) }) && !viaOrgPath(p, ipath) {
+			return refuse(ReasonPlacementCredential, ipath, "mixed Azure DevOps delivery: the gate is delivered via_org but this injection on its host is not, so it would run with no gate")
+		}
+	}
+	return nil
+}
+
 // viaOrgAdmits is the via_org gate (OD-12, design §7.2-§7.3): a row of the
 // via_org shape whose class the stored policy delivers via_org, and whose class
-// may be. Every other configured mode still refuses here until its delivery is built.
+// may be (an Azure DevOps minted token also needs ViaOrgADOAdmits). Every other
+// configured mode still refuses here until its delivery is built.
 func viaOrgAdmits(row Entry, mode Mode) bool {
 	return row.ViaOrg && row.Rule != RuleNotConfigured && mode == ModeViaOrg && slices.Contains(classModes[row.Delivery], ModeViaOrg)
 }
 
 // ViaOrgGrant reports whether an org-held grant of origin is delivered via_org
 // under policy on a runner of trust class trust: the same table rows and gate
-// LocalEligibility applies to it.
+// LocalEligibility applies to it. An Azure DevOps origin (ViaOrgADOAdmits) is never one: no Brokered api_key
+// row exists for the eligible_grants walk, and TestViaOrgGrant_ADOOriginIsNeverAnEligibleGrant pins that.
 func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy, trust types.RunnerTrustClass) bool {
 	return origin.Class != ClassOwn && origin.Class != "" &&
 		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy, Trust: trust}, reflect.Value{}) == nil &&

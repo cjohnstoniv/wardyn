@@ -116,7 +116,7 @@ func Writable(class string) bool {
 }
 
 // PostureRequirement is what a runner's reported posture (types.RunnerPosture,
-// self-reported) must meet for a runner_resident class: only on that mode.
+// self-reported) must meet for a runner_resident class, or an ado_minted_pat via_org row: only on those.
 type PostureRequirement struct {
 	MDMManaged    bool              `json:"mdm_managed,omitempty"`
 	DiskEncrypted bool              `json:"disk_encrypted,omitempty"`
