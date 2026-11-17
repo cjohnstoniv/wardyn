@@ -7,13 +7,20 @@ package k6_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +34,7 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
 )
 
@@ -124,12 +132,15 @@ func labelGone(msg string) bool {
 }
 
 // stopRun is a normal end: StopProxy, then label teardown, then every object gone.
-func (e *env) stopRun(t *testing.T, id uuid.UUID) {
+func (e *env) stopRun(t *testing.T, id uuid.UUID) { e.stopRunOn(t, e.main, id) }
+
+// stopRunOn is stopRun through d.
+func (e *env) stopRunOn(t *testing.T, d *k8s.Driver, id uuid.UUID) {
 	t.Helper()
-	if err := e.main.StopProxy(bg, ref(id)); err != nil {
+	if err := d.StopProxy(bg, ref(id)); err != nil {
 		t.Fatalf("StopProxy %s: %v", id, err)
 	}
-	if err := e.main.StopSandbox(bg, ref(id)); err != nil {
+	if err := d.StopSandbox(bg, ref(id)); err != nil {
 		t.Fatalf("StopSandbox %s: %v", id, err)
 	}
 	e.waitRunGone(t, id, goneWait)
@@ -412,20 +423,16 @@ func (e *env) kubelet(t *testing.T) string {
 	return n.Status.NodeInfo.KubeletVersion
 }
 
-// casePodIPReuse: after a normal stop the next proxy on the node may receive the freed IP and still
-// starts (the refusal was released at witness save); a run still pending keeps its refusal, so a
-// proxy that receives a pending run's IP is refused with relay_ip_fenced. In each half the IP under
-// test is the only address the runs pool can hand out, so the next proxy must receive it.
-func casePodIPReuse(t *testing.T, e *env) {
-	if e.stoppedIP == "" {
-		inconclusive(t, "normal-stop left no stopped proxy IP")
-	}
-	e.setSched(t, e.pin)
-	release := e.onlyIP(t, e.stoppedIP)
+// startOnOnlyIP creates a run through d with ip the only address the runs pool can hand out, so its
+// proxy must receive ip; the reservation is released once the proxy has an address, for the agent
+// pod's own. It returns the run and the proxy's address, and fails when the run does not start on ip.
+func (e *env) startOnOnlyIP(t *testing.T, d *k8s.Driver, ip string) (uuid.UUID, string) {
+	t.Helper()
+	release := e.onlyIP(t, ip)
 	id := uuid.New()
 	e.cleanupRun(t, id)
 	done := make(chan error, 1)
-	go func() { _, err := e.main.CreateSandbox(bg, e.spec(id)); done <- err }()
+	go func() { _, err := d.CreateSandbox(bg, e.spec(id)); done <- err }()
 	got := ""
 	if err := poll(bg, createWait, func(ctx context.Context) (bool, error) {
 		if p, err := e.admin.CoreV1().Pods(e.runsNS).Get(ctx, proxyName(id), metav1.GetOptions{}); err == nil {
@@ -433,24 +440,48 @@ func casePodIPReuse(t *testing.T, e *env) {
 		}
 		return got != "" || len(done) > 0, nil
 	}); err != nil {
-		t.Fatalf("the next proxy had no IP within %s: is %s held outside the case?", createWait, e.stoppedIP)
+		t.Fatalf("the next proxy had no IP within %s: is %s held outside the case?", createWait, ip)
 	}
 	release() // the agent pod needs an address of its own
 	if err := <-done; err != nil {
 		t.Fatalf("the next proxy (IP %q) did not start: %v", got, err)
 	}
-	if got != e.stoppedIP {
-		t.Fatalf("the next proxy received %s, not the stopped IP %s, the only address left", got, e.stoppedIP)
+	if got != ip {
+		t.Fatalf("the next proxy received %s, not the stopped IP %s, the only address left", got, ip)
 	}
+	return id, got
+}
+
+// casePodIPReuse: after a normal stop the next proxy on the node may receive the freed IP and still
+// starts (the refusal was released at witness save); a run still pending keeps its refusal, so a
+// proxy that receives a pending run's IP is refused with relay_ip_fenced. In each half the IP under
+// test is the only address the runs pool can hand out, so the next proxy must receive it. When the
+// proxy image is a release that sends the relay key (relayKeyedImage), the pending run is keyed and a
+// last arm follows: a keyed run on that same fenced IP starts, and the fenced run's key is refused.
+func casePodIPReuse(t *testing.T, e *env) {
+	if e.stoppedIP == "" {
+		inconclusive(t, "normal-stop left no stopped proxy IP")
+	}
+	e.setSched(t, e.pin)
+	id, got := e.startOnOnlyIP(t, e.main, e.stoppedIP)
 	note(t, "the next proxy received the stopped IP %s and started", got)
 	e.stopRun(t, id)
 
 	// A pending run: a third party strips the proxy's finalizer and force-deletes it, so the object is
 	// gone without a witness. NotFound is not evidence, so the run stays pending and fenced.
+	keyed := relayKeyedImage(e.proxyImage)
+	pending := e.main
+	if keyed {
+		pending = e.newKeyedDriver(t)
+	}
 	id = uuid.New()
 	e.cleanupRun(t, id)
-	if _, err := e.main.CreateSandbox(bg, e.spec(id)); err != nil {
+	if _, err := pending.CreateSandbox(bg, e.spec(id)); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
+	}
+	var oldKey []byte
+	if keyed {
+		oldKey = e.relayKeyOf(t, id) // the Secret may not outlive the force-delete
 	}
 	ip := e.evidence(t, id).Pods[proxyComponent].PodIP
 	zero := int64(0)
@@ -469,7 +500,7 @@ func casePodIPReuse(t *testing.T, e *env) {
 	if !e.fences.fenced(ip) {
 		t.Fatalf("the pending run's IP %s is not refused", ip)
 	}
-	release = e.onlyIP(t, ip)
+	release := e.onlyIP(t, ip)
 	next := uuid.New()
 	e.cleanupRun(t, next)
 	_, err := e.main.CreateSandbox(bg, e.spec(next))
@@ -479,6 +510,140 @@ func casePodIPReuse(t *testing.T, e *env) {
 	}
 	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
 	e.waitRunGone(t, next, goneWait) // the pending run stays fenced: its address is reserved when the case ends (kase)
+
+	t.Run("relay-key-arm", func(t *testing.T) {
+		if !keyed {
+			t.Skipf("relay-key arm not run: proxy image %s is not a release at or after %s", e.proxyImage, relayPreambleRelease)
+		}
+		e.relayKeyArm(t, pending, id, oldKey, ip)
+	})
+}
+
+// relayPreambleRelease is the first proxy release that sends the relay key
+// (internal/runner/k8s/relay_key.go); the arm runs only from it on.
+const relayPreambleRelease = "0.11.0-rc.1"
+
+var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
+
+// releaseParts orders a release tag: a release candidate sorts before its release.
+func releaseParts(tag string) ([4]int, bool) {
+	m := releaseTagRE.FindStringSubmatch(tag)
+	if m == nil {
+		return [4]int{}, false
+	}
+	p := [4]int{0, 0, 0, math.MaxInt}
+	for i := range 3 {
+		p[i], _ = strconv.Atoi(m[i+1])
+	}
+	if m[4] != "" {
+		p[3], _ = strconv.Atoi(m[4])
+	}
+	return p, true
+}
+
+// relayKeyedImage reports whether image is a release tag at or after relayPreambleRelease, as the
+// Driver reads it: a digest pin or a development tag is not judged, and the Driver keeps the address rule.
+func relayKeyedImage(image string) bool {
+	ref, _, _ := strings.Cut(image, "@")
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref[i:], "/") {
+		return false
+	}
+	have, ok := releaseParts(ref[i+1:])
+	if !ok {
+		return false
+	}
+	floor, _ := releaseParts(relayPreambleRelease)
+	return slices.Compare(have[:], floor[:]) >= 0
+}
+
+// newKeyedDriver is a Driver wired as runnerd wires a relay that checks keys: the fences hold the
+// relay's key table, so the Driver keys each run's proxy.
+func (e *env) newKeyedDriver(t *testing.T) *k8s.Driver {
+	t.Helper()
+	return e.newDriverWith(t, e.store.view(nil), func(c *k8s.Config) {
+		c.RelayKey = e.fences.relayKey
+		c.DropRelayKey = e.fences.dropKey
+		c.FencedRuns = e.fences.runsOn
+	}, e.runsNS)
+}
+
+// relayKeyOf reads the run's relay key from its proxy config Secret.
+func (e *env) relayKeyOf(t *testing.T, id uuid.UUID) []byte {
+	t.Helper()
+	secs, err := e.admin.CoreV1().Secrets(e.runsNS).List(bg, metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range secs.Items {
+		for _, v := range s.Data {
+			var cfg struct {
+				RelayKey string `json:"relay_key"`
+			}
+			if json.Unmarshal(v, &cfg) == nil && cfg.RelayKey != "" {
+				key, err := base64.StdEncoding.DecodeString(cfg.RelayKey)
+				if err != nil || len(key) != 32 {
+					t.Fatalf("the relay key of run %s is not 32 bytes of base64", id)
+				}
+				return key
+			}
+		}
+	}
+	t.Fatalf("no proxy config Secret of run %s carries relay_key", id)
+	return nil
+}
+
+// replayKey opens a connection to the fake control plane with the preamble carrying key and reports
+// whether the fake closed it (refused) rather than waiting for the TLS hello an admitted one gets.
+func (e *env) replayKey(t *testing.T, key []byte) (refused bool) {
+	t.Helper()
+	c, err := net.Dial("tcp", net.JoinHostPort(e.cp.ip, "8443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write(append([]byte{0x57, 0x01}, key...)); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = c.Read(make([]byte, 1))
+	var ne net.Error
+	return err != nil && !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// relayKeyArm: the keyed pending run, fenced at ip, leaves the address refused to an unkeyed proxy
+// (the half above). A keyed run, on the same node, must start on it, its proxy's connections must be
+// admitted by its own key, and the fenced run's key must still be refused.
+func (e *env) relayKeyArm(t *testing.T, d *k8s.Driver, old uuid.UUID, oldKey []byte, ip string) {
+	t.Helper()
+	oldHash := e.evidence(t, old).RelayKeyHash
+	if oldHash == "" {
+		t.Fatalf("the pending run %s was created keyed and its record holds no relay key hash", old)
+	}
+	id, got := e.startOnOnlyIP(t, d, ip)
+	if !e.fences.fenced(ip) || e.fences.wasReleased(old) {
+		t.Fatalf("the keyed run started on %s but the pending run's fence on it is gone", ip)
+	}
+	ev := e.evidence(t, id)
+	if ev.RelayKeyHash == "" || ev.RelayKeyHash == oldHash {
+		t.Fatalf("the keyed run's relay key hash %q is empty or the pending run's", ev.RelayKeyHash)
+	}
+	key := e.relayKeyOf(t, id)
+	if h := sha256.Sum256(key); hex.EncodeToString(h[:]) != ev.RelayKeyHash {
+		t.Fatalf("the relay key in the keyed run's proxy config does not match the hash in its record")
+	}
+	newHash := sha256.Sum256(key)
+	if total, admitted := e.cp.keyedFrom(ip, newHash); total == 0 || admitted != total {
+		t.Fatalf("keyed connections from %s with the new run's key: %d, admitted %d; want some, all admitted", ip, total, admitted)
+	}
+	if e.replayKey(t, key) {
+		t.Fatalf("the relay refused the keyed run's own key")
+	}
+	if !e.replayKey(t, oldKey) {
+		t.Fatalf("the relay admitted the fenced run's key")
+	}
+	note(t, "the keyed run started on the fenced IP %s with its own key admitted, and the fenced run's key was refused", got)
+	e.stopRunOn(t, d, id)
 }
 
 // k6OnlyIP names the case's IP reservation; k6FencedIP the one that keeps every still-fenced run's address.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -31,8 +32,9 @@ const testProxyRepo = "registry.example/wardyn-proxy"
 // relayKeys stands in for the relay's key registry: each hash the driver hands it, and whether the
 // run's record held that hash by then.
 type relayKeys struct {
-	got    map[uuid.UUID][32]byte
-	events []string
+	got     map[uuid.UUID][32]byte
+	events  []string
+	dropped []uuid.UUID
 }
 
 func wireRelayKeys(h *runnerHarness) *relayKeys {
@@ -43,6 +45,7 @@ func wireRelayKeys(h *runnerHarness) *relayKeys {
 		k.events = append(k.events, fmt.Sprintf("relay_key(persisted=%v)", err == nil && ev.RelayKeyHash == hex.EncodeToString(hash[:])))
 		k.got[id] = hash
 	}
+	h.d.cfg.DropRelayKey = func(id uuid.UUID) { k.dropped = append(k.dropped, id) }
 	return k
 }
 
@@ -285,6 +288,95 @@ func TestRunnerCreateOnFencedIP(t *testing.T) {
 			t.Fatalf("the keyed create handed the relay %d keys, want 1", len(keys.got))
 		}
 	}
+}
+
+// TestRunnerCreateKeyedOnFencedIPSameNode: a keyed create whose new proxy pod reports an IP still
+// fenced for another run starts when its proxy is bound to the node the fenced run's proxy ran on,
+// and the run's key was handed to the relay; on another node it is refused.
+func TestRunnerCreateKeyedOnFencedIPSameNode(t *testing.T) {
+	for _, c := range []struct {
+		name, fencedNode string
+		starts           bool
+	}{
+		{"same node", "n1", true},
+		{"another node", "n2", false},
+	} {
+		px := httptest.NewServer(http.NotFoundHandler())
+		h, keys := keyedHarness(t)
+		h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
+		h.d.cfg.RunnerdPeer = testRunnerdPeer()
+		h.node(t, "n1", "uid-n1", "m1", "s1", "10.0.0.5")
+		h.d.cfg.IPFenced = func(string) bool { return true }
+		f := uuid.New()
+		h.ev.m[f] = relayRecord("", c.fencedNode)
+		h.d.cfg.FencedRuns = func(string) []uuid.UUID { return []uuid.UUID{f} }
+		installProbedProxyReactorOn(h, px.Listener.Addr().String(), "n1", nil)
+		installAgentRunningReactor(t, h.cs)
+		spec := testSandboxSpec()
+		spec.RunID = h.runID
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := h.d.CreateSandbox(ctx, spec)
+		cancel()
+		px.Close()
+		if c.starts && err != nil || !c.starts && !errors.Is(err, runner.ErrRelayIPFenced) {
+			t.Fatalf("%s: keyed create on a fenced IP: %v, starts want %v", c.name, err, c.starts)
+		}
+		if len(keys.got) != 1 {
+			t.Fatalf("%s: the create handed the relay %d keys, want 1", c.name, len(keys.got))
+		}
+	}
+}
+
+// TestRunnerTeardownDropsRelayKey: label teardown makes the relay forget a run's key once its proxy
+// is proven stopped, and not while the proxy's termination is unknown (a fenced run's key is
+// dropped by the relay's Fence instead).
+func TestRunnerTeardownDropsRelayKey(t *testing.T) {
+	ctx := context.Background()
+	t.Run("proxy proven stopped", func(t *testing.T) {
+		h := newRunnerHarness(t)
+		keys := wireRelayKeys(h)
+		f := fenceSet{}
+		f.wire(h)
+		h.boundProxy(t)
+		h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+		if err := h.d.StopProxy(ctx, agentPodName(h.runID)); err != nil {
+			t.Fatal(err)
+		}
+		h.boundAgent(t)
+		if err := h.d.StopSandbox(ctx, agentPodName(h.runID)); err != nil {
+			t.Fatal(err)
+		}
+		if len(keys.dropped) != 1 || keys.dropped[0] != h.runID {
+			t.Fatalf("relay keys dropped %v, want the run's once", keys.dropped)
+		}
+	})
+	t.Run("termination unknown", func(t *testing.T) {
+		h := newRunnerHarness(t)
+		keys := wireRelayKeys(h)
+		f := fenceSet{}
+		f.wire(h)
+		pod := h.boundProxy(t)
+		if _, err := h.d.mutate(h.runID, func(ev *runEvidence) (bool, error) {
+			ev.pod(componentAgent, agentPodName(h.runID)).UID = "uid-agent"
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.cs.Tracker().Delete(podsGVR, testNamespace, pod.Name); err != nil { // gone with no witness
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			_ = h.d.StopProxy(ctx, agentPodName(h.runID))
+		}
+		zero := int64(0)
+		var pending *runner.ContainmentPendingError
+		if err := h.d.teardownByRunID(ctx, h.runID, &zero); !errors.As(err, &pending) {
+			t.Fatalf("held teardown: %v", err)
+		}
+		if len(keys.dropped) != 0 {
+			t.Fatalf("relay keys dropped %v while the proxy's termination is unknown", keys.dropped)
+		}
+	})
 }
 
 // TestRunnerReplayRelayKeys: startup hands the relay every persisted relay key hash again, except a

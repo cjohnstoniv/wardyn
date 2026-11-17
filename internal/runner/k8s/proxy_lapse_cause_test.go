@@ -135,6 +135,11 @@ func TestRunnerCreateSandbox_OlderProxyImageWarnsOnce(t *testing.T) {
 // Ready only when the readiness probe CreateSandbox declares on it succeeds against addr. seen, when
 // set, sees each probe's result.
 func installProbedProxyReactor(h *runnerHarness, addr string, seen func(ready bool)) {
+	installProbedProxyReactorOn(h, addr, "", seen)
+}
+
+// installProbedProxyReactorOn is installProbedProxyReactor with the proxy pod bound to node, when set.
+func installProbedProxyReactorOn(h *runnerHarness, addr, node string, seen func(ready bool)) {
 	h.cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga := action.(clienttesting.GetAction)
 		if !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
@@ -146,6 +151,9 @@ func installProbedProxyReactor(h *runnerHarness, addr string, seen func(ready bo
 		}
 		pod := obj.(*corev1.Pod).DeepCopy()
 		pod.Status.PodIP, pod.Status.Phase = "10.244.0.7", corev1.PodRunning
+		if node != "" {
+			pod.Spec.NodeName = node
+		}
 		ready := probeSucceeds(addr, pod.Spec.Containers[0].ReadinessProbe)
 		if seen != nil {
 			seen(ready)

@@ -36,3 +36,33 @@ func TestK8sRunnerHandsItsUpstreamProxyToTheDriver(t *testing.T) {
 		t.Fatalf("k8sRunnerHooks sets c.UpstreamProxyURL = opts.upstreamProxy %d times, want exactly 1", wired)
 	}
 }
+
+// TestRelayKeyDroppedWhenRunRetired pins the k8s runner's retirement hook: the started callback that
+// k8sRunnerHooks hands runnerRuntimeWith calls m.OnRetired(relay.DropRelayKey), so a retired run's relay
+// key leaves the relay with it. The k8s build is hosted-only, so this reads the source.
+func TestRelayKeyDroppedWhenRunRetired(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "production_k8s.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wired := 0
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "k8sRunnerHooks" || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "OnRetired" && isSelectorOf(call.Args[0], "relay", "DropRelayKey") {
+				wired++
+			}
+			return true
+		})
+	}
+	if wired != 1 {
+		t.Fatalf("k8sRunnerHooks calls OnRetired(relay.DropRelayKey) %d times, want exactly 1", wired)
+	}
+}

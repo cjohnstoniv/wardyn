@@ -22,6 +22,7 @@
 package k6_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -31,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -126,7 +128,7 @@ func TestK6(t *testing.T) {
 	if err != nil {
 		t.Fatalf("K6_ORG_URL: %v", err)
 	}
-	e.cp = newFakeControlPlane(t, orgU.Hostname(), must(t, "K6_APISERVER"))
+	e.cp = newFakeControlPlane(t, orgU.Hostname(), must(t, "K6_APISERVER"), e.fences)
 	if err := json.Unmarshal([]byte(must(t, "K6_RUNNERD_SELECTOR")), &e.peerLabels); err != nil {
 		t.Fatalf("K6_RUNNERD_SELECTOR: %v", err)
 	}
@@ -326,6 +328,7 @@ type evDoc struct {
 	Fence *struct {
 		ProxyIP string `json:"proxy_ip"`
 	} `json:"fence"`
+	RelayKeyHash string            `json:"relay_key_hash"`
 	Reuse        []json.RawMessage `json:"reuse"`
 	Hold         bool              `json:"hold"`
 	ProducerGone bool              `json:"producer_gone"`
@@ -456,21 +459,67 @@ func (s *fakeSink) goneCount(id uuid.UUID) int {
 }
 
 // fences mirrors the relay's fence bookkeeping (cmd/wardyn-runnerd/relay_k8s.go): a fenced run's
-// proxy IP is refused to every later run until the driver's Unfence releases it.
+// proxy IP is refused to every later run until the driver's Unfence releases it. It also holds the
+// relay's key table (RelayKey, DropRelayKey, and Fence's drop), for a keyed Driver.
 type fences struct {
 	mu       sync.Mutex
 	byRun    map[uuid.UUID]string
 	released []uuid.UUID
 	seen     map[uuid.UUID]string // every fence ever applied, released or not
+	keys     map[uuid.UUID][sha256.Size]byte
 }
 
-func newFences() *fences { return &fences{byRun: map[uuid.UUID]string{}, seen: map[uuid.UUID]string{}} }
+func newFences() *fences {
+	return &fences{byRun: map[uuid.UUID]string{}, seen: map[uuid.UUID]string{}, keys: map[uuid.UUID][sha256.Size]byte{}}
+}
 
 func (f *fences) fence(run uuid.UUID, ip string) {
 	f.mu.Lock()
 	f.byRun[run] = ip
 	f.seen[run] = ip
+	delete(f.keys, run)
 	f.mu.Unlock()
+}
+
+// relayKey is Config.RelayKey: a run that was ever fenced gets none, as the relay's.
+func (f *fences) relayKey(run uuid.UUID, hash [sha256.Size]byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, fenced := f.seen[run]; !fenced {
+		f.keys[run] = hash
+	}
+}
+
+// dropKey is Config.DropRelayKey.
+func (f *fences) dropKey(run uuid.UUID) {
+	f.mu.Lock()
+	delete(f.keys, run)
+	f.mu.Unlock()
+}
+
+// keyAdmitted is the relay's key rule for a keyed connection: some unfenced run holds this key hash.
+func (f *fences) keyAdmitted(hash [sha256.Size]byte) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for run, h := range f.keys {
+		if _, fenced := f.seen[run]; !fenced && h == hash {
+			return true
+		}
+	}
+	return false
+}
+
+// runsOn is Config.FencedRuns: the runs whose fence still refuses ip.
+func (f *fences) runsOn(ip string) []uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var runs []uuid.UUID
+	for run, v := range f.byRun {
+		if v == ip {
+			runs = append(runs, run)
+		}
+	}
+	return runs
 }
 
 func (f *fences) fenced(ip string) bool {
@@ -524,14 +573,102 @@ func (f *fences) held() []string {
 // fakeControlPlane stands in for the runnerd relay that production puts in front of the org: a TLS
 // listener on this process's kind-network address that answers the proxy's run-token renew. The proxy
 // opens only after its first successful renew, so without it no runner-mode proxy becomes ready.
+//
+// A keyed proxy opens each connection with the relay preamble (0x57, version 1, the run's 32-byte key);
+// the fake reads it as the relay does and refuses a key no unfenced run holds (fences.keyAdmitted).
+// It judges the key only: the source-address half of the relay's rule is not mirrored, as every
+// connection here comes from the kind network.
 type fakeControlPlane struct {
 	ip     string // the kind-network source address the proxy pod reaches this process on
 	url    string // https://<org host>:8443, the port the relay Service exposes
 	caPEM  string
 	renews atomic.Int64
+	fences *fences
+	mu     sync.Mutex
+	keyed  []keyedConn
 }
 
-func newFakeControlPlane(t *testing.T, host, apiserver string) *fakeControlPlane {
+// keyedConn is one connection that opened with the relay preamble.
+type keyedConn struct {
+	from     string
+	hash     [sha256.Size]byte
+	admitted bool
+}
+
+// preambleListener wraps the TCP listener under TLS so each connection's preamble is read first.
+type preambleListener struct {
+	net.Listener
+	cp *fakeControlPlane
+}
+
+func (l *preambleListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &preambleConn{Conn: c, cp: l.cp}, nil
+}
+
+// preambleConn reads the preamble, when the connection opens with one, on its first Read, and hands
+// TLS the stream after it. A refused key closes the connection before any TLS byte.
+type preambleConn struct {
+	net.Conn
+	cp   *fakeControlPlane
+	once sync.Once
+	r    *bufio.Reader
+	err  error
+}
+
+func (c *preambleConn) Read(p []byte) (int, error) {
+	c.once.Do(func() {
+		c.r = bufio.NewReader(c.Conn)
+		first, err := c.r.Peek(1)
+		if err != nil {
+			c.err = err
+			return
+		}
+		if first[0] != 0x57 { // a TLS ClientHello opens with 0x16
+			return
+		}
+		var pre [34]byte
+		if _, err := io.ReadFull(c.r, pre[:]); err != nil {
+			c.err = err
+			return
+		}
+		hash := sha256.Sum256(pre[2:])
+		ok := pre[1] == 1 && c.cp.fences.keyAdmitted(hash)
+		from, _, _ := net.SplitHostPort(c.RemoteAddr().String())
+		c.cp.mu.Lock()
+		c.cp.keyed = append(c.cp.keyed, keyedConn{from: from, hash: hash, admitted: ok})
+		c.cp.mu.Unlock()
+		if !ok {
+			c.err = errors.New("relay preamble refused")
+			_ = c.Conn.Close()
+		}
+	})
+	if c.err != nil {
+		return 0, c.err
+	}
+	return c.r.Read(p)
+}
+
+// keyedFrom counts the connections from ip that opened with a preamble carrying hash, and how many of
+// them were admitted.
+func (f *fakeControlPlane) keyedFrom(ip string, hash [sha256.Size]byte) (total, admitted int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, k := range f.keyed {
+		if k.from == ip && k.hash == hash {
+			total++
+			if k.admitted {
+				admitted++
+			}
+		}
+	}
+	return total, admitted
+}
+
+func newFakeControlPlane(t *testing.T, host, apiserver string, fs *fences) *fakeControlPlane {
 	t.Helper()
 	// A UDP "dial" sends nothing; it only makes the kernel pick the source address for the route.
 	c, err := net.Dial("udp", apiserver)
@@ -553,11 +690,12 @@ func newFakeControlPlane(t *testing.T, host, apiserver string) *fakeControlPlane
 	if err != nil {
 		t.Fatalf("fake control plane: serving cert for %s: %v", host, err)
 	}
-	ln, err := tls.Listen("tcp", net.JoinHostPort(ip, "8443"), &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	tcp, err := net.Listen("tcp", net.JoinHostPort(ip, "8443"))
 	if err != nil {
 		t.Fatalf("fake control plane: listen on %s:8443: %v", ip, err)
 	}
-	f := &fakeControlPlane{ip: ip, url: "https://" + net.JoinHostPort(host, "8443"), caPEM: string(ca.CertPEM)}
+	f := &fakeControlPlane{ip: ip, url: "https://" + net.JoinHostPort(host, "8443"), caPEM: string(ca.CertPEM), fences: fs}
+	ln := tls.NewListener(&preambleListener{Listener: tcp, cp: f}, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/internal/token/renew", func(w http.ResponseWriter, r *http.Request) {
 		f.renews.Add(1)
@@ -585,6 +723,12 @@ func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
 // newDriverIn is newDriver over namespaces, the first being the default. Its boot canary runs on the
 // pin node, so the pin node is labelled and schedulable first.
 func (e *env) newDriverIn(t *testing.T, v *view, namespaces ...string) *k8s.Driver {
+	t.Helper()
+	return e.newDriverWith(t, v, nil, namespaces...)
+}
+
+// newDriverWith is newDriverIn with tune applied to the Config last.
+func (e *env) newDriverWith(t *testing.T, v *view, tune func(*k8s.Config), namespaces ...string) *k8s.Driver {
 	t.Helper()
 	e.setSched(t, e.pin)
 	e.cordon(t, e.pin, false)
@@ -614,6 +758,9 @@ func (e *env) newDriverIn(t *testing.T, v *view, namespaces ...string) *k8s.Driv
 		c.Unfence = e.fences.unfence
 		c.StartTimeout = 90 * time.Second
 		c.SandboxPlacement = fmt.Sprintf(`{"nodeSelector":{%q:"on"}}`, schedLabel)
+		if tune != nil {
+			tune(c)
+		}
 	})
 	if err != nil {
 		t.Fatalf("k8s.NewRunner under the rendered Role: %v", err)

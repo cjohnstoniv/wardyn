@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
@@ -174,6 +175,63 @@ func TestK8sRelayKeyedRefusals(t *testing.T) {
 		if !closed(t, b) {
 			t.Fatalf("%s: admitted", c.name)
 		}
+	}
+}
+
+// TestK8sRelayAdmitsKeyedConnectionOnFencedAddress: with a usable peer, a connection that opens with
+// the preamble carrying run R's own key is admitted from an address fenced for another run F, and
+// the stream after the preamble reaches the org untouched, first byte first; F's own key is not.
+func TestK8sRelayAdmitsKeyedConnectionOnFencedAddress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	opened := make(chan *runnerwire.Stream, 1)
+	orgConn, runConn := runnerwire.Loopback()
+	org := runnerwire.NewPeer(orgConn, runnerwire.PeerConfig{Org: true, OnOpen: func(s *runnerwire.Stream, o runnerwire.Open) error {
+		if o.Kind != runnerwire.KindRelay {
+			t.Errorf("runner opened %+v", o)
+		}
+		opened <- s
+		return nil
+	}})
+	peer := runnerwire.NewPeer(runConn, runnerwire.PeerConfig{})
+	go func() { _ = org.Run(ctx) }()
+	go func() { _ = peer.Run(ctx) }()
+
+	run, fencedRun := uuid.New(), uuid.New()
+	rKey := bytes.Repeat([]byte{1}, relayPreambleKeyLen)
+	fKey := bytes.Repeat([]byte{2}, relayPreambleKeyLen)
+	r := newK8sRelay(ctx, netip.MustParseAddr("10.244.0.12"), 8443, 443, "10.96.0.40")
+	r.lookup = func(context.Context, netip.Addr) (uuid.UUID, bool, error) { return run, true, nil }
+	r.Online(peer)
+	r.Fence(fencedRun, "10.244.1.7")
+	r.RelayKey(run, sha256.Sum256(rKey))
+	r.RelayKey(fencedRun, sha256.Sum256(fKey)) // refused: a fenced run gets no key
+
+	a, b := net.Pipe()
+	go r.forward(srcConn{a, "10.244.1.7"})
+	go func() { _, _ = b.Write(append(preamble(relayPreambleVersion, rKey), 0x16, 'h', 'i')) }()
+	var st *runnerwire.Stream
+	select {
+	case st = <-opened:
+	case <-ctx.Done():
+		t.Fatal("the run's keyed connection from the fenced address was not admitted")
+	}
+	buf := make([]byte, 3)
+	if _, err := io.ReadFull(st, buf); err != nil || !bytes.Equal(buf, []byte{0x16, 'h', 'i'}) {
+		t.Fatalf("org read %q, %v, want the stream after the preamble", buf, err)
+	}
+	r.mu.Lock()
+	registered := len(r.conns)
+	r.mu.Unlock()
+	if registered != 1 {
+		t.Fatalf("%d connections registered, want 1", registered)
+	}
+
+	a, b = net.Pipe()
+	go r.forward(srcConn{a, "10.244.1.7"})
+	go func() { _, _ = b.Write(append(preamble(relayPreambleVersion, fKey), 0x16)) }()
+	if !closed(t, b) {
+		t.Fatal("the fenced run's key was admitted")
 	}
 }
 
