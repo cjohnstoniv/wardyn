@@ -117,7 +117,6 @@ func documentedAuthzDeniedReasons(t *testing.T) []string {
 	return out
 }
 
-// rowFor returns the markdown table row starting with prefix.
 // reasonsTableFor returns the rows of the "### <action> reasons" table that
 // holds the reason list the action's row used to carry in its When cell.
 func reasonsTableFor(t *testing.T, doc, action string) string {
@@ -139,6 +138,7 @@ func reasonsTableFor(t *testing.T, doc, action string) string {
 	return strings.Join(rows, "\n")
 }
 
+// rowFor returns the markdown table row starting with prefix.
 func rowFor(t *testing.T, doc, prefix string) string {
 	t.Helper()
 	for _, line := range strings.Split(doc, "\n") {
