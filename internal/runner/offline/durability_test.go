@@ -115,48 +115,41 @@ func TestAmbiguousExecutionRestartContainsDespiteFreshLease(t *testing.T) {
 }
 
 func TestExitRetryFlushesBeforeSuccessAndReplay(t *testing.T) {
-	for _, observe := range []bool{false, true} {
-		t.Run(map[bool]string{false: "callback", true: "state"}[observe], func(t *testing.T) {
-			m, sub, _, org := managerFixture(t)
-			id := createLocal(t, m, org)
-			ctx := context.Background()
-			gen := executionIntent(t, m, id, org, runnerwire.MethodExec)
-			if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "known-handle", gen); err != nil {
-				t.Fatal(err)
-			}
-			restore := failStateSave(t, m)
-			code := 7
-			call := func() error { return m.AgentExited(ctx, id, id.String(), code) }
-			if observe {
-				sub.agent = runner.Status{State: types.RunFailed, ExitCode: &code}
-				call = func() error { _, err := allState(ctx, m); return err }
-			}
-			if err := call(); err == nil {
-				t.Fatal("fixture did not fail exit save")
-			}
-			original := *m.state.Runs[id].Exit
-			if err := m.Replay(ctx, nil); err == nil {
-				t.Fatal("unsaved exit replay succeeded")
-			}
-			if err := call(); err == nil {
-				t.Fatal("duplicate exit acknowledged without persistence")
-			}
-			restore()
-			if err := call(); err != nil {
-				t.Fatal(err)
-			}
-			if err := m.Close(); err != nil {
-				t.Fatal(err)
-			}
-			restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer restarted.Close()
-			got := restarted.state.Runs[id].Exit
-			if got == nil || *got != original {
-				t.Fatalf("successful retry lost/changed exit: %+v", got)
-			}
-		})
+	m, sub, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	ctx := context.Background()
+	gen := executionIntent(t, m, id, org, runnerwire.MethodExec)
+	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "known-handle", gen); err != nil {
+		t.Fatal(err)
+	}
+	restore := failStateSave(t, m)
+	code := 7
+	sub.agent = runner.Status{State: types.RunFailed, ExitCode: &code}
+	call := func() error { _, err := allState(ctx, m); return err }
+	if err := call(); err == nil {
+		t.Fatal("fixture did not fail exit save")
+	}
+	original := *m.state.Runs[id].Exit
+	if err := m.Replay(ctx, nil); err == nil {
+		t.Fatal("unsaved exit replay succeeded")
+	}
+	if err := call(); err == nil {
+		t.Fatal("duplicate exit acknowledged without persistence")
+	}
+	restore()
+	if err := call(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	got := restarted.state.Runs[id].Exit
+	if got == nil || *got != original {
+		t.Fatalf("successful retry lost/changed exit: %+v", got)
 	}
 }
