@@ -186,6 +186,44 @@ func TestViaOrgHoldIsHeldAtTheOrganisation(t *testing.T) {
 	org.mu.Unlock()
 }
 
+// The git form's hold is held at the organisation too: the broker's send to github.com reaches the outbound
+// gate, which holds the brokered git URL. Undecided, the sandbox reads the pending 403; approved, the request
+// reaches the host; declined, it is refused.
+func TestViaOrgGitBrokerHoldIsHeldAtTheOrganisation(t *testing.T) {
+	shortHostCallWindow(t)
+	const push = "/wardyn/gh/octocat/hello-world.git/git-upload-pack"
+	for _, tc := range []struct {
+		state  types.ApprovalState
+		status int
+		pass   bool
+		source string
+	}{
+		{"", http.StatusForbidden, false, ruleSourceHostRuleApprovalWait},
+		{types.ApprovalApproved, http.StatusOK, true, ruleSourceHostRuleApprovalApproved},
+		{types.ApprovalDenied, http.StatusForbidden, false, ruleSourceHostRuleApprovalDenied},
+	} {
+		org := &fakeOrg{pollState: tc.state}
+		f := viaOrgRuleFixtureWith(t, org,
+			types.HostRule{Host: githubHost, Methods: []string{"POST"}, Paths: []string{"/octocat/hello-world.git"}, Effect: types.HostRuleHold},
+			types.HostRule{Host: githubHost, Effect: types.HostRuleAllow})
+		w := f.broker(t, push, "0000")
+		hits, _, _ := f.up.seen()
+		if w.Code != tc.status || (hits == 1) != tc.pass {
+			t.Errorf("%q: status %d, upstream hits %d, want %d and reached=%v", tc.state, w.Code, hits, tc.status, tc.pass)
+		}
+		if tc.state == "" && w.Header().Get(egressHeaderStatus) != egressRefusalPending {
+			t.Errorf("undecided: %v, want the pending answer", w.Header())
+		}
+		if rows := f.decisions(t); !strings.Contains(rows, `"rule_source":"`+tc.source+`"`) {
+			t.Errorf("%q: no %s row:\n%s", tc.state, tc.source, rows)
+		}
+		if org.mu.Lock(); org.raised != 1 {
+			t.Errorf("%q: raised %d approvals, want one", tc.state, org.raised)
+		}
+		org.mu.Unlock()
+	}
+}
+
 // deadlineWriter records the read deadline a handler sets on its connection.
 type deadlineWriter struct {
 	*httptest.ResponseRecorder
