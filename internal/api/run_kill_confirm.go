@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -126,7 +127,7 @@ func (s *Server) tryKillConfirm(ctx context.Context, run types.AgentRun) error {
 	defer unlock()
 	cur, err := s.cfg.Store.GetRun(lctx, run.ID)
 	if err != nil {
-		return errKillConfirmBusy // not read: try again, never on the pre-cascade copy's ref
+		return fmt.Errorf("%w: read the run: %w", errKillConfirmBusy, err) // not read: try again, never on the pre-cascade copy's ref
 	}
 	if cur.SandboxRef == "" {
 		return nil // a second kill or the boot pass confirmed it first

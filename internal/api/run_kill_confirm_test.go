@@ -168,7 +168,7 @@ func TestKillRun_ConfirmingStopAnswers202ThenConfirms(t *testing.T) {
 }
 
 // TestKillRun_ConfirmingForeverWritesOneFailureAtTheBound: a stop that never confirms ends in one failure
-// row naming the step, and the ref stays for the terminal sweep.
+// row naming the step, and the ref stays for the boot pass and a repeat of the kill.
 func TestKillRun_ConfirmingForeverWritesOneFailureAtTheBound(t *testing.T) {
 	r := newConfirmRig(t, 150*time.Millisecond, nil, errStillTerminating)
 
