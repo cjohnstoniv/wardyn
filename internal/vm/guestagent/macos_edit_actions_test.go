@@ -29,7 +29,8 @@ import (
 	"time"
 )
 
-// editRig is a toolsRig whose edit-action files and staged items are in the test's own directories.
+// editRig is a toolsRig whose edit-action files and staged items are in the test's own directories. Its
+// guest trusts no staged CA: `security verify-cert` exits 1 (trustStaged changes that).
 func newEditRig(t *testing.T) (*toolsRig, string, string) {
 	t.Helper()
 	rig := newToolsRig(t)
@@ -38,7 +39,45 @@ func newEditRig(t *testing.T) (*toolsRig, string, string) {
 	if err := os.MkdirAll(rig.t.ItemStageDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	run := rig.t.run
+	rig.t.run = func(ctx context.Context, argv []string) ([]byte, int, error) {
+		out, code, err := run(ctx, argv)
+		if len(argv) > 1 && argv[0] == "/usr/bin/security" && argv[1] == "verify-cert" {
+			code = 1
+		}
+		return out, code, err
+	}
 	return rig, rig.t.EditDir, rig.t.ItemStageDir
+}
+
+// trustStaged makes the rig's guest trust staged items names for SSL: verify-cert of their item.cer exits 0.
+func trustStaged(rig *toolsRig, names ...string) {
+	run := rig.t.run
+	rig.t.run = func(ctx context.Context, argv []string) ([]byte, int, error) {
+		out, code, err := run(ctx, argv)
+		for _, n := range names {
+			if slices.Equal(argv, verifyArgv(rig.t.ItemStageDir, n)) {
+				code = 0
+			}
+		}
+		return out, code, err
+	}
+}
+
+// verifyArgv is the read-only trust check Trust the list's CAs makes of staged item name.
+func verifyArgv(stage, name string) []string {
+	return []string{"/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", filepath.Join(stage, name, ItemCert)}
+}
+
+// suLines is the trust script's lines that ask: one su per certificate.
+func suLines(body string) []string {
+	var su []string
+	for _, l := range strings.Split(body, "\n") {
+		if strings.HasPrefix(l, "/usr/bin/su ") {
+			su = append(su, l)
+		}
+	}
+	return su
 }
 
 // stageCA writes a self-signed CA with subject cn as stage/<name>/item.cer, DER or PEM, and returns
@@ -201,8 +240,91 @@ func TestEditTrustCAsWritesOneSudoLinePerStagedCA(t *testing.T) {
 	if strings.Index(body, "a-corp") > strings.Index(body, "b-corp") {
 		t.Error("the staged items are not in name order")
 	}
-	if want := [][]string{userArgv(502, "/usr/bin/open", "-a", "Terminal", script)}; !slices.EqualFunc(rig.ran, want, slices.Equal[[]string]) {
+	want := [][]string{verifyArgv(stage, "a-corp"), verifyArgv(stage, "b-corp"), userArgv(502, "/usr/bin/open", "-a", "Terminal", script)}
+	if !slices.EqualFunc(rig.ran, want, slices.Equal[[]string]) {
 		t.Errorf("ran %q, want %q", rig.ran, want)
+	}
+}
+
+// Trust the list's CAs asks only for what the base does not already trust (rc.23 asked again for a CA the
+// base trusted: two prompts where one was needed). A CA that verify-cert reads trusted for SSL, and a second
+// item holding a certificate an earlier one holds, get no su line; the script says why. With nothing left
+// to ask for, nothing opens and the answer says so.
+func TestEditTrustCAsAsksOnlyForCAsNotYetTrusted(t *testing.T) {
+	line := func(stage, name string) string {
+		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /bin/launchctl asuser 502 /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
+			MacSystemKeychain + " " + filepath.Join(stage, name, ItemCert) + "'"
+	}
+	copyItem := func(t *testing.T, stage, from, to string) {
+		b, err := os.ReadFile(filepath.Join(stage, from, ItemCert))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(stage, to), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stage, to, ItemCert), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		stage   func(t *testing.T, stage string)
+		trusted []string
+		want    []string // the items asked for; none means 409 and nothing opened
+		said    []string // what the script prints for the items not asked for
+	}{
+		{name: "already trusted", stage: func(t *testing.T, s string) { stageCA(t, s, "corp", "Corp Root", false) }, trusted: []string{"corp"}},
+		{name: "two, one trusted", stage: func(t *testing.T, s string) {
+			stageCA(t, s, "acme-proxy", "Acme Proxy", true)
+			stageCA(t, s, "wardyn-inspection-ca", "Wardyn inspection CA (this Mac)", false)
+		}, trusted: []string{"acme-proxy"}, want: []string{"wardyn-inspection-ca"}, said: []string{"already trusted in this base, not asked"}},
+		{name: "a duplicate", stage: func(t *testing.T, s string) {
+			stageCA(t, s, "corp", "Corp Root", false)
+			copyItem(t, s, "corp", "corp-again")
+		}, want: []string{"corp"}, said: []string{"the same certificate as corp, not asked again"}},
+		{name: "a duplicate of a trusted one", stage: func(t *testing.T, s string) {
+			stageCA(t, s, "corp", "Corp Root", false)
+			copyItem(t, s, "corp", "corp-again")
+		}, trusted: []string{"corp"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig, dir, stage := newEditRig(t)
+			tc.stage(t, stage)
+			trustStaged(rig, tc.trusted...)
+			w := rig.do("POST", "/edit/trust-cas", "")
+			if len(tc.want) == 0 {
+				if body := w.Body.String(); w.Code != 409 || body != "every certificate in the install list is already trusted in this base\n" {
+					t.Errorf("trust-cas = %d %q, want 409 and why", w.Code, body)
+				}
+				for _, argv := range rig.ran {
+					if argv[0] != "/usr/bin/security" || argv[1] != "verify-cert" {
+						t.Errorf("ran %q with nothing to trust", argv)
+					}
+				}
+				if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+					t.Errorf("wrote %v with nothing to trust", ents)
+				}
+				return
+			}
+			var res EditActionResult
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &res) != nil || !res.Opened || res.Certificates != len(tc.want) {
+				t.Fatalf("trust-cas = %d %s", w.Code, w.Body)
+			}
+			body, _ := readEditFile(t, filepath.Join(dir, EditTrustCAsScript))
+			var want []string
+			for _, n := range tc.want {
+				want = append(want, line(stage, n))
+			}
+			if got := suLines(body); !slices.Equal(got, want) {
+				t.Errorf("su lines:\n%q\nwant\n%q", got, want)
+			}
+			for _, s := range tc.said {
+				if !strings.Contains(body, "'  "+s+"'") {
+					t.Errorf("the script does not say %q:\n%s", s, body)
+				}
+			}
+		})
 	}
 }
 

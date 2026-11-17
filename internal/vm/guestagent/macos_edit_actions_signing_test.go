@@ -20,7 +20,7 @@ func TestEditTrustCAsNeverTrustsTheSigningCert(t *testing.T) {
 	stageCA(t, stage, AgentSigningItem, "Wardyn guest agent signing", true)
 	rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
 		rig.ran = append(rig.ran, argv)
-		return nil, 0, nil
+		return nil, map[bool]int{true: 1}[slices.Contains(argv, "verify-cert")], nil
 	}
 	line := func(name string) string {
 		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /bin/launchctl asuser 502 /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
@@ -30,7 +30,8 @@ func TestEditTrustCAsNeverTrustsTheSigningCert(t *testing.T) {
 	if w := rig.do("POST", "/edit/trust-cas", ""); w.Code != 409 || len(rig.ran) != 0 {
 		t.Errorf("signing certificate alone = %d, ran %q, want 409 and nothing run", w.Code, rig.ran)
 	}
-	// With a ca item: one ssl line for it, none for the signing certificate, and no security call from the agent.
+	// With a ca item: one ssl line for it, none for the signing certificate, and no security call from the
+	// agent but the ca item's read-only ssl verify.
 	stageCA(t, stage, "corp", "Corp Root", false)
 	w := rig.do("POST", "/edit/trust-cas", "")
 	var res EditActionResult
@@ -52,6 +53,9 @@ func TestEditTrustCAsNeverTrustsTheSigningCert(t *testing.T) {
 		t.Errorf("su lines %q, want only %q", su, line("corp"))
 	}
 	for _, argv := range rig.ran {
+		if slices.Equal(argv, verifyArgv(stage, "corp")) {
+			continue
+		}
 		if slices.Contains(argv, "/usr/bin/security") || slices.Contains(argv, "codeSign") {
 			t.Errorf("ran %q, want no security or codeSign call", argv)
 		}
