@@ -236,7 +236,9 @@ func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) image
 	pw, refusal := s.prewrappedRunImage(ctx, ref)
 	switch {
 	case refusal != nil && refusal.err != nil:
-		return imageResolveResult{BaseErr: refusal.err}
+		// The store's text stays in the log: BaseErr reaches the member's failure hint.
+		slog.ErrorContext(ctx, "wardynd: a workspace's prewrapped base image could not be read", slog.String("ref", ref), slog.Any("err", refusal.err))
+		return imageResolveResult{BaseErr: errors.New("the prewrapped base image could not be read")}
 	case refusal != nil:
 		return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
 	case pw == nil:
