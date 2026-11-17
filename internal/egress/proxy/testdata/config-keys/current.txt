@@ -248,6 +248,7 @@ push_rule_sets.rules.hold_seconds
 push_rule_sets.rules.max_file_size_mib
 push_rule_sets.rules.max_inspect_pack_mib
 push_rule_sets.rules.require_review_paths
+relay_key
 resident_mints
 resident_mints.expires_at
 resident_mints.grant_id
