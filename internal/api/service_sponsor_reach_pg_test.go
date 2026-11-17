@@ -639,7 +639,7 @@ func TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor(t *testing.T) {
 		{"reauth", `{"credential_source":"aws_sso"}`, types.AttentionReauth},
 	} {
 		pending := []types.ApprovalRequest{pendingRow(sponsored.ID, types.ApprovalCredentialReauth, c.scope, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if a := s.attention(req, sponsored, pending, false); a == nil || a.Kind != c.kind || a.By != types.AttentionOwner {
 			t.Errorf("%s hold on a sponsored run: attention=%+v, want {%s owner}", c.name, a, c.kind)
 		}

@@ -74,8 +74,9 @@ func (s *Server) runIsOverNow(ctx context.Context, run types.AgentRun) (bool, er
 	return runIsOver(run, now), nil
 }
 
-// boundNow is the database's now for a bound handed on (a token's life), and this server's when that clock cannot be
-// read: a bound is never withheld for it, as podLifetimeCap does.
+// boundNow is the database's now for a bound handed on (a token's life) or a time shown or measured from a database
+// stamp (a hold, a wait), and this server's when that clock cannot be read: a bound or a display is never withheld for
+// it, as podLifetimeCap does.
 func (s *Server) boundNow(ctx context.Context) time.Time {
 	if now, err := s.dbNow(ctx); err == nil {
 		return now

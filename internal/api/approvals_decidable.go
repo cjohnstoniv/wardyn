@@ -28,8 +28,13 @@ import (
 // (which needs a run's own PENDING rows' Held/HeldUntil to pick row 8's
 // kind/by). A decided row (Hold's own state gate) leaves both fields at
 // their zero value, which is exactly "no hold" — nothing to clear here.
-func (s *Server) projectHolds(rows []types.ApprovalRequest) {
-	now := s.cfg.Now()
+// Hold is read at the database's now (boundNow), the clock that stamps
+// requested_at and the rejoin the hold is measured from.
+func (s *Server) projectHolds(ctx context.Context, rows []types.ApprovalRequest) {
+	if len(rows) == 0 {
+		return
+	}
+	now := s.boundNow(ctx)
 	for i := range rows {
 		held, until := approval.Hold(rows[i], now)
 		rows[i].Held = held
@@ -86,7 +91,7 @@ func (s *Server) withHoldProjection(r *http.Request, fn func(store.Page) ([]type
 		if err != nil {
 			return nil, err
 		}
-		s.projectHolds(rows)
+		s.projectHolds(r.Context(), rows)
 		s.projectEscalations(r.Context(), rows)
 		s.projectDecidable(r, rows)
 		s.projectWallsBlock(r.Context(), rows)
@@ -101,7 +106,7 @@ func (s *Server) withHoldProjectionAll(r *http.Request, fn func() ([]types.Appro
 		if err != nil {
 			return nil, err
 		}
-		s.projectHolds(rows)
+		s.projectHolds(r.Context(), rows)
 		s.projectEscalations(r.Context(), rows)
 		s.projectDecidable(r, rows)
 		s.projectWallsBlock(r.Context(), rows)
