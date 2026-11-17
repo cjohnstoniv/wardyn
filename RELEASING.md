@@ -576,7 +576,7 @@ JSON
       `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
-  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).
+  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/REPO-CI.md](docs/REPO-CI.md)).
   - The supply-chain artifacts are no longer yours to remember; the demo videos
     in step 7 still are.
   - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`

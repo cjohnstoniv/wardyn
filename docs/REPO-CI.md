@@ -1,6 +1,6 @@
 # This repository's own CI
 
-Contributor and maintainer notes for the GitHub Actions workflows in this repository. Adopters running Wardyn in their own pipeline want [CI.md](CI.md) instead.
+Contributor and maintainer notes for the GitHub Actions workflows in this repository. Teams running Wardyn in their own pipeline want [CI.md](CI.md) instead.
 
 ## This repository's own CI
 
