@@ -372,6 +372,11 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 	if p.approval == nil {
 		return refuse(ruleSourceGitPushHeld, headline+", and this proxy has no way to ask for one", "retry the push")
 	}
+	if hold = holdFor(r.Context(), hold); hold <= 0 {
+		// An engine request with no hold time left is refused now, not left to a reset stream.
+		return refuse(ruleSourceGitPushHeld, headline+", and this request has no hold time left, so nobody was asked",
+			"push the same commits again to ask again")
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), hold)
 	defer cancel()
 	if id != uuid.Nil {
@@ -426,7 +431,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 		select {
 		case <-ctx.Done():
 			return refuse(ruleSourceGitPushHeld,
-				fmt.Sprintf("%s, and nobody decided within %s", headline, hold),
+				fmt.Sprintf("%s, and nobody decided within %s", headline, hold.Round(time.Millisecond)), // a capped hold is not a whole second
 				"the request is still in the console; push the same commits again once it is approved")
 		case <-tick.C:
 		}

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -232,8 +233,9 @@ func copyStreamed(w http.ResponseWriter, resp *http.Response) {
 // whose control-plane calls (decisions, approvals, injection, mint) ride the
 // caller's in-process client.
 type ViaOrgEngine struct {
-	srv    *Server
-	closed atomic.Bool
+	srv         *Server
+	holdCeiling time.Duration // ViaOrgEngineOptions.HoldCeiling, stamped on each request as its hold budget
+	closed      atomic.Bool
 }
 
 // ViaOrgEngineOptions are an engine's dependencies. Client is the in-process
@@ -242,6 +244,10 @@ type ViaOrgEngineOptions struct {
 	Client   *http.Client
 	Dial     func(ctx context.Context, network, addr string) (net.Conn, error)
 	LookupIP func(host string) ([]net.IP, error)
+	// HoldCeiling bounds the total hold time of one request on the engine (first-use, push,
+	// capability, re-auth and mint approvals together): the caller sets it under the relay's idle
+	// cut, so a held request ends with the hold's own sentence, not a reset stream. 0 keeps the knobs.
+	HoldCeiling time.Duration
 }
 
 type lookupFunc func(host string) ([]net.IP, error)
@@ -274,7 +280,7 @@ func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions)
 		procRegistry.Evict(h.maskKey)
 		return nil, err
 	}
-	return &ViaOrgEngine{srv: srv}, nil
+	return &ViaOrgEngine{srv: srv, holdCeiling: opts.HoldCeiling}, nil
 }
 
 // ErrViaOrgADOUngated refuses an engine config whose Azure DevOps credential has no Azure DevOps grant for its host.
@@ -290,7 +296,7 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
-	r = trackNetworkBody(r)
+	r = withHoldBudget(trackNetworkBody(r), e.holdCeiling)
 	defer interruptBodyReadOnCancel(w, r)()
 	host = hostKey(host) // the grant's destination as stored: the engine's tables are keyed in this one spelling
 	if e.refuseClosed(w) {
@@ -334,7 +340,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // is served only for a host the run's Azure DevOps grant covers, by the same
 // Entra broker (org pin, capabilities, content and push rules, holds).
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
-	r = trackNetworkBody(r)
+	r = withHoldBudget(trackNetworkBody(r), e.holdCeiling)
 	defer interruptBodyReadOnCancel(w, r)()
 	if e.refuseClosed(w) {
 		return

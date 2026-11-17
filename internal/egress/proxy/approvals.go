@@ -316,7 +316,8 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	// Deriving ctx once and passing it to every Resolve/raise/poll below puts
 	// everything inside that one budget; the result on expiry is unchanged:
 	// pending, fail closed.
-	ctx, cancel := context.WithTimeout(ctx, a.holdTimeout)
+	hold := holdFor(ctx, a.holdTimeout) // under a via_org engine, what is left of this request's hold time
+	ctx, cancel := context.WithTimeout(ctx, hold)
 	defer cancel()
 
 	// First resolve raises the approval (or returns a cached terminal state).
@@ -350,7 +351,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		a.rejoin(ctx, host, r.ApprovalID)
 	}
 
-	timeout := time.NewTimer(a.holdTimeout)
+	timeout := time.NewTimer(hold)
 	defer timeout.Stop()
 	ticker := time.NewTicker(holdPollInterval)
 	defer ticker.Stop()

@@ -173,10 +173,22 @@ func (w *reauthWorkflow) finished() bool {
 // that ends first returns ctx.Err() and nothing else: no decision row, no
 // 401 body, no effect on the workflow.
 func (w *reauthWorkflow) await(ctx context.Context) (types.ResolvedInjection, error) {
+	var spent <-chan time.Time // the joiner's own request may have less hold time than the workflow
+	if left, ok := holdLeft(ctx); ok {
+		t := time.NewTimer(left)
+		defer t.Stop()
+		spent = t.C
+	}
 	select {
 	case <-w.done:
 	case <-ctx.Done():
 		return types.ResolvedInjection{}, ctx.Err()
+	case <-spent:
+		// This caller's time ran out first: the first observer of an expiry reports it, as below.
+		if w.reported.CompareAndSwap(false, true) {
+			return types.ResolvedInjection{}, errReauthTimedOut
+		}
+		return types.ResolvedInjection{}, errReauthTimedOutAgain
 	}
 	if w.err == nil {
 		return w.resolved, nil
@@ -222,6 +234,50 @@ type reauthCoordinator struct {
 	standing map[adoscope.Capability]bool
 }
 
+// holdBudget is the hold time one request on a via_org engine may spend in all: the relay's idle
+// cut measures from the stream's last moved byte, and a held request moves none, so holds in a
+// chain (first-use, push rules, capability, re-auth, a mint approval) must fit under it together.
+// It rides the request's context (withHoldBudget); the clock starts at the request's first hold.
+type holdBudget struct {
+	ceiling time.Duration
+	mu      sync.Mutex
+	start   time.Time
+}
+
+type holdBudgetKey struct{}
+
+// withHoldBudget gives r a hold budget of ceiling; 0 leaves r alone, as a sidecar's is.
+func withHoldBudget(r *http.Request, ceiling time.Duration) *http.Request {
+	if ceiling <= 0 {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), holdBudgetKey{}, &holdBudget{ceiling: ceiling}))
+}
+
+// holdLeft is the hold time ctx's request has left, starting its clock if this is its first hold;
+// ok is false when ctx carries no budget. Spent time answers 0.
+func holdLeft(ctx context.Context) (left time.Duration, ok bool) {
+	b, _ := ctx.Value(holdBudgetKey{}).(*holdBudget)
+	if b == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.start.IsZero() {
+		b.start = time.Now()
+	}
+	return max(b.ceiling-time.Since(b.start), 0), true
+}
+
+// holdFor is budget, or what is left of the request's hold time when that is less. 0 means none is
+// left: the hold ends at once with its own sentence.
+func holdFor(ctx context.Context, budget time.Duration) time.Duration {
+	if left, ok := holdLeft(ctx); ok {
+		return min(budget, left)
+	}
+	return budget
+}
+
 func newReauthCoordinator() *reauthCoordinator {
 	return &reauthCoordinator{workflows: map[uuid.UUID]*reauthWorkflow{}, quit: make(chan struct{})}
 }
@@ -244,8 +300,8 @@ func (c *reauthCoordinator) admit(approvalID uuid.UUID, budget time.Duration) (w
 
 // admitCapability is admit for an Azure DevOps escalation: its own budget, and
 // the re-resolve ask the workflow ends with.
-func (c *reauthCoordinator) admitCapability(approvalID uuid.UUID, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
-	return c.admitWith(approvalID, capabilityHoldBudget(), query)
+func (c *reauthCoordinator) admitCapability(ctx context.Context, approvalID uuid.UUID, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
+	return c.admitWith(approvalID, holdFor(ctx, capabilityHoldBudget()), query)
 }
 
 func (c *reauthCoordinator) admitWith(approvalID uuid.UUID, budget time.Duration, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
