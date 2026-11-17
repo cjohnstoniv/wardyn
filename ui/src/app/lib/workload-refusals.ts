@@ -41,7 +41,7 @@ export const WORKLOAD_REFUSAL_SENTENCE: Record<string, string> = {
   runner_limits_unset: "No runner in the pool has its limits set.",
   runner_recording_off: "Recording is required, and no runner in the pool records runs.",
   recording_store_off: "Recording is required, and this organisation keeps no session recordings.",
-  placement_credential: "A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.",
+  placement_credential: "A credential it carries, such as a grant from the default policy or an MCP server's run identity, cannot be sent to the runner it would land on.",
 };
 
 // The reasons whose server sentence follows the table's: it names the credential and how to drop it. A reader the

@@ -19,7 +19,8 @@ import (
 )
 
 // gatewayLocalSentence is the refusal of the organisation's "tools" MCP server, which sends run identity.
-const gatewayLocalSentence = `the MCP server "tools" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners`
+const gatewayLocalSentence = `The MCP server "tools" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners. ` +
+	"Remove it from this run, or run this on a remote-hosted runner."
 
 // An organisation's remote MCP server that sends run identity takes a token from a mint no runner relays,
 // so a run on a person's own runner that carries it is refused before it is made, naming the server and
@@ -38,8 +39,13 @@ func TestLocalPlacement_GatewayMCPServerRefusedBeforeTheRun(t *testing.T) {
 	}
 	ref := judge(placement.Local, governanceCeiling{}, org)
 	if ref == nil || ref.status != placement.ReasonPlacementCredential.Status() || ref.body.Reason != string(placement.ReasonPlacementCredential) ||
-		!strings.HasPrefix(ref.body.Error, gatewayLocalSentence) || strings.Contains(ref.body.Error, "ProxyConfig") {
+		ref.body.Error != gatewayLocalSentence {
 		t.Fatalf("org identity MCP server on a local run = %+v, want %s %q", ref, placement.ReasonPlacementCredential, gatewayLocalSentence)
+	}
+	// A pool that also offers a remote-hosted runner adds how to get one, as its own sentence.
+	ref.addRemoteInstead("Mixed")
+	if want := gatewayLocalSentence + " " + remoteInsteadMsg("Mixed"); ref.body.Error != want {
+		t.Errorf("with the remote-hosted offer = %q, want %q", ref.body.Error, want)
 	}
 	if ref := judge(placement.Remote, governanceCeiling{}, org); ref != nil {
 		t.Errorf("org identity MCP server on a remote-hosted run = %+v, want it admitted", ref)
@@ -60,7 +66,7 @@ func TestLocalPlacement_GatewayMCPServerRefusedAtEveryDoor(t *testing.T) {
 		w := f.ask(t, door, body)
 		got := decodeErrorBody(t, w)
 		if w.Code != placement.ReasonPlacementCredential.Status() || got.Reason != string(placement.ReasonPlacementCredential) ||
-			!strings.HasPrefix(got.Error, gatewayLocalSentence) {
+			got.Error != gatewayLocalSentence {
 			t.Errorf("%s: %d %s, want %s %q", door, w.Code, w.Body.String(), placement.ReasonPlacementCredential, gatewayLocalSentence)
 		}
 	}
@@ -79,7 +85,54 @@ func TestLocalDispatchRefusesAGatewayRouteNamingTheServer(t *testing.T) {
 	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementCredential)) || !strings.Contains(string(ev.Data), "ProxyConfig.GatewayIdentity") {
 		t.Fatalf("no canonical refusal: %s", auditDump(audit.events, run.ID))
 	}
-	if want := "This run was not launched on your own runner: " + gatewayLocalSentence; !strings.HasPrefix(st.failureHint, want) || strings.Contains(st.failureHint, "ProxyConfig") {
-		t.Fatalf("failure hint %q, want it to start %q", st.failureHint, want)
+	if want := "This run was not launched on your own runner: " + gatewayLocalSentence; st.failureHint != want {
+		t.Fatalf("failure hint %q, want %q", st.failureHint, want)
+	}
+}
+
+// A Bedrock provider that sends run identity sets no LLMUpstreams entry, so nothing else refuses it on a
+// person's own runner: create judges its route on the same gate and refuses the run, naming the provider.
+func TestLocalPlacement_GatewayBedrockProviderRefusedAtCreate(t *testing.T) {
+	f := newComponentFixture(t)
+	f.srv.cfg.Store = localPlanTestStore{f.st}
+	p := testGatewayBedrockBearer()
+	f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+	ctx := utCtx("user", "", nil)
+	if err := f.srv.cfg.Secrets.For(runIdentitySubject(ctx, capSub)).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("own-key")); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+	req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
+	_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	want := `The model provider "corp-gw" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners. ` +
+		"Remove it from this run, or run this on a remote-hosted runner."
+	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != want {
+		t.Fatalf("a Bedrock identity provider on a local run = %+v, want %s %q", ref, placement.ReasonPlacementCredential, want)
+	}
+}
+
+// A run that waits on its pool's remote-hosted runners records that it can never take one of the person's
+// own when it carries an identity server, so the queue never offers it one; without the identity it can.
+func TestStepLocalEligibility_WaitingRunWithAnIdentityServerRecordsNoLocal(t *testing.T) {
+	def := testGatewayMCPComponent().Definition
+	plain := def
+	mcp := *def.MCP
+	mcp.GatewayAudience = ""
+	plain.MCP = &mcp
+	id := uuid.New()
+	for _, tc := range []struct {
+		name    string
+		def     types.ComponentDefinition
+		noLocal bool
+	}{{"identity server", def, true}, {"same server, no identity", plain, false}} {
+		f := newComponentFixture(t)
+		req := createRunRequest{Agent: "claude-code", Task: "t"}
+		w := httptest.NewRecorder()
+		fold := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil)), req: &req, queued: true,
+			place: runPlacement{pooled: true, placement: types.PlacementRemote},
+			comps: runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{ComponentID: &id, Name: "Tools", Version: 3, Definition: tc.def}}}}}
+		if ok := f.srv.stepLocalEligibility(fold, &foldRecorder{}); !ok || fold.place.noLocal != tc.noLocal || w.Body.Len() != 0 {
+			t.Errorf("%s: the step = %v, no_local %v, answered %q; want it passed, no_local %v, nothing written", tc.name, ok, fold.place.noLocal, w.Body, tc.noLocal)
+		}
 	}
 }
