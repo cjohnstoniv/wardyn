@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
 - A command run through the SSH gateway (an `ssh` command, an sftp session, a forwarded port or a folder sync) no longer loses the end of its error output, which is usually the line that says why it failed: the gateway now waits for all of it, for up to 5 seconds after the command's output ends, before it sends the exit status and closes the channel.
 - SSH gateway audit: an sftp transfer or port forward whose process failed is now recorded as a failure that names its exit, also when the client closed its channel or connection after the process's output had ended and before the gateway read the exit; before, that close made the row a success. On the Docker runner a command whose output had already ended when its client closed now reports its own exit, so `ssh.exec` records that exit and a folder sync that ended cleanly is no longer recorded as a failure. Two cases keep the earlier outcome: on the Docker runner, a close that arrives before Docker has recorded the exit; and on a remote runner, a close that reaches the runner before the gateway asks it for the exit. A transfer or forward its client closed while the process still ran stays a success.
+- The cap of 32 `runner.event.refuse` rows an hour for each runner now holds across replicas and restarts: the 33rd is marked `suppressed`, and one summary row follows. Before, each replica kept its own count, and a restart reset it.
 
 ### Security
 
@@ -58,6 +59,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - An organisation whose runners or proxy image predate this release: a VM run with `host_rules` now passes create and fails at its proxy's start, because the older proxy refuses the config. Upgrade the runners and the proxy image first.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants `SELECT, INSERT, UPDATE` on `runner_event_refusal_windows` to every role that was granted `UPDATE` on `runner_spool_cursors`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on `runner_event_refusal_windows` as soon as the migration has run. Until then no event the organisation refuses for good is recorded or acknowledged, so a runner keeps resending it.
 
 ### Before you downgrade
 
