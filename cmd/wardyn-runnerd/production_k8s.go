@@ -120,6 +120,9 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		c.Fence = relay.Fence
 		c.Unfence = relay.Unfence
 		c.IPFenced = relay.IPFenced
+		c.RelayKey = relay.RelayKey
+		c.FencedRuns = relay.FencedRuns
+		c.DropRelayKey = relay.DropRelayKey
 		c.HardDeny = hardDeny
 		sinkURL := fmt.Sprintf("tls://%s", net.JoinHostPort(clusterIP, fmt.Sprint(env.sink)))
 		c.Sink = sinkAdapter{s: sink, url: func() string { return sinkURL }}
@@ -146,6 +149,11 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		}
 		// Every fence, with its IP refusal, is in the relay before Online can set its peer (R4-M1).
 		if err := drv.ReplayFences(m.EvidenceRunIDs()); err != nil {
+			return err
+		}
+		// Every unfenced keyed run's relay key hash is back in the relay before Online too, so its
+		// proxy reconnects after the restart; the fences are in first, so no fenced run gets one.
+		if err := drv.ReplayRelayKeys(m.EvidenceRunIDs()); err != nil {
 			return err
 		}
 		// Every non-retired run's sink key is registered again before Online, so its proxy

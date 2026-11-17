@@ -176,6 +176,9 @@ type Config struct {
 	// FencedRuns lists the runs whose fence still refuses a proxy IP (the relay's): a keyed run starts
 	// on that IP only when each of them recorded its proxy on the new proxy's node.
 	FencedRuns func(ip string) []uuid.UUID
+	// DropRelayKey makes the relay forget a run's relay key hash: teardown calls it once the run's
+	// proxy is proven stopped.
+	DropRelayKey func(runID uuid.UUID)
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
 	// refuses to create a sandbox while it is nil (the sink did not start).
 	Sink DecisionSink

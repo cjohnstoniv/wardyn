@@ -508,6 +508,9 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 	bound := teardownWaitBound(grace)
 	proxyDone, perr := d.containPod(ctx, runID, componentProxy, proxyPodName(runID), grace, bound, true)
 	agentDone, aerr := d.containPod(ctx, runID, componentAgent, agentPodName(runID), grace, bound, false)
+	if proxyDone && d.cfg.DropRelayKey != nil {
+		d.cfg.DropRelayKey(runID) // its proxy is proven stopped: nothing holds its key now
+	}
 	if !proxyDone || !agentDone {
 		if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 			changed := !ev.Hold

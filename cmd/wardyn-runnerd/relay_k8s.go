@@ -28,10 +28,13 @@ var errRelayPortMismatch = errors.New("relay_port_mismatch")
 
 // k8sRelay is the k8s runner's end of the internal hop (design K1 §3.3, R4-M1). It listens on the
 // pod IP at the relay target port; a run's proxy reaches it through the relay Service's ClusterIP.
-// It admits a connection only from the pod IP of one of this runner's live, unfenced proxy pods,
-// keeps a registry of each run's connections, and closes them when the run is fenced. Each
-// admitted connection is copied, unread, over one relay stream on the runner's session, as the
-// Docker relay does.
+// It admits a connection only from the pod IP of one of this runner's live proxy pods, of a run
+// that is not fenced (relayAdmits). A connection that opens with the relay preamble is admitted as
+// that run only with the run's relay key, whatever the IP fence says; any other is admitted only
+// from an unfenced IP and only for a run that holds no key. It keeps a registry of each run's
+// connections and closes them when the run is fenced. Each admitted connection is copied over one
+// relay stream on the runner's session, as the Docker relay does: it reads the fixed 34-byte
+// preamble when one is present, then copies the stream unread.
 type k8sRelay struct {
 	ctx         context.Context
 	bind        netip.AddrPort
@@ -47,9 +50,10 @@ type k8sRelay struct {
 	conns     map[net.Conn]k8sRelayConn
 	fenced    map[uuid.UUID]bool
 	fencedIPs map[netip.Addr]map[uuid.UUID]bool
-	probe     chan netip.Addr // set during the boot source probe
-	waiting   int             // connections between admission to the lookup and their first byte
-	firstByte time.Duration   // relayFirstByteWait when zero; tests shorten it
+	keys      map[uuid.UUID][32]byte // each unfenced keyed run's relay key hash (RelayKey)
+	probe     chan netip.Addr        // set during the boot source probe
+	waiting   int                    // connections between admission to the lookup and their first byte
+	firstByte time.Duration          // relayFirstByteWait when zero; tests shorten it
 }
 
 type k8sRelayConn struct {
@@ -59,7 +63,8 @@ type k8sRelayConn struct {
 
 func newK8sRelay(ctx context.Context, podIP netip.Addr, targetPort, servicePort uint16, clusterIP string) *k8sRelay {
 	return &k8sRelay{ctx: ctx, bind: netip.AddrPortFrom(podIP, targetPort), servicePort: servicePort, clusterIP: clusterIP,
-		conns: map[net.Conn]k8sRelayConn{}, fenced: map[uuid.UUID]bool{}, fencedIPs: map[netip.Addr]map[uuid.UUID]bool{}}
+		conns: map[net.Conn]k8sRelayConn{}, fenced: map[uuid.UUID]bool{}, fencedIPs: map[netip.Addr]map[uuid.UUID]bool{},
+		keys: map[uuid.UUID][32]byte{}}
 }
 
 // listen binds the pod IP (never an unspecified or loopback address) at the target port.
@@ -126,12 +131,14 @@ func remoteAddr(c net.Conn) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// forward admits c, registers it under its run and copies it. The fence check and the
+// forward admits c, registers it under its run and copies it. The admission check (relayAdmits)
+// runs after the connection's opening, preamble included, is read, and the check and the
 // registration happen under one mutex hold, so a connection racing a fence is either registered
-// first and then closed by it, or refused. At most maxLocalRelays connections wait at once, from
-// before the run lookup until their first byte, and one window bounds the lookup and the first
-// byte together, so a stalled API server can neither pile connections up nor hold one longer than
-// a silent one.
+// first and then closed by it, or refused. A source no live proxy pod holds, an offline relay and a
+// fenced run are refused before that read. At most maxLocalRelays connections wait at once, from
+// before the run lookup until their opening is read, and one window bounds the lookup and the read
+// together, so a stalled API server can neither pile connections up nor hold one longer than a
+// silent one.
 func (r *k8sRelay) forward(c net.Conn) {
 	src := remoteAddr(c)
 	r.mu.Lock()
@@ -156,10 +163,20 @@ func (r *k8sRelay) forward(c net.Conn) {
 	run, ok, err := r.lookup(ctx, src)
 	cancel()
 	r.mu.Lock()
-	peer := r.peer
-	ipFenced := len(r.fencedIPs[src]) > 0
-	if err != nil || !ok || peer == nil || r.closed || ipFenced || r.fenced[run] {
+	refused := err != nil || !ok || r.peer == nil || r.closed || r.fenced[run]
+	if refused {
 		r.waiting--
+	}
+	r.mu.Unlock()
+	if refused {
+		_ = c.Close()
+		return
+	}
+	start, read := readRelayStart(c, deadline)
+	r.mu.Lock()
+	r.waiting--
+	peer := r.peer
+	if !read || peer == nil || r.closed || !relayAdmits(run, start, r.keys, r.fenced[run], len(r.fencedIPs[src]) > 0) {
 		r.mu.Unlock()
 		_ = c.Close()
 		return
@@ -172,22 +189,17 @@ func (r *k8sRelay) forward(c net.Conn) {
 		r.mu.Unlock()
 		_ = c.Close()
 	}()
-	first, ok := readFirstByte(c, time.Until(deadline))
-	r.mu.Lock()
-	r.waiting--
-	r.mu.Unlock()
-	if ok {
-		relayCopy(r.ctx, peer, c, first)
-	}
+	relayCopy(r.ctx, peer, c, start.first)
 }
 
-// Fence marks run fenced, refuses its recorded proxy IP from now on, and closes the run's open
-// connections (after unlocking, as Offline does). Leases and sessions never clear it. An IP is
+// Fence marks run fenced, drops its relay key, refuses its recorded proxy IP from now on, and closes
+// the run's open connections (after unlocking, as Offline does). Leases and sessions never clear it. An IP is
 // refused while any run fenced on it is unwitnessed: two runs can share one (a run refused on the IP
 // still had its proxy running there), and each one's release is its own.
 func (r *k8sRelay) Fence(run uuid.UUID, proxyIP string) {
 	r.mu.Lock()
 	r.fenced[run] = true
+	delete(r.keys, run)
 	if ip, err := netip.ParseAddr(proxyIP); err == nil {
 		a := ip.Unmap()
 		if r.fencedIPs[a] == nil {
@@ -232,6 +244,38 @@ func (r *k8sRelay) IPFenced(ip string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.fencedIPs[a.Unmap()]) > 0
+}
+
+// FencedRuns lists the runs whose fence still refuses ip (the k8s driver's create check).
+func (r *k8sRelay) FencedRuns(ip string) []uuid.UUID {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runs := make([]uuid.UUID, 0, len(r.fencedIPs[a.Unmap()]))
+	for id := range r.fencedIPs[a.Unmap()] {
+		runs = append(runs, id)
+	}
+	return runs
+}
+
+// RelayKey holds run's relay key hash: from now on the run's connections must open with the relay
+// preamble and its key. A fenced run gets none: the relay refuses it whatever it sends.
+func (r *k8sRelay) RelayKey(run uuid.UUID, hash [32]byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.fenced[run] {
+		r.keys[run] = hash
+	}
+}
+
+// DropRelayKey forgets run's relay key hash once its proxy is proven stopped.
+func (r *k8sRelay) DropRelayKey(run uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.keys, run)
 }
 
 // awaitProbe arms the boot source probe and returns the wait for the source address of the next
