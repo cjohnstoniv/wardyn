@@ -201,10 +201,6 @@ func exitCodeFor(err error) int {
 // reverse proxy or a CI-internal topology is legitimate; WARDYN_CLI_ALLOW_PLAINTEXT
 // silences it. `run ssh` and `sync` go further and refuse (refusePlainHTTPGateway),
 // whatever this variable says.
-//
-// ponytail: fourth inline loopback predicate in the tree (internal/api/http.go,
-// cmd/wardynd/main.go, internal/egress/proxy/policy.go) — all unexported and
-// server-side. Consolidate only if a fifth appears.
 func warnPlaintextToken(w io.Writer, rawURL, token string) {
 	if token == "" || cliutil.EnvBool("WARDYN_CLI_ALLOW_PLAINTEXT", false) {
 		return
