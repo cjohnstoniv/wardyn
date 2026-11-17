@@ -255,7 +255,7 @@ func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, 
 	}
 	if unread > 0 {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable,
-			loggedMsg(ctx, fmt.Sprintf("the run's current policy generation %d could not be read", unread), errors.New("no readable run.policy.generation row")))
+			loggedMsg(ctx, fmt.Sprintf("the run's current policy generation %d could not be read; try again shortly, or kill or end the run if it persists", unread), errors.New("no readable run.policy.generation row")))
 	}
 	if !ok {
 		return nil

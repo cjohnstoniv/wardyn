@@ -31,8 +31,8 @@ func (s *Server) runEffectivePolicy(ctx context.Context, runID uuid.UUID) (envel
 // not mix up: the run has no run.policy.resolve row (unread is 0; a pruned run), and the run's current
 // generation is 2 or later and its run.policy.generation row cannot be read (unread is that number).
 // Callers that fail closed on ok=false need not look at it. A caller that would read a missing envelope as
-// the permissive default (runDataOutRule) must refuse on unread, since the dispatch envelope's policy is no
-// longer the one enforced and its generation may only have tightened it.
+// the permissive default (runDataOutRule) looks at it and answers unreadable instead, since the dispatch
+// envelope's policy is no longer the one enforced and its generation may only have tightened it.
 //
 // The current generation is the one agent_runs says is current (store.RunPolicyGenerations), never the
 // newest run.policy.generation row: a revive records its generation before the new proxy starts, and one

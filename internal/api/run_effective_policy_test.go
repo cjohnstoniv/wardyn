@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -207,18 +208,18 @@ func dataOutGenFixture(t *testing.T, withRow bool, edited types.TransferRule) (*
 }
 
 // A run whose current generation's row did not land has an unknown data_out rule, and the dispatch rule may
-// be looser than the one it enforces: it reads blocked, a door refuses it, and a revive or an edit is
-// refused rather than carrying "" (allowed).
-func TestDataOutRule_UnreadableGenerationRowIsBlocked(t *testing.T) {
+// be looser than the one it enforces: it is unreadable, never a rule. A door answers 503 data_out_unreadable,
+// and a revive or an edit is refused rather than carrying "" (allowed).
+func TestDataOutRule_UnreadableGenerationRowIsUnreadable(t *testing.T) {
 	srv, run := dataOutGenFixture(t, false, "")
 	ctx := context.Background()
-	if rule, found, err := srv.runDataOutRule(ctx, run.ID); err != nil || !found || rule != types.TransferBlocked {
-		t.Errorf("data_out with no generation row = %q (found %v, err %v), want blocked, found", rule, found, err)
+	if rule, found, err := srv.runDataOutRule(ctx, run.ID); !errors.Is(err, errDataOutGenerationUnread) || found || rule != types.TransferAllowed {
+		t.Errorf("data_out with no generation row = %q (found %v, err %v), want errDataOutGenerationUnread", rule, found, err)
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/output", nil)
-	if !srv.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, false) || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonDataOutBlocked) {
-		t.Errorf("output with no generation row: %d %s, want 403 %s", w.Code, w.Body.String(), reasonDataOutBlocked)
+	if !srv.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, false) || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonDataOutUnreadable) {
+		t.Errorf("output with no generation row: %d %s, want 503 %s", w.Code, w.Body.String(), reasonDataOutUnreadable)
 	}
 	var policy types.RunPolicySpec
 	re := srv.reviveCarryRecordedRules(ctx, run.ID, &policy)
@@ -227,6 +228,36 @@ func TestDataOutRule_UnreadableGenerationRowIsBlocked(t *testing.T) {
 	}
 	if policy.DataOut != "" {
 		t.Errorf("refused revive still carried data_out %q", policy.DataOut)
+	}
+}
+
+// genUnreadFolderStore is a computer-folder store whose run is on policy generation 2 with no generation row.
+type genUnreadFolderStore struct {
+	*computerFolderStore
+	store.RunPolicyGenerations
+}
+
+func (genUnreadFolderStore) RunPolicyState(context.Context, uuid.UUID) (types.RunPolicyState, bool, error) {
+	st, _ := types.RunPolicyState{}.Advance("d2", nil, "jti")
+	return st, true, nil
+}
+
+// An ended run with a seeded both-ways folder, whose rule allows content out, and whose current generation's row
+// cannot be read: every run-end path reads that as a rule it cannot read, which keeps the sandbox for the copy
+// back, and never as a blocked rule, which stops the sandbox with the folder's changes owed.
+func TestRunEnd_UnreadableGenerationRowKeepsTheFolderSandbox(t *testing.T) {
+	s, cs, _, run := giveUpFixture(t)
+	cs.dataOut = types.TransferAllowed
+	s.cfg.Store = genUnreadFolderStore{computerFolderStore: cs}
+	ctx := context.Background()
+	if got, err := s.folderBackEligible(ctx, run.ID); !errors.Is(err, errDataOutGenerationUnread) || got {
+		t.Errorf("folderBackEligible = %v, %v; want an error, not false", got, err)
+	}
+	if !s.endMayPass(ctx, run.ID) {
+		t.Error("endMayPass = false; want true: a rule that cannot be read counts as a pass that can happen")
+	}
+	if folder, unreadable := s.forcedFolder(ctx, run.ID); folder != nil || !unreadable {
+		t.Errorf("forcedFolder = %v, unreadable %v; want unreadable", folder, unreadable)
 	}
 }
 
