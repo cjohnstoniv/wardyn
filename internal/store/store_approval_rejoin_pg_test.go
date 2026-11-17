@@ -16,6 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// approval.Rejoin finds the stamp by a type assertion, so a signature that drifts from the interface would turn
+// every rejoin into a silent no-op instead of a compile error.
+var _ approval.RejoinStamper = store.PG{}
+
 // TestPG_ApprovalRejoinStampsOnlyTheRunsPendingRow: a raise that deduplicates
 // onto a PENDING row stamps last_rejoined_at (0193), which every approvals read
 // carries, so approval.Hold measures the re-entered hold from it. Another run,
