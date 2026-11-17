@@ -996,6 +996,13 @@ func (c *eventChannel) Close() error {
 	return nil
 }
 
+// recorded returns a copy of the events so far, taken under the lock.
+func (c *eventChannel) recorded() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.events)
+}
+
 // saw reports whether an event named e was recorded.
 func (c *eventChannel) saw(e string) bool {
 	c.mu.Lock()
@@ -1050,7 +1057,7 @@ func TestSSHGateway_ExecStderrTailBeforeExitStatus(t *testing.T) {
 			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, sendExit)
 
 			if !ch.saw("close") || (sendExit && !ch.saw("exit-status")) {
-				t.Fatalf("events = %q, want a close, and an exit-status when sendExit", ch.events)
+				t.Fatalf("events = %q, want a close, and an exit-status when sendExit", ch.recorded())
 			}
 			if got := ch.stderrBefore("close"); got != "tail line" {
 				t.Errorf("stderr before Close = %q, want %q", got, "tail line")

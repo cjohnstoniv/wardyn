@@ -231,7 +231,7 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
-			// Bytes a person sends are presence (run_pause.go); the count is read atomically, as Stdout may end mid-copy.
+			// The bytes a person sends are presence (run_pause.go); `in` counts the bytes written to the sandbox's stdin, and is read atomically, off this goroutine, because this copy may still be running when Stdout ends.
 			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
 			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
 			// Half-close only (Stdout/Stderr may still flow), and not on a cut: its Close ends stdin, and a half-close first could let the process end cleanly.
