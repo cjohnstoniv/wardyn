@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -568,17 +569,27 @@ func TestLocalToolApprovalCreateRejects(t *testing.T) {
 // relaying them is how a proxy leaks another connection's framing into its own.
 // relay has to drop two kinds: the fixed RFC 7230 §6.1 names (Keep-Alive,
 // Connection, …), and whatever the upstream NAMED in its own Connection header
-// (X-Hop) — hop-by-hop only because that header says so. Everything else
-// (X-Keep) and the status must arrive untouched.
+// (X-Hop, X-Other) — hop-by-hop only because that header says so. Everything
+// else (X-Keep) and the status must arrive untouched.
 //
-// The two rows differ ONLY in whether that Connection header also carries the
-// "close" token, and that turns out to decide whether the named-token arm can
-// work at all — see the connCloseEatsTokenList row.
+// The rows differ in how that Connection header names them. One that also
+// carries "close" is the case net/http's client hides from relay: it folds the
+// header into resp.Close and deletes it whole, so roundTripUpstream reads the
+// names from the raw head its transport's conn tap copied (stripFolded). A row
+// with answers writes the upstream's responses by hand, one per request, all on
+// one connection.
 func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
+	type answer struct {
+		raw        string // the response as written on the wire (hopAnswer)
+		wantXHop   string // "" == stripped
+		wantXOther string // "" == stripped
+	}
 	cases := []struct {
 		name       string
-		connection string
+		connection string // the Connection header Go's own server writes, for a row with no answers
 		wantXHop   string // "" == stripped
+		plain      bool   // the plain-HTTP forward, whose conns come from the transport's plain dial
+		answers    []answer
 	}{
 		{
 			// The arm relay itself implements: Connection reaches resp.Header, so
@@ -588,61 +599,142 @@ func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
 			wantXHop:   "",
 		},
 		{
-			// KNOWN GAP, pinned deliberately rather than left as folklore. When
-			// Connection carries "close", net/http's own readTransfer DELETES the
-			// whole Connection header from resp.Header (folding it into
-			// resp.Close) before relay ever runs. removeHopByHop therefore finds
-			// no token list to read, and X-Hop is relayed to the sandbox. Nothing
-			// sensitive rides it — it is a response header from an upstream this
-			// run was already allowed to reach — but the strip is NOT the
-			// unconditional one the code reads like. If relay ever learns to
-			// consult resp.Close (or strips before the transport folds it), flip
-			// this row to "" rather than deleting it. Tracked as #2685: a fix
-			// needs the raw response head, read below the transport.
+			// When Connection carries "close", net/http's own readTransfer DELETES
+			// the whole Connection header from resp.Header (folding it into
+			// resp.Close) before relay ever runs, so removeHopByHop finds no token
+			// list to read. roundTripUpstream's stripFolded reads X-Hop's name from
+			// the head the conn tap copied and drops it from resp.Header, before
+			// any relay tail copies it.
 			name:       "connection close eats the token list",
 			connection: "close, X-Hop",
-			wantXHop:   "1",
+			wantXHop:   "",
 		},
+		{
+			name:       "connection close on the plain-HTTP forward",
+			connection: "close, X-Hop",
+			wantXHop:   "",
+			plain:      true,
+		},
+		{
+			name: "close with two names on separate lines in mixed case",
+			answers: []answer{{
+				raw: hopAnswer("HTTP/1.1 202 Accepted", "connection: x-hop", "CONNECTION: Close, X-OTHER"),
+			}},
+		},
+		{
+			// net/http never folds an HTTP/1.0 Connection header, even with
+			// resp.Close set, so relay's own strip reads it.
+			name: "an HTTP/1.0 answer names a token",
+			answers: []answer{{
+				raw:        hopAnswer("HTTP/1.0 202 Accepted", "Connection: X-Hop"),
+				wantXOther: "1",
+			}},
+		},
+		{
+			// Each request arms the conn's tap afresh, so the second answer on a
+			// reused connection is read by its own head alone.
+			name: "a reused connection strips each answer's own names",
+			answers: []answer{
+				{raw: hopAnswer("HTTP/1.1 202 Accepted", "Connection: X-Other"), wantXHop: "1"},
+				{raw: hopAnswer("HTTP/1.1 202 Accepted", "Connection: close, X-Hop"), wantXOther: "1"},
+			},
+		},
+		{
+			// net/http reads past an interim 1xx head, and so does the tap: the
+			// names are the final head's, not the 103's.
+			name: "an interim head before the answer",
+			answers: []answer{{
+				raw: "HTTP/1.1 103 Early Hints\r\nConnection: X-Other\r\nLink: </a.css>; rel=preload\r\n\r\n" +
+					hopAnswer("HTTP/1.1 202 Accepted", "Connection: close, X-Hop"),
+				wantXOther: "1",
+			}},
+		},
+		{
+			// KNOWN CEILING, pinned: a head longer than the capture bound is not
+			// read for names, and is relayed as before rather than failed.
+			name: "a head over the capture bound is relayed as before",
+			answers: []answer{{
+				raw:        hopAnswer("HTTP/1.1 202 Accepted", "Connection: close, X-Hop", "X-Pad: "+strings.Repeat("a", defaultHeadCaptureLimit)),
+				wantXHop:   "1",
+				wantXOther: "1",
+			}},
+		},
+	}
+	check := func(t *testing.T, rec *httptest.ResponseRecorder, want answer) {
+		t.Helper()
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202 relayed verbatim (body %q)", rec.Code, rec.Body.String())
+		}
+		if rec.Body.String() != "relayed" {
+			t.Fatalf("body = %q, want the upstream body streamed through", rec.Body.String())
+		}
+		if got := rec.Header().Get("X-Keep"); got != "1" {
+			t.Fatalf("X-Keep = %q, want it relayed — only hop-by-hop headers may be dropped", got)
+		}
+		if got := rec.Header().Get("Connection"); got != "" {
+			t.Fatalf("Connection = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+		}
+		// A fixed-list name the transport does NOT fold away, so this arm is
+		// relay's own work in every row.
+		if got := rec.Header().Get("Keep-Alive"); got != "" {
+			t.Fatalf("Keep-Alive = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+		}
+		if got := rec.Header().Get("X-Hop"); got != want.wantXHop {
+			t.Fatalf("X-Hop = %q, want %q", got, want.wantXHop)
+		}
+		if got := rec.Header().Get("X-Other"); got != want.wantXOther {
+			t.Fatalf("X-Other = %q, want %q", got, want.wantXOther)
+		}
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			answers, raws := tc.answers, []string(nil)
+			for _, a := range answers {
+				raws = append(raws, a.raw)
+			}
+			if answers == nil {
+				answers = []answer{{wantXHop: tc.wantXHop}}
+			}
+			var handled atomic.Int32
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handled.Add(1)
+				if raws != nil {
+					writeHopAnswers(t, w, r, raws)
+					return
+				}
 				w.Header().Set("Connection", tc.connection)
 				w.Header().Set("X-Hop", "1")
 				w.Header().Set("Keep-Alive", "timeout=5")
 				w.Header().Set("X-Keep", "1")
 				w.WriteHeader(http.StatusAccepted)
 				_, _ = io.WriteString(w, "relayed")
-			}))
+			})
+			var up *httptest.Server
+			var p *Proxy
+			var req func() *http.Request
+			if tc.plain {
+				up = httptest.NewServer(h)
+				p, _ = newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}, upstreamAddr(up), nil, nil)
+				req = func() *http.Request { return mustProxyReq(t, http.MethodGet, "http://allowed.test/hop") }
+			} else {
+				up = httptest.NewTLSServer(h)
+				inj := staticInj(map[string]injectedHeader{
+					anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
+				})
+				p, _ = newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(up), inj, testInsecureTLSConfig)
+				req = func() *http.Request {
+					return mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{}`))
+				}
+			}
 			defer up.Close()
 
-			inj := staticInj(map[string]injectedHeader{
-				anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
-			})
-			p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(up), inj, testInsecureTLSConfig)
-
-			rec := httptest.NewRecorder()
-			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{}`)))
-
-			if rec.Code != http.StatusAccepted {
-				t.Fatalf("status = %d, want 202 relayed verbatim (body %q)", rec.Code, rec.Body.String())
-			}
-			if rec.Body.String() != "relayed" {
-				t.Fatalf("body = %q, want the upstream body streamed through", rec.Body.String())
-			}
-			if got := rec.Header().Get("X-Keep"); got != "1" {
-				t.Fatalf("X-Keep = %q, want it relayed — only hop-by-hop headers may be dropped", got)
-			}
-			if got := rec.Header().Get("Connection"); got != "" {
-				t.Fatalf("Connection = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
-			}
-			// A fixed-list name the transport does NOT fold away, so this arm is
-			// relay's own work in both rows.
-			if got := rec.Header().Get("Keep-Alive"); got != "" {
-				t.Fatalf("Keep-Alive = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
-			}
-			if got := rec.Header().Get("X-Hop"); got != tc.wantXHop {
-				t.Fatalf("X-Hop = %q, want %q (Connection: %q)", got, tc.wantXHop, tc.connection)
+			for i, want := range answers {
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, req())
+				if got := handled.Load(); got != 1 {
+					t.Fatalf("answer %d: the upstream was reached %d times, want once on one connection", i+1, got)
+				}
+				check(t, rec, want)
 			}
 		})
 	}

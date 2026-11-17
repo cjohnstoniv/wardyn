@@ -504,7 +504,7 @@ func newProxy(opts Options) *Proxy {
 		if err != nil {
 			return nil, &connectStageError{err}
 		}
-		return c, nil
+		return tapHeads(ctx, c), nil
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
