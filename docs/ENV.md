@@ -787,6 +787,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Deployment-wide only: no per-run request exists.
 - The wardyn-proxy pod always stays Guaranteed.
 - The Docker substrate ignores it.
+- Unset keeps the default: each request equals its limit.
+- The ratio multiplies each agent pod's limit, after the limit is settled: the policy's own value, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, then the governance ceiling's cap. Lowering the ceiling or the default lowers the request with it.
+- The request is rounded down to a whole milli-CPU or MiB, is at least 1, and is never above the limit. CPU and memory use the same ratio.
+- The sign-in sandbox is an ordinary run, so the ratio applies to its own limits (`WARDYN_HARNESS_LOGIN_CPU_MILLIS` / `_MEMORY_MIB`, default `500` / `512`) the same way.
+- The proxy sidecar's size (`WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`) is not scaled: it always counts in full against the node.
+- Worked example: limits of `2000` milli-CPU and `4096` MiB with a ratio of `0.5` give requests of `1000` and `2048`. A node with 16000 milli-CPU free fits 8 such agent pods by CPU where equal requests fit 4, before the proxy's `500` / `256` per run is counted.
+- The price is overcommit: if every pod runs at its limit, the node holds half what they asked for, so CPU is throttled and memory pressure evicts or OOM-kills. Start near `1` and lower it only while real usage sits well below limits.
 
 ### `WARDYN_HARNESS_LOGIN_CPU_MILLIS`
 
