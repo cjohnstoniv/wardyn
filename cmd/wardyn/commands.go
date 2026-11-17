@@ -395,7 +395,7 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 					// Surface WHY, not just the exit code — a dispatch/image-pull
 					// failure has no agent exit and would otherwise read as an
 					// opaque "FAILED (agent exit code 1)".
-					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
+					if reason := runFailureReason(waitCtx, c, run); reason != "" {
 						fmt.Fprintf(errW, "  reason: %s\n", reason)
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
@@ -477,8 +477,15 @@ func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
 	return code
 }
 
-// runFailureReason surfaces WHY a FAILED run failed. The dispatch path records
-// failures as audit events with outcome "failure" and a human string in
+// runFailureReason surfaces WHY a FAILED run failed. The cause is the run's own
+// failure_hint, a sentence the platform wrote for the operator ("the sandbox could
+// not be created: pull ...: not found"). The audit row only names the step that
+// failed ("Create sandbox"), so the hint is read first and printed without an
+// action prefix: it is already a whole sentence. A FAILED state commits just
+// before the hint is stamped, so a run polled with no hint is re-read once.
+// With still no hint (an older server, or a failure the platform wrote no
+// sentence for) the audit rows are scanned as before: the dispatch path records
+// failures as outcome "failure" with a string in
 // data.error / data.reason (internal/api/runs_dispatch.go) — a reason that is
 // otherwise buried in `wardyn audit <id> --json` and invisible on run get/--wait.
 // A governance product should not hide a FAILED run's own reason from its default
@@ -490,7 +497,16 @@ func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
 // ?outcome=failure for agentExitCode's reason: an unfiltered per-run read is
 // capped at 1000 events, so on a chatty run the dispatch error that explains an
 // otherwise opaque "FAILED" was simply not on the page.
-func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
+func runFailureReason(ctx context.Context, c *sdk.Client, run types.AgentRun) string {
+	if run.FailureHint == "" {
+		if again, err := c.GetRun(ctx, run.ID); err == nil {
+			run = again
+		}
+	}
+	if run.FailureHint != "" {
+		return run.FailureHint
+	}
+	runID := run.ID
 	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{Outcome: "failure"})
 	if err != nil {
 		return ""

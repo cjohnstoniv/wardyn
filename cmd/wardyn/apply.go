@@ -265,7 +265,7 @@ func waitForRunRunning(ctx context.Context, errW io.Writer, c *sdk.Client, runID
 				if sentence := queueEndSentence(run); sentence != "" {
 					msg += ": " + sentence
 				} else if run.State == types.RunFailed {
-					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
+					if reason := runFailureReason(waitCtx, c, run); reason != "" {
 						msg += ": " + reason
 					}
 				}
