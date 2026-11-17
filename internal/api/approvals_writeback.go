@@ -40,10 +40,6 @@ const (
 	writebackAuditStoreError       = "Store error"
 )
 
-// writebackAuditHostRefused is the detail of a requirement the proxy would refuse in every request: the host a sandbox
-// chose is in a spelling proxy.ValidConfigHost rejects, and the log keeps the host's error.
-const writebackAuditHostRefused = "requested_scope host is a spelling the proxy refuses"
-
 // writebackMergeAuditDetail is the failure row's detail for a requirements write the store failed.
 func writebackMergeAuditDetail(err error) string {
 	switch {
@@ -314,11 +310,9 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	// Never learned: a requirement row in a spelling the proxy refuses in every request would stop each
 	// run of the workspace at load. Only a sidecar that lies, or one older than step 0, raises one.
 	if err := proxy.ValidConfigHost(host); err != nil {
-		slog.WarnContext(ctx, "wardynd: a verify approval's requested_scope host is a spelling the proxy refuses; no requirement was written",
-			slog.String("run_id", ap.RunID.String()), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
 			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
-				"source": "verify:" + ap.RunID.String(), "detail": writebackAuditHostRefused,
+				"source": "verify:" + ap.RunID.String(), "detail": err.Error(), // the proxy's own worded refusal
 			})))
 		return
 	}
