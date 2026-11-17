@@ -595,6 +595,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		if p.sink != nil {
 			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
 			denied.GatewayCallID, denied.Scan = callID, scan
+			stampGatewayRequestID(&denied, resp)
 			p.sink.emit(denied)
 		}
 		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
@@ -605,6 +606,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
 	}
 	allow.GatewayCallID, allow.Cause, allow.Scan = callID, mcpToolCause(body), scan
+	stampGatewayRequestID(&allow, resp)
 	p.emitDialledAllow(allow, s.host)
 	if listActive && !x.filterToolLists(w, resp, callID) {
 		return

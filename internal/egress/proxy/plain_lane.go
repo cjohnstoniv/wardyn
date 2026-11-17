@@ -210,6 +210,7 @@ func (p *Proxy) forwardPlainGatewayRoute(w http.ResponseWriter, r, outReq *http.
 	defer func() { _ = resp.Body.Close() }()
 	if log != nil {
 		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
+		stampGatewayRequestID(log, resp)
 		p.emitDialledAllow(*log, host)
 	}
 	p.relayGatewayRoute(w, r, host, port, resp, ruleSource, outReq.Header.Get(gatewayIdentityHeader), callID)
