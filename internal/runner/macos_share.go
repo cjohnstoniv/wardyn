@@ -4,7 +4,9 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 )
@@ -99,6 +101,32 @@ func macProtectedOverlap(real string, protected []string) error {
 		case foldWithin(real, canon):
 			return fmt.Errorf("mount source %q may not be shared into a macOS VM: it contains the protected path %q", real, canon)
 		}
+	}
+	return nil
+}
+
+// CheckBindOutsideMacVMDir refuses a container bind of src when src is, sits under, or contains vmDir, the
+// runner's macOS VM directory: it holds every run's disk, the guest agent's signing key and the Mac's
+// inspection CA key. Both sides are resolved through their symlinks (resolveEntry), so a VM directory
+// linked to another volume is held by where it is, not by what it is called, and a parent of it, such as
+// the home, is refused as well. A VM directory that does not exist on this machine refuses nothing.
+func CheckBindOutsideMacVMDir(src, vmDir string) error {
+	if vmDir == "" {
+		return nil
+	}
+	canon, err := filepath.EvalSymlinks(vmDir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		canon = resolveEntry(vmDir)
+	}
+	real := resolveEntry(src)
+	switch {
+	case foldWithin(canon, real):
+		return fmt.Errorf("mount source %q is the macOS VM directory %q or inside it, and that directory holds every run's disk and keys", real, canon)
+	case foldWithin(real, canon):
+		return fmt.Errorf("mount source %q contains the macOS VM directory %q, which holds every run's disk and keys", real, canon)
 	}
 	return nil
 }

@@ -788,3 +788,30 @@ func TestDeniedUserSegment_MacOSVMDirectory(t *testing.T) {
 		}
 	}
 }
+
+// A folder pass names a path from below the folder it opened, so the folder's own names must stay in front
+// of it: a pair that spans the boundary (Library/Keychains, .config/gh) is still a credential folder.
+func TestDeniedUserSegmentUnder(t *testing.T) {
+	for _, c := range []struct {
+		dir, rel string
+		want     string
+	}{
+		{"/Users/a/Library", "Keychains/login.keychain-db", "Library/Keychains"}, // a pass of ~/Library
+		{"/Users/a/Library/Keychains", "login.keychain-db", "Library/Keychains"},
+		{"/Users/a/LIBRARY", "keychains/x", "LIBRARY/keychains"},
+		{"/Users/a/proj", "Library/Keychains/x", "Library/Keychains"},
+		{"/Users/a/.config", "gh/hosts.yml", ".config/gh"},
+		{"/Users/a/.config", "gcloud/credentials.db", ".config/gcloud"},
+		{"/Users/a/.git", "config", ".git/config"},
+		{"/Users/a/proj", ".ssh/id_ed25519", ".ssh"},
+		{"/Users/a", "Library/Keychains", "Library/Keychains"},
+		{"/Users/a/Library", "Preferences/x.plist", ""}, // an unrelated sibling stays allowed
+		{"/Users/a/.config", "editor/settings.json", ""},
+		{"/Users/a/proj", "Library/Preferences/x", ""},
+		{"/Users/a/proj", "main.go", ""},
+	} {
+		if got := DeniedUserSegmentUnder(c.dir, c.rel); !strings.EqualFold(got, c.want) {
+			t.Errorf("DeniedUserSegmentUnder(%q, %q) = %q, want %q", c.dir, c.rel, got, c.want)
+		}
+	}
+}

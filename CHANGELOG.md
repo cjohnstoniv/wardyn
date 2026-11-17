@@ -45,7 +45,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- A member's workspace mount and a folder pass refuse the macOS VM directory, `macos-vm.noindex`, and anything under it, as they refuse a credential folder. It holds every run's disk and the guest agent's and the inspection CA's keys. A pass of the folder above it leaves it out.
+- A member's workspace mount and a folder pass refuse the macOS VM directory, `macos-vm.noindex`, and anything under it, as they refuse a credential folder. It holds every run's disk and the guest agent's and the inspection CA's keys. A pass of the folder above it leaves it out. A container bind, or a share drive's bind, also refuses a folder that is, is under or contains that directory, such as the home or `~/Library`, by where it really is: a VM directory linked to another volume is held there too.
+- A folder pass of a folder such as `~/Library` or `~/.config` now leaves out `Keychains`, `gh` and `gcloud` under it, as a deeper pass already did.
 - The send record of an MCP call refuses an approval whose operation key starts `call:` but is not the key made from that call (`404`).
 - The audit feed no longer serves a workload's digest, launch policy digest or pin below a super admin; an offline receipt verifier older than this release refuses a receipt that holds such a withheld workload row, so verify new receipts with this release's verifier.
 - The control plane refuses a raised MCP call whose operation key starts `call:` but is not the key made from that call (`400` `mcp_call_scope_invalid`).
