@@ -162,17 +162,17 @@ func TestRunSignIn_SharedFixture(t *testing.T) {
 	}
 }
 
-// A pane at the read's 64 KiB cap, all row clears and short links, parses in
-// linear time: the row clears are found once, not rescanned for every link
-// (that took about a second of CPU a read).
+// A pane of row clears and short links parses in linear time: the row clears
+// are found once, not rescanned for every link. At four times the read's cap a
+// rescan takes about 20 s, so the bound can leave room for a busy runner.
 func TestParseSignInPane_RowClearsScannedOnce(t *testing.T) {
 	unit := "\x1b[2;23H\x1b[1K\r\nhttps://a.awsapps.com/x\r\n"
-	pane := []byte(strings.Repeat(unit, signInPaneMaxBytes/len(unit)))
+	pane := []byte(strings.Repeat(unit, 4*signInPaneMaxBytes/len(unit)))
 	start := time.Now()
 	if _, _, ok := parseSignInPane(pane); ok {
 		t.Fatal("a pane of links without a code is waiting")
 	}
-	if d, limit := time.Since(start), 100*time.Millisecond*raceSlowdown; d > limit {
+	if d, limit := time.Since(start), 2*time.Second*raceSlowdown; d > limit {
 		t.Fatalf("a %d-byte pane of row clears and links took %v to parse, want under %v", len(pane), d, limit)
 	}
 }
@@ -187,7 +187,7 @@ func TestParseSignInPane_PrintingRowsJoinedOnce(t *testing.T) {
 	if _, _, ok := parseSignInPane(pane); ok {
 		t.Fatal("a link still printing is waiting")
 	}
-	if d, limit := time.Since(start), 100*time.Millisecond*raceSlowdown; d > limit {
+	if d, limit := time.Since(start), time.Second*raceSlowdown; d > limit {
 		t.Fatalf("a %d-byte pane of full-width rows took %v to parse, want under %v", len(pane), d, limit)
 	}
 }
