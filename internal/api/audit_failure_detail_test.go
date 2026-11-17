@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 // A failed run.revoke row names each failing step and its reason beside the per-step keys, and the
 // keys stay (additive).
 func TestRevokeRunCascade_FailureRowNamesTheStepAndReason(t *testing.T) {
+	logs := captureSlog(t)
 	srv, _, run := dispatchWithProxyConfigStore(t, &killRaceRunner{fakeRunner: &fakeRunner{}})
 	audit := &recRecorder{}
 	srv.cfg.Audit = audit
@@ -32,9 +34,13 @@ func TestRevokeRunCascade_FailureRowNamesTheStepAndReason(t *testing.T) {
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
 		t.Fatal(err)
 	}
-	want := []map[string]string{{"step": "broker_revoke", "reason": "injected: the broker could not revoke"}}
+	want := []map[string]string{{"step": "broker_revoke", "reason": auditStepRevokeBroker}}
 	if d.BrokerError == "" || !reflect.DeepEqual(d.Failed, want) {
+		// The reason is the step: the broker's own error is in the server log.
 		t.Errorf("run.revoke data = %s; want broker_error kept and failed_steps %v", ev.Data, want)
+	}
+	if !strings.Contains(logs.String(), "injected: the broker could not revoke") {
+		t.Errorf("log = %q, want the broker's error beside the row's step", logs.String())
 	}
 }
 

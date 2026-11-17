@@ -227,7 +227,7 @@ func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun
 			slog.String("run_id", run.ID.String()), slog.Any("err", caErr))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not provision the per-run TLS-interception CA")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStepMITMCA})))
 		return "", "", false
 	}
 	certPEM, keyPEM = string(pemCert), string(pemKey)
@@ -288,7 +288,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the Bedrock bearer credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStepBedrockInjectGrant})))
 		return injections, nil, false
 	}
 	if rule, derr := injectionRuleFromScope(beScope); derr == nil {

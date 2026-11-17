@@ -89,7 +89,7 @@ func (s *Server) untakenWorkloadLaunch(r *http.Request, ws store.WorkloadStore, 
 		return none, nil
 	case errors.Is(err, store.ErrWorkloadBindingGone):
 		s.endUntakenWorkloadRun(r, ws, runID, claimed, workloadKillBindingDeleted)
-		return s.refuseWorkloadLaunch(r, ws, claimed, reasonWorkloadBindingInactive, workloadBindingGoneMsg)
+		return s.refuseWorkloadLaunch(r, ws, claimed, reasonWorkloadBindingInactive, workloadBindingGoneMsg, nil)
 	}
 	s.endUntakenWorkloadRun(r, ws, runID, claimed, workloadKillReplaced)
 	if errors.Is(err, store.ErrWorkloadSuperseded) {

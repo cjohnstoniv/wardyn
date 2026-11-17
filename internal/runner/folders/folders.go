@@ -177,9 +177,12 @@ func (s *Server) closeRoots() {
 	}
 }
 
-// credentialPath is Options.Credential for every pass and survey: a path inside the chosen folder
-// that is or goes through a credential folder (runner.DeniedUserSegment) never crosses either way.
-func credentialPath(rel string) bool { return runner.DeniedUserSegment(rel) != "" }
+// credentialUnder is Options.Credential for every pass and survey of dir: a path inside the chosen folder
+// that is or goes through a credential folder never crosses either way. It is judged with dir in front, so
+// a folder such as ~/Library or ~/.config leaves out Keychains, gh and gcloud under it, as a deeper pass does.
+func credentialUnder(dir string) func(rel string) bool {
+	return func(rel string) bool { return runner.DeniedUserSegmentUnder(dir, rel) != "" }
+}
 
 // Roots is the resolved roots.
 func (s *Server) Roots() []string { return slices.Clone(s.roots) }
@@ -299,7 +302,7 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 		out.Folders = append(out.Folders, f)
 	}
 	if args.Survey {
-		sv, err := foldersync.Survey(root, args.Deny, credentialPath)
+		sv, err := foldersync.Survey(root, args.Deny, credentialUnder(dir))
 		if err != nil {
 			return runnerwire.FolderList{}, runnerwire.Refuse("this folder cannot be sent: %s", foldersync.Shown(err.Error()))
 		}
@@ -475,7 +478,7 @@ func (s *Server) run(stream duplex, root *os.Root, remote string, st *foldersync
 	}
 	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, StateRoot: filepath.Dir(s.stateDir), Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
-		Credential: credentialPath, RunnerPass: true, RunTag: args.RunID.String()[:8],
+		Credential: credentialUnder(args.Path), RunnerPass: true, RunTag: args.RunID.String()[:8],
 	}}
 	// A pass cut short (its stream closed) still reports what it finished and saved in its state.
 	rep, err := sy.Pass(ctx)

@@ -17,25 +17,33 @@ import (
 )
 
 // mitmSet is what decides whether a CONNECT is TLS-terminated: whether the proxy has a CA, whether
-// the built-in LLM hosts are intended for MITM, the compiled host and port tables, and the hosts a
-// via_org route covers.
+// the built-in LLM hosts are intended for MITM, the compiled host and port tables, the hosts a
+// via_org route covers, and the hosts the policy's host rule sets name.
 type mitmSet struct {
 	ca     bool
 	llm    bool
 	hosts  map[string]bool
 	ports  map[string]int
 	viaOrg map[string]bool
+	rules  map[string]bool
 }
 
 // mitmSetOf compiles the set the proxy built from this config: the tables newProxy builds
-// (buildMITMTables) and the via_org hosts.
+// (buildMITMTables), the via_org hosts, and each host a host rule set names, as Policy.namesRuleHost
+// reads them. A host only a sealed outer set names has no interception entry, so it is any port.
 func (c *Config) mitmSetOf() mitmSet {
 	t := buildMITMTables(c.MITMHosts, canonicalPATGrants(c.PATGrants), c.GitHubAPI, c.AzureARM, c.AWSSigV4, c.KubeAPI)
 	viaOrg := make(map[string]bool, len(c.ViaOrgRoutes))
 	for _, r := range c.ViaOrgRoutes {
 		viaOrg[hostKey(r.Host)] = true
 	}
-	return mitmSet{ca: c.MITMCACertPEM != "" && c.MITMCAKeyPEM != "", llm: c.MITMLLM, hosts: t.hosts, ports: t.ports, viaOrg: viaOrg}
+	rules := map[string]bool{}
+	for _, s := range c.Policy.HostRules {
+		for _, r := range s.Rules {
+			rules[r.Host] = true
+		}
+	}
+	return mitmSet{ca: c.MITMCACertPEM != "" && c.MITMCAKeyPEM != "", llm: c.MITMLLM, hosts: t.hosts, ports: t.ports, viaOrg: viaOrg, rules: rules}
 }
 
 func (m mitmSet) portAllowed(host string, port int) bool {
@@ -45,8 +53,8 @@ func (m mitmSet) portAllowed(host string, port int) bool {
 
 // terminates is the rule of the three places the proxy terminates TLS: a via_org host on any port
 // (serveViaOrg), and handleConnect's two branches, each needing the port the entry names: a
-// compiled host (a built-in LLM name is not one there) or a built-in LLM host with MITMLLM on. All
-// need a CA.
+// compiled host (a built-in LLM name is not one there) or a host rule host, or a built-in LLM host
+// with MITMLLM on. All need a CA.
 func (m mitmSet) terminates(host string, port int) bool {
 	h := hostKey(host)
 	if !m.ca {
@@ -64,6 +72,9 @@ func (m mitmSet) terminates(host string, port int) bool {
 // terminatesHost is terminates without the port: whether the host is terminated on the port its
 // entry names (any port when the entry names none).
 func (m mitmSet) terminatesHost(h string) bool {
+	if m.rules[h] {
+		return true // handleConnect opens a rule host before its LLM branch
+	}
 	if h == anthropicHost || h == openaiHost {
 		return m.llm
 	}
@@ -110,6 +121,9 @@ func (m mitmSet) terminated() []terminatedHost {
 			add(h)
 		}
 	}
+	for h := range m.rules {
+		add(h)
+	}
 	for _, h := range []string{anthropicHost, openaiHost} {
 		if m.llm {
 			add(h)
@@ -121,14 +135,15 @@ func (m mitmSet) terminated() []terminatedHost {
 
 // TerminatesTLS reports whether a run with this config has its proxy open a CONNECT to host:port
 // (terminate its TLS) rather than tunnel it unread. It is the decision of the three places the proxy
-// terminates (handleConnect's corp host and built-in LLM host branches, and a via_org route) over the
+// terminates (handleConnect's corp or rule host and built-in LLM host branches, and a via_org route) over the
 // tables newProxy compiles, pinned against them by TestTerminatesTLSMatchesHandleConnect.
 func (c *Config) TerminatesTLS(host string, port int) bool {
 	return c.mitmSetOf().terminates(host, port)
 }
 
 // TerminatedHosts lists every host a run with this config has its proxy terminate, sorted: host when it
-// is terminated on any port (a via_org host, or a compiled host with no port), host:port when
+// is terminated on any port (a via_org host, a compiled host with no port, or a rule host only a sealed
+// outer set names), host:port when
 // a compiled host is scoped to one ([host]:port for an IPv6 literal). It is empty without a CA.
 func (c *Config) TerminatedHosts() []string {
 	out := []string{}
@@ -214,6 +229,9 @@ func (c *Config) InspectsEntry(entry string) bool {
 		candidates = append(candidates, h)
 	}
 	for h := range m.viaOrg {
+		candidates = append(candidates, h)
+	}
+	for h := range m.rules {
 		candidates = append(candidates, h)
 	}
 	candidates = append(candidates, anthropicHost, openaiHost)

@@ -94,7 +94,7 @@ export const APPROVAL_SCOPE_LABEL: Record<ApprovalScope, string> = {
 // re-decides per request. "Connection" is true for the first and understates
 // the second, which is the safe direction.
 export const APPROVAL_SCOPE_HINT: Record<ApprovalScope, string> = {
-  once: "This one connection. The next attempt asks again.",
+  once: "This one connection, or one retry within 60 seconds if it was HTTPS and got nothing back. Then it asks again.",
   run: "Every attempt until this run ends. (default)",
   until: "Every attempt until a time you pick, or this run ends.",
   always: "Also saves it to the workspace — future runs start with it.",

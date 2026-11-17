@@ -15,6 +15,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// workloadApplyOwnerMsg is the refusal of an apply or preview whose ?owner= names anyone but the caller.
+const workloadApplyOwnerMsg = "A workload is applied as its caller's own, so ?owner= may name only the caller."
+
+// refuseForeignApplyOwner answers 400 when ?owner= names anyone but the caller: an apply, and so its preview, is
+// always the caller's own, so another owner is refused, not ignored. It reports whether it answered.
+func refuseForeignApplyOwner(w http.ResponseWriter, r *http.Request) bool {
+	o := r.URL.Query().Get("owner")
+	if o == "" || o == principalFromRequest(r) {
+		return false
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonWorkloadInvalid, workloadApplyOwnerMsg)
+	return true
+}
+
 // workloadPutRefusal is the answer PutWorkload's refusal err gets: the status, reason and sentence the PUT
 // writes. ok is false when err is not one of the store's refusals.
 func workloadPutRefusal(err error) (ref client.WorkloadPreviewRefusal, ok bool) {
@@ -39,7 +53,7 @@ func workloadDocumentFor(name, description, runIn, restartKey string, intent jso
 
 // handlePreviewWorkload is POST /workloads/{name}/preview: what the same body to PUT /workloads/{name}
 // would do for the caller. It takes the PUT's own steps and stops before the first write: the strict decode
-// and normalizeWorkload, the caller as the owner (there is no ?owner=), PlanWorkloadPut for the store's
+// and normalizeWorkload, the caller as the owner (a ?owner= naming anyone else is refused, as on PUT), PlanWorkloadPut for the store's
 // answer, and, when a launch is owed, the preflight of the request the launch would make
 // (workloadCreateRequest). It stores nothing and claims no launch. The one write it can cause is
 // preflight's own: a refusal at a gate that audits leaves the dry-run-marked row a refused preflight leaves.
@@ -51,6 +65,9 @@ func workloadDocumentFor(name, description, runIn, restartKey string, intent jso
 func (s *Server) handlePreviewWorkload(w http.ResponseWriter, r *http.Request) {
 	ws, ok := s.workloadStore(w)
 	if !ok {
+		return
+	}
+	if refuseForeignApplyOwner(w, r) {
 		return
 	}
 	var req client.WorkloadApplyRequest

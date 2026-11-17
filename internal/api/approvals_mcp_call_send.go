@@ -129,8 +129,10 @@ func (s *Server) handleInternalMCPCallSent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	sc, shaped := mcpCallScopeShaped(ap.RequestedScope)
-	if ap.RunID != claims.RunID || ap.State != types.ApprovalApproved || !isMCPCallRow(ap) || !shaped || !types.ValidOperationKey(sc.OperationKey) {
-		// Do not confirm another run's approval, or one with no send to record.
+	if ap.RunID != claims.RunID || ap.State != types.ApprovalApproved || !isMCPCallRow(ap) || !shaped || !types.ValidOperationKey(sc.OperationKey) ||
+		!types.DerivedOperationKeyFits(sc.OperationKey, sc.CallSHA256) {
+		// Do not confirm another run's approval, or one with no send to record: no key, or a key of the made form
+		// that is not this call's own (a row stored before the raise refused the form may hold one).
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}

@@ -949,7 +949,9 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 		// Dial failed: report a DENY (not the earlier-computed allow) so a failed
 		// tunnel is never logged as allowed egress (E3).
 		if log != nil {
-			p.sink.emit(p.denyDialFailed("builtin:dial-failed", log.Request, host, err, nil))
+			dl := p.denyDialFailed("builtin:dial-failed", log.Request, host, err, nil)
+			p.refundOnceUse(&dl, log, host) // before the 502, so the sandbox's retry finds the grant
+			p.sink.emit(dl)
 		}
 		p.httpError(w, "upstream dial failed", err, http.StatusBadGateway)
 		return

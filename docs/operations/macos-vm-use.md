@@ -295,17 +295,26 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | Desktop | One fixed 1920 x 1080 display. A `view only` desktop ([Preparing the base image](macos-vm-base-image.md#preparing-the-base-image)) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
-| Request rules | A run whose policy has [`host_rules`](../POLICIES.md#host_rules--hostruleset) is refused at create with `422` `host_rules_need_inspected_vm`: host rules are not yet judged on a VM guest's flows |
 
 ### Apps that use only the system trust store
 
 Before a run starts, Wardyn asks the guest to trust the run's proxy certificate in its System keychain, for TLS only. macOS 26 refuses this without a person ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)). The run goes on, and its `run.dispatch` audit row says `keychain_trust` `not_trusted`, reason `refused`. The table says which apps that affects.
 
+With `macos_vm_inspection_ca` on and the run's base trusting this Mac's CA, the proxy's certificates for the run's Inspected hosts chain to that CA. Wardyn then asks the guest nothing, writes no such row, and the run's `vm_machine` says `inspection_ca` `trusted`.
+
 | App or tool | Host marked Inspected | Host marked Tunnel only | Tunnel only, behind a TLS-inspecting proxy |
 |---|---|---|---|
 | Uses only the system trust store: Safari, Electron apps, and Go or Swift tools with no CA file of their own | Fails TLS | Works | Fails TLS until your organisation's root is trusted |
+| Uses only the system trust store, with `macos_vm_inspection_ca` on and the base trusting this Mac's CA | Works, within the limits below | Works | Fails TLS until your organisation's root is trusted |
 | Reads a CA variable: Node, Python, git, curl and the AWS CLI | Works | Works | Works, with your organisation's root in the [runner's CA bundle](hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner) |
 
+- The chain lasts 7 days, or to the run's maximum lifetime when that comes sooner. A run that outlives it fails TLS to its Inspected hosts again in system-trust apps; CA-bundle tools are unaffected.
+- `trusted` is what the guest answered at the base's last tools update or `edit-base`, not a check when the run starts.
+- A kept machine made before its base trusted the CA does not gain the trust on macOS 26. After `edit-base`, start it with `--resume-machine <id|name> --fresh`.
+- A host only the organisation's sealed host rules name is Inspected, and is among the chain's names as the run's own Inspected hosts are. Where one Inspected host sits under another (`example.com` and `api.example.com`), the outer host's other subdomains are also among them.
+- A host whose name is not plain ASCII letters, digits, `-` and `_` in dot-separated labels, such as an internationalised name as written in the policy, is not among the chain's names either. So system-trust apps fail TLS to it.
+- A host given as an IP address is not among the chain's names: the chain permits no address, so system-trust apps fail TLS to it.
+- `inspection_ca` reads `not_trusted` on a base that does not trust the CA yet, and `expired` once the CA's five years have passed. An expired CA signs nothing: rotate it.
 - **The CA variables.** `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` are set for every process a run starts.
 - **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](macos-vm-base-image.md#the-organisation-ca)). That reaches a Tunnel only host.
 - **The run's proxy certificate.** Trusting it by hand can't help: the certificate is new for each run.

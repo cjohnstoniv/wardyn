@@ -22,9 +22,9 @@ func TestDispatchFailureReason_NamesOnlyTheReasonCode(t *testing.T) {
 		want   string
 	}{
 		"code and error":   {[]types.AuditEvent{fail("run.create", `{"error":"`+raw+`","reason":"sandbox_create"}`)}, "(sandbox_create)"},
-		"error only":       {[]types.AuditEvent{fail("run.dispatch", `{"error":"list the run's grants: `+raw+`"}`)}, "audit events carry the detail"},
-		"note only":        {[]types.AuditEvent{fail("run.create", `{"note":"`+raw+`"}`)}, "audit events carry the detail"},
-		"free-text reason": {[]types.AuditEvent{fail("run.create", `{"reason":"`+raw+`"}`)}, "audit events carry the detail"},
+		"error only":       {[]types.AuditEvent{fail("run.dispatch", `{"error":"list the run's grants: `+raw+`"}`)}, "audit events name the failed step"},
+		"note only":        {[]types.AuditEvent{fail("run.create", `{"note":"`+raw+`"}`)}, "audit events name the failed step"},
+		"free-text reason": {[]types.AuditEvent{fail("run.create", `{"reason":"`+raw+`"}`)}, "audit events name the failed step"},
 		"last code wins": {[]types.AuditEvent{
 			fail("run.create", `{"reason":"image_arch"}`), fail("run.dispatch", `{"error":"`+raw+`","reason":"placement_denied"}`),
 		}, "(placement_denied)"},

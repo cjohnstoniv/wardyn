@@ -296,7 +296,7 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 	}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStep(ctx, auditStepSaveRecording, err, slog.String("run_id", runID.String()))
 	}
 	accepted := s.recordStreamAuditDurably(ctx, c.run.SandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd",
 		"session.recording.write", key, outcome, mustJSON(data)))

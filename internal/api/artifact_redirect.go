@@ -383,7 +383,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}, true); gerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "failure", mustJSON(map[string]any{
-					"ecosystem": r.Ecosystem, "host": host, "error": gerr.Error(),
+					"ecosystem": r.Ecosystem, "host": host, "error": auditStep(ctx, auditStepRecordGrant, gerr, slog.String("run_id", run.ID.String())),
 				})))
 			continue
 		}

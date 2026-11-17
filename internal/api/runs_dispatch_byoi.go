@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,8 +57,9 @@ func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, re
 const byoiSelftestTimeout = 2 * time.Minute
 
 // byoiSelftest of a run on a runner is the runner's own selftest call
-// (runner.Selftester), under execution's generation, which it does not spend.
-func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, execution runnerExecution, failClosed bool) bool {
+// (runner.Selftester), under execution's generation, which it does not spend. refusal is the runner's refusal
+// sentence when it is too old to run one (selftestUnsupported), else "".
+func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, execution runnerExecution, failClosed bool) (passed bool, refusal string) {
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
 	if run.RunnerID != nil {
@@ -66,7 +69,7 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 		if !failClosed && execution.operation == "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 				run.ID.String(), "success", mustJSON(map[string]any{"ran": false, "detail": "not run: interactive"})))
-			return false
+			return false, ""
 		}
 		st, ok := s.cfg.Runner.(runner.Selftester)
 		if !ok {
@@ -78,23 +81,26 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 	if _, xerr := s.cfg.Runner.Exec(ctx, ref, runner.SelftestArgv()); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": xerr.Error(), "fail_closed": failClosed,
+				"error": auditStep(ctx, auditStepSelftestExec, xerr, slog.String("run_id", run.ID.String())), "fail_closed": failClosed,
 				"detail": "BYOI image could not run agent-run --selftest (missing shell or harness binary?)",
 			})))
-		return false
+		return false, ""
 	}
 	code, werr := s.cfg.Runner.Wait(ctx, ref)
 	return s.byoiSelftestExit(ctx, run, code, werr, failClosed)
 }
 
-// byoiSelftestExit audits a selftest's outcome and reports whether it passed.
-func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code int, werr error, failClosed bool) bool {
+// byoiSelftestExit audits a selftest's outcome and reports whether it passed, and a runner's refusal of it.
+func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code int, werr error, failClosed bool) (bool, string) {
 	if werr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": werr.Error(), "fail_closed": failClosed,
+				"error": selftestWaitError(ctx, run.ID.String(), werr), "fail_closed": failClosed,
 			})))
-		return false
+		if selftestUnsupported(werr) {
+			return false, remote.SelftestUnsupportedMsg
+		}
+		return false, ""
 	}
 	if code != 0 {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
@@ -102,9 +108,18 @@ func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code 
 				"exit_code": code, "fail_closed": failClosed,
 				"detail": "BYOI image failed the agent-run contract selftest",
 			})))
-		return false
+		return false, ""
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 		run.ID.String(), "success", mustJSON(map[string]any{"exit_code": 0})))
-	return true
+	return true, ""
+}
+
+// selftestWaitError is a failed selftest's audit `error`: a too-old runner's own sentence, else the step.
+func selftestWaitError(ctx context.Context, runID string, werr error) string {
+	step := auditStep(ctx, auditStepSelftestWait, werr, slog.String("run_id", runID))
+	if selftestUnsupported(werr) {
+		return remote.SelftestUnsupportedMsg
+	}
+	return step
 }

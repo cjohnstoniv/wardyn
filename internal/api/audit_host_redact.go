@@ -57,6 +57,12 @@ var auditHostViews = map[string]auditHostView{
 	"policy.delete":         {mounts: [][]string{{"before"}}},
 	"preset.create":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
 	"preset.update":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
+	// A workload's digest, launch policy digest or pin: GET /workloads/{name} keeps them to the full tier (workloadOut),
+	// since a digest of an intent whose host axis is withheld lets a reader test guesses at it.
+	"workload.apply":          {withhold: []string{"digest"}},
+	"workload.policy_pin.set": {withhold: []string{"policy_pin", "previous"}},
+	"workload.launch_refused": {withhold: []string{"policy_pin", "policy_digest"}},
+	"workload.delete":         {withhold: []string{"policy_pin"}},
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the

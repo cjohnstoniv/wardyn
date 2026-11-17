@@ -38,6 +38,10 @@ const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandb
 // share one into the guest.
 const VMNoDriveShare = "This runner's version can't attach drives to a Linux VM. Update the runner, or run without drives."
 
+// SelftestUnsupportedMsg is the refusal of a selftest by a runner too old to run one. The server keeps this
+// sentence in the selftest's audit row and the run's failure hint, since it says what to do.
+const SelftestUnsupportedMsg = "this runner does not support the BYOI selftest; upgrade it to run BYOI images"
+
 // MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
 // sentence names it.
 func MacOSVMNotOffered(runner string) string {
@@ -415,7 +419,7 @@ func (s *Substrate) Selftest(ctx context.Context, ref string) (int, error) {
 		return 0, err
 	}
 	if c, ok := s.Caps(); !ok || !c.BYOISelftest {
-		return 0, runnerwire.Refuse("this runner does not support the BYOI selftest; upgrade it to run BYOI images")
+		return 0, runnerwire.Refuse(SelftestUnsupportedMsg)
 	}
 	generation, err := s.executionGeneration(ctx, runnerwire.MethodSelftest, ref)
 	if err != nil {

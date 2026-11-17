@@ -128,6 +128,9 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "RunToken", Class: ClassPlatform, Rule: RuleAllow, Variant: "bounded by the runner_id binding"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneCAPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "public"},
 	{Struct: StructProxyConfig, Field: "MITMCACertPEM", Class: ClassPlatform, Rule: RuleAllow},
+	// On a Mac with macos_vm_inspection_ca on, the runner re-issues this CA under
+	// the Mac's own, limited to the hosts the run's proxy terminates; see the macOS
+	// VM inspection CA residual.
 	{Struct: StructProxyConfig, Field: "MITMCAKeyPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "per run; gains MITM of one's own sandbox only"},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "stored api_key, own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component; via_org replaces it with a ViaOrgRoutes entry", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},

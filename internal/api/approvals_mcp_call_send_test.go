@@ -179,6 +179,46 @@ func TestKeylessMCPCallRaiseReadsNoSendRecord(t *testing.T) {
 	}
 }
 
+// TestMadeKeyOfItsOwnCallIsRaised: a key of the made form that is the call's own (its hash and a positive
+// occurrence) is raised as any key is.
+func TestMadeKeyOfItsOwnCallIsRaised(t *testing.T) {
+	f := newSendFixture(t)
+	_, tok := f.run(t, "alice", "job-7")
+	var sc types.MCPCallScope
+	if err := json.Unmarshal([]byte(keyedScope(t, `{"id":1}`, "")), &sc); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.raise(t, tok, keyedScope(t, `{"id":1}`, "call:"+sc.CallSHA256+":1")); w.Code != http.StatusCreated {
+		t.Fatalf("raise under the call's own made key = %d %s, want 201", w.Code, w.Body.String())
+	}
+}
+
+// TestSendRecordRefusesARowWhoseMadeKeyIsNotItsCalls: an approved row whose operation key has the made form but
+// another call's hash, as one raised before the raise refused it may hold, records no send (404); a row under
+// its call's own made key records as any key does.
+func TestSendRecordRefusesARowWhoseMadeKeyIsNotItsCalls(t *testing.T) {
+	f := newSendFixture(t)
+	_, tok := f.run(t, "alice", "job-7")
+	id := f.approved(t, tok, keyedScope(t, `{"id":1}`, "step-1"))
+	f.aap.mu.Lock()
+	row := f.aap.byID[id]
+	row.RequestedScope = json.RawMessage(keyedScope(t, `{"id":1}`, "call:"+strings.Repeat("0", 64)+":1"))
+	f.aap.byID[id] = row
+	f.aap.mu.Unlock()
+	if w := f.sent(t, tok, id, false); w.Code != http.StatusNotFound || errorReason(w) != reasonApprovalNotFound {
+		t.Fatalf("record under another call's made key = %d %s, want 404 %s", w.Code, w.Body.String(), reasonApprovalNotFound)
+	}
+	if _, recs := f.st.count(); recs != 0 {
+		t.Fatalf("%d sends recorded, want none", recs)
+	}
+	var sc types.MCPCallScope
+	if err := json.Unmarshal([]byte(keyedScope(t, `{"id":2}`, "")), &sc); err != nil {
+		t.Fatal(err)
+	}
+	own := f.approved(t, tok, keyedScope(t, `{"id":2}`, "call:"+sc.CallSHA256+":1"))
+	sentAnswer(t, f.sent(t, tok, own, false), http.StatusOK)
+}
+
 // TestKeyedMCPCallIsSentOnceInItsNamespace: the first send record of a key is a 200 naming its approval; a
 // second record, the same approval's own included, is a 409 naming the first; a raise of the same call with
 // the key is answered 409 with that send and raises nothing, and says answered once the stamp is in.
@@ -300,11 +340,13 @@ func TestOnlyAnApprovedKeyedMCPCallOfTheRunRecords(t *testing.T) {
 func TestMalformedOperationKeyIsRefused(t *testing.T) {
 	good := keyedScope(t, `{"id":1}`, "step-1")
 	for name, scope := range map[string]string{
-		"a space":        strings.Replace(good, `"step-1"`, `"step 1"`, 1),
-		"129 characters": strings.Replace(good, `"step-1"`, `"`+strings.Repeat("a", 129)+`"`, 1),
-		"not a string":   strings.Replace(good, `"step-1"`, `7`, 1),
-		"another case":   strings.Replace(good, `"operation_key"`, `"Operation_Key"`, 1),
-		"twice":          strings.Replace(good, `"operation_key":"step-1"`, `"operation_key":"step-1","operation_key":"step-2"`, 1),
+		"a space":                       strings.Replace(good, `"step-1"`, `"step 1"`, 1),
+		"129 characters":                strings.Replace(good, `"step-1"`, `"`+strings.Repeat("a", 129)+`"`, 1),
+		"not a string":                  strings.Replace(good, `"step-1"`, `7`, 1),
+		"another case":                  strings.Replace(good, `"operation_key"`, `"Operation_Key"`, 1),
+		"a made key of another call":    strings.Replace(good, `"step-1"`, `"call:`+strings.Repeat("0", 64)+`:1"`, 1),
+		"a made key with no occurrence": strings.Replace(good, `"step-1"`, `"call:"`, 1),
+		"twice":                         strings.Replace(good, `"operation_key":"step-1"`, `"operation_key":"step-1","operation_key":"step-2"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			raiseMCPRefused(t, types.ApprovalToolCall, scope, reasonMCPCallScopeInvalid)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -33,9 +34,10 @@ func (errSwapStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, s
 }
 
 // TestResolveWorkspaceImage_WriteErrorServesItsImageAndKeepsTheOldTag: a store
-// error on the swap is non-fatal, rides the run.build row as cache_warn, and
+// error on the swap is non-fatal, is named on the run.build row as cache_warn, and
 // leaves the old tag alone — nothing was swapped.
 func TestResolveWorkspaceImage_WriteErrorServesItsImageAndKeepsTheOldTag(t *testing.T) {
+	logs := captureSlog(t)
 	h := newHarness(t)
 	cfg := baseTestConfig(h, errSwapStore{})
 	cfg.ImageBuilder = &lostSwapBuilder{}
@@ -57,8 +59,9 @@ func TestResolveWorkspaceImage_WriteErrorServesItsImageAndKeepsTheOldTag(t *test
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data["cache_warn"] != "x" {
-		t.Errorf("run.build data = %v, want cache_warn=x", data)
+	// cache_warn names the failed step; the store's error ("x") is in the server log.
+	if data["cache_warn"] != auditStepRecordImage || !strings.Contains(logs.String(), "err=x") {
+		t.Errorf("run.build data = %v, log %q; want cache_warn %q and the store's error logged", data, logs.String(), auditStepRecordImage)
 	}
 	rr.mu.Lock()
 	defer rr.mu.Unlock()

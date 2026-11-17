@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.21). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.22). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -953,7 +953,7 @@ is not the deployment described above.**
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
 - **`host_rules`** are judged per request on a connection the proxy opens: a `CONNECT` to a rule host
-  without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
+  without the per-run CA, on a port it does not open or on the sign-in lane is refused
   (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
   (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
   forward is judged again where it is sent (`roundTripUpstream`, or before an API door's own transport).
@@ -1184,7 +1184,7 @@ ADMIN pre-authorized** —
     list).
   - And it must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.azure`,
     `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`,
-    `.git-credentials`, `.git/config`, `Library/Keychains`).
+    `.git-credentials`, `.git/config`, `Library/Keychains`, `macos-vm.noindex`).
 - Unset roots = **no member host mounts at all**.
 - Writability is a SECOND, narrower allowlist (`WARDYN_USER_WRITABLE_ROOTS` minus
   `WARDYN_USER_WRITABLE_DENY`, deny first and winning); both unset = every member mount
@@ -1586,7 +1586,7 @@ These risks are **not closed by v1 Wardyn**.
 
 | Area | Residuals |
 |---|---|
-| Model channel and egress | 1, 2, 3, 42, 43, 46, 54, 66, 93 |
+| Model channel and egress | 1, 2, 3, 42, 43, 46, 54, 66, 93, 99 |
 | Isolation and confinement | 4, 5, 6, 10, 12, 47, 53, 74 |
 | Identity, tokens and approvals | 7, 8, 11, 17, 38, 39, 44, 60, 61, 78 |
 | Admin reach and authorization | 9, 14, 15, 16, 20, 23, 24, 27, 30, 31, 55, 92 |
@@ -2628,6 +2628,7 @@ These risks are **not closed by v1 Wardyn**.
     - An actor with Docker-daemon or host access can still read a RUNNING proxy's memory, the pre-existing process-memory residual.
     - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and a kept run is not kept at all (residual 58), so the Secret's life is the run's.
     - It is not re-created from the row.
+    - On a Mac with `macos_vm_inspection_ca` on, the runner re-issues this CA under the Mac's own, limited to the hosts the run's proxy terminates; see the macOS VM inspection CA residual (#99).
 
     </details>
 
@@ -3275,6 +3276,18 @@ These risks are **not closed by v1 Wardyn**.
     - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
     - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run and per caller, and the token never reaches the sandbox.
     - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check and closes an open inbound-token stream at its next tick; a browser stream already open is not cut by it.
+
+    </details>
+
+99. **macOS VM inspection CA (opt-in).**
+    <details><summary>Details</summary>
+
+    - Each macOS VM run's proxy CA is re-issued under a root every trusting guest on that Mac accepts.
+    - The re-issued CA permits only the hosts that run's proxy terminates (and, where one of them sits under another, the outer host's other subdomains) and no IP address, and lasts 7 days at most, so a leaked run key passes only for hosts its own proxy inspects (on any port, in any trusting guest on that Mac), and not for long.
+    - The root's key is a plain file of the runner login in the VM directory: excluded from Time Machine (the runner logs a warning when it cannot set that; any other backup tool copies it off the Mac), deleted when a `docker` substrate runner that reaches Docker starts with the setting off, unless the managed profile cannot be read, and never used while one of the runner's drive roots holds it.
+    - Any process of that login, or root, can read it and sign for any name on every trusting guest for the CA's five years.
+    - There is no revocation: recovery is deleting the key, `prepare --new-image`, and starting kept machines fresh. A deleted key stays in the Mac's local snapshots for up to 24 hours.
+    - Whether macOS enforces the name constraints is not yet shown on a Mac.
 
     </details>
 

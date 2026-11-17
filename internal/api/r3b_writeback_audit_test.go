@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -111,6 +113,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 	}
 
 	t.Run("GetRun failure audits the miss", func(t *testing.T) {
+		logs := captureSlog(t)
 		h, fake, srv, runID := unreadable(t)
 		srv.learnVerifyEgress(context.Background(), decided(runID), types.ActorHuman, "admin@corp.example")
 		if len(fake.ws.Requirements) != 0 {
@@ -118,13 +121,16 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		}
 		fails := r3bRequirementWriteFailures(h.audit.snapshot())
 		if len(fails) != 1 {
-			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read error", len(fails))
+			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read step", len(fails))
 		}
-		// The row has to name the CAUSE — "the contract was not written" is the
-		// symptom the operator can already see; why is the part only this row
+		// The row has to say which step failed — "the contract was not written" is the
+		// symptom the operator can already see; the step is the part only this row
 		// carries.
 		if detail := r3bAuditDetail(t, fails[0]); detail == "" || detail == "invalid or empty host in requested_scope" {
-			t.Errorf("failure row detail = %q, want the run-read error", detail)
+			t.Errorf("failure row detail = %q, want the run-read step", detail)
+		}
+		if !strings.Contains(logs.String(), "connection reset by peer") {
+			t.Errorf("log = %q, want the store's error the audit row leaves out", logs.String())
 		}
 	})
 
@@ -143,10 +149,10 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		}
 		fails := r3bRequirementWriteFailures(h.audit.snapshot())
 		if len(fails) != 1 {
-			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read error", len(fails))
+			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read step", len(fails))
 		}
-		if detail := r3bAuditDetail(t, fails[0]); detail != "read run: read run: connection reset by peer" {
-			t.Errorf("failure row detail = %q, want the run-read error", detail)
+		if detail := r3bAuditDetail(t, fails[0]); detail != writebackAuditRunUnread {
+			t.Errorf("failure row detail = %q, want %q: the step, never the store's text", detail, writebackAuditRunUnread)
 		}
 	})
 
@@ -221,6 +227,104 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 			if fails := r3bRequirementWriteFailures(h.audit.snapshot()); len(fails) != 0 {
 				t.Errorf("workspace.requirement.write failure rows = %d, want 0 — a not-applicable "+
 					"condition must not be recorded as a miss (detail=%q)", len(fails), r3bAuditDetail(t, fails[0]))
+			}
+		})
+	}
+}
+
+// TestLearnVerifyEgressMergeFailureNamesItsClass: a requirements write the store fails leaves one failure row
+// whose detail is the class the store's sentinel tells apart, or "Store error" for any other failure, and never
+// the store's text, which only the server log keeps.
+func TestLearnVerifyEgressMergeFailureNamesItsClass(t *testing.T) {
+	raw := errors.New("write to db.internal:5432 refused")
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"the key cap":             {fmt.Errorf("merge: %w", store.ErrConflict), writebackAuditRequirementsFull},
+		"a workspace not there":   {fmt.Errorf("merge: %w", store.ErrNotFound), writebackAuditWorkspaceGone},
+		"any other store failure": {raw, writebackAuditStoreError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureSlog(t)
+			h := newHarness(t)
+			runID, wsID := uuid.New(), uuid.New()
+			fake := &recordStore{
+				run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunRunning},
+				importStateFake: importStateFake{ws: types.Workspace{ID: wsID}},
+				mergeErr:        c.err,
+			}
+			cfg := baseTestConfig(h, fake)
+			cfg.Approvals = h.approvals
+			ap := types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalApproved,
+				RequestedScope: mustJSON(map[string]string{"host": "registry.npmjs.org", "mode": "wait_for_review"})}
+			New(cfg).learnVerifyEgress(context.Background(), ap, types.ActorHuman, "admin@corp.example")
+			fails := r3bRequirementWriteFailures(h.audit.snapshot())
+			if len(fails) != 1 {
+				t.Fatalf("workspace.requirement.write failure rows = %d, want 1", len(fails))
+			}
+			if detail := r3bAuditDetail(t, fails[0]); detail != c.want {
+				t.Errorf("failure row detail = %q, want %q", detail, c.want)
+			}
+			if d := string(fails[0].Data); strings.Contains(d, "db.internal") || strings.Contains(d, "store: ") {
+				t.Errorf("failure row data = %s, want no store text", d)
+			}
+			if c.err == raw && !strings.Contains(logs.String(), "db.internal") {
+				t.Errorf("log = %q, want the store's error", logs.String())
+			}
+		})
+	}
+}
+
+// r3bEgressWriteErrStore is the fixture store whose egress list write fails with err.
+type r3bEgressWriteErrStore struct {
+	*authzStore
+	err error
+}
+
+func (s r3bEgressWriteErrStore) AddWorkspaceEgressDecision(context.Context, uuid.UUID, string, bool, int) (types.Workspace, error) {
+	return types.Workspace{}, s.err
+}
+
+// TestEgressDecisionWriteFailureNamesItsClass: an `always` decision whose egress list write the store fails leaves
+// one failure row whose detail is the class the store's sentinel tells apart, or "Store error" for any other
+// failure, and never the store's text, which only the server log keeps.
+func TestEgressDecisionWriteFailureNamesItsClass(t *testing.T) {
+	raw := errors.New("write to db.internal:5432 refused")
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"the list at its cap or edited": {fmt.Errorf("add: %w", store.ErrConflict), writebackAuditEgressRefused},
+		"a workspace not there":         {fmt.Errorf("add: %w", store.ErrNotFound), writebackAuditWorkspaceGone},
+		"any other store failure":       {raw, writebackAuditStoreError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureSlog(t)
+			h := newHarness(t)
+			runID, wsID := uuid.New(), uuid.New()
+			cfg := baseTestConfig(h, r3bEgressWriteErrStore{authzStore: newAuthzStore(), err: c.err})
+			cfg.Approvals = h.approvals
+			ap := types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalApproved,
+				RequestedScope: mustJSON(map[string]string{"host": "registry.npmjs.org", "mode": "wait_for_review"})}
+			New(cfg).persistWorkspaceEgressDecision(context.Background(), ap, wsID, true, types.ActorHuman, "admin@corp.example")
+			var fails []types.AuditEvent
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "workspace.egress.approve" && ev.Outcome == "failure" {
+					fails = append(fails, ev)
+				}
+			}
+			if len(fails) != 1 {
+				t.Fatalf("workspace.egress.approve failure rows = %d, want 1", len(fails))
+			}
+			if detail := r3bAuditDetail(t, fails[0]); detail != c.want {
+				t.Errorf("failure row detail = %q, want %q", detail, c.want)
+			}
+			if d := string(fails[0].Data); strings.Contains(d, "db.internal") || strings.Contains(d, "store: ") {
+				t.Errorf("failure row data = %s, want no store text", d)
+			}
+			if c.err == raw && !strings.Contains(logs.String(), "db.internal") {
+				t.Errorf("log = %q, want the store's error", logs.String())
 			}
 		})
 	}

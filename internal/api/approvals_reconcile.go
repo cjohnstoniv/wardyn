@@ -73,7 +73,12 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 		// fatal to the rest of the reconcile.
 		written, err := s.cfg.Store.AddWorkspaceEgressDecision(store.WithEgressDecidedAt(ctx, d.decidedAt), d.workspace, d.host, d.allow, maxApprovedEgress)
 		if err != nil {
-			s.auditHealDecision(ctx, d, ws.OwnedBy, "failure", err.Error())
+			detail := writebackEgressAuditDetail(err)
+			if detail == writebackAuditStoreError {
+				slog.ErrorContext(ctx, "wardynd: re-apply a decided host to a workspace's egress lists at boot",
+					slog.String("workspace_id", d.workspace.String()), slog.Any("err", err))
+			}
+			s.auditHealDecision(ctx, d, ws.OwnedBy, "failure", detail)
 			continue
 		}
 		s.auditHealDecision(ctx, d, written.OwnedBy, "success", "")

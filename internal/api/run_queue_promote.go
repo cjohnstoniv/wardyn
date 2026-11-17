@@ -443,7 +443,7 @@ func (s *Server) failStaleStart(ctx context.Context, qs queueStore, runID uuid.U
 		slog.WarnContext(ctx, "wardynd: fail a stale promoted run; the next sweep tries again",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
-			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": err.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": auditStepStaleStart})))
 		return false, err
 	}
 	s.runStateMoved(runID, types.RunPending, types.RunFailed, applied)

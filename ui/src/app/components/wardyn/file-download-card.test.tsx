@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -13,6 +15,15 @@ import { APPROVAL } from "./copy";
 import { APPROVAL_MCP_CALL } from "./copy/approvals";
 import { FILE_DOWNLOAD_CARD as C } from "./copy/files-review";
 import { FileDownloadCard } from "./file-download-card";
+
+function repoRoot(): string {
+  let dir = resolve(process.cwd());
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    dir = dirname(dir);
+  }
+  throw new Error("go.mod not found");
+}
 
 const SHA = "9f2c6b0e4d8a17f35c2e9b1a0d7f64c3e85b2a19f0c4d6e7a8b9c0d1e2f341ab";
 
@@ -112,5 +123,39 @@ describe("the file_download card", () => {
     );
     expect(view.container).toHaveTextContent(APPROVAL.CANCELLED_BODY);
     expect(screen.queryByRole("button", { name: APPROVAL_MCP_CALL.APPROVE })).toBeNull();
+  });
+
+  it("the erased-asker sentences say their words", () => {
+    expect(C.ERASED_ASKER).toBe("a person since erased");
+    expect(C.ERASED_NOTE).toBe("The person who asked for this download was erased and could be anyone, so no person can approve or deny it.");
+  });
+
+  it("the card matches the literal the server writes for an erased asker", () => {
+    const go = readFileSync(join(repoRoot(), "internal/types/file_download.go"), "utf8");
+    const server = /const FileDownloadAskerErased = "([^"]+)"/.exec(go)?.[1];
+    expect(server).toBe("erased");
+    const card = readFileSync(join(repoRoot(), "ui/src/app/components/wardyn/file-download-card.tsx"), "utf8");
+    expect(card).toContain(`scope.requested_by === "${server}"`);
+  });
+
+  it("an erased asker is named in words, and the card offers no decision, since no person can make it", () => {
+    renderCard(row({ decidable: true, requested_by: "dana.reyes@acme.example", requested_scope: scope({ requested_by: "erased" }) as unknown as ApprovalRequest["requested_scope"] }), { canDecide: true });
+    const card = screen.getByTestId("file-download-card");
+    expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toContain(C.ERASED_ASKER);
+    expect(card).toHaveTextContent(C.ERASED_NOTE);
+    expect(card).not.toHaveTextContent(C.WHAT(C.ERASED_ASKER, "build-logs.tar.gz"));
+    expect(card).not.toHaveTextContent(DECIDERS_INBOX.DECIDED_BY_LABEL);
+    expect(within(card).queryByRole("button", { name: /Approve once/ })).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Deny/ })).toBeNull();
+  });
+
+  it("an erased asker's card keeps Approve and Deny for the admin token, the one caller the server lets decide it", () => {
+    renderCard(
+      row({ decidable: true, requested_scope: scope({ requested_by: "erased" }) as unknown as ApprovalRequest["requested_scope"] }),
+      { canDecide: true, principal: "admin-token" },
+    );
+    const card = screen.getByTestId("file-download-card");
+    expect(within(card).getByRole("button", { name: /Approve once/ })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: /Deny/ })).toBeEnabled();
   });
 });

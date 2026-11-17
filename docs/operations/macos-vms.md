@@ -110,9 +110,17 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 | `macos_vm_base_file` | The Mac's runner, or `MacOSVMBaseFile` in the profile | The base's install list, a JSON file on the Mac. A changed list starts a tools update ([Customising the base](macos-vm-base-image.md#customising-the-base)) |
 | `macos_vm_bases_dir` | The Mac's runner, or `MacOSVMBasesDir` in the profile | A directory of the Mac's other bases, one install list each ([Several bases](macos-vm-base-image.md#several-bases)) |
 | `macos_vm_kept_disk_limit_gb` | The Mac's runner (a string, such as `"60"`), or `MacOSVMKeptDiskLimit` in the profile | The GB this Mac's kept machines may take in all, each at its largest. Unset: 110. `0`: none kept. A bad value is refused in `runnerd.json`, and keeps none from the profile |
+| `macos_vm_inspection_ca` | The Mac's runner, or `MacOSVMInspectionCA` in the profile | 1 makes this Mac's inspection CA and adds it to the base's install list. Off by default. To keep it off on a managed Mac, set the profile value to 0 ([Apps that use only the system trust store](macos-vm-use.md#apps-that-use-only-the-system-trust-store)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
 | `macos_vm.max_base_age_days` | The organisation's site config | The most days since the base was prepared that a run or a kept-machine resume accepts. Empty or 0: no maximum. A negative number is refused, and so is a runner with no base age while a maximum is set |
 | `macos_vm.allow_background_watch` | The organisation's site config (Settings, macOS virtual machines) | Whether a person may watch a background macOS run's desktop, view only. Absent or `true`: allowed. `false`: no one may. A governance profile's `deny_background_desktop_watch` denies it for that profile's runs. |
+
+- With `macos_vm_inspection_ca` on, once edit-base trusts the CA, it signs each macOS VM run's proxy certificates for the hosts that run's proxy inspects, so apps that use only the system trust store accept them. Off, the runner deletes the CA. It stays off while a drive_root is or holds the VM directory.
+- The runner makes this Mac's inspection CA when it starts with `macos_vm` and `macos_vm_inspection_ca` on, and removes it at every start of a `docker` substrate runner with `macos_vm_inspection_ca` off, whether `macos_vm` is on or not; the `macos-vm` commands only read it.
+- A runner started with `--substrate folders` does not remove it. It refuses `macos-vm.noindex` and anything under it, as it does a credential folder: no listing, no pass, and a pass of the folder above leaves it out. A member's workspace mount refuses it too.
+- A container bind or a share drive refuses the VM directory, a folder under it and one above it, such as the home, by where it really is. A folders runner knows it by name only: if `macos-vm.noindex` links to another volume, share no folder that holds the target.
+- A managed profile that is there but cannot be read keeps a CA that is there and makes none, unless a drive root holds the VM directory: then the CA is removed.
+- `setup` prepares the first base without it; the base gains it at the runner's first tools update. Restart the runner after changing it.
 
 - **A write that leaves the switch out keeps it.** A site config write that leaves out `allow_background_watch`, whether or not it names `macos_vm`, keeps the stored value. A stored `false` stays off.
 

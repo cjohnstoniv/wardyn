@@ -1174,9 +1174,10 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 }
 
 // A stop again that fails is answered as a failed pause, never with the newer pause's paused view: the
-// agent may run under that mark. The failure row carries the error and both pauses' times, and the
-// newer mark stays.
+// agent may run under that mark. The failure row names the failed step and both pauses' times, the
+// stop's error is in the server log, and the newer mark stays.
 func TestDesktopSignIns_AFailedStopAgainIsNotAnsweredPaused(t *testing.T) {
+	logs := captureSlog(t)
 	f := newVMSignInFixture(t, "memory")
 	drop := f.loseLocks()
 	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
@@ -1216,8 +1217,11 @@ func TestDesktopSignIns_AFailedStopAgainIsNotAnsweredPaused(t *testing.T) {
 		SupersededBy *time.Time `json:"superseded_by"`
 	}
 	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d.Stage != "restop" ||
-		!strings.Contains(d.Error, "no route to host") || d.PausedAt == nil || d.SupersededBy == nil || !d.SupersededBy.Equal(*newer.v.PausedAt) {
-		t.Fatalf("rows = %+v, want one restop failure naming both pauses and the error", rows)
+		d.Error != auditStepStopAgain || d.PausedAt == nil || d.SupersededBy == nil || !d.SupersededBy.Equal(*newer.v.PausedAt) {
+		t.Fatalf("rows = %+v, want one restop failure naming both pauses and the failed step", rows)
+	}
+	if !strings.Contains(logs.String(), "no route to host") {
+		t.Errorf("log = %q, want the stop again's error", logs.String())
 	}
 }
 

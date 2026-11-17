@@ -442,7 +442,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		case folderKeepCut:
 			if ferr != nil {
 				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.reconcile", run.SandboxRef, "failure",
-					mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+					mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
 			}
 			return nil
 		case folderKeepAway:
@@ -473,9 +473,9 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 	case errors.Is(err, runner.ErrEndUnsupported):
 		return errProxyAloneUnsupported
 	default:
-		// teardownOrAudit is called only for the failure row: its teardown answers the stop's own error, so it
-		// never reports the stop confirmed.
-		s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
+		// teardownOrAuditStep is called only for the failure row: its teardown answers the stop's own error, so it
+		// never reports the stop confirmed. The row names the cut, not a sandbox stop.
+		s.teardownOrAuditStep(ctx, runID, ref, action, auditStepCutAgent, func(context.Context, string) error { return err })
 	}
 	return errProxyStopUnconfirmed
 }
@@ -543,7 +543,7 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 		return true, cutErr
 	case v == folderKeepCut && ferr != nil:
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
-			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
 		return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
 	case v == folderKeepCut:
 		return true, nil
@@ -743,8 +743,12 @@ func (s *Server) auditReadbackFailure(ctx context.Context, ch store.ProxyStartCh
 		"reason": ch.Reason, "stopped": c.Contained,
 		"expected_sha256": ch.Start.ExpectedSHA256, "reported_sha256": ch.Start.ReportedSHA256,
 	}
-	if c.Err != nil {
-		data["containment_error"] = c.Err.Error()
+	switch {
+	case errors.Is(c.Err, errRunOpBusy):
+		// The server's own sentence: another operation held the run's lock, and the sweep retries.
+		data["containment_error"] = errRunOpBusy.Error()
+	case c.Err != nil:
+		data["containment_error"] = auditStep(ctx, auditStepStopFailedProxy, c.Err, slog.String("run_id", ch.Start.RunID.String()))
 	}
 	s.auditReadback(ctx, ch.Start.RunID, "run.policy.unconfirmed", "failure", ch.Start.Generation, data)
 }
@@ -859,7 +863,7 @@ func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun
 		done()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy start could not be recorded")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "policy_unconfirmed"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepProxyStart, err, slog.String("run_id", run.ID.String())), "reason": "policy_unconfirmed"})))
 		return rec, false
 	}
 	return rec, true

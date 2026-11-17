@@ -73,23 +73,28 @@ func (a *liveCtxAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 // create (a wrapped base image, a devcontainer repo, an onboarded workspace) and
 // a workspace run's launch. build reports whether the launch goes on to
 // dispatch the run.
+//
+// step is the failed step the door's row names in place of the build's error (the create doors that wrap a base
+// image or build a devcontainer repo), whose error is in the server log; "" for a door whose row keeps the builder's
+// own output.
 var runBuildDoors = []struct {
 	name  string
+	step  string
 	build func(*Server, context.Context, uuid.UUID) bool
 }{
-	{"create wraps a base image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+	{"create wraps a base image", auditStepBuildRunImage, func(s *Server, ctx context.Context, id uuid.UUID) bool {
 		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
-	{"create builds a devcontainer repo", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+	{"create builds a devcontainer repo", auditStepBuildRunImage, func(s *Server, ctx context.Context, id uuid.UUID) bool {
 		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
-	{"create builds a workspace's image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+	{"create builds a workspace's image", "", func(s *Server, ctx context.Context, id uuid.UUID) bool {
 		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, types.AgentRun{ID: id}, []types.Workspace{buildDoorWorkspace()})
 		return !failed
 	}},
-	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+	{"a workspace run builds its image", "", func(s *Server, ctx context.Context, id uuid.UUID) bool {
 		_, _, err := s.workspaceRunImage(ctx, id, buildDoorWorkspace())
 		return err == nil
 	}},
@@ -149,6 +154,7 @@ func TestRunBuild_AKillStopsTheBuild(t *testing.T) {
 				name += ", and the builder could not clean up"
 			}
 			t.Run(name, func(t *testing.T) {
+				logs := captureSlog(t)
 				b := newStoppableBuilder()
 				b.stopErr = stopErr
 				srv, st, audit, run, ctx := runBuildFixture(t, b)
@@ -166,11 +172,22 @@ func TestRunBuild_AKillStopsTheBuild(t *testing.T) {
 					t.Errorf("state = %s, want the kill's KILLED left alone", got)
 				}
 				row := findAudit(audit.snapshot(), run.ID, "run.build", "failure")
-				if row == nil || !strings.Contains(string(row.Data), "context canceled") {
-					t.Fatalf("run.build failure row = %v, want one carrying the cancelled build", row)
+				// Where the row names a step, the cancelled build and what it could not clean up are in the log.
+				where, text := "row", ""
+				if row != nil {
+					text = string(row.Data)
 				}
-				if stopErr != nil && !strings.Contains(string(row.Data), "daemon unreachable") {
-					t.Errorf("run.build failure row = %s, want what the builder could not clean up", row.Data)
+				if door.step != "" {
+					if row == nil || !strings.Contains(text, door.step) {
+						t.Fatalf("run.build failure row = %v, want one naming the step %q", row, door.step)
+					}
+					where, text = "log", logs.String()
+				}
+				if row == nil || !strings.Contains(text, "context canceled") {
+					t.Fatalf("run.build failure %s = %q, want the cancelled build", where, text)
+				}
+				if stopErr != nil && !strings.Contains(text, "daemon unreachable") {
+					t.Errorf("run.build failure %s = %s, want what the builder could not clean up", where, text)
 				}
 				if n := audit.dead.Load(); n != 0 {
 					t.Errorf("%d audit rows were written on a context that had ended", n)

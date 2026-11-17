@@ -2045,7 +2045,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
+  # A required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
@@ -2081,14 +2081,23 @@ jobs:
           docker build -q -f deploy/images/vm-linux/Dockerfile -t wardyn/vm-linux:ci .
           docker build -q -f deploy/compose/Dockerfile.proxy -t wardyn/proxy:ci .
       # A hosted runner's CPU does not offer every feature of the default model (Haswell-v4 needs
-      # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run.
+      # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run. Through
+      # scripts/test-report.sh, whose conformance-vm floor goes red if a case the runtime contract cites
+      # skips or is renamed.
       - name: Linux VM conformance
         env:
           WARDYN_TEST_VM_QEMU_IMAGE: wardyn/vm-qemu:ci
           WARDYN_TEST_VM_GUEST_IMAGE: wardyn/vm-linux:ci
           WARDYN_TEST_VM_PROXY_IMAGE: wardyn/proxy:ci
           WARDYN_TEST_VM_CPU_MODEL: Nehalem-v1
-        run: grep -m1 'model name' /proc/cpuinfo && go test -tags 'docker vm' -count=1 -v -timeout 20m ./test/conformance/vm/
+          WARDYN_TEST_REPORT_COVER: "0"
+        run: grep -m1 'model name' /proc/cpuinfo && scripts/test-report.sh conformance-vm -tags 'docker vm' -count=1 -timeout 20m ./test/conformance/vm/
+      - name: Upload conformance-vm test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: conformance-vm-test-reports
+          path: test/reports/go/conformance-vm/**
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against

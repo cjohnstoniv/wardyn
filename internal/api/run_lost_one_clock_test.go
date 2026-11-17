@@ -307,6 +307,7 @@ func TestLoseRunStopped_AnUnknownEndStillCutsTheProxyWithEveryEndHoldTaken(t *te
 // lost_error (TestLostLocalHeadlessQueuesContainmentWithoutTearingDown). Catches the read's error dropped
 // from the row.
 func TestLoseRunStopped_AQueuedCutAndAnUnreadEndRecordTheReadError(t *testing.T) {
+	logs := captureSlog(t)
 	errRead := errors.New("database down")
 	f := newLostFixture(t)
 	run := oneClockRun(f, f.now.Add(time.Minute))
@@ -328,8 +329,9 @@ func TestLoseRunStopped_AQueuedCutAndAnUnreadEndRecordTheReadError(t *testing.T)
 	if data["containment"] != "pending_runner" {
 		t.Errorf("containment = %v, want pending_runner", data["containment"])
 	}
-	if msg, _ := data["lost_error"].(string); !strings.Contains(msg, "database down") || strings.Contains(msg, "\n") {
-		t.Errorf("lost_error = %q, want the read's error on one line", data["lost_error"])
+	// The row names the failed read of the run's end; the read's error ("database down") is in the server log.
+	if msg, _ := data["lost_error"].(string); msg != auditStepReadLostEnd || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("lost_error = %q, log %q, want the step and the read's error logged", data["lost_error"], logs.String())
 	}
 }
 
@@ -356,6 +358,7 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenTakesTheStrongerEnd(t *testing.T)
 		}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			logs := captureSlog(t)
 			f := newLostFixture(t)
 			f.ls.lapsed = true
 			f.st.endsErr = errors.New("database down")
@@ -377,8 +380,10 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenTakesTheStrongerEnd(t *testing.T)
 				t.Fatal("no run.lost row")
 			}
 			data := leaseAuditData(t, rows[len(rows)-1])
-			if msg, _ := data["lost_error"].(string); data["kept"] != false || !strings.Contains(msg, "database down") {
-				t.Errorf("run.lost data = %v; want kept false and the read's error in lost_error", data)
+			// The row holds the step, or the unsupported end's sentence when the read's error was joined to it; the
+			// read's error is in the server log either way.
+			if msg, _ := data["lost_error"].(string); data["kept"] != false || (msg != auditStepStopLost && msg != runner.ErrEndUnsupported.Error()) || !strings.Contains(logs.String(), "database down") {
+				t.Errorf("run.lost data = %v, log %q; want kept false, a step or sentence in lost_error, and the read's error logged", data, logs.String())
 			}
 		})
 	}
@@ -400,7 +405,7 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenAndTheEndDoesNotLand(t *testing.T
 		lostError   any // the run.lost row's lost_error
 		outcome     string
 	}{
-		{"the end fails: its error, unresolved, retried", errEnd, "unresolved", errEnd.Error(), "failure"},
+		{"the end fails: its error, unresolved, retried", errEnd, "unresolved", auditStepStopLost, "failure"},
 		{"the end is queued: pending on the runner, no lost_error", runner.ErrPendingOnRunner, "pending_runner", nil, "success"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -422,7 +427,11 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenAndTheEndDoesNotLand(t *testing.T
 				t.Errorf("run.lost %s, data %v; want outcome %s, containment %s, kept true, lost_error %v",
 					rows[0].Outcome, data, c.outcome, c.containment, c.lostError)
 			}
-			if want, _ := c.lostError.(string); f.st.containmentError() != want {
+			want := ""
+			if c.lostError != nil {
+				want = errEnd.Error() // the run's own containment_error column keeps the cause; the row names the step
+			}
+			if f.st.containmentError() != want {
 				t.Errorf("containment_error = %q, want %q", f.st.containmentError(), want)
 			}
 			f.sweep(t)

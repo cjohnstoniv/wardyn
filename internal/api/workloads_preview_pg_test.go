@@ -258,15 +258,18 @@ func TestPG_WorkloadPreview_ServiceScope(t *testing.T) {
 		t.Fatalf("service token preview: %d %s, want 200", w.Code, w.Body.String())
 	}
 
-	// The sponsor's own workload of that name is not the service's, and ?owner= is not read.
+	// The sponsor's own workload of that name is not the service's, and a ?owner= naming anyone but the caller
+	// is refused.
 	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.sponsor, workloadBody(pol, "mine", "")), http.StatusCreated)
-	p := decodePreview(t, e.as(t, tok.Token, http.MethodPost, previewPath+"?owner="+svcSponsor, workloadBody(pol, "t", "")), http.StatusOK)
+	p := decodePreview(t, e.as(t, tok.Token, http.MethodPost, previewPath, workloadBody(pol, "t", "")), http.StatusOK)
 	if p.Op != "create" || p.Stored != nil || p.Owner != svcPrin {
 		t.Fatalf("service preview of a name its sponsor holds = %+v, want a create of its own %s", p, svcPrin)
 	}
-	q := decodePreview(t, doSSO(t, e.h.srv, http.MethodPost, previewPath+"?owner="+svcPrin, e.other, workloadBody(pol, "t", "")), http.StatusOK)
-	if q.Op != "create" || q.Stored != nil || q.Owner == svcPrin {
-		t.Fatalf("another person's preview with ?owner=%s = %+v, want a create in their own namespace", svcPrin, q)
+	if w := e.as(t, tok.Token, http.MethodPost, previewPath+"?owner="+svcSponsor, workloadBody(pol, "t", "")); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonWorkloadInvalid) {
+		t.Fatalf("service preview with ?owner=%s = %d %s, want 400 %s", svcSponsor, w.Code, w.Body, reasonWorkloadInvalid)
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPost, previewPath+"?owner="+svcPrin, e.other, workloadBody(pol, "t", "")); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonWorkloadInvalid) {
+		t.Fatalf("another person's preview with ?owner=%s = %d %s, want 400 %s", svcPrin, w.Code, w.Body, reasonWorkloadInvalid)
 	}
 }
 

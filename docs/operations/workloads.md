@@ -98,7 +98,7 @@ intent:
 
 ## Preview an apply
 
-`POST /api/v1/workloads/{name}/preview` takes the body of `PUT /api/v1/workloads/{name}` and answers what the PUT would do. It stores nothing and starts nothing. A service identity's token may call it, for its own workloads.
+`POST /api/v1/workloads/{name}/preview` takes the body of `PUT /api/v1/workloads/{name}` and answers what the PUT would do. It stores nothing and starts nothing. A service identity's token may call it, for its own workloads. `?owner=` may name only the caller; any other owner is `400` `workload_invalid`.
 
 | Field | Meaning |
 |---|---|
@@ -125,6 +125,7 @@ intent:
 | An unchanged spec whose last launch, or queued replacement, was refused | `unchanged` | Launched again, like a restart: the spec is ahead of its run |
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
+- `?owner=` may name only the caller; any other owner is `400` `workload_invalid`.
 - `--dry-run` also prints `launch policy digest: <hex>` under each workload that is owed a launch. That is the digest `wardyn workload pin` takes.
 - The new run is created before the old one is ended. A queued replacement lets the old run serve until the new one runs, unless the old run holds the slot the new one needs.
 - Each run a workload launches carries the SPIFFE ID `spiffe://<trust domain>/workload/<owner>/<name>/run/<run id>` for its life, so a gateway can admit every run of the workload by the ID up to and including `/run/` ([The claims a gateway receives](ai-gateway.md#the-claims-a-gateway-receives)). During a replacement, and longer while the replacement waits in its queue, it and the run it replaces both hold the prefix.

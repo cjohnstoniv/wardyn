@@ -156,7 +156,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	grantRows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepListRunGrants, err, slog.String("run_id", run.ID.String()))})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its credential grants could not be read. Launch it again.")
 		return
 	}
@@ -191,7 +191,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// error) — logged here for the operator, never handed to the member
 		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": agentPolicyAuditError(ctx, run.ID, apErr)})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, agentPolicyFailureHint(apErr, run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks))
 		return
 	}
@@ -640,7 +640,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		stopCreateLease()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepProxyConfig, err, slog.String("run_id", run.ID.String()))})))
 		return
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
@@ -840,7 +840,7 @@ func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.Agen
 		hint, reason := sandboxCreateFailure(err)
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepCreateSandbox, err, slog.String("run_id", run.ID.String())), "reason": reason})))
 		s.unoweAgentCast(ctx, run)
 		return execution, sb, start, false
 	}

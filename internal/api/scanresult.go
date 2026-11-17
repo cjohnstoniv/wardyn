@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -16,6 +17,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
+
+// scanAuditFactsUnparsed is a source.scan failure row's detail for an upload that is not scan facts: the
+// parser's text quotes bytes the sandbox chose, so the row names the step and the log keeps the error.
+const scanAuditFactsUnparsed = "Parse scan facts"
+
+// maxScanFactsLoggedErrBytes bounds the parser error the log keeps for an upload that is not scan facts: for a
+// number that overflows a field the error quotes the whole literal, which a sandbox can make megabytes long.
+const maxScanFactsLoggedErrBytes = 256
+
+// clipForLog is s cut to at most n bytes on a character boundary, with an ellipsis marking a cut.
+func clipForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return clipUTF8(s, n) + "…"
+}
 
 // maxScanResultUploadBytes caps a single scan-result PUT. ScanFacts is already
 // bounded on the producing side (internal/workspacescan manifest-count + per-file
@@ -73,8 +90,10 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	// Unmarshal is both sufficient and forward-compatible with a newer scanner.
 	var facts workspacescan.ScanFacts
 	if err := json.Unmarshal(raw, &facts); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: a scan run's upload is not scan facts",
+			slog.String("run_id", claims.RunID.String()), slog.String("source_id", sourceID.String()), slog.String("err", clipForLog(err.Error(), maxScanFactsLoggedErrBytes)))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
+			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": scanAuditFactsUnparsed})))
 		writeErrorReason(w, http.StatusBadRequest, reasonScanFactsInvalid, "invalid scan facts: "+err.Error())
 		return
 	}

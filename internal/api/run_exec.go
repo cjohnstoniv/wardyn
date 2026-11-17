@@ -206,7 +206,7 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 	defer cancel()
 	sess, err := s.execAdmitted(execCtx, start, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(command)})
 	if err != nil {
-		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": err.Error()})
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": auditStepExecOpen}) // writeExecStartError logs the cause
 		writeExecStartError(w, r, err)
 		return
 	}
@@ -220,7 +220,7 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 	}()
 	res, err := collectExec(execCtx, sess)
 	if err != nil {
-		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": err.Error()})
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": auditStepCollectExec}) // writeExecStartError logs the cause
 		writeExecStartError(w, r, err)
 		return
 	}

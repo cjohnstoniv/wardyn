@@ -64,7 +64,7 @@ describe("ReasonDialog — scope under a rule's cap", () => {
   it("with no cap it renders as today", () => {
     open(undefined);
     expect(radios()).toEqual([
-      { text: "OnceThis one connection. The next attempt asks again.", disabled: false, checked: "false" },
+      { text: "OnceThis one connection, or one retry within 60 seconds if it was HTTPS and got nothing back. Then it asks again.", disabled: false, checked: "false" },
       { text: "This runEvery attempt until this run ends. (default)", disabled: false, checked: "true" },
       { text: "Until…Every attempt until a time you pick, or this run ends.", disabled: false, checked: "false" },
       { text: "AlwaysAlso saves it to the workspace — future runs start with it.", disabled: false, checked: "false" },

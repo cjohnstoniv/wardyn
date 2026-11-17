@@ -64,27 +64,61 @@ const resolveBypassedCause = "this name is on the upstream proxy's bypass list, 
 // can never block on a receiver that has already left.
 //
 // It returns the SOURCE of the direction that finished first, and the error
-// that ended it (nil for a clean end of stream).
+// that ended it (nil for a clean end of stream). That direction is claimed
+// when its copy ends, before its half-close: the half-close tells the other
+// peer this side is done, and a peer that closes in answer (an upstream that
+// reads to EOF after the sandbox's hello and hangs up) can end the other copy
+// before this one reports. Taken from the order of the reports, the sandbox's
+// own close would read as the upstream's.
+//
+// A copy that ended because a WRITE to its destination failed names the
+// destination: that side is the one that broke. An upstream reset that lands
+// while the client's bytes are still being written would otherwise be claimed
+// by the client-to-upstream copy as the client having closed.
 func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	type end struct {
 		src net.Conn
 		err error
 	}
-	done := make(chan end, 2)
+	var ended atomic.Pointer[end]
+	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
+		w := &writeFailed{Writer: dst}
+		_, err := io.Copy(w, src)
+		side := src
+		if w.failed {
+			side = dst
+		}
+		ended.CompareAndSwap(nil, &end{side, err})
 		// Half-close the write side if supported so the peer sees EOF.
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
-		done <- end{src, err}
+		done <- struct{}{}
 	}
 	go cp(a, b)
 	go cp(b, a)
-	e := <-done
+	<-done
 	_ = a.Close()
 	_ = b.Close()
+	e := ended.Load()
 	return e.src, e.err
+}
+
+// writeFailed passes writes on and notes whether one failed, so a copy that
+// ended on an error can tell its destination's write from its source's read.
+// A short write counts as failed, as io.Copy's ErrShortWrite does.
+type writeFailed struct {
+	io.Writer
+	failed bool // the copy's goroutine only
+}
+
+func (w *writeFailed) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err != nil || n < len(p) {
+		w.failed = true
+	}
+	return n, err
 }
 
 // What the client has put into the tunnel so far (tunnelWatch.client).
@@ -352,16 +386,38 @@ func (w *tunnelWatch) failureClass(upstreamFirst bool, err error) (string, *egre
 	return "tunnel first bytes: the client closed before any reply", closed
 }
 
+// answeredNothing reports whether a dead tunnel got its client nothing from the far side after the client opened
+// with a TLS hello: the upstream closed or reset first with no byte back, or the guard refused its answer to the
+// hello and relayed none of it. Only then may the once grant that opened the tunnel be given back
+// (Proxy.refundOnceUse). Everything else spends it: a TLS alert (it is relayed, so it is an answer), an upstream
+// that wrote before the client spoke, the ssh guard, a client that closed first, and a client that did not open
+// with TLS. For a refusal it reads what the guard recorded when it judged (tunnelRefusal.armed), not the client
+// state now: the client may have sent its hello while the tunnel closed.
+func (w *tunnelWatch) answeredNothing(upstreamFirst bool, refusal *egress.Refusal) bool {
+	if refusal == nil {
+		return false
+	}
+	if refusal.Reason == "upstream_not_tls" {
+		r := w.refused.Load()
+		return r != nil && r.armed && w.relayed.Load() == 0
+	}
+	return upstreamFirst && w.client.Load() == clientTLS &&
+		(refusal.Reason == "connection_reset" || refusal.Reason == "connection_closed")
+}
+
 // tunnelEnded writes the one egress.deny a tunnel that died after its 200
 // leaves: the guard refused the upstream's first bytes, the upstream's whole
 // answer was a TLS alert, or the client sent bytes and none came back. The
 // allow emitted when the dial succeeded stays: the tunnel did open. seen is
 // that allow (nil emits nothing); first and err are what tunnel returned.
+// When the far side got the client nothing (answeredNothing), the once grant that opened the tunnel is given back
+// first (refundOnceUse).
 func (p *Proxy) tunnelEnded(seen *egress.DecisionLog, host string, w *tunnelWatch, first net.Conn, err error) {
 	if seen == nil || p.sink == nil {
 		return
 	}
-	cause, refusal := w.failureClass(first == net.Conn(w), err)
+	upstreamFirst := first == net.Conn(w)
+	cause, refusal := w.failureClass(upstreamFirst, err)
 	if cause == "" {
 		return
 	}
@@ -369,6 +425,9 @@ func (p *Proxy) tunnelEnded(seen *egress.DecisionLog, host string, w *tunnelWatc
 	dl.Cause = p.redactTopology(string(maskDecisionBytes([]byte(cause))))
 	dl.Via = p.viaHop(host)
 	dl.Refusal = refusal
+	if w.answeredNothing(upstreamFirst, refusal) {
+		p.refundOnceUse(&dl, seen, host)
+	}
 	p.sink.emit(dl)
 }
 

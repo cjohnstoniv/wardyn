@@ -395,31 +395,46 @@ describe("RunFailureBlock", () => {
   });
 
   // review R-12: a RECOGNISED ending already states this exact fact in its
-  // own vocabulary (copy.happened + ending.detail) — printing run.failure_hint
-  // too would be the same sentence three times. Gated on `!copy`, so a
-  // failure_hint that happens to be set alongside a recognised cause is
-  // silently absorbed by the copy that already covers it.
-  it("image WITH a run.failure_hint: the hint paragraph does not also render — copy.happened already says it", () => {
+  // own vocabulary (copy.happened) — printing run.failure_hint as a second
+  // paragraph would be the same sentence twice. For image the hint is the
+  // mono cause line instead: the audit row names only the step ("Build run
+  // image"), and the hint carries the builder's error.
+  it("image WITH a run.failure_hint: the hint is the cause line, once; the row's step is not shown", () => {
+    const HINT = "the run's sandbox image could not be built: step 4/9: npm ci exited 1";
     render(
       <RunFailureBlock
-        run={{
-          ...run("FAILED"),
-          failure_hint: "the sandbox image could not be built",
-        }}
-        audit={[ev("run.build", "failure", { data: { error: "step 4/9: npm ci exited 1" } })]}
+        run={{ ...run("FAILED"), failure_hint: HINT }}
+        audit={[ev("run.build", "failure", { data: { error: "Build run image" } })]}
         onGoAudit={vi.fn()}
       />,
     );
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "image");
     expect(screen.getByText("What happened")).toBeInTheDocument();
     expect(screen.getByText(/The sandbox image could not be built/)).toBeInTheDocument();
-    // The hint's own exact string does NOT appear as a second, separate
-    // paragraph (copy.happened's sentence differs only by capitalization —
-    // getByText would double-match on a case-insensitive lookup, so this
-    // asserts the paragraph count directly instead).
-    expect(
-      screen.queryAllByText("the sandbox image could not be built"),
-    ).toHaveLength(0);
+    expect(screen.getAllByText(HINT)).toHaveLength(1);
+    expect(screen.queryByText("Build run image")).toBeNull();
+    expect(screen.getByText(/the builder's full output is in the server log/)).toBeInTheDocument();
+    expect(screen.queryByText(/The audit row carries the builder's full output/)).toBeNull();
+  });
+
+  // A selftest row whose error names only the step ("Run selftest exec") gives way to the run's hint too.
+  it("selftest WITH a run.failure_hint: the hint is the cause line; the row's step is not shown", () => {
+    const HINT = "the BYOI selftest could not run: this runner does not support the BYOI selftest; upgrade it to run BYOI images";
+    render(
+      <RunFailureBlock
+        run={{ ...run("FAILED"), failure_hint: HINT }}
+        audit={[ev("run.selftest", "failure", { data: { error: "Run selftest exec", fail_closed: true } })]}
+        onGoAudit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "selftest");
+    expect(screen.getAllByText(HINT)).toHaveLength(1);
+    expect(screen.queryByText("Run selftest exec")).toBeNull();
+  });
+
+  it("image with no run.failure_hint falls back to the row's own words", () => {
+    renderBlock("FAILED", [ev("run.build", "failure", { data: { error: "step 4/9: npm ci exited 1" } })]);
+    expect(screen.getByText("step 4/9: npm ci exited 1")).toBeInTheDocument();
   });
 
   it("Open audit trail hands off to the Audit tab", async () => {
@@ -480,6 +495,26 @@ describe("dispatch failures in plain words (M2)", () => {
     // The visible line outside the disclosure carries no wrapper.
     expect(block.textContent?.split(WRAPPED).length).toBe(2);
     expect(block.textContent).toContain(STRIPPED);
+  });
+
+  it("sandbox_create takes the cause from run.failure_hint when the row names only the step", () => {
+    const HINT = `the sandbox could not be created: ${WRAPPED}`;
+    render(
+      <RunFailureBlock
+        run={{ ...run("FAILED"), failure_hint: HINT }}
+        audit={[ev("run.create", "failure", { data: { error: "Create sandbox", reason: "sandbox_create" } })]}
+        onGoAudit={vi.fn()}
+      />,
+    );
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("sandbox_create");
+    // The step the row names is not shown; the stripped cause is.
+    expect(block.textContent).not.toContain("Create sandbox");
+    expect(block.textContent).toContain(`the sandbox could not be created: ${STRIPPED}`);
+    const details = block.querySelector("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Platform message");
+    expect(details.textContent).toContain(WRAPPED);
   });
 
   it("agent_start renders its copy and omits the disclosure when nothing was stripped", () => {

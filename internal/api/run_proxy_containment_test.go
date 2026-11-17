@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -216,13 +215,15 @@ func unconfirmedFailureRow(t *testing.T, f *readbackFixture) map[string]any {
 	return out
 }
 
-// The failure row's stopped follows the stop: false, with the stop's error, when it failed.
+// The failure row's stopped follows the stop: false, naming the failed step, when it failed; the stop's error is
+// in the server log.
 func TestReadback_FailureRowStoppedFalseWhenTheStopFails(t *testing.T) {
+	logs := captureSlog(t)
 	f := newReadbackFixture(t)
 	f.failWithUnstoppableProxy(t)
 	row := unconfirmedFailureRow(t, f)
-	if row["stopped"] != false || !strings.Contains(fmt.Sprint(row["containment_error"]), "daemon down") {
-		t.Errorf("failure row = %v, want stopped false with the stop's error", row)
+	if row["stopped"] != false || row["containment_error"] != auditStepStopFailedProxy || !strings.Contains(logs.String(), "daemon down") {
+		t.Errorf("failure row = %v, log %q; want stopped false naming the step, and the stop's error logged", row, logs.String())
 	}
 }
 

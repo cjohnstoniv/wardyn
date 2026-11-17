@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
@@ -233,6 +235,7 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 	resp := attachRes.HijackedResponse
 
 	var stdout, stderr io.Reader
+	var outEnded atomic.Bool // the exec's output ended on its own, not by a cut
 	if spec.TTY {
 		stdout = resp.Reader
 		stderr = bytes.NewReader(nil)
@@ -243,6 +246,7 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 		errR, errW := io.Pipe()
 		go func() {
 			_, cerr := stdcopy.StdCopy(outW, errW, resp.Reader)
+			outEnded.Store(cerr == nil)
 			_ = outW.CloseWithError(cerr)
 			_ = errW.CloseWithError(cerr)
 		}()
@@ -266,7 +270,7 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 			}
 			return nil
 		},
-		Wait: func() (int, error) { return d.pollExecExit(ctx, execID) },
+		Wait: func() (int, error) { return d.waitStreamExit(ctx, execID, &outEnded) },
 		Close: func() error {
 			resp.Close()
 			// Also close the pipe read ends (non-TTY): resp.Close alone leaves
@@ -283,4 +287,31 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 			return nil
 		},
 	}, nil
+}
+
+// streamExitAfterCut bounds the one inspect waitStreamExit makes after its
+// context ended.
+const streamExitAfterCut = time.Second
+
+// waitStreamExit is a streamed exec's Wait: pollExecExit, and when the stream's
+// context ended first, one more inspect off that context, but only when the
+// exec's output had ended on its own (outEnded). Such an exec had exited before
+// its client closed, and reports its own exit, as a k8s stream does, where the
+// ended context's error says nothing about the process. A stream the cut ended
+// (its Close fails the demux) keeps the context's error: the exit a cut process
+// reaches afterwards is not how it ended. So does an exec still running, a TTY
+// stream (no demux), or a daemon that does not answer within streamExitAfterCut.
+func (d *Driver) waitStreamExit(ctx context.Context, execID string, outEnded *atomic.Bool) (int, error) {
+	code, err := d.pollExecExit(ctx, execID)
+	if err == nil || ctx.Err() == nil || !outEnded.Load() {
+		return code, err
+	}
+	ictx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamExitAfterCut)
+	defer cancel()
+	if insp, ierr := d.cli.ExecInspectRaw(ictx, execID); ierr == nil {
+		if c, exited := insp.exited(); exited {
+			return c, nil
+		}
+	}
+	return code, err
 }

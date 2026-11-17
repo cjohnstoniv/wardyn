@@ -187,8 +187,8 @@ export interface EgressDecision {
   decision: "allow" | "deny" | "pending" | "failed";
   bytes?: number;
   // B3: the approval an `egress.hold` row raised (the audit row's own
-  // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on
-  // an older trail. It exists because a pending ROW is history, not state — the
+  // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow rows, on a deny row
+  // unless its failed connection gave a once approval back, and on an older trail. It exists because a pending ROW is history, not state — the
   // hold it records may have been approved a minute later — so this is the only
   // link from a row the held-count no longer counts to what was decided.
   approval_id?: string;

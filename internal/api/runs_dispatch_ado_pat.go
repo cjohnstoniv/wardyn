@@ -454,7 +454,7 @@ func (s *Server) revokeNeverRecordedPAT(ctx context.Context, runID uuid.UUID, cl
 	slog.ErrorContext(ctx, "wardynd: revoking an unrecorded Azure DevOps run token failed; it lives to its valid_to",
 		slog.String("run_id", runID.String()), slog.String("authorization_id", authorizationID), slog.String("reason", reason), slog.Any("err", err))
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed, authorizationID, "failure",
-		mustJSON(map[string]any{"reason": reason, "authorization_id": authorizationID, "organisation": org, "error": err.Error(), "abandoned": true})))
+		mustJSON(map[string]any{"reason": reason, "authorization_id": authorizationID, "organisation": org, "error": auditStepRevokeToken, "abandoned": true})))
 }
 
 // revokeUnrecordedRunPAT revokes a token mintRunPAT created whose value could not be recorded, so

@@ -392,9 +392,9 @@ export const DEMOS: Demo[] = [
     id: "once-or-for-good",
     section: "egress",
     title: "Once, or for good",
-    teaches: "The Once scope grants exactly one connection, not the run — approve it and the very next attempt has to ask again.",
+    teaches: "The Once scope grants one connection, not the run — approve it, and after that connection gets an answer the very next attempt has to ask again.",
     overview:
-      "Every approval above stuck around for the rest of the run once granted. Once is narrower: it spends itself on the single connection it was raised for, so the next attempt to that same host is refused all over again and raises a brand-new approval — nothing lingers by accident. Reach for it to unblock one call without opening the host for good.",
+      "Every approval above stuck around for the rest of the run once granted. Once is narrower: one answered connection spends it, so the next attempt to that same host is refused all over again and raises a brand-new approval — nothing lingers by accident. Reach for it to unblock one call without opening the host for good.",
     policy: {
       ...SHARED,
       allowed_domains: [],

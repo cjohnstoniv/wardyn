@@ -41,8 +41,11 @@ describe("limitChips and limitsBoundNothing", () => {
     expect(limitsBoundNothing({ max_cpu_millis: 0, deny_placements: [], allowed_macos_bases: [], allowed_models: [] })).toBe(true);
   });
 
-  it("a confinement floor counts though it draws no chip, and floors that raise nothing are None", () => {
+  it("a confinement floor draws a chip and counts, and floors that raise nothing are None", () => {
+    render(<>{limitChips({ confinement_floors: { own_image: "CC3" } })}</>);
+    expect(screen.getByText(LIMITS_CHIP.CONFINEMENT_FLOORS)).toBeInTheDocument();
     expect(limitsBoundNothing({ confinement_floors: { own_image: "CC3" } })).toBe(false);
+    expect(limitChips({ confinement_floors: {} })).toEqual([]);
     expect(limitsBoundNothing({ confinement_floors: {} })).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -300,7 +301,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	}
 	if saveErr != nil {
 		outcome = "failure"
-		fields["error"] = saveErr.Error()
+		fields["error"] = auditStep(r.Context(), auditStepSaveRecording, saveErr, slog.String("run_id", runIDUUID.String()))
 		if errors.Is(saveErr, recording.ErrErased) {
 			fields["reason"] = reasonRecordingErased
 		}

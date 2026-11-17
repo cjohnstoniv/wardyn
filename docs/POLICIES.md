@@ -734,7 +734,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 
 | Scope | Reaches | Where it lives |
 |---|---|---|
-| `once` | One connection. The very next attempt re-raises. | The proxy's per-host cache, consumed on first use. |
+| `once` | One connection. The next attempt re-raises; an HTTPS connection that got nothing back gives it back once (below). | The proxy's per-host cache, consumed on first use. |
 | `run` | The rest of this run — **the default**, and the only scope that existed before this table did. | Same cache, held for the run's lifetime. |
 | | **Caveat:** during a `workspace record` session an `egress_domain` approve at this scope ALSO writes a permanent, workspace-wide required `egress:<host>` row that widens every future run of the workspace (see `wait_for_review` above). | |
 | `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
@@ -783,9 +783,17 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 
 - On HTTPS, `once` releases one CONNECT tunnel — and a single tunnel can carry many requests before the agent closes it, so one grant can cover far more traffic than "once" suggests.
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
-- The copy is literally accurate for HTTPS; for HTTP it undersells rather than oversells — it never claims a grant covers more than it does, only occasionally less.
+- The copy is literally accurate for HTTPS, except that the retry it names comes only in the cases listed below; for HTTP it undersells rather than oversells.
 - Either way the grant is spent on the approved verdict itself — after the method check, but ahead of IP vetting and the dial.
-- So a DNS-rebind refusal or a failed dial burns it exactly like a successful request would; there is no refund. The audit row names `builtin:dial-failed` for a failed dial, `builtin:tunnel-failed` for a tunnel that died before an answer, `builtin:private-ip` for a DNS-rebind refusal and `builtin:resolve-failed` for a name that did not resolve. A retry needs a new approval.
+- On HTTPS, a CONNECT that got nothing back from the far side gives the grant back once. That covers a failed dial, a configured upstream proxy's refusal of the CONNECT included (`builtin:dial-failed`).
+- Or a tunnel whose upstream, after the sandbox's TLS hello, closed or reset with no byte back, or answered in plaintext that the proxy refused and did not relay (`builtin:tunnel-failed`).
+- That row then carries the `approval_id`, and its `cause` ends with a note that the once approval was not spent. The next request to the host within 60 seconds uses the same approval. A retry that reaches the proxy before that row is written asks again.
+- One approval comes back at most once, and not when another request to the host raised an approval first; one whose raise had already failed without a refusal does not block it. A replaced proxy starts with no approvals cached, so a replace drops it.
+- A request still held on the same approval under `wait_for_review` can take it after the 60 seconds. A proxy image from an earlier release always spends it.
+- Everything else spends it: a DNS-rebind refusal (`builtin:private-ip`), a name that did not resolve (`builtin:resolve-failed`), a TLS alert, which reaches the sandbox, and a tunnel that relayed any answer.
+- So do an upstream that wrote or closed before the sandbox sent anything, and a sandbox that closed first or did not open with TLS.
+- So does a CONNECT the proxy refused at the run's tunnel limit (`builtin:tunnel-limit`), whose `503` asks for a retry.
+- So does a host the proxy terminates TLS for (one a request rule names, a token-injection host, or an LLM host it injects into or inspects), and every plain HTTP request. A retry then needs a new approval.
 
 **`until` is bounded by the run, and honored against two clocks.**
 
@@ -1157,12 +1165,13 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - `review` does not hold every push. A push keeps its own push rules; `blocked` refuses them all.
 - `blocked` denies drives, member drives and kept machines through the same doors as `deny_user_drive`, `deny_member_drives` and `deny_kept_machines`, so it applies where those apply: to runs under a unit, and to a kept machine's governed callers. A member's own `data_out: blocked` denies pushes but not drives or kept machines, which are governance limits.
 - A rule that cannot be read keeps content in. SSH treats it as `blocked`, the automatic bring-back is refused, and run output, the recording replay, web apps and a computer folder's bring-back answer 503 `data_out_unreadable`.
-- A run with no recorded policy, whose audit rows were pruned, carries no rule: every path, SSH included, reads it as `allowed`.
+- A run with no recorded policy, whose audit rows were pruned, carries no rule: every path, SSH included, reads it as `allowed`, except the desktop. The desktop's socket and its Files panel refuse instead, with 503 `desktop_rules_unreadable`.
 - Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
 - Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
 - The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app.
 - With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
-- Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A web app's refusals write it within the audit rate limit shared with failed authentication. A refused Files panel download keeps its `desktop.file.transfer` row. A 503 `data_out_unreadable` writes no row; it is logged.
+- Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A web app's refusals write it; a refused call to an `inbound` app with an API token writes it only within the audit rate limit shared with failed authentication.
+- A refused Files panel download keeps its `desktop.file.transfer` row. A 503 `data_out_unreadable` writes no row; it is logged.
 
 ## `tool_rules` — `[]ToolRule`
 
@@ -1244,7 +1253,9 @@ An `approve_each` call can carry an operation key, the `_meta` member `wardyn.de
 
 A run with a `correlation_id` gives a call without a key one made from the call: its server, tool and arguments, and which occurrence of that call it is in the run. A retry in a new run with the same `correlation_id` within 24 hours of the earlier send is then answered with it, call by call in order.
 
-After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does. A second identical call that waits at the same time as the first may ask a person, and that approval then sends nothing.
+After 24 hours it is asked about as a new call. Within one run, a call repeated after its send is asked about as before, until the run's proxy is revived or restarted: the new proxy counts from the first occurrence again, as a retry does.
+
+A second identical call that waits at the same time as the first, under the same operation key (the one made from the call, or the caller's own), asks no one. Once a person approves, one of them is sent and the other is told the identical call took the approval.
 
 
 ### Try approve_each without an MCP server
@@ -1305,7 +1316,8 @@ What the proxy does for a rule host:
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` without that certificate and on the desktop sign-in lane. When the run's own rules name the host, a `CONNECT` on another port is refused too. A host named only by a set an outer layer adds when the policy is sealed is opened on any port.
 - Plain HTTP to a rule host is checked per request.
 - Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
-- A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
+- A VM run (`linux_vm`, `macos_vm`) judges host rules on its guest's flows as a container run does. HTTPS to an inspected port is opened and each request allowed, held or refused, and plain HTTP on port 80 is judged by path.
+- A rule host the proxy cannot open, on any other port or with no interception certificate, is refused. On a macOS VM, an app that uses only the system trust store fails TLS to a rule host unless `macos_vm_inspection_ca` is on and the run's base trusts that CA, within [its limits](operations/macos-vm-use.md#apps-that-use-only-the-system-trust-store).
 - Requests the proxy sends for itself are not checked: handing a GitHub token back, the push check's reads of the forge, and AWS role credentials.
 
 Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under `allow_all_egress`, a `CONNECT` to the server's IP address, or to another name for it, reads no rule, even when the request inside names the rule host. `refuse_ip_literals` blocks only the IP-address form.

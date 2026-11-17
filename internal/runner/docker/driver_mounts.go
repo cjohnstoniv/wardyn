@@ -16,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/volume"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -96,6 +97,11 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}
 		}
+		// After the member gate, so a member's folder is refused for what the member rules say before
+		// anything is said of this runner's own directories, and with a sentence that names no path.
+		if err := d.checkBindOutsideMacVM(m.Source); err != nil {
+			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   m.Source,
@@ -158,6 +164,34 @@ func (d *Driver) boundMountAllowed(m runner.Mount) error {
 		return errors.New("a runner binds only a member's folder bound to it")
 	}
 	return nil
+}
+
+// macVMBindDirs are the directories a container bind may not be, sit under or contain: this runner's
+// macOS VM root, the configured one while macOS VM sandboxes are on, else the default under the login's
+// home, and the admission ledger and socket directories the VM shares keep out too (macSideDirs). Any may
+// not exist, and then no bind is refused for it.
+func (d *Driver) macVMBindDirs() []string {
+	c := d.macVMConfig()
+	root := ""
+	if c != nil {
+		root = c.Layout.Root
+	}
+	if root == "" {
+		root, _ = macvm.DefaultRoot()
+	}
+	return append([]string{root}, macSideDirs(c)...)
+}
+
+// checkBindOutsideMacVM refuses a container bind of src that touches any of macVMBindDirs. The refusal
+// is pathless, since it reaches the member as the run's failure hint; both paths go to the operator's log.
+func (d *Driver) checkBindOutsideMacVM(src string) error {
+	err := runner.CheckBindOutsideMacVMDirs(src, d.macVMBindDirs()...)
+	var dirErr *runner.MacVMDirError
+	if errors.As(err, &dirErr) {
+		slog.Warn("wardyn: container bind refused: it touches the macOS VM runner's own directories",
+			slog.String("source", dirErr.Src), slog.String("protected", dirErr.Dir), slog.Bool("inside", dirErr.Inside))
+	}
+	return err
 }
 
 // memberBindLimits is the writable ceiling and own roots a member folder is held to at bind. On a runner
@@ -255,8 +289,13 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 	case types.DriveBackendHostPath:
 		// The SHARE bind, converted here only. Every check on its source is hostPathDriveReal's, which a
 		// macOS VM's shared folder runs too.
-		if _, err := d.hostPathDriveReal(drive); err != nil {
+		real, err := d.hostPathDriveReal(drive)
+		if err != nil {
 			return nil, nil, err
+		}
+		if err := d.checkBindOutsideMacVM(real); err != nil {
+			return nil, nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+				runner.RefuseUserDriveBind(drive, drive.ObjectName, real, runner.DriveSourceRefused, err))
 		}
 		return []mount.Mount{{
 			Type:        mount.TypeBind,

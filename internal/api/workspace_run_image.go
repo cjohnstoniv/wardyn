@@ -236,7 +236,9 @@ func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) image
 	pw, refusal := s.prewrappedRunImage(ctx, ref)
 	switch {
 	case refusal != nil && refusal.err != nil:
-		return imageResolveResult{BaseErr: refusal.err}
+		// The store's text stays in the log: BaseErr reaches the member's failure hint.
+		slog.ErrorContext(ctx, "wardynd: a workspace's prewrapped base image could not be read", slog.String("ref", ref), slog.Any("err", refusal.err))
+		return imageResolveResult{BaseErr: errors.New("the prewrapped base image could not be read")}
 	case refusal != nil:
 		return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
 	case pw == nil:
@@ -446,6 +448,9 @@ func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, prima
 	return commit(rec, map[string]any{"source": "generated-devcontainer"})
 }
 
+// refreshNotRecordedMsg is a refresh's failure when its image built but the workspace could not be pointed at it.
+const refreshNotRecordedMsg = "Could not record the refreshed image"
+
 // commitImage swaps the built image in and audits the build a success. A refresh whose swap write
 // failed is a failure, and keeps its tag: the write may have landed with only its reply lost, and
 // the workspace would then name an image removed here.
@@ -453,7 +458,8 @@ func (s *Server) commitImage(ctx context.Context, primary types.Workspace, opts 
 	extra map[string]any, buildAudit func(string, map[string]any)) imageResolveResult {
 	superseded, werr := s.commitBuiltImage(ctx, primary, opts.observedRef(primary), rec, extra, opts.ReclaimLoser)
 	if werr != nil && opts.Refresh {
-		extra["error"] = "could not record the refreshed image: " + werr.Error()
+		// The wizard reads this back (buildFailureDetail); commitBuiltImage already logged the cause beside cache_warn.
+		extra["error"] = refreshNotRecordedMsg
 		buildAudit("failure", extra)
 		return imageResolveResult{}
 	}
@@ -485,7 +491,7 @@ func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, 
 	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, observed, rec.Image.Ref, rec.CacheKey, rec)
 	switch {
 	case err != nil:
-		extra["cache_warn"] = err.Error()
+		extra["cache_warn"] = auditStep(ctx, auditStepRecordImage, err, slog.String("workspace_id", primary.ID.String()))
 		return false, err
 	case !applied:
 		extra["cache_warn"] = "superseded"

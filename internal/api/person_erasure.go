@@ -739,6 +739,8 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 				status, reason, msg = http.StatusServiceUnavailable, reasonCredentialEraseRevokeUnfinished, erasureRevokeUnfinishedMsg
 				data["reason"] = reason
 			}
+			// Kept as the erasure's own report, not a step: it is the record for the admin who ran it, and it
+			// names what the failed scope kept, by name ("member drive \"Notes\" was kept: ..."), for the retry.
 			data["error"] = err.Error()
 			record(owner, "failure", data)
 			slog.ErrorContext(r.Context(), "wardyn: person erasure incomplete", slog.String("target", owner), slog.Any("err", err))

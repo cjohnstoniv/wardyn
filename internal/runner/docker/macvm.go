@@ -80,6 +80,9 @@ type MacVMConfig struct {
 	Changed func()
 	// OnUnexpectedWindow, when set, hears of a window the helper opened with a grant this runner did not issue.
 	OnUnexpectedWindow func(runID uuid.UUID, grant string, at time.Time)
+	// InspectionCA is this Mac's inspection CA (the runner setting macos_vm_inspection_ca), which re-issues a
+	// run's proxy CA when the run's base trusts it (macVMInspection); nil when the setting is off.
+	InspectionCA *macvm.InspectionCA
 	// KeptConfig turns kept machines on (macvm_kept.go); its zero value keeps none.
 	KeptConfig
 
@@ -466,7 +469,11 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
-	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
+	insp, err := c.macVMInspection(spec, kept)
+	if err != nil {
+		return fail(err)
+	}
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, insp.proxy, false)
 	if err != nil {
 		return fail(err)
 	}
@@ -543,7 +550,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 			return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
 		}
 	}
-	res, err := d.bootMacVM(bctx, v, cc, spec, guestMounts, guestDisks, password)
+	res, err := d.bootMacVM(bctx, v, cc, spec, guestMounts, guestDisks, password, insp.signed)
 	password = ""
 	if err != nil {
 		return fail(err)
@@ -567,6 +574,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	machine := &types.VMMachine{Accelerator: types.MacVMAccelerator, MachineType: types.MacVMMachineType,
 		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS, BaseEditedAt: macvm.BaseEditedAt(c.Layout.BaseDir(0), man)}
 	machine.MacOSBase = cmp.Or(spec.MacOSBase, macvm.StandardBase)
+	machine.InspectionCA, machine.InspectionCASHA256 = insp.state, insp.sha256
 	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
@@ -619,7 +627,7 @@ func waitMacVMRunning(ctx context.Context, cc *macvm.ControlClient) error {
 // bootMacVM waits for the guest agent and hands it its sandbox; it answers what the guest made of its
 // sign-in store.
 func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClient, spec runner.SandboxSpec, mounts []guestagent.Mount, disks []guestagent.Disk,
-	desktopPassword string) (guestagent.InitResult, error) {
+	desktopPassword string, signed bool) (guestagent.InitResult, error) {
 	var none guestagent.InitResult
 	if err := waitForSocket(ctx, filepath.Join(d.macVMConfig().sockDir(v.runID), macvm.AgentSock), 30*time.Second); err != nil {
 		return none, fmt.Errorf("docker: the macOS VM's guest agent: %w", err)
@@ -642,6 +650,7 @@ func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClien
 	if err != nil {
 		return none, err
 	}
+	in = withMacInspection(in, signed)
 	in.Mounts, in.Disks = mounts, disks
 	in.DesktopPassword = desktopPassword
 	res, err := v.agent.Init(ctx, in)

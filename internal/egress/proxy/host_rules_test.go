@@ -338,16 +338,17 @@ func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
 	}
 }
 
-// TestHostRulesRefuseAnUninspectedConnect: no CA, a port the proxy does not open for the host, and a VM
-// proxy each refuse the CONNECT with policy:host-rule-needs-inspection, never an opaque tunnel.
+// TestHostRulesRefuseAnUninspectedConnect: no CA, and a port the proxy does not open for the host, each refuse
+// the CONNECT with policy:host-rule-needs-inspection, never an opaque tunnel, on a VM run's proxy as on a container's.
 func TestHostRulesRefuseAnUninspectedConnect(t *testing.T) {
 	for name, tc := range map[string]struct {
 		o    hrOpts
 		port string
 	}{
-		"no CA":            {hrOpts{noCA: true}, "443"},
-		"uninspected port": {hrOpts{mitmHosts: []string{hrHost + ":443"}}, "8443"},
-		"VM run":           {hrOpts{vm: true}, "443"},
+		"no CA":                    {hrOpts{noCA: true}, "443"},
+		"uninspected port":         {hrOpts{mitmHosts: []string{hrHost + ":443"}}, "8443"},
+		"VM run, no CA":            {hrOpts{noCA: true, vm: true}, "443"},
+		"VM run, uninspected port": {hrOpts{mitmHosts: []string{hrHost + ":443"}, vm: true}, "8443"},
 	} {
 		cu := captureUpstream(t, true, "ok")
 		p, buf, _ := hrProxy(t, tc.o, cu.srv)
@@ -361,14 +362,17 @@ func TestHostRulesRefuseAnUninspectedConnect(t *testing.T) {
 			t.Errorf("%s: no %s row:\n%s", name, ruleSourceHostRuleNeedsInspection, buf.String())
 		}
 	}
-	// The inspected port of the same entry opens.
-	cu := captureUpstream(t, true, "ok")
-	p, _, caPEM := hrProxy(t, hrOpts{mitmHosts: []string{hrHost + ":443"}}, cu.srv)
-	srv := httptest.NewServer(p)
-	defer srv.Close()
-	status, conn, _ := hrConnect(t, srv.URL, "443")
-	if status != http.StatusOK || hrInner(t, conn, caPEM, "GET", "/public") != http.StatusOK {
-		t.Errorf("CONNECT on the inspected port = %d, want 200 and an allowed GET", status)
+	// The inspected port of the same entry opens, on a VM run's proxy as on a container's: a guest's own
+	// proxy client reaches this path unchanged (vmnet's proxyDirect).
+	for _, vm := range []bool{false, true} {
+		cu := captureUpstream(t, true, "ok")
+		p, _, caPEM := hrProxy(t, hrOpts{mitmHosts: []string{hrHost + ":443"}, vm: vm}, cu.srv)
+		srv := httptest.NewServer(p)
+		status, conn, _ := hrConnect(t, srv.URL, "443")
+		if status != http.StatusOK || hrInner(t, conn, caPEM, "GET", "/public") != http.StatusOK {
+			t.Errorf("vm=%v: CONNECT on the inspected port = %d, want 200 and an allowed GET", vm, status)
+		}
+		srv.Close()
 	}
 }
 
@@ -418,26 +422,16 @@ func TestHostRulesImposeNothingOnOtherHosts(t *testing.T) {
 	}
 }
 
-// TestConfigHostRulesLoadOnEveryRouteButAVM: rules on a VM run are refused at load. A rule on a host a
-// broker or a via_org route serves is judged on each request (host_rules_broker_test.go,
-// host_rules_via_org_test.go), so it loads.
-func TestConfigHostRulesLoadOnEveryRouteButAVM(t *testing.T) {
+// TestConfigHostRulesLoadOnEveryRoute: a rule on a host a broker or a via_org route serves is judged on each
+// request (host_rules_broker_test.go, host_rules_via_org_test.go), and a VM run's guest flows reach the same
+// paths (vmnet_host_rules_test.go), so each loads.
+func TestConfigHostRulesLoadOnEveryRoute(t *testing.T) {
 	rule := func(h string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{{Host: h, Effect: types.HostRuleAllow}}}}
 	}
 	gitGrant := uuid.New()
-	for name, tc := range map[string]struct {
-		c    Config
-		want string
-	}{
-		"vm": {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
-	} {
-		err := tc.c.validateHostRules()
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: err = %v, want one naming %q", name, err, tc.want)
-		}
-	}
 	for name, c := range map[string]Config{
+		"VM run":      {Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true},
 		"model route": {Policy: types.RunPolicySpec{HostRules: rule("api.anthropic.com")}},
 		"git broker":  {Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}},
 		"pat broker":  {Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}},
@@ -640,6 +634,22 @@ func TestViaOrgRefusesDeclaredOverrideTrailers(t *testing.T) {
 			strings.Contains(logged, `"rule_source":"`+ruleSourceHostRule+`"`) && strings.Contains(logged, "trailer")
 		if refused != refusal || (!refusal && (status != http.StatusOK || !reached.Load())) {
 			t.Errorf("via_org POST declaring a %s trailer: status %d err %v organisation reached %v, want refused=%v:\n%s", trailer, status, err, reached.Load(), refusal, logged)
+		}
+	}
+}
+
+// TestHostRulesRefuseARuleHostOnTheSigninLane: the sign-in lane opens no connection, so a CONNECT to a rule
+// host on it is refused with policy:host-rule-needs-inspection, on a container's proxy and a VM run's.
+func TestHostRulesRefuseARuleHostOnTheSigninLane(t *testing.T) {
+	for _, vm := range []bool{false, true} {
+		rig := newSigninLaneRigFor(t, vm, func(o *Options) {
+			o.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test"},
+				HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: "site.test", Effect: types.HostRuleAllow}}}}})
+			o.MITMHosts = []string{"site.test:443"}
+		})
+		_, _, status := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred))
+		if status != http.StatusForbidden || !strings.Contains(rig.logs.String(), ruleSourceHostRuleNeedsInspection) {
+			t.Errorf("vm=%v: CONNECT = %d, want 403 and a %s row", vm, status, ruleSourceHostRuleNeedsInspection)
 		}
 	}
 }

@@ -105,7 +105,8 @@ type Options struct {
 	OrgDeny []string
 	// Credential, when set, names the paths (slash-separated, relative to the synced root) that hold
 	// credentials. Each is left out with its whole subtree in both directions, as the denylist is.
-	// The folder-only runner sets it to runner.DeniedUserSegment; the CLI leaves it nil.
+	// The folder-only runner sets it to runner.DeniedUserSegmentUnder, through credentialUnder; the CLI
+	// leaves it nil.
 	Credential func(rel string) bool
 	// Notify gets the list of laptop deletes before they are applied; nil drops it.
 	Notify io.Writer

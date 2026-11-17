@@ -231,6 +231,10 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
+		if err := readCtx.Err(); err != nil {
+			done <- err // cut before the store was opened: nothing is written into tail
+			return
+		}
 		rc, err := recording.OpenJoined(readCtx, s.cfg.RecordingStore, runID.String())
 		if err == nil {
 			// Each batch still refreshes after its bytes arrive; per-event
@@ -255,6 +259,7 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	case readErr = <-done:
 	case <-readCtx.Done():
 		readErr = readCtx.Err()
+		<-done // the reader writes into tail until it returns; tail is sealed and released below
 	}
 	// A read that ran out of time keeps no bytes, so it asks no closing coverage
 	// question: in a sweep pass the caller's own deadline is what ended it, and

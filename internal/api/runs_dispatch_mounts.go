@@ -887,7 +887,7 @@ func (s *Server) abortUnrecordedSandbox(ctx context.Context, runID uuid.UUID, re
 	slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; stopping the sandbox and failing the run",
 		slog.String("run_id", runID.String()), slog.String("sandbox_ref", ref), slog.Any("err", cause))
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
-		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": cause.Error()})))
+		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": auditStepSetSandboxRef})))
 	s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
 	s.failAndRevoke(ctx, runID, types.RunStarting,
 		"the sandbox was created but its reference could not be persisted, so the run could not be tracked")
@@ -904,7 +904,7 @@ func (s *Server) auditLostStart(ctx context.Context, runID uuid.UUID, ref string
 	if cause != nil {
 		// A store fault, not a concurrent kill: the note must not claim one (#2806).
 		data["note"] = "the run could not be moved from STARTING to RUNNING after CreateSandbox because the store failed; dispatch aborted"
-		data["error"] = cause.Error()
+		data["error"] = auditStep(ctx, auditStepMarkRunning, cause, slog.String("run_id", runID.String()))
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch",
 		runID.String(), "failure", mustJSON(data)))

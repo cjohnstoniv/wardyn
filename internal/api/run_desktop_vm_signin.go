@@ -263,7 +263,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	gen, err := st.NextDesktopVMPauseGeneration(ctx, run.ID)
 	if err != nil { // nothing was sent: the agent runs on
 		s.recordAuditHeld(context.WithoutCancel(ctx), s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
-			mustJSON(map[string]any{"stage": "record", "error": err.Error()})))
+			mustJSON(map[string]any{"stage": "record", "error": auditStep(ctx, auditStepPauseGeneration, err, slog.String("run_id", run.ID.String()))})))
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "The agent's pause could not be recorded; try again")
 		return
 	}
@@ -291,7 +291,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		// and owns the stopped agent, so it is not continued here, and that pause's row is the answer.
 		if cur, _, rerr := st.DesktopVMSignIns(bg, run.ID); rerr == nil && cur.PausedAt != nil {
 			unlock()
-			s.supersededBy(bg, w, run, at, principal, cur, map[string]any{"error": err.Error()})
+			s.supersededBy(bg, w, run, at, principal, cur, map[string]any{"error": errDesktopSignInUnmarked.Error()})
 			return
 		}
 	}
@@ -301,7 +301,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		switch {
 		case !ok:
 			s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
-				mustJSON(map[string]any{"stage": "lock_lost", "error": err.Error()})))
+				mustJSON(map[string]any{"stage": "lock_lost", "error": desktopPauseFault(bg, run.ID, stage, err)})))
 			w.Header().Set("Retry-After", "5")
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 			return
@@ -309,11 +309,11 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 			s.restopFailed(bg, w, run, at, principal, *newer, restop, map[string]any{"paused_at": now})
 			return
 		case newer != nil:
-			s.supersededBy(bg, w, run, at, principal, *newer, map[string]any{"error": err.Error()})
+			s.supersededBy(bg, w, run, at, principal, *newer, map[string]any{"error": desktopPauseFault(bg, run.ID, stage, err)})
 			return
 		}
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
-			mustJSON(map[string]any{"stage": stage, "error": err.Error()})))
+			mustJSON(map[string]any{"stage": stage, "error": desktopPauseFault(bg, run.ID, stage, err)})))
 		if stage == "record" {
 			writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "The agent's pause could not be recorded; try again")
 			return
@@ -459,11 +459,11 @@ func (s *Server) supersededBy(ctx context.Context, w http.ResponseWriter, run ty
 }
 
 // restopFailed answers a pause or resume whose stop again, for the newer pause whose mark (cur) stands,
-// failed: the agent may run under that mark, so no paused view is given. Its failure row carries the
-// error and both pauses' paused_at; nothing retries the stop.
+// failed: the agent may run under that mark, so no paused view is given. Its failure row names the failed
+// step and both pauses' paused_at, with the error in the server log; nothing retries the stop.
 func (s *Server) restopFailed(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
 	cur store.DesktopVMSignIns, err error, data map[string]any) {
-	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, err.Error()
+	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, auditStep(ctx, auditStepStopAgain, err, slog.String("run_id", run.ID.String()))
 	s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure", mustJSON(data)))
 	writeDesktopPauseFailed(w, http.StatusBadGateway)
 }
@@ -885,7 +885,7 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 	failed := func(stage string) { // the continue answered an error: the mark stays
 		unlock()
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
-			mustJSON(map[string]any{"stage": stage, "paused_by": row.PausedBy, "paused_at": row.PausedAt, "error": err.Error()})))
+			mustJSON(map[string]any{"stage": stage, "paused_by": row.PausedBy, "paused_at": row.PausedAt, "error": auditStep(bg, auditStepResumeAgent, err, slog.String("run_id", run.ID.String()))})))
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSignInsResumeFailed, "the agent could not be resumed; it is still paused. Try again")
 	}
 	// The agent runs again: clear its mark even if the person's tab has closed, or the run would say

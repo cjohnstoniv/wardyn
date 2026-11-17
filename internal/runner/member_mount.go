@@ -73,6 +73,11 @@ var memberDeniedSegments = map[string]bool{
 	".gemini":          true, // another agent CLI's login
 	".npmrc":           true, // registry auth tokens
 	".pypirc":          true,
+	// The macOS VM directory (~/Library/Application Support/Wardyn/macos-vm.noindex, internal/macvm
+	// RootDirName): every run's disk, the guest agent's signing key and the Mac's inspection CA key. A
+	// segment, not a pair with Wardyn, so a folder pass of Wardyn itself, whose paths start below it, is
+	// refused too.
+	"macos-vm.noindex": true,
 }
 
 // memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
@@ -597,6 +602,14 @@ func DeniedUserSegment(real string) string {
 		}
 	}
 	return ""
+}
+
+// DeniedUserSegmentUnder is DeniedUserSegment for rel, a slash-separated path relative to dir: the
+// credential rules read dir's own names too, so a pair that spans the boundary matches. A pass of
+// ~/Library leaves out Keychains/x, and a pass of ~/.config leaves out gh/hosts.yml, as a pass of the
+// folder above does.
+func DeniedUserSegmentUnder(dir, rel string) string {
+	return DeniedUserSegment(filepath.Join(dir, filepath.FromSlash(rel)))
 }
 
 // ParseUserMountPolicy builds the policy from its four raw operator/MDM env

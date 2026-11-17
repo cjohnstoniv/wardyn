@@ -542,7 +542,10 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
 			}
-			data["error"] = err.Error()
+			data["error"] = err.Error() // a sandbox that is gone is a sentence the code wrote
+			if !errors.Is(err, errResumedSandboxGone) {
+				data["error"] = auditStep(ctx, auditStepThawAgent, err, slog.String("run_id", run.ID.String()))
+			}
 			s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 				run.ID.String(), "failure", mustJSON(data)))
 			return err

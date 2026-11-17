@@ -424,7 +424,7 @@ change to the module and its test, in the same commit.
 | `PROVIDERS.KIND_AZURE_DEVOPS` | `workspace-providers-copy.ts` | Azure DevOps |
 | `APPROVAL_BANNER_LABEL.what` / `.blast` | `wardyn/copy.ts` | What you're approving: / Blast radius: |
 | `APPROVAL_SCOPE_LABEL.once` / `.run` / `.until` / `.always` | `wardyn/copy.ts` | Once / This run / Until… / Always |
-| `APPROVAL_SCOPE_HINT.once` / `.run` | `wardyn/copy.ts` | This one connection. The next attempt asks again. / Every attempt until this run ends. (default) |
+| `APPROVAL_SCOPE_HINT.once` / `.run` | `wardyn/copy.ts` | This one connection, or one retry within 60 seconds if it was HTTPS and got nothing back. Then it asks again. / Every attempt until this run ends. (default) |
 | `APPROVAL.CANCELLED_BODY` | `wardyn/copy.ts` | The run ended before anyone decided this. Nothing was approved and nothing was denied. |
 | `CAPABILITY.brokerLine` / `gitPatLine` / `sshKeyLine` | `wardyn/copy.ts` | (the three residency lines, rendered as the lane chips' tooltips, unchanged) |
 | `MEMBER_GETTING_STARTED.SETUP_SUMMARY_TITLE` / `_HELPER` | `wardyn/copy.ts` | What's set up for you / Your admin configured the barrier, network and shared credentials. Your runs inherit them. |

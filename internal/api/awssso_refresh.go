@@ -657,7 +657,7 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 			slog.ErrorContext(ctx, "wardynd: the secret store refused a write; not renewing the AWS SSO credential", slog.Any("err", perr))
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
 			s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-				"provider": awsSSOProvider, "spent": false, "probe_error": perr.Error(),
+				"provider": awsSSOProvider, "spent": false, "probe_error": auditStepProbeSecretWrite, // the cause is logged above
 			})
 			return blob, awsSSORefreshStoreUnwritableSentence
 		}
@@ -728,7 +728,7 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 		// same thing.
 		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
 		outcome = "failure"
-		data["persist_error"] = perr.Error()
+		data["persist_error"] = auditStepPersistAWSSSO // the cause is logged below
 		data["persist_attempts"] = persistAttempts
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed",
 			slog.Any("err", perr))

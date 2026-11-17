@@ -894,7 +894,7 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 				slog.String("run_id", runID.String()),
 				slog.Any("err", serr),
 			)
-			errs["teardown_error"] = serr.Error()
+			errs["teardown_error"] = "Stop sandbox" // the step, as the api's run.revoke rows name it; the cause is logged above
 		}
 	}
 	if l.finishOutput != nil {

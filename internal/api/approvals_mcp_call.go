@@ -155,7 +155,8 @@ func mcpCallScopeShaped(scope json.RawMessage) (types.MCPCallScope, bool) {
 // is a 400 with an auth.fail row: only a misbehaving proxy writes one. An accepted scope comes back
 // re-marshalled from its typed form with canonical arguments and extra, and the row stores that,
 // never the raw bytes. A scope with none of those keys comes back unchanged. An operation key that
-// is not one (types.ValidOperationKey) is refused as a bad scope, and a key already sent in the
+// is not one (types.ValidOperationKey), or that has the made form but is not this call's own
+// (types.DerivedOperationKeyFits), is refused as a bad scope, and a key already sent in the
 // run's namespace is answered 409 with that send instead (refuseSentOperation).
 func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, kind types.ApprovalKind, scope json.RawMessage) (json.RawMessage, bool) {
 	if !mcpCallKeyPresent(scope) {
@@ -171,7 +172,7 @@ func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, k
 		key, err := sc.ComputeKey()
 		if errors.Is(err, types.ErrMCPCallTooLarge) {
 			reason, msg = reasonMCPCallTooLarge, tooLarge
-		} else if err == nil && key == sc.CallSHA256 && (sc.OperationKey == "" || types.ValidOperationKey(sc.OperationKey)) {
+		} else if err == nil && key == sc.CallSHA256 && (sc.OperationKey == "" || (types.ValidOperationKey(sc.OperationKey) && types.DerivedOperationKeyFits(sc.OperationKey, sc.CallSHA256))) {
 			if out, ok := canonicalMCPCallScope(sc); ok {
 				return out, s.refuseSentOperation(w, r, sc)
 			}

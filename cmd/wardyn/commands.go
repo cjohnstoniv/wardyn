@@ -395,7 +395,7 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 					// Surface WHY, not just the exit code — a dispatch/image-pull
 					// failure has no agent exit and would otherwise read as an
 					// opaque "FAILED (agent exit code 1)".
-					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
+					if reason := runFailureReason(waitCtx, c, run); reason != "" {
 						fmt.Fprintf(errW, "  reason: %s\n", reason)
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
@@ -475,41 +475,6 @@ func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
 		}
 	}
 	return code
-}
-
-// runFailureReason surfaces WHY a FAILED run failed. The dispatch path records
-// failures as audit events with outcome "failure" and a human string in
-// data.error / data.reason (internal/api/runs_dispatch.go) — a reason that is
-// otherwise buried in `wardyn audit <id> --json` and invisible on run get/--wait.
-// A governance product should not hide a FAILED run's own reason from its default
-// surfaces (an unpullable image, an unknown --agent falling back to a remote ref,
-// a proxy-resolve error all land here). Returns "" for a plain nonzero agent exit,
-// where the exit code is the whole story. ponytail: first failure ≈ root cause;
-// a later "failure" is usually a teardown cascade.
-//
-// ?outcome=failure for agentExitCode's reason: an unfiltered per-run read is
-// capped at 1000 events, so on a chatty run the dispatch error that explains an
-// otherwise opaque "FAILED" was simply not on the page.
-func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
-	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{Outcome: "failure"})
-	if err != nil {
-		return ""
-	}
-	for _, e := range events {
-		if e.Outcome != "failure" || len(e.Data) == 0 {
-			continue
-		}
-		var d map[string]any
-		if json.Unmarshal(e.Data, &d) != nil {
-			continue
-		}
-		for _, k := range []string{"error", "reason", "detail"} {
-			if v, ok := d[k].(string); ok && v != "" {
-				return fmt.Sprintf("%s: %s", e.Action, v)
-			}
-		}
-	}
-	return ""
 }
 
 // approvalScopePeek extracts the fields common to the several

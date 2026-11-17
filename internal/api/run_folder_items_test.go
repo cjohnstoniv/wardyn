@@ -590,6 +590,7 @@ func (s statusReadFails) RunLocalFolderStatus(context.Context, uuid.UUID) (types
 // changes in it and nothing recorded; a keep on a confirmed cut alone, which stops a sandbox whose runner is away; and
 // a killed run kept for its resume.
 func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
+	logs := captureSlog(t)
 	down := errors.New("database down")
 	for name, tc := range map[string]struct {
 		setup func(*passFixture)
@@ -683,9 +684,10 @@ func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
 				t.Errorf("record %+v, want it unchanged from %+v", st, before)
 			}
 			if f.sb.proxyErr != nil {
+				// The row names the failed cut; the proxy's own error is in the server log.
 				ev := findAudit(f.audit.snapshot(), f.run.ID, "sandbox.orphan.sweep", "failure")
-				if ev == nil || !strings.Contains(string(ev.Data), "the proxy did not stop") {
-					t.Errorf("cut failure row %v, want one under the end's own action naming the proxy's error", ev)
+				if ev == nil || !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepCutAgent+`"`) || !strings.Contains(logs.String(), "the proxy did not stop") {
+					t.Errorf("cut failure row %v, log %q; want one under the end's own action naming the cut, and the proxy's error logged", ev, logs.String())
 				}
 			}
 		})

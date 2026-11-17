@@ -132,7 +132,8 @@ func (s *Server) revokeRunPAT(ctx context.Context, st store.RunPATStore, p store
 		}
 		return adoRevoked
 	}
-	data["error"], data["abandoned"] = err.Error(), !transient
+	data["error"], data["abandoned"] = auditStep(ctx, auditStepRevokeToken, err, slog.String("run_id", p.RunID.String()),
+		slog.String("authorization_id", p.AuthorizationID.String())), !transient
 	s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed,
 		p.AuthorizationID.String(), "failure", mustJSON(data)))
 	if !transient {

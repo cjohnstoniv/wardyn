@@ -104,11 +104,9 @@ func (u *keptToolsUpdater) behind(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var l macvm.BaseList
-	if m.items.file != "" {
-		if l, err = macvm.LoadBaseList(m.items.file); err != nil {
-			return false, err
-		}
+	l, err := m.loadItems()
+	if err != nil {
+		return false, err
 	}
 	return macvm.NeedsToolsUpdate(dir, t, m.version, time.Now()) || macvm.ItemsChanged(dir, l.Digest()), nil
 }

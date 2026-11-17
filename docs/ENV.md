@@ -1120,7 +1120,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
-- The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
+- The same list covers `.codex`, `.gemini`, `.npmrc`, `.pypirc` and `macos-vm.noindex`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - A member's folder scan opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one.
 - Where the server's user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why.

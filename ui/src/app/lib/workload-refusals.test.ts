@@ -32,9 +32,15 @@ describe("workload refusal sentences", () => {
 
   it("every workload reason of reasons.go that a workload can carry is told", () => {
     const go = readFileSync(join(repoRoot(), "internal/api/reasons.go"), "utf8");
-    const carried = [...go.matchAll(/reasonWorkload(Invalid|SourceConflict|CapReached|PoolMismatch|BindingInactive)\s*=\s*"([a-z_]+)"/g)].map((m) => m[2]);
-    expect(carried).toHaveLength(5);
+    const carried = [...go.matchAll(/reasonWorkload(Invalid|SourceConflict|CapReached|PoolMismatch|BindingInactive|PolicyPinMismatch)\s*=\s*"([a-z_]+)"/g)].map((m) => m[2]);
+    expect(carried).toHaveLength(6);
     for (const reason of carried) expect(WORKLOAD_REFUSAL_SENTENCE[reason], reason).toBeTruthy();
+  });
+
+  it("the pin-mismatch sentence says its words", () => {
+    expect(WORKLOAD_REFUSAL_SENTENCE.workload_policy_pin_mismatch).toBe(
+      "Its policy now resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.",
+    );
   });
 
   it("every runner pool reason is told", () => {
