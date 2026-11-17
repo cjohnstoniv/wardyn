@@ -163,6 +163,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	for _, rel := range []string{
 		".ssh", ".aws", ".azure", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
 		".netrc", ".git-credentials", ".config/gh", ".config/gcloud", ".git/config", "Library/Keychains",
+		"Library/Application Support/Wardyn/macos-vm.noindex", "Library/Application Support/Wardyn/macos-vm.noindex/agent-signing",
 		".codex", ".gemini", ".npmrc", ".pypirc", ".azure/cache",
 		// Traversed, not just named: the credential dir is a PARENT of the source.
 		".ssh/keys/work", ".config/gh/hosts", ".config/gcloud/legacy_credentials",
@@ -763,5 +764,27 @@ func TestValidateUserMountSource_HoldsOwnRoots(t *testing.T) {
 				t.Fatalf("ValidateUserMountSource(%s, own=%v) = %v, want refused=%v", tc.src, tc.ownRoots, err, tc.refused)
 			}
 		})
+	}
+}
+
+// DeniedUserSegment is the check a folder pass shares with a member mount. The macOS VM directory, and
+// anything under it, is denied by its name, however far above it a pass starts; its parent is not.
+func TestDeniedUserSegment_MacOSVMDirectory(t *testing.T) {
+	const base = "/Users/a/Library/Application Support/Wardyn"
+	for _, c := range []struct {
+		path string
+		want string
+	}{
+		{base + "/macos-vm.noindex", "macos-vm.noindex"},
+		{base + "/macos-vm.noindex/inspection-ca/key.pem", "macos-vm.noindex"},
+		{base + "/MACOS-VM.NOINDEX/agent-signing", "macos-vm.noindex"},
+		{"macos-vm.noindex/runs/x/disk.img", "macos-vm.noindex"}, // as a pass of Wardyn itself names it
+		{base, ""},
+		{base + "/other", ""},
+	} {
+		got := DeniedUserSegment(c.path)
+		if !strings.EqualFold(got, c.want) {
+			t.Errorf("DeniedUserSegment(%q) = %q, want %q", c.path, got, c.want)
+		}
 	}
 }

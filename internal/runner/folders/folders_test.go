@@ -330,3 +330,34 @@ func TestSyncFolder_RefusesASandboxWithoutTheFolderAndAPathOutsideTheRoots(t *te
 		}
 	}
 }
+
+// The macOS VM directory holds every run's disk and the signing and inspection CA keys, so a folder
+// pass, a listing and a root refuse it and anything under it, like a credential folder.
+func TestFolder_RefusesTheMacOSVMDirectory(t *testing.T) {
+	h := home(t)
+	vm := filepath.Join(h, "Library", "Application Support", "Wardyn", "macos-vm.noindex")
+	put(t, filepath.Join(vm, "inspection-ca", "key.pem"), "fixture: not a real key")
+	put(t, filepath.Join(vm, "agent-signing", "key.pem"), "fixture: not a real key")
+	s := newServer(t, h)
+	sub := wire(t, s)
+	for name, p := range map[string]string{
+		"the VM directory":        vm,
+		"a folder under it":       filepath.Join(vm, "inspection-ca"),
+		"another folder under it": filepath.Join(vm, "agent-signing"),
+	} {
+		if _, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: p}); !refused(err) {
+			t.Errorf("a listing of %s: err = %v, want a refusal", name, err)
+		}
+		args := runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: p, RemoteDir: "/home/agent/work"}
+		if _, err := sub.SyncFolder(context.Background(), args); !refused(err) {
+			t.Errorf("a folder pass of %s: err = %v, want a refusal", name, err)
+		}
+	}
+	if _, err := New(context.Background(), []string{vm}, t.TempDir()); err == nil {
+		t.Error("the VM directory was accepted as a shared root")
+	}
+	// A pass of Wardyn itself names what is inside it from below Wardyn: the VM directory still never crosses.
+	if !credentialPath("macos-vm.noindex/runs/x/disk.img") {
+		t.Error("a file of the VM directory, named from the folder above it, was not left out of a pass")
+	}
+}

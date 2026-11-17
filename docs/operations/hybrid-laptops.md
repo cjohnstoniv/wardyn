@@ -388,7 +388,7 @@ What happens:
   - It follows no symlink.
   - It refuses a credential folder. Each pass, both ways, leaves out every one inside yours, at any depth and
     letter case: `.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`,
-    `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
+    `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains` and `macos-vm.noindex`, the macOS VM directory.
     A project's own `.claude` or `.docker` folder is left out too.
   - While you browse, only folder names, file counts and sizes reach Wardyn.
 - A Linux VM sandbox gets the folder the same way, into its guest as `agent`.

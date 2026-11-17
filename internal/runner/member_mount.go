@@ -73,6 +73,11 @@ var memberDeniedSegments = map[string]bool{
 	".gemini":          true, // another agent CLI's login
 	".npmrc":           true, // registry auth tokens
 	".pypirc":          true,
+	// The macOS VM directory (~/Library/Application Support/Wardyn/macos-vm.noindex, internal/macvm
+	// RootDirName): every run's disk, the guest agent's signing key and the Mac's inspection CA key. A
+	// segment, not a pair with Wardyn, so a folder pass of Wardyn itself, whose paths start below it, is
+	// refused too.
+	"macos-vm.noindex": true,
 }
 
 // memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
