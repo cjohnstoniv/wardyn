@@ -69,7 +69,8 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 // expected is the generation the revive read: its lost mark lands only while that is still the newest.
 func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun, expected int, data map[string]any, actorType types.ActorType, actor, retiring, fresh string, renewed renewedTokens, err error) *reviveError {
 	undoFailed := errors.Is(err, errPolicyNotAbandoned)
-	data["error"] = auditStep(ctx, auditStepPolicyGenRecord, err, slog.String("run_id", run.ID.String()))
+	// The cause is logged where the revive answers (loggedMsg, reviveFailedAfterClaim).
+	data["error"] = auditStepPolicyGenRecord
 	if undoFailed {
 		data["error"] = auditStepPolicyGenUndo
 	}
@@ -192,7 +193,7 @@ func (s *Server) revivePolicyMoved(ctx context.Context, run types.AgentRun, data
 // attempted instead.
 func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, retiring string,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
-	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
+	data["error"] = auditStepReviveReplace  // the cause is logged where the revive answers
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
 	// The generation is abandoned first, so the failure row carries the one that still applies.
 	noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
@@ -211,7 +212,7 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	if aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
 		// stop attempted, fenced on fence, never answered kept-current.
-		data["error"] = auditStep(ctx, auditStepReplaceThenUndo, errors.Join(err, aerr), slog.String("run_id", run.ID.String()))
+		data["error"] = auditStep(ctx, auditStepReplaceThenUndo, aerr, slog.String("run_id", run.ID.String())) // err is logged where the revive answers
 		s.liveRevived.Delete(run.ID)
 		s.revokeRetiringToken(cctx, retiring, run.ID)
 		s.revokeRenewedTokens(cctx, run.ID, renewed.ids(), fresh)
@@ -305,11 +306,11 @@ func (s *Server) reviveLostFate(ctx context.Context, run types.AgentRun) (*store
 // (gen 0, or no store.RunLoserAtGeneration) is put back to lost the same way.
 func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, fate *store.RunLostFate, data map[string]any, actorType types.ActorType, actor string,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
-	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
+	data["error"] = auditStepReviveReplace // the cause is logged where the revive answers
 	s.abandonProxyStart(ctx, run.ID, start)
 	noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
 	if aerr != nil {
-		data["abandon_error"] = aerr.Error() // the old proxy is already stopped, so none wider serves
+		data["abandon_error"] = auditStep(ctx, auditStepPolicyGenUndo, aerr, slog.String("run_id", run.ID.String())) // the old proxy is already stopped, so none wider serves
 	}
 	if aerr == nil && noop != nil && noop.Current == gen {
 		// The undo changed nothing: gen is current again behind a newer undone edit. No proxy serves here, so
@@ -326,7 +327,7 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 	applied, werr := s.fenced(ctx, run.ID, func() (bool, error) { return fl.RestoreRunLostFateAtGeneration(ctx, run.ID, gen, *fate) })
 	switch {
 	case werr != nil:
-		data["error"] = auditStep(ctx, auditStepReplaceThenRest, errors.Join(err, werr), slog.String("run_id", run.ID.String()))
+		data["error"] = auditStep(ctx, auditStepReplaceThenRest, werr, slog.String("run_id", run.ID.String())) // err is logged where the revive answers
 		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost, lostMsg, err)
 	case !applied:
 		data["superseded"] = true

@@ -147,11 +147,11 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 			// as the first pass would have.
 			if ended {
 				s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", map[string]any{
-					"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
+					"kept": false, "end_error": auditEndError(ctx, run.ID, auditStepEndSandbox, err), "ended_at": run.LostAt,
 				})
 			} else {
 				s.stopKeptRun(ctx, leaser, run, types.RunFailed, "run.lost", map[string]any{
-					"kept": false, "lost_error": err.Error(), "reason": string(run.LostReason),
+					"kept": false, "lost_error": auditEndError(ctx, run.ID, auditStepStopLost, err), "reason": string(run.LostReason),
 				})
 			}
 			return
@@ -309,7 +309,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 				run.ID.String(), outcome, mustJSON(data)))
 			return
 		}
-		data["end_error"] = err.Error()
+		data["end_error"] = auditEndError(ctx, run.ID, auditStepEndSandbox, err)
 	}
 	data["kept"] = false
 	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
@@ -495,7 +495,7 @@ func (s *Server) revokeRunBroker(ctx context.Context, runID uuid.UUID) {
 	}
 	if err := s.cfg.Broker.RevokeRun(ctx, runID); err != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(map[string]any{"broker_error": err.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"broker_error": auditStep(ctx, auditStepRevokeBroker, err, slog.String("run_id", runID.String()))})))
 	}
 }
 

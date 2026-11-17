@@ -146,6 +146,7 @@ func TestReadbackContainment_AnEndedRunNotKeptForItsFolderHasItsSandboxStopped(t
 // agent can still reach the network until then), with the cut's one failure row naming the proxy stop as
 // teardown_error. The sandbox stop landed, so the containment is resolved.
 func TestReadbackContainment_AKeptFolderSandboxsFailedProxyStopStopsTheSandbox(t *testing.T) {
+	logs := captureSlog(t)
 	f, gen, _ := endedWithFailedStart(t, readbackKeptResume, nil)
 	sandboxStops := f.lr.stopCount()
 	rows := len(f.audit.eventsFor(f.run.ID, "run.reconcile"))
@@ -160,7 +161,9 @@ func TestReadbackContainment_AKeptFolderSandboxsFailedProxyStopStopsTheSandbox(t
 		t.Error("the start is not contained after the sandbox stop")
 	}
 	evs := f.audit.eventsFor(f.run.ID, "run.reconcile")
-	if len(evs) != rows+1 || evs[len(evs)-1].Outcome != "failure" || !strings.Contains(string(evs[len(evs)-1].Data), "daemon down") ||
+	// The row names the failed step; the stop's error ("daemon down") is in the server log.
+	if len(evs) != rows+1 || evs[len(evs)-1].Outcome != "failure" || !strings.Contains(string(evs[len(evs)-1].Data), auditStepStopSandbox) ||
+		!strings.Contains(logs.String(), "daemon down") ||
 		!strings.Contains(string(evs[len(evs)-1].Data), `"teardown_error"`) || strings.Contains(string(evs[len(evs)-1].Data), "proxy_stop_error") {
 		t.Errorf("run.reconcile rows = %v, want one failure naming the stop's error as teardown_error", evs[rows:])
 	}
@@ -632,6 +635,7 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 // teardown_error (the key stopProxyOrAudit writes): the files it was kept for are lost rather than left with a network
 // the agent can still reach.
 func TestReadback_KeptFolderProxyStopFailureIsAuditedAndTheSandboxStopped(t *testing.T) {
+	logs := captureSlog(t)
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "kept")
 	sandboxStops := f.lr.stopCount()
@@ -644,7 +648,7 @@ func TestReadback_KeptFolderProxyStopFailureIsAuditedAndTheSandboxStopped(t *tes
 	}
 	var rows int
 	for _, ev := range f.audit.eventsFor(f.run.ID, "run.reconcile") {
-		if ev.Outcome == "failure" && strings.Contains(string(ev.Data), "daemon down") {
+		if ev.Outcome == "failure" && strings.Contains(string(ev.Data), auditStepStopSandbox) {
 			if !strings.Contains(string(ev.Data), `"teardown_error"`) || strings.Contains(string(ev.Data), "proxy_stop_error") {
 				t.Errorf("row %s, want the stop's error as teardown_error alone", ev.Data)
 			}
@@ -653,6 +657,9 @@ func TestReadback_KeptFolderProxyStopFailureIsAuditedAndTheSandboxStopped(t *tes
 	}
 	if rows != 1 {
 		t.Errorf("%d run.reconcile failure rows naming the stop, want 1", rows)
+	}
+	if !strings.Contains(logs.String(), "daemon down") {
+		t.Errorf("log = %q, want the stop's error beside the row's step", logs.String())
 	}
 }
 

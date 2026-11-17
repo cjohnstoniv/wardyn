@@ -4,6 +4,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -59,7 +60,7 @@ func (s *Server) auditIdPLogout(r *http.Request, source, sub string, err error) 
 	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0, "source": source}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", auditStep(r.Context(), auditStepSignOut, err)
+		outcome, data["error"] = "failure", auditStep(r.Context(), auditStepSignOut, err, slog.String("sub", sub), slog.String("source", source))
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, oidcCallbackActor, "session.revoke", sub, outcome, mustJSON(data)))
 }

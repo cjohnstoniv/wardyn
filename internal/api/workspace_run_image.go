@@ -453,7 +453,7 @@ func (s *Server) commitImage(ctx context.Context, primary types.Workspace, opts 
 	extra map[string]any, buildAudit func(string, map[string]any)) imageResolveResult {
 	superseded, werr := s.commitBuiltImage(ctx, primary, opts.observedRef(primary), rec, extra, opts.ReclaimLoser)
 	if werr != nil && opts.Refresh {
-		extra["error"] = "could not record the refreshed image: " + werr.Error()
+		extra["error"] = auditStep(ctx, auditStepRecordImage, werr, slog.String("workspace_id", primary.ID.String()))
 		buildAudit("failure", extra)
 		return imageResolveResult{}
 	}
@@ -485,7 +485,7 @@ func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, 
 	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, observed, rec.Image.Ref, rec.CacheKey, rec)
 	switch {
 	case err != nil:
-		extra["cache_warn"] = err.Error()
+		extra["cache_warn"] = auditStep(ctx, auditStepRecordImage, err, slog.String("workspace_id", primary.ID.String()))
 		return false, err
 	case !applied:
 		extra["cache_warn"] = "superseded"

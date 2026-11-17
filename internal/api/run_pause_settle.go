@@ -108,7 +108,7 @@ func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run typ
 			if !paused {
 				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
 					run.ID.String(), "failure", mustJSON(map[string]any{
-						"reason": reason, "thaw_error": err.Error(),
+						"reason": reason, "thaw_error": auditStepThawAgent, // pauseUnsettled logs the cause
 					})))
 			}
 			s.pauseUnsettled(ctx, run.ID, "move the sandbox to its row", err)

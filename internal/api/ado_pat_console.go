@@ -380,7 +380,8 @@ func (s *Server) revokeRunPATCreatedAcrossEnd(ctx context.Context, st store.RunP
 	}
 	// Nothing can redeem the sign-in again to retry: the token lives to its
 	// valid_to, and its record says so.
-	data["error"], data["abandoned"] = err.Error(), true
+	data["error"], data["abandoned"] = auditStep(ctx, auditStepRevokeToken, err, slog.String("run_id", p.RunID.String()),
+		slog.String("authorization_id", p.AuthorizationID.String())), true
 	s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed,
 		p.AuthorizationID.String(), "failure", mustJSON(data)))
 	s.closeRunPAT(ctx, st, p, reason, err.Error())

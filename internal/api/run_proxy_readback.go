@@ -442,7 +442,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		case folderKeepCut:
 			if ferr != nil {
 				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.reconcile", run.SandboxRef, "failure",
-					mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+					mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
 			}
 			return nil
 		case folderKeepAway:
@@ -543,7 +543,7 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 		return true, cutErr
 	case v == folderKeepCut && ferr != nil:
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
-			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
 		return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
 	case v == folderKeepCut:
 		return true, nil
@@ -744,7 +744,7 @@ func (s *Server) auditReadbackFailure(ctx context.Context, ch store.ProxyStartCh
 		"expected_sha256": ch.Start.ExpectedSHA256, "reported_sha256": ch.Start.ReportedSHA256,
 	}
 	if c.Err != nil {
-		data["containment_error"] = c.Err.Error()
+		data["containment_error"] = auditStep(ctx, auditStepStopFailedProxy, c.Err, slog.String("run_id", ch.Start.RunID.String()))
 	}
 	s.auditReadback(ctx, ch.Start.RunID, "run.policy.unconfirmed", "failure", ch.Start.Generation, data)
 }

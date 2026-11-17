@@ -364,9 +364,9 @@ func dispatchFailureReason(events []types.AuditEvent) string {
 		}
 	}
 	if reason == "" {
-		return "the sandbox never started; the run's audit events carry the detail"
+		return "the sandbox never started; the run's audit events name the failed step, and the server log has the cause"
 	}
-	return "the sandbox never started (" + reason + "); the run's audit events carry the detail"
+	return "the sandbox never started (" + reason + "); the run's audit events name the failed step, and the server log has the cause"
 }
 
 // reasonCodeShaped reports whether s reads as a reason code (lower-case

@@ -326,6 +326,29 @@ func TestProbeFailureDetail_ExecNeverStartedIsNeverRan(t *testing.T) {
 	}
 }
 
+// TestProbeFailureDetail_ExecNeverStartedKeepsTheRunsHint: the run.complete row of an agent exec that never started
+// names only the step (runs_lifecycle.go), so the verdict reads the driver's reason from the run's own failure hint,
+// which that watcher stamps before the row. Catches: the verdict losing the Waiting reason, and the hint read as a
+// launch failure's, which would skip the wait for the row it belongs to.
+func TestProbeFailureDetail_ExecNeverStartedKeepsTheRunsHint(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.runs[runID] = types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: execNeverStartedHint + "CreateContainerConfigError: secret not found"}
+	ps.events = []types.AuditEvent{
+		{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{"exec_started": false, "error": auditStepWaitAgentExec})},
+	}
+	srv := New(baseTestConfig(newHarness(t), ps))
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if !res.neverRan {
+		t.Error("neverRan = false, want true: exec_started:false means the task never ran")
+	}
+	if !strings.Contains(res.incompleteReason, "CreateContainerConfigError: secret not found") {
+		t.Errorf("incompleteReason = %q, want the driver's reason from the run's hint", res.incompleteReason)
+	}
+}
+
 func TestFindEgressRedirect(t *testing.T) {
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "registry.npmjs.org", To: "artifactory.corp/npm", Ecosystem: "npm"},

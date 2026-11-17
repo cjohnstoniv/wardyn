@@ -710,9 +710,9 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			// run.build failure row, so only the run is failed here.
 			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 			defer cancel()
-			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
-			// run.build row carries it for the operator.
-			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
+			// The hint is the fixed sentence and the builder's error, as the launch builds' hint above is (the
+			// resolver's run.build row carries the same error), since the run page shows the hint as the cause.
+			s.failAndRevoke(failCtx, runID, types.RunPending, "the run's sandbox image could not be built: "+res.BaseErr.Error())
 			return "", nil, true
 		}
 	}
