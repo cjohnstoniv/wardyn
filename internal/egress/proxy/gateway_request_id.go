@@ -43,19 +43,37 @@ func gatewayRequestID(h http.Header) string {
 	return ""
 }
 
-// sandboxRequestIDEcho reports whether id is a value the sandbox's own request carried under
-// any of gatewayRequestIDHeaders. The proxy forwards those headers upstream as it forwards
-// any other, and a gateway that echoes request headers would hand the sandbox's value back
-// on its answer: such a value is the sandbox's, not the gateway's, and is never recorded.
-// Exact bytes after the same trim the header parser applies; r nil has none.
+// gatewayRequestIDAffixMin is the shortest sandbox header value whose appearance inside an id
+// marks the id as the sandbox's own.
+const gatewayRequestIDAffixMin = 16
+
+// sandboxRequestIDEcho reports whether id is, or is built from, a value the sandbox's own
+// request carried. The proxy forwards the sandbox's headers upstream as it forwards any
+// other, and a gateway that echoes request headers, copies one into x-request-id, folds an
+// underscore name into a dashed one or wraps a value would hand it back on its answer, where
+// it is the sandbox's and not the gateway's. It is true when id equals, ignoring case after
+// the trim the header parser applies, any value of ANY header in r; or any comma element of id
+// does; or id contains, ignoring case, a sandbox header value of gatewayRequestIDAffixMin
+// characters or more. r nil has none.
 func sandboxRequestIDEcho(r *http.Request, id string) bool {
-	if r == nil {
+	if r == nil || id == "" {
 		return false
 	}
-	for _, name := range gatewayRequestIDHeaders {
-		for _, v := range r.Header.Values(name) {
-			if strings.Trim(v, " \t") == id {
+	lowered := strings.ToLower(id)
+	elements := strings.Split(id, ",")
+	for _, vs := range r.Header {
+		for _, v := range vs {
+			v = strings.Trim(v, " \t")
+			if v == "" {
+				continue
+			}
+			if strings.EqualFold(v, id) || len(v) >= gatewayRequestIDAffixMin && strings.Contains(lowered, strings.ToLower(v)) {
 				return true
+			}
+			for _, e := range elements {
+				if strings.EqualFold(strings.Trim(e, " \t"), v) {
+					return true
+				}
 			}
 		}
 	}
@@ -64,7 +82,7 @@ func sandboxRequestIDEcho(r *http.Request, id string) bool {
 
 // stampGatewayRequestID records resp's request id on the row of a call that went to a
 // gateway route, the rows that carry a GatewayCallID. r is the sandbox's own request, whose
-// request ids are never recorded even when the answer echoes them. A row without a call id
+// header values are never recorded, even when the answer echoes them (sandboxRequestIDEcho). A row without a call id
 // (a direct call) and a nil answer are left as they are.
 func stampGatewayRequestID(log *egress.DecisionLog, r *http.Request, resp *http.Response) {
 	if log == nil || resp == nil || log.GatewayCallID == "" {
