@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -185,17 +186,36 @@ func parseKeptDiskLimit(v string) (int64, error) {
 type macOSVMSettings struct {
 	// keptLimit is macos_vm_kept_disk_limit_gb, baseFile macos_vm_base_file and basesDir macos_vm_bases_dir.
 	keptLimit, baseFile, basesDir string
-	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare), which
-	// then neither opens nor removes the CA. driveRoots is drive_root: the CA is not used under one.
+	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare) or the
+	// value is not one macOSVMKnown reads, which then neither opens nor removes the CA. driveRoots is drive_root:
+	// the CA is not used under one.
 	inspectionCA *bool
 	driveRoots   []string
 }
 
 // macOSVMSettings is c's macOS VM settings.
 func (c runnerConfig) macOSVMSettings() macOSVMSettings {
-	inspectionCA := macOSVMOn(c.get("macos_vm_inspection_ca"))
-	return macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
-		inspectionCA: &inspectionCA, driveRoots: c.field("drive_root").List}
+	ca := c.field("macos_vm_inspection_ca")
+	set := macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
+		driveRoots: c.field("drive_root").List}
+	if !macOSVMKnown(ca.Value) {
+		// Off removes the key, which on macOS 26 costs a prepare --new-image; a value that is neither on nor off keeps it.
+		slog.Warn("macOS VM base: macos_vm_inspection_ca is not 1, 0, true, false, on, off, yes or no, so this Mac's inspection CA is neither made nor removed",
+			"value", ca.Value, "source", ca.Source)
+		return set
+	}
+	on := macOSVMOn(ca.Value)
+	set.inspectionCA = &on
+	return set
+}
+
+// macOSVMKnown is whether v is a spelling of on or off: empty (unset, so off), 0, 1, true, false, on, off, yes or no.
+func macOSVMKnown(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "1", "true", "false", "on", "off", "yes", "no":
+		return true
+	}
+	return false
 }
 
 // macOSVMOn reads the macos_vm setting.
@@ -567,6 +587,9 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if _, err := parseKeptDiskLimit(f.MacOSVMKeptDiskLimit); err != nil {
 		return err
+	}
+	if !macOSVMKnown(f.MacOSVMInspectionCA) {
+		return fmt.Errorf("macos_vm_inspection_ca: %q is not 1, 0, true, false, on, off, yes or no", strings.TrimSpace(f.MacOSVMInspectionCA))
 	}
 	if _, err := parseRelayWant(f.RelayListen, f.RelayHostTarget); err != nil {
 		return fmt.Errorf("relay_listen / relay_host_target: %w", err)

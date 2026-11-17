@@ -514,3 +514,57 @@ func TestMacOSVMInspectionCADigestIsTheSameAtEveryStart(t *testing.T) {
 		t.Errorf("two starts: %s, then %s", a, b)
 	}
 }
+
+// A runnerd.json macos_vm_inspection_ca that is not a spelling of on or off is refused, as the kept limit is,
+// rather than read as off, which removes the Mac's key.
+func TestCheckRunnerFileInspectionCA(t *testing.T) {
+	for _, v := range []string{"", "0", "1", "true", "false", "on", "off", "yes", "no", " ON ", "Yes"} {
+		if err := checkRunnerFile(runnerFile{MacOSVMInspectionCA: v}); err != nil {
+			t.Errorf("%q refused: %v", v, err)
+		}
+	}
+	for _, v := range []string{"enabled", "2", "tru", "disabled"} {
+		err := checkRunnerFile(runnerFile{MacOSVMInspectionCA: v})
+		if err == nil || !strings.HasPrefix(err.Error(), "macos_vm_inspection_ca: ") || !strings.Contains(err.Error(), `"`+v+`"`) {
+			t.Errorf("%q: error %v, want one naming the key and the value", v, err)
+		}
+	}
+}
+
+// A managed preference (the key has no flag or environment variable) or a file value that is neither on nor off
+// keeps this Mac's key, and says so once; 0 and off still remove it.
+func TestMacOSVMInspectionCAUnknownValueKeepsTheKey(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	on := true
+	m.openInspectionCA(&on, nil, true)
+	inspectionCAGone(t, m, false, "made")
+	for _, v := range []string{"enabled", "2"} {
+		for name, in := range map[string]runnerInputs{
+			"managed": inputs(nil, nil, map[string]string{"MacOSVMInspectionCA": v}, runnerFile{}),
+			"file":    inputs(nil, nil, nil, runnerFile{MacOSVMInspectionCA: v}),
+		} {
+			logs := captureRunnerLog(t)
+			set := resolveRunnerConfig(in).macOSVMSettings()
+			if set.inspectionCA != nil {
+				t.Fatalf("%s %q: settings say %v, want none", name, v, *set.inspectionCA)
+			}
+			if got := logs.String(); strings.Count(got, "neither made nor removed") != 1 || !strings.Contains(got, v) {
+				t.Errorf("%s %q: log %q, want one warning naming the value", name, v, got)
+			}
+			m.items = macOSVMItems{}
+			m.openInspectionCA(set.inspectionCA, nil, true)
+			inspectionCAGone(t, m, false, name+" "+v)
+		}
+	}
+	for _, v := range []string{"0", "off"} {
+		set := resolveRunnerConfig(inputs(nil, nil, map[string]string{"MacOSVMInspectionCA": v}, runnerFile{})).macOSVMSettings()
+		if set.inspectionCA == nil || *set.inspectionCA {
+			t.Fatalf("%q: settings say %v, want off", v, set.inspectionCA)
+		}
+		m.items = macOSVMItems{}
+		m.openInspectionCA(set.inspectionCA, nil, true)
+		inspectionCAGone(t, m, true, v)
+		m.openInspectionCA(&on, nil, true) // make it again for the next value
+	}
+}

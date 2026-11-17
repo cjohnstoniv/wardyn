@@ -34,8 +34,8 @@ type macOSVMItems struct {
 }
 
 // openInspectionCA opens this Mac's inspection CA in the VM directory when macos_vm_inspection_ca is on. on is
-// nil when the caller resolved no settings (setup's prepare): the CA is then neither opened nor removed. owner is
-// the runner's handle (enableMacOSVM): only it makes the CA, and only it removes it, when the setting is off or one
+// nil when the caller resolved no settings (setup's prepare) or the setting is neither on nor off: the CA is then
+// neither opened nor removed. owner is the runner's handle (enableMacOSVM): only it makes the CA, and only it removes it, when the setting is off or one
 // of its drive roots is or holds the CA's directory, since a key left on disk is one a run's mount could read. A
 // macos-vm command resolves its own config, which may not be the runner's, so it only reads a CA that is there.
 func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
