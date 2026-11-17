@@ -189,7 +189,7 @@ func TestPG_RefuseRunnerEventSettlesOwnOpenAction(t *testing.T) {
 	}
 }
 
-// The bound on runner.event.refuse rows is the database's, per runner, whichever replica refuses (DR-0436): 32 rows,
+// The bound on runner.event.refuse rows is the database's, per runner, whichever replica refuses: 32 rows,
 // the 33rd marked suppressed, none after it in the window, and the first refusal of the next window writes the
 // summary and its own row. Two replicas refusing for one runner at once never pass the bound, and another runner
 // has a window of its own.
