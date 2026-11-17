@@ -157,6 +157,8 @@ type runEvidence struct {
 	PendingSince *time.Time `json:"pending_since,omitempty"`
 	// SinkKeyHash is the hex sha256 of the run's decision sink key, re-registered at startup.
 	SinkKeyHash string `json:"sink_key_hash,omitempty"`
+	// RelayKeyHash is the hex sha256 of the run's relay key, handed to the relay again at startup.
+	RelayKeyHash string `json:"relay_key_hash,omitempty"`
 	// ProducerGone marks the sink producer settled on the proxy's completion evidence.
 	ProducerGone bool `json:"producer_gone,omitempty"`
 	// Namespace is the namespace the run's objects were created in, saved with the sink key before

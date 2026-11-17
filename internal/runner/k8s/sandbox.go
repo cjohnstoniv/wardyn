@@ -325,9 +325,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
-	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
+	if err := d.relayIPRefusal(spec.RunID, proxyIP); err != nil {
 		// Contained before it ever opens, rather than running to its deadline.
-		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
+		return fail(err)
 	}
 	proxyAddr, err := d.keepAddress(ctx, ns, spec.RunID, keepSvc, proxyIP)
 	if err != nil {
@@ -828,8 +828,9 @@ func releaseParts(v string) [4]int {
 }
 
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
-// (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2) and hard_deny (§5.3). The proxy
-// decodes strictly, so a proxy that does not know a key refuses to start.
+// (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2), hard_deny (§5.3) and, when the proxy
+// image sends the relay preamble, the run's relay_key (relayKeyed). The proxy decodes strictly, so
+// a proxy that does not know a key refuses to start.
 func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byte) ([]byte, error) {
 	if !d.runnerMode() {
 		return b, nil
@@ -842,7 +843,13 @@ func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byt
 	if err != nil {
 		return nil, err
 	}
-	return runner.WithProxyConfigKeys(b, d.runnerProxyKeys(sink))
+	keys := d.runnerProxyKeys(sink)
+	if d.relayKeyed() {
+		if keys["relay_key"], err = d.openRelayKey(runID); err != nil {
+			return nil, err
+		}
+	}
+	return runner.WithProxyConfigKeys(b, keys)
 }
 
 // openSink makes the run's sink key, persists its hash in the run's record, then registers it with

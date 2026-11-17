@@ -169,6 +169,10 @@ type Config struct {
 	Unfence func(runID uuid.UUID, proxyIP string)
 	// IPFenced reports a proxy IP another run's fence refuses.
 	IPFenced func(ip string) bool
+	// RelayKey hands the relay a run's relay key hash (the sha256 of the key in its proxy's config):
+	// the relay admits a connection opening with the relay preamble as that run only with that key.
+	// Called once the hash is durable, before the proxy pod exists. Nil gives no run a relay key.
+	RelayKey func(runID uuid.UUID, hash [32]byte)
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
 	// refuses to create a sandbox while it is nil (the sink did not start).
 	Sink DecisionSink
