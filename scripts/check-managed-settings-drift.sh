@@ -218,6 +218,9 @@ echo "ok: Claude Code $pin drops every built-in tool the attended-rules document
 # stand-in (node, which the image has) asks the CLI to call WebFetch; `--print` records a call it refused in
 # the result event's permission_denials, so no model, network or credential is needed. A control run without
 # the managed file must let WebFetch through under each condition, or the assertions prove nothing.
+# ENABLE_TOOL_SEARCH=false keeps WebFetch in the request's tools: since 2.1.3xx a deferred tool is left out
+# until tool search surfaces it, even behind a local ANTHROPIC_BASE_URL, so the stand-in would never call it.
+# `ran` needs the stand-in's call (toolu_probe1) in the stream; a run that never called WebFetch is `uncalled`.
 mkdir -p "$tmp/ws-empty" "$tmp/ws-allow/.claude"
 echo '{"permissions":{"allow":["WebFetch"]}}' > "$tmp/ws-allow/.claude/settings.json"
 echo '{"hasCompletedOnboarding":true,"projects":{"/ws":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' > "$tmp/claude.json"
@@ -246,28 +249,32 @@ http.createServer((req, res) => {
 }).listen(8080, "127.0.0.1");
 JS
 chmod -R a+rX "$tmp/ws-empty" "$tmp/ws-allow" "$tmp/stub.js" "$tmp/claude.json"
-webfetch_of() { # <settings dir or ""> <workspace dir> [claude args...] -> denied | ran | "" (no result event)
-    local mount=() ws="$2" out; [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro"); shift 2
+webfetch_of() { # <settings dir or ""> <workspace dir> [claude args...] -> denied | ran | uncalled | "" (no result event)
+    local mount=() ws="$2" out denials; [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro"); shift 2
     out="$(docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
         --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
         -v "$tmp/stub.js:/probe/stub.js:ro" -v "$tmp/claude.json:/probe/claude.json:ro" -v "$ws:/ws:ro" -w /ws \
-        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token \
-        --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" \
-        | grep -oE '"permission_denials":\[[^]]*\]' | head -1 || true)"
-    case "$out" in "") ;; *WebFetch*) echo denied ;; *) echo ran ;; esac
+        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token -e ENABLE_TOOL_SEARCH=false \
+        --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" || true)"
+    denials="$(grep -oE '"permission_denials":\[[^]]*\]' <<<"$out" | head -1 || true)"
+    case "$denials" in "") ;; *WebFetch*) echo denied ;; *) if grep -qF '"toolu_probe1"' <<<"$out"; then echo ran; else echo uncalled; fi ;; esac
 }
-[ "$(webfetch_of "" "$tmp/ws-empty" --dangerously-skip-permissions)" = ran ] || die "WebFetch did not run under --dangerously-skip-permissions without a managed file — the ask-under-bypass check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
-[ "$(webfetch_of "" "$tmp/ws-allow")" = ran ] || die "a repository permissions.allow did not let WebFetch run without a managed file — the repository-allow check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+got="$(webfetch_of "" "$tmp/ws-empty" --dangerously-skip-permissions)"
+[ "$got" = ran ] || die "WebFetch did not run under --dangerously-skip-permissions without a managed file (got: ${got:-no result event}) — the ask-under-bypass check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+got="$(webfetch_of "" "$tmp/ws-allow")"
+[ "$got" = ran ] || die "a repository permissions.allow did not let WebFetch run without a managed file (got: ${got:-no result event}) — the repository-allow check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
 asked=0; allowed=0
 for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
     grep -q '"WebFetch"' <(sed -n '/"ask": \[/,/\]/p' "$doc") || continue
     dir="$tmp/settings-attended-rules-$(basename "$doc" .json)"
     if ! grep -q '"disableBypassPermissionsMode"' "$doc"; then
-        [ "$(webfetch_of "$dir" "$tmp/ws-empty" --dangerously-skip-permissions)" = denied ] || die "attended-rules/$(basename "$doc"): WebFetch ran under --dangerously-skip-permissions although the file's permissions.ask names it — ask no longer beats bypass; stderr: $(head -c 400 "$tmp/stderr")"
+        got="$(webfetch_of "$dir" "$tmp/ws-empty" --dangerously-skip-permissions)"
+        [ "$got" = denied ] || die "attended-rules/$(basename "$doc"): WebFetch was not refused under --dangerously-skip-permissions although the file's permissions.ask names it (got: ${got:-no result event}) — ask no longer beats bypass; stderr: $(head -c 400 "$tmp/stderr")"
         asked=$((asked + 1))
     fi
     if grep -q '"allowManagedPermissionRulesOnly": true' "$doc"; then
-        [ "$(webfetch_of "$dir" "$tmp/ws-allow")" = denied ] || die "attended-rules/$(basename "$doc"): a repository permissions.allow let WebFetch run although the file sets allowManagedPermissionRulesOnly and asks for it; stderr: $(head -c 400 "$tmp/stderr")"
+        got="$(webfetch_of "$dir" "$tmp/ws-allow")"
+        [ "$got" = denied ] || die "attended-rules/$(basename "$doc"): WebFetch was not refused with a repository permissions.allow although the file sets allowManagedPermissionRulesOnly and asks for it (got: ${got:-no result event}); stderr: $(head -c 400 "$tmp/stderr")"
         allowed=$((allowed + 1))
     fi
 done

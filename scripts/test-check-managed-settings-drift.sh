@@ -44,11 +44,13 @@ fake_cli() {
 # stand-in is mounted) reports a refused WebFetch when the file asks for it, unless $FAKE_ASK_BYPASSED is set and
 # the run launches bypass (a CLI where bypass beats ask), or $FAKE_REPO_ALLOW_WINS is set and the workspace
 # carries a permissions.allow (a CLI where a repository allow lifts a managed ask); $FAKE_NO_RESULT makes it
-# print no result event at all (a CLI that cannot run the stub).
+# print no result event at all (a CLI that cannot run the stub). A stub run prints the stub's WebFetch call
+# (toolu_probe1) first, except with $FAKE_WEBFETCH_UNCALLED (a CLI that never calls WebFetch), or with
+# $FAKE_DEFERS_WEBFETCH when the run lacks ENABLE_TOOL_SEARCH=false (a CLI that defers WebFetch, as 2.1.3xx does).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
-for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; *:/probe/stub.js:ro) st=1 ;; *:/ws:ro) w="${a%%:*}" ;; --dangerously-skip-permissions) skip=1 ;; bypassPermissions) by=1 ;; manual) man=1 ;; esac; done
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; *:/probe/stub.js:ro) st=1 ;; *:/ws:ro) w="${a%%:*}" ;; --dangerously-skip-permissions) skip=1 ;; bypassPermissions) by=1 ;; manual) man=1 ;; ENABLE_TOOL_SEARCH=false) nots=1 ;; esac; done
 if [ -n "${m:-}" ]; then
     [ -z "${FAKE_NO_HOOK:-}" ] || exit 1
     if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
@@ -56,6 +58,8 @@ if [ -n "${m:-}" ]; then
 fi
 if [ -n "${st:-}" ]; then
     [ -z "${FAKE_NO_RESULT:-}" ] || exit 1
+    if [ -n "${FAKE_WEBFETCH_UNCALLED:-}" ] || { [ -n "${FAKE_DEFERS_WEBFETCH:-}" ] && [ -z "${nots:-}" ]; }; then echo '{"type":"result","permission_denials":[]}'; exit 1; fi
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_probe1","name":"WebFetch","input":{}}]}}'
     denied=""
     if [ -n "${d:-}" ] && sed -n '/"ask": \[/,/\]/p' "$d/managed-settings.json" | grep -q '"WebFetch"'; then denied=1; fi
     [ -z "${skip:-}" ] || [ -z "${FAKE_ASK_BYPASSED:-}" ] || denied=""
@@ -186,12 +190,12 @@ echo "ok  a managed run with no tools list fails"
 
 # 8g. A CLI where bypass beats a managed ask => fail naming the document.
 if out="$(FAKE_ASK_BYPASSED=1 probe)"; then fail "a CLI that lets --dangerously-skip-permissions through a managed ask must FAIL"; fi
-grep -q "WebFetch ran under --dangerously-skip-permissions although the file's permissions.ask names it" <<<"$out" || fail "an ask lost to bypass must be named; got: $out"
+grep -q "WebFetch was not refused under --dangerously-skip-permissions although the file's permissions.ask names it (got: ran)" <<<"$out" || fail "an ask lost to bypass must be named; got: $out"
 echo "ok  a managed ask that loses to bypass fails"
 
 # 8h. A CLI where a repository allow lifts a managed ask => fail naming the document.
 if out="$(FAKE_REPO_ALLOW_WINS=1 probe)"; then fail "a CLI where a repository allow lifts a managed ask must FAIL"; fi
-grep -q "a repository permissions.allow let WebFetch run although the file sets allowManagedPermissionRulesOnly" <<<"$out" || fail "a repository allow that wins must be named; got: $out"
+grep -q "WebFetch was not refused with a repository permissions.allow although the file sets allowManagedPermissionRulesOnly and asks for it (got: ran)" <<<"$out" || fail "a repository allow that wins must be named; got: $out"
 grep -q "would pass vacuously" <<<"$out" && fail "the controls (no managed file) must run WebFetch; got: $out"
 echo "ok  a repository allow that lifts a managed ask fails"
 
@@ -199,6 +203,15 @@ echo "ok  a repository allow that lifts a managed ask fails"
 if out="$(FAKE_NO_RESULT=1 probe)"; then fail "a CLI that reports no result event must FAIL the control run"; fi
 grep -q "the ask-under-bypass check would pass vacuously" <<<"$out" || fail "an unrunnable control must be named; got: $out"
 echo "ok  a control that cannot run WebFetch fails"
+
+# 8k. A CLI that never calls WebFetch => the control must say so, not read "no denial" as "ran".
+if out="$(FAKE_WEBFETCH_UNCALLED=1 probe)"; then fail "a CLI that never calls WebFetch must FAIL the control run"; fi
+grep -q "(got: uncalled) — the ask-under-bypass check would pass vacuously" <<<"$out" || fail "an uncalled WebFetch must be named; got: $out"
+echo "ok  a control where WebFetch is never called fails"
+
+# 8l. A CLI that defers WebFetch behind tool search => the probe turns tool search off and still proves the rules.
+out="$(FAKE_DEFERS_WEBFETCH=1 probe)" || fail "a CLI that defers WebFetch must still PASS (the probe sets ENABLE_TOOL_SEARCH=false); got: $out"
+echo "ok  a CLI that defers WebFetch is still probed"
 
 # 8j. No attended-rules document asks for WebFetch => fail: the ask and repository-allow checks would prove nothing.
 cp -r "$TMP/internal/agentpolicy" "$TMP/internal/agentpolicy.bak"
