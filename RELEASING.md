@@ -496,7 +496,7 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
     "gates (licenses)", "gates (license-headers)",
     "notices",
-    "test-pg", "conformance", "conformance-k8s", "envbuild-integration",
+    "test-pg", "conformance", "conformance-k8s", "vm", "envbuild-integration",
     "helm", "helm-install-test",
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",

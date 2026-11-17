@@ -2045,7 +2045,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
+  # A required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and

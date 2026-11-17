@@ -223,7 +223,7 @@ var requiredCIContexts = []string{
 	"build", "dco", "gates (gitleaks)", "gates (govulncheck)", "gates (license-headers)",
 	"gates (licenses)", "gates (staticcheck)", "notices", "ui", "trivy (wardynd)",
 	"trivy (wardyn-proxy)", "trivy (agent-base)", "trivy (agent-codex-cli)",
-	"trivy (agent-aws-sso)", "test-pg", "conformance", "conformance-k8s", "helm", "compose",
+	"trivy (agent-aws-sso)", "test-pg", "conformance", "conformance-k8s", "vm", "helm", "compose",
 	"helm-install-test", "envbuild-integration", "trivy (agent-vscode)", "trivy (agent-novnc)",
 	"diagrams",
 }
