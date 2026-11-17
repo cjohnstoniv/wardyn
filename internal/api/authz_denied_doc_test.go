@@ -60,10 +60,10 @@ func TestAuthzDeniedReasonsAreDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
-	row := rowFor(t, string(actions), "| `authz.denied` |")
+	row := rowFor(t, string(actions), "| `authz.denied` |") + reasonsTableFor(t, string(actions), "authz.denied")
 	for reason := range audited {
 		if !strings.Contains(row, "`"+reason+"`") {
-			t.Errorf("docs/AUDIT-ACTIONS.md's authz.denied row omits %q from its inline vocabulary", reason)
+			t.Errorf("docs/AUDIT-ACTIONS.md's authz.denied row and its reasons table omit %q from the inline vocabulary", reason)
 		}
 	}
 }
@@ -118,6 +118,27 @@ func documentedAuthzDeniedReasons(t *testing.T) []string {
 }
 
 // rowFor returns the markdown table row starting with prefix.
+// reasonsTableFor returns the rows of the "### <action> reasons" table that
+// holds the reason list the action's row used to carry in its When cell.
+func reasonsTableFor(t *testing.T, doc, action string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(doc, "\n### "+action+" reasons\n")
+	if !ok {
+		t.Fatalf("docs/AUDIT-ACTIONS.md has no %q heading", "### "+action+" reasons")
+	}
+	var rows []string
+	for _, line := range strings.Split(strings.TrimLeft(rest, "\n"), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			break
+		}
+		rows = append(rows, line)
+	}
+	if len(rows) < 3 {
+		t.Fatalf("docs/AUDIT-ACTIONS.md's %q table has no rows", "### "+action+" reasons")
+	}
+	return strings.Join(rows, "\n")
+}
+
 func rowFor(t *testing.T, doc, prefix string) string {
 	t.Helper()
 	for _, line := range strings.Split(doc, "\n") {

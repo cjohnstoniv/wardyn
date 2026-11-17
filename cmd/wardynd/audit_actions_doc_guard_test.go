@@ -64,6 +64,65 @@ var backtickSpan = regexp.MustCompile("`([^`]+)`")
 // at all, and the migration file is the whole of its emit site.
 var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md|sql)$`)
 
+// auditReasonsHeading opens an action's reasons table in docs/AUDIT-ACTIONS.md:
+// a row whose reason list is long keeps a short When cell and moves the list to
+// a `Reason | When` table under "### <action> reasons".
+var auditReasonsHeading = regexp.MustCompile("^### (\\S+) reasons$")
+
+// foldAuditReasonTables returns lines with every action's reasons table folded
+// back into that action's row: each table row's When text is appended to the
+// row's own When cell, and the table's header, separator and rows are blanked.
+// Line numbers do not move, so a guard that reads a row, or an anchor pooled
+// across the row's When cell, reads what it read when the list sat in the cell.
+// A reasons heading with no row, no table or an empty table fails the test: a
+// guard must not pass because the list it checks went missing.
+func foldAuditReasonTables(t *testing.T, lines []string) []string {
+	t.Helper()
+	out := append([]string(nil), lines...)
+	rowAt := map[string]int{}
+	for i, l := range lines {
+		if m := auditActionRow.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+			if _, seen := rowAt[m[1]]; !seen {
+				rowAt[m[1]] = i
+			}
+		}
+	}
+	for i, l := range lines {
+		m := auditReasonsHeading.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		action := m[1]
+		ri, ok := rowAt[action]
+		if !ok {
+			t.Fatalf("docs/AUDIT-ACTIONS.md:%d: %q has a reasons table but no `%s` row", i+1, l, action)
+		}
+		j := i + 1
+		for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+			j++
+		}
+		var whens []string
+		for ; j < len(lines) && strings.HasPrefix(lines[j], "|"); j++ {
+			cells := strings.Split(lines[j], "|")
+			out[j] = ""
+			if strings.HasPrefix(lines[j], "| Reason |") || strings.HasPrefix(lines[j], "|---") {
+				continue
+			}
+			if len(cells) < 4 {
+				t.Fatalf("docs/AUDIT-ACTIONS.md:%d: a reasons row has %d cells, want Reason | When", j+1, len(cells)-2)
+			}
+			whens = append(whens, strings.TrimSpace(cells[2]))
+		}
+		if len(whens) == 0 {
+			t.Fatalf("docs/AUDIT-ACTIONS.md:%d: %q has no reasons rows", i+1, l)
+		}
+		cells := strings.Split(out[ri], "|")
+		cells[2] += " " + strings.Join(whens, " ") + " "
+		out[ri] = strings.Join(cells, "|")
+	}
+	return out
+}
+
 // constNamesFor inverts the tree's package-level string constants: action value
 // -> the names that hold it. An emit whose action arrives as a named constant
 // (`ruleSourceGit`, `ruleSourcePATDenied`) spells nothing of the action at the
@@ -119,7 +178,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
-	docLines := strings.Split(string(raw), "\n")
+	docLines := foldAuditReasonTables(t, strings.Split(string(raw), "\n"))
 	constHolders := constNamesFor(parseAuditTree(t, root))
 
 	// citedSource is one cited file's parse, cached by path: the whole text (for
@@ -737,7 +796,7 @@ func TestAuditActionsDoc_Grammar(t *testing.T) {
 	// ("| `rule_source` |"); a heading ends either.
 	const actionTable, ruleSourceTable = 1, 2
 	table, actions, sources := 0, 0, 0
-	for _, line := range strings.Split(body, "\n") {
+	for _, line := range foldAuditReasonTables(t, strings.Split(body, "\n")) {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(trimmed, "| Action |"):

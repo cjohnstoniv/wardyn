@@ -233,14 +233,15 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 	}
 }
 
-// auditDocRowFor returns the AUDIT-ACTIONS.md table row for one action.
+// auditDocRowFor returns the AUDIT-ACTIONS.md table row for one action, with its
+// reasons table folded into the When cell (foldAuditReasonTables).
 func auditDocRowFor(t *testing.T, root, action string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
 	if err != nil {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range foldAuditReasonTables(t, strings.Split(string(raw), "\n")) {
 		if strings.HasPrefix(strings.TrimSpace(line), "| `"+action+"` |") {
 			return line
 		}
