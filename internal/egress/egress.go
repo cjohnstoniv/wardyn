@@ -60,6 +60,10 @@ type DecisionLog struct {
 	Decision   Decision   `json:"decision"`
 	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | "builtin:resolve-failed" | ...
 	ApprovalID *uuid.UUID `json:"approval_id,omitempty"`
+	// GivenBackUse marks an allow released by a once approval the proxy had given back (refundOnce): the request
+	// it describes is the second use of that approval, and the failure rows it leaves name the approval. It stays
+	// inside the proxy process and is never on the wire.
+	GivenBackUse bool `json:"-"`
 	// Cause is the masked, topology-redacted sentence naming WHY a builtin
 	// dial-shaped refusal happened and at what STAGE (TCP dial, TLS
 	// handshake, upstream-proxy CONNECT). It runs through the same masking

@@ -667,6 +667,8 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
+	// givenBack: that approval is a once grant refundOnce gave back, so this request is its second use.
+	var givenBack bool
 
 	// B6, and it sits HERE — above the first-use approval flow, below
 	// policy:denied/policy:method — for the reason privateIPMemoHit's own doc
@@ -694,7 +696,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			case apApproved:
 				// Released by approval: remember it for the Allow log below, then
 				// fall through to method + IP vetting.
-				approvalID = r.ApprovalID
+				approvalID, givenBack = r.ApprovalID, r.GivenBack
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
@@ -738,7 +740,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// the full pinning VetHost guard.
 	if trustedLiteralIP != nil {
 		target := net.JoinHostPort(trustedLiteralIP.String(), strconv.Itoa(port))
-		log := p.allowLog(req, approvalID)
+		log := p.allowLog(req, approvalID, givenBack)
 		// Attribute the grant rather than leaving it as an ordinary
 		// policy:allowed — reaching a private/reserved address is the one allow
 		// an auditor most wants to see the REASON for. Same "an approval is the
@@ -771,7 +773,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		p.privateIPRefused(req, blockKindOf(terr), log.Cause)
 		return egress.Deny, "", &log
 	}
-	log := p.allowLog(req, approvalID)
+	log := p.allowLog(req, approvalID, givenBack)
 	// The internal-host lift is the ONLY egressTarget outcome evaluate()
 	// attributes a non-default rule_source to, and only when the request was
 	// not already attributed to an approval (a released approval is the more
@@ -789,12 +791,13 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 // the already-attributed pending/deny branches above — so the audit trail
 // self-joins back to the approval that let the traffic through. Otherwise
 // (approvalID == Nil, the common case) it is a standing policy allow.
-func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.DecisionLog {
+func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID, givenBack bool) egress.DecisionLog {
 	if approvalID == uuid.Nil {
 		return decisionLog(req, egress.Allow, "policy:allowed")
 	}
 	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
 	log.ApprovalID = &approvalID
+	log.GivenBackUse = givenBack
 	return log
 }
 
@@ -860,7 +863,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			if log != nil {
 				p.sink.emit(*log)
 			}
-			p.mitmConnect(w, r, host, port)
+			p.mitmConnect(w, r, host, port, log)
 			return
 		}
 	}
@@ -884,7 +887,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			if log != nil {
 				p.sink.emit(*log)
 			}
-			p.mitmConnect(w, r, host, port)
+			p.mitmConnect(w, r, host, port, log)
 			return
 		}
 		// With allowed_models set, a model host is never an opaque tunnel: the gate cannot see into it.

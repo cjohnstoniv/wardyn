@@ -428,7 +428,7 @@ func (p *Proxy) tunnelEnded(seen *egress.DecisionLog, host string, w *tunnelWatc
 	if w.answeredNothing(upstreamFirst, refusal) {
 		p.refundOnceUse(&dl, seen, host)
 	} else {
-		p.nameGivenBackUse(&dl, seen, host)
+		nameGivenBackUse(&dl, seen)
 	}
 	p.sink.emit(dl)
 }

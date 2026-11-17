@@ -50,27 +50,11 @@ func (a *approvalClient) refundOnce(host string, id uuid.UUID) bool {
 	return true
 }
 
-// wasGivenBack reports whether the once grant id, spent on host, is one refundOnce gave back earlier: the entry
-// consumeIfOnce left carries the approval as spent and the count of times it came back. It reads the entry and
-// changes nothing.
-func (a *approvalClient) wasGivenBack(host string, id uuid.UUID) bool {
-	if id == uuid.Nil {
-		return false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	st := a.hosts[approvalHostKey(host)]
-	return st != nil && st.state == apNone && st.spent == id && st.refunds > 0
-}
-
 // nameGivenBackUse marks dl, the failure's row, with the approval seen's request went ahead on when that approval
-// was one refundOnce gave back: the request that spent it again reads as the use of an approval, not as any other
-// failure. It marks nothing for a request released by an approval not given back, and gives nothing back.
-func (p *Proxy) nameGivenBackUse(dl, seen *egress.DecisionLog, host string) {
-	if p.approval == nil || seen == nil || seen.ApprovalID == nil {
-		return
-	}
-	if p.approval.wasGivenBack(host, *seen.ApprovalID) {
+// was one refundOnce gave back (seen.GivenBackUse, decided when the request took the grant): the use that spends it
+// for good names it, without the not-spent note. It marks nothing for any other request and gives nothing back.
+func nameGivenBackUse(dl, seen *egress.DecisionLog) {
+	if seen != nil && seen.GivenBackUse && seen.ApprovalID != nil {
 		dl.ApprovalID = seen.ApprovalID
 	}
 }
@@ -82,13 +66,12 @@ func (p *Proxy) nameGivenBackUse(dl, seen *egress.DecisionLog, host string) {
 // either. A use of a grant already given back once is spent by its failure, and its row names the approval too
 // (nameGivenBackUse).
 func (p *Proxy) refundOnceUse(dl, seen *egress.DecisionLog, host string) {
+	nameGivenBackUse(dl, seen)
 	if p.approval == nil || p.noNetwork || seen == nil || seen.ApprovalID == nil {
 		return
 	}
 	if p.approval.refundOnce(host, *seen.ApprovalID) {
 		dl.ApprovalID = seen.ApprovalID
 		dl.Cause += onceRefundNote
-		return
 	}
-	p.nameGivenBackUse(dl, seen, host)
 }

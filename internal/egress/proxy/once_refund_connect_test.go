@@ -360,3 +360,112 @@ func TestOnceRefund_ARefusalRecordedAfterTheRowSpendsTheGrant(t *testing.T) {
 		t.Fatalf("a row with reason %s was given a refund", refusal.Reason)
 	}
 }
+
+// The retry that went ahead on the given-back grant dies again; its tunnel-failed row must name it.
+func TestOnceRefund_TheTunnelRowOfAGivenBackUseNamesTheApproval(t *testing.T) {
+	hello := func(c net.Conn) bool { _, err := io.ReadFull(c, make([]byte, len(fakeClientHello))); return err == nil }
+	for _, c := range []struct {
+		name   string
+		second func(net.Conn)
+	}{
+		{"retry answered with an alert", func(c net.Conn) {
+			if hello(c) {
+				_, _ = c.Write(plaintextAlert)
+			}
+		}},
+		{"retry closed again after hello", func(c net.Conn) { _, _ = c.Read(make([]byte, 1)) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var n atomic.Int32
+			up := upstreamThat(t, func(conn net.Conn) {
+				if n.Add(1) == 1 {
+					_, _ = conn.Read(make([]byte, 1))
+					return
+				}
+				c.second(conn)
+			})
+			id := uuid.New()
+			p, _ := onceProxy(t, id, redirectDial(up))
+			proxyURL, done := serveTunnelProxy(t, p)
+			for i := 0; i < 2; i++ {
+				conn, resp := connectThrough(t, proxyURL, onceHost+":443")
+				if !strings.HasPrefix(resp, "HTTP/1.1 200") {
+					t.Fatalf("try %d CONNECT = %q", i, resp)
+				}
+				_, _ = conn.Write(fakeClientHello)
+				_ = readToEnd(t, conn)
+				_ = conn.Close()
+				rows := tunnelFailedRows(awaitDecision(t, p, done))
+				if len(rows) != 1 || rows[0].ApprovalID == nil || *rows[0].ApprovalID != id {
+					t.Fatalf("try %d tunnel-failed rows = %+v, want one naming %s", i, rows, id)
+				}
+				if note := strings.HasSuffix(rows[0].Cause, onceRefundNote); note != (i == 0) {
+					t.Fatalf("try %d note = %v", i, note)
+				}
+			}
+		})
+	}
+}
+
+// A third request to the host lands while the given-back retry is still dialling.
+func TestOnceRefund_ARequestToTheHostMidRetryDoesNotLoseTheName(t *testing.T) {
+	var calls atomic.Int32
+	second, release := make(chan struct{}), make(chan struct{})
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		if calls.Add(1) == 2 {
+			close(second)
+			<-release
+		}
+		return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+	}
+	id := uuid.New()
+	p, raises := onceProxy(t, id, dial)
+	proxyURL, done := serveTunnelProxy(t, p)
+	conn, _ := connectThrough(t, proxyURL, onceHost+":443")
+	_ = conn.Close()
+	awaitDecision(t, p, done)
+
+	r2 := make(chan string, 1)
+	go func() {
+		c, err := net.Dial("tcp", strings.TrimPrefix(proxyURL, "http://"))
+		if err != nil {
+			r2 <- err.Error()
+			return
+		}
+		defer c.Close()
+		_, _ = io.WriteString(c, "CONNECT "+onceHost+":443 HTTP/1.1\r\nHost: "+onceHost+":443\r\n\r\n")
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		b := make([]byte, 256)
+		k, _ := c.Read(b)
+		r2 <- string(b[:k])
+	}()
+	select {
+	case <-second:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry never dialled")
+	}
+	conn, resp3 := connectThrough(t, proxyURL, "other-port."+onceHost+":443")
+	_ = conn.Close()
+	_ = resp3
+	conn, resp3 = connectThrough(t, proxyURL, onceHost+":8443") // same approval host key, other port
+	_ = conn.Close()
+	r3rows := awaitDecision(t, p, done)
+	awaitDecision(t, p, done)
+	close(release)
+	resp2 := <-r2
+	rows := awaitDecision(t, p, done)
+	t.Logf("racer resp=%q rows=%+v raises=%d", strings.SplitN(resp3, "\r\n", 2)[0], r3rows, raises.Load())
+	var failed []egress.DecisionLog
+	for _, d := range rows {
+		if d.RuleSource == "builtin:dial-failed" {
+			failed = append(failed, d)
+		}
+	}
+	t.Logf("retry resp=%q", strings.SplitN(resp2, "\r\n", 2)[0])
+	if len(failed) != 1 {
+		t.Fatalf("retry dial-failed rows = %+v", rows)
+	}
+	if failed[0].ApprovalID == nil {
+		t.Errorf("the retry went ahead on given-back approval %s but its dial-failed row has approval_id null (a request to the same host resolved during its dial)", id)
+	}
+}
