@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,19 +80,28 @@ func TestMacProtectedOverlapMissingRootBehindALink(t *testing.T) {
 // A container bind may neither be, sit under nor contain the runner's macOS VM directory, whatever the
 // spelling: a parent, an upper-case name, a link to it or to its parent, and a VM directory that is itself a
 // link to another volume. A sibling stays allowed, and so does everything when there is no VM directory.
-func TestCheckBindOutsideMacVMDir(t *testing.T) {
+func TestCheckBindOutsideMacVMDirs(t *testing.T) {
 	home := realTemp(t)
 	support := filepath.Join(home, "Library", "Application Support", "Wardyn")
 	vm := filepath.Join(support, "macos-vm.noindex")
 	mkdirs(t, filepath.Join(vm, "runs", "x"), filepath.Join(support, "other"), filepath.Join(home, "proj"))
 	elsewhere := realTemp(t)
 	mkdirs(t, filepath.Join(elsewhere, "vms", "runs"), filepath.Join(elsewhere, "docs"))
+	// The ledger and socket directories sit under a shared directory, as /Users/Shared/Wardyn does.
+	shared := realTemp(t)
+	shw := filepath.Join(shared, "Wardyn")
+	ledger, sock := filepath.Join(shw, "macos-vm-admission"), filepath.Join(shw, "sock")
+	mkdirs(t, ledger, sock, filepath.Join(shw, "docs"), filepath.Join(shared, "other"))
+	if err := os.WriteFile(filepath.Join(ledger, "e1.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	linked := filepath.Join(home, "linked-vm")
 	mkdirs(t, linked)
 	for name, target := range map[string]string{
 		filepath.Join(home, "to-vm"):      vm,
 		filepath.Join(home, "to-support"): support,
 		filepath.Join(home, "to-home"):    home,
+		filepath.Join(home, "to-shw"):     shw,
 		filepath.Join(linked, "vm"):       filepath.Join(elsewhere, "vms"),
 	} {
 		if err := os.Symlink(target, name); err != nil {
@@ -113,8 +123,17 @@ func TestCheckBindOutsideMacVMDir(t *testing.T) {
 		{"a sibling", filepath.Join(support, "other"), true},
 		{"another folder of the home", filepath.Join(home, "proj"), true},
 		{"a prefix sibling", vm + "2", true},
+		{"the shared directory", shared, false},
+		{"the Wardyn directory under it", shw, false},
+		{"the ledger directory", ledger, false},
+		{"a file in the ledger directory", filepath.Join(ledger, "e1.json"), false},
+		{"the socket directory", sock, false},
+		{"a link to the Wardyn directory", filepath.Join(home, "to-shw"), false},
+		{"a sibling under the shared directory", filepath.Join(shared, "other"), true},
+		{"a sibling of the ledger in the Wardyn directory", filepath.Join(shw, "docs"), true},
+		{"an unrelated directory", filepath.Join(elsewhere, "docs"), true},
 	} {
-		if err := CheckBindOutsideMacVMDir(c.src, vm); (err == nil) != c.ok {
+		if err := CheckBindOutsideMacVMDirs(c.src, vm, ledger, sock); (err == nil) != c.ok {
 			t.Errorf("%s (%s): err = %v, want ok %v", c.name, c.src, err, c.ok)
 		}
 	}
@@ -124,17 +143,29 @@ func TestCheckBindOutsideMacVMDir(t *testing.T) {
 		"under the real place": filepath.Join(elsewhere, "vms", "runs"),
 		"the volume above it":  elsewhere,
 	} {
-		if err := CheckBindOutsideMacVMDir(src, filepath.Join(linked, "vm")); err == nil {
+		if err := CheckBindOutsideMacVMDirs(src, filepath.Join(linked, "vm")); err == nil {
 			t.Errorf("linked VM directory, %s: bind accepted", name)
 		}
 	}
-	if err := CheckBindOutsideMacVMDir(filepath.Join(elsewhere, "docs"), filepath.Join(linked, "vm")); err != nil {
+	if err := CheckBindOutsideMacVMDirs(filepath.Join(elsewhere, "docs"), filepath.Join(linked, "vm")); err != nil {
 		t.Errorf("linked VM directory, a sibling on its volume: %v", err)
 	}
-	// No VM directory on this runner: nothing is refused for it.
+	// No VM directory on this runner: nothing is refused for it, the ledger and socket directories
+	// included.
 	for _, vmDir := range []string{"", filepath.Join(home, "no-such", "macos-vm.noindex")} {
-		if err := CheckBindOutsideMacVMDir(home, vmDir); err != nil {
+		if err := CheckBindOutsideMacVMDirs(home, vmDir, filepath.Join(home, "no-ledger"), filepath.Join(home, "no-sock")); err != nil {
 			t.Errorf("VM directory %q does not exist: %v", vmDir, err)
+		}
+	}
+	// The sentence reaches a member as a failure hint, so it names no path; the paths ride in the type.
+	err := CheckBindOutsideMacVMDirs(shared, vm, ledger, sock)
+	var dirErr *MacVMDirError
+	if !errors.As(err, &dirErr) || dirErr.Inside || dirErr.Dir != ledger {
+		t.Fatalf("a bind of the shared directory: err = %v (%+v), want a *MacVMDirError for the ledger", err, dirErr)
+	}
+	for _, leak := range []string{shared, ledger, "macos-vm", "Wardyn", "/"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("refusal %q names %q", err, leak)
 		}
 	}
 }
