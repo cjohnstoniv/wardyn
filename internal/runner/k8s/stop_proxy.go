@@ -429,7 +429,11 @@ func (d *Driver) checkOnce(ctx context.Context, runID uuid.UUID, component, name
 	}
 	v := ev.evaluate(pe, pod, post)
 	if !v.ok() {
-		return false, fmt.Errorf("%w: %s: %s", errTerminationUnknown, name, v.why)
+		err := fmt.Errorf("%w: %s: %s", errTerminationUnknown, name, v.why)
+		if v.final {
+			return false, unprovableError{err}
+		}
+		return false, err
 	}
 	w := newWitness(runID, pe, pod, v, post, ev.Record, d.now().UTC())
 	unlock := d.runLock(runID)
@@ -517,13 +521,17 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 			return err
 		}
 		cause := errors.Join(perr, aerr)
-		if cause == nil {
+		known := cause != nil
+		if !known {
 			cause = errTerminationUnknown
 		}
 		const held = "k8s: teardown of run %s held, NetworkPolicies kept: %w"
 		err := d.pendingOr(runID, agentDone, cause, held)
 		if errors.As(err, new(*runner.ContainmentPendingError)) {
 			err = fmt.Errorf(held, runID, err) // still typed: the manager holds the run, not the session
+		}
+		if !known {
+			return err // no cause to read, so not shown to be only still stopping
 		}
 		return stillStopping(ctx, err)
 	}

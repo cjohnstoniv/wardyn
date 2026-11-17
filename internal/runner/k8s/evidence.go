@@ -303,6 +303,8 @@ type verdict struct {
 	arm   string
 	tiers map[string]string
 	why   string
+	// final: no later status read can make this pod's evidence; only a person's record releases the run.
+	final bool
 }
 
 func (v verdict) ok() bool { return v.arm != "" }
@@ -356,7 +358,7 @@ func (pe *podEvidence) containerTier(name string, t *corev1.ContainerStateTermin
 // after it returned (post). It reads nothing and never treats a missing pod as evidence.
 func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHolder) verdict {
 	if pod == nil || string(pod.UID) != pe.UID || pe.UID == "" {
-		return verdict{why: "no read of the recorded pod UID"}
+		return verdict{why: "no read of the recorded pod UID", final: true}
 	}
 	if pod.Spec.NodeName == "" && pod.DeletionTimestamp != nil && pe.NodeName == "" {
 		// The API refuses to bind a pod being deleted, and a deletionTimestamp is never unset.
@@ -368,12 +370,12 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 		// a later list that latched another holder of the node name changed it, and the run stays
 		// contained until a record for the new tuple is accepted.
 		if !sameTuple(*ev.tuple(ev.Record.Tuple.RunID), ev.Record.Tuple) {
-			return verdict{why: "the node record's approved tuple no longer matches the run's: a new record is needed"}
+			return verdict{why: "the node record's approved tuple no longer matches the run's: a new record is needed", final: true}
 		}
 		return verdict{arm: armRecord}
 	}
 	if len(ev.Reuse) > 0 {
-		return verdict{why: "node name reused: only a two-person node powered off record releases the run"}
+		return verdict{why: "node name reused: only a two-person node powered off record releases the run", final: true}
 	}
 	terminal := ev.terminalArm(pe, pod, post)
 	if terminal.ok() {
@@ -415,7 +417,7 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 		}
 		tier, refuse := pe.containerTier(name, cs.State.Terminated, t1, t2)
 		if refuse {
-			return verdict{why: whyDifferentExecution}
+			return verdict{why: whyDifferentExecution, final: true}
 		}
 		if tier == "" {
 			return verdict{}

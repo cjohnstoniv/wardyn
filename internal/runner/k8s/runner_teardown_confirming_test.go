@@ -163,3 +163,67 @@ func TestRunnerKillErrorsAreNotConfirming(t *testing.T) {
 	}
 	noPoliciesDropped(t, h2)
 }
+
+// A final verdict (a reused node name, a changed node record tuple, a different execution) can be released
+// only by a person's record, so no later status read proves it: the agent_only hold it leaves keeps its
+// plain typed answer and is not confirming.
+func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
+	for name, setup := range map[string]func(*testing.T, *runnerHarness){
+		"node name reused": func(t *testing.T, h *runnerHarness) {
+			h.evidence(t, func(ev *runEvidence) {
+				ev.Reuse = append(ev.Reuse, runner.NodeSample{Name: "n1", UID: "uid-n1-new", MachineID: "m7", SystemUUID: "s7", InternalIP: "10.0.0.9"})
+			})
+		},
+		"node record tuple changed": func(t *testing.T, h *runnerHarness) {
+			h.evidence(t, func(ev *runEvidence) { ev.Record = &runner.NodeRecord{Tuple: runner.NodeTuple{RunID: h.runID}} })
+		},
+		"different execution": func(t *testing.T, h *runnerHarness) {
+			h.evidence(t, func(ev *runEvidence) {
+				ev.Pods[componentProxy].Containers[proxyContainerName].Latched = []string{"containerd://p2"}
+			})
+			h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRunnerHarness(t)
+			h.boundProxy(t)
+			setup(t, h)
+			err := h.runnerKill(t, context.Background(), 25*time.Second)
+			var pending *runner.ContainmentPendingError
+			if !errors.As(err, &pending) || pending.Kind != runner.ContainmentAgentOnly || errors.Is(err, runner.ErrTeardownConfirming) {
+				t.Fatalf("kill = %v, want the agent_only hold and not ErrTeardownConfirming", err)
+			}
+			if !errors.As(err, new(unprovableError)) {
+				t.Errorf("kill = %v, want the final verdict's unprovableError in the chain", err)
+			}
+			noPoliciesDropped(t, h)
+		})
+	}
+}
+
+// One pod still unknown and the other with a real error (a refused delete): the answer is plain, because
+// not every cause is "no evidence yet".
+func TestRunnerKillUnknownBesideARealErrorIsNotConfirming(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.boundProxy(t)
+	h.agentPod(t)
+	h.cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.(clienttesting.DeleteActionImpl).GetName() == agentPodName(h.runID) {
+			return true, nil, apierrors.NewForbidden(podsGVR.GroupResource(), agentPodName(h.runID), errors.New("refused"))
+		}
+		return false, nil, nil
+	})
+	err := h.runnerKill(t, context.Background(), 25*time.Second)
+	if err == nil || errors.Is(err, runner.ErrTeardownConfirming) || !errors.Is(err, errTerminationUnknown) {
+		t.Fatalf("kill = %v, want a plain answer that still carries the proxy's unknown", err)
+	}
+	noPoliciesDropped(t, h)
+}
+
+// evidence edits the harness run's stored evidence.
+func (h *runnerHarness) evidence(t *testing.T, edit func(*runEvidence)) {
+	t.Helper()
+	if _, err := h.d.mutate(h.runID, func(ev *runEvidence) (bool, error) { edit(ev); return true, nil }); err != nil {
+		t.Fatal(err)
+	}
+}

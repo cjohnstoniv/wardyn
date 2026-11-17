@@ -19,12 +19,21 @@ type vanishedError struct{ err error }
 func (e vanishedError) Error() string { return e.err.Error() }
 func (e vanishedError) Unwrap() error { return e.err }
 
+// unprovableError is checkOnce's answer for a verdict no later status read can turn into evidence (a
+// final verdict: no read of the recorded UID, a changed node record tuple, a reused node name, a
+// different execution): only a person's record releases the run. It still wraps errTerminationUnknown;
+// stillStopping does not count it as a pod that is still stopping.
+type unprovableError struct{ err error }
+
+func (e unprovableError) Error() string { return e.err.Error() }
+func (e unprovableError) Unwrap() error { return e.err }
+
 // stillStopping is runner-mode teardown's answer for a held run (teardownRunner). When the caller's ctx is
 // live and the only thing missing is completion evidence that has not come yet (every leaf of err is
 // errTerminationUnknown), and the run is not held as pending_delete, it wraps err in
 // runner.ErrTeardownConfirming: the pods were deleted and are still stopping, and a retry of the kill
-// completes the teardown. Any other answer (a read, delete or evidence-store error, a vanished pod, the
-// pending_delete hold) is returned as it is. Either way nothing after the pods' wait has run: the
+// completes the teardown. Any other answer (a read, delete or evidence-store error, a vanished pod, a final
+// verdict, the pending_delete hold) is returned as it is. Either way nothing after the pods' wait has run: the
 // NetworkPolicies stay until both pods are proven stopped and gone.
 func stillStopping(ctx context.Context, err error) error {
 	var pending *runner.ContainmentPendingError
@@ -37,7 +46,7 @@ func stillStopping(ctx context.Context, err error) error {
 // onlyTerminating reports whether every leaf of err's tree is errTerminationUnknown.
 func onlyTerminating(err error) bool {
 	switch e := err.(type) {
-	case nil, vanishedError:
+	case nil, vanishedError, unprovableError:
 		return false
 	case interface{ Unwrap() []error }:
 		errs := e.Unwrap()
