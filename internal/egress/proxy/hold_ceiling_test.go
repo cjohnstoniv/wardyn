@@ -58,8 +58,20 @@ func workflowsEndWithin(t *testing.T, c *reauthCoordinator, start time.Time, lim
 	}
 }
 
+// withSpentBudget is withHoldBudget for a request that has already spent `spent` of its hold time.
+func withSpentBudget(r *http.Request, ceiling, spent time.Duration) *http.Request {
+	b := &holdBudget{ceiling: ceiling, start: time.Now().Add(-spent)}
+	return r.WithContext(context.WithValue(r.Context(), holdBudgetKey{}, b))
+}
+
 // doHeld is adoHarness.do on a request carrying a hold budget, as the engine gives one.
 func (h *adoHarness) doHeld(t *testing.T, ceiling time.Duration, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return h.doHeldSpent(t, ceiling, 0, method, target, body)
+}
+
+// doHeldSpent is doHeld for a request with `spent` of its hold time already gone.
+func (h *adoHarness) doHeldSpent(t *testing.T, ceiling, spent time.Duration, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	raw := method + " " + target + " HTTP/1.1\r\nHost: " + adoHost + "\r\n"
 	if body != "" {
@@ -71,7 +83,12 @@ func (h *adoHarness) doHeld(t *testing.T, ceiling time.Duration, method, target,
 		return httptest.NewRecorder()
 	}
 	rec := httptest.NewRecorder()
-	h.p.serveMITMRequest(rec, withHoldBudget(req, ceiling), adoHost, 443)
+	if spent > 0 {
+		req = withSpentBudget(req, ceiling, spent)
+	} else {
+		req = withHoldBudget(req, ceiling)
+	}
+	h.p.serveMITMRequest(rec, req, adoHost, 443)
 	return rec
 }
 
@@ -249,5 +266,110 @@ func TestHoldCeiling_FirstUseHoldEndsAtTheCeiling(t *testing.T) {
 		}
 	case <-time.After(3 * holdCeilingTest):
 		t.Fatalf("the first-use hold outlasted %s: the ceiling was not applied", 3*holdCeilingTest)
+	}
+}
+
+// A hold workflow is shared by every request that joins it, so a request with little time left that
+// opens one must not shorten it for the next: the workflow keeps the ceiling, and each caller's own
+// time bounds its wait.
+func TestHoldCeiling_ASharedWorkflowKeepsTheFullCeiling(t *testing.T) {
+	const spent = holdCeilingTest - 300*time.Millisecond
+	t.Run("re-auth", func(t *testing.T) {
+		fastPolls(t, 5*time.Millisecond)
+		h := newADOHarness(t, adoscope.CapProjectRead)
+		cp := newSignInControlPlane(t, adoToken)
+		lapse(t, h.p.inject, adoHost, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending)})
+		start := time.Now()
+		rec := h.doHeldSpent(t, holdCeilingTest, spent, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "")
+		if !strings.Contains(rec.Body.String(), adoSignInTimedOutRefusal) || time.Since(start) > time.Second {
+			t.Fatalf("the nearly spent request got %d %q after %s, want the timeout sentence within its 300ms", rec.Code, rec.Body.String(), time.Since(start))
+		}
+		workflowsEndAtLeast(t, h.p.inject.reauth, start, holdCeilingTest-100*time.Millisecond)
+		again := time.Now()
+		rec = h.doHeld(t, holdCeilingTest, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "")
+		if took := time.Since(again); !strings.Contains(rec.Body.String(), adoSignInTimedOutRefusal) || took < time.Second {
+			t.Errorf("the next request got %q after %s, want it to wait on the shared hold, not be refused at once", rec.Body.String(), took)
+		}
+	})
+	t.Run("capability", func(t *testing.T) {
+		cp := newCapControlPlane(t)
+		h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending)})
+		start := time.Now()
+		rec := h.doHeldSpent(t, holdCeilingTest, spent, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1?api-version=7.1", adoWorkItemPatch)
+		h.mustRefuse(t, rec, adoHoldTimedOutRefusal)
+		workflowsEndAtLeast(t, h.p.inject.reauth, start, holdCeilingTest-100*time.Millisecond)
+	})
+}
+
+// workflowsEndAtLeast is workflowsEndWithin's other bound.
+func workflowsEndAtLeast(t *testing.T, c *reauthCoordinator, start time.Time, least time.Duration) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.workflows) == 0 {
+		t.Error("the request opened no hold workflow")
+	}
+	for id, wf := range c.workflows {
+		if wf.deadline.Sub(start) < least {
+			t.Errorf("hold workflow %s ends %s after the request began, want at least %s", id, wf.deadline.Sub(start), least)
+		}
+	}
+}
+
+// A joiner's own request bounds its wait on a workflow that outlives it, and only the first observer
+// of an expiry reports it.
+func TestHoldCeiling_AwaitBoundsAJoinerByItsOwnTime(t *testing.T) {
+	wf := &reauthWorkflow{done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i, want := range []error{errReauthTimedOut, errReauthTimedOutAgain} {
+		req := withSpentBudget(httptest.NewRequest(http.MethodGet, "/", nil), holdCeilingTest, holdCeilingTest-300*time.Millisecond)
+		start := time.Now()
+		_, err := wf.await(context.WithValue(ctx, holdBudgetKey{}, req.Context().Value(holdBudgetKey{})))
+		if err != want || time.Since(start) > 2*time.Second {
+			t.Errorf("joiner %d: err %v after %s, want %v within its 300ms (the workflow is still open)", i, err, time.Since(start), want)
+		}
+	}
+	if wf.finished() {
+		t.Error("a joiner's timeout ended the shared workflow")
+	}
+}
+
+// The engine stamps a budget on a request it serves through ServeInjected too: a host rule's hold
+// (90 s) on a forwarded request ends at the ceiling.
+func TestHoldCeiling_EngineBoundsAHostCallHoldOnAnInjectedRequest(t *testing.T) {
+	fastPolls(t, 5*time.Millisecond)
+	prev := hostCallSecond
+	hostCallSecond = time.Second
+	t.Cleanup(func() { hostCallSecond = prev })
+	up := newOrgUpstream(t)
+	cfg := &Config{
+		RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", DecisionBufferSize: defaultBufferSize,
+		Policy: types.RunPolicySpec{AllowedDomains: []string{viaOrgHost}, HostRules: []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: viaOrgHost, Methods: []string{"POST"}, Paths: []string{"/admin"}, Effect: types.HostRuleHold},
+			{Host: viaOrgHost, Effect: types.HostRuleAllow},
+		}}}},
+		Injection: []InjectionConfig{{GrantID: uuid.New(),
+			InjectionRule: egress.InjectionRule{Host: viaOrgHost, Header: "Authorization", SecretName: "corp-secret"}}},
+		MITMHosts:    []string{viaOrgHost},
+		TrustedCAPEM: string(up.caPEM),
+	}
+	e, err := NewViaOrgEngine(context.Background(), cfg, ViaOrgEngineOptions{
+		Client: &http.Client{Transport: &fakeOrg{}}, Dial: redirectDial(upstreamAddr(up.srv)),
+		LookupIP: publicResolver{}.LookupIP, HoldCeiling: holdCeilingTest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.Close(context.Background()) })
+	rec, took := serveWithin(t, 3*holdCeilingTest, func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/admin", strings.NewReader("{}"))
+		r.Host = viaOrgHost
+		w := httptest.NewRecorder()
+		e.ServeInjected(w, r, viaOrgHost)
+		return w
+	})
+	if hits, _, _ := up.seen(); hits != 0 || rec.Code != http.StatusForbidden || took < holdCeilingTest-100*time.Millisecond {
+		t.Errorf("status %d after %s with %d upstream hits, want a held refusal at about %s", rec.Code, took, hits, holdCeilingTest)
 	}
 }

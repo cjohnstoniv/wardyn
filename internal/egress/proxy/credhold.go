@@ -269,6 +269,16 @@ func holdLeft(ctx context.Context) (left time.Duration, ok bool) {
 	return max(b.ceiling-time.Since(b.start), 0), true
 }
 
+// holdCap is budget under the engine's ceiling alone, whatever the request has spent: a hold
+// workflow is shared by every request that joins it, so its deadline is no one request's remainder
+// (await bounds each caller by its own).
+func holdCap(ctx context.Context, budget time.Duration) time.Duration {
+	if b, _ := ctx.Value(holdBudgetKey{}).(*holdBudget); b != nil {
+		return min(budget, b.ceiling)
+	}
+	return budget
+}
+
 // holdFor is budget, or what is left of the request's hold time when that is less. 0 means none is
 // left: the hold ends at once with its own sentence.
 func holdFor(ctx context.Context, budget time.Duration) time.Duration {
@@ -301,7 +311,7 @@ func (c *reauthCoordinator) admit(approvalID uuid.UUID, budget time.Duration) (w
 // admitCapability is admit for an Azure DevOps escalation: its own budget, and
 // the re-resolve ask the workflow ends with.
 func (c *reauthCoordinator) admitCapability(ctx context.Context, approvalID uuid.UUID, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
-	return c.admitWith(approvalID, holdFor(ctx, capabilityHoldBudget()), query)
+	return c.admitWith(approvalID, holdCap(ctx, capabilityHoldBudget()), query)
 }
 
 func (c *reauthCoordinator) admitWith(approvalID uuid.UUID, budget time.Duration, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {

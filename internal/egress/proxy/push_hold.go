@@ -374,7 +374,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 	}
 	if hold = holdFor(r.Context(), hold); hold <= 0 {
 		// An engine request with no hold time left is refused now, not left to a reset stream.
-		return refuse(ruleSourceGitPushHeld, headline+", and this request has no hold time left, so nobody was asked",
+		return refuse(ruleSourceGitPushHeld, headline+", and this request has no hold time left to wait for a decision",
 			"push the same commits again to ask again")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hold)
