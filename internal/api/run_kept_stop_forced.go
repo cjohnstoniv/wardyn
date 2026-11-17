@@ -641,6 +641,24 @@ func (s *Server) forgetTeardownRow(runID uuid.UUID, action string) {
 	teardownRowsWritten.Delete(teardownRowKey{s, runID, action})
 }
 
+// folderRecordRowsWritten holds, per server, run and action, an unread computer folder record whose row
+// stopTerminalSandbox has written: the row is written once while the record stays unreadable, not on every pass.
+// The entry goes when the record reads again or the sandbox is stopped or found gone, so a later failure is
+// written again. In memory only, like teardownRowsWritten: a restart, or another replica, writes its own first row.
+var folderRecordRowsWritten sync.Map
+
+// folderRecordRowDue reports whether run id's unread-record row under action is still to be written, and marks it
+// written.
+func (s *Server) folderRecordRowDue(runID uuid.UUID, action string) bool {
+	_, seen := folderRecordRowsWritten.LoadOrStore(teardownRowKey{s, runID, action}, struct{}{})
+	return !seen
+}
+
+// forgetFolderRecordRow drops run id's entry: its record read, or its sandbox is stopped or gone.
+func (s *Server) forgetFolderRecordRow(runID uuid.UUID, action string) {
+	folderRecordRowsWritten.Delete(teardownRowKey{s, runID, action})
+}
+
 // forcedRestopWaits holds, per server and run, the wait before the forced retry stops that run's sandbox again
 // (noteForcedRestop). In memory only, like teardownRowsWritten: a restart, or another replica, stops once and starts
 // a wait of its own. A tick drops this server's entries for runs it no longer lists (forgetForcedRestops).
