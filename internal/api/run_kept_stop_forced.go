@@ -644,7 +644,8 @@ func (s *Server) forgetTeardownRow(runID uuid.UUID, action string) {
 // folderRecordRowsWritten holds, per server, run and action, an unread computer folder record whose row
 // stopTerminalSandbox has written: the row is written once while the record stays unreadable, not on every pass.
 // The entry goes when the record reads again or the sandbox is stopped or found gone, so a later failure is
-// written again. In memory only, like teardownRowsWritten: a restart, or another replica, writes its own first row.
+// written again. A run the sweep no longer probes (its ref cleared, or gone from the listing) keeps its entry
+// until the process exits. In memory only, like teardownRowsWritten: a restart, or another replica, writes its own first row.
 var folderRecordRowsWritten sync.Map
 
 // folderRecordRowDue reports whether run id's unread-record row under action is still to be written, and marks it
