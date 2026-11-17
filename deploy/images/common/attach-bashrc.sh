@@ -24,16 +24,6 @@
 # Only for interactive shells (attach); skip scripts/non-interactive execs.
 case $- in *i*) ;; *) return 2>/dev/null || true ;; esac
 
-# Tool search off against a host that is not first-party Anthropic. An attach shell
-# does not pass through agent-run, which applies this rule to the agent it starts, so
-# a claude started here needs it too. Claude Code 2.1.231 did this itself; later
-# versions do not. Bedrock and a value already set are left alone.
-if [ -n "${ANTHROPIC_BASE_URL:-}" ] && [ -z "${ENABLE_TOOL_SEARCH+x}" ] && [ -z "${CLAUDE_CODE_USE_BEDROCK:-}" ]; then
-  _h="${ANTHROPIC_BASE_URL#*://}"; _h="${_h%%/*}"; _h="${_h##*@}"; _h="${_h%%:*}"
-  [ "${_h,,}" = "api.anthropic.com" ] || export ENABLE_TOOL_SEARCH=false
-  unset _h
-fi
-
 _prep_gone=
 if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then
   if [ ! -f "$HOME/.wardyn/prep-done" ]; then

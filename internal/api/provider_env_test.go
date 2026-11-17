@@ -230,3 +230,86 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 		}
 	})
 }
+
+// TestClaudeToolSearchDefault: dispatch turns Claude Code's tool search off where claude would reach a host
+// that is not first-party Anthropic, as 2.1.231 did, and leaves it at the CLI default everywhere else.
+func TestClaudeToolSearchDefault(t *testing.T) {
+	srv := providerRunFixture(t, types.SiteConfig{}, &capStore{}, nil)
+	srv.cfg.AWSSSOProxyInject = true
+	srv.cfg.AWSSSOEndpointOverride = "http://sso-fake.test:8090"
+	blob := awsSSOBlob{AccessToken: "tok", StartURL: brStartURL, Region: "us-east-1", AccountID: "123456789012",
+		RoleName: "BedrockUser", ExpiresAt: time.Now().Add(time.Hour)}
+	kinds := map[string]joinKind{}
+	for _, k := range joinKinds() {
+		kinds[k.p.ID] = k
+	}
+	laneOf := func(id string) (providerLane, string) {
+		k := kinds[id]
+		lane := providerLane{chosen: &chosenProvider{provider: k.p, owner: joinCreateOwner}, blob: blob}
+		if providerKeyKind(k.p.Kind) {
+			lane.key, _ = providerKeyLaneFor(k.p, k.agent)
+		}
+		return lane, k.agent
+	}
+	gateway := subProvider("claude-gw")
+	gateway.BaseURL = "https://gw.corp.example/anthropic"
+	vendorBase := subProvider("claude-vendor")
+	vendorBase.BaseURL = "https://api.anthropic.com"
+	foundry := providerLane{
+		chosen: &chosenProvider{provider: types.ModelProvider{ID: "az", UID: "uid-az", Kind: types.ModelProviderAzureFoundry}, owner: joinCreateOwner},
+		azure:  providerAzureLane{harness: azureMessagesHarness, endpoint: "https://res.services.ai.azure.com", model: "m-az"},
+	}
+	subLane := func(p types.ModelProvider) providerLane {
+		return providerLane{chosen: &chosenProvider{provider: p, owner: joinCreateOwner}}
+	}
+	anthropicKey, _ := laneOf("anthropic-key")
+	customEndpoint, _ := laneOf("corp-gw")
+	subscription, _ := laneOf("claude")
+	sso, _ := laneOf("sso")
+	bearer, _ := laneOf("bearer")
+	openai, _ := laneOf("openai-key")
+	rows := []struct {
+		name   string
+		lane   providerLane
+		run    types.AgentRun
+		preset map[string]string // set before the default is applied: an operator's own value
+		want   string            // "" = the variable is absent
+	}{
+		{name: "api key", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"}, want: "false"},
+		{name: "custom endpoint", lane: customEndpoint, run: types.AgentRun{Agent: "claude-code"}, want: "false"},
+		{name: "no provider", run: types.AgentRun{Agent: "claude-code"}, want: "false"},
+		{name: "subscription behind a gateway", lane: subLane(gateway), run: types.AgentRun{Agent: "claude-code"}, want: "false"},
+		{name: "subscription direct", lane: subscription, run: types.AgentRun{Agent: "claude-code"}},
+		{name: "subscription set to the vendor host", lane: subLane(vendorBase), run: types.AgentRun{Agent: "claude-code"}},
+		{name: "bedrock sso", lane: sso, run: types.AgentRun{Agent: "claude-code"}},
+		{name: "bedrock key", lane: bearer, run: types.AgentRun{Agent: "claude-code"}},
+		{name: "foundry", lane: foundry, run: types.AgentRun{Agent: "claude-code"}},
+		// Foundry and Bedrock stay on the default even when a base URL is also set; only the provider decides.
+		{name: "foundry with a base URL", lane: foundry, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+		{name: "bedrock with a base URL", lane: sso, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+		{name: "sign-in task", run: types.AgentRun{Agent: "claude-code", Task: harnessLoginTask}},
+		{name: "macOS VM, no brokered route", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code", MachineKind: types.MachineMacOSVM}},
+		{name: "codex harness", lane: openai, run: types.AgentRun{Agent: "codex-cli"}},
+		{name: "operator value kept", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
+			preset: map[string]string{"ENABLE_TOOL_SEARCH": "true"}, want: "true"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			env := map[string]string{}
+			if r.run.Task != harnessLoginTask {
+				srv.applyProviderEnv(context.Background(), r.run, r.lane, &types.RunPolicySpec{}, env, joinProxyURL)
+			} else {
+				// dispatch's sign-in task: the public host, no model arm.
+				env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+			}
+			maps.Copy(env, r.preset)
+			applyClaudeToolSearchDefault(r.run, env)
+			got, set := env["ENABLE_TOOL_SEARCH"]
+			if r.want == "" && set || r.want != "" && got != r.want {
+				t.Errorf("ENABLE_TOOL_SEARCH = %q (set %v), want %q (env %v)", got, set, r.want, env)
+			}
+		})
+	}
+}

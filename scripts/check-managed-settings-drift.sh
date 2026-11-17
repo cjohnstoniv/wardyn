@@ -219,7 +219,8 @@ echo "ok: Claude Code $pin drops every built-in tool the attended-rules document
 # the result event's permission_denials, so no model, network or credential is needed. A control run without
 # the managed file must let WebFetch through under each condition, or the assertions prove nothing.
 # Every run happens under two tool-search arms. `off` sets ENABLE_TOOL_SEARCH=false, so WebFetch is in the
-# request's tools from the first turn. `default` sets nothing, as the image runs: since 2.1.3xx a deferred
+# request's tools from the first turn; dispatch sets it for a run on the proxy's route or an operator gateway.
+# `default` sets nothing, as a run on api.anthropic.com, Bedrock, Foundry or Vertex runs: since 2.1.3xx a deferred
 # tool such as WebFetch is left out of the tools until tool search surfaces it, even behind a local
 # ANTHROPIC_BASE_URL, so the stand-in first calls ToolSearch (toolu_probe0) for WebFetch, then WebFetch.
 # `ran` needs the stand-in's WebFetch call (toolu_probe1) in the stream; a run that never called it is `uncalled`.
