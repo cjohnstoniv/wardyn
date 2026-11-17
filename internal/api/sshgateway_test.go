@@ -1095,6 +1095,48 @@ func TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel(t *testing.T) {
 	}
 }
 
+// stdinRecorder is an exec's stdin that records its half-close and, like a
+// process that exits at the end of its input, ends its stdout then.
+type stdinRecorder struct {
+	closed  atomic.Bool
+	stdoutW *io.PipeWriter
+}
+
+func (r *stdinRecorder) Write(p []byte) (int, error) { return len(p), nil }
+func (r *stdinRecorder) Close() error {
+	r.closed.Store(true)
+	return r.stdoutW.Close()
+}
+
+// TestSSHGateway_ExecStdinNotHalfClosedOnACut pins that the bridge half-closes
+// a process's stdin when the client's input ends, but not once its context
+// ended (a cut): the cut's own Close ends the process's input, and a half-close
+// first could let it end cleanly, so a cut transfer would read as a success.
+func TestSSHGateway_ExecStdinNotHalfClosedOnACut(t *testing.T) {
+	for name, cut := range map[string]bool{"input ended": false, "cut": true} {
+		t.Run(name, func(t *testing.T) {
+			srv, _, _, run := newWiredPauseServer(t)
+			stdoutR, stdoutW := io.Pipe()
+			stdin := &stdinRecorder{stdoutW: stdoutW}
+			sess := &runner.ExecSession{Stdin: stdin, Stdout: stdoutR, Wait: func() (int, error) { return 0, nil },
+				Close: func() error { return stdoutW.Close() }}
+			ch := newFakeSSHChannel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cut {
+				cancel()
+			}
+			_ = ch.inW.Close() // the client's input ends
+			// Without a cut the bridge returns only after the half-close (it ends stdout).
+			srv.sshBridgeExecSession(ctx, run.ID, holderOwner, ch, sess, true)
+			time.Sleep(100 * time.Millisecond) // on a cut, the stdin goroutine has seen the input's end by now
+			if got := stdin.closed.Load(); got == cut {
+				t.Errorf("stdin half-closed = %v on %s, want %v", got, name, !cut)
+			}
+		})
+	}
+}
+
 // TestSSHGateway_ExecStreamUnsupportedIsCleanError pins the post-brief
 // context: runner.ErrExecStreamUnsupported maps to a clean channel error
 // (nonzero exit + a message), never a hang.

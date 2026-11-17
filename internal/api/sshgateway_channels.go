@@ -213,9 +213,8 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	stderrDone := drainExecStderr(channel, sess)
 
-	// The Stdout copy below reads a pipe no ctx can reach: a disconnected client
-	// (or closed channel) would park this goroutine holding a channel slot and
-	// the keepalive, so the idle reaper never fires. Close the session when ctx
+	// The Stdout copy below reads a pipe no ctx can reach: a disconnected client (or closed channel) would park this
+	// goroutine holding a channel slot and the keepalive, so the idle reaper never fires. Close the session when ctx
 	// dies; Close is idempotent.
 	stopOnCtx := context.AfterFunc(ctx, func() {
 		if sess.Close != nil {
@@ -232,12 +231,13 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
-			// Bytes a person sends are presence (run_pause.go).
+			// Bytes a person sends are presence (run_pause.go); the count is read atomically, as Stdout may end mid-copy.
 			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
-			// Counted as written to the sandbox, off this goroutine: it may still
-			// be mid-copy when Stdout ends, so the total is read atomically.
 			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
-			_ = sess.Stdin.Close() // half-close only: Stdout/Stderr may still be flowing
+			// Half-close only (Stdout/Stderr may still flow), and not on a cut: its Close ends stdin, and a half-close first could let the process end cleanly.
+			if ctx.Err() == nil {
+				_ = sess.Stdin.Close()
+			}
 		}()
 	}
 
