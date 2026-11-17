@@ -736,7 +736,7 @@ jobs:
       # suite "docker" (below) is what turns a silent skip back into red.
       - name: Build agent-aws-sso image (local only — the real AWS CLI these tests drive)
         run: docker build -f deploy/images/aws-sso/Dockerfile -t wardyn/agent-aws-sso:local .
-      # The coverage compile of internal/api peaks near 13 GB here with GOMEMLIMIT set (the suite's notice records
+      # The coverage compile of internal/api peaks near 13 GB here with GOMEMLIMIT set (the prebuild's notice records
       # the largest single process), about all the hosted runner's memory, and a runner was shut down mid-suite
       # without it. A lower GOGC did not lower the peak (the MON lines below measured it), so extra swap lets the
       # peak page out instead.
@@ -749,9 +749,10 @@ jobs:
           sudo swapon /swapfile-wardyn
           free -m
       # The suite below compiles every package at the default -p, so the api coverage compile, the job's memory peak,
-      # ran beside other compiles. Compiled here first, alone and with the suite's coverage flags, the suite finds it
-      # in the build cache.
+      # ran beside other compiles. Compiled here first, alone and with the suite's coverage flags, the suite finds that
+      # test compile in the build cache. The step's own limit makes an overrun a reported failure, not a cancelled job.
       - name: Prebuild the docker-tagged api coverage binary with one worker
+        timeout-minutes: 25
         env:
           GOMAXPROCS: "2"
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
