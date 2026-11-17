@@ -267,13 +267,36 @@ func TestEditTrustCAsAsksOnlyForCAsNotYetTrusted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	asPEM := func(t *testing.T, stage, from, to string) {
+		der, err := os.ReadFile(filepath.Join(stage, from, ItemCert))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(stage, to), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stage, to, ItemCert), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, tc := range []struct {
 		name    string
 		stage   func(t *testing.T, stage string)
 		trusted []string
+		unread  bool     // verify-cert does not start: no exit code (0) and an error
 		want    []string // the items asked for; none means 409 and nothing opened
 		said    []string // what the script prints for the items not asked for
 	}{
+		{name: "a verify that does not start", stage: func(t *testing.T, s string) { stageCA(t, s, "corp", "Corp Root", false) },
+			trusted: []string{"corp"}, unread: true, want: []string{"corp"}},
+		{name: "two certificates with one subject", stage: func(t *testing.T, s string) {
+			stageCA(t, s, "corp-a", "Corp Root", false)
+			stageCA(t, s, "corp-b", "Corp Root", false)
+		}, want: []string{"corp-a", "corp-b"}},
+		{name: "one certificate as DER and as PEM", stage: func(t *testing.T, s string) {
+			stageCA(t, s, "corp", "Corp Root", false)
+			asPEM(t, s, "corp", "corp-pem")
+		}, want: []string{"corp"}, said: []string{"the same certificate as corp, not asked again"}},
 		{name: "already trusted", stage: func(t *testing.T, s string) { stageCA(t, s, "corp", "Corp Root", false) }, trusted: []string{"corp"}},
 		{name: "two, one trusted", stage: func(t *testing.T, s string) {
 			stageCA(t, s, "acme-proxy", "Acme Proxy", true)
@@ -292,6 +315,15 @@ func TestEditTrustCAsAsksOnlyForCAsNotYetTrusted(t *testing.T) {
 			rig, dir, stage := newEditRig(t)
 			tc.stage(t, stage)
 			trustStaged(rig, tc.trusted...)
+			if tc.unread {
+				run := rig.t.run
+				rig.t.run = func(ctx context.Context, argv []string) ([]byte, int, error) {
+					if len(argv) > 1 && argv[1] == "verify-cert" {
+						return nil, 0, errors.New("security did not start")
+					}
+					return run(ctx, argv)
+				}
+			}
 			w := rig.do("POST", "/edit/trust-cas", "")
 			if len(tc.want) == 0 {
 				if body := w.Body.String(); w.Code != 409 || body != "every certificate in the install list is already trusted in this base\n" {
