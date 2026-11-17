@@ -12,6 +12,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ViaOrgRoute is one destination of a via_org grant on a runner's proxy: its grant
@@ -61,6 +63,9 @@ func (p *Proxy) viaOrgRouteFor(r *http.Request) (ViaOrgRoute, string, bool) {
 		return ViaOrgRoute{}, "", false
 	}
 	if r.Method != http.MethodConnect && r.URL != nil && r.URL.Host == "" {
+		if strings.HasPrefix(r.URL.Path, routePATBroker) {
+			return p.viaOrgADOGitRoute(r)
+		}
 		orgRepo, _, ok := parseGitBrokerPath(r.URL.Path)
 		id, granted := p.gitGrants[orgRepo]
 		if !strings.HasPrefix(r.URL.Path, routeGitBroker) || !ok || !granted {
@@ -79,6 +84,24 @@ func (p *Proxy) viaOrgRouteFor(r *http.Request) (ViaOrgRoute, string, bool) {
 	host, _ := splitHostPort(authority, 443)
 	route, ok := p.viaOrgRouteForHost(host)
 	return route, authority, ok
+}
+
+// viaOrgADOGitRoute is the via_org route of a /wardyn/git/<host>/ request whose host is a via_org route's and that this
+// proxy does not broker itself (no git_pat grant and no Azure DevOps grant for it). The organisation's engine serves
+// it with the run's Azure DevOps grant (ServeBroker), or refuses it.
+func (p *Proxy) viaOrgADOGitRoute(r *http.Request) (ViaOrgRoute, string, bool) {
+	host, _, ok := parsePATBrokerPath(r.URL.Path)
+	if !ok {
+		return ViaOrgRoute{}, "", false
+	}
+	if _, pat := p.patGrants[host]; pat {
+		return ViaOrgRoute{}, "", false
+	}
+	if _, ado := p.adoGitGrant(host); ado {
+		return ViaOrgRoute{}, "", false
+	}
+	route, ok := p.viaOrgRouteForHost(host)
+	return route, r.Host, ok
 }
 
 func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
@@ -229,6 +252,16 @@ func (f lookupFunc) LookupIP(host string) ([]net.IP, error) { return f(host) }
 // run's via_org rules. It starts no token renewer or activity reporter: every
 // forwarded request carries the run's live token, which the client presents.
 func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions) (*ViaOrgEngine, error) {
+	// An Azure DevOps credential never travels without its gate: the token bounds nothing on its own.
+	ado := newADOGrantsByHost(cfg.ADOGrant)
+	for _, in := range cfg.Injection {
+		if in.SecretName != types.ADOEntraAccessTokenSecret {
+			continue
+		}
+		if _, ok := ado.ADOGrantFor(in.Host); !ok {
+			return nil, fmt.Errorf("%w: %s", ErrViaOrgADOUngated, in.Host)
+		}
+	}
 	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New()}
 	if opts.LookupIP != nil {
 		h.res = lookupFunc(opts.LookupIP)
@@ -243,6 +276,9 @@ func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions)
 	}
 	return &ViaOrgEngine{srv: srv}, nil
 }
+
+// ErrViaOrgADOUngated refuses an engine config whose Azure DevOps credential has no Azure DevOps grant for its host.
+var ErrViaOrgADOUngated = errors.New("via_org: an Azure DevOps credential with no Azure DevOps grant for its host")
 
 // errViaOrgCleartext refuses a destination this engine would reach in
 // cleartext: the organisation always dials TLS.
@@ -294,21 +330,37 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 
 // ServeBroker serves a forwarded /wardyn/gh/ request: the git broker's repo
 // allowlist, branch namespace and push-content rules, its approval hold and its
-// mint, exactly as a sandbox's own proxy serves it.
+// mint, exactly as a sandbox's own proxy serves it. A /wardyn/git/<host>/ request
+// is served only for a host the run's Azure DevOps grant covers, by the same
+// Entra broker (org pin, capabilities, content and push rules, holds).
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 	r = trackNetworkBody(r)
 	defer interruptBodyReadOnCancel(w, r)()
 	if e.refuseClosed(w) {
 		return
 	}
-	if !strings.HasPrefix(r.URL.Path, routeGitBroker) {
-		http.Error(w, "via_org: not a brokered route", http.StatusForbidden)
-		return
-	}
 	// The control plane's listener sets no read timeout, so the request body
 	// gets the same bound a terminated tunnel's does.
-	rearmBodyDeadline(w, r)
-	e.srv.proxy.handleGitBroker(w, r)
+	switch {
+	case strings.HasPrefix(r.URL.Path, routeGitBroker):
+		rearmBodyDeadline(w, r)
+		e.srv.proxy.handleGitBroker(w, r)
+	case strings.HasPrefix(r.URL.Path, routePATBroker) && e.adoGitCovered(r.URL.Path):
+		rearmBodyDeadline(w, r)
+		e.srv.proxy.handlePATBroker(w, r)
+	default:
+		http.Error(w, "via_org: not a brokered route", http.StatusForbidden)
+	}
+}
+
+// adoGitCovered reports whether the engine's Azure DevOps grant covers the host a /wardyn/git/<host>/ path names.
+func (e *ViaOrgEngine) adoGitCovered(path string) bool {
+	host, _, ok := parsePATBrokerPath(path)
+	if !ok {
+		return false
+	}
+	_, covered := e.srv.proxy.adoGitGrant(host)
+	return covered
 }
 
 // interruptBodyReadOnCancel makes the end of a forwarded request's stream (run end, release, idle: the
