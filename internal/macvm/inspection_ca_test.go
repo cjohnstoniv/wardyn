@@ -29,7 +29,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // testRunCA is a run CA as the control plane mints one, returned parsed, with its key and as PEM.
@@ -546,6 +550,38 @@ func TestCrossSignedRunCAIsLimitedToTheInspectedHosts(t *testing.T) {
 	leaf := leafUnder(t, cp, key, []string{"tunnel.example.org"}, nil)
 	if err := verifyWith(leaf, []*x509.Certificate{run}, nil, "tunnel.example.org"); err != nil {
 		t.Errorf("the guest's own bundle path: %v", err)
+	}
+}
+
+// TestCrossSignedRunCANamesTheSealedRuleHosts reads the names as the runner does, from the proxy's own config
+// (runner.ProxyConfigOf, TerminatedHosts). The proxy opens a host only a sealed outer host rule set names, so the
+// copy permits it; an allowed host the proxy only tunnels stays outside it.
+func TestCrossSignedRunCANamesTheSealedRuleHosts(t *testing.T) {
+	ca, _ := openCA(t)
+	_, key, runPEM := testRunCA(t, time.Now().AddDate(1, 0, 0))
+	pc := runner.ProxyConfig{MITMCACertPEM: runPEM, MITMCAKeyPEM: "key", MITMHosts: []string{"own.example.com:443"},
+		Policy: types.RunPolicySpec{
+			AllowedDomains: []string{"own.example.com", "sealed.example.com", "tunnel.example.org"},
+			HostRules: []types.HostRuleSet{
+				{Rules: []types.HostRule{{Host: "own.example.com", Effect: types.HostRuleAllow}}},
+				{Rules: []types.HostRule{{Host: "sealed.example.com", Effect: types.HostRuleAllow}}},
+			},
+		}}
+	cfg := runner.ProxyConfigOf(uuid.Nil, pc, 0)
+	terminated := cfg.TerminatedHosts()
+	if p, _ := macvm.InspectedNames(terminated); !reflect.DeepEqual(p, []string{"own.example.com", "sealed.example.com"}) {
+		t.Fatalf("permitted = %q (terminated %q), want the run's own and the sealed-only rule host", p, terminated)
+	}
+	cp := crossed(t, ca, runPEM, terminated, 0)
+	mac := macCert(t, ca)
+	viaMac := func(name string) error {
+		return verifyWith(leafUnder(t, cp, key, []string{name}, nil), []*x509.Certificate{mac}, []*x509.Certificate{cp}, name)
+	}
+	if err := viaMac("sealed.example.com"); err != nil {
+		t.Errorf("a sealed-only rule host: %v", err)
+	}
+	if err := viaMac("tunnel.example.org"); err == nil {
+		t.Error("an allowed host the proxy only tunnels verifies")
 	}
 }
 
