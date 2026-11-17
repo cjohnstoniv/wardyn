@@ -276,7 +276,7 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	for hi, h := range def.Hosts {
 		if d, err := types.ParseDestination(h); err == nil && adm.bounds.servesModel(d) {
 			return attachedComponent{}, componentRefused(c, i, reasonComponentHostServesModel,
-				fmt.Sprintf("hosts[%d]: %q serves a model on this deployment, and a component may not reach a model's host", hi, h),
+				fmt.Sprintf("hosts[%d]: %q serves a model on this deployment, and a component may not reach a model's host; the port does not count, so give the MCP server its own host name", hi, h),
 				"reaches a host that serves a model, which a component may not.")
 		}
 	}
