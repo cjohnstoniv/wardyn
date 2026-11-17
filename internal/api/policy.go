@@ -12,7 +12,9 @@ import (
 	"log/slog"
 	neturl "net/url"
 	"os"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -57,8 +59,17 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
-	if err := validateAuthoredPolicySpec(spec); err != nil {
+	// The file is the default policy, read at boot: an api_key grant it marks
+	// requires_approval loads, with a warning, so an upgrade never stops the
+	// daemon. It is refused when the policy is next saved.
+	if err := validateAuthoredPolicySpecHolding(spec, spec.EligibleGrants); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
+	}
+	for i, g := range spec.EligibleGrants {
+		if g.Kind == types.GrantAPIKey && g.RequiresApproval {
+			slog.Warn("wardynd: an api_key grant in the policy file requires approval; its key is never injected and the grant is refused when the policy is next saved",
+				"file", path, "grant", fmt.Sprintf("eligible_grants[%d]", i))
+		}
 	}
 	return spec, nil
 }
@@ -90,6 +101,13 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 // file). owner_only_refs is refused there: Wardyn sets it at launch, on a
 // spec the run path then validates with validatePolicySpec.
 func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
+	return validateAuthoredPolicySpecHolding(spec, nil)
+}
+
+// validateAuthoredPolicySpecHolding is validateAuthoredPolicySpec for a spec
+// that may carry grants an earlier write already held, which a write that does
+// not change them leaves alone (see authoredAPIKeyApprovalRefusal).
+func validateAuthoredPolicySpecHolding(spec types.RunPolicySpec, held []types.GrantSpec) error {
 	if err := validatePolicySpec(spec); err != nil {
 		return err
 	}
@@ -97,6 +115,27 @@ func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
 		if err := authoredGrantRefusal(fmt.Sprintf("eligible_grants[%d]", i), g); err != nil {
 			return err
 		}
+	}
+	return authoredAPIKeyApprovalRefusal(spec.EligibleGrants, held)
+}
+
+// authoredAPIKeyApprovalRefusal refuses an api_key grant marked requires_approval
+// where a person or a file authors it now, as env_secret and file_secret are
+// refused: every door that wires an api_key into a run drops an approval-gated
+// grant (persistRunGrants, probeInjections, mintRecordAPIKeyInjections) and its
+// mint answers without the key, so no run could ever use it.
+//
+// It is NOT part of validatePolicySpec: a policy, ceiling or default saved
+// before this rule still loads, clamps, overlays and launches as it always did,
+// its key left out of every run. held is what an earlier write already carried;
+// a grant equal to one of them is not authored now and is left alone.
+func authoredAPIKeyApprovalRefusal(grants, held []types.GrantSpec) error {
+	for i, g := range grants {
+		if g.Kind != types.GrantAPIKey || !g.RequiresApproval || slices.ContainsFunc(held, func(h types.GrantSpec) bool { return sameGrant(h, g) }) {
+			continue
+		}
+		return fmt.Errorf("eligible_grants[%d]: api_key cannot require approval — every door that injects a key drops an "+
+			"approval-gated grant, so no run could ever use it", i)
 	}
 	return nil
 }
@@ -107,6 +146,20 @@ func authoredGrantRefusal(path string, g types.GrantSpec) error {
 		return fmt.Errorf("%s: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead", path)
 	}
 	return nil
+}
+
+// sameGrant reports whether two grants are equal, their scopes compared as JSON
+// and not as the bytes a store or a re-marshal left them in.
+func sameGrant(a, b types.GrantSpec) bool {
+	compact := func(raw json.RawMessage) json.RawMessage {
+		var buf bytes.Buffer
+		if json.Compact(&buf, raw) != nil {
+			return raw
+		}
+		return buf.Bytes()
+	}
+	a.Scope, b.Scope = compact(a.Scope), compact(b.Scope)
+	return reflect.DeepEqual(a, b)
 }
 
 // validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount
@@ -655,16 +708,6 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		}
 		if rule.Placeholder != "" {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
-		}
-		// requires_approval is refused, as it is on env_secret and file_secret:
-		// every door that wires an api_key into a run drops an approval-gated
-		// grant (persistRunGrants, probeInjections, mintRecordAPIKeyInjections)
-		// and its mint answers without the key, so no run could ever use it.
-		// A stored row that already holds one still reads and launches (neither
-		// re-validates it); an authored write is refused.
-		if g.RequiresApproval {
-			return fmt.Errorf("eligible_grants[%d]: api_key cannot require approval — every door that injects a key drops an "+
-				"approval-gated grant, so no run could ever use it", i)
 		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)

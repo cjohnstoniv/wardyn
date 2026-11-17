@@ -803,7 +803,7 @@ func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUn
 			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
-		if verr := validateAuthoredPolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
+		if verr := validateAuthoredPolicySpecHolding(eff.Ceiling, base.Ceiling.EligibleGrants); verr != nil && validatePolicySpec(base.Ceiling) == nil {
 			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}
