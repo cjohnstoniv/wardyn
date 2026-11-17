@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -157,7 +159,7 @@ func TestCheckOverlayGatedAPIKeyFromTheBase(t *testing.T) {
 		Scope: apiKeyScope(t, "api.example.test", "corp-key")}}
 	overlay := func(g types.GrantSpec) *unitWriteError {
 		p := types.GovernanceUnit{Name: "p", Overlay: &types.CeilingOverlay{EligibleGrants: &[]types.GrantSpec{g}}}
-		return srv.checkOverlay(p, []types.GovernanceUnit{p})
+		return srv.checkOverlay(p, []types.GovernanceUnit{p}, nil)
 	}
 	unchanged := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, TTLSeconds: 300,
 		Scope: json.RawMessage(`{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}`)}
@@ -287,7 +289,9 @@ func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
 		srv := &Server{cfg: Config{Store: hardBoundary(spec)}}
 		body := `{"mode":"hard_limits","spec":{"eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
 		w := httptest.NewRecorder()
-		srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(body)))
+		servePastValidation(func() {
+			srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(body)))
+		})
 		return w
 	}
 	if w := put([]types.GrantSpec{legacy}, 300); strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
@@ -298,5 +302,90 @@ func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
 	}
 	if w := put(nil, 300); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
 		t.Errorf("boundary that held none = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
+
+// servePastValidation runs a handler whose store is a stub that holds only the boundary: a request
+// the validation lets through goes on to store calls the stub does not answer, which panic. The
+// panic is the proof the validation passed, so it is swallowed; the tests read the recorder.
+func servePastValidation(serve func()) {
+	defer func() { _ = recover() }()
+	serve()
+}
+
+func gatedBoundaryBody(ttl int) string {
+	return `{"mode":"hard_limits","spec":{"eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+}
+
+// The boundary dry run judges the proposed boundary against the grants the stored one holds, as the
+// save does: an unchanged gated grant is not refused, a changed one is.
+func TestBoundaryDryRunGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	srv := &Server{cfg: Config{Store: hardBoundary(types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}})}}
+	run := func(ttl int) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		servePastValidation(func() {
+			srv.handleBoundaryDryRun(w, httptest.NewRequest(http.MethodPost, "/api/v1/governance/boundary/dry-run", strings.NewReader(gatedBoundaryBody(ttl))))
+		})
+		return w
+	}
+	if w := run(300); strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("unchanged gated grant = %d %s, want it not refused", w.Code, w.Body.String())
+	}
+	if w := run(60); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
+
+// A held boundary replacement is judged against the stored boundary's grants (unchanged: not refused,
+// changed: refused), and a boundary that moved since the review is stale before it is invalid.
+func TestBoundaryReplayGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	cur := types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}}}
+	hash := computeETag(boundaryState(cur))
+	replay := func(ttl int, baseHash string) error {
+		var held types.BoundaryWrite
+		if err := json.Unmarshal([]byte(gatedBoundaryBody(ttl)), &held); err != nil {
+			t.Fatal(err)
+		}
+		return boundaryReplayRefusal(&held, cur, baseHash)
+	}
+	if err := replay(300, hash); err != nil {
+		t.Errorf("unchanged gated grant: %v, want accepted", err)
+	}
+	if err := replay(60, hash); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: %v, want the approval refusal", err)
+	}
+	if err := replay(60, "moved"); !errors.Is(err, store.ErrGovernanceChangeStale) {
+		t.Errorf("a boundary that moved: %v, want stale before invalid", err)
+	}
+}
+
+// A composed profile saved before the rule may overlay a gated api_key its base holds ungated. A
+// write that sends no overlay (a rename) judges the stored overlay again, and is not refused for the
+// approval rule; an overlay that newly gates the grant is.
+func TestComposedOverlayGatedAPIKeyStoredRow(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	ungated := gatedAPIKey(t, false)
+	s.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{ungated}
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.EligibleGrants = []types.GrantSpec{ungated}
+	gated := ungated
+	gated.RequiresApproval = true
+	stored := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
+	stored.Overlay.EligibleGrants = &[]types.GrantSpec{gated}
+	all := []types.GovernanceUnit{base, stored}
+
+	renamed := stored
+	renamed.Name = "renamed"
+	if _, _, err := s.checkGraphWrite(renamed, all, maxUnitDepthDefault); err != nil && strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("rename of a stored gating overlay: %v, want it not refused for the approval rule", err)
+	}
+	plain := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
+	plain.Overlay.EligibleGrants = &[]types.GrantSpec{ungated}
+	if _, _, err := s.checkGraphWrite(stored, []types.GovernanceUnit{base, plain}, maxUnitDepthDefault); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("an overlay that newly gates the grant: %v, want the approval refusal", err)
 	}
 }

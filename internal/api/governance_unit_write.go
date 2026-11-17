@@ -731,7 +731,7 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 		return p, nil, err
 	}
 	if p.Composed() {
-		if ref := s.checkOverlay(p, chain); ref != nil {
+		if ref := s.checkOverlay(p, chain, s.storedCeilingGrants(all, p.ID)); ref != nil {
 			return p, nil, ref
 		}
 	}
@@ -766,8 +766,9 @@ func unsatisfiableWrite(err error, name string) error {
 
 // checkOverlay is the strict, write-time reading of an overlay against its resolved base: a value
 // outside the base, a grant the base does not hold, or an overlay that would make the effective
-// policy invalid is the author's to fix.
-func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUnit) *unitWriteError {
+// policy invalid is the author's to fix. A gated api_key grant is refused only when this write adds or
+// changes it: stored is the effective grants of the row being replaced, which, with the base's, are held.
+func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUnit, stored []types.GrantSpec) *unitWriteError {
 	base := s.deploymentAuthority()
 	var baseAuthored types.ResourceLimits
 	if len(chain) > 1 {
@@ -805,7 +806,7 @@ func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUn
 			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
-		if verr := validateAuthoredPolicySpecHolding(eff.Ceiling, base.Ceiling.EligibleGrants); verr != nil && validatePolicySpec(base.Ceiling) == nil {
+		if verr := validateAuthoredPolicySpecHolding(eff.Ceiling, append(slices.Clone(base.Ceiling.EligibleGrants), stored...)); verr != nil && validatePolicySpec(base.Ceiling) == nil {
 			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}

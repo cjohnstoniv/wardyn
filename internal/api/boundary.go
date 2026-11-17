@@ -223,6 +223,19 @@ func boundaryAuditData(before, after types.BoundaryWrite) map[string]any {
 	return map[string]any{"mode": after.Mode, "was_mode": before.Mode, "changed": changedPaths(before, after)}
 }
 
+// boundaryReplayRefusal is what a held replacement is refused with against the boundary as it now
+// stands: stale when it moved since the proposal was reviewed, else invalid when the replacement
+// itself is, judged against the grants the stored boundary holds.
+func boundaryReplayRefusal(held *types.BoundaryWrite, cur types.Boundary, baseHash string) error {
+	if computeETag(boundaryState(cur)) != baseHash {
+		return store.ErrGovernanceChangeStale
+	}
+	if err := validateBoundaryHolding(held, boundaryGrants(cur)); err != nil {
+		return writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
+	}
+	return nil
+}
+
 // applyBoundaryChange applies a held replacement inside the decision transaction: the target lock,
 // the boundary as it now stands compared with what the proposal reviewed, then the write on q.
 func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
@@ -238,13 +251,10 @@ func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if err != nil {
 		return govApplied{}, err
 	}
-	if err := validateBoundaryHolding(&held, boundaryGrants(cur)); err != nil {
-		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
+	if err := boundaryReplayRefusal(&held, cur, ch.BaseHash); err != nil {
+		return govApplied{}, err
 	}
 	before := boundaryState(cur)
-	if computeETag(before) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
-	}
 	if held.LockedKnobs != nil {
 		units, err := store.ListGovernanceUnitsQ(ctx, q)
 		if err != nil {
