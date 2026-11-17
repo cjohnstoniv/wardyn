@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -22,7 +23,7 @@ func echoNarrow(a runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, err
 // the revive path, and a narrow answers ErrNarrowNotSent. The control first: with the flag the same calls go out.
 func TestNarrow_NoProxyNarrowCapSendsNoFrame(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	rig.Server.Narrow = echoNarrow
+	rig.Narrows(t, echoNarrow)
 	sb, _ := create(t, rig, nil)
 	ctx := ctxT(t)
 
@@ -49,10 +50,25 @@ func TestNarrow_NoProxyNarrowCapSendsNoFrame(t *testing.T) {
 	}
 }
 
+// Caps are held in memory only, so after wardynd restarts a runner's are unknown until it reports them again.
+// A narrow then answers ErrNarrowNotSent, which the edit answers "try again", and never ErrNarrowNotOffered,
+// which would send the edit down the revive path and refuse it as if the runner could not narrow.
+func TestNarrow_CapsNotYetKnownIsNotSent(t *testing.T) {
+	sub := remote.New(rid, &remote.Link{}, remote.Options{})
+	ctx := ctxT(t)
+	_, readErr := sub.ProxyNarrowState(ctx, "runner:"+rid+"/x")
+	_, narrowErr := sub.NarrowProxy(ctx, "runner:"+rid+"/x", []string{"a.example"})
+	for name, err := range map[string]error{"ProxyNarrowState": readErr, "NarrowProxy": narrowErr} {
+		if !errors.Is(err, runner.ErrNarrowNotSent) || errors.Is(err, runner.ErrNarrowNotOffered) {
+			t.Errorf("%s before any caps = %v; want ErrNarrowNotSent and not ErrNarrowNotOffered", name, err)
+		}
+	}
+}
+
 // An offline runner is not asked: the narrow answers ErrNarrowNotSent, nothing was sent and nothing is queued.
 func TestNarrow_OfflineBeforeSendIsNotSent(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	rig.Server.Narrow = echoNarrow
+	rig.Narrows(t, echoNarrow)
 	sb, _ := create(t, rig, nil)
 	rig.Org.Drop()
 	waitOffline(t, rig)
@@ -71,7 +87,7 @@ func TestNarrow_OfflineBeforeSendIsNotSent(t *testing.T) {
 // A ref of another runner is not sent either.
 func TestNarrow_ForeignRefIsNotSent(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	rig.Server.Narrow = echoNarrow
+	rig.Narrows(t, echoNarrow)
 	if _, err := rig.Sub.NarrowProxy(ctxT(t), "runner:99999999-2222-3333-4444-555555555555/x", []string{"a.example"}); !errors.Is(err, runner.ErrNarrowNotSent) {
 		t.Fatalf("NarrowProxy of a foreign ref = %v; want ErrNarrowNotSent", err)
 	}
@@ -84,10 +100,10 @@ func TestNarrow_ForeignRefIsNotSent(t *testing.T) {
 // (which would undo an edit the proxy may hold) and never NotListening or Unsupported (also definitive).
 func TestNarrow_LinkDroppedAfterSendIsUncertain(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	rig.Server.Narrow = func(a runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, error) {
+	rig.Narrows(t, func(a runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, error) {
 		rig.Org.Drop()
 		return echoNarrow(a)
-	}
+	})
 	sb, _ := create(t, rig, nil)
 	_, err := rig.Sub.NarrowProxy(ctxT(t), sb.Ref, []string{"a.example"})
 	if !errors.Is(err, runner.ErrNarrowUncertain) {
@@ -106,6 +122,7 @@ func TestNarrow_LinkDroppedAfterSendIsUncertain(t *testing.T) {
 // The runner's definitive answers keep their sentinel across the wire, and BaseChecked and the list survive it.
 func TestNarrow_RunnerAnswersKeepTheirSentinels(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
+	rig.Narrows(t, echoNarrow)
 	sb, _ := create(t, rig, nil)
 	ctx := ctxT(t)
 	for _, want := range []error{runner.ErrNarrowUnsupported, runner.ErrNarrowRefused, runner.ErrNarrowNotListening, runner.ErrNarrowNotSent, runner.ErrNarrowUncertain} {

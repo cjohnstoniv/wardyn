@@ -577,15 +577,17 @@ const egressEditUnsupportedMsg = "This run's network can't be changed while it r
 // egressEditUpdateRunnerMsg is egressEditUnsupportedMsg for a runner that must be updated first (egressEditRunnerToUpdate).
 const egressEditUpdateRunnerMsg = "This run's network can't be changed while it runs: the runner on %s must be updated first. Update it, or start a new run with the narrower policy."
 
-// egressEditRunnerToUpdate names the computer of a container run on a runner whose last caps say it
-// can keep a sandbox (not Kubernetes). Such a runner can replace a container's proxy, so an unsupported
-// answer from it means the runner is older; "" for any other run. It picks the text only, never a refusal.
+// egressEditRunnerToUpdate names the computer of a container run on a runner that an update would let
+// edit it: one that can keep a sandbox (Docker), which can replace a container's proxy, or a Kubernetes
+// runner whose last caps lack ProxyNarrow (older than 0.10.1), which a newer one narrows in place. An
+// unsupported answer from either means the runner is older; "" for any other run. It picks the text
+// only, never a refusal.
 func (s *Server) egressEditRunnerToUpdate(run types.AgentRun) string {
 	if run.RunnerID == nil || run.MachineKind.IsVM() {
 		return ""
 	}
 	caps, ok := s.runnerLastCaps(*run.RunnerID)
-	if !ok || caps.EndsUnkept {
+	if !ok || (s.runOnKubernetes(run) && caps.ProxyNarrow) {
 		return ""
 	}
 	return cmp.Or(caps.MachineName, "its computer")

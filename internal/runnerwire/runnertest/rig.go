@@ -85,6 +85,24 @@ func (r *Rig) Connect(tb testing.TB) {
 	}
 }
 
+// Narrows makes the fake runner's substrate one that narrows a proxy in place, answering narrow_proxy with
+// fn, and publishes caps again so they carry ProxyNarrow. A later Connect serves a fresh Server without it.
+func (r *Rig) Narrows(tb testing.TB, fn func(runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, error)) {
+	tb.Helper()
+	r.Server.Narrow = fn
+	if err := r.Server.PublishCaps(context.Background(), placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}, []string{"/work"}, "test"); err != nil {
+		tb.Fatalf("publish caps: %v", err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if c, ok := r.Sub.Caps(); ok && c.ProxyNarrow {
+			return
+		}
+		if time.Now().After(deadline) {
+			tb.Fatal("the runner's caps never carried ProxyNarrow")
+		}
+	}
+}
+
 // Queued is the pending actions the substrate queued, "kind ref", in order.
 func (r *Rig) Queued() []string {
 	r.mu.Lock()

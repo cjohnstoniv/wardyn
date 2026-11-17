@@ -41,12 +41,22 @@ const (
 	// narrowDeliverTimeout bounds the delivery. It is not cancelled by a lost lock: a delivered list is
 	// always a subset of the stored one, and cancelling would only turn a likely success into a cut run.
 	narrowDeliverTimeout = 15 * time.Second
+	// narrowRunnerRouteTimeout and narrowRunnerDeliverTimeout are a runner's bounds: a wire round trip on top of the
+	// runner's own probe (5 s) and its probe-then-apply (5 s + 15 s).
+	narrowRunnerRouteTimeout   = 10 * time.Second
+	narrowRunnerDeliverTimeout = 25 * time.Second
 )
 
 const (
 	narrowOldPodMsg    = "This run's proxy was started before 0.10.0-rc.20 or runs an older image, so its network can't be narrowed while it runs. Start a new run with the narrower policy."
 	narrowRetryMsg     = "The run's proxy is not taking live edits right now (it may be restarting), so nothing changed. Try again in a few seconds."
 	narrowSupersedeMsg = "Another edit of this run came after this one and carries its hosts; that edit's own readback confirms them."
+	// narrowRunnerOldPodMsg is a runner's Unsupported: its proxy pod lacks the live deny list or its image the
+	// narrowing, the pod is not running, or the runner has no matching record of the base it started it with.
+	narrowRunnerOldPodMsg = "This run's proxy can't be narrowed while it runs, so nothing changed: a runner older than 0.10.1 or an older image started it, it is not running, or its runner cannot prove it still runs the config it was started with. Start a new run with the narrower policy, and update the runner first if it is older than 0.10.1."
+	// narrowRunnerRetryMsg names the runner of an edit nothing reached: it is offline, or has not reported its
+	// capabilities since wardynd started, so whether it narrows in place is not known yet.
+	narrowRunnerRetryMsg = "The runner on %s is not connected or has not reported what it supports since Wardyn restarted, so nothing changed. Try again in a few seconds."
 )
 
 // egressEditInPlace marks an edit that narrowed the proxy in place instead of replacing it.
@@ -59,17 +69,20 @@ type narrowEdit struct {
 	run    types.AgentRun
 	stored []byte // the run's stored config before the edit: what an undo puts back
 	denies []string
-	want   string // the hash of the config the proxy will enforce once it holds denies
+	want   string // the hash of the config the proxy will enforce once it holds denies; a runner's is its answer's
 	gen    int
 	start  proxyStartRec
+	// onRunner: the run is on a runner, which proves the proxy's base itself (BaseChecked) and answers the
+	// hash of the bytes its proxy enforces, since the org never holds those bytes.
+	onRunner bool
 }
 
 // narrowRunEgress applies edit by narrowing run's proxy in place. It returns a nil egressEditInPlace
-// exactly when the revive path should run instead: a run on a runner, or a substrate that does not
-// narrow in place.
+// exactly when the revive path should run instead: a substrate that does not narrow in place,
+// including a runner whose caps lack ProxyNarrow.
 func (s *Server) narrowRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (reviveResult, *reviveError, *egressEditInPlace) {
 	n, ok := s.cfg.Runner.(runner.ProxyNarrower)
-	if !ok || run.RunnerID != nil {
+	if !ok {
 		return reviveResult{}, nil, nil
 	}
 	ctx := r.Context()
@@ -82,14 +95,14 @@ func (s *Server) narrowRunEgress(r *http.Request, run types.AgentRun, edit liveE
 			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonReviveLocalModeNotOwner})))
 		return reviveResult{}, reviveRefused(http.StatusForbidden, reasonReviveLocalModeNotOwner, "in local mode only the run's owner can revive it"), inPlace
 	}
-	pctx, cancel := context.WithTimeout(ctx, narrowRouteTimeout)
+	pctx, cancel := context.WithTimeout(ctx, narrowBound(run, narrowRouteTimeout, narrowRunnerRouteTimeout))
 	_, err := n.ProxyNarrowState(pctx, run.SandboxRef)
 	cancel()
 	if errors.Is(err, runner.ErrNarrowNotOffered) {
 		return reviveResult{}, nil, nil
 	}
 	if err != nil {
-		return reviveResult{}, narrowProbeRefusal(ctx, err), inPlace
+		return reviveResult{}, s.narrowProbeRefusal(ctx, run, err), inPlace
 	}
 	if rerr := narrowEntryLengths(edit); rerr != nil {
 		return reviveResult{}, rerr, inPlace
@@ -130,7 +143,10 @@ func (s *Server) narrowRunEgress(r *http.Request, run types.AgentRun, edit liveE
 		return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 			loggedMsg(ctx, "the edit could not be added to the run's stored config, so nothing changed", err)), inPlace
 	}
-	ne := &narrowEdit{s: s, n: n, run: run, stored: rd.stored, denies: denies, want: proxy.ConfigSHA256(next)}
+	ne := &narrowEdit{s: s, n: n, run: run, stored: rd.stored, denies: denies, onRunner: run.RunnerID != nil}
+	if !ne.onRunner {
+		ne.want = proxy.ConfigSHA256(next)
+	}
 	res, rerr := ne.write(ctx, sctx, policy, next, rd)
 	if rerr != nil {
 		return res, rerr, inPlace
@@ -139,12 +155,42 @@ func (s *Server) narrowRunEgress(r *http.Request, run types.AgentRun, edit liveE
 	return res, rerr, inPlace
 }
 
+// narrowBound is onRunner for a run on a runner, and hosted for any other.
+func narrowBound(run types.AgentRun, hosted, onRunner time.Duration) time.Duration {
+	if run.RunnerID != nil {
+		return onRunner
+	}
+	return hosted
+}
+
+// narrowRunnerName names the runner's computer from its last caps, else its row, as egressEditRunnerToUpdate
+// does: the caps are held in memory only, so after a restart the row may be all there is.
+func (s *Server) narrowRunnerName(ctx context.Context, id uuid.UUID) string {
+	if caps, ok := s.runnerLastCaps(id); ok && caps.MachineName != "" {
+		return caps.MachineName
+	}
+	if rs, ok := s.cfg.Store.(runnerGetter); ok {
+		if row, err := rs.GetRunner(ctx, id); err == nil && row.MachineName != "" {
+			return row.MachineName
+		}
+	}
+	return "its computer"
+}
+
 // narrowProbeRefusal is the answer for a probe or locked read of the proxy that failed.
-func narrowProbeRefusal(ctx context.Context, err error) *reviveError {
+func (s *Server) narrowProbeRefusal(ctx context.Context, run types.AgentRun, err error) *reviveError {
+	onRunner := run.RunnerID != nil
 	switch {
+	case errors.Is(err, runner.ErrNarrowUnsupported) && onRunner:
+		return reviveRefused(http.StatusConflict, reasonEgressEditUnsupported, narrowRunnerOldPodMsg)
 	case errors.Is(err, runner.ErrNarrowUnsupported):
 		return reviveRefused(http.StatusConflict, reasonEgressEditUnsupported, narrowOldPodMsg)
 	case errors.Is(err, runner.ErrNarrowNotListening):
+		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, narrowRetryMsg)
+	case onRunner && (errors.Is(err, runner.ErrNarrowNotSent) || errors.Is(err, runner.ErrRunnerOffline)):
+		slog.InfoContext(ctx, "api: a runner run's proxy was not reached for an egress edit", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, fmt.Sprintf(narrowRunnerRetryMsg, s.narrowRunnerName(ctx, *run.RunnerID)))
+	case errors.Is(err, runner.ErrNarrowNotSent):
 		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, narrowRetryMsg)
 	}
 	return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
@@ -208,7 +254,7 @@ func (s *Server) readNarrowSnapshot(sctx context.Context, n runner.ProxyNarrower
 		return rd, unreadable("read the run's proxy start", err)
 	}
 	if rd.probe, err = n.ProxyNarrowState(sctx, run.SandboxRef); err != nil {
-		return rd, narrowProbeRefusal(sctx, err)
+		return rd, s.narrowProbeRefusal(sctx, run, err)
 	}
 	return rd, nil
 }
@@ -245,8 +291,16 @@ func narrowStateRow(ctx context.Context, run types.AgentRun, rd narrowSnapshot) 
 	case rd.active.State != types.ProxyStartPending && rd.active.State != types.ProxyStartEnforced:
 		return false, narrowUnsupported()
 	}
-	base, err := proxy.LiveDenyBaseSHA256(rd.stored)
-	if err != nil || rd.probe.BaseSHA256 != base {
+	// A runner's proxy carries keys the org never holds, so only the runner can prove its base: it compares
+	// the proxy's answer with the base it recorded at create.
+	var baseOK bool
+	if run.RunnerID != nil {
+		baseOK = rd.probe.BaseChecked
+	} else {
+		base, err := proxy.LiveDenyBaseSHA256(rd.stored)
+		baseOK = err == nil && rd.probe.BaseSHA256 == base
+	}
+	if !baseOK {
 		return false, reviveRefused(http.StatusConflict, reasonEgressEditUnsupported,
 			"This run's proxy was not started from the config Wardyn stored for it, so nothing changed. Start a new run with the narrower policy.")
 	}
@@ -449,21 +503,29 @@ func narrowLost(gen int, why error) (reviveResult, *reviveError) {
 
 // deliver tells the proxy and answers the start by what it said.
 func (ne *narrowEdit) deliver(ctx context.Context) (reviveResult, *reviveError) {
-	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), narrowDeliverTimeout)
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), narrowBound(ne.run, narrowDeliverTimeout, narrowRunnerDeliverTimeout))
 	after, nerr := ne.n.NarrowProxy(dctx, ne.run.SandboxRef, ne.denies)
 	cancel()
 	// The answer takes a bound of its own, so a slow earlier step cannot leave it unwritable.
 	actx, cancelAnswer := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancelAnswer()
 	switch {
-	case errors.Is(nerr, runner.ErrNarrowRefused), errors.Is(nerr, runner.ErrNarrowUnsupported), errors.Is(nerr, runner.ErrNarrowNotListening):
+	case errors.Is(nerr, runner.ErrNarrowRefused), errors.Is(nerr, runner.ErrNarrowUnsupported),
+		errors.Is(nerr, runner.ErrNarrowNotListening), errors.Is(nerr, runner.ErrNarrowNotSent):
 		// Nothing was delivered, so the start is abandoned and the generation undone.
 		msg := "the run's proxy refused the edit, so nothing changed"
-		if errors.Is(nerr, runner.ErrNarrowNotListening) {
+		if errors.Is(nerr, runner.ErrNarrowNotListening) || errors.Is(nerr, runner.ErrNarrowNotSent) {
 			msg = narrowRetryMsg
 		}
 		return ne.undo(ctx, nerr, msg)
-	case nerr == nil && after.ConfigSHA256 == ne.want && slices.Equal(after.LiveDenies, ne.denies):
+	case nerr == nil && ne.onRunner && after.BaseChecked && after.ConfigSHA256 != "" && slices.Equal(after.LiveDenies, ne.denies):
+		ne.want = after.ConfigSHA256 // the runner's hash of the bytes its proxy now enforces, as for create and replace_proxy
+		ok, why, _ := ne.s.proxyStartAnswered(actx, ne.run.ID, ne.start, ne.want)
+		if ok {
+			return reviveResult{generation: ne.gen, stored: true}, nil
+		}
+		return narrowLost(ne.gen, errors.New(why))
+	case nerr == nil && !ne.onRunner && after.ConfigSHA256 == ne.want && slices.Equal(after.LiveDenies, ne.denies):
 		ok, why, _ := ne.s.proxyStartAnswered(actx, ne.run.ID, ne.start, ne.want)
 		if ok {
 			return reviveResult{generation: ne.gen, stored: true}, nil
@@ -486,7 +548,7 @@ func (ne *narrowEdit) undo(ctx context.Context, cause error, msg string) (revive
 	noop, aerr := ne.s.abandonRunPolicyGeneration(actx, ne.run, ne.gen, ne.stored)
 	switch {
 	case aerr == nil && noop == nil:
-		if errors.Is(cause, runner.ErrNarrowNotListening) {
+		if errors.Is(cause, runner.ErrNarrowNotListening) || errors.Is(cause, runner.ErrNarrowNotSent) {
 			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, msg)
 		}
 		return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent, loggedMsg(ctx, msg, cause))

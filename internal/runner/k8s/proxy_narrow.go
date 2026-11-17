@@ -123,8 +123,14 @@ func (d *Driver) baseChecked(ref string, st runner.ProxyNarrowState, fault error
 		return runner.ProxyNarrowState{}, fmt.Errorf("k8s: narrow proxy: %w: no base recorded for run %s", fault, runID)
 	}
 	if st.BaseSHA256 != ev.ProxyBaseSHA256 {
-		slog.Warn("wardynd: k8s substrate: a proxy answers a base other than the one recorded at create; nothing was narrowed on it",
-			slog.String("run", runID.String()), slog.String("answered", st.BaseSHA256), slog.String("recorded", ev.ProxyBaseSHA256))
+		// Before the apply nothing was narrowed; after it, the list just sent may hold.
+		narrowing := "not applied"
+		if errors.Is(fault, runner.ErrNarrowUncertain) {
+			narrowing = "may be applied"
+		}
+		slog.Warn("wardynd: k8s substrate: a proxy answers a base other than the one recorded at create",
+			slog.String("run", runID.String()), slog.String("answered", st.BaseSHA256), slog.String("recorded", ev.ProxyBaseSHA256),
+			slog.String("narrowing", narrowing))
 		return runner.ProxyNarrowState{}, fmt.Errorf("k8s: narrow proxy: %w: the proxy's base is not the one recorded", fault)
 	}
 	st.BaseChecked = true

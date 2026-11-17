@@ -44,8 +44,9 @@ type Server struct {
 	// neither flag, fence_proxy is an unknown method, and a policy generation is not read.
 	Legacy bool
 	// Narrow, when set, answers narrow_proxy; unset, the substrate is one that cannot narrow, and the verb
-	// answers narrow_unsupported. PublishCaps carries ProxyNarrow either way (a Legacy server carries none and
-	// does not know the verb), so a test that wants a runner without the flag sends its own caps event.
+	// answers narrow_unsupported. PublishCaps carries ProxyNarrow only while it is set, as a runner whose
+	// substrate narrows does (a Legacy server carries none and does not know the verb); Rig.Narrows sets it
+	// and publishes again.
 	Narrow func(runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, error)
 	// NarrowCalls is every narrow_proxy frame received, in order.
 	NarrowCalls []runnerwire.NarrowProxyArgs
@@ -69,7 +70,7 @@ func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, r
 		return err
 	}
 	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings,
-		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy, ProxyNarrow: !s.Legacy})
+		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy, ProxyNarrow: !s.Legacy && s.Narrow != nil})
 	if err != nil {
 		return err
 	}
