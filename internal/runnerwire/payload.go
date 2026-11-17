@@ -142,6 +142,9 @@ type Caps struct {
 	// reads and sends a resident value only for a runner that says so; an older
 	// runner's run with one is refused before any value is read.
 	Resident bool `json:"resident,omitempty"`
+	// ViaOrgADO says the runner's proxy forwards Azure DevOps git (/wardyn/git/) to the organisation for a via_org
+	// grant (0.10.1 on). The organisation dispatches a via_org Azure DevOps token only to a runner that says so.
+	ViaOrgADO bool `json:"via_org_ado,omitempty"`
 	// EndsUnkept says the runner's substrate cannot keep an ended sandbox
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.

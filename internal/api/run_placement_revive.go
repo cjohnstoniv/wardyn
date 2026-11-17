@@ -51,6 +51,8 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 		return ref
 	}
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
+	// The stored row is the organisation's and keeps a via_org run's Azure DevOps gate; the laptop copy never carries it.
+	cfg.ADOGrant = stripped.ProxyConfig.ADOGrant
 	// "" for every run here (a person's runner, or No network), recorded as a dispatch records it; no secret is read.
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil, upstreamNoHopReason(run))
 	cfg.TrustedCAPEM = ""

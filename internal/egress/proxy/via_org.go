@@ -40,6 +40,9 @@ const (
 	// ViaOrgPathPrefix is the organisation's via_org route; the grant id and the
 	// sandbox request's own path follow it.
 	ViaOrgPathPrefix = "/api/v1/internal/via-org/"
+	// ViaOrgADOGitPrefix is the sandbox-facing prefix of the Azure DevOps git route, /wardyn/git/<host>/: the
+	// organisation serves it only for a via_org Azure DevOps grant, with the host read from the path.
+	ViaOrgADOGitPrefix = routePATBroker
 	// ViaOrgAuthorityHeader carries the sandbox request's authority (its Host)
 	// to the organisation, which compares it with the grant's destination.
 	ViaOrgAuthorityHeader = "X-Wardyn-Via-Org-Authority"
@@ -57,8 +60,11 @@ const (
 
 // viaOrgRouteFor is the via_org route a sandbox request is for, and the
 // authority to report: a CONNECT or an absolute-form request to a route's host,
-// or a /wardyn/gh/ request for a repository whose grant is a via_org route.
-// ok is false for everything else, which this proxy serves itself.
+// a /wardyn/gh/ request for a repository whose grant is a via_org route, or a
+// /wardyn/git/<host>/ request for a route's host that this proxy brokers no other
+// way (viaOrgADOGitRoute). For an origin-form request the authority is the
+// sandbox's own Host header, so the organisation reads a /wardyn/git/ host from
+// the path. ok is false for everything else, which this proxy serves itself.
 func (p *Proxy) viaOrgRouteFor(r *http.Request) (ViaOrgRoute, string, bool) {
 	if len(p.viaOrgRoutes) == 0 {
 		return ViaOrgRoute{}, "", false

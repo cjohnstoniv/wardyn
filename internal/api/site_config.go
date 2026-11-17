@@ -995,6 +995,6 @@ func auditProviderBlocks(datum map[string]any, saved types.SiteConfig, invalidat
 	}
 	// This door writes the Azure DevOps runner_resident opt-ins too.
 	if saved.WorkspaceProviders != nil {
-		datum["runner_resident"], datum["runner_resident_sandbox"] = residentOptInRows(*saved.WorkspaceProviders)
+		datum["runner_resident"], datum["runner_resident_sandbox"], datum["runner_via_org"] = residentOptInRows(*saved.WorkspaceProviders)
 	}
 }

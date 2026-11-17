@@ -108,6 +108,7 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 		return fmt.Errorf("%w: %w", errHostCaps, err)
 	}
 	caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = c.capacity(ctx), c.dispatcher.Selftests(), true, c.dispatcher.Residents()
+	caps.ViaOrgADO = true
 	caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = c.extra.proxySettings(), c.extra.driveRoots, c.extra.localModelPorts
 	caps.LinuxVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.macOSVM.current(), c.hasLocal
 	caps.BoundFolders = c.extra.boundFolders

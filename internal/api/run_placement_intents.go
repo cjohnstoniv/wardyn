@@ -174,11 +174,12 @@ func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec,
 // localADOOrigin is the one origin of an Azure DevOps lane, at admission and at
 // dispatch: own only for the owner's own PAT proven in their namespace; every
 // other token mode is minted by the organisation. Only a minted_pat connection's
-// opt-in counts toward runner_resident: a bearer token keeps refusing. Its error
+// opt-in counts toward runner_resident, and only its switch toward via_org: a bearer token keeps refusing. Its error
 // is a store fault during the own-PAT proof (errSecretStoreUnavailable).
 func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) (placement.CredentialOrigin, error) {
 	if a.tokenMode != types.ADOTokenModeOwnPAT || owner == "" || a.owner != owner || !adoEntraValidRowID(a.rowID) {
-		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode == types.ADOTokenModeMintedPAT}, nil
+		minted := a.tokenMode == types.ADOTokenModeMintedPAT
+		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && minted, ViaOrgOptIn: a.viaOrgOptIn && minted}, nil
 	}
 	own, err := s.ownsSecretChecked(ctx, owner, adoOwnPATSecretName(a.rowID))
 	if err != nil {

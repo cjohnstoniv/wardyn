@@ -204,3 +204,50 @@ func (s *Server) residentRunnerReady(ctx context.Context, run types.AgentRun) bo
 	s.refuseResidentDispatch(ctx, run, rows[i].ID, residentRunnerTooOld)
 	return false
 }
+
+// viaOrgADORunnerReady refuses a local run with a via_org Azure DevOps grant whose runner does not advertise
+// Caps.ViaOrgADO, or whose organisation's proxy image names a release before viaOrgADORelease. It runs once the
+// lane has recorded its grants (authorADOEntraLane), which is after residentRunnerReady's read of the grants;
+// false means the run has been failed.
+func (s *Server) viaOrgADORunnerReady(ctx context.Context, run types.AgentRun) bool {
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
+		return true
+	}
+	rows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		s.refuseResidentDispatch(ctx, run, uuid.Nil, "its grants could not be read to check its runner reaches Azure DevOps via the organisation")
+		return false
+	}
+	i := slices.IndexFunc(rows, viaOrgADOLaneGrant)
+	if i < 0 {
+		return true
+	}
+	if c, ok := s.runnerEndpoint(*run.RunnerID).sub.Caps(); ok && c.ViaOrgADO && !s.proxyImageBeforeViaOrgADO() {
+		return true
+	}
+	s.refuseResidentDispatch(ctx, run, rows[i].ID, viaOrgADORunnerTooOld)
+	return false
+}
+
+// viaOrgADORunnerTooOld is the refusal of a run with a via_org Azure DevOps grant whose runner does not advertise
+// Caps.ViaOrgADO, or whose organisation's proxy image is older than the release that forwards /wardyn/git/.
+const viaOrgADORunnerTooOld = "The runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later"
+
+// viaOrgADORelease is the first release whose runner proxy forwards /wardyn/git/ to the organisation.
+const viaOrgADORelease = "0.10.1"
+
+// viaOrgADOLaneGrant reports whether g is an Azure DevOps lane grant recorded via_org.
+func viaOrgADOLaneGrant(g types.CredentialGrant) bool {
+	if g.Delivery != types.GrantDeliveryViaOrg || g.Spec.Kind != types.GrantAPIKey {
+		return false
+	}
+	rule, err := injectionRuleFromScope(g.Spec.Scope)
+	return err == nil && isADOLaneRule(rule)
+}
+
+// proxyImageBeforeViaOrgADO reports whether the organisation's proxy image names a release older than viaOrgADORelease;
+// an image that names none (a digest, a development tag) is not evidence, so it passes.
+func (s *Server) proxyImageBeforeViaOrgADO() bool {
+	tag := proxyImageRelease(s.cfg.ProxyImage)
+	return tag != "" && releaseBefore(tag, viaOrgADORelease)
+}
