@@ -585,14 +585,18 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
 	// silently clobbered back to FAILED (was: unconditional write), and audit.
-	buildFailed := func(auditData map[string]any) {
+	buildFailed := func(auditData map[string]any, cause ...string) {
 		// Bounded, and not on the build's context: a kill that stopped the build does not stop this.
 		ctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 		defer cancel()
-		// Surface the build failure under the FAILED badge, not only in the
-		// run.build audit row. The error text is already in auditData["error"].
+		// Surface the build failure under the FAILED badge. A caller whose row's "error" names the step
+		// passes cause, what the member reads beside the badge; else the row's own error is.
 		hint := "the run's sandbox image could not be built"
-		if e, ok := auditData["error"].(string); ok && e != "" {
+		e, _ := auditData["error"].(string)
+		if len(cause) > 0 {
+			e = cause[0]
+		}
+		if e != "" {
 			hint += ": " + e
 		}
 		s.failAndRevoke(ctx, runID, types.RunPending, hint)
@@ -624,7 +628,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case req.Image != "" && s.cfg.ImageBuilder == nil:
 		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
 		// builder nothing else may run it.
-		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()})
+		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()}, errPrewrappedNotRegistered.Error())
 		return "", nil, true
 	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
@@ -639,7 +643,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
 		endBuild()
 		if berr != nil {
-			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
+			buildFailed(map[string]any{"byoi_base": req.Image, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
 			return "", nil, true
 		}
 		image, origin = built.Ref, imageOriginMember
@@ -657,7 +661,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
 		endBuild()
 		if berr != nil {
-			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
+			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
 			return "", nil, true
 		}
 		image, origin = built.Ref, types.ImageOriginDevcontainer
@@ -727,7 +731,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// them, so a run whose admission cannot be recorded fails rather than run unpinned.
 	if arches != nil {
 		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
-			buildFailed(map[string]any{"base_image": image, "error": "record the prewrapped image's architectures: " + err.Error()})
+			buildFailed(map[string]any{"base_image": image, "error": auditStep(ctx, auditStepPrewrapArches, err, slog.String("run_id", runID.String()))}, auditStepPrewrapArches)
 			return "", nil, true
 		}
 	}

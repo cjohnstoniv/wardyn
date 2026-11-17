@@ -321,16 +321,18 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev := findAudit(audit.events, run.ID, "run.exec", "failure"); ev == nil {
 		t.Fatal("no run.exec/failure event emitted")
 	}
-	// The teardown row shares the action and outcome; the Exec failure is the one with an error.
+	// The teardown row shares the action and outcome; the Exec failure is the one with an error. That row
+	// names the step, never the runner's text.
 	stamped := false
 	for _, e := range audit.events {
 		if e.Action == "run.exec" && e.Outcome == "failure" && strings.Contains(string(e.Data), `"reason":"agent_start"`) &&
-			strings.Contains(string(e.Data), "OCI runtime error") {
+			strings.Contains(string(e.Data), `"error":"`+auditStepStartAgentExec+`"`) &&
+			!strings.Contains(string(e.Data), "OCI runtime error") {
 			stamped = true
 		}
 	}
 	if !stamped {
-		t.Errorf("the Exec failure row must carry reason agent_start, got %s", auditDump(audit.events, run.ID))
+		t.Errorf("the Exec failure row must carry reason agent_start and the step, not the runner's text, got %s", auditDump(audit.events, run.ID))
 	}
 	ev := findTeardownError(audit.events, run.ID)
 	if ev == nil {

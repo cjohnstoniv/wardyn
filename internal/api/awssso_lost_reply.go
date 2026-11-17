@@ -52,7 +52,7 @@ func awsSSOEndedInvalidGrant(err error) bool {
 // awsSSORefreshFailureData is a failed redemption's harness.credential.refresh
 // row data; after_lost_reply rides it only when true.
 func awsSSORefreshFailureData(spent bool, err error, attempts int, afterLostReply bool) map[string]any {
-	data := map[string]any{"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts}
+	data := map[string]any{"provider": awsSSOProvider, "spent": spent, "error": auditStepAWSSSORedeem, "attempts": attempts}
 	if refused, ok := awsSSORefusal(err); ok {
 		data["code"] = refused.code
 		if refused.description != "" {

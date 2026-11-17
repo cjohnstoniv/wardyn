@@ -297,7 +297,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		// the rare, interesting case an operator would want in the log.
 		at, principal := actorFromRequest(r)
 		s.recordStreamAudit(r.Context(), run.SandboxRef, s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
-			mustJSON(map[string]any{"error": err.Error()})))
+			mustJSON(map[string]any{"error": auditStep(r.Context(), auditStepReadRunResources, err, slog.String("run_id", id.String()))})))
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			// The human sentence AND the sentinel: the UI shows the first, an
 			// operator reading a response body needs the second to tell this

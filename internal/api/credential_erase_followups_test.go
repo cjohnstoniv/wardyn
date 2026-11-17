@@ -58,7 +58,7 @@ func TestSweepExpiredCredentials_AuditsFailures(t *testing.T) {
 		switch {
 		case ev.Outcome == "success":
 		case ev.Target == "wardyn-harness-aws-oauth" && data[i]["secret_owner"] == "carol" &&
-			data[i]["reason"] == "expired" && data[i]["error"] == "vault: 403 permission denied":
+			data[i]["reason"] == "expired" && data[i]["error"] == auditStepDeleteExpired:
 			kept = ev.Outcome == "failure" && ev.ActorType == types.ActorSystem
 		case ev.Target == "" && data[i]["secret_owner"] == nil && data[i]["reason"] == "expired":
 			scan = ev.Outcome == "failure"

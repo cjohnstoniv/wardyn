@@ -348,7 +348,7 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the "+g.source+" credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": g.source + " inject grant: " + err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "Record " + g.source + " inject grant"})))
 		return injections, false
 	}
 	if rule, err := injectionRuleFromScope(raw); err == nil {

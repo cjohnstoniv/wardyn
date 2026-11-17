@@ -49,7 +49,7 @@ type webAttach struct {
 // normally with the reason, which the console prints and does not retry.
 func (wa *webAttach) fail(err error, promotion bool) {
 	wa.failed.Store(true)
-	data := map[string]any{"state": "attaching", "error": err.Error()}
+	data := map[string]any{"state": "attaching", "error": attachAuditError(wa.finishCtx, wa.run.ID, err)}
 	if promotion {
 		data["promotion"] = true
 	}
@@ -94,7 +94,7 @@ func (wa *webAttach) open() error {
 	if errors.Is(err, errAttachCancelled) {
 		// The connection ended some other way (a client close, a take-over)
 		// while the exec was opening; the outcome is still recorded.
-		wa.audit("failure", map[string]any{"state": "attaching", "error": err.Error()})
+		wa.audit("failure", map[string]any{"state": "attaching", "error": errAttachCancelled.Error()})
 		return err
 	}
 	if err != nil {

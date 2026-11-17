@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -155,8 +156,10 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
-		outcome, data := "failure", map[string]any{"error": err.Error()}
-		if sshStartCutByClient(ctx, err) {
+		outcome, data := "failure", map[string]any{}
+		if !sshStartCutByClient(ctx, err) {
+			data["error"] = auditStep(ctx, auditStepSFTPStart, err, slog.String("run_id", runID.String()))
+		} else {
 			// A start its client's own close cut is the client's end, as a close under the running process is
 			// (bridgeOutcome): a success that names no error, with nothing moved. Only a wait the channel's end
 			// cut reads so: the fence's own refusals (its wait's bound, the start budget, a lost lock) are never

@@ -112,6 +112,7 @@ func awsSSOErrorDescription(desc string, blob awsSSOBlob) string {
 // (`registration`), and marks the refresh token refused so the readiness grade,
 // Review and the banner agree with dispatch until a sign-in replaces it.
 func (s *Server) auditAWSSSORenewalFailure(ctx context.Context, scope awsSSOScope, blob awsSSOBlob, spent bool, err error, attempts int, afterLostReply bool) {
+	slog.ErrorContext(ctx, "wardynd: redeeming an AWS SSO refresh token failed", slog.String("step", auditStepAWSSSORedeem), slog.Any("err", err))
 	data := awsSSORefreshFailureData(spent, err, attempts, afterLostReply)
 	if refused, ok := awsSSORefusal(err); ok {
 		data["registration"] = "absent"
