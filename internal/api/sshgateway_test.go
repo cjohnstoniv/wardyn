@@ -1789,7 +1789,7 @@ func TestSSHGatewayHealthz_ProxyCommandOnlyWhenSet(t *testing.T) {
 
 	unset := sshHealthzField(t, "")
 	keys := slices.Sorted(maps.Keys(unset))
-	if want := []string{"advertise_addr", "enabled", "host_key_fingerprint"}; !slices.Equal(keys, want) {
+	if want := []string{"advertise_addr", "channels", "enabled", "host_key_fingerprint"}; !slices.Equal(keys, want) {
 		t.Fatalf("ssh keys with the proxy command unset = %v, want exactly %v", keys, want)
 	}
 }

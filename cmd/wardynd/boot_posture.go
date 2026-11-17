@@ -477,6 +477,11 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 			return err
 		}
 	}
+	if f.sshChannels != nil {
+		if _, err := parseSSHChannels(*f.sshChannels); err != nil {
+			return err
+		}
+	}
 	if err := validatePositiveBounds(f); err != nil {
 		return err
 	}

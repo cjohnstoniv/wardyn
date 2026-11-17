@@ -674,7 +674,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
 		case "direct-tcpip":
-			if s.sshRefuseDataOut(connCtx, runID, principal, newCh, dataOut) {
+			if s.sshRefuseForward(connCtx, runID, principal, newCh, dataOut) {
 				continue
 			}
 			if !s.sshAcquireSession(runID) {

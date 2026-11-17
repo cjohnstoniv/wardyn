@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -27,10 +28,11 @@ import (
 // sshGatewayHealthz and the console's ConnectSSHCard (run-detail-ssh.tsx),
 // whose command/config strings this command reproduces byte-for-byte.
 type sshHealthz struct {
-	Enabled            bool   `json:"enabled"`
-	AdvertiseAddr      string `json:"advertise_addr"`
-	HostKeyFingerprint string `json:"host_key_fingerprint"`
-	ProxyCommand       string `json:"proxy_command"`
+	Enabled            bool     `json:"enabled"`
+	AdvertiseAddr      string   `json:"advertise_addr"`
+	HostKeyFingerprint string   `json:"host_key_fingerprint"`
+	ProxyCommand       string   `json:"proxy_command"`
+	Channels           []string `json:"channels"` // absent on a server older than WARDYN_SSH_CHANNELS: all four
 }
 
 // sshCmd returns the cobra command for `wardyn run ssh <run-id>`. It is a
@@ -89,6 +91,7 @@ address, host key fingerprint and ProxyCommand all come from it.
 // sshGateway is where the gateway is reached, as /healthz advertises it.
 type sshGateway struct {
 	host, port, fingerprint, proxy string
+	channels                       []string // the kinds served; nil = all four
 }
 
 // errSSHGatewayOff is /healthz saying the operator has not turned SSH on.
@@ -129,7 +132,7 @@ func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
 	if err := cliutil.CheckSSHProxyCommand(proxy); err != nil {
 		return sshGateway{}, fmt.Errorf("ssh: this deployment advertises a ProxyCommand that %v, so it is not shown or run; ask your operator", err)
 	}
-	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy}, nil
+	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy, channels: health.SSH.Channels}, nil
 }
 
 // checkGatewayAddr refuses an advertised address that is not a DNS name or IP
@@ -236,6 +239,9 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 		})
 	}
 
+	if err := refuseSSHChannelsOff("ssh", gw); err != nil {
+		return err
+	}
 	if proxy != "" && !m.advertisedProxy {
 		return fmt.Errorf("ssh: this deployment advertises a ProxyCommand, which ssh would run on this computer:\n  %s\n"+
 			"run again with --advertised-proxy to connect through it, or use --print or --config to copy it", proxy)
@@ -244,6 +250,34 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	// -i only on the real connection: --print and --config stay byte-identical
 	// to the console card, which cannot know this computer's key file.
 	return runSSHBinary(cmd.Context(), sshConnArgs(gw, runID, localSSHKey()))
+}
+
+// sshVerbNeeds is the channel kinds each ssh-backed command opens, and sshKindWords what each is called to a
+// person (the same words the gateway's own refusal uses).
+var sshVerbNeeds = map[string][]string{
+	"ssh": {"shell"}, "exec": {"exec"}, "forward": {"forward"}, "editor": {"shell", "exec", "sftp", "forward"},
+}
+
+var sshKindWords = map[string]string{
+	"shell": "a terminal", "exec": "commands (exec)", "sftp": "file transfer (sftp)", "forward": "port forwarding",
+}
+
+// refuseSSHChannelsOff is the one-line refusal, before any dial, when the gateway's WARDYN_SSH_CHANNELS leaves
+// out a kind verb needs. A gateway that publishes no list serves all four.
+func refuseSSHChannelsOff(verb string, gw sshGateway) error {
+	if gw.channels == nil {
+		return nil
+	}
+	var off []string
+	for _, k := range sshVerbNeeds[verb] {
+		if !slices.Contains(gw.channels, k) {
+			off = append(off, sshKindWords[k])
+		}
+	}
+	if len(off) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: this deployment's SSH gateway does not serve %s (WARDYN_SSH_CHANNELS); ask your Wardyn admin", verb, strings.Join(off, ", "))
 }
 
 // sshAccess is what `run exec|forward|editor` check before they touch ssh(1).
@@ -268,6 +302,9 @@ func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, ad
 		return sshAccess{}, fmt.Errorf("%s: the operator has not turned SSH on for this deployment, so there is no gateway to reach (WARDYN_SSH_LISTEN)", verb)
 	}
 	if err != nil {
+		return sshAccess{}, err
+	}
+	if err := refuseSSHChannelsOff(verb, gw); err != nil {
 		return sshAccess{}, err
 	}
 	if gw.proxy != "" && !advertisedProxy {

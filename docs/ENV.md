@@ -361,6 +361,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` | int | `8` with SSO, else `WARDYN_SSH_MAX_CONNECTIONS` | authenticated SSH gateway connections one person may hold, per replica (flag `-ssh-max-connections-per-principal`). Without SSO every key is one person. See [SSH.md](SSH.md#bounds) |
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
+| `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
@@ -1882,6 +1883,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - The per-run cap on `session` and `direct-tcpip` channels together (flag `-ssh-max-sessions-per-run`).
 - The ceiling of 64 is the gateway's connection cap. `wardyn-sync` has its own fixed cap of `2` ([SSH.md](SSH.md)).
+
+### `WARDYN_SSH_CHANNELS`
+
+- Which kinds of SSH channel the gateway serves (flag `-ssh-channels`): `shell` (a terminal), `exec` (a command), `sftp` (file transfer) and `forward` (`-L` port forwarding).
+- Unset serves all four, as before. Set, only the listed kinds are served; any other is refused with one sentence and one `ssh.channel.reject` row (reason `channel_off`).
+- `wardyn sync` is always served: it is not a name to list.
+- It only narrows. It adds no credential path, and the per-run `data_out` rule still applies to what it serves.
+- Boot refuses an unknown name or an empty item.
+- `/healthz` lists the served kinds as `ssh.channels`, and `wardyn run ssh`, `exec`, `forward` and `editor` stop with one line before they dial when they need a kind that is off. `editor` needs all four.
+- See [SSH.md](SSH.md).
 
 ### `WARDYN_SYNC_DENY`
 

@@ -673,6 +673,7 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	SSHChannels          map[string]bool // WARDYN_SSH_CHANNELS: the kinds served; nil = all (sshChannelOn)
 	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
 	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
 	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int

@@ -302,11 +302,11 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 	}
 	switch m.Subsystem {
 	case "sftp":
-		if g.mayDispatch(req, true, "sftp") {
+		if g.mayDispatch(req, true, "sftp", sshKindSFTP) {
 			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
 		}
 	case sshSyncSubsystem:
-		if !g.mayDispatch(req, false, "") {
+		if !g.mayDispatch(req, false, "", sshKindSync) {
 			return nil
 		}
 		if !g.slot.toSync() {
@@ -419,7 +419,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if !gate.mayDispatch(req, true, "") {
+			if !gate.mayDispatch(req, true, "", sshKindShell) {
 				continue
 			}
 			gate.started = true
@@ -431,7 +431,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if !gate.mayDispatch(req, true, "exec") {
+			if !gate.mayDispatch(req, true, "exec", sshKindExec) {
 				continue
 			}
 			var m sshExecReqMsg
