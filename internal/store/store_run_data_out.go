@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RunDataOuts keeps a run's data_out rule on its row (agent_runs.data_out, migration 0291), where audit
+// RunDataOuts keeps a run's data_out rule on its row (agent_runs.data_out, migration 0292), where audit
 // retention cannot drop it; GetRun reads it back as AgentRun.DataOut. Optional for RunLeaser's reason: the
 // api layer type-asserts, and production is always PG.
 type RunDataOuts interface {

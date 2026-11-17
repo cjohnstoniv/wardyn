@@ -23,9 +23,8 @@ import (
 // sync client's RealPath check needs it.
 const sftpServerDeny = "read,readlink"
 
-// sshDataOut is the run's data_out rule for one SSH connection, read once when it opens. A rule that cannot
-// be read is blocked, and says so once in the log; a run with no recorded policy carries no rule, so it is
-// allowed, as runDataOutRule reads it for every other path.
+// sshDataOut is the run's data_out rule for one SSH connection, read once when it opens, as runDataOutRule reads
+// it for every other path. A rule that cannot be read is blocked, and says so once in the log.
 func (s *Server) sshDataOut(ctx context.Context, runID uuid.UUID) types.TransferRule {
 	rule, _, err := s.runDataOutRule(ctx, runID)
 	if err != nil {

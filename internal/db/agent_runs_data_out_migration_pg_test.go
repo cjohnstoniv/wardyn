@@ -10,16 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
-const agentRunsDataOutMigration = "0291"
+const agentRunsDataOutMigration = "0292"
 
-// TestMigration0291_FillsDataOutFromThePolicyRows applies the data_out column over runs dispatched before it:
+// TestMigration0292_FillsDataOutFromThePolicyRows applies the data_out column over runs dispatched before it:
 // a run takes the strictest rule among its run.policy.resolve row (run.policy.effective in older releases)
-// and its run.policy.generation rows, a resolve row with no rule reads as allowed, and a run whose policy rows
-// were pruned keeps no rule. The column refuses a value that is not a rule.
-func TestMigration0291_FillsDataOutFromThePolicyRows(t *testing.T) {
+// and its run.policy.generation rows, a resolve row with no rule reads as allowed, a generation row with no
+// rule says nothing, and a run whose policy rows were pruned, or whose only kept rows are generation rows with
+// no rule, keeps no rule. The column refuses a value that is not a rule.
+func TestMigration0292_FillsDataOutFromThePolicyRows(t *testing.T) {
 	pool, _ := partialSchemaPool(t, agentRunsDataOutMigration)
-	blocked, review, legacy, unset, raised, pruned := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	for i, id := range []uuid.UUID{blocked, review, legacy, unset, raised, pruned} {
+	blocked, review, legacy, unset, raised, pruned, ruleless := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for i, id := range []uuid.UUID{blocked, review, legacy, unset, raised, pruned, ruleless} {
 		pgExec(t, pool, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 			VALUES ($1, 'sub-a', 'claude-code', 'repo', 'CC1', 'STOPPED', $2, 'docker')`, id, "spiffe://run/"+string(rune('a'+i)))
 	}
@@ -34,10 +35,11 @@ func TestMigration0291_FillsDataOutFromThePolicyRows(t *testing.T) {
 	policyRow(unset, "run.policy.resolve", `{"allowed_domains":["a.example"]}`)
 	policyRow(raised, "run.policy.resolve", `{"data_out":"review"}`)
 	policyRow(raised, "run.policy.generation", `{"generation":2,"policy":{"data_out":"blocked"}}`)
-	policyRow(raised, "run.policy.generation", `{"generation":3,"policy":{}}`) // an egress edit's: it carries no rule
-	policyRow(pruned, "run.create", `{"data_out":"allowed"}`)                  // not a policy row
+	policyRow(raised, "run.policy.generation", `{"generation":3,"policy":{}}`)   // an egress edit's: it carries no rule
+	policyRow(pruned, "run.create", `{"data_out":"allowed"}`)                    // not a policy row
+	policyRow(ruleless, "run.policy.generation", `{"generation":2,"policy":{}}`) // its resolve row was pruned
 
-	migrateBefore(t, pool, "0292")
+	migrateBefore(t, pool, "0293")
 
 	for _, tc := range []struct {
 		name string
@@ -50,6 +52,7 @@ func TestMigration0291_FillsDataOutFromThePolicyRows(t *testing.T) {
 		{"no rule recorded", unset, "allowed"},
 		{"raised by a revive", raised, "blocked"},
 		{"policy rows pruned", pruned, "none"},
+		{"resolve row pruned, a generation row with no rule kept", ruleless, "none"},
 	} {
 		if got := pgScalar[string](t, pool, `SELECT COALESCE(data_out, 'none') FROM agent_runs WHERE id = $1`, tc.id); got != tc.want {
 			t.Errorf("%s: data_out = %s, want %s", tc.name, got, tc.want)

@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
 - A command run through the SSH gateway (an `ssh` command, an sftp session, a forwarded port or a folder sync) no longer loses the end of its error output, which is usually the line that says why it failed: the gateway now waits for all of it, for up to 5 seconds after the command's output ends, before it sends the exit status and closes the channel.
 - SSH gateway audit: an sftp transfer or port forward whose process failed is now recorded as a failure that names its exit, also when the client closed its channel or connection after the process's output had ended and before the gateway read the exit; before, that close made the row a success. On the Docker runner a command whose output had already ended when its client closed now reports its own exit, so `ssh.exec` records that exit and a folder sync that ended cleanly is no longer recorded as a failure. Two cases keep the earlier outcome: on the Docker runner, a close that arrives before Docker has recorded the exit; and on a remote runner, a close that reaches the runner before the gateway asks it for the exit. A transfer or forward its client closed while the process still ran stays a success.
+- A run's `data_out` rule is now kept on the run itself, so audit retention removing the run's policy records no longer reopens output and replay reads, web apps, SSH (file transfer, commands, port forwards and `wardyn sync` down), the desktop's file transfers and clipboard, or computer-folder bring-back. Migration `0292_agent_runs_data_out` fills it on existing runs from the policy records retention has kept; a run whose records were already removed reads as `blocked`, so only a security admin reads its output and a super admin replays it. A live egress edit on a Kubernetes run no longer lifts the run's `data_out` rule.
 
 ### Security
 
@@ -58,6 +59,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - An organisation whose runners or proxy image predate this release: a VM run with `host_rules` now passes create and fails at its proxy's start, because the older proxy refuses the config. Upgrade the runners and the proxy image first.
+- Runs whose policy records were already pruned now treat their output as blocked: only a security admin can read it, and only a super admin can replay them.
+- The migration fills each existing run's `data_out` from its policy records and holds a write lock on runs while it does; on an install with many runs and a long audit history, plan the upgrade for a quiet window.
 
 ### Before you downgrade
 

@@ -41,6 +41,9 @@ func TestReadySweepPG_FreshAndResumedSessionsKeepAKeptSandbox(t *testing.T) {
 	if _, err := f.st.CreateRun(f.ctx, kept); err != nil {
 		t.Fatal(err)
 	}
+	if err := f.st.RaiseRunDataOut(f.ctx, kept.ID, types.TransferAllowed); err != nil { // a dispatched run's rule (keepRunDataOut)
+		t.Fatal(err)
+	}
 	if ok, err := f.st.SetRunLocalFolderStatusIf(f.ctx, kept.ID, store.FolderStatusGuard{},
 		types.RunLocalFolderStatus{Resume: &types.FolderResume{Unsynced: 1}}); !ok || err != nil {
 		t.Fatalf("kept record = %v, %v; want it written", ok, err)

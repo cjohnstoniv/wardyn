@@ -66,7 +66,7 @@ func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule type
 }
 
 // dataOutUnrecorded is the rule of a run whose row and audit log both hold none: one from before the column
-// whose policy rows retention pruned before the upgrade's fill could read them (migration 0291), or one never
+// whose policy rows retention pruned before the upgrade's fill could read them (migration 0292), or one never
 // dispatched, which has no content to keep in. It keeps content in, as an unreadable rule does on SSH:
 // security admins still read its output and super admins replay it, and nothing reopens for anyone else.
 const dataOutUnrecorded = types.TransferBlocked
