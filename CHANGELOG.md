@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A `workspace.requirement.write`, `workspace.egress.approve` or `workspace.egress.deny` audit row whose workspace could not be read when the write missed now says `Store error`, not `Workspace not found`; the server log keeps the store's own error. `DELETE /api/v1/invitations/{id}` answers such a read failure `500` `internal_error`, which a retry may clear, where it answered `404`.
+- The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
+
+## [0.10.0-rc.23] — 2026-11-17
+
 ### Added
 
 - `deploy/macos-guest/mdm/inspection-ca.mobileconfig.template`, a `com.apple.security.root` profile for one Mac's inspection CA, and a "Managing macOS VMs with MDM" section in the base image page: what an MDM vendor needs, why only MDM delivery gives TLS trust, what the runner package and profile do with no sudo, and the open question of many clones of one enrolled guest.
@@ -46,8 +53,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
 - A command run through the SSH gateway (an `ssh` command, an sftp session, a forwarded port or a folder sync) no longer loses the end of its error output, which is usually the line that says why it failed: the gateway now waits for all of it, for up to 5 seconds after the command's output ends, before it sends the exit status and closes the channel.
 - SSH gateway audit: an sftp transfer or port forward whose process failed is now recorded as a failure that names its exit, also when the client closed its channel or connection after the process's output had ended and before the gateway read the exit; before, that close made the row a success. On the Docker runner a command whose output had already ended when its client closed now reports its own exit, so `ssh.exec` records that exit and a folder sync that ended cleanly is no longer recorded as a failure. Two cases keep the earlier outcome: on the Docker runner, a close that arrives before Docker has recorded the exit; and on a remote runner, a close that reaches the runner before the gateway asks it for the exit. A transfer or forward its client closed while the process still ran stays a success.
-- A `workspace.requirement.write`, `workspace.egress.approve` or `workspace.egress.deny` audit row whose workspace could not be read when the write missed now says `Store error`, not `Workspace not found`; the server log keeps the store's own error. `DELETE /api/v1/invitations/{id}` answers such a read failure `500` `internal_error`, which a retry may clear, where it answered `404`.
-- The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
 
 ### Security
 
