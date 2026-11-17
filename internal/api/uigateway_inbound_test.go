@@ -409,8 +409,8 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 // TestUIGateway_InboundRateLimit: past the run's bucket a call is 429 with Retry-After, and audited.
 func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h, _ := inboundHarness(t)
-	for range int(inboundBurst) {
-		h.srv.uiInbound.take(h.run.ID, "someone", h.clock.now(), "")
+	for range int(inboundRunBurst) {
+		h.srv.uiInbound.take(h.run.ID, "", h.clock.now(), "")
 	}
 	rec := h.call("wdn_alice", nil)
 	if rec.Code != http.StatusTooManyRequests || respondedReason(t, rec) != reasonInboundRateLimited || rec.Header().Get("Retry-After") != "1" {
@@ -419,9 +419,26 @@ func TestUIGateway_InboundRateLimit(t *testing.T) {
 	if !h.audit.hasDataValue("reason", inboundDenyRateLimited) {
 		t.Errorf("no inbound.deny rate_limited; reasons: %s", h.audit.dataReasons())
 	}
+	if !h.audit.hasDataValue("limit", "run") {
+		t.Errorf("the refusal's row does not say the run's bucket refused; reasons: %s", h.audit.dataReasons())
+	}
 	h.clock.advance(time.Second)
 	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
 		t.Fatalf("a second later = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_InboundRunBucketIsSharedByCallers: callers who are each far under their own limit still share
+// the run's bucket, and the refusal that comes when it is empty names the run's.
+func TestUIGateway_InboundRunBucketIsSharedByCallers(t *testing.T) {
+	h, _ := inboundHarness(t)
+	for i := range int(inboundRunBurst) {
+		if refused, _ := h.srv.uiInbound.take(h.run.ID, fmt.Sprintf("p%d", i), h.clock.now(), ""); refused != "" {
+			t.Fatalf("call %d from its own caller was refused by %q within the run's burst", i+1, refused)
+		}
+	}
+	if refused, _ := h.srv.uiInbound.take(h.run.ID, "p-last", h.clock.now(), ""); refused != "run" {
+		t.Errorf("a call past the run's burst, from a caller with a full bucket, was refused by %q, want \"run\"", refused)
 	}
 }
 
@@ -429,8 +446,8 @@ func TestUIGateway_InboundRateLimit(t *testing.T) {
 // bucket, however full each run's is; another caller, and the run's own bucket, are untouched by it.
 func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
 	h, _ := inboundHarness(t, "user:bob")
-	for range int(inboundBurst) {
-		if ok, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); !ok {
+	for range int(inboundCallerBurst) {
+		if refused, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); refused != "" {
 			t.Fatal("a caller's first calls, each on its own run, were refused")
 		}
 	}
@@ -440,6 +457,9 @@ func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
 	}
 	if !h.audit.hasDataValue("reason", inboundDenyRateLimited) {
 		t.Errorf("no inbound.deny rate_limited; reasons: %s", h.audit.dataReasons())
+	}
+	if !h.audit.hasDataValue("limit", "caller") {
+		t.Errorf("the refusal's row does not say the caller's bucket refused; reasons: %s", h.audit.dataReasons())
 	}
 	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
 		t.Fatalf("alice's call = %d %s, want 200: bob's bucket is not hers", rec.Code, rec.Body.String())
@@ -459,21 +479,21 @@ func TestUIGateway_InboundRateLimitReadsNoRun(t *testing.T) {
 	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "bob", Inbound: true, tokenID: uuid.New(),
 		SandboxRef: h.run.SandboxRef}
 	from := ts.runReadCount()
-	for i := range int(inboundBurst) {
+	for i := range int(inboundCallerBurst) {
 		if !h.srv.admitInbound(httptest.NewRecorder(), req, sess) {
 			t.Fatalf("call %d within the burst was refused", i+1)
 		}
 	}
-	if got := ts.runReadCount() - from; got != int(inboundBurst) {
-		t.Fatalf("%d admitted calls read the run %d times, want once each", int(inboundBurst), got)
+	if got := ts.runReadCount() - from; got != int(inboundCallerBurst) {
+		t.Fatalf("%d admitted calls read the run %d times, want once each", int(inboundCallerBurst), got)
 	}
 	for range 10 {
 		if rec := httptest.NewRecorder(); h.srv.admitInbound(rec, req, sess) || rec.Code != http.StatusTooManyRequests {
 			t.Fatalf("a call past the burst = %d %s, want 429", rec.Code, rec.Body.String())
 		}
 	}
-	if got := ts.runReadCount() - from; got != int(inboundBurst) {
-		t.Errorf("10 refused calls read the run %d times, want none", got-int(inboundBurst))
+	if got := ts.runReadCount() - from; got != int(inboundCallerBurst) {
+		t.Errorf("10 refused calls read the run %d times, want none", got-int(inboundCallerBurst))
 	}
 }
 
@@ -489,13 +509,13 @@ func TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil)
 	page := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true}
-	for i := range int(inboundBurst) {
+	for i := range int(inboundRunBurst) {
 		if !h.srv.admitInbound(httptest.NewRecorder(), req, page) {
 			t.Fatalf("the owner's page load %d was refused within the run's burst", i+1)
 		}
 	}
 	token := uiSession{Run: runs[0].ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true, tokenID: uuid.New()}
-	for i := range int(inboundBurst) {
+	for i := range int(inboundCallerBurst) {
 		if !h.srv.admitInbound(httptest.NewRecorder(), req, token) {
 			t.Fatalf("the owner's token call %d on another run was refused: the page loads spent its bucket", i+1)
 		}

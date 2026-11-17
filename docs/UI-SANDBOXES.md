@@ -478,7 +478,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 |---|---|
 | `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
 | `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
-| `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100: the run's inbound apps together, or one caller over all runs. The owner's browser spends only the run's |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100, either to the run's inbound apps together or from one caller over all runs; the `inbound.deny` row's `limit` says which. The owner's browser spends only the run's |
 | `409` `ui_gateway_not_running` | The run is not running, is kept or has no sandbox |
 | `503` `run_unreadable` | The run or its policy is unreadable |
 | `403` `data_out_blocked` | The run's `data_out` is `review` or `blocked` and the app is not the desktop. Audited as `inbound.deny` `data_out` and `run.data_out.deny`, each under `auth.fail`'s bound |

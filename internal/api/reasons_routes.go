@@ -276,7 +276,7 @@ const (
 const (
 	reasonInboundCredentialInvalid = "inbound_credential_invalid" // the bearer is not a live inbound token (401, WWW-Authenticate: Bearer)
 	reasonInboundNotFound          = "inbound_not_found"          // no run, no such app, an app that is not inbound, or a token holder who is not one of its callers: one answer
-	reasonInboundRateLimited       = "inbound_rate_limited"       // the run's inbound apps are past 50 requests a second, burst 100 (429, Retry-After: 1)
+	reasonInboundRateLimited       = "inbound_rate_limited"       // past the run's or the caller's request rate (429, Retry-After: 1; the inbound.deny row's limit says which)
 	reasonUIGatewayCrossSite       = "ui_gateway_cross_site"      // host mode: a session request from another site that is not a top-level navigation, or naming another Origin
 )
 
