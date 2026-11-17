@@ -639,14 +639,15 @@ func TestRunCmd_WaitFailedPropagatesAgentExitCode(t *testing.T) {
 func TestRunFailureReason(t *testing.T) {
 	runID := uuid.New()
 
-	// A dispatch failure (e.g. an unpullable image from an unknown --agent) records
+	// A run with no failure_hint (an older server) falls back to the audit rows: a
+	// dispatch failure (e.g. an unpullable image from an unknown --agent) records
 	// outcome "failure" with a human error in Data — the reason otherwise buried in
 	// `audit --json` and invisible on run get/--wait.
 	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
 		{Action: "run.exec", Outcome: "success", Data: json.RawMessage(`{}`)},
 		{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)},
 	})
-	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), runID)
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed})
 	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
 		t.Errorf("runFailureReason = %q, want %q", got, want)
 	}
@@ -657,8 +658,39 @@ func TestRunFailureReason(t *testing.T) {
 	srv2 := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
 		{Action: "run.complete", Outcome: "failure", Data: json.RawMessage(`{"exit_code":3,"state":"FAILED"}`)},
 	})
-	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), runID); got != "" {
+	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed}); got != "" {
 		t.Errorf("runFailureReason on a plain exit = %q, want empty", got)
+	}
+}
+
+// The audit row of a sandbox-create failure names only the step ("Create sandbox");
+// the cause is the run's failure_hint. The reason printed is the hint, whether the
+// polled run already carried it or only a re-read does (the FAILED state commits
+// just before the hint is stamped).
+func TestRunFailureReason_TakesTheCauseFromTheRunHint(t *testing.T) {
+	runID := uuid.New()
+	const hint = "the sandbox could not be created: pull ghcr.io/x/agent-oracle:latest: not found"
+	for name, polled := range map[string]string{"hint on the polled run": hint, "hint stamped after the poll": ""} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/runs/" + runID.String():
+					_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: hint})
+				case "/api/v1/audit":
+					_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+						{Action: "run.create", Outcome: "failure", Data: json.RawMessage(`{"error":"Create sandbox"}`)},
+					})
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: polled})
+			if got != hint {
+				t.Errorf("runFailureReason = %q, want the run's hint %q, not the audit row's step", got, hint)
+			}
+		})
 	}
 }
 
@@ -2571,7 +2603,7 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	srv := cappedAuditServer(t, runID, []types.RunState{types.RunFailed}, 1200,
 		types.AuditEvent{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)})
 
-	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), runID)
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed})
 	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
 		t.Errorf("runFailureReason = %q, want %q — the failure event sat past the audit page cap", got, want)
 	}
