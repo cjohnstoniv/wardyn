@@ -876,7 +876,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, `env_secret`, or `file_secret`. Anything else is rejected. |
 | `scope` | object | — | Kind-specific; see the table below. |
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
-| `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
+| `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. Refused at save on `api_key`, `env_secret` and `file_secret`, which no approval can gate. |
 | `owner_only` | `bool` | `false` | For a grant that names a stored secret, resolves it from the run owner's own row only, never the operator's; refused on `github_token` and `cloud_sts`. See [`owner_only`](#owner_only). |
 | `owner_only_refs` | `[string]` | `[]` | `owner_only` for the named secrets alone. See [`owner_only_refs`](#owner_only_refs). |
 
@@ -942,6 +942,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - Set it for an https-only vendor the proxy has no table for, which is the one case those rules cannot tell apart from a legitimately plaintext internal connector.
 - It is part of the pairing too, so a member cannot keep the operator's blessed `(host, secret, header, format)` and drop the TLS requirement.
 - Proxy-side injection only: Wardyn places no copy in the sandbox, though a host that echoes request headers can return the value ([CREDENTIALS.md](CREDENTIALS.md#residuals)).
+- `requires_approval` is refused when the policy is saved: every door that injects a key drops an approval-gated grant, so no run could use it. A policy saved before this rule still loads, and its key is never injected.
 - `shared` in the scope is set by Wardyn for an organisation component's secret and never authored: every policy door refuses it.
 - Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused.
 

@@ -656,6 +656,16 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if rule.Placeholder != "" {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
 		}
+		// requires_approval is refused, as it is on env_secret and file_secret:
+		// every door that wires an api_key into a run drops an approval-gated
+		// grant (persistRunGrants, probeInjections, mintRecordAPIKeyInjections)
+		// and its mint answers without the key, so no run could ever use it.
+		// A stored row that already holds one still reads and launches (neither
+		// re-validates it); an authored write is refused.
+		if g.RequiresApproval {
+			return fmt.Errorf("eligible_grants[%d]: api_key cannot require approval — every door that injects a key drops an "+
+				"approval-gated grant, so no run could ever use it", i)
+		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
