@@ -33,9 +33,12 @@ type localRun struct {
 	RunID           uuid.UUID                    `json:"run_id"`
 	Ref             string                       `json:"ref"`
 	Lease           runnerwire.Lease             `json:"lease"`
-	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
-	Exit            *runnerwire.AgentExit        `json:"exit,omitempty"`
-	ExitAcked       bool                         `json:"exit_acked,omitempty"`
+	// LapseBy is when Lease lapses on this runner's wall clock, the sooner of its token and ends_at legs, as of
+	// the last lease. A restart's provisional deadline (ProvisionalDeadlines) is never later than it.
+	LapseBy        time.Time             `json:"lapse_by,omitempty"`
+	ProxyStoppedAt *time.Time            `json:"proxy_stopped_at,omitempty"`
+	Exit           *runnerwire.AgentExit `json:"exit,omitempty"`
+	ExitAcked      bool                  `json:"exit_acked,omitempty"`
 	// Substrate is the k8s runner's per-run evidence record (internal/runner/k8s), opaque here and
 	// written only by this file's atomic save.
 	Substrate json.RawMessage `json:"substrate,omitempty"`

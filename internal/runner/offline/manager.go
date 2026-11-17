@@ -98,6 +98,15 @@ type deadline struct {
 	tokenLeft, endsLeft time.Duration
 }
 
+// by is when d lapses: its receipt plus the sooner of its legs.
+func (d deadline) by() time.Time {
+	left := d.tokenLeft
+	if !d.endsAt.IsZero() {
+		left = min(left, d.endsLeft)
+	}
+	return d.receipt.Add(left)
+}
+
 // New recovers local state. Run must start before connecting: a restart cannot
 // reconstruct a monotonic deadline, so existing proxies are contained until
 // an authenticated fresh lease establishes one.
@@ -296,7 +305,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	}
 	m.deadlines[l.RunID] = d
 	if r, ok := m.state.Runs[l.RunID]; ok && !r.Tombstone {
-		r.Lease = l
+		r.Lease, r.LapseBy = l, d.by()
 		m.state.Runs[l.RunID] = r
 		return m.save()
 	}
@@ -333,7 +342,7 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	if ref == "" {
 		return errors.New("runner create requires a recoverable substrate reference")
 	}
-	m.state.Runs[spec.RunID] = localRun{RunID: spec.RunID, Ref: ref, Lease: l}
+	m.state.Runs[spec.RunID] = localRun{RunID: spec.RunID, Ref: ref, Lease: l, LapseBy: m.deadlines[spec.RunID].by()}
 	if err := m.save(); err != nil {
 		// A failed directory sync may follow a successful rename. Retain the
 		// intent even on error so an ambiguous durable write cannot allow retry.
@@ -759,8 +768,8 @@ func (m *Manager) SetOptions(o Options) error {
 }
 
 // ProvisionalDeadlines gives each held run with no deadline and no obligation the provisional
-// cleanup deadline restart + RunTokenTTL (design K1 §6.2 "After a restart"). The org's next lease
-// replaces it.
+// cleanup deadline restart + RunTokenTTL, or the deadline its last lease gave (LapseBy) when that is
+// sooner (design K1 §6.2 "After a restart"). The org's next lease replaces it.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -772,7 +781,11 @@ func (m *Manager) ProvisionalDeadlines() {
 		if _, ok := m.deadlines[id]; ok || r.Retired || r.Ref == "" || r.ProxyExited != nil || r.ProxyStoppedAt != nil {
 			continue
 		}
-		m.deadlines[id] = deadline{receipt: now, tokenLeft: identity.RunTokenTTL}
+		left := identity.RunTokenTTL
+		if !r.LapseBy.IsZero() {
+			left = min(left, r.LapseBy.Sub(now))
+		}
+		m.deadlines[id] = deadline{receipt: now, tokenLeft: left}
 	}
 }
 
