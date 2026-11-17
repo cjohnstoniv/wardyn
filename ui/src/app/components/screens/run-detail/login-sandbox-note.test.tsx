@@ -127,7 +127,7 @@ describe("LoginSandboxNote — the waiting sign-in strip", () => {
 
   // Owner report (rc.24): the button went away once IAM Identity Center sent its regional sign-in page,
   // a link with no user_code=, because the server's read never answered waiting for it. The answer here
-  // is the server's own for the adopter's pane, from the shared cases its parser is pinned on.
+  // is the server's own for that pane, from the shared cases its parser is pinned on.
   it("shows the Open button for the sign-in page link IAM Identity Center sends, with the pane's code", async () => {
     const answer = answerOf("the sign-in page link AWS IAM Identity Center sends");
     getMock.mockResolvedValue(answer);
