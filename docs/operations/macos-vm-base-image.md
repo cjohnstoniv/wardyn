@@ -249,7 +249,7 @@ What an MDM vendor needs from Wardyn, and what is not known yet:
 - **Why MDM.** Apple's rule: on macOS 13 and later, a root installed by hand from a configuration profile is not trusted for TLS by default. A root that a device management service installs is, and its trust settings cannot be changed ([Apple](https://support.apple.com/guide/deployment/intro-to-certificate-management-depb5eff8914/web), [Apple](https://support.apple.com/guide/deployment/certificates-payload-settings-dep91d2eb26/web)).
   - So the CA template fixes TLS only when MDM delivers it. A `profile` item that installs it by hand in `edit-base` does not.
   - The payload's keys are `PayloadContent` (the certificate) and `PayloadCertificateFileName` ([Apple](https://developer.apple.com/documentation/devicemanagement/certificateroot)).
-- **The blocker.** Each run's guest is an APFS clone of one base. Whether any MDM accepts many clones of one enrolled guest is not known, and no Apple page was read on enrolling a macOS VM.
+- **The blocker.** Each run's guest is an APFS clone of one base. Whether any MDM accepts many clones of one enrolled guest is not known, and Wardyn has not checked Apple's documentation on enrolling a macOS VM.
   - A guest is also an unmanaged device to a sign-in that requires a compliant one ([Guest posture](#guest-posture)).
   - Without MDM, use this Mac's own CA, trusted once in `edit-base` ([above](#customising-the-base)).
 
