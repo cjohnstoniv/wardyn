@@ -111,6 +111,29 @@ func TestMacOSVMInspectionCAJoinsEveryListJob(t *testing.T) {
 	}
 }
 
+// The VM directory is excluded from Time Machine before the CA's key is made, not only at the first prepare;
+// a start that only reads the CA adds no exclusion.
+func TestMacOSVMInspectionCAExcludesTheDirectoryBeforeTheKey(t *testing.T) {
+	_, m, _ := inspectionCAJobRig(t)
+	var got []string
+	excludeFromBackups = func(dir string) error {
+		if _, err := os.Stat(filepath.Join(m.layout.InspectionCADir(), "key.pem")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the key was there before the exclusion: %v", err)
+		}
+		got = append(got, dir)
+		return nil
+	}
+	on := true
+	m.openInspectionCA(&on, nil, false)
+	if len(got) != 0 {
+		t.Fatalf("a read-only start excluded %q", got)
+	}
+	m.openInspectionCA(&on, nil, true)
+	if m.items.ca == nil || !slices.Equal(got, []string{m.layout.Root}) {
+		t.Fatalf("ca %v, exclusions %q, want [%s]", m.items.ca, got, m.layout.Root)
+	}
+}
+
 // A CA that cannot be opened starts no prepare or tools update, as a list that cannot be read starts none.
 func TestMacOSVMInspectionCAThatCannotOpenStartsNoListJob(t *testing.T) {
 	_, m, _ := inspectionCAJobRig(t)

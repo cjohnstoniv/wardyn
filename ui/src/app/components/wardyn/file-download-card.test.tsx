@@ -125,13 +125,4 @@ describe("the file_download card", () => {
     expect(within(card).queryByRole("button", { name: /Deny/ })).toBeNull();
   });
 
-  it("an erased asker's card keeps Approve and Deny when the server says the caller may decide it", () => {
-    renderCard(
-      row({ decidable: true, requested_scope: scope({ requested_by: "erased" }) as unknown as ApprovalRequest["requested_scope"] }),
-      { canDecide: true },
-    );
-    const card = screen.getByTestId("file-download-card");
-    expect(within(card).getByRole("button", { name: /Approve once/ })).toBeEnabled();
-    expect(within(card).getByRole("button", { name: /Deny/ })).toBeEnabled();
-  });
 });

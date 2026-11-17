@@ -52,6 +52,9 @@ func (m *macOSVMs) openInspectionCA(on *bool, driveRoots []string, owner bool) {
 		readOnly := !owner || perr != nil
 		if readOnly {
 			open = macvm.ReadInspectionCA
+		} else if err := excludeFromBackups(m.layout.Root); err != nil {
+			// Before the key is made: the first prepare's exclusion can come long after this start.
+			slog.Warn("macOS VM directory: Time Machine exclusion", "error", err.Error())
 		}
 		ca, err := open(context.Background(), dir)
 		if readOnly && errors.Is(err, os.ErrNotExist) {
