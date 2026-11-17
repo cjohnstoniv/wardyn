@@ -40,12 +40,14 @@ func validateDataOut(r types.TransferRule) error {
 }
 
 // runDataOutRule is the run's data_out rule. Its row's rule comes first (agent_runs.data_out, written at
-// dispatch and raised by a revive), which audit retention cannot prune. A row with none, a run from before the
-// column, reads its policy envelope, "" read as allowed. found is false when neither holds a rule. A store that
-// keeps the column (store.RunDataOuts) reads such a run as dataOutUnrecorded; any other store, which keeps no
-// rule but the envelope, reads it as allowed.
+// dispatch before the run.policy.resolve row and raised by a revive), which audit retention cannot prune. A
+// row with none reads its policy envelope, "" read as allowed: a run from before the column that a previous
+// release dispatched after the upgrade's migration. found is false when neither holds a rule, and the rule is
+// then allowed, as for a run never dispatched: dispatch writes the row before any sandbox exists, so no content
+// was kept in. A run from before the column that was dispatched but whose policy rows retention had pruned
+// gets its row set to blocked by the migration (0292), so it never reaches this answer.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
-	stored, keeps, err := s.storedRunDataOut(ctx, runID)
+	stored, _, err := s.storedRunDataOut(ctx, runID)
 	if err != nil {
 		return types.TransferAllowed, false, err
 	}
@@ -57,18 +59,15 @@ func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule type
 		return types.TransferAllowed, false, err
 	}
 	if !found {
-		if keeps {
-			return dataOutUnrecorded, false, nil
-		}
 		return types.TransferAllowed, false, nil
 	}
 	return envelope.DataOut.DataOut(), true, nil
 }
 
-// dataOutUnrecorded is the rule of a run whose row and audit log both hold none: one from before the column
-// whose policy rows retention pruned before the upgrade's fill could read them (migration 0292), or one never
-// dispatched, which has no content to keep in. It keeps content in, as an unreadable rule does on SSH:
-// security admins still read its output and super admins replay it, and nothing reopens for anyone else.
+// dataOutUnrecorded is the rule a revive or an in-place edit carries for a run whose row and audit log both
+// hold none on a store that keeps the column (reviveCarryRecordedRules). Such a run has a sandbox, so it was
+// dispatched, but by a previous release that kept no row, and retention has since pruned its policy rows: its
+// rule is unknown, so the new generation keeps its content in rather than open what the run may have kept.
 const dataOutUnrecorded = types.TransferBlocked
 
 // storedRunDataOut is the rule the run's row keeps, nil when it keeps none, and whether the store keeps the

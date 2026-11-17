@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -411,9 +412,8 @@ func dataOutDoors(t *testing.T, env, row *types.TransferRule, keeps bool) (outpu
 
 // TestDataOutRunRowRuleOutlivesRetention: the run row keeps the data_out rule, so a run whose policy rows
 // retention pruned keeps it on output, web apps and the bring-back (review and blocked refuse, allowed opens),
-// and the row wins over an envelope that says otherwise. A run from before the column (no rule on its row)
-// reads its envelope, and one with no envelope either keeps its content in. A store that keeps no column
-// reads the envelope alone, as before.
+// and the row wins over an envelope that says otherwise. A run with no rule on its row reads its envelope. A
+// store that keeps no column reads the envelope alone, as before.
 func TestDataOutRunRowRuleOutlivesRetention(t *testing.T) {
 	rule := func(r types.TransferRule) *types.TransferRule { return &r }
 	allowed, review, blocked := rule(types.TransferAllowed), rule(types.TransferReview), rule(types.TransferBlocked)
@@ -430,7 +430,6 @@ func TestDataOutRunRowRuleOutlivesRetention(t *testing.T) {
 		{"no row, envelope blocked", blocked, nil, true, true},
 		{"no row, envelope review", review, nil, true, true},
 		{"no row, envelope allowed", allowed, nil, true, false},
-		{"no row, envelope pruned", nil, nil, true, true},
 		{"no column, envelope pruned", nil, nil, false, false},
 		{"no column, envelope blocked", blocked, nil, false, true},
 	} {
@@ -440,6 +439,81 @@ func TestDataOutRunRowRuleOutlivesRetention(t *testing.T) {
 		}
 		if tc.keeps && folder != tc.refused {
 			t.Errorf("%s: bring-back refused %v, want %v", tc.name, folder, tc.refused)
+		}
+	}
+}
+
+// TestDataOutRunNeverStampedReadsAllowed: a run whose row and audit log hold no rule, on a store that keeps the
+// column, never reached dispatch's stamp, which writes the row before any sandbox exists: it is queued or
+// building, or failed or was killed before it. It holds no content, so every door reads it as allowed, as a
+// run with no recorded policy always has.
+func TestDataOutRunNeverStampedReadsAllowed(t *testing.T) {
+	if output, app, folder := dataOutDoors(t, nil, nil, true); output || app || folder {
+		t.Errorf("a run never stamped: output refused %v, web app refused %v, bring-back refused %v; want none", output, app, folder)
+	}
+	srv, _, seed := runOutputServer(t)
+	srv.cfg.Store = &dataOutRowStore{Store: &envelopeStore{Store: srv.cfg.Store, noEnvelope: true}}
+	id := seed(types.AgentRun{State: types.RunQueued})
+	if rule, found, err := srv.runDataOutRule(context.Background(), id); err != nil || found || rule != types.TransferAllowed {
+		t.Errorf("a queued run's rule = %q found %v err %v, want allowed, not found, no error", rule, found, err)
+	}
+}
+
+// dataOutKeepStore is dispatchTestStore with the agent_runs.data_out column. Each raise records the rule it
+// asked for and how many run.policy.resolve rows rec held for the run then; raiseErr fails every raise.
+type dataOutKeepStore struct {
+	*dispatchTestStore
+	rec      *recRecorder
+	raiseErr error
+	mu       sync.Mutex
+	raised   []types.TransferRule
+	resolved []int
+}
+
+var _ store.RunDataOuts = (*dataOutKeepStore)(nil)
+
+func (s *dataOutKeepStore) RaiseRunDataOut(_ context.Context, id uuid.UUID, rule types.TransferRule) error {
+	n := 0
+	for _, ev := range s.rec.snapshot() {
+		if ev.Action == "run.policy.resolve" && ev.RunID != nil && *ev.RunID == id {
+			n++
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raised, s.resolved = append(s.raised, rule), append(s.resolved, n)
+	return s.raiseErr
+}
+
+// TestDispatchStoresDataOutBeforeTheResolveRow: dispatch stores the sealed data_out rule on the run's row before
+// it writes run.policy.resolve, so a run with a resolve row always has its rule on the row. A row that cannot
+// be written fails the run before the resolve row and before any sandbox is created.
+func TestDispatchStoresDataOutBeforeTheResolveRow(t *testing.T) {
+	for _, raiseErr := range []error{nil, errors.New("data_out column unavailable")} {
+		rn := &killRaceRunner{fakeRunner: &fakeRunner{}}
+		srv, st, rec, run := dispatchTeardownFixture(t, rn, types.RunPending)
+		ks := &dataOutKeepStore{dispatchTestStore: st, rec: rec, raiseErr: raiseErr}
+		srv.cfg.Store = ks
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+			RunToken: "run-token", Image: "wardyn/claude-code:latest",
+			Policy: types.RunPolicySpec{MinConfinementClass: types.CC1, AllowedDomains: []string{"api.example.com"}, DataOut: types.TransferBlocked},
+		})
+		ks.mu.Lock()
+		raised, resolved := ks.raised, ks.resolved
+		ks.mu.Unlock()
+		if len(raised) != 1 || raised[0] != types.TransferBlocked || resolved[0] != 0 {
+			t.Fatalf("raise err %v: raises %v with %v resolve rows already written; want one raise to blocked before any", raiseErr, raised, resolved)
+		}
+		row := findAudit(rec.snapshot(), run.ID, "run.policy.resolve", "success")
+		rn.fakeRunner.mu.Lock()
+		creates := rn.createCalls
+		rn.fakeRunner.mu.Unlock()
+		got, _ := st.GetRun(context.Background(), run.ID)
+		if raiseErr == nil && row == nil {
+			t.Errorf("the rule was stored but no run.policy.resolve row followed")
+		}
+		if raiseErr != nil && (row != nil || creates != 0 || got.State != types.RunFailed) {
+			t.Errorf("a failed raise: resolve row %v, creates %d, state %s; want no row, no create, FAILED", row != nil, creates, got.State)
 		}
 	}
 }
