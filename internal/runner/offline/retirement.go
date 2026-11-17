@@ -159,6 +159,15 @@ func (m *Manager) ReleaseSettledOutput(release func(runID uuid.UUID, ref string)
 	m.retryRetiredReleases(context.Background())
 }
 
+// OnRetired sets the hook called with each run a retirement action retires, once the retirement is
+// durable. apply calls it after releasing mu (still under actionMu), so the hook may take a lock of
+// its own, such as the k8s relay's.
+func (m *Manager) OnRetired(f func(runID uuid.UUID)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retired = f
+}
+
 // noOutputSettled answers output settlement for a receipt that says the org
 // never asked for this run's output. Only a run that recorded no capture and
 // holds no buffer (outputSettled's ErrOutputUnrecoverable) settles, at 0; a

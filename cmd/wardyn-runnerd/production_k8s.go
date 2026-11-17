@@ -143,6 +143,8 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	}
 	started := func(ctx context.Context, m *offline.Manager) error {
 		ev.m = m
+		// A retired run's relay key goes with it; startup replays only unretired runs' keys.
+		m.OnRetired(relay.DropRelayKey)
 		// A live run in a namespace no longer listed refuses boot; the rest are mapped to theirs.
 		if err := drv.CheckRunNamespaces(ctx, m.EvidenceRunIDs()); err != nil {
 			return err

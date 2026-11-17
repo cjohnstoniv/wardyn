@@ -99,6 +99,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	m.actionMu.Lock()
 	defer m.actionMu.Unlock()
 	proof := m.lostProof(ctx, a)
+	var retired func(uuid.UUID) // OnRetired's hook, called once mu is released
+	defer func() {
+		if retired != nil {
+			retired(a.RunID)
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state.Revoked {
@@ -122,6 +128,9 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		res, err := m.retireRun(ctx, a, r)
 		if refused := (actionRefusal{}); errors.As(err, &refused) {
 			return m.refuseAction(ctx, a, err)
+		}
+		if err == nil && m.state.Runs[a.RunID].Retired {
+			retired = m.retired
 		}
 		return res, err
 	}

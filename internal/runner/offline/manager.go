@@ -48,6 +48,7 @@ type Manager struct {
 	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
 	eraseOutput   func(uuid.UUID) error
 	releaseOutput func(uuid.UUID, string) error
+	retired       func(uuid.UUID) // OnRetired; called outside mu
 	stopper       runner.ProxyStopper
 	// proofTimeout bounds the engine inspect behind a lost-identity proof.
 	proofTimeout  time.Duration
