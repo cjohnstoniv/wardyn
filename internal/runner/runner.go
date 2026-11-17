@@ -381,6 +381,9 @@ type ExecSpec struct {
 // an interface: a fake can construct a partial ExecSession by filling in
 // fields directly. Resize, Wait, and Close take NO context: an implementation
 // binds them to whatever context it created the exec with.
+// Wait may still return the exec's own exit after that context ended, when the
+// exec had already exited; a caller that must tell a cut from an exit checks
+// its own context, not Wait's error.
 type ExecSession struct {
 	// Stdin writes to the exec's stdin. Close HALF-closes the write side only
 	// — implementations MUST NOT tear down Stdout/Stderr when Stdin.Close is

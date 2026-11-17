@@ -264,21 +264,32 @@ func TestExecStream_SandboxGone(t *testing.T) {
 	}
 }
 
+// cutConn is an attach stream the session's Close cut: every read fails.
+type cutConn struct{ fakeConn }
+
+func (cutConn) Read([]byte) (int, error) { return 0, net.ErrClosed }
+
 // TestExecStream_WaitAfterCutReadsTheExit: a stream whose context ended (its
-// client closed) after the exec had exited reports that exec's own exit, not
-// the context's error; one still running reports the context's error.
+// client closed) after the exec's output had ended on its own reports that
+// exec's own exit, not the context's error; one still running, or one whose
+// output the cut ended, reports the context's error.
 func TestExecStream_WaitAfterCutReadsTheExit(t *testing.T) {
 	for name, tc := range map[string]struct {
 		exited  bool
+		cut     bool // the stream's output ended by the cut, not on its own
 		wantErr bool
 	}{
-		"exited before the cut": {exited: true},
-		"still running":         {wantErr: true},
+		"exited before the cut":         {exited: true},
+		"still running":                 {wantErr: true},
+		"exited after the cut ended it": {exited: true, cut: true, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeDocker()
 			d, ref := execStreamSandbox(t, f)
 			f.execAttachConn = &bufConn{r: bytes.NewReader(nil)}
+			if tc.cut {
+				f.execAttachConn = cutConn{}
+			}
 			f.inspectHonorsCtx = true
 			ctx, cancel := context.WithCancel(context.Background())
 			sess, err := d.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", "exit 7"}})
@@ -286,6 +297,8 @@ func TestExecStream_WaitAfterCutReadsTheExit(t *testing.T) {
 				t.Fatalf("ExecStream: %v", err)
 			}
 			defer sess.Close()
+			// The gateway reads Stdout to its end before it calls Wait.
+			_, _ = io.Copy(io.Discard, sess.Stdout)
 			f.mu.Lock()
 			f.execExited, f.execExitCode = tc.exited, 7
 			f.mu.Unlock()
