@@ -89,7 +89,7 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.sshChannelOn(sshKindExec) {
 		// This door is the SSH exec channel over HTTP, so a deployment that leaves exec out of
-		// WARDYN_SSH_CHANNELS leaves it out here, with the sentence and the row the gateway gives.
+		// WARDYN_SSH_CHANNELS leaves it out here, with its own sentence and the row the gateway writes.
 		at, actor := actorFromRequest(r)
 		s.sshAuditChannelOff(r.Context(), run.ID, at, actor, string(sshKindExec))
 		writeErrorReason(w, http.StatusConflict, reasonRunExecOff, runExecChannelOffMsg)

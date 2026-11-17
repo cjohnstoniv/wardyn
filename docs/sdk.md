@@ -311,7 +311,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 `POST /api/v1/runs/{id}/exec` takes `{"command": "...", "timeout_sec": 60}` and answers `200 {"exit_code", "stdout", "stderr", "truncated", "timed_out"}` once the command ends.
 
 - It is the SSH gateway's exec, over HTTP: the command runs through `/bin/sh -c` from the sandbox user's home directory, with no TTY and no added environment.
-- It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), and the per-run controls below apply either way: `deny_interactive`, `deny_task_mode_exec` on a background run, and the `data_out` rule.
+- It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), unless an operator turns it off (below), and the per-run controls below apply either way: `deny_interactive`, `deny_task_mode_exec` on a background run, and the `data_out` rule.
 - As with SSH exec, the output is neither masked nor recorded.
 - Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too. A super admin is the exception on their own run or an operator-owned one, unless `WARDYN_GOVERN_ADMIN_RUNS` is on, when only an operator-owned run is.
 - A run whose `data_out` rule is `review` or `blocked`, or whose rule cannot be read, answers `409 data_out_blocked`.
@@ -321,6 +321,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
   A command does not keep the run going: it ends when its task exits, at its end time or when killed, and a command still running then answers `409 run_exec_unavailable` or `502 run_exec_failed`.
 - The governance profile the run was launched under, as it stands now, can refuse a command with `403 governance_unit` (target `runs.exec`). `deny_interactive` refuses one into any run, and `deny_task_mode_exec` refuses one into a background run, which nobody supervises. The error names the profile and the limit.
 - A run that cannot take a command now (not running, ended, paused and not resumed, or busy with another operation on the run) answers `409 run_exec_unavailable`, and its error says which. A paused run is resumed first.
+- An operator who leaves `exec` out of `WARDYN_SSH_CHANNELS` turns this route off: it answers `409 run_exec_off` and writes an `ssh.channel.reject` row (reason `channel_off`).
 - A sandbox with no way to run a second command answers `501 run_inspect_exec_stream_unsupported`. On Docker, a runtime with no exec (libkrun) runs the task as the sandbox's only process; a runner older than this release answers `502 run_exec_failed` there.
 - The command may be up to 128 KiB, the most Linux execs as one argument; a longer one answers `400 run_exec_invalid`.
 - `timeout_sec` defaults to 60 and may be 1 to 300.
