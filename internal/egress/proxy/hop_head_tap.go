@@ -110,7 +110,8 @@ func (c *headCapture) feed(b []byte) bool {
 			return true
 		}
 		if !interimHead(c.buf[:end]) {
-			h := c.buf[:end]
+			h := bytes.Clone(c.buf[:end]) // not a slice of buf, which may hold body bytes too
+			c.buf = nil
 			c.head.Store(&h)
 			return true
 		}
@@ -151,7 +152,7 @@ type headSlot struct{ cur atomic.Pointer[headCapture] }
 // before the request is written to it.
 func tapResponseHead(ctx context.Context, limit int64) (context.Context, *headSlot) {
 	s := &headSlot{}
-	n := int(cmp.Or(limit, defaultHeadCaptureLimit))
+	n := int(cmp.Or(max(limit, 0), defaultHeadCaptureLimit))
 	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
 		var c *headCapture
 		if t, ok := info.Conn.(interface{ arm(*headCapture) }); ok {

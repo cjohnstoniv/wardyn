@@ -326,7 +326,7 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 	// hadTLS comes from the request, not the trace: net/http records the
-	// handshake only for a *tls.Conn, and sniffH2 may have wrapped one.
+	// handshake only for a conn that reports its TLS state, and sniffH2 may have wrapped one in a conn that does not.
 	mm := &h2MismatchError{err: err, hadTLS: tlsLane}
 	if !sniffed {
 		mm.alpn, _ = alpnState()
