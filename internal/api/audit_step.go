@@ -11,31 +11,24 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // auditStep returns step for an audit row's `error` field and logs err beside it. A store, driver or runner
 // error can name hosts, users, databases and bytes a sandbox chose, so the row says which step failed and the
-// server log keeps the cause. A runner's refusal is the exception: its sentence is worded by Wardyn's own runner
-// and says what to do (runnerRefusal), so the row keeps it. attrs are slog attributes that say which run or
-// workspace it was.
+// server log keeps the cause. attrs are slog attributes that say which run or workspace it was.
 func auditStep(ctx context.Context, step string, err error, attrs ...any) string {
 	slog.ErrorContext(ctx, "wardynd: an audit row names this failed step; the cause is here",
 		append(attrs, slog.String("step", step), slog.Any("err", err))...)
-	if sentence, ok := runnerRefusal(err); ok {
-		return sentence
-	}
 	return step
 }
 
-// runnerRefusal is the sentence of a runner's refusal (runnerwire.Refuse, a typed refused reply), such as "this
-// runner does not support the BYOI selftest; upgrade it to run BYOI images", and whether err carries one.
-func runnerRefusal(err error) (string, bool) {
+// selftestUnsupported reports whether err is a runner's refusal of a selftest because it is too old to run one.
+// Only that sentence is matched: other refusals can format a daemon's, a keystore's or a member's path's text.
+func selftestUnsupported(err error) bool {
 	var we *runnerwire.Error
-	if errors.As(err, &we) && we.Code == runnerwire.CodeRefused && we.Message != "" {
-		return we.Message, true
-	}
-	return "", false
+	return errors.As(err, &we) && we.Code == runnerwire.CodeRefused && we.Message == remote.SelftestUnsupportedMsg
 }
 
 // The failed step a row's `error` field names, for the failures auditStep or a log already beside the row

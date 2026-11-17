@@ -135,15 +135,8 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 					return
 				}
-				// The row says only which step failed, so the run's own failure hint keeps the driver's reason (a
-				// k8s Waiting reason and message), as a launch failure's does. It is stamped before the run.complete
-				// row below, so a reader of that row finds it.
-				if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
-					if herr := setter.SetRunFailureHint(ctx, runID, execNeverStartedHint+werr.Error()); herr != nil {
-						slog.WarnContext(ctx, "wardynd: could not persist the never-started run failure hint",
-							slog.String("run_id", runID.String()), slog.Any("err", herr))
-					}
-				}
+				// Stamped before the run.complete row below, so a reader of that row finds it.
+				s.stampNeverStartedHint(ctx, runID, werr)
 				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
 				return
 			}
@@ -573,6 +566,19 @@ func (s *Server) failedRunEffects(ctx context.Context, runID uuid.UUID, from typ
 		s.cancelRunApprovals(ctx, runID)
 	}
 	s.FinishRunOutput(ctx, runID)
+}
+
+// stampNeverStartedHint keeps the driver's reason (a k8s Waiting reason and message) in the run's own failure
+// hint, as a launch failure's is: the run.complete row says only which step failed.
+func (s *Server) stampNeverStartedHint(ctx context.Context, runID uuid.UUID, werr error) {
+	setter, ok := s.cfg.Store.(runFailureHintSetter)
+	if !ok {
+		return
+	}
+	if herr := setter.SetRunFailureHint(ctx, runID, execNeverStartedHint+werr.Error()); herr != nil {
+		slog.WarnContext(ctx, "wardynd: could not persist the never-started run failure hint",
+			slog.String("run_id", runID.String()), slog.Any("err", herr))
+	}
 }
 
 // execNeverStartedHint opens the failure hint of a run whose agent exec the driver proved would never start

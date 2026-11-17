@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -57,7 +58,7 @@ const byoiSelftestTimeout = 2 * time.Minute
 
 // byoiSelftest of a run on a runner is the runner's own selftest call
 // (runner.Selftester), under execution's generation, which it does not spend. refusal is the runner's refusal
-// sentence when it refused the selftest (runnerRefusal), else "".
+// sentence when it is too old to run one (selftestUnsupported), else "".
 func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, execution runnerExecution, failClosed bool) (passed bool, refusal string) {
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
@@ -94,10 +95,12 @@ func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code 
 	if werr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": auditStep(ctx, auditStepSelftestWait, werr, slog.String("run_id", run.ID.String())), "fail_closed": failClosed,
+				"error": selftestWaitError(ctx, run.ID.String(), werr), "fail_closed": failClosed,
 			})))
-		refusal, _ := runnerRefusal(werr)
-		return false, refusal
+		if selftestUnsupported(werr) {
+			return false, remote.SelftestUnsupportedMsg
+		}
+		return false, ""
 	}
 	if code != 0 {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
@@ -110,4 +113,13 @@ func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code 
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 		run.ID.String(), "success", mustJSON(map[string]any{"exit_code": 0})))
 	return true, ""
+}
+
+// selftestWaitError is a failed selftest's audit `error`: a too-old runner's own sentence, else the step.
+func selftestWaitError(ctx context.Context, runID string, werr error) string {
+	step := auditStep(ctx, auditStepSelftestWait, werr, slog.String("run_id", runID))
+	if selftestUnsupported(werr) {
+		return remote.SelftestUnsupportedMsg
+	}
+	return step
 }
