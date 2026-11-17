@@ -263,3 +263,43 @@ func TestExecStream_SandboxGone(t *testing.T) {
 		t.Fatalf("ExecStream on a removed container = %v, want runner.ErrSandboxGone", err)
 	}
 }
+
+// TestExecStream_WaitAfterCutReadsTheExit: a stream whose context ended (its
+// client closed) after the exec had exited reports that exec's own exit, not
+// the context's error; one still running reports the context's error.
+func TestExecStream_WaitAfterCutReadsTheExit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		exited  bool
+		wantErr bool
+	}{
+		"exited before the cut": {exited: true},
+		"still running":         {wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeDocker()
+			d, ref := execStreamSandbox(t, f)
+			f.execAttachConn = &bufConn{r: bytes.NewReader(nil)}
+			f.inspectHonorsCtx = true
+			ctx, cancel := context.WithCancel(context.Background())
+			sess, err := d.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", "exit 7"}})
+			if err != nil {
+				t.Fatalf("ExecStream: %v", err)
+			}
+			defer sess.Close()
+			f.mu.Lock()
+			f.execExited, f.execExitCode = tc.exited, 7
+			f.mu.Unlock()
+			cancel()
+			code, err := sess.Wait()
+			if tc.wantErr {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Wait = %d, %v; want the context's error", code, err)
+				}
+				return
+			}
+			if err != nil || code != 7 {
+				t.Fatalf("Wait = %d, %v; want 7, nil", code, err)
+			}
+		})
+	}
+}

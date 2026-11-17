@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
@@ -266,7 +267,7 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 			}
 			return nil
 		},
-		Wait: func() (int, error) { return d.pollExecExit(ctx, execID) },
+		Wait: func() (int, error) { return d.waitStreamExit(ctx, execID) },
 		Close: func() error {
 			resp.Close()
 			// Also close the pipe read ends (non-TTY): resp.Close alone leaves
@@ -283,4 +284,29 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 			return nil
 		},
 	}, nil
+}
+
+// streamExitAfterCut bounds the one inspect waitStreamExit makes after its
+// context ended.
+const streamExitAfterCut = time.Second
+
+// waitStreamExit is a streamed exec's Wait: pollExecExit, and when the stream's
+// context ended first, one more inspect off that context. An exec that had
+// already exited (its output ended, then its client closed) reports its own
+// exit, as a k8s stream does, where the ended context's error says nothing
+// about the process. An exec still running, or a daemon that does not answer
+// within streamExitAfterCut, gives the context's error as before.
+func (d *Driver) waitStreamExit(ctx context.Context, execID string) (int, error) {
+	code, err := d.pollExecExit(ctx, execID)
+	if err == nil || ctx.Err() == nil {
+		return code, err
+	}
+	ictx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamExitAfterCut)
+	defer cancel()
+	if insp, ierr := d.cli.ExecInspectRaw(ictx, execID); ierr == nil {
+		if c, exited := insp.exited(); exited {
+			return c, nil
+		}
+	}
+	return code, err
 }

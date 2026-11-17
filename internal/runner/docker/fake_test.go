@@ -223,6 +223,9 @@ type fakeDocker struct {
 	// execExited is true ExecInspectRaw reports the process as finished.
 	execExitCode int
 	execExited   bool
+	// inspectHonorsCtx makes ExecInspectRaw fail on an ended context, as the real
+	// client does.
+	inspectHonorsCtx bool
 	// execUnstarted makes the next N ExecInspectRaw probes report an exec the
 	// daemon has created but not started: not running, a null exit code, no pid.
 	execUnstarted int
@@ -1290,6 +1293,9 @@ func (f *fakeDocker) ExecInspectRaw(ctx context.Context, execID string) (execIns
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.execInspects++
+	if f.inspectHonorsCtx && ctx.Err() != nil {
+		return execInspect{}, ctx.Err()
+	}
 	if f.execGone != "" && execID == f.execGone {
 		return execInspect{}, fakeNotFound{msg: "no such exec: " + execID}
 	}
