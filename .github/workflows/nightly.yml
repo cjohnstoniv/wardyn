@@ -748,6 +748,18 @@ jobs:
           sudo mkswap /swapfile-wardyn
           sudo swapon /swapfile-wardyn
           free -m
+      # The suite below compiles every package at the default -p, so the api coverage compile, the job's memory peak,
+      # ran beside other compiles. Compiled here first, alone and with the suite's coverage flags, the suite finds it
+      # in the build cache.
+      - name: Prebuild the docker-tagged api coverage binary with one worker
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # The same GOFLAGS as the suite below; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 1 -tags docker -covermode=atomic -coverpkg=./...
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
