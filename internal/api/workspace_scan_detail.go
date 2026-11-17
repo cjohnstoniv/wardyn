@@ -5,8 +5,8 @@ package api
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 )
 
 // runningInContainer reports whether wardynd itself is inside a container
@@ -39,7 +39,7 @@ func localDirScanFailureDetail(path string, notDir bool, workspacesRoot string, 
 	}
 	base := "local directory not found on this host: " + path
 	switch {
-	case workspacesRoot != "" && !pathWithinRoot(workspacesRoot, path):
+	case workspacesRoot != "" && !pathutil.Within(workspacesRoot, path):
 		return base + ". wardynd only sees directories under its configured workspaces root (" + workspacesRoot +
 			") — move the project under it, or point WARDYN_WORKSPACES_ROOT at a directory that contains it and re-run `make setup`."
 	case workspacesRoot == "" && containerized:
@@ -48,11 +48,4 @@ func localDirScanFailureDetail(path string, notDir bool, workspacesRoot string, 
 	default:
 		return base
 	}
-}
-
-// pathWithinRoot reports whether path is root itself or inside it, on cleaned
-// absolute paths — a plain prefix check would call /home/x-evil inside /home/x.
-func pathWithinRoot(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }

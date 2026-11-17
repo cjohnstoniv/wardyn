@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -178,16 +179,11 @@ func volumeOverSecretDir(insp container.InspectResponse) string {
 	slices.Sort(dests)
 	anchor := managedFileAnchors[runner.ComponentSecretDir]
 	for _, d := range dests {
-		if d = path.Clean(d); pathWithin(runner.ComponentSecretDir, d) || pathWithin(d, anchor) {
+		if d = path.Clean(d); pathutil.Within(d, runner.ComponentSecretDir) || pathutil.Within(anchor, d) {
 			return d
 		}
 	}
 	return ""
-}
-
-// pathWithin reports whether p is root or lies under it (both clean, absolute).
-func pathWithin(p, root string) bool {
-	return p == root || root == "/" || strings.HasPrefix(p, root+"/")
 }
 
 // managedFileUID is the uid a workload runs as under USER user: numeric as
