@@ -193,4 +193,78 @@ for p in internal/store internal/db internal/secretstore internal/broker interna
 done
 "${sel}" --packages nope >/dev/null 2>&1 && fail "--packages accepted an unknown set"
 ok "selector: --packages names the api and store shard lists, refuses others"
+
+# ── must-pass floors, through test-report.sh ─────────────────────────────────
+# A stand-in `go` replays a canned event stream, so each name-list floor is exercised without a daemon:
+# every floor's names passing is green; its target skipped, or absent, is red and says so. The names are
+# written out here on purpose, so a floor dropped from test-report.sh's chain fails its case.
+stub="${tmp}/stub"
+mkdir "${stub}"
+cat > "${stub}/go" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = test ] && [ "$2" = -json ] && exec cat "${STUB_EVENTS}"
+echo "stub go: unexpected call: $*" >&2
+exit 2
+SH
+chmod +x "${stub}/go"
+floor_run() { # <suite> <events file> [VAR=val ...]: runs test-report.sh on the replayed events, prints its log
+  local suite="$1" events="$2"; shift 2
+  (cd "${tmp}/q" && env -u WARDYN_TEST_DOCKER -u WARDYN_TEST_K8S -u WARDYN_TEST_K8S_AGENT_SANDBOX -u WARDYN_TEST_PG \
+    -u WARDYN_TEST_REPORT_SKIP_FLOOR -u GITHUB_ACTIONS \
+    PATH="${stub}:${PATH}" STUB_EVENTS="${events}" WARDYN_GO_QUARANTINE="${tmp}/none.txt" \
+    WARDYN_TEST_REPORT_NAME="${report}" WARDYN_TEST_REPORT_COVER=0 "$@" "${REPO_ROOT}/scripts/test-report.sh" "${suite}" ./... 2>&1)
+}
+floor_events() { # <file> <skip|-> <names...>: every name passes, the one named in $2 skips; plus one marked probe for the suites that need it
+  local f="$1" skipped="$2"; shift 2
+  : > "${f}"
+  ev output TestMarked ',"Output":"WARDYN_FLOOR_PROBE:docker\n"' >> "${f}"
+  ev pass TestMarked >> "${f}"
+  local n
+  for n in "$@"; do
+    if [ "${n}" = "${skipped}" ]; then ev skip "${n}" >> "${f}"; else ev pass "${n}" >> "${f}"; fi
+  done
+}
+# floor_case <label> <suite> <target> <env> <names...>: all pass is green; <target> skipped, or not run, is red.
+floor_case() {
+  local label="$1" suite="$2" target="$3" envs="$4" log n others=()
+  shift 4
+  for n in "$@"; do [ "${n}" = "${target}" ] || others+=("${n}"); done
+  # shellcheck disable=SC2086 # envs is a short list of VAR=val words
+  floor_events "${tmp}/floor.json" - "$@"
+  log="$(floor_run "${suite}" "${tmp}/floor.json" ${envs})" || fail "${label}: every name passing should be green, got: ${log}"
+  grep -q "all passed" <<<"${log}" || fail "${label}: no 'all passed' line in: ${log}"
+  floor_events "${tmp}/floor.json" "${target}" "$@"
+  log="$(floor_run "${suite}" "${tmp}/floor.json" ${envs})" && fail "${label}: ${target} skipped must be red, got: ${log}"
+  grep -q "SKIPPED" <<<"${log}" && grep -q "${target}" <<<"${log}" || fail "${label}: the skip of ${target} is not named in: ${log}"
+  floor_events "${tmp}/floor.json" - "${others[@]}"
+  log="$(floor_run "${suite}" "${tmp}/floor.json" ${envs})" && fail "${label}: ${target} absent must be red, got: ${log}"
+  grep -qE "did not pass|no test matching" <<<"${log}" && grep -q "${target}" <<<"${log}" || fail "${label}: the absence of ${target} is not named in: ${log}"
+  ok "floor ${label}: ${target} must pass (skipped and absent both fail)"
+}
+
+vm_names=(TestLinuxVMSandbox TestLinuxVMSandbox/ForwardDialsGuestLoopbackOnly TestLinuxVMSandbox/HostRulesJudgedInTheGuest TestLinuxVMDrives)
+for t in "${vm_names[@]}"; do floor_case "conformance-vm" conformance-vm "${t}" "" "${vm_names[@]}"; done
+floor_case "docker revive" docker TestStartSandbox_OnlyBehindARunningProxy "" TestStartSandbox_OnlyBehindARunningProxy
+l0_names=(TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)
+floor_case "l0-docker" l0-docker TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce WARDYN_TEST_DOCKER=1 "${l0_names[@]}"
+k8s_names=(TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop
+  TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted
+  TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured
+  TestConformanceK8s/LiveProxyNarrow TestConformanceK8s/ClosedOffAfterTeardown TestConformanceK8s/ManagedFiles TestConformanceK8s/ExecStream
+  TestConformanceK8s/InteractiveAttach TestConformanceK8s/ExecStreamLoopbackRelay TestConformanceK8s/NoNetwork TestConformanceK8s/EphemeralDiskLimit
+  TestRecordingK8s TestConformanceK8s/NoNetworkProxyPodReachesOnlyWardyn
+  TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Tmp TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Workdir
+  TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Cache TestConformanceK8s/EphemeralDiskLimit/AnOversizedLimitStillSchedules)
+for t in TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Tmp TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Workdir \
+  TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Cache TestConformanceK8s/EphemeralDiskLimit/AnOversizedLimitStillSchedules; do
+  floor_case "EphemeralDiskLimit" conformance-k8s "${t}" WARDYN_TEST_K8S=1 "${k8s_names[@]}"
+done
+# The agent-sandbox pair is required only where the lane declares it.
+sandbox_names=(TestAgentSandboxGoneAfterTeardown TestAgentSandboxNetworkPolicyFirst)
+for t in "${sandbox_names[@]}"; do
+  floor_case "AGENT_SANDBOX" conformance-k8s "${t}" "WARDYN_TEST_K8S=1 WARDYN_TEST_K8S_AGENT_SANDBOX=1" "${k8s_names[@]}" "${sandbox_names[@]}"
+done
+floor_events "${tmp}/floor.json" - "${k8s_names[@]}"
+log="$(floor_run conformance-k8s "${tmp}/floor.json" WARDYN_TEST_K8S=1)" || fail "AGENT_SANDBOX unset: the pair must not be required, got: ${log}"
+ok "floor AGENT_SANDBOX: the pair is not required while WARDYN_TEST_K8S_AGENT_SANDBOX is unset"
 echo "test-test-report: PASS"
