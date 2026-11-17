@@ -166,7 +166,7 @@ func TestRunnerKillErrorsAreNotConfirming(t *testing.T) {
 
 // A final verdict (a reused node name, a changed node record tuple, a different execution, the pod GC's
 // mark, a closing anchor on another Node, a pod whose main containers never started with no causal node)
-// is released only by a person's record or an operator's taint, so no later status read proves it: the
+// is never proved by a later status read (what can release each one is on unprovableError), so the
 // agent_only hold it leaves keeps its plain typed answer and is not confirming.
 func TestRunnerKillFinalVerdictsAreNotConfirming(t *testing.T) {
 	// Each case's own verdict, so a case that went final for another reason does not pass.
