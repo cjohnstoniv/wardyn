@@ -19,6 +19,7 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -1006,8 +1007,9 @@ func TestCreateSandbox_MacVMDirIsRefusedAsABind(t *testing.T) {
 		}
 	}
 	t.Setenv("HOME", home)
-	if got := newTestDriver(newFakeDocker()).macVMBindDirs()[0]; got != vm {
-		t.Fatalf("the default VM directory = %q, want %q", got, vm)
+	want := []string{vm, admission.DefaultDir, admission.DefaultSockDir}
+	if got := newTestDriver(newFakeDocker()).macVMBindDirs(); !slices.Equal(got, want) {
+		t.Fatalf("the protected directories = %q, want %q", got, want)
 	}
 
 	for _, tc := range []struct {
@@ -1018,6 +1020,10 @@ func TestCreateSandbox_MacVMDirIsRefusedAsABind(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("workspace mount %s: err = %v, want ok %v", tc.src, err, tc.ok)
 		}
+		if tc.src == vm {
+			// A drive named macos-vm.noindex is refused, by that member-visible name, before this check.
+			continue
+		}
 		// A share drive's bind: its root is the folder above the drive's directory.
 		drive := hostPathDrive(tc.src)
 		drive.HomeName = filepath.Base(tc.src)
@@ -1025,7 +1031,7 @@ func TestCreateSandbox_MacVMDirIsRefusedAsABind(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("share drive %s: err = %v, want ok %v", tc.src, err, tc.ok)
 		}
-		if err != nil && (strings.Contains(err.Error(), base) || strings.Contains(err.Error(), "macos-vm")) {
+		if err != nil && strings.Contains(err.Error(), base) {
 			t.Errorf("refusal of %s names a path: %v", tc.src, err)
 		}
 	}
