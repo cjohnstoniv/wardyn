@@ -185,7 +185,8 @@ type adoEntraBlob struct {
 	CapturedAt time.Time `json:"captured_at"`
 	// CapturedDBAt is CapturedAt on the database's clock, read by the server that captured the sign-in
 	// (databaseStamp), so any server can compare it with a database stamp such as requested_at. Absent on a
-	// capture stored before it existed, or when that clock could not be read: signedInAfter then falls back.
+	// capture stored before it existed, when that clock could not be read, or after a server without the field
+	// rewrote the blob: signedInAfter then falls back.
 	CapturedDBAt time.Time `json:"captured_db_at,omitzero"`
 	// Source names HOW this credential arrived, so a review can tell a
 	// browser sign-in from anything added later. One value today.
