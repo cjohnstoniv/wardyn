@@ -314,29 +314,6 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 	return cfg
 }
 
-// sshGatewayHealthz is /healthz's "ssh" field: nil (disabled) or the pane's
-// three discovery facts (enabled, advertise_addr, host_key_fingerprint), plus
-// proxy_command only when WARDYN_SSH_PROXY_COMMAND is set — see healthz.go's
-// handleHealthz.
-func (s *Server) sshGatewayHealthz() map[string]any {
-	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 || s.sshUnbound.Load() {
-		return nil
-	}
-	signer, err := ssh.NewSignerFromKey(s.cfg.SSHHostKey)
-	if err != nil {
-		return nil
-	}
-	out := map[string]any{
-		"enabled":              true,
-		"advertise_addr":       s.cfg.SSHAdvertiseAddr,
-		"host_key_fingerprint": ssh.FingerprintSHA256(signer.PublicKey()),
-	}
-	if s.cfg.SSHProxyCommand != "" {
-		out["proxy_command"] = s.cfg.SSHProxyCommand
-	}
-	return out
-}
-
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
 // PublicKeyCallback): registered public keys only, OWNER authorization —
 // run.CreatedBy == the key's principal, OR the key's own stored role is

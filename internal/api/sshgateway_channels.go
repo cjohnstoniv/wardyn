@@ -291,27 +291,6 @@ type sshSessionGate struct {
 	capAudited bool
 }
 
-// mayDispatch refuses (and replies false to) a second dispatch, and — when
-// shared is set — one a sync-only channel (admitted past the shared cap, see
-// sshOpenSlot) may not make: that one is audited once, answered with the cap
-// text and closed, which frees the sync slot it was holding.
-func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string) bool {
-	if g.started || g.s.sshDataOutRefused(g, path) {
-		_ = req.Reply(false, nil)
-		return false
-	}
-	if shared && g.slot.sync {
-		if !g.capAudited {
-			g.capAudited = true
-			g.s.sshAuditChannelRejected(g.ctx, g.runID, g.principal, "session", sshCapReasonChannels, g.s.cfg.SSHMaxSessionsPerRun)
-		}
-		_ = req.Reply(false, nil)
-		sendChannelError(g.channel, fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", g.s.cfg.SSHMaxSessionsPerRun))
-		return false
-	}
-	return true
-}
-
 // subsystemBridge validates a subsystem request and returns the bridge to run,
 // or nil after replying false. wardyn-sync moves the channel onto a sync slot.
 func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string, pass *sshSyncPass) func() {
