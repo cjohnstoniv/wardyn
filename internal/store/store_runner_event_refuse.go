@@ -70,8 +70,9 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 			return false, err
 		}
 	}
+	markMoved := false
 	if r.Spool != nil {
-		if err := advanceRefusedSpoolCursorTx(ctx, tx, runnerID, *r.Spool); err != nil {
+		if markMoved, err = advanceRefusedSpoolCursorTx(ctx, tx, runnerID, *r.Spool); err != nil {
 			return false, err
 		}
 	}
@@ -115,7 +116,7 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		if r.Marker {
 			fields["suppressed"] = true
 		}
-		if r.Spool != nil && r.Spool.Seq == 0 && r.Spool.Count > 0 { // an overflow summary: how far the mark moved
+		if markMoved { // the row carries count and drop_end only when an overflow summary moved the mark
 			fields["count"], fields["drop_end"] = r.Spool.Count, r.Spool.DropEnd
 		}
 		if claimed != "" {
@@ -146,32 +147,32 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 //
 // An overflow summary (Seq 0) moves the overflow mark the same way, to the total the runner's own mark reaches when it
 // acknowledges the summary: only a summary whose interval starts at the mark, as accept requires of one it ingests.
-// Its hash is kept so that a replay of it is a duplicate there too.
-func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, sp RunnerEventRefusalSpool) error {
+// Its hash is kept so that a replay of it is a duplicate there too. It reports whether it moved the overflow mark.
+func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, sp RunnerEventRefusalSpool) (moved bool, err error) {
 	if sp.Seq < 0 || len(sp.Hash) != 64 {
-		return nil
+		return false, nil
 	}
 	overflow := sp.Seq == 0
 	if overflow && (sp.Count == 0 || sp.DropEnd < sp.Count) {
-		return nil
+		return false, nil
 	}
 	if sp.Seq == 1 || (overflow && sp.Count == sp.DropEnd) {
 		if _, err := tx.Exec(ctx, `INSERT INTO runner_spool_cursors(run_id,runner_id,spool_id) SELECT $1::uuid,$2::uuid,$3::uuid
  WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=$1::uuid AND runner_id=$2::uuid) ON CONFLICT(run_id) DO NOTHING`, sp.RunID, runnerID, sp.SpoolID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if overflow {
-		_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET overflow_end=$4::text::numeric,overflow_hash=$5::text
+		tag, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET overflow_end=$4::text::numeric,overflow_hash=$5::text
  WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND overflow_end=$6::text::numeric`,
 			sp.RunID, runnerID, sp.SpoolID, strconv.FormatUint(sp.DropEnd, 10), sp.Hash, strconv.FormatUint(sp.DropEnd-sp.Count, 10))
-		return err
+		return tag.RowsAffected() == 1, err
 	}
-	_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=(recent_hashes||jsonb_build_object($5::text,$6::text))
+	_, err = tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=(recent_hashes||jsonb_build_object($5::text,$6::text))
  - ARRAY(SELECT k FROM jsonb_object_keys(recent_hashes) AS k WHERE k::bigint <= $4::bigint-$8::bigint)
  WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
 		sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1, int64(runnerspool.ReplayBatch))
-	return err
+	return false, err
 }
 
 // refusalTargetTx names a refusal row's run. The run id is the runner's word: the row joins a run's trail only when

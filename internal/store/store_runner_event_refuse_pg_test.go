@@ -401,7 +401,7 @@ func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextOverflowMark(t *testing.T) {
 	spoolID, hash := uuid.New(), strings.Repeat("a", 64)
 	refuse := func(sp store.RunnerEventRefusalSpool) {
 		t.Helper()
-		r := store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalStoreRefused, RunID: &sp.RunID, Spool: &sp}
+		r := store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalStoreRefused, RunID: &sp.RunID, Spool: &sp, Row: true}
 		if _, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, r, prepareSpoolTest); err != nil {
 			t.Fatal(err)
 		}
@@ -453,5 +453,18 @@ func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextOverflowMark(t *testing.T) {
 	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Hash: second, Count: 3, DropEnd: 5})
 	if end, at, _ := mark(run.ID); end != "5" || at != second {
 		t.Fatalf("next summary refused: mark %s %q, want 5 %q", end, at, second)
+	}
+	// Every refusal has its row; only the two that moved the mark carry its interval.
+	actor := "runner:" + f.rn.ID.String()
+	if n := f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1`, actor); n != 11 {
+		t.Fatalf("refusal rows = %d, want 11", n)
+	}
+	var ends string
+	if err := f.pool.QueryRow(ctx, `SELECT coalesce(string_agg(data->>'drop_end', ',' ORDER BY seq), '') FROM audit_events
+ WHERE action='runner.event.refuse' AND actor=$1 AND (data->>'drop_end' IS NOT NULL OR data->>'count' IS NOT NULL)`, actor).Scan(&ends); err != nil {
+		t.Fatal(err)
+	}
+	if ends != "2,5" {
+		t.Fatalf("rows carrying the interval = %q, want only the two moves %q", ends, "2,5")
 	}
 }
