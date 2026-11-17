@@ -407,7 +407,7 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 		if s.noteContainmentFailure(ctx, leaser, run.ID, err) {
-			data["containment"], data["error"] = "unresolved", err.Error()
+			data["containment"], data["error"] = "unresolved", auditStepContainStop
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert",
 				run.ID.String(), "failure", mustJSON(data)))
 		}

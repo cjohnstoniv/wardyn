@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -81,6 +82,6 @@ func (s *Server) keepFinalRunProxyConfig(ctx context.Context, run types.AgentRun
 	stopLease()
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-		run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepProxyConfig, err, slog.String("run_id", run.ID.String()))})))
 	return false
 }

@@ -115,7 +115,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				// exec_started:false so probeFailureDetail (site_config_probe.go)
 				// can tell "the task never ran" from "it ran but its own
 				// completion accounting failed".
-				data := map[string]any{"exec_started": false, "error": werr.Error()}
+				data := map[string]any{"exec_started": false, "error": auditStep(base, auditStepWaitAgentExec, werr, slog.String("run_id", runID.String()))}
 				ctx, unlock, locked := s.lockRunEnd(base, runID, endHoldDedicated) // through the tail's computer folder pass
 				if !locked {
 					s.finishRunOutput(base, runID)
@@ -124,7 +124,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				defer unlock()
 				applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
-					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
+					data["error"] = auditStep(ctx, auditStepMarkRunComplete, uerr, slog.String("run_id", runID.String()))
 					s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
@@ -140,7 +140,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			}
 			// Audit the watcher's exit for forensics either way.
 			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
-				runID.String(), "failure", mustJSON(map[string]any{"error": werr.Error()})))
+				runID.String(), "failure", mustJSON(map[string]any{"error": auditStep(base, auditStepWaitAgentExec, werr, slog.String("run_id", runID.String()))})))
 			if base.Err() != nil {
 				// Shutdown / daemon stopping: leave the run as-is for the next boot's
 				// ReconcileOnBoot to observe. Forcing a state change here would
@@ -203,7 +203,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		if uerr != nil {
 			s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
-					"exit_code": exitCode, "error": uerr.Error(),
+					"exit_code": exitCode, "error": auditStep(ctx, auditStepMarkRunComplete, uerr, slog.String("run_id", runID.String())),
 				})))
 			return
 		}
@@ -294,7 +294,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		settleAfterTeardown(ctx, func(ctx context.Context) {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(map[string]any{
-					"sandbox_ref": ref, "teardown_error": serr.Error(),
+					"sandbox_ref": ref, "teardown_error": auditStep(ctx, auditStepStopSandbox, serr, slog.String("run_id", runID.String())),
 				})))
 		})
 	}
@@ -500,7 +500,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		slog.ErrorContext(ctx, "wardynd: failAndRevoke CAS failed, run may be stranded",
 			slog.String("run_id", runID.String()), slog.String("from_state", string(from)), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
-			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": err.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": auditStepFailRun})))
 		return false
 	}
 	if applied {

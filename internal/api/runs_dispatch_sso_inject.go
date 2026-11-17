@@ -283,7 +283,7 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the AWS SSO credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "aws sso inject grant: " + gerr.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStepSSOInjectGrant})))
 		return injections, nil, nil, false
 	}
 	if sigv4Hosts != nil {

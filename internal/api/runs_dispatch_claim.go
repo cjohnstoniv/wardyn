@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -18,7 +19,7 @@ func (s *Server) claimDispatch(ctx context.Context, run types.AgentRun) bool {
 	}
 	data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
 	if cerr != nil {
-		data["error"] = cerr.Error()
+		data["error"] = auditStep(ctx, auditStepClaimDispatch, cerr, slog.String("run_id", run.ID.String()))
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
 		run.ID.String(), "failure", mustJSON(data)))

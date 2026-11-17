@@ -321,11 +321,11 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 		var kept *secretstore.ExpiredKept
 		if !errors.As(e, &kept) {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", "", "failure",
-				mustJSON(map[string]any{"reason": "expired", "error": e.Error()})))
+				mustJSON(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, e)})))
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", kept.Name, "failure",
-			withSecretOwner(map[string]any{"reason": "expired", "error": kept.Err.Error()}, kept.Owner, true)))
+			withSecretOwner(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, kept.Err, slog.String("credential", kept.Name))}, kept.Owner, true)))
 	}
 }
 
@@ -350,7 +350,7 @@ func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store,
 		return
 	} else if err != nil {
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStepDeleteExpired
 	}
 	s.adoEntraTokens.forget(owner)
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", name, outcome,

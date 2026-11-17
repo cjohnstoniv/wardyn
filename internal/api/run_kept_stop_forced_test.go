@@ -1106,8 +1106,8 @@ func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *tes
 		f.tick(t, f.s)
 	}
 	rows := sweepRows(f.audit, "failure", "teardown_error")
-	if len(rows) != 1 || rows[0]["teardown_error"] != "stop failure 1" || f.leaser.markCount() != 1 {
-		t.Fatalf("failure rows %v, %d marks after three failing ticks; want one row naming the first failure, and the mark kept", rows, f.leaser.markCount())
+	if len(rows) != 1 || rows[0]["teardown_error"] != auditStepStopSandbox || f.leaser.markCount() != 1 {
+		t.Fatalf("failure rows %v, %d marks after three failing ticks; want one row naming the stop step, and the mark kept", rows, f.leaser.markCount())
 	}
 	f.sb.stopErr = nil
 	f.tick(t, f.s)

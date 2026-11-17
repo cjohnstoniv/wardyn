@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -166,7 +167,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		}
 		if err != nil {
 			outcome = "failure"
-			data["error"] = err.Error()
+			data["error"] = auditStep(ctx, auditStepSaveRecording, err, slog.String("run_id", runID.String()))
 		}
 		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, principalType, principal, "session.recording.write",
 			key, outcome, mustJSON(data)))

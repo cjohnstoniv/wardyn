@@ -859,7 +859,7 @@ func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun
 		done()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy start could not be recorded")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "policy_unconfirmed"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepProxyStart, err, slog.String("run_id", run.ID.String())), "reason": "policy_unconfirmed"})))
 		return rec, false
 	}
 	return rec, true

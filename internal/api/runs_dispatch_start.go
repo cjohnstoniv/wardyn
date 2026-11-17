@@ -100,7 +100,7 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 		}
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
+				run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepStartAgentExec, xerr, slog.String("run_id", run.ID.String())), "reason": "agent_start"})))
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
@@ -139,7 +139,7 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 			slog.ErrorContext(ctx, "wardynd: could not persist the agent exec id; failing the run",
 				slog.String("run_id", run.ID.String()), slog.Any("err", xerr))
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"argv": argv, "error": xerr.Error()})))
+				run.ID.String(), "failure", mustJSON(map[string]any{"argv": argv, "error": auditStepPersistExecID})))
 			// The agent IS running; stop it, the same order the Exec-failure arm
 			// above uses, so a FAILED run never leaves a live agent behind.
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")

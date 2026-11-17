@@ -81,7 +81,7 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 			for k, v := range data {
 				td[k] = v
 			}
-			td["teardown_error"] = serr.Error()
+			td["teardown_error"] = auditStep(ctx, auditStepStopSandbox, serr, slog.String("run_id", runID.String()))
 			settleAfterTeardown(ctx, func(sctx context.Context) {
 				s.recordAudit(sctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 					ref, "failure", mustJSON(td)))

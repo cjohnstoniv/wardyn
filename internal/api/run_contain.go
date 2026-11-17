@@ -689,7 +689,7 @@ func (s *Server) containFailed(ctx context.Context, st store.RunContainer, run t
 	if started {
 		slog.WarnContext(ctx, "wardynd: cutting an ended run's agent failed", slog.String("run_id", run.ID.String()), slog.Any("err", cause))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert", run.ID.String(), "failure",
-			mustJSON(map[string]any{"reason": "ended", "containment": "unresolved", "error": cause.Error()})))
+			mustJSON(map[string]any{"reason": "ended", "containment": "unresolved", "error": auditStepContainEndedRun})))
 	}
 }
 

@@ -904,7 +904,7 @@ func (s *Server) auditLostStart(ctx context.Context, runID uuid.UUID, ref string
 	if cause != nil {
 		// A store fault, not a concurrent kill: the note must not claim one (#2806).
 		data["note"] = "the run could not be moved from STARTING to RUNNING after CreateSandbox because the store failed; dispatch aborted"
-		data["error"] = cause.Error()
+		data["error"] = auditStep(ctx, auditStepMarkRunning, cause, slog.String("run_id", runID.String()))
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch",
 		runID.String(), "failure", mustJSON(data)))

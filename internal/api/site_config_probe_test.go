@@ -1617,6 +1617,22 @@ func TestProbeFailureDetail_DoesNotWaitOnALaunchFailure(t *testing.T) {
 	}
 }
 
+// TestProbeFailureDetail_ALaunchFailureNamesTheRunsOwnHint: a launch failure's audit row names only the failed
+// step, so the verdict reads the run's failure hint, the cause the run page shows.
+func TestProbeFailureDetail_ALaunchFailureNamesTheRunsOwnHint(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{{RunID: &runID, Action: "run.create", Outcome: "failure",
+		Data: mustJSON(map[string]any{"error": auditStepCreateSandbox})}}
+	hint := "the sandbox could not be created: image not found"
+	ps.runs[runID] = types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: hint}
+	srv := New(baseTestConfig(newHarness(t), ps))
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if want := "run.create: " + hint; !res.neverRan || res.incompleteReason != want {
+		t.Errorf("neverRan = %v, reason %q, want true and %q", res.neverRan, res.incompleteReason, want)
+	}
+}
+
 // TestProbeFailureDetail_NonFatalEarlyFailureDoesNotShortCircuitTheWait: a
 // NON-fatal failure event ahead of a late run.complete (a lost sandbox ref, a
 // proxy resolve) must not be mistaken for the explanation -- the row has no

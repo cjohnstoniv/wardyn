@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -261,6 +262,26 @@ func TestOnceRefund_TheSandboxsCloseIsReportedAsTheFirst(t *testing.T) {
 	_ = sandbox.Close()
 	if first, err := tunnel(a, b); first != net.Conn(a) || err != nil {
 		t.Fatalf("tunnel first = %v, err = %v: want the sandbox side that closed first, with no error", first, err)
+	}
+}
+
+// resetOnWrite is a connection whose every write fails as a reset does, with its read side still open.
+type resetOnWrite struct{ net.Conn }
+
+func (resetOnWrite) Write([]byte) (int, error) { return 0, syscall.ECONNRESET }
+
+// TestOnceRefund_AWriteThatFailsNamesTheSideItWroteTo: an upstream reset that lands while the proxy is writing the
+// client's bytes ends the client-to-upstream copy on a write error. tunnel reports the upstream, which broke, and
+// not the client, whose connection is still open: the row would otherwise say the client closed before any reply.
+func TestOnceRefund_AWriteThatFailsNamesTheSideItWroteTo(t *testing.T) {
+	client, sandbox := net.Pipe()
+	upstream, peer := net.Pipe()
+	t.Cleanup(func() { _ = sandbox.Close(); _ = peer.Close() })
+	b := resetOnWrite{upstream}
+	go func() { _, _ = sandbox.Write([]byte("hello")) }()
+	first, err := tunnel(client, b)
+	if first != net.Conn(b) || !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("tunnel first = %v, err = %v: want the upstream whose write failed, with its reset", first, err)
 	}
 }
 

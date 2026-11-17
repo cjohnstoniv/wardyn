@@ -70,6 +70,11 @@ const resolveBypassedCause = "this name is on the upstream proxy's bypass list, 
 // reads to EOF after the sandbox's hello and hangs up) can end the other copy
 // before this one reports. Taken from the order of the reports, the sandbox's
 // own close would read as the upstream's.
+//
+// A copy that ended because a WRITE to its destination failed names the
+// destination: that side is the one that broke. An upstream reset that lands
+// while the client's bytes are still being written would otherwise be claimed
+// by the client-to-upstream copy as the client having closed.
 func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	type end struct {
 		src net.Conn
@@ -78,8 +83,13 @@ func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	var ended atomic.Pointer[end]
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
-		ended.CompareAndSwap(nil, &end{src, err})
+		w := &writeFailed{Writer: dst}
+		_, err := io.Copy(w, src)
+		side := src
+		if w.failed {
+			side = dst
+		}
+		ended.CompareAndSwap(nil, &end{side, err})
 		// Half-close the write side if supported so the peer sees EOF.
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
@@ -93,6 +103,22 @@ func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	_ = b.Close()
 	e := ended.Load()
 	return e.src, e.err
+}
+
+// writeFailed passes writes on and notes whether one failed, so a copy that
+// ended on an error can tell its destination's write from its source's read.
+// A short write counts as failed, as io.Copy's ErrShortWrite does.
+type writeFailed struct {
+	io.Writer
+	failed bool // the copy's goroutine only
+}
+
+func (w *writeFailed) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err != nil || n < len(p) {
+		w.failed = true
+	}
+	return n, err
 }
 
 // What the client has put into the tunnel so far (tunnelWatch.client).

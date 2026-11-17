@@ -167,7 +167,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStep(r.Context(), auditStepRevokeSessions, err)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"session.revoke", target, outcome, mustJSON(data)))
@@ -535,7 +535,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0,
 				"sessions_only": true, "cli_sessions_ended": cliEnded}
 			if err != nil {
-				outcome, data["error"] = "failure", err.Error()
+				outcome, data["error"] = "failure", auditStep(r.Context(), auditStepSignOut, err)
 			}
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"session.revoke", sub, outcome, mustJSON(data)))

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 	if _, xerr := s.cfg.Runner.Exec(ctx, ref, runner.SelftestArgv()); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": xerr.Error(), "fail_closed": failClosed,
+				"error": auditStep(ctx, auditStepSelftestExec, xerr, slog.String("run_id", run.ID.String())), "fail_closed": failClosed,
 				"detail": "BYOI image could not run agent-run --selftest (missing shell or harness binary?)",
 			})))
 		return false
@@ -92,7 +93,7 @@ func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code 
 	if werr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": werr.Error(), "fail_closed": failClosed,
+				"error": auditStep(ctx, auditStepSelftestWait, werr, slog.String("run_id", run.ID.String())), "fail_closed": failClosed,
 			})))
 		return false
 	}

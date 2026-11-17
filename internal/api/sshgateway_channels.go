@@ -610,7 +610,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 				}
 				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
 				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": err.Error(), "promotion": true})))
+					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true})))
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
 				cancel()
 				return
@@ -676,7 +676,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	attachErr := s.establishExec(pumpCtx, run, holder)
 	if attachErr != nil {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachErr.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)})))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
 		}

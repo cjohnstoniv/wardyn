@@ -647,9 +647,9 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	// stamps FailureHint on every create/dispatch failure, whereas a trail can
 	// carry NON-fatal failure events (a proxy resolve, a lost sandbox ref)
 	// ahead of the run.complete that is still on its way.
-	launchFailed := false
+	launchFailed, hint := false, ""
 	if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && run.FailureHint != "" {
-		launchFailed = true
+		launchFailed, hint = true, run.FailureHint
 	}
 	for i := 0; i < probeTrailSettleTries && err == nil && !launchFailed && !hasRunComplete(events); i++ {
 		select {
@@ -706,7 +706,7 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 			}
 			_ = json.Unmarshal(ev.Data, &es)
 			res.neverRan = es.ExecStarted != nil && !*es.ExecStarted
-			res.incompleteReason = probeFailureReason(ev)
+			res.incompleteReason = probeFailureReason(ev, "")
 			return res
 		}
 		if launchFail == nil {
@@ -715,7 +715,7 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	}
 	if launchFail != nil {
 		res.neverRan = true
-		res.incompleteReason = probeFailureReason(launchFail)
+		res.incompleteReason = probeFailureReason(launchFail, hint)
 		return res
 	}
 	res.incompleteReason = "the probe sandbox failed for an unreported reason"
@@ -723,8 +723,13 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 }
 
 // probeFailureReason words one failure-outcome audit event for a probe verdict:
-// "<action>: <error>" when the event carried one, else the action alone.
-func probeFailureReason(ev *types.AuditEvent) string {
+// "<action>: <reason>". A launch failure's reason is the run's own failure hint (hint, what the run page
+// shows), since the event's error names only the failed step; with no hint it is the event's error, else the
+// action alone.
+func probeFailureReason(ev *types.AuditEvent, hint string) string {
+	if hint != "" {
+		return fmt.Sprintf("%s: %s", ev.Action, hint)
+	}
 	var d struct {
 		Error string `json:"error"`
 	}

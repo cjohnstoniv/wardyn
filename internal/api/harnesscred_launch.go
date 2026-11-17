@@ -122,7 +122,7 @@ func (s *Server) finishHarnessLoginLaunch(ctx context.Context, run types.AgentRu
 	dc, _, dcErr := s.resolveDispatchCeiling(ctx)
 	if dcErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": dcErr.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepDispatchCeiling, dcErr, slog.String("run_id", run.ID.String()))})))
 		s.failAndRevoke(ctx, run.ID, types.RunPending, harnessLoginCeilingUnresolved)
 		return
 	}

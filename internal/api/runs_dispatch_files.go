@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -203,7 +204,7 @@ func (s *Server) fileSecretRunnerDelivers(ctx context.Context, run types.AgentRu
 	hint := "This run was not launched: it delivers a secret as a file, and its runner cannot place one in the sandbox"
 	if err != nil {
 		hint = "This run was not launched: it delivers a secret as a file, and whether its runner can place one in the sandbox is unknown"
-		data["error"] = err.Error()
+		data["error"] = auditStep(ctx, auditStepRunnerCaps, err, slog.String("run_id", run.ID.String()))
 	} else {
 		data["error"] = "runner " + caps.Driver + " does not deliver managed files"
 	}

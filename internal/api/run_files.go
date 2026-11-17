@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -392,7 +393,7 @@ func repoCloneLeaf(repo string) string {
 // handleRunFiles' doc for why success is silent).
 func (s *Server) auditRunFilesFailure(r *http.Request, run types.AgentRun, err error) {
 	s.recordStreamAudit(r.Context(), run.SandboxRef, s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
-		"run.files.fail", run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		"run.files.fail", run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(r.Context(), auditStepReadRunFiles, err, slog.String("run_id", run.ID.String()))})))
 }
 
 // parseRunFiles reads runFilesScript's stdout — the numstat section, the
