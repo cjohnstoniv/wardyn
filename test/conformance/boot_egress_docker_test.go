@@ -80,7 +80,8 @@ const bootEgressProxyImage = "wardyn/wardyn-proxy:local"
 // first_use_approval=deny_with_review, attaches the way the console does, and
 // walks the run the way a human does: the workspace-trust prompt (the one
 // screen a human is meant to answer, and not the theme picker or "Security
-// notes"), then the single Enter that prompt's default invites, then the REPL —
+// notes"), then "Yes, I trust this folder" (the prompt opens on "No, exit")
+// and one Enter, then the REPL —
 // asserting throughout that no first-use approval was raised and no host
 // denied. A third arm runs the autonomous `claude -p` shape, which meets no
 // dialog at all.
@@ -203,13 +204,18 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	// is actually up, so a run that stops at a pre-REPL prompt can report "zero
 	// approvals" while the product is about to dial two.
 	//
-	// Press the one key the human presses (the default option is already "Yes, I
-	// trust this folder") and wait for the prompt. Then keep pressing, bounded:
+	// Choose "Yes, I trust this folder" the way a human does: the prompt opens on
+	// "No, exit", so move down to Yes first (bootEgressTrustYes), then press
+	// Enter once and wait for the prompt. Then keep pressing, bounded:
 	// on an image WITHOUT the onboarding seed the run is parked behind the theme
 	// picker and the Security-notes page as well, and those extra Enters are what
 	// a human would press to get to the same place. Phase 1 already asserts the
 	// fixed image needs none of them; here the count is EVIDENCE, and reaching the
 	// REPL at all is what makes the measurement below mean anything.
+	if claudeImage && !bootEgressTrustYes(t, sess, tail) {
+		t.Errorf("the trust prompt never showed %q selected, so the Enter below may answer %q and quit\nscreen:\n%s",
+			bootEgressTrustYesOption, bootEgressTrustNoOption, tail.rendered())
+	}
 	enters := 0
 	var repl string
 	for enters < 4 {
@@ -369,6 +375,52 @@ func (tl *bootEgressTail) waitFor(want string, d time.Duration) string {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// The trust prompt's two options. The selected one carries the pointer "❯".
+const (
+	bootEgressTrustYesOption = "Yes, I trust this folder"
+	bootEgressTrustNoOption  = "No, exit"
+)
+
+// bootEgressTrustYes moves the trust prompt's pointer to "Yes, I trust this
+// folder" and reports whether it got there, without pressing Enter. The
+// prompt opens on "No, exit" and ignores keys for a moment after it opens, so
+// the screen is read before every move, and a move is sent only while the
+// pointer still sits on No: one move past Yes would wrap back to No.
+func bootEgressTrustYes(t *testing.T, sess runner.Session, tail *bootEgressTail) bool {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		switch bootEgressTrustPointer(tail.rendered()) {
+		case bootEgressTrustYesOption:
+			return true
+		case bootEgressTrustNoOption:
+			if _, err := sess.Write([]byte("\x1b[B")); err != nil { // ArrowDown
+				t.Fatalf("send ArrowDown on the trust prompt: %v", err)
+			}
+			time.Sleep(1500 * time.Millisecond) // let the redraw land before reading again
+		default:
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return false
+}
+
+// bootEgressTrustPointer names the trust option the LAST pointer in the
+// rendered stream sits on, or "" when it sits on neither. The tail keeps every
+// frame, so only the last pointer is the current one.
+func bootEgressTrustPointer(rendered string) string {
+	i := strings.LastIndex(rendered, "❯")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(rendered[i+len("❯"):])
+	for _, option := range []string{bootEgressTrustYesOption, bootEgressTrustNoOption} {
+		if strings.HasPrefix(rest, option) {
+			return option
+		}
+	}
+	return ""
 }
 
 // bootEgressProxyLogs returns the wardyn-proxy sidecar's whole container log.
