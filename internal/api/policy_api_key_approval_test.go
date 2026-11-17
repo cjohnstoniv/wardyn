@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -265,8 +266,8 @@ func TestStandaloneCeilingGatedAPIKeyHeldGrant(t *testing.T) {
 		return `{"name":"top","ceiling":{"min_confinement_class":"CC2","allowed_domains":["pypi.org"],"eligible_grants":[` +
 			strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
 	}
-	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(300)); err != nil && strings.Contains(err.Error(), apiKeyApprovalMsg) {
-		t.Errorf("unchanged gated grant: %v, want it not refused", err)
+	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(300)); err != nil {
+		t.Errorf("unchanged gated grant: %v, want accepted", err)
 	}
 	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(60)); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
 		t.Errorf("changed gated grant: %v, want the approval refusal", err)
@@ -286,16 +287,13 @@ func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
 		if stored != nil {
 			spec.EligibleGrants = &stored
 		}
-		srv := &Server{cfg: Config{Store: hardBoundary(spec)}}
-		body := `{"mode":"hard_limits","spec":{"eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+		srv := &Server{cfg: Config{Store: hardBoundary(spec), Now: time.Now}}
 		w := httptest.NewRecorder()
-		servePastValidation(func() {
-			srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(body)))
-		})
+		srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(gatedBoundaryBody(ttl))))
 		return w
 	}
-	if w := put([]types.GrantSpec{legacy}, 300); strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
-		t.Errorf("unchanged gated grant = %d %s, want it not refused", w.Code, w.Body.String())
+	if w := put([]types.GrantSpec{legacy}, 300); w.Code != http.StatusOK {
+		t.Errorf("unchanged gated grant = %d %s, want 200", w.Code, w.Body.String())
 	}
 	if w := put([]types.GrantSpec{legacy}, 60); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
 		t.Errorf("changed gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
@@ -305,12 +303,29 @@ func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
 	}
 }
 
-// servePastValidation runs a handler whose store is a stub that holds only the boundary: a request
-// the validation lets through goes on to store calls the stub does not answer, which panic. The
-// panic is the proof the validation passed, so it is swallowed; the tests read the recorder.
-func servePastValidation(serve func()) {
-	defer func() { _ = recover() }()
+// errPastValidation is what pastValidationStore panics with when a handler gets as far as listing
+// the governance units, which the boundary dry run does only after its validation passed.
+var errPastValidation = errors.New("past validation")
+
+type pastValidationStore struct{ sealBoundaryStore }
+
+func (pastValidationStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
+	panic(errPastValidation)
+}
+
+// servePastValidation runs serve and reports whether it reached pastValidationStore. Any other panic
+// is re-raised.
+func servePastValidation(serve func()) (reached bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != any(errPastValidation) {
+				panic(r)
+			}
+			reached = true
+		}
+	}()
 	serve()
+	return false
 }
 
 func gatedBoundaryBody(ttl int) string {
@@ -322,19 +337,19 @@ func gatedBoundaryBody(ttl int) string {
 func TestBoundaryDryRunGatedAPIKeyHeldGrant(t *testing.T) {
 	legacy := gatedAPIKey(t, true)
 	legacy.TTLSeconds = 300
-	srv := &Server{cfg: Config{Store: hardBoundary(types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}})}}
-	run := func(ttl int) *httptest.ResponseRecorder {
+	srv := &Server{cfg: Config{Store: pastValidationStore{hardBoundary(types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}})}, Now: time.Now}}
+	run := func(ttl int) (*httptest.ResponseRecorder, bool) {
 		w := httptest.NewRecorder()
-		servePastValidation(func() {
+		reached := servePastValidation(func() {
 			srv.handleBoundaryDryRun(w, httptest.NewRequest(http.MethodPost, "/api/v1/governance/boundary/dry-run", strings.NewReader(gatedBoundaryBody(ttl))))
 		})
-		return w
+		return w, reached
 	}
-	if w := run(300); strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
-		t.Errorf("unchanged gated grant = %d %s, want it not refused", w.Code, w.Body.String())
+	if w, reached := run(300); !reached || w.Body.Len() != 0 {
+		t.Errorf("unchanged gated grant: reached = %v, body %q, want it past validation with nothing written", reached, w.Body.String())
 	}
-	if w := run(60); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
-		t.Errorf("changed gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	if w, reached := run(60); reached || w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: reached = %v, %d %s, want 400 naming the refusal", reached, w.Code, w.Body.String())
 	}
 }
 
@@ -378,10 +393,8 @@ func TestComposedOverlayGatedAPIKeyStoredRow(t *testing.T) {
 	stored.Overlay.EligibleGrants = &[]types.GrantSpec{gated}
 	all := []types.GovernanceUnit{base, stored}
 
-	renamed := stored
-	renamed.Name = "renamed"
-	if _, _, err := s.checkGraphWrite(renamed, all, maxUnitDepthDefault); err != nil && strings.Contains(err.Error(), apiKeyApprovalMsg) {
-		t.Errorf("rename of a stored gating overlay: %v, want it not refused for the approval rule", err)
+	if err := govCovBuildErr(t, s, all, govCovPID, `{"name":"renamed"}`); err != nil {
+		t.Errorf("rename of a stored gating overlay: %v, want accepted", err)
 	}
 	plain := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
 	plain.Overlay.EligibleGrants = &[]types.GrantSpec{ungated}
