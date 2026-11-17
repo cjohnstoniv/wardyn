@@ -310,6 +310,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	out.Header.Del("Host")
 	callID, sentToken := "", ""
 	if d.gateway != nil {
+		stripSandboxRequestIDs(out.Header)
 		// Before sign: the attach drops Accept-Encoding, Range and If-Range, which the sandbox may
 		// have signed, so the signature covers only what is sent. A refused mint sends nothing.
 		callID = uuid.NewString()

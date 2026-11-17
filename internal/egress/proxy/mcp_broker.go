@@ -567,6 +567,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if len(p.gatewayRoutes) > 0 {
 		callID = uuid.NewString()
 		out.Header.Set(gatewayCallIDHeader, callID)
+		stripSandboxRequestIDs(out.Header)
 	}
 	route := p.gatewayRouteFor(s.host, s.port, s.path)
 	if route != nil && route.MCPKey != s.key {

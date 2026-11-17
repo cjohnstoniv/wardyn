@@ -199,6 +199,8 @@ func (p *Proxy) forwardPlainGatewayRoute(w http.ResponseWriter, r, outReq *http.
 		return
 	}
 	outReq.Header.Set(gatewayCallIDHeader, callID)
+	stripSandboxRequestIDs(outReq.Header)
+	stripSandboxRequestIDs(outReq.Trailer)
 	if log != nil {
 		log.GatewayCallID = callID
 	}
