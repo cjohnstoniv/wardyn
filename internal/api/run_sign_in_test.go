@@ -138,10 +138,21 @@ func TestRunSignIn_SharedFixture(t *testing.T) {
 			f.audit.mu.Lock()
 			rows := slices.Clone(f.audit.events)
 			f.audit.mu.Unlock()
-			for _, ev := range rows {
-				if strings.Contains(string(ev.Data), "user_code") || strings.Contains(ev.Target, "user_code") ||
-					strings.Contains(string(ev.Data), "signin.aws") || strings.Contains(ev.Target, "signin.aws") {
-					t.Errorf("an audit row carries the pane: %+v", ev)
+			// The answer's own link and code, and the words that mark a pane.
+			secrets := []string{"user_code", "signin.aws"}
+			for _, v := range []string{tc.Go.UserCode, tc.Go.VerificationURL} {
+				if v != "" {
+					secrets = append(secrets, v)
+				}
+			}
+			for _, v := range secrets {
+				for _, ev := range rows {
+					if strings.Contains(string(ev.Data), v) || strings.Contains(ev.Target, v) {
+						t.Errorf("an audit row carries %q from the pane: %+v", v, ev)
+					}
+				}
+				if strings.Contains(logs.String(), v) {
+					t.Errorf("a log line carries %q from the pane: %s", v, logs.String())
 				}
 			}
 		})

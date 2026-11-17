@@ -283,12 +283,146 @@
     },
     {
       "name": "lookalike sign-in page hosts are not the sign-in link",
-      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws.evil.example/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.awsx/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://user@us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws@evil.example/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws:443/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttp://us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://evil.us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-12.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize/../evil?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/start/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://evil.example/us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws.evil.example/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.awsx/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://user@us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws@evil.example/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws:443/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttp://us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://evil.us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize/../evil?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/start/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\nPlease visit the following URL:\n\nhttps://evil.example/us-east-1.signin.aws/platform/authorize?request_uri=x\n\nThen enter the code:\n\nABCD-EFGH\n",
       "sign_in_process": true,
       "go": {
         "state": "not_waiting"
       },
       "ts": null
+    },
+    {
+      "name": "a link tmux split into 80-column rows for a client wider than the window (captured)",
+      "pane": "\u001b[?1049h\u001b[22;0;0t\u001b[?1h\u001b=\u001b[H\u001b[2J\u001b[?12l\u001b[?25h\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1005l\u001b[?2004h\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[?1006l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[1;1H\u001b[1;30r\u001b[c\u001b[>c\u001b[>q\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[11;1H\u001b[?25l\u001b[1;81H│·······································\u001b[2;81H│·······································\u001b[3;81H│·······································\u001b[4;81H│·······································\u001b[5;81H│·······································\u001b[6;81H│·······································\u001b[7;81H│·······································\u001b[8;81H│·······································\u001b[9;81H│·······································\u001b[10;81H│·······································\u001b[11;81H│·······································\u001b[12;81H│·······································\u001b[13;81H│·······································\u001b[14;81H│·······································\u001b[15;81H│·······································\u001b[16;81H│·······································\u001b[17;81H│·······································\u001b[18;81H│·······································\u001b[19;81H│·······································\u001b[20;81H│·······································\u001b[21;81H│·······································\u001b[22;81H│·······································\u001b[23;81H│·······································\u001b[24;81H│·······································\u001b[25;1H────────────────────────────────────────────────────────────────────────────────┘·······································\u001b[26;1H························································································································\u001b[27;1H························································································································\u001b[28;1H························································································································\u001b[29;1H························································································································\u001b(B\u001b[m\u001b[1;1HBrowser will not be automatically opened.\u001b[39X\u001b[2;80H\u001b[1K\rPlease visit the following URL:\u001b[3;80H\u001b[1K\r\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%\r\n3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-\u001b[6;80H\u001b[1K\r0000000000\u001b[7;80H\u001b[1K\n\u001b[1K\rThen enter the code:\u001b[9;80H\u001b[1K\n\u001b[1K\rABCD-EFGH\u001b[11;80H\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\u001b[30m\u001b[42m\u001b[30;1H[s] 0:bash*                                                                            \"sign-in-sandbox\" 00:00 01-Jan-26\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[11;1H\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[?1006l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[1;1H\u001b[1;30r\u001b[11;1H\u001b[?25l\u001b[1;81H│·······································\u001b[2;81H│·······································\u001b[3;81H│·······································\u001b[4;81H│·······································\u001b[5;81H│·······································\u001b[6;81H│·······································\u001b[7;81H│·······································\u001b[8;81H│·······································\u001b[9;81H│·······································\u001b[10;81H│·······································\u001b[11;81H│·······································\u001b[12;81H│·······································\u001b[13;81H│·······································\u001b[14;81H│·······································\u001b[15;81H│·······································\u001b[16;81H│·······································\u001b[17;81H│·······································\u001b[18;81H│·······································\u001b[19;81H│·······································\u001b[20;81H│·······································\u001b[21;81H│·······································\u001b[22;81H│·······································\u001b[23;81H│·······································\u001b[24;81H│·······································\u001b[25;1H────────────────────────────────────────────────────────────────────────────────┘·······································\u001b[26;1H························································································································\u001b[27;1H························································································································\u001b[28;1H························································································································\u001b[29;1H························································································································\u001b(B\u001b[m\u001b[1;1HBrowser will not be automatically opened.\u001b[39X\u001b[2;80H\u001b[1K\rPlease visit the following URL:\u001b[3;80H\u001b[1K\r\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%\r\n3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-\u001b[6;80H\u001b[1K\r0000000000\u001b[7;80H\u001b[1K\n\u001b[1K\rThen enter the code:\u001b[9;80H\u001b[1K\n\u001b[1K\rABCD-EFGH\u001b[11;80H\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\n\u001b[1K\u001b[30m\u001b[42m\u001b[30;1H[s] 0:bash*                                                                            \"sign-in-sandbox\" 00:00 01-Jan-26\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[11;1H\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
+    },
+    {
+      "name": "a link split into rows whose next row has not arrived",
+      "pane": "\u001b[?1049h\u001b[22;0;0t\u001b[?1h\u001b=\u001b[H\u001b[2J\u001b[?12l\u001b[?25h\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1005l\u001b[?2004h\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[?1006l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[1;1H\u001b[1;30r\u001b[c\u001b[>c\u001b[>q\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[11;1H\u001b[?25l\u001b[1;81H│·······································\u001b[2;81H│·······································\u001b[3;81H│·······································\u001b[4;81H│·······································\u001b[5;81H│·······································\u001b[6;81H│·······································\u001b[7;81H│·······································\u001b[8;81H│·······································\u001b[9;81H│·······································\u001b[10;81H│·······································\u001b[11;81H│·······································\u001b[12;81H│·······································\u001b[13;81H│·······································\u001b[14;81H│·······································\u001b[15;81H│·······································\u001b[16;81H│·······································\u001b[17;81H│·······································\u001b[18;81H│·······································\u001b[19;81H│·······································\u001b[20;81H│·······································\u001b[21;81H│·······································\u001b[22;81H│·······································\u001b[23;81H│·······································\u001b[24;81H│·······································\u001b[25;1H────────────────────────────────────────────────────────────────────────────────┘·······································\u001b[26;1H························································································································\u001b[27;1H························································································································\u001b[28;1H························································································································\u001b[29;1H························································································································\u001b(B\u001b[m\u001b[1;1HBrowser will not be automatically opened.\u001b[39X\u001b[2;80H\u001b[1K\rPlease visit the following URL:\u001b[3;80H\u001b[1K\r\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%\r\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a link split into rows whose line end has not arrived",
+      "pane": "\u001b[?1049h\u001b[22;0;0t\u001b[?1h\u001b=\u001b[H\u001b[2J\u001b[?12l\u001b[?25h\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1005l\u001b[?2004h\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[?1006l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[1;1H\u001b[1;30r\u001b[c\u001b[>c\u001b[>q\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[11;1H\u001b[?25l\u001b[1;81H│·······································\u001b[2;81H│·······································\u001b[3;81H│·······································\u001b[4;81H│·······································\u001b[5;81H│·······································\u001b[6;81H│·······································\u001b[7;81H│·······································\u001b[8;81H│·······································\u001b[9;81H│·······································\u001b[10;81H│·······································\u001b[11;81H│·······································\u001b[12;81H│·······································\u001b[13;81H│·······································\u001b[14;81H│·······································\u001b[15;81H│·······································\u001b[16;81H│·······································\u001b[17;81H│·······································\u001b[18;81H│·······································\u001b[19;81H│·······································\u001b[20;81H│·······································\u001b[21;81H│·······································\u001b[22;81H│·······································\u001b[23;81H│·······································\u001b[24;81H│·······································\u001b[25;1H────────────────────────────────────────────────────────────────────────────────┘·······································\u001b[26;1H························································································································\u001b[27;1H························································································································\u001b[28;1H························································································································\u001b[29;1H························································································································\u001b(B\u001b[m\u001b[1;1HBrowser will not be automatically opened.\u001b[39X\u001b[2;80H\u001b[1K\rPlease visit the following URL:\u001b[3;80H\u001b[1K\r\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%\r",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a long-s in the sign-in host is not the sign-in link",
+      "pane": "Please visit the following URL:\n\nhttps://us-east-1.ſignin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a Kelvin sign in the region is not the sign-in link",
+      "pane": "Please visit the following URL:\n\nhttps://eu-Korth-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "an upper-case sign-in host is not the sign-in link",
+      "pane": "Please visit the following URL:\n\nhttps://US-EAST-1.SIGNIN.AWS/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a NEL after the code prompt does not arm the code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a BOM after the code prompt does not arm the code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:﻿\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a line between the link and the code without the prompt does not arm the code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nUse this code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a text line between the prompt and the code is not the code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nnot a code here\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a lower-case code prompt does not arm the code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nthen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
+    },
+    {
+      "name": "a eusc-de-east-1 sign-in page attempt",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://eusc-de-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://eusc-de-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "https://eusc-de-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
+    },
+    {
+      "name": "a us-isob-east-1 sign-in page attempt",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://us-isob-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://us-isob-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "https://us-isob-east-1.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
+    },
+    {
+      "name": "a ap-southeast-10 sign-in page attempt",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://ap-southeast-10.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000\n\nThen enter the code:\n\nABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://ap-southeast-10.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000",
+        "user_code": "ABCD-EFGH"
+      },
+      "ts": "https://ap-southeast-10.signin.aws/platform/authorize?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3A00000000-0000-0000-0000-000000000000&identitystore_id=d-0000000000"
     }
   ]
 }
