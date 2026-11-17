@@ -52,7 +52,11 @@ export function canonicalAuditAction(a: string): string {
 // (spool_full), not a policy decision. Both are absent on every other row.
 // A run ending, with the one fact a runner's revocation adds: the runner was revoked, and was connected or
 // not when it happened (the run.kill row's runner_online). Absent on every other ending.
-export type RunEndingFacts = RunEnding & { runnerRevoked?: { online: boolean } };
+export type RunEndingFacts = RunEnding & {
+  runnerRevoked?: { online: boolean };
+  /** For a `partial` kill: the failed step is on the run.kill.confirm row, not the run.kill row. */
+  confirmFailed?: boolean;
+};
 
 export type SpooledEgressDecision = EgressDecision & { spooled_at?: string; spool_full?: boolean };
 
@@ -256,7 +260,12 @@ function latestEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): Au
 // someone stopped on purpose is not a failure and gets no block at all).
 // Returns undefined for every state that ended fine — the block must not
 // appear on a run that completed.
-export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEndingFacts | undefined {
+export function runEndingFromAudit(
+  state: RunState,
+  events: AuditEvent[],
+  // The page's kill wait has run out (use-run-detail.ts): a stop still being confirmed with no result is unconfirmed.
+  opts: { confirmWaitOver?: boolean } = {},
+): RunEndingFacts | undefined {
   const from = (kind: RunEndingKind, e: AuditEvent | undefined, action: string): RunEnding => ({
     kind,
     action: e?.action ?? action,
@@ -271,8 +280,9 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     // server exempts an already-KILLED run from the terminal guard precisely so
     // a kill whose teardown failed can be retried (runs_lifecycle.go), so the
     // most recent attempt is this run's containment truth. What the trail
-    // PROVES is `evidence` (#1487): a success row confirms the teardown, any
-    // other outcome says a step failed, and NO row (an older trail, or one
+    // PROVES is `evidence` (#1487): a success row confirms the teardown (or,
+    // when its sandbox stop was still being confirmed, its run.kill.confirm row
+    // does), any other outcome says a step failed, and NO row (an older trail, or one
     // truncated by the 1000-row cap) proves nothing — the state alone is the
     // fact, and the block says so rather than inventing who or how.
     const kill = latestEvent(events, (e) => e.action === "run.kill");
@@ -289,17 +299,26 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
         runnerRevoked: { online: kill.data?.runner_online === true },
       };
     }
-    return {
-      ...from("killed", kill, "run.kill"),
-      evidence: !kill
-        ? "unknown"
-        : kill.outcome !== "success"
-          ? "partial"
-          : // The credentials are revoked; the offline runner removes the sandbox when it reconnects.
-            str(kill.data?.sandbox_stop) === "queued"
-            ? "queued"
-            : "confirmed",
-    };
+    const base = from("killed", kill, "run.kill");
+    if (!kill) return { ...base, evidence: "unknown" };
+    if (kill.outcome !== "success") return { ...base, evidence: "partial" };
+    // A success with no sandbox_stop is a stop the kill saw finish.
+    if (kill.data?.sandbox_stop === undefined) return { ...base, evidence: "confirmed" };
+    const stop = kill.data.sandbox_stop;
+    // The credentials are revoked; the offline runner removes the sandbox when it reconnects.
+    if (stop === "queued") return { ...base, evidence: "queued" };
+    // Any other value claims nothing about the sandbox (a revoked runner's sweep writes "runner_revoked"):
+    // fail closed rather than say it stopped.
+    if (stop !== "confirming") return { ...base, evidence: "unconfirmed" };
+    // The sandbox was still stopping when the kill finished, and Wardyn confirms the stop later on its own
+    // run.kill.confirm row (internal/api/run_kill_confirm.go). Only a row at or after this kill answers it: a
+    // kill made during a confirm writes no new confirm row, and that confirm's row still lands after it. No
+    // row (none yet, or a read that failed) never proves the stop.
+    const killAt = Date.parse(kill.time);
+    const confirm = latestEvent(events, (e) => e.action === "run.kill.confirm" && Date.parse(e.time) >= killAt);
+    if (confirm?.outcome === "success") return { ...base, evidence: "confirmed" };
+    if (confirm) return { ...base, evidence: "partial", confirmFailed: true };
+    return { ...base, evidence: opts.confirmWaitOver ? "unconfirmed" : "confirming" };
   }
   if (state === "STOPPED") {
     const stop = firstEvent(events, (e) => e.action === "run.autostop");

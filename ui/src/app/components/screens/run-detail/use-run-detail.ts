@@ -108,9 +108,10 @@ export function useRunDetail(id: string) {
   const folderWait = React.useRef<{ id: string; since: number | null } | null>(null);
   const endingGen = React.useRef(0);
   const endingInFlight = React.useRef(false);
+  const confirmRows = React.useRef<AuditEvent[]>([]);
   const loadEnding = React.useCallback(() => {
     // One read at a time: a poll that keeps asking while a slow read is still out
-    // would stack four more calls every tick.
+    // would stack five more calls every tick.
     if (endingInFlight.current) return;
     endingInFlight.current = true;
     const gen = ++endingGen.current;
@@ -119,11 +120,16 @@ export function useRunDetail(id: string) {
       auditApi.listAudit(id, { action: "run.kill" }),
       auditApi.listAudit(id, { action: "run.autostop" }),
       auditApi.listAudit(id, { action: "credential.mint" }),
-    ]).then(([done, kill, autostop, minted]) => {
+      // The result of a kill whose sandbox stop was still being confirmed (internal/api/run_kill_confirm.go).
+      auditApi.listAudit(id, { action: "run.kill.confirm" }),
+    ]).then(([done, kill, autostop, minted, confirm]) => {
       endingInFlight.current = false;
       if (endingGen.current !== gen) return;
+      // A failed confirm read keeps the last rows it read: no row never proves the stop (see runEndingFromAudit),
+      // so the kill's own rows still show, and the next poll reads it again.
+      if (confirm.status === "fulfilled") confirmRows.current = confirm.value;
       if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
-        setEndingAudit([done.value, kill.value, autostop.value].flat());
+        setEndingAudit([done.value, kill.value, autostop.value, confirmRows.current].flat());
         setEndingState("ready");
       } else {
         setEndingState((s) => (s === "ready" ? s : "failed"));
@@ -307,31 +313,39 @@ export function useRunDetail(id: string) {
   // beat before it lands.
   const held =
     mintAudit === undefined ? undefined : heldCredentials(grantsReadable ? grants : undefined, mintAudit ?? undefined);
+  // What the trail alone proves, before the page's wait decides a stop still being confirmed.
+  const trailEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
+  // The server marks a run KILLED BEFORE it writes the run.kill row
+  // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
+  // whose trail can still settle for two minutes, counted on THIS page's clock
+  // from when it first saw such a run (a ref, so it resets on remount): the
+  // server's ended_at against our Date.now() would depend on skew. The row
+  // arrives, or the wait gives up and the person can kill again. A failed ending
+  // read is retried on the same polls (load re-calls loadEnding). A stop still
+  // being confirmed waits the same way for its run.kill.confirm row; a kill row
+  // that is final but proves nothing (unconfirmed) has nothing left to wait for.
+  const unconfirmedKill =
+    run?.state === "KILLED" && trailEvidence !== "confirmed" && trailEvidence !== "queued" && trailEvidence !== "unconfirmed";
+  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
+  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
+  // The wait ran out with no confirm row: Wardyn has no record that the sandbox stopped.
+  const killConfirmWaitOver = trailEvidence === "confirming" && !killSettling;
+  const killEvidence = killConfirmWaitOver ? "unconfirmed" : trailEvidence;
   // Kill again is offered on a KILLED run whose trail does not PROVE the
   // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
   // cascade is safe to repeat — the one action that settles the doubt.
-  const killEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
   // Kill again follows the evidence: offered once the ending facts have settled
   // (or failed to read) and the trail does not PROVE the teardown. A failed read
   // does not hide a row the main trail already holds, so a proven kill stays off.
   // A queued stop is settled too: the credentials are revoked, and a second kill cannot reach the offline runner.
-  const killSettled = killEvidence === "confirmed" || killEvidence === "queued";
+  // So is a stop being confirmed: a second kill during the confirm starts nothing, and the result is on its way.
+  const killSettled = killEvidence === "confirmed" || killEvidence === "queued" || killEvidence === "confirming";
   const killAgain = run?.state === "KILLED" && endingState !== "loading" && !killSettled;
   // The outcome block of a KILLED run waits for its facts (see loadEnding). When
   // the read failed it still shows what the main trail proves, and nothing when
   // that holds no kill row either (no row would read as "no kill record", which a
   // failed read cannot claim).
   const outcomeReady = run?.state !== "KILLED" || endingState === "ready" || (endingState === "failed" && killEvidence !== "unknown");
-  // The server marks a run KILLED BEFORE it writes the run.kill row
-  // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
-  // whose trail does not yet PROVE the teardown for two minutes, counted on THIS
-  // page's clock from when it first saw such a run (a ref, so it resets on
-  // remount): the server's ended_at against our Date.now() would depend on skew.
-  // The row arrives, or the wait gives up and the person can kill again. A failed
-  // ending read is retried on the same polls (load re-calls loadEnding).
-  const unconfirmedKill = run?.state === "KILLED" && !killSettled;
-  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
-  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
   // A terminal run's computer folder changes on the server with nothing to press here. Unsettled, it is polled
   // until it settles. With only the sandbox's stop left to confirm, or after an answer that lost the fate of a
   // folder this page saw waiting (a read the server could not finish), it is polled for FOLDER_SETTLE_MS on this
@@ -349,6 +363,6 @@ export function useRunDetail(id: string) {
   return {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
-    load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
+    load, terminal, pending, endingEvents, held, killAgain, outcomeReady, killConfirmWaitOver,
   };
 }
