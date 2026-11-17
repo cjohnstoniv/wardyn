@@ -35,6 +35,7 @@
 | Use a Wardyn someone else operates (you are a member) | [USERS.md](USERS.md) |
 | Start a run from the console: New run steps, Review, templates | [NEW-RUN.md](NEW-RUN.md) |
 | Reach a run over SSH, sftp, port-forward or VS Code Remote-SSH | [SSH.md](SSH.md) |
+| Script a sandbox from another tool over SSH | [SSH-SCRIPTED-ACCESS.md](SSH-SCRIPTED-ACCESS.md) |
 | Relay a UI app in a run (editor, dev server) to your browser | [UI-SANDBOXES.md](UI-SANDBOXES.md) |
 | Keep a command running, with restarts and a health check | [SERVICES.md](SERVICES.md) |
 
@@ -58,6 +59,9 @@
 | Run the organisation's own runner in a Kubernetes cluster | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
 | Set up SSO (Entra ID / OIDC) and admin/member roles on a cluster | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Run more than one wardynd replica, and see its limits | [operations/high-availability.md](operations/high-availability.md) |
+| Expose the SSH gateway from a Kubernetes cluster | [operations/ssh-from-a-cluster.md](operations/ssh-from-a-cluster.md) |
+| Reach the SSH gateway through a 443-only listener | [operations/ssh-443-only.md](operations/ssh-443-only.md) |
+| See where the SSH gateway's keys and code live | [operations/ssh-internals.md](operations/ssh-internals.md) |
 | Require a signed image when a member creates a run (audit first, then enforce) | [operations/image-signature-checks.md](operations/image-signature-checks.md) |
 | Make a cluster refuse unsigned Wardyn images (policy-controller or Kyverno) | [operations/image-admission.md](operations/image-admission.md) |
 | Let an agent-sandbox controller make the agent pods (experimental) | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |

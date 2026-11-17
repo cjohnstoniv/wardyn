@@ -25,7 +25,7 @@
 
 ## remote-workspace.yaml
 
-- The external-tool lane ([docs/SSH.md](../../docs/SSH.md) "Other tools over SSH"): a human drives this sandbox from their own IDE or agent workbench over the SSH gateway instead of handing Wardyn a task string.
+- The external-tool lane ([docs/SSH-SCRIPTED-ACCESS.md](../../docs/SSH-SCRIPTED-ACCESS.md)): a human drives this sandbox from their own IDE or agent workbench over the SSH gateway instead of handing Wardyn a task string.
 - `auto_stop_after_sec: -1` because the reaper's idle clock cannot see a human thinking in their own editor, or that tool's own agent working between calls that touch the sandbox at all — both would otherwise read as idle.
   - It means never reaped only under a ceiling with no positive `auto_stop_after_sec`; a member under the shipped default ceiling is cut to 3600s unless the operator raises it.
 - `first_use_approval: wait_for_review` holds an unknown-host connection for a live decision instead of denying it outright, on the premise that someone is already at the keyboard to decide.

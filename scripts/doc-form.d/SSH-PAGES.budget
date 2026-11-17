@@ -1,0 +1,5 @@
+# Prose-word budgets for the pages split out of docs/SSH.md (scripts/doc-form.sh).
+docs/operations/ssh-from-a-cluster.md=325 share=3 # 325 measured: moved from docs/SSH.md (From a cluster)
+docs/operations/ssh-443-only.md=512 share=3 # 512 measured: moved from docs/SSH.md (SSH on a 443-only estate)
+docs/SSH-SCRIPTED-ACCESS.md=802 share=1 # 802 measured: moved from docs/SSH.md (6. Other tools over SSH (scripted access))
+docs/operations/ssh-internals.md=93 share=10 # 93 measured: moved from docs/SSH.md (Migration & internals)
