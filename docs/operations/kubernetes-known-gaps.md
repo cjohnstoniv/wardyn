@@ -62,10 +62,11 @@
 ## Killing a run
 
 - A kill deletes the run's pods and waits up to 25 seconds for them to go; the network policies and the per-run Secret stay until they have.
-- If every pod is already terminating when the wait ends, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
+- If every pod is already terminating when the wait ends and no other kill step failed, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
 - Wardyn retries the stop in the background and writes one `run.kill.confirm` row per confirm, within 60 seconds of the kill; a kill made on the same server replica while one runs adds none. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref.
 - Once the pods are gone, the label sweep removes the Secret and the NetworkPolicies, the next daemon start clears the ref, and a repeat of the kill completes it at once.
 - A pod that is not terminating, or a Kubernetes API error, still answers 500 and the kill can be retried.
+- So does a kill whose pods are terminating when another kill step fails, such as a credential revoke. Its `run.kill` row is a `failure` that still carries `sandbox_stop` `confirming`, and no confirm starts.
 - On a Kubernetes runner, the kill deletes the proxy pod and waits up to 25 seconds for proof that it stopped, then does the same for the agent pod.
 - On a Kubernetes runner, the kill answers 202 with `teardown` `confirming` when both pods were deleted and only that proof is missing, or both are proven stopped and every pod left is terminating. The confirm then runs as above.
 - A kill on a Kubernetes runner still answers 500 when its two waits together outlast the kill's 30-second budget, because the runner answers too late. A slow proxy pod with an agent pod proven stopped quickly can still answer 202.
