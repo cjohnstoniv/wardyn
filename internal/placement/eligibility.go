@@ -5,6 +5,7 @@ package placement
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -142,23 +143,35 @@ func trustName(t types.RunnerTrustClass) string {
 	return string(t)
 }
 
-// mixedADODelivery refuses a plan whose Azure DevOps gate is delivered via_org while an injection on one of the
-// gate's hosts is not: the laptop copy drops the gate with the via_org routes, which would leave that injection
-// (an own PAT, say) with no gate.
+// mixedADODelivery refuses a plan whose Azure DevOps gate is delivered via_org while a credential on one of the
+// gate's hosts is not: the laptop copy drops the gate with the via_org routes, which would leave that credential
+// (an own PAT injection, or a git PAT grant the runner's own broker serves) with no gate.
 func mixedADODelivery(p LocalPlan) *Refusal {
 	const path = "ProxyConfig.ADOGrant"
 	gate := p.Spec.ProxyConfig.ADOGrant
 	if gate == nil || !viaOrgPath(p, path) {
 		return nil
 	}
+	onGate := func(host string) bool {
+		return slices.ContainsFunc(gate.Hosts, func(h string) bool { return gateHostKey(h) == gateHostKey(host) })
+	}
 	for i, in := range p.Spec.ProxyConfig.Injection {
 		ipath := indexed("ProxyConfig.Injection", i)
-		if slices.ContainsFunc(gate.Hosts, func(h string) bool { return domainmatch.CanonHost(h) == domainmatch.CanonHost(in.Rule.Host) }) && !viaOrgPath(p, ipath) {
+		if onGate(in.Rule.Host) && !viaOrgPath(p, ipath) {
 			return refuse(ReasonPlacementCredential, ipath, "mixed Azure DevOps delivery: the gate is delivered via_org but this injection on its host is not, so it would run with no gate")
+		}
+	}
+	for _, host := range slices.Sorted(maps.Keys(p.Spec.ProxyConfig.PATGrants)) {
+		ppath := "ProxyConfig.PATGrants[" + host + "]"
+		if onGate(host) && !viaOrgPath(p, ppath) {
+			return refuse(ReasonPlacementCredential, ppath, "mixed Azure DevOps delivery: the gate is delivered via_org but this git PAT grant on its host is not, so it would run with no gate")
 		}
 	}
 	return nil
 }
+
+// gateHostKey is a host as the proxy keys its host tables (its hostKey): spaces trimmed, then canonicalised.
+func gateHostKey(h string) string { return domainmatch.CanonHost(strings.TrimSpace(h)) }
 
 // viaOrgAdmits is the via_org gate (OD-12, design §7.2-§7.3): a row of the
 // via_org shape whose class the stored policy delivers via_org, and whose class
@@ -302,7 +315,7 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	return postureRefusal(class, cp, p, path)
 }
 
-// ViaOrgADOAdmits is the via_org gate for an Azure DevOps minted token (owner rulings 2026-11-17): the token stays in
+// ViaOrgADOAdmits is the via_org gate for an Azure DevOps minted token: the token stays in
 // the organisation, and the run is judged as runner_resident is, except that any runner owner is served (the token
 // never reaches the runner). The connection's via_org switch is its consent; runner_resident is not needed.
 func ViaOrgADOAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal {
