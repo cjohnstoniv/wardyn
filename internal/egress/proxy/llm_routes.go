@@ -12,7 +12,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -177,10 +176,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 				brokeredMessage(reasonCredentialUnavailable, dest, ruleSourceLLM, extra["detail"].(string), ""), extra)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		body, _ := json.Marshal(extra)
-		_, _ = w.Write(body)
+		writeJSONStatus(w, http.StatusNotFound, "application/json", extra)
 		return
 	}
 	if ierr != nil && r.Context().Err() != nil {

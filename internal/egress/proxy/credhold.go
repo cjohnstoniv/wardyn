@@ -394,14 +394,11 @@ func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (typ
 // same masked, topology-redacted sentence as the decision log's Cause field,
 // never a raw error or a credential.
 func writeAWSSDKError(w http.ResponseWriter, status int, errType, message string) {
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-amzn-errortype", errType)
-	w.WriteHeader(status)
-	body, _ := json.Marshal(map[string]string{
+	writeJSONStatus(w, status, "application/json", map[string]string{
 		"__type":  errType,
 		"message": message,
 	})
-	_, _ = w.Write(body)
 }
 
 // writeSSOUnauthorized answers a spent hold with the shape the AWS SDKs
