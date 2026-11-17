@@ -1317,7 +1317,7 @@ What the proxy does for a rule host:
 - Plain HTTP to a rule host is checked per request.
 - Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
 - A VM run (`linux_vm`, `macos_vm`) judges host rules on its guest's flows as a container run does. HTTPS to an inspected port is opened and each request allowed, held or refused, and plain HTTP on port 80 is judged by path.
-- A rule host the proxy cannot open, on any other port or with no interception certificate, is refused. On a macOS VM, an app that uses only the system trust store fails TLS to a rule host unless `macos_vm_inspection_ca` is on.
+- A rule host the proxy cannot open, on any other port or with no interception certificate, is refused. On a macOS VM, an app that uses only the system trust store fails TLS to a rule host unless `macos_vm_inspection_ca` is on and the run's base trusts that CA, within [its limits](operations/macos-vm-use.md#apps-that-use-only-the-system-trust-store).
 - Requests the proxy sends for itself are not checked: handing a GitHub token back, the push check's reads of the forge, and AWS role credentials.
 
 Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under `allow_all_egress`, a `CONNECT` to the server's IP address, or to another name for it, reads no rule, even when the request inside names the rule host. `refuse_ip_literals` blocks only the IP-address form.

@@ -26,13 +26,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - In a `run.record.start` row, a record launch refusal the route answers in its own words keeps that sentence; every other failure, a run-cap or host-capacity refusal included, names the step.
 - A `workspace.requirement.write` row for a requirements write the store failed says `Requirements at their key cap`, `Workspace not found` or `Store error`, never the store's text.
 - A `workspace.egress.approve` or `workspace.egress.deny` row for an `always` decision whose egress list write the store failed, written either when the decision is made or when the boot re-apply replays it, now says `Egress list at its cap or edited since the decision`, `Workspace not found` or `Store error`, never the store's text. The server log keeps the cause of a `Store error`.
-- A second identical MCP call under the same operation key (its own, or the one send once makes) that waits at the same time as the first no longer asks a person: once one is approved and sent, the other is told so.
+- A second identical MCP call under the same operation key (its own, or the one send once makes) that waits at the same time as the first no longer asks a person: once one is approved and sent, the other is told so. Needs the new proxy image.
 - While a component a run carries keeps its MCP servers from a gateway token, the sandbox gets `403` `gateway_component_cut` instead of a `502` `credential_unavailable` that SDKs retry. Needs the new proxy image.
 - `POST /api/v1/workloads/{name}/preview` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`), as the apply does.
 - `PUT /api/v1/workloads/{name}` refuses a `?owner=` naming anyone but the caller (`400` `workload_invalid`); it used to be ignored.
-- A file download whose asker was erased reads `a person since erased` in the console. Its card offers no Approve or Deny unless the server says the caller may still decide it.
+- A file download whose asker was erased reads `a person since erased` in the console. Its card offers no Approve or Deny: no person can decide it, and the admin token decides it through the API or the CLI.
 - A workload launch refused for a policy pin mismatch now says why in the console: its policy resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.
-- A limits list shows a `Confinement floors` chip for a policy or profile that sets at least one confinement floor.
+- A governance profile's limits show a `Confinement floors` chip when the profile sets at least one confinement floor.
 
 ### Fixed
 
@@ -54,7 +54,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you downgrade
 
 - Going back to an earlier runner: remove `macos_vm_inspection_ca` from runnerd.json first. An earlier runner refuses a file with a key it does not know.
-- Turn `macos_vm_inspection_ca` off and start this runner once first: that deletes the CA's key. An earlier runner leaves the key in the VM directory and does not keep it away from a drive root.
+- Turn `macos_vm_inspection_ca` off and start this runner once first, with Docker running: that deletes the CA's key, and its log then says `this Mac's inspection CA was removed`. An earlier runner leaves the key in the VM directory and does not keep it away from a drive root.
 
 ## [0.10.0-rc.22] — 2026-11-16
 

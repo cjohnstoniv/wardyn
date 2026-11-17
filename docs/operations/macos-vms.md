@@ -116,7 +116,8 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 | `macos_vm.allow_background_watch` | The organisation's site config (Settings, macOS virtual machines) | Whether a person may watch a background macOS run's desktop, view only. Absent or `true`: allowed. `false`: no one may. A governance profile's `deny_background_desktop_watch` denies it for that profile's runs. |
 
 - With `macos_vm_inspection_ca` on, once edit-base trusts the CA, it signs each macOS VM run's proxy certificates for the hosts that run's proxy inspects, so apps that use only the system trust store accept them. Off, the runner deletes the CA. It stays off while a drive_root is or holds the VM directory.
-- The runner makes this Mac's inspection CA when it starts with `macos_vm` and `macos_vm_inspection_ca` on, and removes it at every start with `macos_vm_inspection_ca` off, whether `macos_vm` is on or not; the `macos-vm` commands only read it.
+- The runner makes this Mac's inspection CA when it starts with `macos_vm` and `macos_vm_inspection_ca` on, and removes it at every start of a `docker` substrate runner with `macos_vm_inspection_ca` off, whether `macos_vm` is on or not; the `macos-vm` commands only read it.
+- A runner started with `--substrate folders` does not remove it. Delete `inspection-ca` by hand before sharing a folder that holds the VM directory.
 - A managed profile that is there but cannot be read keeps a CA that is there and makes none, unless a drive root holds the VM directory: then the CA is removed.
 - `setup` prepares the first base without it; the base gains it at the runner's first tools update. Restart the runner after changing it.
 

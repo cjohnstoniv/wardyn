@@ -432,7 +432,7 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
 	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil / TestL0_DNSQueryIsRecorded / TestL0_HostAddressUnreachable (internal/runner/docker/network_test.go, dns_live_test.go), and TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce (proxy_replace_live_test.go)"
 	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
-	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
+	@echo "surface until the next nightly run. Scoped to just these six by -run: the rest of"
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
 	@echo "Run through test-report.sh (l0-docker): a rename or a skip of any of them fails the job."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 10m -run '^(TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil|DNSQueryIsRecorded|HostAddressUnreachable)|TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)$$' ./internal/runner/docker/...

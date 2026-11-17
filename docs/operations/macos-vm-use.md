@@ -313,6 +313,7 @@ With `macos_vm_inspection_ca` on and the run's base trusting this Mac's CA, the 
 - A kept machine made before its base trusted the CA does not gain the trust on macOS 26. After `edit-base`, start it with `--resume-machine <id|name> --fresh`.
 - A host only the organisation's sealed host rules name is inspected but is not among the chain's names, so system-trust apps fail TLS to it. Where one Inspected host sits under another (`example.com` and `api.example.com`), the outer host's other subdomains are also among them.
 - A host whose name is not plain ASCII letters, digits, `-` and `_` in dot-separated labels, such as an internationalised name as written in the policy, is not among the chain's names either. So system-trust apps fail TLS to it.
+- A host given as an IP address is not among the chain's names: the chain permits no address, so system-trust apps fail TLS to it.
 - `inspection_ca` reads `not_trusted` on a base that does not trust the CA yet, and `expired` once the CA's five years have passed. An expired CA signs nothing: rotate it.
 - **The CA variables.** `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` are set for every process a run starts.
 - **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](macos-vm-base-image.md#the-organisation-ca)). That reaches a Tunnel only host.
