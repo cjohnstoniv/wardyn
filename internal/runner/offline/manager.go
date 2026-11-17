@@ -769,7 +769,7 @@ func (m *Manager) SetOptions(o Options) error {
 
 // ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional cleanup
 // deadline: the sooner of restart + RunTokenTTL and its last lease's LapseBy, but never before restart
-// + restartReadyGrace (design K1 section 6.2 "After a restart"). The org's next lease replaces it.
+// + restartReadyGrace. The org's next lease replaces it.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
