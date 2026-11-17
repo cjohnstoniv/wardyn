@@ -121,13 +121,6 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 			return base, nil, invalid(err)
 		}
 	}
-	// A gated api_key grant the overlay adds or changes is authored now, as an
-	// inline_policy's is; one the base already carries is left as it always was.
-	if slices.Contains(keys, "eligible_grants") {
-		if err := authoredAPIKeyApprovalRefusal(merged.EligibleGrants, base.EligibleGrants); err != nil {
-			return base, nil, invalid(err)
-		}
-	}
 	spec, warns := merged, []string(nil)
 	// The keys the overlay laid on are the person's; what the bound below then
 	// narrowed in them is the ceiling's.

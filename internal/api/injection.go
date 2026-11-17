@@ -393,10 +393,10 @@ const storedKeyTTL = 10 * time.Minute
 //
 // An approval-gated grant stays static (0): each of its mints spends the
 // approval (broker.ErrAlreadyMinted unless a run-wide lease covers it), so a
-// re-resolve would fail the run at the first expiry. An approval-gated api_key
-// grant never reaches the sink (persistRunGrants leaves it off the proxy's rules
-// and its mint answers without the key), so this branch only keeps an approval
-// that did mint from being re-asked on a lease.
+// re-resolve would fail the run at the first expiry. For an api_key grant this
+// branch is unreachable in production: persistRunGrants leaves an approval-gated
+// grant off the proxy's rules and its mint answers without the key. It stays for
+// the kinds a lease also covers (a subscription token).
 func (s *Server) storedKeyExpiry(m broker.Minted) int64 {
 	if m.ApprovalID != uuid.Nil {
 		return 0

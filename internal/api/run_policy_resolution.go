@@ -114,12 +114,6 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
 		}
-		// A gated api_key grant is refused as authored, BEFORE the clamp below can
-		// force approval on a member's grant under a ceiling saved with one: that
-		// grant still launches, its key left out of the run.
-		if err := authoredAPIKeyApprovalRefusal(spec.EligibleGrants, nil); err != nil {
-			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
-		}
 		// The policy as authored, recorded BEFORE the env-secret posture and the
 		// member clamp change it (policySourceRecord stamps it redacted).
 		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)

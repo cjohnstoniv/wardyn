@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const apiKeyApprovalRefusal = "eligible_grants[0]: api_key cannot require approval"
@@ -61,6 +62,11 @@ func TestAPIKeyApprovalHeldGrantLeftAloneUntilChanged(t *testing.T) {
 	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{restated}, []types.GrantSpec{held}); err != nil {
 		t.Errorf("unchanged grant (scope spelled differently): err = %v, want accepted", err)
 	}
+	reordered := held
+	reordered.Scope = json.RawMessage(`{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}`)
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{reordered}, []types.GrantSpec{held}); err != nil {
+		t.Errorf("unchanged grant (scope keys in another order): err = %v, want accepted", err)
+	}
 	changed := held
 	changed.TTLSeconds = 60
 	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{changed}, []types.GrantSpec{held}); err == nil {
@@ -71,36 +77,21 @@ func TestAPIKeyApprovalHeldGrantLeftAloneUntilChanged(t *testing.T) {
 	}
 }
 
-// An inline_policy is authored at launch: a gated api_key grant in it is a 400.
-func TestCreateRun_InlineGatedAPIKeyRefused(t *testing.T) {
-	h := newHarness(t)
-	body := `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2",` +
-		`"eligible_grants":[{"kind":"api_key","requires_approval":true,"scope":{"host":"api.example.test","secret_name":"corp-key"}}]}}`
-	w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "api_key cannot require approval") {
-		t.Fatalf("inline gated api_key: code = %d, want 400 naming the refusal; body=%s", w.Code, w.Body.String())
-	}
-}
-
-// A policy_overlay over a stored or default base that already carries a gated
-// api_key grant is not refused for it (the key stays out of every run, as it
-// always did), unless the overlay's own eligible_grants add or change one.
-func TestPolicyOverlayGatedAPIKeyOnlyRefusedWhenAuthored(t *testing.T) {
-	base := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{gatedAPIKey(t, true)}}
-	merged, err := templatePolicyOverlay(base, json.RawMessage(`{"allowed_domains":["api.example.test"]}`))
-	if err != nil {
-		t.Fatalf("templatePolicyOverlay: %v", err)
-	}
-	if err := validatePolicySpec(merged); err != nil {
-		t.Errorf("overlay that leaves the legacy grant alone: validatePolicySpec = %v, want accepted", err)
-	}
-	other := `{"eligible_grants":[{"kind":"api_key","requires_approval":true,"scope":{"host":"other.example.test","secret_name":"corp-key"}}]}`
-	merged, err = templatePolicyOverlay(base, json.RawMessage(other))
-	if err != nil {
-		t.Fatalf("templatePolicyOverlay: %v", err)
-	}
-	if err := authoredAPIKeyApprovalRefusal(merged.EligibleGrants, base.EligibleGrants); err == nil {
-		t.Error("overlay that adds a gated api_key: want the refusal, got nil")
+// A launch never refuses a gated api_key grant. A default policy and a member's
+// ceiling saved before the rule hold one; a policy_overlay that adds or changes
+// the grant still launches, and the key is left out of the run (the grant is
+// never on the proxy's list: TestPersistRunGrantsLeavesApprovalGatedKeyOffTheProxy).
+func TestPolicyOverlayGatedAPIKeyLaunches(t *testing.T) {
+	srv, _ := ovOverlayFixture(t)
+	legacy := &srv.cfg.DefaultPolicy.EligibleGrants[0] // shared with the member's ceiling
+	legacy.RequiresApproval = true
+	body := ovOverlayBody(`{"eligible_grants":[{"kind":"api_key","requires_approval":true,"ttl_seconds":60,` +
+		`"scope":{"host":"api.anthropic.com","secret_name":"` + govCorpSecret + `"}}]}`)
+	_, created, _ := ovDoorSpecs(t, srv, body)
+	for _, g := range created.EligibleGrants {
+		if g.Kind == types.GrantAPIKey && !g.RequiresApproval {
+			t.Errorf("created grant %+v, want the approval kept on", g)
+		}
 	}
 }
 
@@ -141,7 +132,76 @@ func TestLoadPolicySpecGatedAPIKeyLoadsWithWarning(t *testing.T) {
 		t.Errorf("eligible grants = %+v, want the gated api_key grant kept", spec.EligibleGrants)
 	}
 	out := logs.String()
-	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "eligible_grants[0]") || !strings.Contains(out, "never injected") {
+	if strings.Count(out, "an api_key grant in the policy file requires approval") != 1 || !strings.Contains(out, "eligible_grants[0]") ||
+		!strings.Contains(out, "never injected") || !strings.Contains(out, "level=WARN") {
 		t.Errorf("log = %q, want one WARN naming eligible_grants[0] and that the key is never injected", out)
+	}
+}
+
+// A governance overlay write over a base that holds a gated api_key grant (a
+// deployment default saved before the rule) leaves the grant alone, even with
+// its scope keys in another order, and refuses an overlay that changes it.
+func TestCheckOverlayGatedAPIKeyFromTheBase(t *testing.T) {
+	srv, _, _ := govEscapeFixture(t, &capStore{})
+	srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey, RequiresApproval: true, TTLSeconds: 300,
+		Scope: apiKeyScope(t, "api.example.test", "corp-key")}}
+	overlay := func(g types.GrantSpec) *unitWriteError {
+		p := types.GovernanceUnit{Name: "p", Overlay: &types.CeilingOverlay{EligibleGrants: &[]types.GrantSpec{g}}}
+		return srv.checkOverlay(p, []types.GovernanceUnit{p})
+	}
+	unchanged := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, TTLSeconds: 300,
+		Scope: json.RawMessage(`{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}`)}
+	if ref := overlay(unchanged); ref != nil {
+		t.Errorf("unchanged grant, keys reordered: %v, want accepted", ref)
+	}
+	changed := unchanged
+	changed.TTLSeconds = 60
+	if ref := overlay(changed); ref == nil || !strings.Contains(ref.Error(), "api_key cannot require approval") {
+		t.Errorf("changed grant: %v, want the api_key approval refusal", ref)
+	}
+}
+
+// A preset save refuses a gated api_key grant in its inline_policy or its
+// policy_overlay, and leaves alone one the stored preset already carries.
+func TestPresetSaveGatedAPIKey(t *testing.T) {
+	f := newMemPresetFixture(t)
+	grant := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, Scope: apiKeyScope(t, "api.example.test", "corp-key")}
+	inline := client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code",
+		InlinePolicy: &types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{grant}}}}
+	overlay := client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code",
+		PolicyOverlay: json.RawMessage(`{"eligible_grants":[{"kind":"api_key","requires_approval":true,` +
+			`"scope":{"host":"api.example.test","secret_name":"corp-key"}}]}`)}}
+	for name, req := range map[string]client.PresetRequest{"inline_policy": inline, "policy_overlay": overlay} {
+		w := f.put(t, "new-"+name[:6], req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "api_key cannot require approval") {
+			t.Errorf("%s: code = %d, want 400 naming the refusal; body=%s", name, w.Code, w.Body.String())
+		}
+	}
+	raw, err := json.Marshal(inline.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store.rows = map[string]types.LaunchPreset{"ops": {Name: "ops", Version: 1, Request: raw}}
+	if w := f.put(t, "ops", inline); w.Code != http.StatusOK {
+		t.Errorf("a save that leaves the stored gated grant alone: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A template save refuses a gated api_key grant in its inline_policy when the
+// save adds or changes it, and leaves alone one the revision it replaces held.
+func TestTemplateSaveGatedAPIKey(t *testing.T) {
+	owner := testTemplateOwner("person", "alice", "")
+	grant := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, Scope: apiKeyScope(t, "api.example.test", "corp-key")}
+	doc := structDoc(t, `{"inline_policy":{"eligible_grants":[{"kind":"api_key","requires_approval":true,`+
+		`"scope":{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}}]}}`)
+	save := func(held []types.GrantSpec) []client.TemplateDiagnostic {
+		_, diags := templateForSave(client.TemplateSaveRequest{Name: "t", Document: doc}, owner, types.TemplateKindTemplate, held)
+		return diags
+	}
+	if diags := save(nil); len(diags) == 0 || !strings.Contains(diags[0].Message, "api_key cannot require approval") {
+		t.Errorf("a new gated api_key: diagnostics %v, want the refusal", diags)
+	}
+	if diags := save([]types.GrantSpec{grant}); len(diags) != 0 {
+		t.Errorf("the stored revision held it (scope keys reordered): diagnostics %v, want accepted", diagReasons(diags))
 	}
 }
