@@ -44,6 +44,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An approved MCP call with an operation key whose body the content scan blocks is refused before its send is recorded, so its key no longer reads as possibly sent. Needs the new proxy image.
 - An SSO sign-in now always replaces the groups recorded at the person's last sign-in, also after the database's clock stepped back.
 - A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
+- A command run through the SSH gateway (an `ssh` command, an sftp session, a forwarded port or a folder sync) no longer loses the end of its error output, which is usually the line that says why it failed: the gateway now waits for all of it, for up to 5 seconds after the command's output ends, before it sends the exit status and closes the channel.
 
 ### Security
 
