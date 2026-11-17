@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -292,6 +293,7 @@ func (s sshCanonicalCutoffFailure) RevokeSub(ctx context.Context, principal stri
 }
 
 func TestRevokeSessions_CanonicalCutoffFailureStillDeletesCredentials(t *testing.T) {
+	logs := captureSlog(t)
 	st := sshOffboardingStore()
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
@@ -308,7 +310,11 @@ func TestRevokeSessions_CanonicalCutoffFailureStillDeletesCredentials(t *testing
 	assertSSHDeletionAudit(t, h.audit, "sub-alice", "success", 2)
 	ev := lastAuditEvent(t, h.audit.events, "session.revoke")
 	data := auditData(t, ev)
-	if ev.Outcome != "failure" || data["ssh_keys_deleted"] != float64(2) || data["error"] != "canonical cutoff unavailable" {
+	if ev.Outcome != "failure" || data["ssh_keys_deleted"] != float64(2) || data["error"] != auditStepRevokeSessions {
+		// The row names the failed step; the cutoff's own error is in the server log.
 		t.Fatalf("partial session audit=%+v data=%v", ev, data)
+	}
+	if !strings.Contains(logs.String(), "canonical cutoff unavailable") {
+		t.Errorf("log = %q, want the cutoff's error beside the row's step", logs.String())
 	}
 }

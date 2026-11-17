@@ -218,7 +218,9 @@ func agentPolicyDocument(agent string, level types.AutonomyLevel, harnesses []ty
 	if agent == claudeCodeHarness || slices.ContainsFunc(harnesses, func(h types.RunHarness) bool { return h.Harness == claudeCodeHarness }) {
 		withRules, err := agentpolicy.WithToolRules(d.content, attended)
 		if err != nil {
-			return agentPolicyDoc{}, agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings: " + err.Error())
+			// The error quotes the member's own tool names and a parser's text, so the refusal is a fixed sentence and
+			// agentPolicyAuditError logs the cause.
+			return agentPolicyDoc{}, fmt.Errorf("%w: %v", agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings"), err)
 		}
 		if !bytes.Equal(withRules, d.content) {
 			d.path, d.content, d.ok, d.harness = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true, claudeCodeHarness

@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +48,8 @@ func TestPG_IdleStopRunsTheKillsRevocationCascade(t *testing.T) {
 	if _, err := pg.GetRunProxyConfig(ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("the idle-stopped run's proxy config is still stored (read err %v); want it dropped", err)
 	}
-	if !strings.Contains(out.Errors["broker_error"], "injected") {
+	// The key holds the failed step ("Revoke broker credentials"); the broker's own error is in the server log.
+	if out.Errors["broker_error"] != "Revoke broker credentials" {
 		t.Errorf("StopRun errors = %v; want the broker's failure under broker_error", out.Errors)
 	}
 }

@@ -688,15 +688,16 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 		if ev.Outcome != "failure" {
 			t.Errorf("run.exec outcome = %q, want failure", ev.Outcome)
 		}
-		if !strings.Contains(string(ev.Data), "pool exhausted") {
-			t.Errorf("run.exec data = %s, want the store error", ev.Data)
+		// The row names the failed step; the store error is in the server log (checked below).
+		if !strings.Contains(string(ev.Data), auditStepPersistExecID) {
+			t.Errorf("run.exec data = %s, want the failed step %q", ev.Data, auditStepPersistExecID)
 		}
 	}
 	if execRows != 1 {
 		t.Errorf("run.exec rows = %d, want exactly 1 (the failure)", execRows)
 	}
-	if !strings.Contains(buf.String(), "exec id") {
-		t.Errorf("log = %q, want an error line naming the lost exec-id write", buf.String())
+	if !strings.Contains(buf.String(), "exec id") || !strings.Contains(buf.String(), "pool exhausted") {
+		t.Errorf("log = %q, want an error line naming the lost exec-id write and the store error", buf.String())
 	}
 }
 

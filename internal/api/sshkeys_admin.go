@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,7 +69,7 @@ func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string, resolve
 	data := map[string]any{"scope": scope, "count": count}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", auditStep(ctx, auditStepDeleteSSHKeys, err)
+		outcome, data["error"] = "failure", auditStep(ctx, auditStepDeleteSSHKeys, err, slog.String("principal", principal), slog.String("scope", scope))
 	}
 	if refusal != "" {
 		outcome, data["reason"] = "failure", refusal

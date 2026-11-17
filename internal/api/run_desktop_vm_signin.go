@@ -459,8 +459,8 @@ func (s *Server) supersededBy(ctx context.Context, w http.ResponseWriter, run ty
 }
 
 // restopFailed answers a pause or resume whose stop again, for the newer pause whose mark (cur) stands,
-// failed: the agent may run under that mark, so no paused view is given. Its failure row carries the
-// error and both pauses' paused_at; nothing retries the stop.
+// failed: the agent may run under that mark, so no paused view is given. Its failure row names the failed
+// step and both pauses' paused_at, with the error in the server log; nothing retries the stop.
 func (s *Server) restopFailed(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
 	cur store.DesktopVMSignIns, err error, data map[string]any) {
 	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, auditStep(ctx, auditStepStopAgain, err, slog.String("run_id", run.ID.String()))

@@ -59,7 +59,7 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 // (replaceRevivedProxyHashed), so the start is not abandoned again here, on the claim's longer bound.
 func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string, gen int, source []byte,
 	retiring, freshJTI string, renewed renewedTokens, err error) (reviveResult, *reviveError) {
-	data["error"] = auditStep(ctx, auditStepReviveReplace, err, slog.String("run_id", run.ID.String()))
+	data["error"] = auditStepReviveReplace // the cause is logged where the revive answers
 	if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 		// The old proxy was never touched (an image that cannot be pulled, a
 		// failed inspect): a live run keeps it, renewing its own token. Only

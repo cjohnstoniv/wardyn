@@ -119,7 +119,8 @@ func TestAgentPolicyDispatch_AttendedRulesFailClosed(t *testing.T) {
 		hint string
 	}{
 		{"a rule Claude Code would read as a pattern", &fakeRunner{}, dispatchParams{Interactive: true, Policy: pattern},
-			`tool rules could not be written into Claude Code's managed settings: tool rule "Bash(rm:*)"`},
+			// The hint is a fixed sentence: the rule's name (the cause) goes to the server log, and the create door's own check named it.
+			`tool rules could not be written into Claude Code's managed settings`},
 		{"a runner that cannot deliver the file", &fakeRunner{noManagedFiles: true}, dispatchParams{Interactive: true, Policy: types.RunPolicySpec{ToolRules: attendedGoldenRules}},
 			"managed settings enforce its tool rules in an interactive run, and this runner cannot vouch for them: runner"},
 		{"a runtime whose guest may run as root (krun)", &fakeRunner{capsResolved: map[types.ConfinementClass]string{types.CC1: "oci/krun"}},

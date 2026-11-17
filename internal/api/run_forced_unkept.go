@@ -53,7 +53,7 @@ func forcedCutObserved(run types.AgentRun, kind cutKind, err error) bool {
 
 // auditCutFailure writes the failure row a cut that failed leaves under action, as stopProxyOrAudit wrote it.
 func (s *Server) auditCutFailure(ctx context.Context, runID uuid.UUID, ref, action string, err error) {
-	s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
+	s.teardownOrAuditStep(ctx, runID, ref, action, auditStepCutAgent, func(context.Context, string) error { return err })
 }
 
 // makeUpForcedTail is the retry's make-up for a forced end whose process died between its claim and its tail,

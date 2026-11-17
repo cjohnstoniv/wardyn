@@ -104,6 +104,11 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// capability ("adoscope: %q is not a grantable capability ..."), never
 	// store/driver text.
 	"runs_dispatch_ado_inject.go:Server.authorADOEntraInjection:refuseADOEntraDispatch": "fixed adoscope.ScopesFor refusal naming the capability (#445)",
+	// A workspace's chosen base image that would not wrap fails the run with the builder's own answer (an
+	// unpullable base, a missing tag), the same operator-useful launch-failure text #445 allows above: the run
+	// page and the CLI read the cause from the hint.
+	// TestCreateRun_UnwrappableBaseImageHintCarriesTheBuilderError pins it.
+	"runs_create.go:Server.resolveCreateRunImage:failAndRevoke": "the builder's answer for a base image that would not wrap, operator-useful like #445; pinned by TestCreateRun_UnwrappableBaseImageHintCarriesTheBuilderError",
 	// Every other such site is fixed, not allowlisted — a new entry here
 	// needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as the entries above, not just a

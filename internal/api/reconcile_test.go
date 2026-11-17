@@ -283,6 +283,7 @@ func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
 	fr := &errTeardownRunner{fakeRunner: &fakeRunner{}, stopErr: errors.New("docker: no such container")}
 	srv, pool := pgHarnessWithRunner(t, fr)
 	audit := srv.cfg.Audit.(*recRecorder)
+	logs := captureSlog(t)
 	ctx := context.Background()
 
 	// A stranded RUNNING run with a sandbox ref (as a crash would leave it).
@@ -326,8 +327,12 @@ func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
 	if !strings.Contains(string(failure.Data), "teardown_error") {
 		t.Errorf("run.reconcile/failure data should carry teardown_error, got %s", failure.Data)
 	}
-	if !strings.Contains(string(failure.Data), "no such container") {
-		t.Errorf("run.reconcile/failure should include the teardown error text, got %s", failure.Data)
+	// The row names the failed step; the teardown error's text is in the server log.
+	if !strings.Contains(string(failure.Data), auditStepStopSandbox) {
+		t.Errorf("run.reconcile/failure should name the failed step %q, got %s", auditStepStopSandbox, failure.Data)
+	}
+	if !strings.Contains(logs.String(), "no such container") {
+		t.Errorf("the server log should keep the teardown error text, got %s", logs.String())
 	}
 }
 

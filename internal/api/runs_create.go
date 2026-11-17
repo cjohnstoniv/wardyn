@@ -609,7 +609,11 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	startBuild := func(fields map[string]any) (buildCtx context.Context, end func(), ok bool) {
 		buildCtx, end, live, err := s.trackRunBuild(ctx, runID)
 		if err != nil {
-			fields["error"] = auditStep(ctx, auditStepTrackBuild, err, slog.String("run_id", runID.String()))
+			if errors.Is(err, errRunUnreadBeforeBuild) {
+				fields["error"] = errRunUnreadBeforeBuild.Error() // the server's own sentence; trackRunBuild logged the store's error
+			} else {
+				fields["error"] = auditStep(ctx, auditStepTrackBuild, err, slog.String("run_id", runID.String()))
+			}
 			buildFailed(fields, err.Error())
 		}
 		return buildCtx, end, live
@@ -710,9 +714,11 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			// run.build failure row, so only the run is failed here.
 			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 			defer cancel()
-			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
-			// run.build row carries it for the operator.
-			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
+			// The hint is the fixed sentence and the builder's error, as the launch builds' hint above is, since the
+			// run page and the CLI show the hint as the cause (allowlisted in server_error_driver_text_guard_test.go).
+			slog.ErrorContext(ctx, "wardynd: the run's sandbox image could not be built",
+				slog.String("run_id", runID.String()), slog.Any("err", res.BaseErr))
+			s.failAndRevoke(failCtx, runID, types.RunPending, "the run's sandbox image could not be built: "+res.BaseErr.Error())
 			return "", nil, true
 		}
 	}

@@ -97,7 +97,7 @@ func TestDispatch_UnrecordedSandboxRef(t *testing.T) {
 			// The stop's own failure row shares the action and outcome; the lost write is the one naming it.
 			lostRow := slices.ContainsFunc(audit.events, func(ev types.AuditEvent) bool {
 				return ev.Action == "run.create" && ev.Outcome == "failure" &&
-					strings.Contains(string(ev.Data), `"set_sandbox_ref_error":"store: set sandbox ref: connection reset"`)
+					strings.Contains(string(ev.Data), `"set_sandbox_ref_error":"`+auditStepSetSandboxRef+`"`)
 			})
 			if tc.wantState == types.RunRunning {
 				if !started || lostRow || st.ref == "" {

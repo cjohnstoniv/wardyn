@@ -192,6 +192,7 @@ func (s *ceilingBlipStore) failureHint(id uuid.UUID) string {
 // appear out of a successful first. The blip is therefore simulated exactly
 // where a detached tail would meet one — after the run row exists.
 func TestFinishHarnessLoginLaunch_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
+	logs := captureSlog(t)
 	h := newHarness(t)
 	spy := &revokeSpy{Provider: h.idp}
 	st := &ceilingBlipStore{
@@ -258,8 +259,9 @@ func TestFinishHarnessLoginLaunch_CeilingErrorAfterCreateFailsTheRun(t *testing.
 	if rows[0].Outcome != "failure" {
 		t.Errorf("run.dispatch outcome = %q, want failure", rows[0].Outcome)
 	}
-	if !strings.Contains(string(rows[0].Data), "governance store unavailable") {
-		t.Errorf("run.dispatch data = %s, want the resolver's own error", rows[0].Data)
+	// The row names the failed step; the resolver's own error is in the server log.
+	if !strings.Contains(string(rows[0].Data), `"error":"`+auditStepDispatchCeiling+`"`) || !strings.Contains(logs.String(), "governance store unavailable") {
+		t.Errorf("run.dispatch data = %s, log %q; want the step, and the resolver's own error logged", rows[0].Data, logs.String())
 	}
 }
 

@@ -647,11 +647,8 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	// stamps FailureHint on every create/dispatch failure, whereas a trail can
 	// carry NON-fatal failure events (a proxy resolve, a lost sandbox ref)
 	// ahead of the run.complete that is still on its way.
-	launchFailed, hint := false, ""
-	if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && run.FailureHint != "" {
-		launchFailed, hint = true, run.FailureHint
-	}
-	for i := 0; i < probeTrailSettleTries && err == nil && !launchFailed && !hasRunComplete(events); i++ {
+	hint, startHint := s.probeRunHints(ctx, runID)
+	for i := 0; i < probeTrailSettleTries && err == nil && hint == "" && !hasRunComplete(events); i++ {
 		select {
 		case <-ctx.Done():
 			i = probeTrailSettleTries
@@ -662,6 +659,10 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	if err != nil {
 		res.incompleteReason = "could not read the probe run's own audit trail: " + err.Error()
 		return res
+	}
+	if hint == "" && startHint == "" {
+		// The loop may have waited out the terminal write's hint, which can land after the first read.
+		hint, startHint = s.probeRunHints(ctx, runID)
 	}
 	for _, ev := range events {
 		if ev.Action != "run.complete" {
@@ -706,7 +707,11 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 			}
 			_ = json.Unmarshal(ev.Data, &es)
 			res.neverRan = es.ExecStarted != nil && !*es.ExecStarted
-			res.incompleteReason = probeFailureReason(ev, "")
+			if res.neverRan {
+				res.incompleteReason = probeFailureReason(ev, startHint)
+			} else {
+				res.incompleteReason = probeFailureReason(ev, "")
+			}
 			return res
 		}
 		if launchFail == nil {
@@ -720,6 +725,21 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	}
 	res.incompleteReason = "the probe sandbox failed for an unreported reason"
 	return res
+}
+
+// probeRunHints reads a probe run's failure hint, split by whose it is. A launch failure's hint (hint) is
+// the reason of the first failed launch event and means no run.complete is coming. A never-started agent exec's
+// (execNeverStartedHint) is the reason of the run.complete row that is still coming or already there, so the
+// settle loop must not skip its wait for that row.
+func (s *Server) probeRunHints(ctx context.Context, runID uuid.UUID) (hint, startHint string) {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	switch {
+	case err != nil || run.FailureHint == "":
+		return "", ""
+	case strings.HasPrefix(run.FailureHint, execNeverStartedHint):
+		return "", run.FailureHint
+	}
+	return run.FailureHint, ""
 }
 
 // probeFailureReason words one failure-outcome audit event for a probe verdict:

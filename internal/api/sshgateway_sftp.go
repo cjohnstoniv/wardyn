@@ -93,12 +93,21 @@ func sshStartCutByClient(ctx context.Context, err error) bool {
 }
 
 // sshStartError is a door's start error as its failure row records it: a start its client's close cut names that
-// close (errSSHChannelClosed), where the start lock's busy sentence would name a cause that was not there.
-func sshStartError(ctx context.Context, err error) string {
-	if sshStartCutByClient(ctx, err) {
+// close (errSSHChannelClosed), where the start lock's busy sentence would name a cause that was not there; a start
+// the fence refused reads the fence's own sentence; anything else is the step that failed (sftp, exec and forward
+// pass theirs), since a runner's error text can name a socket, a path or a host. The cause goes to the server log.
+func sshStartError(ctx context.Context, runID uuid.UUID, step string, err error) string {
+	switch {
+	case sshStartCutByClient(ctx, err):
 		return errSSHChannelClosed.Error()
+	case errors.As(err, new(startUnfenced)):
+		return lockUnavailableMsg
+	case errors.Is(err, errStartTooSlow):
+		return startTooSlowMsg
+	case errors.Is(err, errStartLockLost):
+		return startLockLostMsg
 	}
-	return err.Error()
+	return auditStep(ctx, step, err, slog.String("run_id", runID.String()))
 }
 
 // sftpServerMissing is the image contract a missing sftp-server breaks.
@@ -158,7 +167,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	if err != nil {
 		outcome, data := "failure", map[string]any{}
 		if !sshStartCutByClient(ctx, err) {
-			data["error"] = auditStep(ctx, auditStepSFTPStart, err, slog.String("run_id", runID.String()))
+			data["error"] = sshStartError(ctx, runID, auditStepSFTPStart, err)
 		} else {
 			// A start its client's own close cut is the client's end, as a close under the running process is
 			// (bridgeOutcome): a success that names no error, with nothing moved. Only a wait the channel's end

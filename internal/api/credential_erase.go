@@ -321,7 +321,7 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 		var kept *secretstore.ExpiredKept
 		if !errors.As(e, &kept) {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", "", "failure",
-				mustJSON(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, e)})))
+				mustJSON(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, e, slog.String("stage", "scan"))})))
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", kept.Name, "failure",

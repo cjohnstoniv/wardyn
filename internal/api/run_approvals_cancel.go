@@ -48,7 +48,7 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(map[string]any{"approval_cancel_error": err.Error()}))))
+			runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(map[string]any{"approval_cancel_error": auditStepCancelApprovals}))))
 		return err
 	}
 	n := 0

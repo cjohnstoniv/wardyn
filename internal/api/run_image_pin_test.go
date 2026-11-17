@@ -458,3 +458,50 @@ func TestImageAdmissionScopeAllAuditChecksAndRuns(t *testing.T) {
 		}
 	})
 }
+
+// failingWrapBuilder is a wired image builder whose base-image wrap fails with the builder's own answer.
+type failingWrapBuilder struct{ fakeDevcontainerBuilder }
+
+func (failingWrapBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("pull access denied for ghcr.io/acme/base")
+}
+
+// hintPinStore is a pinStore that keeps the failure hint a failed run was given.
+type hintPinStore struct {
+	*pinStore
+	hint string
+}
+
+func (s *hintPinStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint string) error {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	s.hint = hint
+	return nil
+}
+
+// TestCreateRun_UnwrappableBaseImageHintCarriesTheBuilderError: a workspace's chosen base image that would not wrap
+// fails the run with the fixed sentence and the builder's own answer in its failure hint, what the run page and the
+// CLI show as the cause, and the server log keeps the error (serverErrorDriverTextAllowlist allows this one site).
+func TestCreateRun_UnwrappableBaseImageHintCarriesTheBuilderError(t *testing.T) {
+	logs := captureSlog(t)
+	srv, st, _, run := pinFixture(t, nil)
+	hs := &hintPinStore{pinStore: st}
+	srv.cfg.Store, srv.cfg.ImageBuilder = hs, failingWrapBuilder{}
+	ws := types.Workspace{
+		ID:        uuid.New(),
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
+	}
+	if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, []types.Workspace{ws}); !failed {
+		t.Fatal("the run launched on a base image that would not wrap")
+	}
+	hs.wsMu.Lock()
+	hint := hs.hint
+	hs.wsMu.Unlock()
+	if want := "the run's sandbox image could not be built: pull access denied for ghcr.io/acme/base"; hint != want {
+		t.Errorf("failure hint = %q, want %q", hint, want)
+	}
+	if !strings.Contains(logs.String(), "pull access denied for ghcr.io/acme/base") {
+		t.Errorf("log = %q, want the builder's error", logs.String())
+	}
+}

@@ -135,6 +135,15 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 					return
 				}
+				// The row says only which step failed, so the run's own failure hint keeps the driver's reason (a
+				// k8s Waiting reason and message), as a launch failure's does. It is stamped before the run.complete
+				// row below, so a reader of that row finds it.
+				if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+					if herr := setter.SetRunFailureHint(ctx, runID, execNeverStartedHint+werr.Error()); herr != nil {
+						slog.WarnContext(ctx, "wardynd: could not persist the never-started run failure hint",
+							slog.String("run_id", runID.String()), slog.Any("err", herr))
+					}
+				}
 				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
 				return
 			}
@@ -284,6 +293,11 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 
 // teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
 func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
+	return s.teardownOrAuditStep(ctx, runID, ref, action, auditStepStopSandbox, teardown)
+}
+
+// teardownOrAuditStep is teardownOrAudit with the step its failure row's teardown_error names.
+func (s *Server) teardownOrAuditStep(ctx context.Context, runID uuid.UUID, ref, action, step string, teardown func(context.Context, string) error) bool {
 	serr := teardownUnlessLost(ctx, ref, teardown)
 	if serr == nil {
 		return true
@@ -294,7 +308,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		settleAfterTeardown(ctx, func(ctx context.Context) {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(map[string]any{
-					"sandbox_ref": ref, "teardown_error": auditStep(ctx, auditStepStopSandbox, serr, slog.String("run_id", runID.String())),
+					"sandbox_ref": ref, "teardown_error": auditStep(ctx, step, serr, slog.String("run_id", runID.String())),
 				})))
 		})
 	}
@@ -343,16 +357,16 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
 		if rerr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Identity.RevokeRun(ctx, runID) }); rerr != nil {
-			data["identity_error"] = rerr.Error()
+			data["identity_error"] = auditStep(ctx, auditStepRevokeIdentity, rerr, slog.String("run_id", runID.String()))
 		}
 	}
 	if s.cfg.Broker != nil {
 		if berr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Broker.RevokeRun(ctx, runID) }); berr != nil {
-			data["broker_error"] = berr.Error()
+			data["broker_error"] = auditStep(ctx, auditStepRevokeBroker, berr, slog.String("run_id", runID.String()))
 		}
 	}
 	if perr := revokeStep(ctx, func(ctx context.Context) error { return s.dropRunProxyConfig(ctx, runID) }); perr != nil {
-		data["proxy_config_error"] = perr.Error()
+		data["proxy_config_error"] = auditStep(ctx, auditStepDropProxyConfig, perr, slog.String("run_id", runID.String()))
 	}
 	macGUIEnvForget(runID)
 	_ = revokeStep(ctx, func(ctx context.Context) error { s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd); return nil })
@@ -362,7 +376,7 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 		rows, err := st.ListUnrevokedRunPATs(lctx, store.RunPATFilter{RunID: runID})
 		lcancel()
 		if err != nil {
-			data["pat_revoke_check_error"] = err.Error()
+			data["pat_revoke_check_error"] = auditStep(ctx, auditStepCheckRunTokens, err, slog.String("run_id", runID.String()))
 		} else if len(rows) > 0 {
 			data["pat_revoke_pending"] = len(rows)
 		}
@@ -560,6 +574,11 @@ func (s *Server) failedRunEffects(ctx context.Context, runID uuid.UUID, from typ
 	}
 	s.FinishRunOutput(ctx, runID)
 }
+
+// execNeverStartedHint opens the failure hint of a run whose agent exec the driver proved would never start
+// (runner.ErrExecNeverStarted), in the shape of a launch failure's hint. The probe tells it from a launch
+// failure's by this opening: this run's run.complete row is still to come when its hint is already there.
+const execNeverStartedHint = "The agent process never started in the sandbox: "
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
 // persist a run's FailureHint. Kept off the core store.Store interface on
@@ -834,7 +853,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
 			} else {
-				killData["runner_error"] = kerr.Error()
+				killData["runner_error"] = auditStep(ctx, auditStepKillSandbox, kerr, slog.String("run_id", id.String()))
 			}
 		}
 	}
@@ -853,13 +872,13 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// before the audit) — the revoke step is simply skipped.
 	if s.cfg.Identity != nil {
 		if rerr := retrying(revokeCtx, func() error { return s.cfg.Identity.RevokeRun(revokeCtx, id) }); rerr != nil {
-			killData["identity_error"] = rerr.Error()
+			killData["identity_error"] = auditStep(ctx, auditStepRevokeIdentity, rerr, slog.String("run_id", id.String()))
 		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {
 		if berr := retrying(revokeCtx, func() error { return s.cfg.Broker.RevokeRun(revokeCtx, id) }); berr != nil {
-			killData["broker_error"] = berr.Error()
+			killData["broker_error"] = auditStep(ctx, auditStepRevokeBroker, berr, slog.String("run_id", id.String()))
 		}
 	}
 	_, identityFailed := killData["identity_error"]
@@ -867,7 +886,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	s.settleRevokeOwed(revokeCtx, id, marked, identityFailed || brokerFailed)
 	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
 	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
-		killData["proxy_config_error"] = perr.Error()
+		killData["proxy_config_error"] = auditStep(ctx, auditStepDropProxyConfig, perr, slog.String("run_id", id.String()))
 	}
 	macGUIEnvForget(id)
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),

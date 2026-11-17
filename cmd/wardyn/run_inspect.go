@@ -98,7 +98,7 @@ func runGetCmd(client clientFn) *cobra.Command {
 			// the failure reason from audit inline; fall back to a pointer so the
 			// user is never left with a bare "FAILED".
 			if run.State == types.RunFailed {
-				if reason := runFailureReason(cmd.Context(), client(), run.ID); reason != "" {
+				if reason := runFailureReason(cmd.Context(), client(), run); reason != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed: %s\n", reason)
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed — full detail: wardyn audit %s --json\n", run.ID)
