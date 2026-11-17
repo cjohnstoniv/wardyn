@@ -350,7 +350,7 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce'
+    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce TestL0_DNSResolverAfterAKeptRevive'
   fi
   # The four Linux VM cases: three docs/RUNTIME-CONTRACT.md cites, and the guest proof that docs/POLICIES.md's VM
   # host rules judge plain HTTP. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE are set; ci.yml's vm job, the suite's
