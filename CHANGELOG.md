@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A `workspace.requirement.write`, `workspace.egress.approve` or `workspace.egress.deny` audit row whose workspace could not be read when the write missed now says `Store error`, not `Workspace not found`; the server log keeps the store's own error. `DELETE /api/v1/invitations/{id}` answers such a read failure `500` `internal_error`, which a retry may clear, where it answered `404`.
+- A workspace or invitation write that matched no row, when the read that follows to explain the miss also fails, is no longer reported as a missing workspace or invitation. The `workspace.requirement.write`, `workspace.egress.approve` and `workspace.egress.deny` audit rows say `Store error`, not `Workspace not found`, and the server log keeps the store's own error. A workspace edit, an egress list saved with `If-Match`, and `DELETE /api/v1/invitations/{id}` answer `500` `internal_error`, which a retry may clear, where they answered `404`.
 - The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
 
 ## [0.10.0-rc.23] — 2026-11-17
