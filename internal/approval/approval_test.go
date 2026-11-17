@@ -45,6 +45,9 @@ type fakeStore struct {
 func (f *fakeStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if a.RequestedAt.IsZero() {
+		a.RequestedAt = time.Now().UTC() // the database's default, as the PG store stamps it
+	}
 	f.records = append(f.records, a)
 	return a, nil
 }

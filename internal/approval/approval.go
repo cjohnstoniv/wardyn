@@ -73,7 +73,9 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 		req.ID = uuid.New()
 	}
 	req.State = types.ApprovalPending
-	req.RequestedAt = time.Now().UTC()
+	// Zero, so the store stamps requested_at from the database clock (the rejoin stamp is the
+	// database's too), and so a caller-supplied value never survives.
+	req.RequestedAt = time.Time{}
 	req.DecidedAt = nil
 	req.DecidedBy = ""
 	req.MintedJTI = ""

@@ -686,11 +686,13 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 	if err != nil {
 		return types.ApprovalRequest{}, err
 	}
+	// A zero RequestedAt (pgx sends Go's zero time as 0001-01-01, never NULL) means the database's
+	// clock, so the raise and its rejoin stamp share one; an explicit time is stored as given.
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
 	const q = `
 		INSERT INTO approvals (` + approvalInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		VALUES ($1,$2,$3,$4,$5,$6,COALESCE(NULLIF($7::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), now()),$8,$9,$10,$11)
 		RETURNING ` + approvalCols
 	out, err := scanApproval(tx.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,

@@ -97,3 +97,41 @@ func TestPG_ApprovalRejoinNeverPrecedesRequestedAt(t *testing.T) {
 		t.Fatalf("last_rejoined_at %v is before requested_at %v", got.LastRejoinedAt, row.RequestedAt)
 	}
 }
+
+// TestPG_ApprovalRaiseAndRejoinShareTheDatabaseClock: a raise with a zero RequestedAt is stamped by the
+// database, as the rejoin is, so the rejoin is strictly after the raise whatever the replicas' clocks say.
+func TestPG_ApprovalRaiseAndRejoinShareTheDatabaseClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runID := uuid.New()
+	if _, err := pg.CreateRun(ctx, types.AgentRun{
+		ID: runID, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CreatedBy: "test-user",
+		Agent: "claude-code", Repo: "test/repo", Task: "t", ConfinementClass: types.CC2, State: types.RunPending,
+		SPIFFEID: "spiffe://test/agent-run/" + runID.String(), RunnerTarget: "docker",
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	row, err := pg.CreateApproval(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`)})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if _, ok, err := pg.StampApprovalRejoin(ctx, row.ID, runID, types.ApprovalEgressDomain); err != nil || !ok {
+		t.Fatalf("stamp: %v, %v; want the row stamped", ok, err)
+	}
+	got, err := pg.GetApproval(ctx, row.ID)
+	if err != nil || got.LastRejoinedAt == nil {
+		t.Fatalf("read back: %+v, %v; want last_rejoined_at set", got, err)
+	}
+	if !got.LastRejoinedAt.After(got.RequestedAt) {
+		t.Errorf("last_rejoined_at %v is not after requested_at %v", got.LastRejoinedAt, got.RequestedAt)
+	}
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatalf("db now: %v", err)
+	}
+	if d := dbNow.Sub(got.RequestedAt); d < 0 || d > 5*time.Second {
+		t.Errorf("requested_at %v is %v before the database's now() %v; want it stamped by the database just now", got.RequestedAt, d, dbNow)
+	}
+}
