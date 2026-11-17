@@ -96,11 +96,11 @@ func TestLocalEligibility_ADOResidentUnchangedByViaOrg(t *testing.T) {
 	optIn := CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}
 	p, _ := viaOrgADOPlan(optIn, resident)
 	if _, r := LocalEligibility(p); r != nil {
-		t.Fatalf("row 10, person's runner: %+v, want resident admitted", r)
+		t.Fatalf("resident ADO on the person's own runner: %+v, want resident admitted", r)
 	}
 	p.Trust, p.OwnerKind = types.RunnerTrustOrgCluster, types.RunnerOwnerOrg
 	if _, r := LocalEligibility(p); r == nil || !strings.Contains(r.Detail, "runner_resident only on a person's own runner") {
-		t.Fatalf("row 4, org runner: %+v, want the person-owned refusal", r)
+		t.Fatalf("resident ADO on an org runner: %+v, want the person-owned refusal", r)
 	}
 	// A via_org opt-in alone does not make a resident row deliver.
 	p, _ = viaOrgADOPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ViaOrgOptIn: true}, resident)
@@ -114,17 +114,17 @@ func TestLocalEligibility_ADOResidentUnchangedByViaOrg(t *testing.T) {
 func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 	var none DeliveryPolicy
 	if err := viaOrgADOPolicy.Validate(); err != nil {
-		t.Errorf("row 1 Validate: %v", err)
+		t.Errorf("global via_org row, Validate: %v", err)
 	}
 	if err := viaOrgADOPolicy.CheckBuildable(none); err != nil {
-		t.Errorf("row 1 CheckBuildable: %v, want accepted", err)
+		t.Errorf("global via_org row, CheckBuildable: %v, want accepted", err)
 	}
 	withPosture := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeViaOrg, RequirePosture: &PostureRequirement{MDMManaged: true}}}}
 	if err := withPosture.Validate(); err != nil {
-		t.Errorf("row 8 Validate: %v, want accepted", err)
+		t.Errorf("per-runner via_org opt-in, Validate: %v, want accepted", err)
 	}
 	if err := withPosture.CheckBuildable(none); err != nil {
-		t.Errorf("row 8 CheckBuildable: %v", err)
+		t.Errorf("per-runner via_org opt-in, CheckBuildable: %v", err)
 	}
 	// require_posture stays refused for a via_org row of any other class, and for a mode other than resident or ADO via_org.
 	for name, p := range map[string]DeliveryPolicy{
@@ -139,7 +139,7 @@ func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 	for _, trust := range []types.RunnerTrustClass{types.RunnerTrustPersonal, types.RunnerTrustOrgCluster} {
 		byTrust := DeliveryPolicy{ByTrust: map[types.RunnerTrustClass]TrustPolicy{trust: {Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeViaOrg}}}}}
 		if err := byTrust.Validate(); !errors.Is(err, ErrInvalidPolicy) {
-			t.Errorf("row 9 by_trust.%s: %v, want ErrInvalidPolicy", trust, err)
+			t.Errorf("via_org under by_trust.%s: %v, want ErrInvalidPolicy", trust, err)
 		}
 	}
 	override := DeliveryPolicy{
@@ -147,7 +147,7 @@ func TestDeliveryPolicy_ADOViaOrg(t *testing.T) {
 		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}}},
 	}
 	if err := override.Validate(); !errors.Is(err, ErrInvalidPolicy) {
-		t.Errorf("row 9 override of a global via_org row: %v, want ErrInvalidPolicy", err)
+		t.Errorf("an override of a global via_org row: %v, want ErrInvalidPolicy", err)
 	}
 }
 
