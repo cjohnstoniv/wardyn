@@ -553,7 +553,7 @@ func TestL0_NoDNSExfil(t *testing.T) {
 // runner's relay is reached (host.docker.internal is host-gateway there).
 //
 // The bridge's addresses are read from this host, so it needs the daemon on the machine running the
-// test, as in CI; elsewhere it skips, and the l0-docker suite's REQUIRE_ALL turns that skip red.
+// test, as in CI; elsewhere it skips, and the l0-docker and docker suites' REQUIRE_ALL turns that skip red.
 func TestL0_HostAddressUnreachable(t *testing.T) {
 	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
 		t.Skip("set WARDYN_TEST_DOCKER=1 to run the docker L0 network tests")
