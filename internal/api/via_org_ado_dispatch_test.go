@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -180,7 +181,13 @@ func TestViaOrgEngineConfig_ADOGateRidesTheSealedRow(t *testing.T) {
 	grant := adoViaOrgGrantRow(run.ID, host)
 	ls.dispatchTestStore.grants = []types.CredentialGrant{grant}
 	gate := &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{host, "other.visualstudio.com"}}
-	laptop := runner.ProxyConfig{RunToken: "run-token", ControlPlaneURL: "http://127.0.0.1:9", ViaOrgRoutes: []proxy.ViaOrgRoute{{GrantID: grant.ID, Host: host}}}
+	// The per-run CA rides the laptop copy as dispatch authors it: a stored gate loads only beside one.
+	caCert, caKey, err := generateRunCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop := runner.ProxyConfig{RunToken: "run-token", ControlPlaneURL: "http://127.0.0.1:9", MITMCACertPEM: string(caCert), MITMCAKeyPEM: string(caKey),
+		ViaOrgRoutes: []proxy.ViaOrgRoute{{GrantID: grant.ID, Host: host}}}
 
 	if got := withADOGate(laptop, gate); got.ADOGrant != gate || laptop.ADOGrant != nil {
 		t.Fatalf("withADOGate = %+v (laptop copy %+v), want the gate restored on a copy", got.ADOGrant, laptop.ADOGrant)
@@ -282,6 +289,10 @@ func TestViaOrgADORunnerReady(t *testing.T) {
 		{name: "runner does not say so", caps: &runnerwire.Caps{}, want: false},
 		{name: "runner not connected", want: false},
 		{name: "image older", caps: &runnerwire.Caps{ViaOrgADO: true}, image: "ghcr.io/acme/wardyn-proxy:0.10.0", want: false},
+		// The floor is 0.10.1's first release candidate: every 0.10.1 candidate passes, a 0.10.0 candidate does not.
+		{name: "first 0.10.1 candidate", caps: &runnerwire.Caps{ViaOrgADO: true}, image: "ghcr.io/acme/wardyn-proxy:0.10.1-rc.1", want: true},
+		{name: "later 0.10.1 candidate", caps: &runnerwire.Caps{ViaOrgADO: true}, image: "ghcr.io/acme/wardyn-proxy:0.10.1-rc.7", want: true},
+		{name: "late 0.10.0 candidate", caps: &runnerwire.Caps{ViaOrgADO: true}, image: "ghcr.io/acme/wardyn-proxy:0.10.0-rc.30", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
@@ -313,7 +324,13 @@ func TestViaOrgADORunnerReady(t *testing.T) {
 func TestRevivedStoredConfig_KeepsTheViaOrgADOGate(t *testing.T) {
 	ctx := context.Background()
 	run := types.AgentRun{ID: uuid.New(), Placement: types.PlacementLocal}
-	raw, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{RunToken: "run-token", ControlPlaneURL: "http://127.0.0.1:9"}, runner.ProxyListenPort)
+	// The revived copy keeps the run's CA, as a revive of a real row does: the stored row's gate loads only beside it.
+	caCert, caKey, err := generateRunCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{RunToken: "run-token", ControlPlaneURL: "http://127.0.0.1:9",
+		MITMCACertPEM: string(caCert), MITMCAKeyPEM: string(caKey)}, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,5 +357,63 @@ func TestRevivedStoredConfig_KeepsTheViaOrgADOGate(t *testing.T) {
 	remote := types.AgentRun{ID: run.ID, Placement: types.PlacementRemote}
 	if out, rerr := revivedStoredConfig(ctx, remote, cfg, inspectionCorpus{}, gate, laptop); rerr != nil || string(out) != string(laptop) {
 		t.Fatalf("a remote run's stored config differs from its own: %v", rerr)
+	}
+}
+
+// A refreshed laptop copy drops the via_org Azure DevOps gate only when it carries no Azure DevOps token injection: a
+// copy that still holds the injection keeps its stored gate, so a revive never hands a runner the token ungated.
+func TestLaptopADOGate_KeepsTheGateBesideTheTokenInjection(t *testing.T) {
+	stored := &proxy.ADOGrantConfig{Organization: "acme", Hosts: []string{"dev.azure.com"}}
+	adoInj := proxy.InjectionConfig{GrantID: uuid.New(), InjectionRule: egress.InjectionRule{Host: "dev.azure.com", SecretName: types.ADOEntraAccessTokenSecret}}
+	other := proxy.InjectionConfig{GrantID: uuid.New(), InjectionRule: egress.InjectionRule{Host: "api.vendor.example", SecretName: "vendor-key"}}
+	for _, tc := range []struct {
+		name       string
+		injection  []proxy.InjectionConfig
+		classified *proxy.ADOGrantConfig // the re-classified copy's gate
+		want       *proxy.ADOGrantConfig
+	}{
+		{name: "resident row, still resident", injection: []proxy.InjectionConfig{adoInj}, classified: stored, want: stored},
+		{name: "resident row, now via_org: the injection keeps its gate", injection: []proxy.InjectionConfig{adoInj, other}, want: stored},
+		{name: "via_org row, still via_org: the laptop copy carries none", injection: []proxy.InjectionConfig{other}, want: nil},
+		{name: "via_org row, now resident: the classified gate", classified: stored, want: stored},
+	} {
+		cfg := &proxy.Config{Injection: tc.injection, ADOGrant: stored}
+		if got := laptopADOGate(cfg, tc.classified); got != tc.want {
+			t.Errorf("%s: gate %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A revive runs dispatch's recorded-mode door: a grant recorded runner_resident revives while the policy still gives
+// its class that mode, and is refused, with dispatch's reason, once the policy no longer does.
+func TestLocalRevive_RefusesAGrantWhoseRecordedModeMoved(t *testing.T) {
+	f := newComponentFixture(t)
+	runnerID := uuid.New()
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, RunnerID: &runnerID}
+	env := types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Delivery: types.GrantDeliveryResident,
+		Spec: types.GrantSpec{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"name":"TOKEN","secret_name":"ci-token"}`)}}
+	st := residentFactsStore{localPlanTestStore: localPlanTestStore{f.st},
+		policy:  json.RawMessage(`{"classes":{},"by_trust":{"org_cluster":{"classes":{"env_secret":{"mode":"runner_resident"}}}}}`),
+		posture: types.RunnerPosture{OS: "linux", Evidence: types.PostureEvidenceOSProbe},
+		trust:   types.RunnerTrustOrgCluster, recorded: types.RunnerTrustOrgCluster}
+	f.srv.cfg.Store = st
+	f.st.grants = []types.CredentialGrant{env}
+	revive := func() *placement.Refusal {
+		t.Helper()
+		cfg := proxy.Config{RunID: run.ID}
+		err := f.srv.refreshLocalDeploymentConfig(context.Background(), run, types.SiteConfig{}, &cfg)
+		r, _ := err.(*placement.Refusal)
+		if err != nil && r == nil {
+			t.Fatalf("revive: %v", err)
+		}
+		return r
+	}
+	if r := revive(); r != nil {
+		t.Fatalf("revive while the policy gives the recorded mode: %v", r)
+	}
+	st.policy = json.RawMessage(`{"classes":{}}`)
+	f.srv.cfg.Store = st
+	if r := revive(); r == nil || r.Reason != placement.ReasonPlacementCredential || r.Field != "eligible_grants" || !strings.Contains(r.Detail, "recorded runner_resident") {
+		t.Fatalf("revive after the policy moved: %+v, want placement_credential on eligible_grants naming the recorded mode", r)
 	}
 }

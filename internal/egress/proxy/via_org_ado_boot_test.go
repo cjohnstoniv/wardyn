@@ -67,6 +67,21 @@ func TestBuildInjector_LazyADOCredentialForAnEngine(t *testing.T) {
 	}
 }
 
+// An engine built while the run's Azure DevOps sign-in has lapsed (the rebuild after an idle release) still builds,
+// and the run's other via_org grants keep working: NewViaOrgEngine builds its injector lazily for that credential.
+func TestNewViaOrgEngine_BuildsWithALapsedADOCredential(t *testing.T) {
+	org := &fakeOrg{failGrant: uuid.New()} // the sign-in has lapsed: the Azure DevOps credential's resolve fails
+	f := newViaOrgFixtureWith(t, org, nil, func(cfg *Config) {
+		cfg.Policy.AllowedDomains = append(cfg.Policy.AllowedDomains, viaOrgADOHost)
+		cfg.Injection = append(cfg.Injection, InjectionConfig{GrantID: org.failGrant,
+			InjectionRule: egress.InjectionRule{Host: viaOrgADOHost, Header: "Authorization", SecretName: types.ADOEntraAccessTokenSecret}})
+		cfg.ADOGrant = &ADOGrantConfig{Organization: "acme", Hosts: []string{viaOrgADOHost}}
+	})
+	if w := f.inject(http.MethodGet, "/v1/x", nil); w.Code != http.StatusOK {
+		t.Fatalf("the run's other grant through the rebuilt engine = %d %q, want 200", w.Code, w.Body)
+	}
+}
+
 // No engine is built with a kubectl grant: its door's own hold plus the request budget would pass the relay's idle cut.
 func TestNewViaOrgEngine_RefusesAKubeAPIGrant(t *testing.T) {
 	cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", KubeAPI: &KubeAPIGrant{}}

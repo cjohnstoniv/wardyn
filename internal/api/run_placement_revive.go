@@ -46,19 +46,36 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if err := s.trustChangedRefusal(ctx, run, p.Trust); err != nil {
 		return err
 	}
+	// Dispatch's door too: a grant recorded via_org or runner_resident revives only while the policy gives it that mode.
+	ref, err := s.dispatchTrustRefusal(ctx, run, p)
+	if err != nil {
+		return err
+	}
+	if ref != nil {
+		return ref
+	}
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		return ref
 	}
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
-	// The stored row is the organisation's and keeps a via_org run's Azure DevOps gate; the laptop copy never carries it.
-	cfg.ADOGrant = stripped.ProxyConfig.ADOGrant
+	cfg.ADOGrant = laptopADOGate(cfg, stripped.ProxyConfig.ADOGrant)
 	// "" for every run here (a person's runner, or No network), recorded as a dispatch records it; no secret is read.
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil, upstreamNoHopReason(run))
 	cfg.TrustedCAPEM = ""
 	cfg.UpstreamProxyNoProxy = nil
 	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)
 	return nil
+}
+
+// laptopADOGate is the Azure DevOps gate a refreshed laptop copy carries: the re-classified copy's, which drops a
+// via_org run's gate (the stored row keeps it), unless cfg still holds the Azure DevOps token injection. Such a copy
+// keeps its stored gate: the token never reaches a runner without its gate.
+func laptopADOGate(cfg *proxy.Config, classified *proxy.ADOGrantConfig) *proxy.ADOGrantConfig {
+	if slices.ContainsFunc(cfg.Injection, func(in proxy.InjectionConfig) bool { return isADOLaneRule(in.InjectionRule) }) {
+		return cfg.ADOGrant
+	}
+	return classified
 }
 
 func localStoredSpec(c proxy.Config) runner.SandboxSpec {

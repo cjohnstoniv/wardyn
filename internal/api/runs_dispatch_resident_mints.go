@@ -154,12 +154,18 @@ func (s *Server) readResidentKnownHosts(ctx context.Context, run types.AgentRun,
 // run.dispatch failure row {reason, grant_id, runner_id}, the shape a refused
 // delivery takes (deliverResident).
 func (s *Server) refuseResidentDispatch(ctx context.Context, run types.AgentRun, grantID uuid.UUID, detail string) {
+	s.refuseLocalDispatch(ctx, run, grantID, "This run was not launched on your own runner: "+detail)
+}
+
+// refuseLocalDispatch is refuseResidentDispatch with the whole failure hint: a via_org run's runner may be an
+// organisation's, which is not the person's own.
+func (s *Server) refuseLocalDispatch(ctx context.Context, run types.AgentRun, grantID uuid.UUID, hint string) {
 	data := map[string]any{"reason": placement.ReasonPlacementCredential, "grant_id": grantID}
 	if run.RunnerID != nil {
 		data["runner_id"] = *run.RunnerID
 	}
 	bg := context.WithoutCancel(ctx)
-	s.failAndRevoke(bg, run.ID, types.RunStarting, "This run was not launched on your own runner: "+detail)
+	s.failAndRevoke(bg, run.ID, types.RunStarting, hint)
 	s.recordAudit(bg, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
 }
 
@@ -215,7 +221,7 @@ func (s *Server) viaOrgADORunnerReady(ctx context.Context, run types.AgentRun) b
 	}
 	rows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
-		s.refuseResidentDispatch(ctx, run, uuid.Nil, "its grants could not be read to check its runner reaches Azure DevOps via the organisation")
+		s.refuseLocalDispatch(ctx, run, uuid.Nil, "This run was not launched: its grants could not be read to check its runner reaches Azure DevOps via the organisation")
 		return false
 	}
 	i := slices.IndexFunc(rows, viaOrgADOLaneGrant)
@@ -225,16 +231,17 @@ func (s *Server) viaOrgADORunnerReady(ctx context.Context, run types.AgentRun) b
 	if c, ok := s.runnerEndpoint(*run.RunnerID).sub.Caps(); ok && c.ViaOrgADO && !s.proxyImageBeforeViaOrgADO() {
 		return true
 	}
-	s.refuseResidentDispatch(ctx, run, rows[i].ID, viaOrgADORunnerTooOld)
+	s.refuseLocalDispatch(ctx, run, rows[i].ID, viaOrgADORunnerTooOld)
 	return false
 }
 
 // viaOrgADORunnerTooOld is the refusal of a run with a via_org Azure DevOps grant whose runner does not advertise
 // Caps.ViaOrgADO, or whose organisation's proxy image is older than the release that forwards /wardyn/git/.
-const viaOrgADORunnerTooOld = "The runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later"
+const viaOrgADORunnerTooOld = "This run was not launched: its runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later"
 
-// viaOrgADORelease is the first release whose runner proxy forwards /wardyn/git/ to the organisation.
-const viaOrgADORelease = "0.10.1"
+// viaOrgADORelease is the first release whose runner proxy forwards /wardyn/git/ to the organisation: its first
+// release candidate, as the sibling floors name theirs (readbackRelease), so a 0.10.1-rc.N image passes.
+const viaOrgADORelease = "0.10.1-rc.1"
 
 // viaOrgADOLaneGrant reports whether g is an Azure DevOps lane grant recorded via_org.
 func viaOrgADOLaneGrant(g types.CredentialGrant) bool {
