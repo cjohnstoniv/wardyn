@@ -264,7 +264,8 @@ const approvalRunUnreadableMsg = "This approval's run could not be read to check
 // approvalRunUnreadable answers an egress approve whose run could not be read: 503 run_unreadable, logged.
 // Without the run neither its restrictions nor its frozen preset can be checked, so the approval stays pending.
 func approvalRunUnreadable(w http.ResponseWriter, r *http.Request, err error) {
-	slog.ErrorContext(r.Context(), "api: read an approval's run", slog.Any("err", err))
+	slog.ErrorContext(r.Context(), "api: read an approval's run",
+		slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
 	writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, approvalRunUnreadableMsg)
 }
 
