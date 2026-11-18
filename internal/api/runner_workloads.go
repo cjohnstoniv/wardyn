@@ -57,7 +57,8 @@ const workloadBindingGoneMsg = "No namespace binding binds this workload's names
 // WorkloadFromRunner is the `workload` event. It runs on the runner's read loop, so it only decodes, finds
 // the binding and records; a launch, a run's end and every status push go on in the background, because
 // each of them may call this same runner. A report outside the wire's shape is refused for good; a
-// resource that is not a workload Wardyn accepts is acknowledged and answered by its status.
+// resource that is not a workload Wardyn accepts is acknowledged and answered by its status. Past the runner's
+// workload rate a frame is refused (rate_limited) and acknowledged; the next full report carries it.
 //
 // session is the runner session the frame came in on, fresh or resumed (remote.EventSession). One
 // runner's reports are in order within its session, and every write a report makes holds only while that
@@ -78,6 +79,9 @@ func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ses
 		// Only a frame of a runner session is fenced, so one with none records nothing.
 		slog.WarnContext(ctx, "wardynd: a workload report with no runner session records nothing", slog.String("runner_id", runnerID.String()))
 		return nil
+	}
+	if !s.eventRefusals.allowWorkload(runnerID, s.cfg.Now()) {
+		return errWorkloadEventRateLimited
 	}
 	by := store.WorkloadReporter{Runner: runnerID, Session: session}
 	err := s.workloadReport(ctx, ws, by, rep)

@@ -194,6 +194,8 @@ To bind the namespace again, delete the binding and create it again with the ide
 - The runner reports every resource when a namespace's informer has synced, when its session to the organisation comes up, and every 10 minutes.
 - Between those it reports a resource that is added, or whose `metadata.generation` changed, and one that is deleted. A status write changes no generation, so it reports nothing.
 - Each full report ends with the names the namespace holds. The organisation deletes the workloads of that namespace the list omits, with audit `via` `k8s_sync`. This catches a delete missed while the runner was down.
+- The organisation takes at most 10 workload events a second from one runner on one replica, with room for a full report of about 6000 resources at once. Past that, an event is refused (`runner.event.refuse`, code `rate_limited`) and the next full report carries it. A runner that watches more resources loses the end of each full report.
+- A refused delete is the exception when its namespace holds over 1000 names, which sends no sync, or lies in the lost end of a runner's full report. That workload stays until the resource changes again or an admin deletes it. Split such a runner's namespaces across runners.
 - Deleting a resource deletes its workload and ends its run. There is no finalizer on the resource.
 - An admin or security admin may delete a `k8s` workload through the API. The resource writes it back at the next full report unless it is gone too. Anyone else gets `409` `workload_managed_by_k8s`.
 

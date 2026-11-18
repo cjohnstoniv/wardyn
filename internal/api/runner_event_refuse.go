@@ -38,13 +38,36 @@ var (
 	errAgentExitShape    = fmt.Errorf("%w: %w", errRunnerEventShape, store.ErrRunnerExecutionRefused)
 	errSpoolShape        = fmt.Errorf("%w: %w", errRunnerEventShape, store.ErrRunnerSpoolRefused)
 	errReportShape       = fmt.Errorf("%w: %w", errRunnerEventShape, errRunnerEventRefused)
+
+	errWorkloadEventRateLimited = errors.New("workload events past this runner's rate")
 )
 
-// runnerEventRefusals is the per-runner bound on runner.event.refuse rows, in memory (DR-0436). The zero value is
-// ready to use.
+// workloadEventRatePerSec and workloadEventBurst bound one runner's workload events. The burst is what the rate earns
+// between two full reports (cmd/wardyn-runnerd's workloadResync, 10 minutes): a full report is sent back-to-back, and
+// a burst below it would refuse the same sorted tail at every resync.
+const (
+	workloadEventRatePerSec = 10.0
+	workloadEventBurst      = workloadEventRatePerSec * 600
+	workloadEventMaxRunners = 4096 // enrolLimiterMaxPeers' bound
+)
+
+// runnerEventRefusals is the per-runner bounds on runner.event.refuse rows and on workload events, in memory.
+// The zero value is ready to use.
 type runnerEventRefusals struct {
-	mu       sync.Mutex
-	byRunner map[uuid.UUID]*refusalWindow
+	mu        sync.Mutex
+	byRunner  map[uuid.UUID]*refusalWindow
+	workloads *principalLimiter // per-runner workload event rate, built on first use
+}
+
+// allowWorkload spends one of runnerID's workload events at now.
+func (r *runnerEventRefusals) allowWorkload(runnerID uuid.UUID, now time.Time) bool {
+	r.mu.Lock()
+	if r.workloads == nil {
+		r.workloads = &principalLimiter{rate: workloadEventRatePerSec, burst: workloadEventBurst, max: workloadEventMaxRunners}
+	}
+	l := r.workloads
+	r.mu.Unlock()
+	return l.allow(runnerID.String(), now)
 }
 
 type refusalWindow struct {
@@ -109,6 +132,7 @@ var runnerEventRefusalCodes = []struct {
 	{store.ErrRunnerActionRefused, runnerwire.RefusalStoreRefused},
 	{store.ErrRunnerSpoolRefused, runnerwire.RefusalStoreRefused},
 	{errRunnerEventRefused, runnerwire.RefusalStoreRefused},
+	{errWorkloadEventRateLimited, runnerwire.RefusalRateLimited},
 }
 
 // classifyRunnerEvent turns err, an event handler's error, into the peer's verdict. A permanent refusal (a sentinel
@@ -176,7 +200,9 @@ func (s *Server) classifyRunnerEvent(ctx context.Context, runnerID uuid.UUID, ev
 		return err
 	}
 	s.eventRefusals.count(runnerID, now)
-	slog.WarnContext(ctx, "runner event refused for good and acknowledged", "runner_id", runnerID, "kind", ev.Kind,
-		"run_id", ev.RunID, "code", code, "settled", settled)
+	if r.Row || code != runnerwire.RefusalRateLimited {
+		slog.WarnContext(ctx, "runner event refused for good and acknowledged", "runner_id", runnerID, "kind", ev.Kind,
+			"run_id", ev.RunID, "code", code, "settled", settled)
+	}
 	return &runnerwire.EventRefusal{Code: code, Err: err}
 }
