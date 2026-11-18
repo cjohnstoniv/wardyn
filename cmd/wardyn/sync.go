@@ -183,15 +183,8 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
-	if err := refuseSSHChannelsOff("sync", gw); err != nil {
+	if err := checkSyncGateway(gw, runID, f.advertisedProxy); err != nil {
 		return err
-	}
-	if gw.proxy != "" && !f.advertisedProxy {
-		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
-			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))
-	}
-	if gw.fingerprint == "" {
-		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
 	}
 	rules, err := c.GetRunSyncRules(cmd.Context(), id)
 	if err != nil {
@@ -261,6 +254,21 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		runErr = cerr
 	}
 	return runErr
+}
+
+// checkSyncGateway refuses a gateway sync cannot use: channels off, an unacknowledged ProxyCommand, or no host key fingerprint.
+func checkSyncGateway(gw sshGateway, runID string, advertisedProxy bool) error {
+	if err := refuseSSHChannelsOff("sync", gw); err != nil {
+		return err
+	}
+	if gw.proxy != "" && !advertisedProxy {
+		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
+			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))
+	}
+	if gw.fingerprint == "" {
+		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
+	}
+	return nil
 }
 
 // refusePlainHTTPGateway refuses a plain-http, non-loopback server: the gateway's
