@@ -47,7 +47,7 @@ var localFolderSeedPoll = 2 * time.Second
 // agent for the folder only where the hold has a start to hold and the sync a
 // door to come in by: a task run (the agent exec), not interactive (whose
 // start is the person's own attach), not background-only (which refuses SSH),
-// on a deployment with an SSH gateway and a store that keeps the seed.
+// on a deployment with an SSH gateway that serves sftp (sync follows it) and a store that keeps the seed.
 func (s *Server) localFolderRefusal(ctx context.Context, req *createRunRequest) *runRefusal {
 	f := req.LocalFolder
 	if f == nil {
@@ -81,6 +81,8 @@ func (s *Server) localFolderRefusal(ctx context.Context, req *createRunRequest) 
 		return unsupported("a run with no task has no agent start to hold")
 	case s.cfg.SSHListenAddr == "":
 		return unsupported("this deployment has no SSH gateway, so 'wardyn sync' could never seed the folder")
+	case !s.sshChannelOn(sshKindSync):
+		return unsupported("this deployment's operator left sftp out of WARDYN_SSH_CHANNELS, and 'wardyn sync' follows sftp, so it could never seed the folder")
 	case !canSeed:
 		return unsupported("this server's store cannot record a folder's first sync")
 	}

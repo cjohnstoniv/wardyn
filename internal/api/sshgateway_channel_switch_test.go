@@ -308,3 +308,34 @@ func TestSSHChannelSwitch_HealthzListsTheServedKinds(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalFolderFollowsTheChannelSwitch: a local folder is seeded through wardyn-sync, which follows sftp, so a
+// deployment that leaves sftp out refuses the folder at create (422 local_folder_unsupported) and does not wait
+// out the seed.
+func TestLocalFolderFollowsTheChannelSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		channels map[string]bool
+		served   bool
+	}{
+		{"unset", nil, true},
+		{"sftp listed", map[string]bool{"sftp": true}, true},
+		{"sftp left out", map[string]bool{"shell": true, "exec": true, "forward": true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _, _, _ := localFolderFixture(t)
+			s.cfg.SSHListenAddr = ":2222"
+			s.cfg.SSHChannels = tc.channels
+			r := s.localFolderRefusal(context.Background(), &createRunRequest{Task: "fix it", LocalFolder: &types.RunLocalFolder{Name: "app"}})
+			if tc.served {
+				if r != nil {
+					t.Fatalf("a local folder was refused with sftp served: %+v", r)
+				}
+				return
+			}
+			if r == nil || r.status != http.StatusUnprocessableEntity || r.body.Reason != reasonLocalFolderUnsupported || !strings.Contains(r.body.Error, "WARDYN_SSH_CHANNELS") {
+				t.Fatalf("a local folder with sftp left out = %+v, want 422 %s naming WARDYN_SSH_CHANNELS", r, reasonLocalFolderUnsupported)
+			}
+		})
+	}
+}
