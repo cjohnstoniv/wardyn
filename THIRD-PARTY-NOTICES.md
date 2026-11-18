@@ -156,7 +156,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
 | `gopkg.in/inf.v0` | BSD-3-Clause | https://github.com/go-inf/inf/blob/v0.9.1/LICENSE |
 | `gopkg.in/yaml.v3` | MIT | https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE |
-| `gvisor.dev/gvisor/pkg` | Apache-2.0 | https://github.com/google/gvisor/blob/9680d69bf798/LICENSE |
+| `gvisor.dev/gvisor/pkg` | Apache-2.0 | https://github.com/gvisor/gvisor/blob/9680d69bf798/LICENSE |
 | `k8s.io/api` | Apache-2.0 | https://github.com/kubernetes/api/blob/v0.37.2/LICENSE |
 | `k8s.io/apimachinery/pkg` | Apache-2.0 | https://github.com/kubernetes/apimachinery/blob/v0.37.2/LICENSE |
 | `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause | https://github.com/kubernetes/apimachinery/blob/v0.37.2/third_party/forked/golang/LICENSE |
