@@ -660,7 +660,7 @@ func TestDocsOpsRunAuditRowsCiteEveryEmitFile(t *testing.T) {
 		}
 
 		row := ""
-		for _, line := range strings.Split(doc, "\n") {
+		for _, line := range foldAuditReasonTables(t, strings.Split(doc, "\n")) {
 			if strings.HasPrefix(line, "| `"+action+"` |") {
 				row = line
 				break
