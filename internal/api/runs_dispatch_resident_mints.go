@@ -228,7 +228,8 @@ func (s *Server) viaOrgADORunnerReady(ctx context.Context, run types.AgentRun) b
 	if i < 0 {
 		return true
 	}
-	if c, ok := s.runnerEndpoint(*run.RunnerID).sub.Caps(); ok && c.ViaOrgADO && !s.proxyImageBeforeViaOrgADO() {
+	// The runner row is read only for a runner that already advertises the capability.
+	if c, ok := s.runnerEndpoint(*run.RunnerID).sub.Caps(); ok && c.ViaOrgADO && !s.proxyImageBeforeViaOrgADO(s.runnerRowOf(ctx, *run.RunnerID)) {
 		return true
 	}
 	s.refuseLocalDispatch(ctx, run, rows[i].ID, viaOrgADORunnerTooOld)
@@ -252,9 +253,28 @@ func viaOrgADOLaneGrant(g types.CredentialGrant) bool {
 	return err == nil && isADOLaneRule(rule)
 }
 
-// proxyImageBeforeViaOrgADO reports whether the organisation's proxy image names a release older than viaOrgADORelease;
-// an image that names none (a digest, a development tag) is not evidence, so it passes.
-func (s *Server) proxyImageBeforeViaOrgADO() bool {
-	tag := proxyImageRelease(s.cfg.ProxyImage)
+// runnerRowOf is the runner's row, or nil when the store cannot read it or it is unreadable.
+func (s *Server) runnerRowOf(ctx context.Context, id uuid.UUID) *types.Runner {
+	rs, ok := s.cfg.Store.(runnerGetter)
+	if !ok {
+		return nil
+	}
+	row, err := rs.GetRunner(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return &row
+}
+
+// proxyImageBeforeViaOrgADO reports whether the proxy image rn runs names a release older than viaOrgADORelease: the
+// image the organisation names for rn's architecture, else the global one (runnerProxyImage). With no row (nil) the
+// fallback is the global image, s.cfg.ProxyImage. An image that names no release (a digest, a development tag) is not
+// evidence, so it passes.
+func (s *Server) proxyImageBeforeViaOrgADO(rn *types.Runner) bool {
+	image := s.cfg.ProxyImage
+	if rn != nil {
+		image = s.runnerProxyImage(*rn)
+	}
+	tag := proxyImageRelease(image)
 	return tag != "" && releaseBefore(tag, viaOrgADORelease)
 }
