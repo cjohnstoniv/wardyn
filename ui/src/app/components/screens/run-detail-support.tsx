@@ -14,6 +14,7 @@ import { support, type SupportDoor, type SupportGrantView, type SupportStatus } 
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage } from "../../lib/format";
 import { isBackgroundRun, isServiceRun } from "../../lib/run-entry";
+import { HARNESS_LOGIN_TASK } from "./run-detail/sign-in-run";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
@@ -34,6 +35,14 @@ import {
 import { SupportConsentDialog, utcClock } from "./run-detail-support-consent";
 
 const POLL_MS = 10_000;
+
+// The run tasks the server sets itself and never lets a helper into: reservedRunTasks
+// (internal/api/runs_create_validate.go), which supportRunIneligible (internal/api/support_entry.go) refuses.
+const RESERVED_RUN_TASKS: readonly string[] = [HARNESS_LOGIN_TASK, "workspace record", "workspace verify"];
+
+// The principal of the deployment's admin token (adminTokenPrincipal, internal/api/runs_policy.go): no person,
+// so the server refuses its request (supportPerson, internal/api/support_entry.go).
+const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 
 const closedKey = (grant: string) => `wardyn.support.closed.${grant}`;
 const wasClosed = (grant: string): boolean => {
@@ -74,8 +83,10 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
     if (!mayRead || !runId) return;
     try {
       setStatus(await support.status(runId));
-    } catch {
-      setStatus(null); // not a party to this run's help (a 404), or the server said no: nothing to show
+    } catch (e) {
+      // Not a party to this run's help (a 404, or a not-found reason): nothing to show. Any other failure keeps
+      // the last answer, so one failed read neither shuts a helper's terminal nor drops the owner's banner.
+      if (e instanceof HttpError && (e.status === 404 || e.reason.endsWith("not_found"))) setStatus(null);
     }
   }, [mayRead, runId]);
   React.useEffect(() => {
@@ -123,6 +134,7 @@ const BANNER = "mb-0 flex flex-wrap items-start justify-between gap-3 rounded-lg
 export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport }) {
   const { viewer, open, status, refresh } = sup;
   const operator = useOperator();
+  const principal = usePrincipal();
   const [requesting, setRequesting] = React.useState(false);
   const [reviewing, setReviewing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -141,9 +153,20 @@ export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport 
     }
   };
 
-  // Help may be asked for on a live run that belongs to a person, by a super admin who is not that person.
+  // Help may be asked for on a live run that belongs to a person, by a super admin signed in as a person who is
+  // not that person: the server's supportRunIneligible and supportCaller, less local mode, which it answers.
   const mayAsk =
-    operator && viewer !== "owner" && run.state === "RUNNING" && !open && !run.operator_owned && !isServiceRun(run) && !isBackgroundRun(run);
+    operator &&
+    principal !== "" &&
+    principal !== ADMIN_TOKEN_PRINCIPAL &&
+    viewer !== "owner" &&
+    run.state === "RUNNING" &&
+    !open &&
+    !run.lost_at &&
+    !run.operator_owned &&
+    !isServiceRun(run) &&
+    !isBackgroundRun(run) &&
+    !RESERVED_RUN_TASKS.includes(run.task);
 
   let body: React.ReactNode = null;
   if (open && viewer) {
@@ -235,6 +258,11 @@ function RequestedBanner({ run, grant, viewer, busy, onReview, onCancel }: { run
       {viewer === "helper" && (
         <Button variant="outline" size="sm" disabled={busy} onClick={onCancel} data-testid="support-cancel-request">
           {SUPPORT_BANNER.CANCEL_REQUEST}
+        </Button>
+      )}
+      {viewer === "security" && (
+        <Button variant="outline" size="sm" disabled={busy} onClick={onCancel} className="text-danger" data-testid="support-end-now">
+          {SUPPORT_BANNER.END_NOW}
         </Button>
       )}
     </div>

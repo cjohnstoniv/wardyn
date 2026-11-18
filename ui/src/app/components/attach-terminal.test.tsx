@@ -886,6 +886,8 @@ describe("AttachTerminal — a support helper", () => {
     expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
     expect(screen.queryByText(RUN_COCKPIT.displacedUnknownHint)).toBeNull();
     expect(screen.queryByText(RUN_COCKPIT.driving)).toBeNull();
+    // The close reason names no principal, so nobody is "holding" the terminal.
+    expect(screen.queryByText(RUN_COCKPIT.heldBy("The run's owner joined"))).toBeNull();
     expect(FakeWebSocket.instances).toHaveLength(1); // no automatic reconnect
 
     fireEvent.click(screen.getByRole("button", { name: SUPPORT_BANNER.RECONNECT }));
@@ -899,5 +901,9 @@ describe("AttachTerminal — a support helper", () => {
     act(() => ws.open());
     act(() => ws.drop(1008, "The run's owner joined"));
     expect(screen.queryByText(SUPPORT_BANNER.OWNER_JOINED)).toBeNull();
+    // That reason names nobody, so it is the unnamed displacement: no holder and no Take over from "The run's owner joined".
+    expect(screen.queryByText(RUN_COCKPIT.heldBy("The run's owner joined"))).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
+    expect(screen.getByText(RUN_COCKPIT.displacedUnknownHint)).toBeInTheDocument();
   });
 });

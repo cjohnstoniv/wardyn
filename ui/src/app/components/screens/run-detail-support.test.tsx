@@ -6,7 +6,7 @@
 // The run page's support strip: hidden until the setup answer carries support_sessions, the helper's Request help
 // dialog, the one banner each party reads, and the line for every way help ends.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
@@ -15,6 +15,9 @@ import { makeRun } from "../../../test/factories";
 import { setField } from "../../../test/set-field";
 import type { RunDetail, SetupStatus } from "../../lib/types";
 import type { SupportGrantView, SupportStatus } from "../../lib/api/support";
+import { HttpError } from "../../lib/api/core";
+import { aheadByHours } from "../../lib/test-clock";
+import { utcClock } from "./run-detail-support-consent";
 import { supportEndLine, SUPPORT_REQUEST, type SupportViewer } from "../wardyn/copy/support";
 
 const api = {
@@ -30,22 +33,35 @@ import { RunSupportStrip, useRunSupport } from "./run-detail-support";
 
 const OFFERED = ["terminal", "commands", "files", "forward", "web_apps", "desktop"];
 const run = { ...makeRun({ created_by: "maya" }), } as RunDetail;
+// Times from the clock: asked six minutes ago, seen two minutes ago, ending in 24 minutes.
+const REQUESTED = aheadByHours(-0.1);
+const SEEN = aheadByHours(-2 / 60);
+const UNTIL = aheadByHours(0.4);
 
 const grant = (o: Partial<SupportGrantView> = {}): SupportGrantView => ({
   grant: "g-1",
   helper: "sam",
   reason: "The build keeps stalling.",
   doors_asked: ["terminal", "commands", "files"],
-  requested_at: "2026-11-17T14:05:00Z",
+  requested_at: REQUESTED,
   state: "requested",
   ...o,
 });
 const active = (o: Partial<SupportGrantView> = {}) =>
-  grant({ state: "active", doors: ["terminal", "files"], minutes: 30, expires_at: "2026-11-17T14:35:00Z", last_seen_at: "2026-11-17T14:12:00Z", ...o });
+  grant({ state: "active", doors: ["terminal", "files"], minutes: 30, expires_at: UNTIL, last_seen_at: SEEN, ...o });
 
 function Page({ r }: { r: RunDetail }) {
   const sup = useRunSupport(r);
-  return <RunSupportStrip run={r} sup={sup} />;
+  return (
+    <>
+      <RunSupportStrip run={r} sup={sup} />
+      {/* What the run page hands the cockpit (SupportHelperContext), and a read on demand in place of the poll. */}
+      <span data-testid="helper-terminal">{String(sup.helperTerminal)}</span>
+      <button type="button" onClick={() => void sup.refresh()}>
+        read again
+      </button>
+    </>
+  );
 }
 
 function mount(who: { principal: string; operator?: boolean; security?: boolean }, on = true, r: RunDetail = run) {
@@ -144,7 +160,7 @@ describe("support strip: the banner", () => {
     answer({ open: grant() });
     mount({ principal: "maya" });
     expect(await screen.findByText("sam asked to help in this run")).toBeTruthy();
-    expect(screen.getByText("Requested 14:05 UTC. A request nobody answers lapses after 15 minutes.")).toBeTruthy();
+    expect(screen.getByText(`Requested ${utcClock(REQUESTED)}. A request nobody answers lapses after 15 minutes.`)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Review request" })).toBeTruthy();
     cleanup();
     api.end.mockResolvedValue(grant({ state: "ended", end_reason: "ended_by_helper" }));
@@ -168,8 +184,8 @@ describe("support strip: the banner", () => {
       expect(banner.textContent).toContain("Terminal");
       expect(banner.textContent).toContain("Files");
       expect(banner.textContent).not.toContain("Commands"); // asked, not opened
-      expect(banner.textContent).toContain("14:35 UTC");
-      expect(banner.textContent).toContain("14:12 UTC");
+      expect(banner.textContent).toContain(utcClock(UNTIL));
+      expect(banner.textContent).toContain(utcClock(SEEN));
       expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Review request" })).toBeNull();
       cleanup();
@@ -203,6 +219,88 @@ describe("support strip: the banner", () => {
     mount({ principal: "maya" });
     await waitFor(() => expect(api.status).toHaveBeenCalled());
     expect(screen.queryByTestId("support-ended")).toBeNull();
+  });
+});
+
+describe("support strip: where Request help is never offered (the server always refuses)", () => {
+  it.each<[string, Partial<RunDetail>]>([
+    ["an operator-owned run", { operator_owned: true }],
+    ["a service identity's run", { created_by: "service:nightly" }],
+    ["a background run", { experience: "background" } as Partial<RunDetail>],
+    ["a lost run", { lost_at: aheadByHours(-0.5) }],
+    ["a sign-in run", { task: "harness login" }],
+    ["a workspace record run", { task: "workspace record" }],
+    ["a workspace verify run", { task: "workspace verify" }],
+    ["a run that is not running", { state: "SUCCEEDED" }],
+  ])("not on %s", async (_name, over) => {
+    answer({ open: null });
+    mount({ principal: "sam", operator: true }, true, { ...run, ...over } as RunDetail);
+    await waitFor(() => expect(api.status).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: SUPPORT_REQUEST.TITLE })).toBeNull();
+  });
+
+  it.each([
+    ["the admin token, which is no person", "admin-token"],
+    ["a session with no principal", ""],
+  ])("not to %s", async (_name, principal) => {
+    answer({ open: null });
+    mount({ principal, operator: true });
+    await waitFor(() => expect(api.status).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: SUPPORT_REQUEST.TITLE })).toBeNull();
+  });
+
+  it("is still offered on the same run with none of those facts (the control row)", async () => {
+    answer({ open: null });
+    mount({ principal: "sam", operator: true }, true, { ...run, task: "fix the build" } as RunDetail);
+    expect(await screen.findByRole("button", { name: SUPPORT_REQUEST.TITLE })).toBeTruthy();
+  });
+});
+
+describe("support strip: a security admin who is not a super admin", () => {
+  it("sees the active banner with End now and is never offered Request help", async () => {
+    answer({ open: active() });
+    mount({ principal: "sec", operator: false, security: true });
+    expect(await screen.findByText("sam is helping in this run")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: SUPPORT_REQUEST.TITLE })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review request" })).toBeNull();
+  });
+
+  it("gets End now on a request still waiting, which ends it with the same call", async () => {
+    answer({ open: grant() });
+    api.end.mockResolvedValue(grant({ state: "ended", end_reason: "ended_by_security" }));
+    mount({ principal: "sec", operator: false, security: true });
+    expect(await screen.findByText("sam asked to help in this run")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review request" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel request" })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "End now" }));
+    expect(api.end).toHaveBeenCalledWith("run-1", "g-1");
+  });
+});
+
+describe("support strip: a failed read keeps what was shown", () => {
+  it("a 500 keeps the helper's terminal open and the owner's banner up; a 404 clears both", async () => {
+    answer({ open: active() });
+    mount({ principal: "sam", operator: true });
+    await waitFor(() => expect(screen.getByTestId("helper-terminal").textContent).toBe("true"));
+    api.status.mockRejectedValueOnce(new HttpError(500, "internal error"));
+    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    expect(api.status).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("helper-terminal").textContent).toBe("true");
+    expect(screen.getByText("You are helping in this run")).toBeTruthy();
+    cleanup();
+
+    answer({ open: active() });
+    mount({ principal: "maya" });
+    expect(await screen.findByText("sam is helping in this run")).toBeTruthy();
+    api.status.mockRejectedValueOnce(new HttpError(500, "internal error"));
+    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    expect(screen.getByText("sam is helping in this run")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
+
+    api.status.mockRejectedValueOnce(new HttpError(404, "run not found", "run_not_found"));
+    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    await waitFor(() => expect(screen.queryByText("sam is helping in this run")).toBeNull());
   });
 });
 

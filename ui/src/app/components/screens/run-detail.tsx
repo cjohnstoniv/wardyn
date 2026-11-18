@@ -330,6 +330,8 @@ function RunDetailPage({ id }: { id: string }) {
           onValueChange={(v) => setTab(v as Tab)}
           className="flex min-h-0 flex-1 flex-col"
         >
+          {/* A support helper's terminal: the header's attachable chip and the cockpit's terminal read the same answer. */}
+          <SupportHelperContext.Provider value={sup.helperTerminal}>
           <SummaryHeader
             run={run}
             terminal={terminal}
@@ -401,7 +403,6 @@ function RunDetailPage({ id }: { id: string }) {
               scroll inside it (run-detail/canvas.tsx) — <main> still never
               scrolls, which e2e asserts. */}
           <TabsContent value="overview" className="mt-0 flex min-h-[20rem] flex-1 flex-col">
-            <SupportHelperContext.Provider value={sup.helperTerminal}>
             <Cockpit
               run={run} view={view}
               terminal={terminal}
@@ -421,7 +422,6 @@ function RunDetailPage({ id }: { id: string }) {
               onGoOutput={() => setTab("output")}
               onGoApprovals={() => setTab("approvals")}
             />
-            </SupportHelperContext.Provider>
           </TabsContent>
 
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
@@ -486,6 +486,7 @@ function RunDetailPage({ id }: { id: string }) {
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
+          </SupportHelperContext.Provider>
         </Tabs>
       )}
 

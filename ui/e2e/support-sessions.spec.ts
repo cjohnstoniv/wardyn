@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import type { Page, WebSocketRoute } from "@playwright/test";
+import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { attachModeFrame, findRunningFixture, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { SUPPORT_BANNER, SUPPORT_CONSENT, SUPPORT_REQUEST } from "../src/app/components/wardyn/copy/support";
+import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 
 // Support sessions in the console (approved board SC): the helper's Request help dialog, the owner's consent
 // screen (doors and minutes), Decline, End now, the banner each party reads, and nothing at all when
@@ -87,6 +89,24 @@ async function openRun(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 }
 
+// The helper's terminal: the seeded RUNNING fixture 2, made the owner's interactive run. Cache-and-serve, as
+// attach-stub.ts's stubInteractiveRun does, since the run page polls this read. Registered after spliceIdentity,
+// so it answers first for this one run.
+async function helpedTerminalRun(page: Page): Promise<string> {
+  const { id: runId } = await findRunningFixture(page);
+  let cached: Record<string, unknown> | null = null;
+  await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    if (!cached) {
+      const response = await route.fetch();
+      cached = { ...(await response.json()), interactive: true, state: "RUNNING", created_by: OWNER, operator_owned: false };
+    }
+    await route.fulfill({ json: cached! });
+  });
+  await stubAttachTicket(page, runId);
+  return runId;
+}
+
 const world = (over: Partial<World> = {}): World => ({ open: null, ended: null, calls: [], ...over });
 const requested = (): Grant => ({ grant: "g-e2e", helper: HELPER, reason: "The build keeps stalling.", doors_asked: ["terminal", "commands", "files"], requested_at: new Date().toISOString(), state: "requested", recorded_doors: ["terminal"] });
 
@@ -154,7 +174,7 @@ test.describe("Support sessions", () => {
     expect(w.calls.some((c) => c.path.endsWith("/decline"))).toBe(true);
   });
 
-  test("End now ends the help, for the owner and the helper, and the ended line has Close", async ({ page }) => {
+  test("the owner's End now ends the help, and the ended line has Close", async ({ page }) => {
     const w = world({ open: { ...requested(), state: "active", doors: ["terminal"], minutes: 30, expires_at: new Date(Date.now() + 30 * 60_000).toISOString() } });
     await spliceIdentity(page, { switchOn: true, viewer: OWNER });
     await serveSupport(page, w);
@@ -175,5 +195,50 @@ test.describe("Support sessions", () => {
     const banner = page.getByTestId("support-active");
     await expect(banner.getByText(SUPPORT_BANNER.ACTIVE_HELPER)).toBeVisible();
     await expect(banner.getByRole("button", { name: SUPPORT_BANNER.END_NOW })).toBeVisible();
+  });
+
+  const helping = (): World => world({ open: { ...requested(), state: "active", doors: ["terminal"], minutes: 30, expires_at: new Date(Date.now() + 30 * 60_000).toISOString() } });
+
+  test("enter: the helper's terminal opens on a ticket, read-only while the owner holds it, with no Take over and no hint", async ({ page }) => {
+    await spliceIdentity(page, { switchOn: true, viewer: HELPER });
+    await serveSupport(page, helping());
+    const runId = await helpedTerminalRun(page);
+    const { opens } = await stubAttachSocket(page, (_n, ws) => ws.send(attachModeFrame(true, { principal: OWNER })));
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane.locator(".xterm-screen").first()).toBeVisible();
+    await expect(pane.getByText(RUN_COCKPIT.heldBy(OWNER))).toBeVisible();
+    await expect(pane.getByText(RUN_COCKPIT.watchingReadOnly)).toBeVisible();
+    await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toHaveCount(0);
+    await expect(pane.getByText(RUN_COCKPIT.heldHint)).toHaveCount(0);
+    expect(opens()).toBe(1);
+  });
+
+  test("cut: the owner joining closes the helper's terminal, which says so and offers Reconnect only", async ({ page }) => {
+    await spliceIdentity(page, { switchOn: true, viewer: HELPER });
+    await serveSupport(page, helping());
+    const runId = await helpedTerminalRun(page);
+    let firstWs: WebSocketRoute | null = null;
+    const { opens } = await stubAttachSocket(page, (n, ws) => {
+      if (n === 1) firstWs = ws;
+      ws.send(attachModeFrame(false, { principal: HELPER }));
+    });
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane.locator(".xterm-screen").first()).toBeVisible();
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+
+    await firstWs!.close({ code: 1008, reason: "The run's owner joined" });
+    const strip = pane.getByTestId("support-owner-joined");
+    await expect(strip.getByText(SUPPORT_BANNER.OWNER_JOINED)).toBeVisible();
+    await expect(strip.getByText(SUPPORT_BANNER.OWNER_DRIVING)).toBeVisible();
+    await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toHaveCount(0);
+    expect(opens()).toBe(1);
+
+    await strip.getByRole("button", { name: SUPPORT_BANNER.RECONNECT }).click();
+    await expect.poll(() => opens(), { timeout: 10_000, message: "Reconnect never opened a second socket" }).toBe(2);
+    await expect(pane.getByTestId("support-owner-joined")).toHaveCount(0);
   });
 });

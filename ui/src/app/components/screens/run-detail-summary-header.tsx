@@ -30,6 +30,7 @@ import { END_RUN } from "../wardyn/copy/run-lifetime";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { RunEndsControls } from "./run-detail/run-ends-row";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { useSupportHelper } from "../wardyn/support-helper-context";
 import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import { RUN_PLACEMENT, runnerLabel } from "../wardyn/copy/runners";
@@ -181,7 +182,11 @@ export function SummaryHeader({
   const operator = useOperator();
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
-  const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
+  // A support helper whose grant opens the terminal enters through the server's support arm: the same predicate
+  // TerminalPane (run-detail/terminal-notice.tsx) opens the terminal on.
+  const supportHelper = useSupportHelper();
+  const resolved = useOperatorResolved();
+  const canAttach = supportHelper || mayEnterRunOrUnknown(run, principal, operator, resolved);
   const elapsed = useElapsed(run.created_at, run.ended_at ?? run.updated_at, terminal);
   const sentence = statusSentence(run, terminal, pendingApprovalCount, viewerBlocked);
   // The list's chip, so a row and its page say the same thing: a live service's health in place of "Running".

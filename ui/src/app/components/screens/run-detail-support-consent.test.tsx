@@ -111,15 +111,14 @@ describe("consent: answering", () => {
     expect(onAnswered).toHaveBeenCalled();
   });
 
-  it("shows the lapsed screen for a request older than 15 minutes, with only Close", () => {
+  it("keeps Accept and Decline on a request this browser's clock calls older than 15 minutes: only the server says it lapsed", () => {
     open(grant({ requested_at: new Date(Date.now() - 16 * 60_000).toISOString() }));
-    expect(screen.getByText(SUPPORT_CONSENT.LAPSED)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
-    // the dialog's own X and the footer Close
-    expect(within(screen.getByTestId("support-consent-lapsed")).getAllByRole("button", { name: "Close" })).toHaveLength(2);
+    expect(screen.queryByText(SUPPORT_CONSENT.LAPSED)).toBeNull();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
   });
 
-  it("turns to the lapsed screen when the server no longer finds the request", async () => {
+  it("turns to the lapsed screen, with only Close, when the server no longer finds the request", async () => {
     accept.mockRejectedValue(new HttpError(404, "No such open help request", "support_grant_not_found"));
     const user = userEvent.setup();
     open(grant());
@@ -127,6 +126,9 @@ describe("consent: answering", () => {
     await user.click(screen.getByRole("radio", { name: "15 minutes" }));
     await user.click(acceptButton());
     expect(await screen.findByText(SUPPORT_CONSENT.LAPSED)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    // the dialog's own X and the footer Close
+    expect(within(screen.getByTestId("support-consent-lapsed")).getAllByRole("button", { name: "Close" })).toHaveLength(2);
     expect(onAnswered).not.toHaveBeenCalled();
   });
 });

@@ -27,8 +27,6 @@ export function utcClock(iso: string | undefined): string {
   return `${t.toISOString().slice(11, 16)} UTC`;
 }
 
-const LAPSE_MS = 15 * 60_000;
-
 /** Where the sandbox runs, as the consent screen names it: the owner's computer, or the pool or host. */
 function sandboxPlace(run: RunDetail): string {
   if (run.placement === "local") return runnerLabel(run);
@@ -54,8 +52,8 @@ export function SupportConsentDialog({
   const [minutes, setMinutes] = React.useState<number | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [lapsedNow, setLapsedNow] = React.useState(false);
-  const lapsed = lapsedNow || Date.now() - Date.parse(grant.requested_at) > LAPSE_MS;
+  // Lapsed only on the server's word (support_grant_not_found on an answer), never on this browser's clock.
+  const [lapsed, setLapsed] = React.useState(false);
   const asked = SUPPORT_DOORS.filter((d) => grant.doors_asked.includes(d));
   const recording = (door: SupportDoor) => (recordedDoors.includes(door) ? SUPPORT_RECORDED.yes : SUPPORT_RECORDED.no);
 
@@ -68,7 +66,7 @@ export function SupportConsentDialog({
       onAnswered();
     } catch (e) {
       // The request is gone (answered, ended or lapsed): the one thing left to say is that it lapsed.
-      if (e instanceof HttpError && e.reason === "support_grant_not_found") setLapsedNow(true);
+      if (e instanceof HttpError && e.reason === "support_grant_not_found") setLapsed(true);
       else setError(getErrorMessage(e));
       setBusy(false);
     }
