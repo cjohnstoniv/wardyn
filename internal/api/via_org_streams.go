@@ -314,6 +314,20 @@ func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 	run.smu.Unlock()
 }
 
+// releaseViaOrgEngineOf releases runID's engine on this replica and ends its open streams, as a run away is released
+// (releaseViaOrgRun's away form): the run keeps its state and byte total, and its next request builds a fresh engine
+// from the configuration as it stands then. The run is looked up under s.viaOrg's lock, which is let go before
+// releaseViaOrgRun takes the run's own locks, as endViaOrgRunner does: releaseViaOrgRun's final form takes s.viaOrg's
+// lock under the run's smu, so holding it here would invert that order.
+func (s *Server) releaseViaOrgEngineOf(runID uuid.UUID) {
+	s.viaOrg.mu.Lock()
+	run := s.viaOrg.runs[runID]
+	s.viaOrg.mu.Unlock()
+	if run != nil {
+		s.releaseViaOrgRun(run, false, false)
+	}
+}
+
 // closeViaOrgGen closes a retired generation's engine once every stream admitted to it has returned
 // (they were cancelled): its sink and masking corpus stay alive for their last producer, and the
 // engine keeps them until its sink has posted every queued row (proxy.Server.Shutdown).
