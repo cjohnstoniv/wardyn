@@ -30,6 +30,7 @@
 | **v0.10.0-rc.22** | rc.22: `wardyn policy check --within`, send-once operation keys for approve_each calls, confinement floors, workload policy pins and identities, a runtime contract page, and component grant withdrawals that reach running runs. | **Shipped (pre-alpha)** — `v0.10.0-rc.22`, 2026-11-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.23** | rc.23: a macOS VM inspection CA with an MDM profile template, `host_rules` for VM runs, a `once` approval a failed HTTPS connection no longer spends, and no repeat prompt for an identical concurrent MCP call. | **Shipped (pre-alpha)** — `v0.10.0-rc.23`, 2026-11-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.24** | rc.24: Claude Code 2.1.312, a Kubernetes run that keeps its `data_out` rule after a live egress edit, a Bedrock sign-in link for the AWS page, and run identity MCP servers refused on every runner. | **Shipped (pre-alpha)** — `v0.10.0-rc.24`, 2026-11-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.25** | rc.25: an Azure DevOps token on a cluster run that stops working within 10 minutes of the connection being disabled or capped. | **Shipped (pre-alpha)** — `v0.10.0-rc.25`, 2026-11-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 

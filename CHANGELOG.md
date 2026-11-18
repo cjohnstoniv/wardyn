@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.25] — 2026-11-18
+
+### Security
+
+- An Azure DevOps `minted_pat` run on the cluster now has its proxy fetch the run's token from Wardyn again at least every 10 minutes while the run uses Azure DevOps, as `bearer` and `own_pat` runs do. Before, disabling or deleting the connection, narrowing its ceiling below a capability the run holds, switching its token mode, or a boundary or restriction cap that leaves such a capability out usually reached such a run only when its token was renewed, up to `pat_max_hours` (default 8) later, and the run kept working against Azure DevOps until then. Now such a run's Azure DevOps requests are refused from at most 10 minutes after the change, and its tokens are revoked at the first refused one (`drift`). A deleted connection's tokens cannot be revoked: they are recorded as `ado_pat.revoke.failed` and stop working at their own expiry, and the run is no longer given them. If Wardyn is unreachable, the run's proxy stops adding the token at most 25 minutes after its last fetch. Runs on a runner are unchanged (15 minutes). Contrary to the 0.10.0-rc.17 notes, a capability a run already holds is not checked again at every request, only at the run's credential resolves; the boundary page now says so.
+
 ## [0.10.0-rc.24] — 2026-11-18
 
 ### Changed
