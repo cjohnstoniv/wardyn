@@ -131,7 +131,7 @@ export const SECRETS_DEMOS: Demo[] = [
       },
       {
         cmd: "git ls-remote https://example.com/wardyn-demo.git",
-        text: "After the minute is up, ask again: git gets a 502, because the broker refused a second mint. One approval bought one mint, and that mint lived ttl_seconds at the proxy. The proof is the Audit panel: the refused mint (already_minted) and a deny for example.com, with no new credential.mint.",
+        text: "After the minute is up, ask again: git gets a 502, because the broker refuses a second mint (already_minted). One approval bought one mint, and that mint lived ttl_seconds at the proxy. The proof is the Audit panel: a deny for example.com, and still only one credential.mint.",
       },
     ],
     setupUi: [
