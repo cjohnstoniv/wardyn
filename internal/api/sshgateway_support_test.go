@@ -505,6 +505,8 @@ func TestSSHSupport_FailedRunReadClosesAHelper(t *testing.T) {
 
 // (j) The owner's web attach takes the writer seat from a helper's SSH shell: the helper's channel reads "The
 // run's owner joined", one session.takeover row has reason owner_joined, and the shell was seated as a helper's.
+// Every row of the helper's shell, its two session.attach rows and its session.detach, names the grant and the
+// support entry.
 func TestSSHSupport_OwnerAttachDisplacesAHelperShell(t *testing.T) {
 	r := newSSHSupportRig(t, []string{"terminal"})
 	client, err := r.dial(t)
@@ -557,6 +559,44 @@ func TestSSHSupport_OwnerAttachDisplacesAHelperShell(t *testing.T) {
 	ev := waitForAudit(t, r.h.audit, r.run.ID, "session.takeover", "success")
 	if ev == nil || ev.Actor != sshSupportOwner || !strings.Contains(string(ev.Data), `"reason":"owner_joined"`) || !strings.Contains(string(ev.Data), `"previous_holder":"`+sshSupportHelper+`"`) {
 		t.Errorf("session.takeover row = %+v, want the owner's with reason owner_joined naming the helper", ev)
+	}
+	waitForActorAudit(t, r.h.audit, r.run.ID, "session.detach", sshSupportHelper)
+	rows := map[string]int{}
+	for _, ev := range r.h.audit.snapshot() {
+		if ev.Actor != sshSupportHelper || (ev.Action != "session.attach" && ev.Action != "session.detach") {
+			continue
+		}
+		rows[ev.Action]++
+		if d := uiRowData(t, ev); d["entry"] != supportEntryHelper || d["support_grant"] != r.grant.ID.String() {
+			t.Errorf("the helper's %s %s row = %s, want entry %s and support_grant %s", ev.Action, ev.Outcome, ev.Data, supportEntryHelper, r.grant.ID)
+		}
+	}
+	if rows["session.attach"] != 2 || rows["session.detach"] != 1 {
+		t.Errorf("the helper's shell wrote %v, want two session.attach rows and one session.detach", rows)
+	}
+}
+
+// A helper promoted from the queue to the writer seat is written as a helper: the session.promote row names the
+// grant and the support entry.
+func TestSSHSupport_PromotedHelperRowNamesTheEntry(t *testing.T) {
+	rec := &sshTestRecorder{}
+	srv := New(Config{Audit: rec, AdminToken: adminToken})
+	runID, grant := uuid.New(), uuid.New()
+	owner := &attachHolder{principal: sshSupportOwner, actorType: types.ActorHuman, source: attachSourceWeb, since: time.Now()}
+	helper := &attachHolder{principal: sshSupportHelper, actorType: types.ActorHuman, source: attachSourceSSH, since: time.Now(),
+		support: grant, notify: func(bool, *attachHolder) {}}
+	_, releaseOwner := srv.registerAttachHolder(runID, owner)
+	if readOnly, _ := srv.registerAttachHolder(runID, helper); !readOnly {
+		t.Fatal("the helper took the seat the owner holds")
+	}
+	announce := releaseOwner()
+	if announce == nil {
+		t.Fatal("the owner left with the helper queued and nothing was promoted")
+	}
+	announce()
+	ev := waitForActorAudit(t, rec, runID, "session.promote", sshSupportHelper)
+	if d := uiRowData(t, *ev); d["entry"] != supportEntryHelper || d["support_grant"] != grant.String() {
+		t.Errorf("session.promote row = %s, want entry %s and support_grant %s", ev.Data, supportEntryHelper, grant)
 	}
 }
 
@@ -734,20 +774,23 @@ func TestSSHSupportUnreadableGrantRefuses(t *testing.T) {
 	if sshSupportGrantUnreadable(perms) {
 		t.Fatal("a good grant extension reads as unreadable")
 	}
-	perms.Extensions[sshExtSupportGrant] = "not-a-grant-id"
-	if !sshSupportGrantUnreadable(perms) {
-		t.Fatal("an unparseable grant extension reads as readable")
-	}
-	if reason := r.h.srv.sshCurrentKey(context.Background(), perms); reason != sshSupportUnverified {
-		t.Errorf("an unparseable grant extension re-checked as %q, want %q", reason, sshSupportUnverified)
-	}
-	ctx := withSupportDoors(context.Background(), perms)
-	if _, helper := sshSupportOf(ctx); !helper {
-		t.Fatal("an unparseable grant extension gave a context that reads as the owner's")
-	}
-	for _, kind := range []sshChannelKind{sshKindShell, sshKindExec, sshKindSFTP, sshKindSync, sshKindForward} {
-		if !sshSupportDoorRefused(ctx, kind) {
-			t.Errorf("an unparseable grant extension admitted %q", kind)
+	// An id that does not parse, and the nil id, which parses but names no grant.
+	for _, bad := range []string{"not-a-grant-id", uuid.Nil.String()} {
+		perms.Extensions[sshExtSupportGrant] = bad
+		if !sshSupportGrantUnreadable(perms) {
+			t.Fatalf("grant extension %q reads as readable", bad)
+		}
+		if reason := r.h.srv.sshCurrentKey(context.Background(), perms); reason != sshSupportUnverified {
+			t.Errorf("grant extension %q re-checked as %q, want %q", bad, reason, sshSupportUnverified)
+		}
+		ctx := withSupportDoors(context.Background(), perms)
+		if _, helper := sshSupportOf(ctx); !helper {
+			t.Fatalf("grant extension %q gave a context that reads as the owner's", bad)
+		}
+		for _, kind := range []sshChannelKind{sshKindShell, sshKindExec, sshKindSFTP, sshKindSync, sshKindForward} {
+			if !sshSupportDoorRefused(ctx, kind) {
+				t.Errorf("grant extension %q admitted %q", bad, kind)
+			}
 		}
 	}
 	if sshSupportGrantUnreadable(&ssh.Permissions{Extensions: map[string]string{}}) {

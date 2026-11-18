@@ -79,16 +79,16 @@ func sshSupportGrant(perms *ssh.Permissions) uuid.UUID {
 	return id
 }
 
-// sshSupportGrantUnreadable reports a support-grant extension that is present and not a grant id. Such a
-// connection is a helper's, never an owner's: sshSupportGrant reads it as no grant, so a caller that did not ask
-// here would take it for the run's owner.
+// sshSupportGrantUnreadable reports a support-grant extension that is present and not a grant id, the nil id
+// included. Such a connection is a helper's, never an owner's: sshSupportGrant reads it as no grant, so a caller
+// that did not ask here would take it for the run's owner.
 func sshSupportGrantUnreadable(perms *ssh.Permissions) bool {
 	raw, ok := perms.Extensions[sshExtSupportGrant]
 	if !ok {
 		return false
 	}
-	_, err := uuid.Parse(raw)
-	return err != nil
+	id, err := uuid.Parse(raw)
+	return err != nil || id == uuid.Nil
 }
 
 // sshAuthData is the ssh.authenticate success row's data: override for an admin key's operator-owned entry,

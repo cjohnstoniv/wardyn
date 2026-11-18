@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -491,7 +492,11 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// recorder is built, held until finishRecording below has returned.
 	releaseSlot, refused := s.reserveAttachSlotOrSay(run, principal)
 	if refused != "" {
-		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, map[string]any{"transport": "ssh"})
+		data := map[string]any{"transport": "ssh"}
+		if entry, ok := sshSupportOf(ctx); ok { // a helper's refused shell names its grant, as its other rows do
+			maps.Copy(data, supportEntryFields(entry.grant))
+		}
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, data)
 		sendChannelError(channel, "wardyn: "+refused)
 		return
 	}
