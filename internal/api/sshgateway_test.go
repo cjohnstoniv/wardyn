@@ -297,6 +297,9 @@ func fakeEchoExecSession() *runner.ExecSession {
 		Stdout: stdoutR,
 		Stderr: stderrR,
 		Wait:   func() (int, error) { return 0, nil },
+		// Close ends the relay, as every substrate's does: a bridge whose client closed the channel before its EOF
+		// reached Stdin would otherwise park on Stdout.
+		Close: func() error { _ = stdinR.Close(); _ = stdoutR.Close(); _ = stderrR.Close(); return nil },
 	}
 }
 
