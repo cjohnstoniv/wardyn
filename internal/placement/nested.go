@@ -25,7 +25,8 @@ var nestedFields = map[reflect.Type][]string{
 		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		// LiveDenies is the hosts a live egress edit denied: it only narrows egress and carries no credential.
-		"VM PortRule SigninListen NoNetwork LiveDenies"),
+		// RelayKey is set by the Kubernetes driver at pod create (runnerd), never in a dispatched spec, and carries no grant.
+		"VM PortRule SigninListen NoNetwork LiveDenies RelayKey"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),

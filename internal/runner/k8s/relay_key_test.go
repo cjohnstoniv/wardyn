@@ -393,7 +393,7 @@ func TestRunnerReplayRelayKeys(t *testing.T) {
 		t.Fatal("no relay key hash persisted")
 	}
 	fenced, none, bad := uuid.New(), uuid.New(), uuid.New()
-	h.ev.m[fenced] = []byte(`{"relay_key_hash":"` + hex.EncodeToString(want[:]) + `","fence":{"at":"2026-11-17T00:00:00Z"}}`)
+	h.ev.m[fenced] = []byte(`{"relay_key_hash":"` + hex.EncodeToString(want[:]) + `","fence":{"at":"` + time.Now().UTC().Format(time.RFC3339) + `"}}`)
 	h.ev.m[none] = []byte(`{}`)
 	h.ev.m[bad] = []byte(`{"relay_key_hash":"zz"}`)
 	restarted := wireRelayKeys(h)
