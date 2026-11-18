@@ -26,9 +26,25 @@ import (
 type tokenSource struct {
 	mu  sync.RWMutex
 	tok string
+	// atMs is when tok was installed, the start-up token's or a renewal's, in unix ms. It is read on the
+	// wall clock, as brokeredToken's expiry and inject.go's lastGood are, so a computer's sleep counts.
+	atMs int64
 }
 
-func newTokenSource(tok string) *tokenSource { return &tokenSource{tok: tok} }
+func newTokenSource(tok string) *tokenSource {
+	return &tokenSource{tok: tok, atMs: time.Now().UnixMilli()}
+}
+
+// quiet is how long ago the current token was installed: how long this proxy has gone without renewing
+// its run token. 0 for a nil source.
+func (t *tokenSource) quiet(now time.Time) time.Duration {
+	if t == nil {
+		return 0
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return time.Duration(now.UnixMilli()-t.atMs) * time.Millisecond
+}
 
 // Get returns the current token; a nil source yields "" (safe when no token is configured).
 func (t *tokenSource) Get() string {
@@ -46,7 +62,7 @@ func (t *tokenSource) Set(tok string) {
 		return
 	}
 	t.mu.Lock()
-	t.tok = tok
+	t.tok, t.atMs = tok, time.Now().UnixMilli()
 	t.mu.Unlock()
 }
 
@@ -56,8 +72,10 @@ func (t *tokenSource) Set(tok string) {
 const FirstRenewGateEnv = "WARDYN_PROXY_FIRST_RENEW_GATE"
 
 const (
-	renewRetry       = time.Minute      // first gap after a failed renew, and the floor on every gap
-	renewMaxInterval = 30 * time.Minute // caps the gap between renews and the failure-backoff ceiling
+	renewRetry = time.Minute // first gap after a failed renew, and the floor on every gap
+	// renewMaxInterval caps the gap between renews and the failure-backoff ceiling. It is half of
+	// brokerOfflineBound (git_broker.go), so a proxy that reaches the organisation never meets that bound.
+	renewMaxInterval = 15 * time.Minute
 	renewTimeout     = 10 * time.Second // bounds one renew request
 	// renewClosedTimeout bounds one request while a replacement proxy's gate has not opened: the runner
 	// waits 10 s for the proxy, so a first request that hangs must leave room for a retry.
