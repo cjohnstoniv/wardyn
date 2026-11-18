@@ -227,7 +227,7 @@ describe("WorkloadDrawer inbound address", () => {
 });
 
 describe("WorkloadDrawer last refusal", () => {
-  const TOLD = "A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.";
+  const TOLD = "A credential it carries, such as a grant from the default policy or an MCP server's run identity, cannot be sent to the runner it would land on.";
   const SERVER = "ProxyConfig.Policy.EligibleGrants[0]: not delivered to this runner. The grant may come from the default policy.";
   const refused = (message?: string) =>
     workload({ generation: 5, last_refusal: { generation: 5, reason: "placement_credential", message, at: ago(D) } });
