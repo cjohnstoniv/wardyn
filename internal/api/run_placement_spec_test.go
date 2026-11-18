@@ -268,6 +268,62 @@ func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T)
 	}
 }
 
+// localClassifyRunnerStore is localClassifyStore with the run's runner row, which classification reads for the
+// runner's owner kind and trust class.
+type localClassifyRunnerStore struct {
+	localClassifyStore
+	row types.Runner
+}
+
+func (s localClassifyRunnerStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
+	return s.row, nil
+}
+
+// A classification refusal says "your own runner" only for a person's runner; on an organisation's runner (a via_org
+// run's) it names the run's runner instead. The pure choice, then the hint a refused dispatch records.
+func TestLocalDispatchRefusalPrefixFollowsTheRunnersOwner(t *testing.T) {
+	const own, its = "This run was not launched on your own runner: ", "This run was not launched on its runner: "
+	for _, tc := range []struct {
+		kind types.RunnerOwnerKind
+		want string
+	}{
+		{types.RunnerOwnerPerson, own},
+		{types.RunnerOwnerOrg, its},
+		{"", its},
+	} {
+		if got := localRefusalPrefix(tc.kind); got != tc.want {
+			t.Errorf("localRefusalPrefix(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		row   types.Runner
+		want  string
+		other string
+	}{
+		{"person's runner", types.Runner{OwnerKind: types.RunnerOwnerPerson, TrustClass: types.RunnerTrustPersonal}, own, its},
+		{"organisation's runner", types.Runner{OwnerKind: types.RunnerOwnerOrg, TrustClass: types.RunnerTrustOrgCluster}, its, own},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunStarting)
+			id := uuid.New()
+			run.Placement, run.RunnerID = types.PlacementLocal, &id
+			st.run = run
+			tc.row.ID = id
+			srv.cfg.Store = localClassifyRunnerStore{localClassifyStore: localClassifyStore{dispatchTestStore: st,
+				comps: []types.RunComponent{{Name: "Private Personal Tool", SelfDefined: true}}}, row: tc.row}
+			ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
+			spec := runner.SandboxSpec{RunID: run.ID}
+			if srv.classifyLocalDispatch(context.Background(), run, ceiling, types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
+				t.Fatal("a self-defined component passed P3 by default")
+			}
+			if !strings.HasPrefix(st.failureHint, tc.want) || strings.Contains(st.failureHint, tc.other) {
+				t.Fatalf("failure hint %q, want it to open %q", st.failureHint, tc.want)
+			}
+		})
+	}
+}
+
 // The org never chooses a path on the laptop: a stored proxy config's
 // DecisionSpoolDir does not reach the laptop-bound spec; the runner sets its own.
 func TestLocalStoredSpecNeverCarriesTheDecisionSpoolDir(t *testing.T) {

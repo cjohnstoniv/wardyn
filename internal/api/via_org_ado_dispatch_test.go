@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -317,6 +318,78 @@ func TestViaOrgADORunnerReady(t *testing.T) {
 	run.RunnerID = &id
 	if !srv.viaOrgADORunnerReady(context.Background(), run) {
 		t.Fatal("a run with no via_org Azure DevOps grant was refused")
+	}
+}
+
+// viaOrgRunnerStore is the dispatch fixture's store plus the run's runner row, counting the reads of it.
+type viaOrgRunnerStore struct {
+	localDispatchStore
+	row   types.Runner
+	err   error
+	reads *int
+}
+
+func (s viaOrgRunnerStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
+	*s.reads++
+	return s.row, s.err
+}
+
+// The floor reads the image the runner is given: the organisation's image for its architecture, else the global one.
+func TestViaOrgADORunnerReady_ReadsTheRunnersArchitectureImage(t *testing.T) {
+	const repo = "ghcr.io/acme/wardyn-proxy"
+	for _, tc := range []struct {
+		name         string
+		perArch      string
+		global       string
+		unreadable   bool
+		want         bool
+		wantRowReads int
+	}{
+		{name: "per-arch 0.10.0, global 0.10.1", perArch: repo + ":0.10.0", global: repo + ":0.10.1", want: false},
+		{name: "per-arch 0.10.1, global 0.10.0", perArch: repo + ":0.10.1", global: repo + ":0.10.0", want: true},
+		{name: "no per-arch, global 0.10.0", global: repo + ":0.10.0", want: false},
+		{name: "neither set", want: true},
+		{name: "per-arch untagged, global 0.10.0", perArch: repo + "@sha256:" + strings.Repeat("a", 64), global: repo + ":0.10.0", want: true},
+		{name: "row unreadable falls back to the global image, old", perArch: repo + ":0.10.1", global: repo + ":0.10.0", unreadable: true, want: false},
+		{name: "row unreadable falls back to the global image, current", perArch: repo + ":0.10.0", global: repo + ":0.10.1", unreadable: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
+			id := uuid.New()
+			run.RunnerID = &id
+			ls.dispatchTestStore.grants = []types.CredentialGrant{adoViaOrgGrantRow(run.ID, "dev.azure.com")}
+			reads := 0
+			vs := viaOrgRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, Arch: "arm64"}, reads: &reads}
+			if tc.unreadable {
+				vs.err = store.ErrNotFound
+			}
+			srv.cfg.Store = vs
+			srv.cfg.ProxyImage = tc.global
+			if tc.perArch != "" {
+				srv.cfg.ProxyImageByArch = map[string]string{"arm64": tc.perArch}
+			}
+			seamConnect(t, srv, id, runnerwire.Caps{ViaOrgADO: true})
+			if got := srv.viaOrgADORunnerReady(context.Background(), run); got != tc.want {
+				t.Fatalf("ready = %v (hint %q), want %v", got, ls.dispatchTestStore.failureHint, tc.want)
+			}
+			if reads != 1 {
+				t.Fatalf("read the runner row %d times, want once", reads)
+			}
+		})
+	}
+	// A runner that does not advertise the capability is refused with no read of its row.
+	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
+	id := uuid.New()
+	run.RunnerID = &id
+	ls.dispatchTestStore.grants = []types.CredentialGrant{adoViaOrgGrantRow(run.ID, "dev.azure.com")}
+	reads := 0
+	srv.cfg.Store = viaOrgRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id}, reads: &reads}
+	seamConnect(t, srv, id, runnerwire.Caps{})
+	if ready := srv.viaOrgADORunnerReady(context.Background(), run); ready || reads != 0 {
+		t.Fatalf("a runner without the capability: ready=%v, row reads %d, want refused and none", ready, reads)
+	}
+	if !strings.Contains(ls.dispatchTestStore.failureHint, viaOrgADORunnerTooOld) {
+		t.Fatalf("failure hint %q, want %q", ls.dispatchTestStore.failureHint, viaOrgADORunnerTooOld)
 	}
 }
 

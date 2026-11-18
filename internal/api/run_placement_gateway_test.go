@@ -72,10 +72,25 @@ func TestLocalPlacement_GatewayMCPServerRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
+// localPersonRunnerStore binds a local dispatch fixture's run to a person's runner, the one runner whose
+// refusal says "your own runner" (localRefusalPrefix).
+type localPersonRunnerStore struct {
+	localDispatchStore
+	row types.Runner
+}
+
+func (s localPersonRunnerStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
+	return s.row, nil
+}
+
 // Dispatch stays the backstop: a local spec carrying a run identity route is refused there, and the
 // run's failure hint names the server, not the spec field the audit row keeps.
 func TestLocalDispatchRefusesAGatewayRouteNamingTheServer(t *testing.T) {
 	srv, st, audit, run := localDispatchFixture(t, types.PlacementLocal)
+	id := uuid.New()
+	run.RunnerID = &id
+	st.run = run
+	srv.cfg.Store = localPersonRunnerStore{localDispatchStore: st, row: types.Runner{ID: id, OwnerKind: types.RunnerOwnerPerson, TrustClass: types.RunnerTrustPersonal}}
 	spec := localOrgNetworkSpec(run.ID)
 	spec.ProxyConfig.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "mcp.corp.example", Port: 443, MCPKey: "tools", Audience: "mcp-aud"}}
 	if srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
