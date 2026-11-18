@@ -21,7 +21,6 @@ THRESHOLD=1000
 
 # path -> frozen cap (lines at 2026-07-16 + headroom). Shrinking is always fine.
 declare -A ALLOWLIST=(
-  ["./internal/workspacescan/detect.go"]=1340 # 1244 at freeze
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
   # The build-plumbing shell was unpoliced until 2026-07-29 and the three biggest
