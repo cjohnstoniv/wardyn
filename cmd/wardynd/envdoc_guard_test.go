@@ -714,18 +714,19 @@ func readOperatorScriptVars(t *testing.T, root string) map[string]bool {
 // TestEnvDoc_OperatorScriptsVarsAreDocumented is the forward ratchet's third
 // shell-side leg (#202): every WARDYN_* token read by install.sh,
 // scripts/ci-run.sh or anything under deploy/images/** must appear as a
-// literal token in docs/ENV.md OR docs/CI.md — scripts/ci-run.sh's own
+// literal token in docs/ENV.md, docs/CI.md OR docs/REPO-CI.md (the image-build knobs
+// moved there with this repository's own CI notes) — scripts/ci-run.sh's own
 // WARDYN_CI_* knobs are the CI doc's registry already (docs/ENV.md's "Setup /
 // operator scripts" table points there rather than duplicating it), so this
 // test reads both files rather than forcing a second copy of that table.
 func TestEnvDoc_OperatorScriptsVarsAreDocumented(t *testing.T) {
 	root := repoRoot(t)
-	documented := documentedVars(readEnvDoc(t, root) + "\n" + readRepo(t, filepath.Join(root, "docs", "CI.md")))
+	documented := documentedVars(readEnvDoc(t, root) + "\n" + readRepo(t, filepath.Join(root, "docs", "CI.md")) + "\n" + readRepo(t, filepath.Join(root, "docs", "REPO-CI.md")))
 	for v := range readOperatorScriptVars(t, root) {
 		if documented[v] {
 			continue
 		}
-		t.Errorf("%s is read by install.sh, scripts/ci-run.sh or something under deploy/images/** but does not appear anywhere in docs/ENV.md or docs/CI.md — add a row (or a prose mention) for it", v)
+		t.Errorf("%s is read by install.sh, scripts/ci-run.sh or something under deploy/images/** but does not appear anywhere in docs/ENV.md, docs/CI.md or docs/REPO-CI.md — add a row (or a prose mention) for it", v)
 	}
 }
 

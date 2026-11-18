@@ -85,7 +85,7 @@ updates:
   # alpine). A directory that digest-pins a compose image must be listed here;
   # scripts/test-repo-guards.sh (guard 19) fails when one is missing. A bump
   # needs deploy/base-images.txt in step, as for the Dockerfile pins
-  # (docs/CI.md, "Docker Hub base-image mirror").
+  # (docs/REPO-CI.md, "Docker Hub base-image mirror").
   - package-ecosystem: docker-compose
     directories:
       - /deploy/compose

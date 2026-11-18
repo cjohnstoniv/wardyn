@@ -42,7 +42,7 @@ permissions:
   contents: read
 
 # GitHub gives this repository 20 concurrent job slots, and a candidate's PR CI,
-# its nightly and the 07:00 schedule all draw on them (docs/CI.md, "This
+# its nightly and the 07:00 schedule all draw on them (docs/REPO-CI.md, "This
 # repository's own CI"). scope=candidate (see SCOPE below) cuts what a release
 # candidate's dispatch takes; this group stops a re-dispatch on the same ref from
 # running beside the run it replaces. Only a dispatched run is ever cancelled:
@@ -75,7 +75,7 @@ concurrency:
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
 
-# Every job sets timeout-minutes, at least twice its measured maximum (docs/CI.md).
+# Every job sets timeout-minutes, at least twice its measured maximum (docs/REPO-CI.md).
 # e2e-live and docker-tagged-live failed in every nightly measured, so no green
 # duration exists for them and theirs are wider still.
 jobs:
@@ -93,7 +93,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
@@ -150,7 +150,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
@@ -222,7 +222,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|busybox:latest|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
@@ -353,7 +353,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -407,7 +407,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -454,7 +454,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -479,7 +479,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -539,7 +539,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
@@ -615,7 +615,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
@@ -684,7 +684,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|debian:trixie-slim)@'
@@ -832,7 +832,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(busybox:latest)@'
@@ -911,7 +911,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
@@ -950,7 +950,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|ubuntu:24\.04)@'
@@ -1005,7 +1005,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -1483,7 +1483,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
@@ -1667,7 +1667,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
@@ -1749,7 +1749,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
@@ -1840,7 +1840,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
@@ -2151,7 +2151,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
@@ -2225,7 +2225,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|alpine:3\.20)@'
@@ -2313,7 +2313,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
@@ -2380,7 +2380,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|postgres:17|registry:3)@'
@@ -2446,7 +2446,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(postgres:17)@'
@@ -2501,7 +2501,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
@@ -2589,7 +2589,7 @@ jobs:
   # Informational: it never merges or pushes anything for real, only reports.
   # No measured baseline yet (new job) — 180 min budgets for about 30 check
   # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
-  # each); re-measure and tighten once nightly runs exist (docs/CI.md).
+  # each); re-measure and tighten once nightly runs exist (docs/REPO-CI.md).
   migration-merge-check:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-26.04
@@ -2660,7 +2660,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: ''
@@ -2823,7 +2823,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
@@ -2922,7 +2922,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'

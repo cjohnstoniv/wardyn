@@ -8,7 +8,7 @@ description: >-
   with ONE dockerd restart that brings the job's service containers back, then
   pulls the pins under their docker.io names. A miss anywhere falls through to
   the next mirror and then to Docker Hub, exactly as before. A job uses this
-  step INSTEAD of a separate mirror.gcr.io step. See docs/CI.md, "Docker Hub
+  step INSTEAD of a separate mirror.gcr.io step. See docs/REPO-CI.md, "Docker Hub
   base-image mirror".
 inputs:
   prime:
