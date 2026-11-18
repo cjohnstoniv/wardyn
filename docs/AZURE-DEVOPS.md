@@ -336,6 +336,7 @@ That has two consequences:
 - **Every live token is revoked** when the run completes, fails or is cancelled, on kill, when the run's lease is lost,
   - when Wardyn reconciles a run after a restart, on the sandbox sweeps and the idle stop,
   - when the row's access changes under a running run so the run's request is refused (`drift`),
+    - a change reaches a run using Azure DevOps within 10 minutes on the cluster, 15 on a runner; to cut it at once, pause or end it,
   - when the person disconnects, and when an admin erases the person's credentials.
   - A sweep at boot and every five minutes revokes any token a crash left behind, and closes the records of tokens past their expiry without a revoke call.
 - **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`.
@@ -372,6 +373,7 @@ That has two consequences:
   - The proxy fetches at most 15 minutes apart, so a withdrawn opt-in or a policy, trust or posture change cuts the run within 15 minutes. To cut it at once, end or pause it.
   - Renewal, widening, pause and resume, and every revoke work as on the cluster.
 - If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch, and a restarted proxy does not start.
+  - On the cluster, a `minted_pat` proxy stops adding it after at most 25 minutes.
 - A stored git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
 - Pinned by `TestLocalEligibility_ADOResidentIsOffByDefault` ([`internal/placement/resident_test.go`](../internal/placement/resident_test.go)) and `TestMintedPATLocal_` ([`internal/api/runs_dispatch_ado_pat_local_test.go`](../internal/api/runs_dispatch_ado_pat_local_test.go)).
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).

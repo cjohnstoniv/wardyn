@@ -346,11 +346,17 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	// The lease, not the PAT's validTo, brings the proxy back to re-judge drift
+	// and the caps: 10 minutes on the cluster, as for bearer and own_pat, and 15
+	// through a runner relay. Outside the renew window the re-resolve returns the
+	// cached token, so it mints nothing.
+	lease := storedKeyTTL
+	if _, relayed := relayRunner(r.Context()); relayed {
+		lease = residentRejudgeEvery
+	}
 	expires := pat.ValidTo
-	if next := s.cfg.Now().Add(residentRejudgeEvery); next.Before(expires) {
-		if _, relayed := relayRunner(r.Context()); relayed {
-			expires = next
-		}
+	if next := s.cfg.Now().Add(lease); next.Before(expires) {
+		expires = next
 	}
 	// JTI is the token's own authorization id: the proxy names it back as
 	// stale_jti when Azure DevOps refuses the header it holds.
