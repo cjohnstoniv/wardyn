@@ -215,7 +215,7 @@ func TestPG_RefuseRunnerEventBoundsRowsPerRunner(t *testing.T) {
 			t.Fatalf("refusal %d: %v", i, err)
 		}
 		// The window is full only once a refusal gets no row: the 33rd, marked, still has one.
-		if (i <= 33 && fullFor != 0) || (i == 34 && (fullFor <= 0 || fullFor > time.Hour)) {
+		if (i <= 33 && fullFor != 0) || (i == 34 && (fullFor <= 0 || fullFor >= time.Hour)) {
 			t.Fatalf("refusal %d: window full for %v, want zero through the 33rd and more than zero, at most an hour, after", i, fullFor)
 		}
 		marked := 0

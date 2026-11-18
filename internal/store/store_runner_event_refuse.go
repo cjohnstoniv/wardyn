@@ -138,7 +138,9 @@ func refusalWindowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (row, m
 		runnerID, start, written, suppressed); err != nil {
 		return false, false, nil, 0, fmt.Errorf("store: count refusal: %w", err)
 	}
-	return row, marker, summary, start.Add(runnerEventRefuseWindow).Sub(now), nil
+	// A database clock that stepped back would put start after now; never
+	// report more than one window left.
+	return row, marker, summary, min(start.Add(runnerEventRefuseWindow).Sub(now), runnerEventRefuseWindow), nil
 }
 
 // writeRefusalRowsTx writes the summary row a previous window owes, then the refusal's own row when its window has
