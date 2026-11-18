@@ -6,6 +6,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -278,6 +279,17 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 	if aerr != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
 			sw+" is set, but the service identity that created this run could not be read to verify a second human decided it")
+		return "", false
+	}
+	helper, herr := s.supportHelperOf(r.Context(), ap.RunID, principal, time.Time{})
+	if herr != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
+			sw+" is set, but whether you helped in this run could not be read to verify a second human decided it")
+		return "", false
+	}
+	if helper {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+" is set: a second human must decide this — "+SupportHelperSecondHumanWhy).
+			OnRun(ap.RunID))
 		return "", false
 	}
 	if !authored && !askedForDownload(ap, principal) {
