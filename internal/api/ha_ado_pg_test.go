@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
@@ -248,4 +249,92 @@ func TestHALivePG_ErasureDeletesRunTokenAndChunkRowsAndNoLateWriteRecreatesThem(
 	if tokenRows() != 0 || l.storedChunks(run.ID) != "" {
 		t.Fatalf("a late write recreated rows: %d token rows, chunks %q", tokenRows(), l.storedChunks(run.ID))
 	}
+}
+
+// haPGRunPATs keeps the run's token rows in Postgres, and takes the provider-row write the admin door
+// makes, over the in-memory lane the fixture serves the rest from.
+type haPGRunPATs struct {
+	*adoPATStore
+	pg store.PG
+}
+
+func (s *haPGRunPATs) InsertRunPAT(ctx context.Context, p store.RunPAT) error {
+	return s.pg.InsertRunPAT(ctx, p)
+}
+
+func (s *haPGRunPATs) MarkRunPATRevoked(ctx context.Context, runID, id uuid.UUID, reason, lastError string) (bool, error) {
+	return s.pg.MarkRunPATRevoked(ctx, runID, id, reason, lastError)
+}
+
+func (s *haPGRunPATs) NoteRunPATRevokeFailed(ctx context.Context, runID, id uuid.UUID, lastError string) error {
+	return s.pg.NoteRunPATRevokeFailed(ctx, runID, id, lastError)
+}
+
+func (s *haPGRunPATs) ListUnrevokedRunPATs(ctx context.Context, f store.RunPATFilter) ([]store.RunPAT, error) {
+	return s.pg.ListUnrevokedRunPATs(ctx, f)
+}
+
+func (s *haPGRunPATs) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	s.site = cfg
+	return cfg, nil
+}
+
+func (*haPGRunPATs) ListSources(context.Context) ([]types.Source, error) { return nil, nil }
+
+// A cluster run's connection disabled on A is refused on B one lease later: the write revokes nothing
+// itself (the run is not on a runner), the answer A gave expires within the lease, and B's resolve
+// judges the drift, closes the run's token rows in Postgres with reason drift and mints nothing.
+func TestHALivePG_ClusterRunRowDisabledOnAIsRefusedOnBWithinALease(t *testing.T) {
+	h := newHAADO(t)
+	st := &haPGRunPATs{adoPATStore: h.st, pg: store.NewPG(h.pool)}
+	h.a.cfg.Store, h.b.cfg.Store = st, st
+	h.a.cfg.ADOLoginFacts = func() (string, string, bool) { return h.cfg.ClientID, h.cfg.TenantID, true }
+	if !h.dispatch(t) {
+		t.Fatalf("dispatch refused: %q", h.st.hint)
+	}
+	w, resp := h.resolveOn(h.a, "dev.azure.com", nil)
+	if limit := h.clock().Add(storedKeyTTL).UnixMilli(); w.Code != http.StatusOK || resp.ExpiresAt > limit {
+		t.Fatalf("A's resolve = %d expires %d, want 200 and at most now + storedKeyTTL (%d)", w.Code, resp.ExpiresAt, limit)
+	}
+
+	providers := *h.st.site.WorkspaceProviders
+	providers.Git = slices.Clone(providers.Git)
+	providers.Git[0].Disabled = true
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspace-providers", strings.NewReader(string(mustJSON(providers))))
+	r = r.WithContext(withOIDCHuman(r.Context(), h.subject))
+	put := httptest.NewRecorder()
+	h.a.handlePutWorkspaceProviders(put, r)
+	if put.Code != http.StatusOK {
+		t.Fatalf("A's PUT /workspace-providers = %d %s, want 200", put.Code, put.Body.String())
+	}
+	if live := h.openRows(); live != 1 {
+		t.Fatalf("open token rows right after the write = %d, want the run's one, still open", live)
+	}
+
+	h.advance(storedKeyTTL - 5*time.Minute)
+	w, _ = h.resolveOn(h.b, "dev.azure.com", nil)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonScopeChanged) {
+		t.Fatalf("B's resolve one lease later = %d %s, want 403 %s", w.Code, w.Body.String(), reasonScopeChanged)
+	}
+	var total, drifted int
+	if err := h.pool.QueryRow(t.Context(),
+		`SELECT count(*), count(*) FILTER (WHERE revoked_at IS NOT NULL AND revoke_reason = $2) FROM ado_run_pats WHERE run_id = $1`,
+		h.run.ID, adoPATRevokeDrift).Scan(&total, &drifted); err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || drifted != 1 {
+		t.Fatalf("ado_run_pats rows = %d, closed with reason %q = %d, want 1 and 1", total, adoPATRevokeDrift, drifted)
+	}
+	if n := h.pats.createCount(); n != 1 {
+		t.Fatalf("creates = %d, want 1: the refusal mints nothing", n)
+	}
+}
+
+// openRows counts the run's token rows in Postgres that are still open.
+func (h *haADO) openRows() int {
+	var n int
+	if err := h.pool.QueryRow(context.Background(), `SELECT count(*) FROM ado_run_pats WHERE run_id = $1 AND revoked_at IS NULL`, h.run.ID).Scan(&n); err != nil {
+		h.t.Fatal(err)
+	}
+	return n
 }

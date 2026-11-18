@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.24). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.25). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -2689,6 +2689,7 @@ These risks are **not closed by v1 Wardyn**.
       - **A run can hold several live PATs until each one's `validTo`.**
         - The proxy keeps one header per Azure DevOps host and wardynd cannot reach it, so a token a host may still hold is never revoked early: renewal and widening leave the older PAT in place.
         - Each is no wider than the newest, and all are revoked on pause, at the end, on drift, when the person disconnects and when they are offboarded.
+        - Drift is judged at the proxy's next fetch: within 10 minutes of a change on the cluster, 15 on a runner, while the run uses Azure DevOps.
       - **"Restrict full-scoped PAT creation" does not bound custom scopes.**
         - It requires new PATs to name "a specific, custom-defined set of scopes", and that set may name every scope.
         - So the policy is not a bound on a stolen minting credential and Wardyn does not treat it as one.

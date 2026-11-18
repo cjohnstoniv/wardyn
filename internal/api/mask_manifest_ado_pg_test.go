@@ -82,7 +82,7 @@ func TestMaskManifest_RunTokenRenderingsSurviveARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := ml.ok(t, "dev.azure.com", nil)
-	ml.setClock(time.UnixMilli(first.ExpiresAt).Add(-adoRunPATRenewWindow + time.Minute))
+	ml.setClock(ml.validTo(t, first.JTI).Add(-adoRunPATRenewWindow + time.Minute))
 	ml.ok(t, "dev.azure.com", nil) // the renewal: a second token
 	if len(ml.pats.tokens) != 2 {
 		t.Fatalf("tokens minted = %d, want the dispatch token and one renewal", len(ml.pats.tokens))
