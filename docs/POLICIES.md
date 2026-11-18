@@ -509,7 +509,7 @@ What the check does and does not settle:
 
 - The branch-namespace confinement two sections up is default-**ON**, and an operator can turn it off for every run on a proxy process at once (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false`, [`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)'s `BranchNSEnforced`).
 - `git_push_any_branch: true` is the same escape hatch scoped to **one run's policy** instead.
-- A sandbox a human drives through an external tool ([docs/SSH.md](SSH.md) §6) that checks out and pushes its own branch name.
+- A sandbox a human drives through an external tool ([SSH-SCRIPTED-ACCESS.md](SSH-SCRIPTED-ACCESS.md)) that checks out and pushes its own branch name.
 - That is not the `wardyn/<run-id>/*` one `agent-run` sets up.
 - Such a sandbox gets every push refused with no way to tell that tool why.
 - Setting the field lets this run's brokered pushes land on any branch the granted token may write.

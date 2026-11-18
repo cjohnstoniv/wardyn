@@ -72,6 +72,7 @@ docker-compose.override.yml
 
 # Generated test-report artifacts (regenerable per run). The only committed
 # file under test/reports/ is its README.md; everything else is generated.
+# test/reports/go/ also holds TEST-GAPS.md, written by `make test-gaps`.
 test/reports/go/
 test/reports/ui/
 test/reports/e2e/

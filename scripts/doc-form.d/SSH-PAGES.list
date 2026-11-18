@@ -1,0 +1,5 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/operations/ssh-from-a-cluster.md
+docs/operations/ssh-443-only.md
+docs/SSH-SCRIPTED-ACCESS.md
+docs/operations/ssh-internals.md

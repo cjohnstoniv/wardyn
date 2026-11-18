@@ -1883,7 +1883,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Advisory copy: the daemon never runs it, people's own `ssh` does.
 - Boot refuses a value with a control character, a newline or a single quote, or over 512 bytes.
 - Unset, `/healthz` is unchanged.
-- See [SSH.md](SSH.md), "SSH on a 443-only estate".
+- See [SSH on a 443-only estate](operations/ssh-443-only.md).
 
 ### `WARDYN_SSH_MAX_SESSIONS_PER_RUN`
 

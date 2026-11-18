@@ -119,7 +119,7 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
    keeps today's behaviour.
 3. **Release PR.** When the milestone's release-gating issues are closed, one
    PR carries steps 1 and 1b below — the CHANGELOG rename, the version strings,
-   the ROADMAP row, [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md) — and nothing else.
+   the ROADMAP row — and nothing else.
    - The same PR regenerates the GPL source offer from the previous tag's published digests (header of [`scripts/gpl-source-offer.sh`](scripts/gpl-source-offer.sh)).
 4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
@@ -329,11 +329,6 @@ crash or a usage limit resumes with the same command:
      - pointing at the CHANGELOG's now-dated entry
        instead of `[Unreleased]`.
    - ROADMAP.md carries no per-version narrative to flip any more — CHANGELOG.md is the only per-release detail.
-   - **Also regenerate [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md): `make test-gaps`** (needs the union
-     coverage profile `make ci`/`cover-check` already produced this run) —
-     - a past review found the generator gained a Kubernetes-gated bucket with
-       nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
-       `make test-gaps` is a standalone target, not in `make ci`.
    - **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
      (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
      -run TestConfigKeySet`) rather than copying `current.txt` —

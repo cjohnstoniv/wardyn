@@ -4177,7 +4177,7 @@ The labelled series, every label, and where its values come from:
 ### The advertised SSH ProxyCommand (opt-in)
 
 - `WARDYN_SSH_PROXY_COMMAND` (Helm `ssh.proxyCommand`, unset by default) is advisory copy.
-- wardynd publishes it on `/healthz` as `ssh.proxy_command`, and each person's own `ssh` executes it on their computer when they connect ([`docs/SSH.md`](../docs/SSH.md#ssh-on-a-443-only-estate), "SSH on a 443-only estate").
+- wardynd publishes it on `/healthz` as `ssh.proxy_command`, and each person's own `ssh` executes it on their computer when they connect ([SSH on a 443-only estate](../docs/operations/ssh-443-only.md)).
 
 **The controls.**
 
