@@ -81,6 +81,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   skip_lane "kind-survival-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent survival walk (skipping)."
@@ -133,16 +135,7 @@ curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz" >/dev/null 2>&1 \
   || die "${BASE}/healthz did not answer — is the NodePort published on 127.0.0.1:${HTTP_PORT}?"
 pass "cluster reachable at ${BASE}"
 
-api() {
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
-  else
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${TMPDIR}/resp.json" "${CURL_MAX_TIME}" "$@"; }
 
 # psql1 SQL -> one query against the cluster's own postgres Deployment
 # (kubectl exec, never docker exec — wardynd's own pod is distroless and has

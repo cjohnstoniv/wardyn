@@ -709,6 +709,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/common_clone_present_test.sh
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
+	./scripts/lib/walk_api_test.sh
 	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-cache-prune.sh
 	./scripts/test-ci-pick-dispatched-run.sh
