@@ -33,6 +33,7 @@ func TestErrorCodeToSentinelMap(t *testing.T) {
 		"narrow_not_listening":   runner.ErrNarrowNotListening,
 		"narrow_not_sent":        runner.ErrNarrowNotSent,
 		"narrow_uncertain":       runner.ErrNarrowUncertain,
+		"teardown_confirming":    runner.ErrTeardownConfirming,
 	}
 	if len(codeSentinels) != len(want) {
 		t.Fatalf("%d sentinel-mapped codes, design lists %d", len(codeSentinels), len(want))
@@ -89,5 +90,15 @@ func TestUnknownCodeIsNotTrusted(t *testing.T) {
 	var we *Error
 	if !errors.As(e.Err(), &we) || we.Code != CodeInternal {
 		t.Fatalf("unknown code = %v, want internal", e.Err())
+	}
+}
+
+// teardown_confirming is the last code, so a chain that also holds another sentinel keeps that one's code.
+func TestTeardownConfirmingIsTheLastCode(t *testing.T) {
+	if last := codeSentinels[len(codeSentinels)-1]; last.code != CodeTeardownConfirming {
+		t.Fatalf("last code = %q, want %q", last.code, CodeTeardownConfirming)
+	}
+	if c := ErrorFor(errors.Join(runner.ErrTeardownConfirming, runner.ErrSandboxGone)).Code; c != CodeSandboxGone {
+		t.Fatalf("a chain with both = %q, want %q", c, CodeSandboxGone)
 	}
 }

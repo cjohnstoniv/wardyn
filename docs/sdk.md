@@ -106,6 +106,9 @@ func main() {
 }
 ```
 
+- `KillRun` answers 202 with the run `KILLED`. On Kubernetes, in process or on a Kubernetes runner, `resp.Teardown` is `"confirming"` when the sandbox's pods were still terminating at the end of the kill's wait.
+- The run is `KILLED` and its credentials are revoked in that case. Wardyn confirms the stop in the background and writes one `run.kill.confirm` audit row per confirm, within 60 seconds of the kill; a kill made on the same server replica while one runs adds none.
+
 ## Naming server types
 
 The values returned and accepted by `Client` methods are exposed directly on

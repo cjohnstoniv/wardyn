@@ -110,7 +110,7 @@ const KIND_ORDER: EventKind[] = ["egress", "tool", "credentials", "approvals", "
 
 function eventKind(e: AuditEvent): EventKind {
   const action = e.action;
-  if (action === "run.kill") return "enforcement";
+  if (action === "run.kill" || action === "run.kill.confirm") return "enforcement";
   // A call the run's own tool_rules answered rides an egress.allow/deny
   // envelope, but it is a TOOL call — the proxy answered it on the brokered
   // approval route, not on the wire. Bucketing it under Egress hides it from

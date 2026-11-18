@@ -306,6 +306,9 @@ type verdict struct {
 	arm   string
 	tiers map[string]string
 	why   string
+	// final: no later status read can make this pod's evidence. Which record or taint releases it, if
+	// any, depends on the verdict (see unprovableError).
+	final bool
 }
 
 func (v verdict) ok() bool { return v.arm != "" }
@@ -359,7 +362,7 @@ func (pe *podEvidence) containerTier(name string, t *corev1.ContainerStateTermin
 // after it returned (post). It reads nothing and never treats a missing pod as evidence.
 func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHolder) verdict {
 	if pod == nil || string(pod.UID) != pe.UID || pe.UID == "" {
-		return verdict{why: "no read of the recorded pod UID"}
+		return verdict{why: "no read of the recorded pod UID", final: true}
 	}
 	if pod.Spec.NodeName == "" && pod.DeletionTimestamp != nil && pe.NodeName == "" {
 		// The API refuses to bind a pod being deleted, and a deletionTimestamp is never unset.
@@ -371,12 +374,12 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 		// a later list that latched another holder of the node name changed it, and the run stays
 		// contained until a record for the new tuple is accepted.
 		if !sameTuple(*ev.tuple(ev.Record.Tuple.RunID), ev.Record.Tuple) {
-			return verdict{why: "the node record's approved tuple no longer matches the run's: a new record is needed"}
+			return verdict{why: "the node record's approved tuple no longer matches the run's: a new record is needed", final: true}
 		}
 		return verdict{arm: armRecord}
 	}
 	if len(ev.Reuse) > 0 {
-		return verdict{why: "node name reused: only a two-person node powered off record releases the run"}
+		return verdict{why: "node name reused: only a two-person node powered off record releases the run", final: true}
 	}
 	terminal := ev.terminalArm(pe, pod, post)
 	if terminal.ok() {
@@ -393,10 +396,36 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 	if terminal.why != "" {
 		return terminal
 	}
+	if arm, _ := unstartedArm(pod, pe.clean); arm != "" && pe.tier2Never() {
+		return verdict{why: "main containers never started and the pod has no causal node: tier 2 can never bind it", final: true}
+	}
 	return verdict{why: "no arm holds: termination unknown"}
 }
 
-const whyDifferentExecution = "a container ID differs from its baseline or is latched: a different execution"
+const (
+	whyDifferentExecution = "a container ID differs from its baseline or is latched: a different execution"
+	whyPodGC              = "Failed by the pod garbage collector, never by the kubelet: its Node is gone or out of service"
+	whyNeverBound         = "a terminated container no tier can ever bind: the association or the closing anchor rules it out"
+)
+
+// tier1Never reports that tier 1 can never hold for the pod. The association is made once (associate,
+// on the first bound read) and the closing anchor is taken once (closingList), so a pod with no anchor,
+// an association that is neither causal nor u1, or a closing anchor naming no Node or another Node
+// stays unbound by tier 1.
+func (pe *podEvidence) tier1Never() bool {
+	if pe.PostBind == nil {
+		return false
+	}
+	a := pe.anchor()
+	if a == nil || (pe.Assoc != assocCausal && pe.Assoc != assocU1) {
+		return true
+	}
+	return pe.Closing != nil && (pe.Closing.None || pe.Closing.Node.UID != a.UID || !sameAnchorIdentity(pe.Closing.Node, *a))
+}
+
+// tier2Never reports that tier 2 can never hold for the pod: its association, made once, gave it no
+// causal node.
+func (pe *podEvidence) tier2Never() bool { return pe.PostBind != nil && pe.causalUID() == "" }
 
 // terminalArm is arm (a): the kubelet's terminal status for the recorded pod UID, every container
 // terminated, no DeletionByPodGC, and every container bound by tier 1 or tier 2.
@@ -405,12 +434,13 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 		return verdict{}
 	}
 	if podGCMarked(pod) {
-		return verdict{}
+		return verdict{why: whyPodGC, final: true}
 	}
 	inits, mains := specContainerNames(pod)
 	statuses := statusByName(pod)
 	t1, t2 := pe.tier1Pod(post), pe.tier2Node(pod, post)
 	tiers := map[string]string{}
+	unbound := false
 	for _, name := range slices.Concat(inits, mains) {
 		cs, ok := statuses[name]
 		if !ok || cs.State.Terminated == nil {
@@ -418,12 +448,21 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 		}
 		tier, refuse := pe.containerTier(name, cs.State.Terminated, t1, t2)
 		if refuse {
-			return verdict{why: whyDifferentExecution}
+			return verdict{why: whyDifferentExecution, final: true}
 		}
 		if tier == "" {
-			return verdict{}
+			// containerTier's split: an anchored container with a terminated ID binds only by tier 1.
+			c := pe.Containers[name]
+			byTier1 := c != nil && c.Anchored && c.Baseline != "" && cs.State.Terminated.ContainerID != ""
+			if (byTier1 && pe.tier1Never()) || (!byTier1 && pe.tier2Never()) {
+				return verdict{why: whyNeverBound, final: true}
+			}
+			unbound = true
 		}
 		tiers[name] = tier
+	}
+	if unbound {
+		return verdict{}
 	}
 	return verdict{arm: armTerminal, tiers: tiers}
 }

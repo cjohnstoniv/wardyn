@@ -53,6 +53,7 @@ export function Cockpit({
   auditGap,
   held,
   outcomeReady,
+  killConfirmWaitOver,
   pending,
   recording,
   recState,
@@ -75,6 +76,8 @@ export function Cockpit({
   held: HeldCredentials | undefined;
   /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
   outcomeReady: boolean;
+  /** The page's kill wait ran out with a sandbox stop still unconfirmed: the outcome block says so. */
+  killConfirmWaitOver?: boolean;
   /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
    *  held count every widget reads; the decision surface itself is
    *  LiveApprovals' own poll. */
@@ -129,7 +132,9 @@ export function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      {outcomeReady && <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />}
+      {outcomeReady && (
+        <RunFailureBlock run={run} audit={audit} held={held} killConfirmWaitOver={killConfirmWaitOver} onGoAudit={onGoAudit} />
+      )}
       <TerminalPane
         run={run}
         terminal={terminal}

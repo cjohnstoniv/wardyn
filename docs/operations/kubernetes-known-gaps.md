@@ -59,6 +59,24 @@
 - If your DNS pods carry other labels, it matches nothing and DNS falls back to the broad rule.
 - Check with `kubectl -n kube-system get pods --show-labels`.
 
+## Killing a run
+
+- A kill deletes the run's pods and waits up to 25 seconds for them to go; the network policies and the per-run Secret stay until they have.
+- If every pod is already terminating when the wait ends and no other kill step failed, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
+- Wardyn retries the stop in the background and writes one `run.kill.confirm` row per confirm, within 60 seconds of the kill; a kill made on the same server replica while one runs adds none. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref.
+- Once the pods are gone, the label sweep removes the Secret and the NetworkPolicies, the next daemon start clears the ref, and a repeat of the kill completes it at once.
+- A pod that is not terminating, or a Kubernetes API error, still answers 500 and the kill can be retried.
+- So does a kill whose pods are terminating when another kill step fails, such as a credential revoke. Its `run.kill` row is a `failure` that still carries `sandbox_stop` `confirming`, and no confirm starts.
+- On a Kubernetes runner, the kill deletes the proxy pod and waits up to 25 seconds for proof that it stopped, then does the same for the agent pod.
+- On a Kubernetes runner, the kill answers 202 with `teardown` `confirming` when both pods were deleted and only that proof is missing, or both are proven stopped and every pod left is terminating. The confirm then runs as above.
+- A kill on a Kubernetes runner still answers 500 when its two waits together outlast the kill's 30-second budget, because the runner answers too late. A slow proxy pod with an agent pod proven stopped quickly can still answer 202.
+- It also answers 500 when both pods have passed their delete bounds without that proof (`pending_delete`), on a Kubernetes API or runner error, and on an older runner.
+- A pod no later read can prove stopped answers 500 too:
+  - No record or taint releases a pod that went without that proof, or whose name now holds another pod.
+  - A changed node record needs a new record, and a reused node name a two-person node powered off record. A taint releases neither.
+  - A person's record, or an out-of-service taint on the pod's causal machine, releases a different execution, a pod the pod garbage collector marked, or a container no tier can ever bind.
+  - A pod with no causal node has no machine to taint. When its main containers never started, or a container no tier can ever bind, only a person's record releases it.
+
 ## Eviction, priority and run count
 
 - **Eviction and priority.** Sandbox pods take `k8s.sandbox.priorityClassName` and `k8s.sandbox.podAnnotations` (`WARDYN_K8S_SANDBOX_PLACEMENT`, [docs/ENV.md](../ENV.md)).

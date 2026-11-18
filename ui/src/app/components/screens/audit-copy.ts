@@ -136,6 +136,8 @@ const ACTION_VERB: Record<string, string> = {
   // carries a red failure badge.
   "run.complete": "the run ended",
   "run.kill": "killed the run",
+  // Not "confirmed": the same action records a stop that could not be confirmed, with a red failure badge.
+  "run.kill.confirm": "checked that the killed run's sandbox stopped",
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",

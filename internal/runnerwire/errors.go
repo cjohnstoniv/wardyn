@@ -33,6 +33,7 @@ const (
 	CodeNarrowNotListening   Code = "narrow_not_listening"
 	CodeNarrowNotSent        Code = "narrow_not_sent"
 	CodeNarrowUncertain      Code = "narrow_uncertain"
+	CodeTeardownConfirming   Code = "teardown_confirming"
 	CodeRefused              Code = "refused"
 	CodeInternal             Code = "internal"
 )
@@ -59,6 +60,9 @@ var codeSentinels = []struct {
 	{CodeNarrowNotListening, runner.ErrNarrowNotListening},
 	{CodeNarrowNotSent, runner.ErrNarrowNotSent},
 	{CodeNarrowUncertain, runner.ErrNarrowUncertain},
+	// Last, so a chain that also holds an earlier sentinel keeps that code. An organisation older than this
+	// code reads it as internal (Err), the answer it had before.
+	{CodeTeardownConfirming, runner.ErrTeardownConfirming},
 }
 
 // Valid reports whether c is in the closed list.

@@ -92,6 +92,9 @@ func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOp
 type KillRunResponse struct {
 	ID    uuid.UUID      `json:"id"`
 	State types.RunState `json:"state"`
+	// Teardown is "confirming" when the sandbox's pods were still terminating at the end of the kill's
+	// wait: the run is KILLED and Wardyn confirms the stop in the background (run.kill.confirm).
+	Teardown string `json:"teardown,omitempty"`
 }
 
 // KillRun initiates the kill sequence for a run: durable state transition

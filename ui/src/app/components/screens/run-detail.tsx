@@ -116,7 +116,7 @@ function RunDetailPage({ id }: { id: string }) {
   const {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
-    load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
+    load, terminal, pending, endingEvents, held, killAgain, outcomeReady, killConfirmWaitOver,
   } = useRunDetail(id);
   const workload = useRunWorkload(run?.id);
 
@@ -404,6 +404,7 @@ function RunDetailPage({ id }: { id: string }) {
               auditGap={auditGap}
               held={held}
               outcomeReady={outcomeReady}
+              killConfirmWaitOver={killConfirmWaitOver}
               pending={pending}
               recording={recording}
               recState={recState}
