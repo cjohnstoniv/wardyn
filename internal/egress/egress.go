@@ -126,6 +126,12 @@ type DecisionLog struct {
 	// attempt, never taken from the sandbox. Empty on every row of a run with no
 	// gateway route, and on every row for a host that is neither.
 	GatewayCallID string `json:"gateway_call_id,omitempty"`
+	// GatewayRequestID is the id the gateway, or the provider behind it, assigned to that
+	// attempt, read from the answer's request-id, x-request-id or x-amzn-requestid header
+	// only (never the sandbox's request), so the provider's own log and this row join on
+	// it. Set on the rows of an attempt that was answered, and only when the id is at most
+	// 128 printable ASCII characters. Empty on every other row, including every opaque tunnel.
+	GatewayRequestID string `json:"gateway_request_id,omitempty"`
 	// Usage, when non-nil, makes this row a model call's token counts (rule source
 	// llm:usage), sent once the answer has been relayed. It is not an egress
 	// decision: the call's own allow row was sent before the answer.
