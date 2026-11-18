@@ -787,8 +787,7 @@ type Server struct {
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	viaOrg viaOrgState
 	fleet  fleetSnapshot
-	// revokedEndRetry and exitRetry space out the retries of the queue sweep (a run it could not end, runner_revoke.go) and of the runner exit sweep (each receipt, which it may park; runner_exits.go).
-	// eventRefusals bounds each runner's workload events on this replica and remembers, until it ends, each runner's refusal window the store reported full, so that runner's rate_limited refusals skip the store (runner_event_refuse.go).
+	// revokedEndRetry and exitRetry space out the queue and exit sweep retries (runner_revoke.go, runner_exits.go); eventRefusals bounds each runner's workload events on this replica and keeps, until it ends, each refusal window the store reported full, so rate_limited refusals skip the store (runner_event_refuse.go).
 	revokedEndRetry revokedEndRetry
 	exitRetry       runnerExitRetry
 	eventRefusals   runnerEventRefusals
