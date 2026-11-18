@@ -389,6 +389,11 @@ That has two consequences:
   - the runner and the proxy image are 0.10.1 (any release candidate) or later. An older one is refused with "This run was not launched: its runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later". An image that names no release (a digest, a development tag) passes.
 - **Bounds of the relay**, per run: 16 streams, 8 GiB per server replica (reset on restart) and 10 minutes idle. A request through the organisation's proxy waits at most 9 minutes in all for approvals and sign-in.
 - Every open stream ends, and the engine is released, when the run's runner goes offline, so Azure DevOps stops at once.
+- **A paused run.** Every request a paused run sends through the organisation (`via_org`) is refused `409 run_paused` until the run is resumed: Azure DevOps, GitHub and `api_key` credentials alike (`refuseViaOrgEndedRun`).
+- **Withdraw.** The token's `via_org` delivery is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes.
+  - If it is no longer admitted, the run's tokens are revoked at Azure DevOps (`drift`) and the organisation's proxy for the run is restarted, which drops any copy of the token. The run's next Azure DevOps request is refused (`placement_credential`) (`revokeWithdrawnLocalPATs`, `viaOrgADOStillAdmitted`).
+  - A change made outside those settings is caught at the next token resolve, which the proxy makes at most every 15 minutes.
+  - A change of the runner's trust class does not withdraw it: `via_org` is never trust-gated (`DeliveryPolicy.Validate`, `DeliveryPolicy.ForTrust`, `ViaOrgADOAdmits`).
 - A global `via_org` row of the delivery policy applies to every runner and turns `runner_resident` off for that class; a per-trust row cannot deliver `via_org` or override one.
 - Pinned by `TestViaOrgADORunnerReady` and `TestHandleViaOrg_ADOGitRouteIsTheGrantsAndBrokered` ([`internal/api`](../internal/api)).
 
