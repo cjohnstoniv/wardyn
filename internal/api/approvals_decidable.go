@@ -13,6 +13,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -188,6 +189,9 @@ func (s *Server) mayDecide(r *http.Request, ap types.ApprovalRequest, run types.
 	if ap.Kind == types.ApprovalCredentialReauth {
 		return false
 	}
+	if s.helperBlocksDecision(r, ap.RunID, ap.RequestedAt) { // decide()'s support_helper_decision refusal
+		return false
+	}
 	if !s.decidableKindAndOwner(r, ap, run) {
 		return false
 	}
@@ -259,5 +263,8 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 		return false // requireSecondHuman's unconditional 503: unenforceable here
 	}
 	authored, err := s.runAuthoredBy(r.Context(), run, principal)
-	return err == nil && !authored && !askedForDownload(ap, principal)
+	if err != nil || authored || askedForDownload(ap, principal) {
+		return false
+	}
+	return !s.helperBlocksDecision(r, ap.RunID, time.Time{}) // requireSecondHumanUnder: a helper is never the second human
 }
