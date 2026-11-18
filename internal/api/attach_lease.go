@@ -207,6 +207,7 @@ func (s *Server) acquireAttachLease(runID uuid.UUID, h *attachHolder, from uuid.
 	defer cancel()
 	ok, err := h.lease.st.AcquireAttachLease(ctx, store.AttachLease{
 		RunID: runID, HolderID: h.id, Replica: s.replicaName(), Principal: h.principal, Source: h.source, Since: h.since,
+		Support: h.support != uuid.Nil,
 	}, from, attachLeaseTTL)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not take a run's attach lease; the client is read-only",
@@ -245,6 +246,7 @@ func (s *Server) recoverAttachLease(runID uuid.UUID, h *attachHolder, gen uint64
 	defer cancel()
 	ok, err := l.st.ReacquireAttachLease(ctx, store.AttachLease{
 		RunID: runID, HolderID: h.id, Replica: s.replicaName(), Principal: h.principal, Source: h.source, Since: h.since,
+		Support: h.support != uuid.Nil,
 	}, attachLeaseTTL)
 	switch {
 	case err != nil:
@@ -254,7 +256,11 @@ func (s *Server) recoverAttachLease(runID uuid.UUID, h *attachHolder, gen uint64
 		if l.at(gen, func() { l.gen++; l.held.Store(false) }) {
 			slog.InfoContext(ctx, "wardynd: a run's attach lease is held by another client; the local writer is ended",
 				slog.String("run_id", runID.String()), slog.String("holder", h.id.String()))
-			s.attachLeaseLost(runID, h, attachLeaseLostReason)
+			reason := attachLeaseLostReason
+			if h.support != uuid.Nil {
+				reason = supportOwnerJoinedReason // only the owner takes a helper's lease (the store's support arm)
+			}
+			s.attachLeaseLost(runID, h, reason)
 		}
 	case s.attachWriterIs(runID, h) && l.restored(gen):
 		l.erring.Store(false)
@@ -432,14 +438,19 @@ func (s *Server) renewAttachLease(ctx context.Context, runID uuid.UUID, w *attac
 
 // firstWaiting is the oldest observer queued behind a lease another replica held: the one a free
 // lease goes to. An observer left behind by a local take-over is not waiting for it, so the slot
-// stays free for the taker.
+// stays free for the taker. A support observer is taken only when no non-support one waits.
 func firstWaiting(ra *runAttach) *attachHolder {
+	var first *attachHolder
 	for _, o := range ra.observers {
-		if o.lease != nil && o.waitRemote.Load() {
+		switch {
+		case o.lease == nil || !o.waitRemote.Load():
+		case o.support == uuid.Nil:
 			return o
+		case first == nil:
+			first = o
 		}
 	}
-	return nil
+	return first
 }
 
 // promoteFromLease gives a free lease to runID's oldest waiting observer here, promoting it in place.

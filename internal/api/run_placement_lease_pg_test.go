@@ -368,6 +368,10 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 	if err != nil {
 		t.Fatal(err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := f.st.RaiseRunDataOut(f.ctx, run.ID, types.TransferAllowed); err != nil {
+		t.Fatal(err)
+	}
 	// Admission records the class the run was admitted at; a revive holds the runner to it.
 	if err := f.st.SetRunRunnerTrustClass(f.ctx, run.ID, types.RunnerTrustPersonal); err != nil {
 		t.Fatal(err)

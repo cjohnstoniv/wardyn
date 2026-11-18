@@ -146,6 +146,13 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
+
+	// A support helper's doors are the entry points supportMayEnter names (support_entry.go); these five open none.
+	"POST /runs/{id}/support":                 "a super admin asks to help; opens nothing until the owner accepts",
+	"GET /runs/{id}/support":                  "read the run's help request or session; opens nothing",
+	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
+	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
+	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

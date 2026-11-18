@@ -16,6 +16,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { SupportHelperContext } from "../wardyn/support-helper-context";
 import { waitingReauth } from "../wardyn/model-access-copy";
 import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunDetail, RunState } from "../../lib/types";
@@ -110,6 +111,18 @@ describe("SummaryHeader — attachable chip predicate", () => {
     );
     expect(screen.getByText("Interactive")).toBeInTheDocument();
     expect(screen.queryByText("Interactive — attachable")).toBeNull();
+  });
+
+  // A support helper whose grant opens the terminal: the chip agrees with the terminal TerminalPane opens.
+  it("a support helper on another person's run gets 'Interactive — attachable'", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="sam@acme.io">
+        <SupportHelperContext.Provider value={true}>
+          <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+        </SupportHelperContext.Provider>
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
   });
 
   it("a super admin keeps 'attachable' on an operator-owned run", () => {

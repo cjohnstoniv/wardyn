@@ -241,10 +241,13 @@ func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Con
 // the rules that config leaves off, data_out and recording (sidecarPolicy blanks both: the proxy enforces
 // neither), from the policy the run is recorded under now, so the re-seal and the new generation start
 // from the run's own rules. Without it a revive would keep only what an outer layer imposes, and an edit
-// would record none. A store that keeps no generations has no new row to carry them into, and a run with
-// no recorded policy (a pruned run) keeps what the stored config holds. A recorded policy that cannot be
-// read, or a run whose current policy generation's row cannot be read, refuses the revive or the edit: the
-// rules to carry are unknown, and carrying none would record them as allowed.
+// would record none. data_out is the stricter of the recorded policy's and the run row's (runDataOutRule),
+// which retention cannot prune. A store that keeps no generations has no new row to carry them into. A run
+// with no recorded policy (a pruned run) keeps the recording the stored config holds, and data_out from its
+// row, or, on a store that keeps the column but holds no rule there either, dataOutUnrecorded. A recorded
+// policy or a row that cannot be read, or a run whose current policy generation's row cannot be read, refuses
+// the revive or the edit: the rules to carry are unknown, and carrying none would record them as allowed. A
+// rule on the row does not lift that last refusal, since recording is carried from the recorded policy alone.
 func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, policy *types.RunPolicySpec) *reviveError {
 	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
 		return nil
@@ -257,9 +260,19 @@ func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, 
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable,
 			loggedMsg(ctx, fmt.Sprintf("the run's current policy generation %d could not be read; try again shortly, or kill or end the run if it persists", unread), errors.New("no readable run.policy.generation row")))
 	}
-	if !ok {
-		return nil
+	if ok {
+		policy.DataOut, policy.Recording = envelope.DataOut, envelope.Recording
 	}
-	policy.DataOut, policy.Recording = envelope.DataOut, envelope.Recording
+	stored, keeps, err := s.storedRunDataOut(ctx, runID)
+	switch {
+	case err != nil:
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's data_out rule", err))
+	case stored != nil:
+		if v := types.StricterTransfer(*stored, policy.DataOut.DataOut()); v != policy.DataOut.DataOut() {
+			policy.DataOut = v
+		}
+	case !ok && keeps:
+		policy.DataOut = dataOutUnrecorded
+	}
 	return nil
 }

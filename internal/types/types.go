@@ -236,6 +236,12 @@ type AgentRun struct {
 	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
 	// dispatched, one dispatched before the field, or one whose write failed.
 	PolicyDigest string `json:"policy_digest,omitempty"`
+	// DataOut is the run's data_out rule as its row keeps it (agent_runs.data_out): written at dispatch just
+	// before the run.policy.resolve row, raised by a revive whose seal makes it stricter, never lowered, and
+	// kept when audit retention prunes the policy rows. nil for a run not yet dispatched, or one from before the
+	// column that the upgrade (migration 0292) found no rule for and did not set to blocked: it then reads its
+	// policy envelope, or allowed with none. Never on the wire: the run's policy view shows the rule.
+	DataOut *TransferRule `json:"-"`
 	// PolicyReadback is the run's current proxy start, as its policy readback stands (RunPolicyReadback);
 	// filled on the single-run read only, nil elsewhere and for a run with no recorded start.
 	PolicyReadback *RunPolicyReadback `json:"policy_readback,omitempty"`

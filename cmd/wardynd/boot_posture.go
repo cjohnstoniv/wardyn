@@ -472,10 +472,8 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateSyncFlags(f); err != nil {
 		return err
 	}
-	if f.sshMaxSessionsPerRun != nil {
-		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
-			return err
-		}
+	if err := validateSSHSessionFlags(f); err != nil {
+		return err
 	}
 	if err := validatePositiveBounds(f); err != nil {
 		return err
@@ -522,6 +520,21 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateSSHSessionFlags checks the per-run SSH session cap and channel list, each only when declared.
+func validateSSHSessionFlags(f *bootFlags) error {
+	if f.sshMaxSessionsPerRun != nil {
+		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
+			return err
+		}
+	}
+	if f.sshChannels != nil {
+		if _, err := parseSSHChannels(*f.sshChannels); err != nil {
+			return err
+		}
 	}
 	return nil
 }

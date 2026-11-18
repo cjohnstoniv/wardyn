@@ -13,6 +13,7 @@ import type { RunDetail, RunOutput } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeMacOSVMRun, makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { SupportHelperContext } from "../../wardyn/support-helper-context";
 import { RUN_COCKPIT, RUN_MODE, RUN_OUTPUT } from "../../wardyn/copy";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 import { TerminalPane } from "./terminal-notice";
@@ -20,10 +21,12 @@ import { TerminalPane } from "./terminal-notice";
 vi.mock("../../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 
 // The last keepsIn the pane handed the terminal.
-const attach = vi.hoisted(() => ({ keepsIn: undefined as boolean | "unreadable" | undefined }));
+const attach = vi.hoisted(() => ({ keepsIn: undefined as boolean | "unreadable" | undefined, mounted: false, barAction: undefined as unknown }));
 vi.mock("../../attach-terminal", () => ({
-  AttachTerminal: (p: { keepsIn?: boolean | "unreadable" }) => {
+  AttachTerminal: (p: { keepsIn?: boolean | "unreadable"; barAction?: unknown }) => {
     attach.keepsIn = p.keepsIn;
+    attach.mounted = true;
+    attach.barAction = p.barAction;
     return null;
   },
 }));
@@ -213,6 +216,21 @@ describe("TerminalPane — Watch desktop", () => {
     paneFor(over);
     await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+  });
+
+  it("is never offered to a support helper, whatever their doors", async () => {
+    attach.mounted = false;
+    attach.barAction = undefined;
+    render(
+      <OperatorProvider operator={true} principal="sam">
+        <SupportHelperContext.Provider value={true}>
+          <TerminalPane onGoOutput={vi.fn()} run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: true, machine_kind: "macos_vm", macos: { desktop: "observe" } } as Partial<RunDetail>) as RunDetail} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+        </SupportHelperContext.Provider>
+      </OperatorProvider>,
+    );
+    // The helper's terminal opens, and its bar carries no Watch desktop.
+    await waitFor(() => expect(attach.mounted).toBe(true));
+    expect(attach.barAction).toBeUndefined();
   });
 
   it("is not offered on a background run, whose Watch is the Desktop tile's, and asks for no ticket", async () => {

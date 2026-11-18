@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -314,29 +313,6 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 	return cfg
 }
 
-// sshGatewayHealthz is /healthz's "ssh" field: nil (disabled) or the pane's
-// three discovery facts (enabled, advertise_addr, host_key_fingerprint), plus
-// proxy_command only when WARDYN_SSH_PROXY_COMMAND is set — see healthz.go's
-// handleHealthz.
-func (s *Server) sshGatewayHealthz() map[string]any {
-	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 || s.sshUnbound.Load() {
-		return nil
-	}
-	signer, err := ssh.NewSignerFromKey(s.cfg.SSHHostKey)
-	if err != nil {
-		return nil
-	}
-	out := map[string]any{
-		"enabled":              true,
-		"advertise_addr":       s.cfg.SSHAdvertiseAddr,
-		"host_key_fingerprint": ssh.FingerprintSHA256(signer.PublicKey()),
-	}
-	if s.cfg.SSHProxyCommand != "" {
-		out["proxy_command"] = s.cfg.SSHProxyCommand
-	}
-	return out
-}
-
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
 // PublicKeyCallback): registered public keys only, OWNER authorization —
 // run.CreatedBy == the key's principal, OR the key's own stored role is
@@ -435,11 +411,17 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		return nil, errors.New("ssh: unknown run")
 	}
 	override := run.CreatedBy != rec.Principal
+	var grant uuid.UUID // the support grant this entry rides on; uuid.Nil for an owner or an override
+	var doors []string
 	if override {
 		reason := s.sshOverrideRefusal(rec)
 		if reason == "" && !run.OperatorOwned {
-			// A fresh admin key still opens no shell in a person's run (#1476).
+			// A fresh admin key still opens no shell in a person's run (#1476), unless the run's owner
+			// accepted this admin as a helper and ticked an SSH door. Nothing else clears the reason.
 			reason = runOwnerOnlyReason
+			if g, v := s.supportMayEnter(ctx, run, rec.Principal, uuid.Nil, supportDoorSSH); v == supportOK {
+				grant, doors, reason = g.ID, g.Doors, ""
+			}
 		}
 		// A service identity's run takes no SSH entry at all, its sponsor's key included, whatever
 		// service_attach grant the sponsor holds (F7: sponsor attach is the terminal and UI app only).
@@ -460,10 +442,10 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	// deny_interactive on the profile the run was created under closes SSH
 	// for all but a super admin (a fresh, uncapped admin key), as the terminal
-	// attach does (governance_run_doors.go). A super admin reaches this point
-	// only on their own run or an operator-owned one, so the exemption cannot
-	// reach a person's run.
-	if s.sshOverrideRefusal(rec) != "" || !s.adminDoorExempt(run) {
+	// attach does (governance_run_doors.go). A super admin reaches the exemption
+	// only on their own run or an operator-owned one, never through a support
+	// grant, so it cannot reach a person's run.
+	if s.sshOverrideRefusal(rec) != "" || grant != uuid.Nil || !s.adminDoorExempt(run) {
 		name, err := s.interactiveDeniedUnit(ctx, run)
 		if err != nil {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")
@@ -488,9 +470,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		"key_fingerprint": fp,
 		"key_created_at":  rec.CreatedAt.Format(time.RFC3339Nano),
 	}
-	if override {
-		ext["override"] = "true"
-	}
+	sshMarkEntry(ext, override, grant, doors)
 	return &ssh.Permissions{Extensions: ext}, nil
 }
 
@@ -568,14 +548,11 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 		// a well-formed run_id already in Extensions.
 		return nil, errors.New("ssh: internal: missing run id in verified permissions")
 	}
-	// override:true names the ONE case where the run's owner is not the human
+	// override:true or support_grant names the cases where the run's owner is not the human
 	// on the other end — an admin key reaching someone else's run. Absent
 	// datum = an ordinary owner login, so the datum's presence is itself the
 	// thing an auditor greps for.
-	var data json.RawMessage
-	if perms.Extensions["override"] == "true" {
-		data = mustJSON(map[string]any{"override": true})
-	}
+	data := sshAuthData(perms.Extensions)
 	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.authenticate", ssh.FingerprintSHA256(key), "success", data)
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
@@ -655,22 +632,23 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	// first, so connCtx then keeps ctx's own cause.
 	connCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errSSHChannelClosed)
+	connCtx = withSupportDoors(connCtx, sconn.Permissions)
 	// A daemon stop cancels connCtx with its own cause, which reaches every door's context before the close, then
 	// closes the connection, so its doors end with it and the stop's wait (sshGoTracked) does not wait on the client.
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)); _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() {
-		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
+		sshProbeConn(connCtx, sconn, func() string {
+			return sshSupportStrict(sconn.Permissions, s.sshCurrentKey(connCtx, sconn.Permissions))
+		})
 	})
 
 	for newCh := range chans {
 		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
 			if reason := s.sshCurrentKey(connCtx, sconn.Permissions); reason != "" {
 				s.recordAudit(connCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
-					sconn.Permissions.Extensions["key_fingerprint"], "failure", mustJSON(map[string]any{
-						"channel_type": newCh.ChannelType(), "reason": reason,
-					})))
-				_ = newCh.Reject(ssh.Prohibited, "SSH key is no longer authorized")
+					sconn.Permissions.Extensions["key_fingerprint"], "failure", sshRejectData(connCtx, newCh.ChannelType(), reason)))
+				_ = newCh.Reject(ssh.Prohibited, sshRejectMessage(reason))
 				continue
 			}
 		}
@@ -697,7 +675,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
 		case "direct-tcpip":
-			if s.sshRefuseDataOut(connCtx, runID, principal, newCh, dataOut) {
+			if s.sshRefuseForward(connCtx, runID, principal, newCh, dataOut) {
 				continue
 			}
 			if !s.sshAcquireSession(runID) {
@@ -764,7 +742,11 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 	if reason := s.sshKeyRevocationRefusal(ctx, key); reason != "" {
 		return reason
 	}
-	if permissions.Extensions["override"] == "true" {
+	if sshSupportGrantUnreadable(permissions) {
+		return sshSupportUnverified // a grant id that cannot be read is no grant, and no owner's connection either
+	}
+	grant := sshSupportGrant(permissions)
+	if permissions.Extensions[sshExtOverride] == "true" || grant != uuid.Nil {
 		if reason := s.sshOverrideRefusal(key); reason != "" {
 			return reason
 		}
@@ -777,6 +759,11 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		run, err := s.cfg.Store.GetRun(ctx, runID)
 		if err != nil {
 			return sshReasonRunLookup
+		}
+		if grant != uuid.Nil {
+			// A helper's connection stands only while its grant does; this read also stamps last_seen_at.
+			_, v := s.supportMayEnter(ctx, run, key.Principal, grant, supportDoorSSH)
+			return sshSupportReason(v)
 		}
 		if !run.OperatorOwned {
 			return runOwnerOnlyReason

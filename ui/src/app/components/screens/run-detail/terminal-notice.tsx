@@ -22,6 +22,7 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { useSupportHelper } from "../../wardyn/support-helper-context";
 import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
@@ -61,7 +62,10 @@ export function TerminalPane({
   // command bar's "attachable" chip, the SSH card and its widget gate claim —
   // all must agree or the page promises a terminal it then refuses to open
   // (#1476: the run's person, or an admin on a run no person owns).
-  const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A support helper of an accepted grant that opens the terminal enters through the server's support arm.
+  const supportHelper = useSupportHelper();
+  const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  const canAttach = supportHelper || mayEnter;
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing; a failed read turns copying off under its own line.
   const dataOut = useRunDataOut(run.id, attachable);
@@ -69,8 +73,9 @@ export function TerminalPane({
   const watchable = !recordingDisabled && run.has_recording !== false;
   // A desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
   // background run: its watch has its own ticket and lives in the Desktop tile, and this button's attach ticket refuses it.
+  // Never for a support helper, whatever their doors: a helper's way into the desktop waits on its own mock.
   const watchDesktop =
-    run.state === "RUNNING" && canAttach && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
+    run.state === "RUNNING" && mayEnter && !supportHelper && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
 
   // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (its
   // agent output cast is saved when the agent finishes), any other non-interactive run once the recording read

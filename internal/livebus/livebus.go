@@ -53,6 +53,9 @@ const (
 	// re-read); the replica holding the runner's session ends it, and the fresh one reads the action.
 	// The Run field carries the runner's id.
 	KindRunnerGoaway = "runner_goaway"
+	// KindSupportGrant: a run's support grant was accepted or ended; every replica re-reads the run's
+	// grant to keep its audit window (the support_grant stamp on the run's rows) current.
+	KindSupportGrant = "support_grant"
 )
 
 // Message is one notice.

@@ -55,7 +55,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The nine `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`) are also read once at boot so a bad value is refused there.
+- The ten `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`, `WARDYN_SUPPORT_SESSIONS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -331,6 +331,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
 | `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
+| `WARDYN_SUPPORT_SESSIONS` | bool | off | Lets a super admin ask to help inside a person's running run, and its owner accept for 15, 30 or 60 minutes. Off: a request or accept is refused with `409` `support_disabled`, and open help sessions close. [Details](#wardyn_support_sessions) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations and one MCP call's approval: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -361,6 +362,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` | int | `8` with SSO, else `WARDYN_SSH_MAX_CONNECTIONS` | authenticated SSH gateway connections one person may hold, per replica (flag `-ssh-max-connections-per-principal`). Without SSO every key is one person. See [SSH.md](SSH.md#bounds) |
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
+| `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
@@ -1566,6 +1568,19 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
 - A value that is not a bool exits 2 at boot.
 
+### `WARDYN_SUPPORT_SESSIONS`
+
+- Turns on support sessions: a super admin asks to help inside someone else's running run, and that run's owner answers in the console or the CLI.
+- Off (the default): a request or an accept is refused with `409` `support_disabled`. An open help session closes at its next check, and the sweep ends open grants as `support_off`.
+- On, the owner picks the doors to open (terminal, commands, files, forward, web apps, desktop) and 15, 30 or 60 minutes. There is no extension; more time is a new request.
+- Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background task, and not in local mode.
+- A helper enters governed. The run's profile, the channel switches and the data-out rule apply as for its owner.
+- A request left unanswered for 15 minutes lapses. The run ending, the helper signing out and the owner being revoked each end the grant.
+- Every request, answer and end is audited as `support.request`, `support.accept`, `support.decline` and `support.end`.
+- `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
+- Needs migration `0293_run_support_grants`.
+- A value that is not a bool exits 2 at boot.
+
 ### `WARDYN_MCP_LOCAL_SERVERS`
 
 - Turns on MCP servers that run inside the run's sandbox: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
@@ -1882,6 +1897,18 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - The per-run cap on `session` and `direct-tcpip` channels together (flag `-ssh-max-sessions-per-run`).
 - The ceiling of 64 is the gateway's connection cap. `wardyn-sync` has its own fixed cap of `2` ([SSH.md](SSH.md)).
+
+### `WARDYN_SSH_CHANNELS`
+
+- Which kinds of SSH channel the gateway serves (flag `-ssh-channels`): `shell` (a terminal), `exec` (a command), `sftp` (file transfer) and `forward` (`-L` port forwarding).
+- Unset serves all four, as before. Set, only the listed kinds are served; any other is refused with one sentence and one `ssh.channel.reject` row (reason `channel_off`).
+- `sftp` also covers `wardyn sync`, which runs the same sftp-server; `sync` is not a name to list. `exec` also covers `POST /runs/{id}/exec`, the same command over HTTP, which is refused with `409 run_exec_off` and its own sentence.
+- An empty value is the same as unset.
+- `exec` covers more than it says: while it is listed, a client can still start a shell, run `sftp-server` and relay ports through a command, so leaving out `shell`, `sftp` or `forward` alone does not stop them. Only leaving out `exec` narrows those. The console's terminal is not an SSH gateway channel and is not covered.
+- It only narrows. It adds no credential path, and the per-run `data_out` rule still applies to what it serves.
+- Boot refuses an unknown name or an empty item.
+- `/healthz` lists the served kinds as `ssh.channels`, and `wardyn run ssh`, `exec`, `forward` and `editor`, and `wardyn sync`, stop with one line before they dial when they need a kind that is off. `editor` needs all four.
+- See [SSH.md](SSH.md).
 
 ### `WARDYN_SYNC_DENY`
 

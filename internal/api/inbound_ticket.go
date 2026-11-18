@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -91,13 +92,18 @@ func (s *Server) handleAppTicket(w http.ResponseWriter, r *http.Request) {
 
 // uiTicketMayEnter is the gateway enter's entry rule for a redeemed ticket. A ticket minted for one app opens
 // that app only. A caller's ticket opens it while the run declares it inbound with the callers entry the
-// ticket was minted under (a run's callers are fixed at create), and never passes the owner rule; any other
-// ticket answers to the owner rule, the sponsor arm included.
+// ticket was minted under (a run's callers are fixed at create), and never passes the owner rule; a support
+// helper's ticket (ta.support) opens it while the grant it carries is live and ticks the app's door, in host
+// mode only; any other ticket answers to the owner rule, the sponsor arm included.
 func (s *Server) uiTicketMayEnter(ctx context.Context, run types.AgentRun, ta ticketActor, app string, superAdmin bool) bool {
 	if ta.app != "" && ta.app != app {
 		return false
 	}
 	if ta.caller == "" {
+		if ta.support != uuid.Nil {
+			_, v := s.supportMayEnter(ctx, run, ta.principal, ta.support, uiSupportDoor(app))
+			return v == supportOK && s.uiRunOrigin(run.ID) != ""
+		}
 		return s.mayEnterRunOrSponsor(ctx, run, ta.principal, superAdmin, ta.authorizedAt)
 	}
 	declared, ok := s.inboundApp(ctx, run.ID, app)

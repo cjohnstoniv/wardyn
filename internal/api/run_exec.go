@@ -28,7 +28,8 @@ import (
 
 // POST /runs/{id}/exec runs one command in a running run and answers with its output: the SSH
 // gateway's exec channel (bridgeSSHExec) over plain HTTP, and no wider. Before the runner is called it
-// checks, in order, who may enter the run (getRunForEntry), the governance profile the run was launched
+// checks, in order, who may enter the run (getRunForEntry, or a live support grant that ticks the commands
+// door, which lasts only while the grant does), the governance profile the run was launched
 // under (refuseExecGovernance: deny_interactive, and deny_task_mode_exec on a background run), the run's
 // data_out rule (as an SSH exec channel does), the run's state (execFreshRun) and the run's SSH channel
 // cap, which a command shares with SSH (sshAcquireSession). A background run takes a command too, though it
@@ -48,11 +49,18 @@ const (
 	runExecAuditCommandCap = 4 << 10
 	// runExecCallerLeft is the run.command.exec error for a caller who left before the command ended.
 	runExecCallerLeft = "The caller left before the command ended."
+	// runExecSupportEnded and runExecSupportUnverified are that error for a helper's command cut because its
+	// grant ended, or because the grant could not be read, which is not the caller leaving.
+	runExecSupportEnded      = "The support session ended."
+	runExecSupportUnverified = "The support session could not be verified."
 	// runExecStreamCap is how much of each stream the reply keeps. Reading never stops there: a stream
 	// nobody reads blocks the command (runner.ExecSession's streaming contract).
 	runExecStreamCap = 1 << 20
 	// runExecDataOutMsg is sshDataOutRefused's sentence for this door.
 	runExecDataOutMsg = "This run's data_out rule (%s) keeps content in, so commands are off; the terminal still works."
+	// runExecChannelOffMsg answers a deployment whose operator left exec out of WARDYN_SSH_CHANNELS: sshChannelOffMsg's
+	// sentence for this door.
+	runExecChannelOffMsg = "Commands are off on this deployment: its operator left exec out of WARDYN_SSH_CHANNELS."
 	// runExecSandboxGoneMsg answers a run whose sandbox went away between the state check and the exec.
 	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
 	// runExecBusyMsg answers a run already holding its most SSH channels and commands at once.
@@ -74,14 +82,48 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunForEntry(w, r, id)
-	if !ok {
-		return
+	// The support arm (support_terminal.go): a super admin signed in as a person who is not the run's creator
+	// asks it first, for the commands door. supportNone, which is every caller without a grant, goes on to
+	// getRunForEntry's owner rule unchanged; any other answer but supportOK is a refusal.
+	var run types.AgentRun
+	var grant store.SupportGrant
+	viaSupport := false
+	if s.supportCaller(r.Context()) {
+		if run, ok = s.getRunAuthorizedBy(w, r, id, s.ownsRunOrAdmin); !ok {
+			return
+		}
+		if principal := principalFromRequest(r); run.CreatedBy != principal {
+			var v supportVerdict
+			grant, v = s.supportMayEnter(r.Context(), run, principal, uuid.Nil, supportDoorCommands)
+			if v == supportOff {
+				v = supportNone // the switch is off: the owner rule's refusal, as before (value list, row A)
+			}
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
+				return
+			}
+			if viaSupport = v == supportOK; viaSupport {
+				r = r.WithContext(withSupportExec(r.Context(), grant.ID))
+			}
+		}
+	}
+	if !viaSupport {
+		if run, ok = s.getRunForEntry(w, r, id); !ok {
+			return
+		}
 	}
 	// The governance door, exempt for a super admin as sshAuth's deny_interactive door is: a super admin is
 	// past getRunForEntry only on their own run or an operator-owned one, so the exemption cannot reach a
-	// person's run.
-	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
+	// person's run. A helper under a support grant is never exempt, whatever the profile or GovernAdminRuns
+	// say: the exemption is the admin's own, not a person's run's.
+	if (!s.isOperator(r.Context()) || viaSupport || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
+		return
+	}
+	if !s.sshChannelOn(sshKindExec) {
+		// This door is the SSH exec channel over HTTP, so a deployment that leaves exec out of
+		// WARDYN_SSH_CHANNELS leaves it out here, with its own sentence and the row the gateway writes.
+		at, actor := actorFromRequest(r)
+		s.sshAuditChannelOff(r.Context(), run.ID, at, actor, string(sshKindExec))
+		writeErrorReason(w, http.StatusConflict, reasonRunExecOff, runExecChannelOffMsg)
 		return
 	}
 	var req client.ExecRequest
@@ -116,6 +158,28 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.sshReleaseSession(run.ID)
+	if viaSupport {
+		// A helper's command lasts while its grant does: the grant is asked again every authority tick, and
+		// the end of it cancels the request's context, which ends runExec's execCtx.
+		// The cut carries its cause, so runExec audits it as the grant's end and not as the caller leaving. check
+		// and end run on the one goroutine holdAttachAuthority starts, so cause needs no lock.
+		hctx, hcancel := context.WithCancelCause(r.Context())
+		defer hcancel(nil)
+		var cause error
+		check := func(lctx context.Context) error {
+			_, v := s.supportMayEnter(lctx, fresh, actor, grant.ID, supportDoorCommands)
+			if v == supportOK {
+				return nil
+			}
+			cause = errRunExecSupportEnded
+			if v == supportUnavailable {
+				cause = errRunExecSupportUnverified
+			}
+			return errAttachAuthorityEnded
+		}
+		s.holdAttachAuthority(hctx, check, func() { hcancel(cause) })
+		r = r.WithContext(hctx)
+	}
 	s.runExec(w, r, fresh, req.Command, timeout, start)
 }
 
@@ -230,10 +294,29 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 	case res.TimedOut:
 		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
 	case res.ExitCode == -1:
-		data["error"], outcome = runExecCallerLeft, "failure"
+		data["error"], outcome = runExecCutReason(ctx), "failure"
 	}
 	s.auditRunExec(ctx, fresh, at, actor, outcome, data)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// errRunExecSupportEnded and errRunExecSupportUnverified are the causes a helper's command's context is
+// cancelled with when its grant is gone or cannot be read.
+var (
+	errRunExecSupportEnded      = errors.New(runExecSupportEnded)
+	errRunExecSupportUnverified = errors.New(runExecSupportUnverified)
+)
+
+// runExecCutReason is the audit error for a command cut short, when it was not the timeout: the support grant's
+// end or failed read when that cancelled the request, else the caller leaving.
+func runExecCutReason(ctx context.Context) string {
+	switch context.Cause(ctx) {
+	case errRunExecSupportEnded:
+		return runExecSupportEnded
+	case errRunExecSupportUnverified:
+		return runExecSupportUnverified
+	}
+	return runExecCallerLeft
 }
 
 // runExecTimeout is the request's timeout, or the sentence refusing the request.
@@ -288,6 +371,7 @@ func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 // bytes and its exit code, or the error, never output. A cut command adds command_bytes and command_sha256,
 // its full length and hash, so padding cannot hide what ran. It outlives a caller who left before the command ended.
 func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.ActorType, actor, outcome string, data map[string]any) {
+	data = supportExecFields(ctx, data) // a helper's command names its grant and entry
 	if c, ok := data["command"].(string); ok && len(c) > runExecAuditCommandCap {
 		cut := runExecAuditCommandCap
 		for cut > 0 && !utf8.RuneStart(c[cut]) {

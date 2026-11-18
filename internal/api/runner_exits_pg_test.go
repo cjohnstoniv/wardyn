@@ -58,6 +58,10 @@ func runnerExitAPIFixture(t *testing.T) (*pgxpool.Pool, Config, types.Runner, ty
 	if err != nil {
 		t.Fatal(err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := st.RaiseRunDataOut(ctx, run.ID, types.TransferAllowed); err != nil {
+		t.Fatal(err)
+	}
 	ref := "runner:" + rn.ID.String() + "/sandbox"
 	if err := st.SetSandboxRef(ctx, run.ID, ref); err != nil {
 		t.Fatal(err)

@@ -108,7 +108,7 @@ func TestPG_RecordRunnerActionResultWraps(t *testing.T) {
 
 func eventRefusal(runID, actionID *uuid.UUID) store.RunnerEventRefusal {
 	return store.RunnerEventRefusal{Kind: runnerwire.EventActionResult, Code: runnerwire.RefusalShape, Sentinel: "runner event shape refused",
-		RunID: runID, ActionID: actionID, PayloadSHA256: strings.Repeat("0", 64), PayloadBytes: 7, Row: true}
+		RunID: runID, ActionID: actionID, PayloadSHA256: strings.Repeat("0", 64), PayloadBytes: 7}
 }
 
 // RefuseRunnerEvent closes only this runner's open action, as refused with its receipt, and writes its own row
@@ -187,22 +187,80 @@ func TestPG_RefuseRunnerEventSettlesOwnOpenAction(t *testing.T) {
 		openAction(asserted) != 0 || f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.action.refuse' AND target=$1 AND run_id IS NULL`, asserted.String()) != 1 {
 		t.Fatalf("asserted subject: settled=%v err=%v", settled, err)
 	}
+}
 
-	before := eventRows(f.rn.ID)
-	if settled, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalShape}, prepareSpoolTest); err != nil || settled ||
-		eventRows(f.rn.ID) != before {
-		t.Fatalf("suppressed refusal: settled=%v err=%v, rows %d -> %d", settled, err, before, eventRows(f.rn.ID))
+// The bound on runner.event.refuse rows is the database's, per runner, whichever replica refuses: 32 rows,
+// the 33rd marked suppressed, none after it in the window, and the first refusal of the next window writes the
+// summary and its own row. Two replicas refusing for one runner at once never pass the bound, and another runner
+// has a window of its own.
+func TestPG_RefuseRunnerEventBoundsRowsPerRunner(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	replicas := []store.PG{f.st, store.NewPG(f.pool)}
+	rows := func(runner uuid.UUID, where string, args ...any) int {
+		return f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1`+where,
+			append([]any{"runner:" + runner.String()}, args...)...)
+	}
+	refuse := func(st store.PG, runner uuid.UUID) error {
+		_, err := st.RefuseRunnerEvent(ctx, runner, eventRefusal(nil, nil), prepareSpoolTest)
+		return err
+	}
+	for i := 1; i <= 34; i++ {
+		if err := refuse(replicas[i%2], f.rn.ID); err != nil {
+			t.Fatalf("refusal %d: %v", i, err)
+		}
+		marked := 0
+		if i > 32 {
+			marked = 1
+		}
+		if got, gotMarked := rows(f.rn.ID, ""), rows(f.rn.ID, ` AND data->>'suppressed' = 'true'`); got != min(i, 33) || gotMarked != marked {
+			t.Fatalf("after refusal %d: %d rows, %d marked; want %d, %d", i, got, gotMarked, min(i, 33), marked)
+		}
+	}
+	other := claimed(t, f.st, ctx, "action-owner-2")
+	if err := refuse(f.st, other.ID); err != nil || rows(other.ID, "") != 1 {
+		t.Fatalf("another runner's first refusal: err=%v, %d rows, want 1", err, rows(other.ID, ""))
 	}
 
-	marked := eventRefusal(&run.ID, nil)
-	marked.Marker = true
-	marked.Summary = &store.RunnerEventRefusalSummary{Suppressed: 5, WindowStart: time.Now().Add(-2 * time.Hour), WindowEnd: time.Now().Add(-time.Hour)}
-	if _, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, marked, prepareSpoolTest); err != nil {
+	busy := claimed(t, f.st, ctx, "action-owner-3")
+	const each = 40
+	errs := make(chan error, 2*each)
+	var wg sync.WaitGroup
+	for _, st := range replicas {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range each {
+				errs <- refuse(st, busy.ID)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent refusal: %v", err)
+		}
+	}
+	if got, marked := rows(busy.ID, ""), rows(busy.ID, ` AND data->>'suppressed' = 'true'`); got != 33 || marked != 1 {
+		t.Fatalf("two replicas at once wrote %d rows, %d marked; want 33, 1", got, marked)
+	}
+
+	if _, err := f.pool.Exec(ctx, `UPDATE runner_event_refusal_windows SET window_start = window_start - interval '1 hour' WHERE runner_id = $1`, busy.ID); err != nil {
 		t.Fatal(err)
 	}
-	if f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND (data->>'suppressed_count')::int = 5`) != 1 ||
-		f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND data->>'suppressed' = 'true'`) != 1 {
-		t.Fatal("the summary and the marked row were not both written")
+	if err := refuse(f.st, busy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(busy.ID, ""); got != 35 {
+		t.Fatalf("first refusal of the next window: %d rows, want 35 (its summary and its own row)", got)
+	}
+	if n := rows(busy.ID, ` AND (data->>'suppressed_count')::int = $2
+		AND (data->>'window_end')::timestamptz - (data->>'window_start')::timestamptz = interval '1 hour'`, 2*each-33); n != 1 {
+		t.Fatalf("%d summaries of %d suppressed refusals over one hour, want 1", n, 2*each-33)
+	}
+	if n := rows(busy.ID, ` AND data->>'suppressed' = 'true'`); n != 1 {
+		t.Fatalf("the next window's first row is marked: %d marked rows, want 1", n)
 	}
 }
 
@@ -332,8 +390,8 @@ func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextSpoolCursor(t *testing.T) {
 	}
 }
 
-// Refused spool records keep ingest's replay window: past runnerspool.ReplayBatch refusals with their audit rows
-// suppressed, the cursor holds only the last ReplayBatch hashes; a refused record retried inside the window moves
+// Refused spool records keep ingest's replay window: past runnerspool.ReplayBatch refusals, most of them past the
+// bound on their audit rows, the cursor holds only the last ReplayBatch hashes; a refused record retried inside the window moves
 // nothing on either path, one evicted from it is refused as ingest refuses it, and the next record is taken.
 func TestPG_RefusedSpoolRecordsKeepTheReplayWindow(t *testing.T) {
 	pool, st, rn, run, _ := spoolPGFixture(t)

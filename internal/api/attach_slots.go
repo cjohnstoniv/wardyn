@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 
@@ -125,11 +126,15 @@ func (s *Server) attachSlotsFull(run types.AgentRun, principal string) string {
 }
 
 // webAttachSlot is reserveAttachSlot for the web lane, before the upgrade: a refusal is answered
-// here, with nil returned.
-func (s *Server) webAttachSlot(ctx context.Context, w http.ResponseWriter, run types.AgentRun, actorType types.ActorType, principal string) (release func()) {
+// here, with nil returned. support is the ticket's support grant, uuid.Nil for an owner's attach.
+func (s *Server) webAttachSlot(ctx context.Context, w http.ResponseWriter, run types.AgentRun, actorType types.ActorType, principal string, support uuid.UUID) (release func()) {
 	release, refused := s.reserveAttachSlotOrSay(run, principal)
 	if refused != "" {
-		s.auditAttachSessionCap(ctx, run, actorType, principal, refused, map[string]any{})
+		data := map[string]any{}
+		if support != uuid.Nil { // a helper's refused attach names its grant, as its other rows do
+			maps.Copy(data, supportEntryFields(support))
+		}
+		s.auditAttachSessionCap(ctx, run, actorType, principal, refused, data)
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 	}
 	return release

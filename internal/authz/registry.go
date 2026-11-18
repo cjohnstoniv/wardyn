@@ -130,6 +130,13 @@ const (
 	// ReasonDecisionScopeAboveRule: a decision_scope that reaches further than the unit deciders rule allows
 	// (its max_scope, and never always under a rule), for every decider.
 	ReasonDecisionScopeAboveRule Reason = "decision_scope_above_rule"
+	// ReasonSupportDoorNotGranted: a support helper's entry asked for a door its owner did not tick.
+	ReasonSupportDoorNotGranted Reason = "support_door_not_granted"
+	// ReasonSupportGrantEnded: a support helper's entry named a grant that has ended (expired, revoked,
+	// signed out, or its run is over).
+	ReasonSupportGrantEnded Reason = "support_grant_ended"
+	// ReasonSupportHelperDecision: a person who helped in a run asked to decide one of its holds.
+	ReasonSupportHelperDecision Reason = "support_helper_decision"
 )
 
 // Refusal is one reason's registry row.
@@ -202,6 +209,9 @@ var refusals = map[Reason]Refusal{
 	ReasonUnitScopeDenied:                {Effect: EffectDeny, Audit: true, Sentence: "this is outside the units you administer"},
 	ReasonNotADecider:                    {Effect: EffectDeny, Audit: true},
 	ReasonDecisionScopeAboveRule:         {Effect: EffectDeny, Audit: true},
+	ReasonSupportDoorNotGranted:          {Effect: EffectDeny, Audit: true, Sentence: "the run's owner did not allow this kind of help"},
+	ReasonSupportGrantEnded:              {Effect: EffectDeny, Audit: true, Sentence: "this help session has ended"},
+	ReasonSupportHelperDecision:          {Effect: EffectDeny, Audit: true, Sentence: "you helped in this run, so you cannot decide its holds"},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

@@ -94,3 +94,56 @@ func TestSSHMaxConnectionsPerPrincipalBoot(t *testing.T) {
 		t.Errorf("-1 = %v, want a refusal naming the variable", err)
 	}
 }
+
+// WARDYN_SSH_CHANNELS: unset is nil (every kind served, as before), a list of the four names is taken as
+// listed, and an unknown name, an empty item or a blank value refuses boot, naming the variable.
+func TestSSHChannelsBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_SSH_CHANNELS")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	f := parseBootFlags()
+	if err := validateBootPosture(f, tlsPosture{}); err != nil && strings.Contains(err.Error(), "WARDYN_SSH_CHANNELS") {
+		t.Fatalf("unset refused: %v", err)
+	}
+	if got := sshChannelSet(f.sshChannels); got != nil {
+		t.Fatalf("unset = %v, want nil (every kind served)", got)
+	}
+
+	for _, tc := range []struct {
+		value string
+		want  []string
+	}{
+		{"exec", []string{"exec"}},
+		{"shell,exec,sftp,forward", []string{"exec", "forward", "sftp", "shell"}},
+		{" sftp , forward ", []string{"forward", "sftp"}},
+	} {
+		got, err := parseSSHChannels(tc.value)
+		if err != nil || len(got) != len(tc.want) {
+			t.Fatalf("%q = %v (%v), want %v", tc.value, got, err, tc.want)
+		}
+		for _, k := range tc.want {
+			if !got[k] {
+				t.Errorf("%q: %q missing from %v", tc.value, k, got)
+			}
+		}
+	}
+
+	for _, tc := range []struct{ value, want string }{
+		{"exec,ssh", `unknown channel "ssh" (want shell, exec, sftp or forward)`},
+		{"Exec", `unknown channel "Exec" (want shell, exec, sftp or forward)`},
+		{"sync", `unknown channel "sync" (want shell, exec, sftp or forward)`},
+		{"exec,,sftp", `unknown channel "" (want shell, exec, sftp or forward)`},
+		{",", `unknown channel ""`},
+		{"  ", "empty list"},
+	} {
+		t.Setenv("WARDYN_SSH_CHANNELS", tc.value)
+		resetFlags(t)
+		err := validateBootPosture(parseBootFlags(), tlsPosture{})
+		if err == nil || !strings.Contains(err.Error(), "WARDYN_SSH_CHANNELS: "+tc.want) {
+			t.Errorf("%q: boot = %v, want a refusal containing %q", tc.value, err, tc.want)
+		}
+	}
+}

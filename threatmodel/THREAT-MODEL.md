@@ -1794,6 +1794,7 @@ These risks are **not closed by v1 Wardyn**.
     - Every successful OIDC login re-stamps BOTH `role` and `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go) to `store.RefreshSSHKeyRoles`).
     - And `sshAuth` and `sshCurrentKey` refuse the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed reading for every pre-`0046` row).
     - Still bounded-stale, never live.
+    - One exception reaches a person's run: the helper of a live support grant is admitted on the SSH doors the owner ticked, with the same key role, cap and freshness checks and the run's governance, and the connection is re-checked on each keepalive.
     - A demoted admin's key keeps granting the override until their next login (re-stamping `role=user`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
     - A member's key never satisfies the override regardless of drift — only `role==admin` does, reachable only by holding the admin role at a stamping moment.
     - Audited distinctly (`ssh.authenticate` success carries `override:true` when the owner check failed and the role check passed; a TTL-refused attempt is an `ssh.authenticate` failure with its own reason string).
@@ -3261,7 +3262,7 @@ These risks are **not closed by v1 Wardyn**.
     </details>
 
 97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
-    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - The cap is 32 `runner.event.refuse` rows per runner per hour, counted in the database across every replica and restart, then one `suppressed` row.
     - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
     - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
     - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
