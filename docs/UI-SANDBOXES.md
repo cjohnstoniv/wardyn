@@ -675,7 +675,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
   - A WebSocket or other upgraded connection an inbound token opened is the exception (rc.8); see [its re-check](#what-wardyn-checks-on-every-call).
-  - So is a support helper's: every relayed request, a WebSocket or a long response included, is re-checked every 30 seconds and closed once the grant stops.
+  - So is a support helper's: each new request is re-checked before it is relayed, and one already open, a WebSocket or a long response, is re-checked every 30 seconds and closed once the grant stops.
 - **A support helper.** A super admin whose [support request](ENV.md#wardyn_support_sessions) the run's owner accepted with the web apps or desktop door ticked opens the run's apps, governed.
   - Web apps opens a declared app that is not a desktop. Desktop opens the `novnc` app and a Linux VM's desktop. A door the owner left unticked is `403` `support_door_not_granted` when the ticket is asked for. A ticket used after its grant ended, ran out or lost that door is `403` `ui_gateway_ticket_run_mismatch` at the enter.
   - It needs per-run hosts. On one shared host the ticket mint answers `403` `inbound_needs_host_mode`.

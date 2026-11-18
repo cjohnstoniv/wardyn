@@ -568,7 +568,8 @@ func uiReassertKey(sess uiSession) string {
 // uiReassertDue answers whether sess's request re-checks now. A helper's session (one carrying a support grant)
 // always does, with no debounce: the check then refuses a revoked grant with a clean 403 before the request is
 // relayed, where a debounced pass would relay it and leave a stream to the watch (supportWatchCtx) to cut later.
-// The cost is the run and the grant read on every request of a helper's session, and of no other.
+// The cost is the full check (the run, the grant read and its stamp, and the revocation reads) on every request of a
+// helper's session, and of no other.
 func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
 	if sess.SupportGrant != uuid.Nil {
 		return true
