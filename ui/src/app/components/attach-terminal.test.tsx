@@ -125,6 +125,8 @@ import { HttpError } from "../lib/api/core";
 import type { PolicyRef } from "../lib/api/health";
 import { aheadByHours } from "../lib/test-clock";
 import { ATTACH_CAP_REASON, RUN_OWNER_ONLY } from "../lib/run-entry";
+import { SupportHelperContext } from "./wardyn/support-helper-context";
+import { SUPPORT_BANNER } from "./wardyn/copy/support";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -831,3 +833,71 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
   });
 });
 
+
+// A support helper (an accepted grant that opens the terminal): admitted on the ticket lane although they did not
+// start the run, never offered Take over, and told once the run's owner joined.
+describe("AttachTerminal — a support helper", () => {
+  beforeEach(() => {
+    stubTerminalEnv();
+    vi.mocked(runs.attachTicket).mockReset();
+    vi.mocked(runs.attachTicket).mockResolvedValue("tic_helper");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const helper = () =>
+    render(
+      <OperatorProvider operator={true} principal="sam@example.com">
+        <SupportHelperContext.Provider value={true}>
+          <AttachTerminal runId="run_1" createdBy="maya@example.com" />
+        </SupportHelperContext.Provider>
+      </OperatorProvider>,
+    );
+
+  it("opens through a ticket, not the admin cookie, on a run it did not start", async () => {
+    helper();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(vi.mocked(runs.attachTicket)).toHaveBeenCalledWith("run_1");
+    expect(FakeWebSocket.instances[0].url).toContain("ticket=tic_helper");
+    expect(screen.queryByText(RUN_OWNER_ONLY)).toBeNull();
+  });
+
+  it("watching read-only names the holder and offers no Take over and no hint", async () => {
+    helper();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "maya@example.com")));
+    expect(screen.getByText(RUN_COCKPIT.heldBy("maya@example.com"))).toBeInTheDocument();
+    expect(screen.getByText(RUN_COCKPIT.watchingReadOnly)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
+    expect(screen.queryByText(RUN_COCKPIT.heldHint)).toBeNull();
+  });
+
+  it("the owner joining closes the socket with its reason: says so, offers Reconnect only, and Reconnect attaches again", async () => {
+    helper();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "sam@example.com")));
+    act(() => ws.drop(1008, "The run's owner joined"));
+
+    expect(screen.getByText(SUPPORT_BANNER.OWNER_JOINED)).toBeInTheDocument();
+    expect(screen.getByText(SUPPORT_BANNER.OWNER_DRIVING)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
+    expect(screen.queryByText(RUN_COCKPIT.displacedUnknownHint)).toBeNull();
+    expect(screen.queryByText(RUN_COCKPIT.driving)).toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(1); // no automatic reconnect
+
+    fireEvent.click(screen.getByRole("button", { name: SUPPORT_BANNER.RECONNECT }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(screen.queryByText(SUPPORT_BANNER.OWNER_JOINED)).toBeNull();
+  });
+
+  it("another person's take-over stays the ordinary state for anyone who is not a helper", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.drop(1008, "The run's owner joined"));
+    expect(screen.queryByText(SUPPORT_BANNER.OWNER_JOINED)).toBeNull();
+  });
+});

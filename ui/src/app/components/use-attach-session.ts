@@ -81,6 +81,8 @@ const SETTLED_OPEN_MS = 15_000;
 // other close keeps the reconnect path.
 const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
+/** The close reason of a helper whose terminal the run's owner took (the server's support arm). Exactly this and no other. */
+export const OWNER_JOINED_REASON = "The run's owner joined";
 
 // The authority contract (internal/api/attach_authority.go): an open socket
 // whose sign-in stopped authorizing it (signed out, revoked, expired, or a
@@ -601,7 +603,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         // back, which is the only remaining action.
         const reason = ev.reason ?? "";
         if (ev.code === TAKEN_OVER_CLOSE_CODE || reason.startsWith(TAKEN_OVER_REASON_PREFIX)) {
-          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
+          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : reason === OWNER_JOINED_REASON ? OWNER_JOINED_REASON : "");
           setMode(null); // we hold nothing now; the header must not still say "driving"
           setConnState("closed");
           // #216 — was a writeln; the holder footer's displacedHint says this.

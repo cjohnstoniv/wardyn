@@ -22,6 +22,7 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { useSupportHelper } from "../../wardyn/support-helper-context";
 import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
@@ -61,7 +62,9 @@ export function TerminalPane({
   // command bar's "attachable" chip, the SSH card and its widget gate claim —
   // all must agree or the page promises a terminal it then refuses to open
   // (#1476: the run's person, or an admin on a run no person owns).
-  const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A support helper of an accepted grant that opens the terminal enters through the server's support arm.
+  const supportHelper = useSupportHelper();
+  const canAttach = supportHelper || mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing; a failed read turns copying off under its own line.
   const dataOut = useRunDataOut(run.id, attachable);
