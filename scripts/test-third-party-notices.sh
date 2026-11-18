@@ -76,6 +76,9 @@ keep "$tmp/keep.err" < "$tmp/in.csv" > "$tmp/out.csv"
 err_for gopkg.in/inf.v0 v0.9.2 > "$tmp/ver.err"
 got="$(keep "$tmp/ver.err" <<<"gopkg.in/inf.v0,Unknown,BSD-3-Clause")"
 [ "$got" = "gopkg.in/inf.v0,Unknown,BSD-3-Clause" ] || { echo "FAIL: a URL was kept for a version other than the one that failed; got: $got"; exit 1; }
+err_for gopkg.in/inf.v0 | sed 's/library gopkg.in\/inf.v0:.*/library gopkg.in\/inf.v0:/' > "$tmp/nover.err"
+got="$(keep "$tmp/nover.err" <<<"gopkg.in/inf.v0,Unknown,BSD-3-Clause")"
+[ "$got" = "gopkg.in/inf.v0,Unknown,BSD-3-Clause" ] || { echo "FAIL: a URL was kept for a discovery error that names no version; got: $got"; exit 1; }
 err_for gopkgXin/inf.v0 > "$tmp/dot.err"
 got="$(keep "$tmp/dot.err" <<<"gopkg.in/inf.v0,Unknown,BSD-3-Clause")"
 [ "$got" = "gopkg.in/inf.v0,Unknown,BSD-3-Clause" ] || { echo "FAIL: a discovery error for gopkgXin/inf.v0 kept gopkg.in/inf.v0 (the match must be literal); got: $got"; exit 1; }
