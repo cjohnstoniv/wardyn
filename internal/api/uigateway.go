@@ -474,6 +474,8 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// The same human is presence for the pause, and thaws a paused run.
 	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
+	ctx, stop := s.supportWatchCtx(ctx, sess)
+	defer stop()
 	s.serveUIRelay(w, r.WithContext(ctx))
 }
 

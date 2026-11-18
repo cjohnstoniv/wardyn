@@ -17,16 +17,16 @@ import (
 // (DESIGN-support-sessions.md section 2), not an edit of these lists.
 
 // supportCallList is every function that may call supportMayEnter, by name. Value true is a pending mark: the
-// door's lane (support-ssh for sshAuth and sshCurrentKey, support-web for the other three) has not landed, so the
+// door's lane (support-ssh, for sshAuth and sshCurrentKey) has not landed, so the
 // function may or may not call the arm yet, and the lane deletes its own mark when it lands.
 var supportCallList = map[string]bool{
 	"handleAttachTicket":       false, // the ticket mint: purpose "" is the terminal, "ui" the UI doors
 	"refuseAttachEntry":        false, // the terminal's WebSocket entry, its ticket branch only
 	"attachAuthority":          false, // the open terminal's re-check, its ticket branch only
 	"handleRunExec":            false, // POST /exec
-	"uiTicketMayEnter":         true,  // the UI gateway's ticket entry, inside ta.caller == ""
-	"uiSessionStillAuthorized": true,  // the UI session's re-check
-	"desktopRun":               true,  // the Files panel
+	"uiTicketMayEnter":         false, // the UI gateway's ticket entry, inside ta.caller == ""
+	"uiSessionStillAuthorized": false, // the UI session's re-check
+	"desktopRun":               false, // the Files panel
 	"sshAuth":                  false, // the SSH gateway's authentication, inside the operator-owned rule's branch
 	"sshCurrentKey":            false, // the SSH gateway's re-check of an open connection
 }

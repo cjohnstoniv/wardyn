@@ -135,6 +135,11 @@ Three more the tier inherits rather than introduces:
   - recovery is operator-side — an admin or `security_admin`, which on m′ the developer explicitly is not. Once the rightful owner is verified out of band, they remove the registrant's keys with `DELETE /people/{principal}/ssh-keys` (see [Reclaiming a squatted fingerprint](SSH.md#reclaiming-a-squatted-fingerprint));
 - and compose serves the console and the UI relay on a **shared origin**, a documented residual of this topology.
 
+### Support sessions are not offered on this tier
+
+- A run on a managed laptop's local daemon takes no support helper: a support request on a local-mode run is refused `409` `support_run_ineligible`, because the daemon has one seat.
+- Its web apps, desktop and Files panel answer to the run's owner alone.
+
 ### Named gap: the browser lane is not available on this tier
 
 - `wardyn run ssh` works on a managed laptop as of 0.7.
