@@ -105,9 +105,16 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const macOff = !!macOS?.disk;
   const viewOnly = (macOS?.desktop === "observe" && running) || watchable;
   const desktopOn = !!uiSandbox?.enabled && !macOff;
+  const uiApps = run.ui_apps ?? [];
   // The Open desktop button, its recording line and its new-tab note: a helper needs the desktop door for them.
   const canOpen = desktopOn && !noDoor && (!background || watchable) && desktopDoor;
-  const uiApps = run.ui_apps ?? [];
+  // Files moves with the desktop, under the buttons: the same gate it had in the Attach tile (the run's person, not a
+  // sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop), plus never on a background run,
+  // which has no files door. The panel shows the run's own desktop rules.
+  const filesLane = desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running;
+  // A helper whose grant opens neither Open desktop nor a Files lane this run can draw has no lane here: no tile (empty
+  // tiles are not drawn). The tile predicate cannot see the gateway, so the card says it once /healthz has answered.
+  if (asHelper && !desktopDoor && !filesLane) return null;
   // The window on the Mac (mac_window, live macOS VM runs only): its button comes first and the desktop's turns outline.
   const windowState = running ? run.mac_window?.state : undefined;
   const windowButton = running && macWindowHasButton(run.mac_window);
@@ -207,13 +214,8 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           </>
         )}
         {canOpen && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
-        {/* Files moves with the desktop, under the buttons: the same gate it had in the Attach tile
-            (the run's person, not a sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop),
-            plus never on a background run, which has no files door. The panel shows the run's own desktop rules. */}
-        {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && filesDoor && <DesktopFilesPanel runId={run.id} vm />}
-        {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && !filesDoor && (
-          <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />
-        )}
+        {filesLane && filesDoor && <DesktopFilesPanel runId={run.id} vm />}
+        {filesLane && !filesDoor && <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />}
         {desktopOn && !background && !asHelper && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}
       </section>
     </WidgetCard>

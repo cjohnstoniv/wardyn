@@ -240,6 +240,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // token at whatever else owns the host root). It rides `wardyn login <url>`;
   // the attach command itself carries no prefix.
   const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
+  // The non-VM run's Files panel: with a declared UI app once the gateway is on, or, for a run with none, when the run's
+  // rule is review. The two cases were separate renders in the same place and never both true.
+  const filesPanelHere =
+    mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) &&
+    ((uiSandboxOn && uiApps.length > 0) || (dataOut === "review" && uiApps.length === 0));
   const syncBase = sshBase && run.placement !== "local" && !!run.agent_exec_id;
   const syncLane = syncBase && filesDoor;
 
@@ -471,16 +476,12 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
-            {/* A VM run's Files panel is in its Desktop tile; any other run with a declared UI app keeps it here. */}
-            {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && filesDoor && <DesktopFilesPanel runId={run.id} />}
-            {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && !filesDoor && (
-              <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />
-            )}
           </>
         )}
-        {webAppsDoor && dataOut === "review" && uiApps.length === 0 && mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && (
-          <DesktopFilesPanel runId={run.id} noDesktop />
-        )}
+        {/* A VM run's Files panel is in its Desktop tile; any other run keeps it here: with a declared UI app, or, under
+            review, as the reviewed way out of a run with none. It rides the files door alone, never web_apps. */}
+        {filesPanelHere && filesDoor && <DesktopFilesPanel runId={run.id} noDesktop={uiApps.length === 0} />}
+        {filesPanelHere && !filesDoor && <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />}
       </div>
     </WidgetCard>
   );

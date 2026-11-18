@@ -59,6 +59,15 @@ describe("the Desktop and Attach tiles: who is admitted", () => {
     expect(attach(c)).toBe(att);
   });
 
+  it("files alone draws the Desktop tile only where the card draws the Files lane: not a macOS VM with no declared UI app", () => {
+    const mac = (over: Partial<RunDetail> = {}) => vm({ machine_kind: "macos_vm", ...over });
+    const app = [{ name: "code-server", port: 8080 }];
+    expect(desktop(ctx("admin, open grant", "admin", ["files"], mac()))).toBe(false);
+    expect(desktop(ctx("admin, open grant", "admin", ["files"], mac({ ui_apps: app })))).toBe(true);
+    expect(desktop(ctx("admin, open grant", "admin", ["desktop"], mac()))).toBe(true);
+    expect(desktop(ctx("admin, open grant", "admin", ["files"], vm()))).toBe(true);
+  });
+
   it("a helper's Desktop tile needs a live VM run; the Attach tile a live run that is not a background one", () => {
     expect(desktop(ctx("admin, open grant", "admin", ALL, vm({ machine_kind: undefined })))).toBe(false);
     expect(desktop(ctx("admin, open grant", "admin", ALL, vm({ state: "COMPLETED" })))).toBe(false);

@@ -162,6 +162,20 @@ describe("DesktopCard for a helper", () => {
     expect(container.querySelector("section")).toBeNull();
   });
 
+  it("files only draws no tile where the card has no Files lane: the gateway off, or a macOS VM with no declared UI app", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: HEALTH.ssh });
+    const off = desk(["files"]);
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(off.container.querySelector("section")).toBeNull();
+    off.unmount();
+    healthMock.mockResolvedValue(HEALTH);
+    const mac = desk(["files"], "helper", { machine_kind: "macos_vm", ui_apps: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mac.container.querySelector("section")).toBeNull();
+    expect(screen.queryByTestId("files-panel")).toBeNull();
+  });
+
   it("a click answered support_grant_ended reads P-02; run_owner_only keeps its words", async () => {
     attachTicketMock.mockRejectedValueOnce(new HttpError(403, "support grant ended", "support_grant_ended"));
     desk(ALL);
@@ -171,6 +185,24 @@ describe("DesktopCard for a helper", () => {
     attachTicketMock.mockRejectedValueOnce(new HttpError(403, "only the person", "run_owner_only"));
     within(tile).getByRole("button", { name: UI_APPS_LANE.cta("desktop") }).click();
     expect(await within(tile).findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
+  });
+});
+
+describe("the non-VM run's Files panel rides the files door alone", () => {
+  const container = { machine_kind: undefined } as Partial<RunDetail>;
+
+  it("files without web apps: the panel is drawn, with no P-01", async () => {
+    attach(["files"], "helper", container);
+    expect(await screen.findByTestId("files-panel")).toBeInTheDocument();
+    expect(screen.queryByText(closed("files"), { exact: true })).toBeNull();
+  });
+
+  it("web apps without files: the Files heading says P-01 and no panel is drawn", async () => {
+    attach(["web_apps"], "helper", container);
+    await screen.findByRole("button", { name: UI_APPS_LANE.cta("code-server") });
+    expect(screen.getByText(DESKTOP_FILES.title)).toBeInTheDocument();
+    expect(screen.getAllByText(closed("files"), { exact: true }).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("files-panel")).toBeNull();
   });
 });
 

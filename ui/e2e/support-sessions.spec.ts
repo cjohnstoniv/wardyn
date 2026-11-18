@@ -283,6 +283,12 @@ test.describe("Support sessions", () => {
     await page.route(new RegExp(`/api/v1/runs/${runId}/desktop/files(\\?.*)?$`), (route) =>
       route.fulfill({ json: { folder: "~/Transfers", rules: { paste_in: "allowed", copy_out: "blocked", upload: "allowed", download: "blocked" }, files: [] } }),
     );
+    // The SSH lane opens by default only for a person with a key, and the hermetic backend registers none.
+    await page.route(/\/api\/v1\/me\/ssh-keys(\?|$)/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: [{ fingerprint: "SHA256:e2e-helper", principal: HELPER, name: "helper laptop", public_key: "ssh-ed25519 AAAA", created_at: new Date().toISOString() }] })
+        : route.fallback(),
+    );
     await stubAttachTicket(page, runId);
     await stubAttachSocket(page, (_n, ws) => ws.send(attachModeFrame(false, { principal: HELPER })));
     return runId;
@@ -360,7 +366,8 @@ test.describe("Support sessions", () => {
 
   test("doors: a click the server answers support_grant_ended reads P-02 on Open desktop", async ({ page }) => {
     const { desktop } = await openHelpedRun(page, doorsWorld(["desktop", "files", "web_apps"]));
-    await page.route("**/api/v1/runs/*/attach/ticket", (route) =>
+    // A RegExp: Open desktop mints with ?purpose=ui, and a glob is anchored at the end of the URL.
+    await page.route(/\/api\/v1\/runs\/[^/]+\/attach\/ticket(\?.*)?$/, (route) =>
       route.fulfill({ status: 403, json: { error: "the support grant on this run ended", reason: "support_grant_ended" } }),
     );
     await desktop.scrollIntoViewIfNeeded();

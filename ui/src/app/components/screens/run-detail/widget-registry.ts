@@ -33,7 +33,7 @@ import type {
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
 import type { SupportDoor } from "../../../lib/api/support";
-import { ATTACH_TILE_DOORS, DESKTOP_TILE_DOORS, hasAnyDoor } from "../../wardyn/support-helper-lanes";
+import { ATTACH_TILE_DOORS, hasAnyDoor } from "../../wardyn/support-helper-lanes";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
 import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
@@ -300,7 +300,9 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
         isVMKind(ctx.run.machine_kind) &&
         ctx.run.state === "RUNNING" &&
         !isBackgroundRun(ctx.run) &&
-        hasAnyDoor(ctx.helperDoors, DESKTOP_TILE_DOORS)),
+        // Files alone draws the tile only where the card draws the Files lane: not a macOS VM with no declared UI app.
+        (ctx.helperDoors.includes("desktop") ||
+          (ctx.helperDoors.includes("files") && (!isMacOSVM(ctx.run) || (ctx.run.ui_apps ?? []).length > 0)))),
   },
   ssh: {
     label: "Attach from your terminal",

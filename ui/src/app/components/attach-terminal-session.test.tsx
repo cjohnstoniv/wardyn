@@ -332,7 +332,7 @@ describe("AttachTerminal — close codes", () => {
     const hws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
     act(() => hws.open());
     act(() => hws.drop(4401, "session ended"));
-    expect(written.join("")).toContain("[Help on this run has ended.]");
+    expect(written.join("")).toContain("Help on this run has ended.");
     expect(written.join("")).not.toContain("sign in again");
     helper.unmount();
   });

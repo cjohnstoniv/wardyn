@@ -97,8 +97,8 @@ export const SUPPORT_HELPER = {
   },
   /** P-02: a helper's click after the grant ended (REST reason support_grant_ended). */
   ended: "Help is no longer open on this run.",
-  /** P-03: the terminal's line for a helper whose grant ended, in the terminal's own brackets. */
-  terminalEnded: "[Help on this run has ended.]",
+  /** P-03: the terminal's line for a helper whose grant ended. */
+  terminalEnded: "Help on this run has ended.",
 } as const;
 
 export type SupportViewer = "owner" | "helper" | "security";
