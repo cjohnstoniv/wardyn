@@ -528,7 +528,8 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 // (folderKeepVerdict); left reports a sandbox left in place. A sandbox kept for its pass back stays when the
 // agent's cut is confirmed, and a stop that failed is action's failure row with teardown_error. A record that
 // cannot be read is logged. Inside the keep the sandbox then stays only once that cut is confirmed, as a failure
-// row with folder_record_error that stays unresolved so a later pass reads it again. Past the keep its copy back
+// row with folder_record_error, written once until the record reads again or the sandbox is stopped or gone
+// (folderRecordRowDue), that stays unresolved so a later pass reads it again. Past the keep its copy back
 // is given up, or found to owe nothing (unreadKeepEnded), and the sandbox is stopped as any other, so a record
 // that never reads does not keep it for good; a give-up that does not land, or a record that reads when read
 // again and owes nothing, leaves it kept as inside the keep, for the next pass (one that reads again and is still
@@ -541,12 +542,17 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 		return false, nil
 	}
 	v, ferr, cutErr := s.folderKeepVerdict(ctx, run, action)
+	if ferr == nil {
+		s.forgetFolderRecordRow(run.ID, action) // the record reads: a later failure is written again
+	}
 	switch {
 	case v == folderKeepAway:
 		return true, cutErr
 	case v == folderKeepCut && ferr != nil:
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
-			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
+		if s.folderRecordRowDue(run.ID, action) {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
+				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": auditStep(ctx, auditStepReadFolderRecord, ferr, slog.String("run_id", run.ID.String()))})))
+		}
 		return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
 	case v == folderKeepCut:
 		return true, nil
@@ -554,6 +560,7 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
 		return false, errProxyStopUnconfirmed
 	}
+	s.forgetFolderRecordRow(run.ID, action) // the sandbox is stopped: nothing is kept for the record now
 	return false, nil
 }
 

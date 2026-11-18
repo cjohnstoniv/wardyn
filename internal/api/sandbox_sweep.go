@@ -137,6 +137,9 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 	st, serr := s.cfg.Runner.Status(pctx, run.SandboxRef)
 	pcancel()
 	if serr != nil || st.State != types.RunRunning {
+		if serr == nil {
+			s.forgetFolderRecordRow(run.ID, sandboxSweepAction) // the sandbox is gone, and any row it owed with it
+		}
 		return false // already gone (or unprobeable) — the normal, settled case
 	}
 	// A sandbox kept for its computer folder's pass back (or whose record cannot be read) is left for
