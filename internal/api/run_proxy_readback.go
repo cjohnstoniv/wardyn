@@ -115,6 +115,9 @@ func (s *Server) olderThanFirstRenewGate(ctx context.Context, run types.AgentRun
 // release older than readbackRelease, or an in-process driver whose proxy image tag is. Anything else,
 // an unreadable runner row included, is expected. It needs only the runner read, not all of
 // store.RunnerStore: a store that can read the row has the evidence.
+// The read is not bound to the session the start is sent on: a runner that reconnects on another version first
+// is judged by AnswerProxyStart's rule, under which an expected start answered with no hash fails and a legacy
+// one stays unconfirmed whatever it answers, so a stale read never enforces a start.
 func (s *Server) proxyStartMode(ctx context.Context, run types.AgentRun) string {
 	if run.RunnerID != nil {
 		rs, ok := s.cfg.Store.(runnerGetter)
