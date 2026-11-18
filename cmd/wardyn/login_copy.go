@@ -64,13 +64,14 @@ const (
 	errUnreachable      = "saved %s, but could not reach it to sign in: %v"
 
 	// A stored sign-in that can no longer renew. The reason is one of the endReason* values.
-	errSessionEnded   = "the CLI sign-in for %s has ended (%s): run `wardyn login` to sign in again"
-	endReasonExpired  = "it reached the end of its lifetime"
-	endReasonIdle     = "it went unused past its idle lifetime"
-	endReasonServer   = "the server refused to renew it: %s" // the server's reason code; it never says which end
-	errRenewBusy      = "another wardyn command is renewing the CLI sign-in for %s; retry in a moment"
-	errRenew          = "could not renew the CLI sign-in for %s: %v"
-	hintStoredRefused = "the CLI sign-in's token was refused: run `wardyn whoami`, or `wardyn login` to sign in again"
+	errSessionEnded    = "the CLI sign-in for %s has ended (%s): run `wardyn login` to sign in again"
+	endReasonExpired   = "it reached the end of its lifetime"
+	endReasonIdle      = "it went unused past its idle lifetime"
+	endReasonSignedOut = "it was signed out, under Settings → Signed-in CLIs or with `wardyn logout`"
+	endReasonServer    = "the server refused to renew it: %s" // the server's reason code, for an end it does not name (a revoke, a cut, a deactivation, a reuse)
+	errRenewBusy       = "another wardyn command is renewing the CLI sign-in for %s; retry in a moment"
+	errRenew           = "could not renew the CLI sign-in for %s: %v"
+	hintStoredRefused  = "the CLI sign-in's token was refused: run `wardyn whoami`, or `wardyn login` to sign in again"
 
 	// A running command whose stored sign-in was signed out or replaced while it ran (errSessionChanged).
 	errSessionChangedText = "this computer's CLI sign-in changed while the command ran (signed out, or replaced by another `wardyn login`): the command stopped rather than go on under another sign-in or none; what it already sent stands (a started run keeps running); check `wardyn whoami` before you go on"

@@ -477,8 +477,9 @@ const (
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
 
-	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid and cli_session_invalid are one
-	// answer each for every refusal of the token call and of a refresh, so neither is an oracle.
+	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid is one answer for every refusal of the token
+	// call, and cli_session_invalid one reason and sentence for every refusal of a refresh, so neither is an oracle.
+	// Past a valid device proof a refresh's detail may name a sign-out, a lifetime or an idle end (cliSessionEndDetail).
 	reasonCLISignInRateLimited       = "cli_sign_in_rate_limited"      // too many sign-in attempts or refreshes from this address or for this session
 	reasonCLISignInInvalidRequest    = "cli_sign_in_invalid_request"   // the sign-in request body is malformed
 	reasonCLIPasteSignInOff          = "cli_paste_sign_in_off"         // paste-back sign-in while WARDYN_CLI_PASTE_SIGN_IN is off

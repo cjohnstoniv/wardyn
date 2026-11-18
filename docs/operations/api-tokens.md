@@ -195,6 +195,8 @@ a new login ends the last.
 - **Ending it.** `POST /sessions/revoke` (every scope, including `sessions_only`), a console sign-out, Signed-in CLIs
   (`DELETE /me/cli-sessions/{id}`) and SCIM deactivation end the session and its tokens at once. A sessions-only cut
   leaves the person's own API tokens working, as before; `session.revoke` counts `cli_sessions_ended`.
+  The CLI then says why only when the sign-in was signed out, reached its lifetime or went unused past its idle
+  lifetime; every other end reads the same.
 - **Admins.** An admin's CLI acts as role `user`. `wardyn login --admin` asks for a fresh approval and gives a 1-hour
   `cli_admin` token with the real role, never renewed, which ends with the session.
 - **No browser.** `WARDYN_CLI_PASTE_SIGN_IN=true` lets the person paste a code back instead; the code lasts 5
