@@ -90,7 +90,7 @@ import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
 import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
 import { Cockpit } from "./run-detail/cockpit";
 import { RunSupportStrip, useRunSupport } from "./run-detail-support";
-import { SupportHelperContext } from "../wardyn/support-helper-context";
+import { SupportHelperContext, SupportHelperDoorsContext } from "../wardyn/support-helper-context";
 import { COULDNT_END, ENDING, toastRunName } from "../wardyn/copy/run-lifetime";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
@@ -332,6 +332,7 @@ function RunDetailPage({ id }: { id: string }) {
         >
           {/* A support helper's terminal: the header's attachable chip and the cockpit's terminal read the same answer. */}
           <SupportHelperContext.Provider value={sup.helperTerminal}>
+          <SupportHelperDoorsContext.Provider value={sup.helperDoors}>
           <SummaryHeader
             run={run}
             terminal={terminal}
@@ -486,6 +487,7 @@ function RunDetailPage({ id }: { id: string }) {
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
+          </SupportHelperDoorsContext.Provider>
           </SupportHelperContext.Provider>
         </Tabs>
       )}

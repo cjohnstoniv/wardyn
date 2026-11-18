@@ -23,6 +23,7 @@ import {
   useSecurityOperator,
 } from "../../wardyn/operator-context";
 import { type ConsoleView } from "../../wardyn/console-view";
+import { useSupportHelperDoors } from "../../wardyn/support-helper-context";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
@@ -104,6 +105,8 @@ export function Cockpit({
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
   const operatorResolved = useOperatorResolved();
+  // The doors of the open grant this viewer helps through (null for anyone else): the Desktop and Attach tiles draw for it.
+  const helperDoors = useSupportHelperDoors();
   // "blocked until an admin decides": see viewerBlockedOnDecision for what it leaves out (re-auth, an owned ADO escalation).
   const isRunOwner = run.created_by === principal;
   const viewerBlocked = viewerBlockedOnDecision(pending, securityOperator, isRunOwner);
@@ -181,6 +184,7 @@ export function Cockpit({
     finished: terminal,
     principal,
     operator, operatorResolved, view, // ssh widget: owner-or-admin AND the user view (M-7).
+    helperDoors,
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

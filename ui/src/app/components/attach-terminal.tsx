@@ -361,6 +361,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     signedOut,
     // A helper's door is the ticket lane: the cookie lane is admin-only and refuses a run its admin did not start.
     operator: operator && !supportHelper,
+    supportHelper,
     operatorResolved,
     mayEnter,
     refusal,

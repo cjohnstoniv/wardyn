@@ -22,7 +22,8 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
-import { useSupportHelper } from "../../wardyn/support-helper-context";
+import { useSupportHelper, useSupportHelperDoors } from "../../wardyn/support-helper-context";
+import { SUPPORT_HELPER } from "../../wardyn/copy/support";
 import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
@@ -66,6 +67,9 @@ export function TerminalPane({
   const supportHelper = useSupportHelper();
   const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const canAttach = supportHelper || mayEnter;
+  // A helper of an open grant whose owner left the terminal door closed reads that, not the owner-only line.
+  const helperDoors = useSupportHelperDoors();
+  const refusalLine = !mayEnter && helperDoors ? SUPPORT_HELPER.doorsClosed(["terminal"]) : runEntryRefusalLine(run);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing; a failed read turns copying off under its own line.
   const dataOut = useRunDataOut(run.id, attachable);
@@ -210,7 +214,7 @@ export function TerminalPane({
         <StartupProgress run={run} lastStep={lastStep}>
           {lastStep === null && (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
-              <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
+              <p className="text-sm text-muted-foreground">{refusalLine}</p>
               {watchable && (
                 <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                   Watch the captured session →
@@ -244,7 +248,7 @@ export function TerminalPane({
         <div className="min-h-0 flex-1" />
       ) : (
         <PaneNotice
-          text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
+          text={run.interactive ? refusalLine : RUN_MODE.autonomous.blurb}
           action={
             !watchable ? undefined : (
               <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">

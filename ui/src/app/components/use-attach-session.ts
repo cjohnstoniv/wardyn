@@ -29,6 +29,7 @@ import { HttpError, TIMEOUT_STATUS } from "../lib/api/core";
 import type { PolicyRef } from "../lib/api/health";
 import { sessionExpiry } from "../lib/api/session-activity";
 import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
+import { SUPPORT_HELPER } from "./wardyn/copy/support";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
@@ -130,6 +131,8 @@ export interface UseAttachSessionArgs {
   /** Who created the run: a service run's sponsor arm is the one that answers a 404 run_not_found. */
   createdBy?: string;
   tokenOnlyMode: boolean;
+  /** The signed-in person helps through an accepted support grant: the end line says so, not "sign in again". */
+  supportHelper?: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   panelRef: React.RefObject<HTMLDivElement | null>;
   termRef: React.MutableRefObject<Terminal | null>;
@@ -177,6 +180,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     refusal,
     createdBy,
     tokenOnlyMode,
+    supportHelper,
     containerRef,
     panelRef,
     termRef,
@@ -213,6 +217,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
   const operatorRef = React.useRef(operator);
   const operatorResolvedRef = React.useRef(operatorResolved);
   operatorRef.current = operator;
+  // Latched: the page's poll can read the grant as ended before this socket's close arrives, and the line must still
+  // be the helper's. Never reset, so a person who was a helper here never reads "sign in again".
+  const helperRef = React.useRef(false);
+  if (supportHelper) helperRef.current = true;
   operatorResolvedRef.current = operatorResolved;
   // Signing out mid-page closes the socket and stops retries and input, but
   // keeps the terminal and what it shows: the same person signing back in
@@ -617,7 +625,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           }
           setMode(null);
           setConnState("closed");
-          term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");
+          term.writeln(`\r\n\x1b[2m${helperRef.current ? SUPPORT_HELPER.terminalEnded : "[session ended: sign in again to reconnect]"}\x1b[0m`);
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.

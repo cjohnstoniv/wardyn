@@ -87,6 +87,20 @@ export const SUPPORT_BANNER = {
   CLOSE: "Close",
 } as const;
 
+/** P-01 to P-03: what a helper reads where an owner-only or closed lane would be (board M5c, STRINGS.md). */
+export const SUPPORT_HELPER = {
+  /** P-01: {doors} are the banner's chip labels, joined "A, B and C". */
+  doorsClosed: (doors: readonly SupportDoor[]): string => {
+    const names = SUPPORT_DOORS.filter((d) => doors.includes(d)).map((d) => SUPPORT_DOOR[d].name);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names.join("");
+    return `The run's owner did not allow ${list} in this help session.`;
+  },
+  /** P-02: a helper's click after the grant ended (REST reason support_grant_ended). */
+  ended: "Help is no longer open on this run.",
+  /** P-03: the terminal's line for a helper whose grant ended, in the terminal's own brackets. */
+  terminalEnded: "[Help on this run has ended.]",
+} as const;
+
 export type SupportViewer = "owner" | "helper" | "security";
 
 /**

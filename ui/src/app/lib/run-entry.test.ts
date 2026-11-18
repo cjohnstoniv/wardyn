@@ -12,6 +12,7 @@ import {
   RUN_OWNER_ONLY,
   SERVICE_ATTACH_LINE,
   SERVICE_ENTRY_LINE,
+  SUPPORT_GRANT_ENDED_REASON,
   sponsorOnlyEntry,
   runEntryOwnerLine,
   runEntryRefusalLine,
@@ -92,5 +93,14 @@ describe("refusal wording", () => {
     expect(RUN_OWNER_ONLY).toBe("Only the person who started this run can open it interactively.");
     expect(entryErrorMessage(new HttpError(403, "nope", "other"), (e) => (e as Error).message)).toBe("nope");
     expect(entryErrorMessage(new Error("x"), () => "fallback")).toBe("fallback");
+  });
+});
+
+describe("a helper's ended grant", () => {
+  it("support_grant_ended maps from the reason to P-02; run_owner_only keeps its words", () => {
+    const ended = new HttpError(403, "the support grant on this run ended", SUPPORT_GRANT_ENDED_REASON);
+    expect(entryErrorMessage(ended, () => "fallback")).toBe("Help is no longer open on this run.");
+    expect(entryErrorMessage(new HttpError(403, "x", "run_owner_only"), () => "fallback")).toBe(RUN_OWNER_ONLY);
+    expect(SUPPORT_GRANT_ENDED_REASON).toBe("support_grant_ended");
   });
 });

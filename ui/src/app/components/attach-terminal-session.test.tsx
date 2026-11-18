@@ -20,6 +20,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, screen, fireEvent } from "@testing-library/react";
 
 const focusCalls = { n: 0 };
+// What the terminal wrote with writeln, for the end line a closed socket prints.
+const written: string[] = [];
 // Captured from attachCustomKeyEventHandler so the Ctrl+V path can be driven
 // the same way a real keydown would, without a real DOM key event round trip.
 let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
@@ -32,7 +34,9 @@ vi.mock("@xterm/xterm", () => {
     loadAddon() {}
     open() {}
     write() {}
-    writeln() {}
+    writeln(line: string) {
+      written.push(line);
+    }
     resize() {}
     focus() {
       focusCalls.n++;
@@ -107,6 +111,7 @@ import { AttachTerminal } from "./attach-terminal";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { HttpError } from "../lib/api/core";
 import { OperatorProvider } from "./wardyn/operator-context";
+import { SupportHelperContext } from "./wardyn/support-helper-context";
 import { runs } from "../lib/api/runs";
 import { ATTACH_CAP_REASON } from "../lib/run-entry";
 import { aheadByHours } from "../lib/test-clock";
@@ -303,6 +308,33 @@ describe("AttachTerminal — close codes", () => {
     await act(() => vi.advanceTimersByTimeAsync(30000));
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("a 4401 close tells the owner to sign in again, and a helper that help has ended", async () => {
+    written.length = 0;
+    const owner = render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.drop(4401, "session ended"));
+    expect(written.join("")).toContain("[session ended: sign in again to reconnect]");
+    owner.unmount();
+
+    written.length = 0;
+    const before = FakeWebSocket.instances.length;
+    const helper = render(
+      <SupportHelperContext.Provider value={true}>
+        <AttachTerminal runId="run_1" />
+      </SupportHelperContext.Provider>,
+    );
+    // A helper opens through a ticket, so the socket follows the mint.
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(before);
+    const hws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    act(() => hws.open());
+    act(() => hws.drop(4401, "session ended"));
+    expect(written.join("")).toContain("[Help on this run has ended.]");
+    expect(written.join("")).not.toContain("sign in again");
+    helper.unmount();
   });
 
   it("a 4401 close reconnects once when the session was renewed past the expiry the socket opened under", async () => {

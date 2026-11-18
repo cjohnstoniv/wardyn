@@ -31,6 +31,7 @@ export function UIAppRow({
   busy,
   onOpen,
   facts,
+  helper = false,
   children,
 }: {
   runId: string;
@@ -40,6 +41,8 @@ export function UIAppRow({
   busy: boolean;
   onOpen: () => void;
   facts: InboundFacts | null;
+  /** A support helper's row: Open, the Inbound tag and the callers as facts; Only you and the Copy buttons are the owner's to hand out. */
+  helper?: boolean;
   /** Under the row: the failure of this app's last Open. */
   children?: React.ReactNode;
 }) {
@@ -71,10 +74,11 @@ export function UIAppRow({
           ))}
         </div>
       ) : (
-        <Chip className="mt-2">{INBOUND_APP.ONLY_YOU}</Chip>
+        !helper && <Chip className="mt-2">{INBOUND_APP.ONLY_YOU}</Chip>
       )}
       {app.inbound && (
         <>
+          {!helper && (
           <div className="mt-2 flex flex-wrap gap-2">
             <CopyButton text={link} label={INBOUND_APP.COPY_LINK} className={copyButton}>
               {INBOUND_APP.COPY_LINK}
@@ -85,6 +89,7 @@ export function UIAppRow({
               </CopyButton>
             )}
           </div>
+          )}
           {facts?.host_mode === false && (
             <p className="mt-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-meta leading-relaxed text-muted-foreground">
               {INBOUND_APP.PATH_MODE_NOTE}

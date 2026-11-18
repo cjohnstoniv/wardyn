@@ -32,6 +32,8 @@ import type {
 } from "../../../lib/types";
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
+import type { SupportDoor } from "../../../lib/api/support";
+import { ATTACH_TILE_DOORS, DESKTOP_TILE_DOORS, hasAnyDoor } from "../../wardyn/support-helper-lanes";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
 import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
@@ -96,6 +98,10 @@ export type WidgetContext = {
    *  "AND the user view" to owner-or-admin — the admin monitor carries no
    *  Connect-via-SSH door, even on the admin's own run. */
   view: ConsoleView;
+  /** The doors of the OPEN support grant the viewer helps through on this run; null or absent for anyone else. A helper is
+   *  an admin in the admin view, so the Desktop and Attach tiles admit them here, for the doors the grant opens only
+   *  (admin-member-modes-design.md §4.6). */
+  helperDoors?: readonly SupportDoor[] | null;
   grants: CredentialGrant[];
   egress: EgressDecision[];
   /** How many of this run's approvals are HELD right now — isHeld over the
@@ -284,11 +290,18 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
     // for a macOS VM, while the Mac's report of its disk has something to say. The admin monitor has
     // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
+    // A helper of an open grant is the one exception to "user view": the tile draws, for a live VM run, when the grant
+    // opens one of its two lanes (Open desktop, Files).
     available: (ctx) =>
-      ctx.view === "user" &&
-      isVMKind(ctx.run.machine_kind) &&
-      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
-      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
+      (ctx.view === "user" &&
+        isVMKind(ctx.run.machine_kind) &&
+        (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
+        mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true)) ||
+      (!!ctx.helperDoors &&
+        isVMKind(ctx.run.machine_kind) &&
+        ctx.run.state === "RUNNING" &&
+        !isBackgroundRun(ctx.run) &&
+        hasAnyDoor(ctx.helperDoors, DESKTOP_TILE_DOORS)),
   },
   ssh: {
     label: "Attach from your terminal",
@@ -305,11 +318,17 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
+    // A helper of an open grant is the one exception to "user view": the tile draws when the grant opens one of its lanes
+    // (SSH, Sync, UI apps). The CLI lane is not drawn for a helper.
     available: (ctx) =>
-      ctx.view === "user" &&
-      ctx.run.state === "RUNNING" &&
-      !isBackgroundRun(ctx.run) &&
-      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
+      (ctx.view === "user" &&
+        ctx.run.state === "RUNNING" &&
+        !isBackgroundRun(ctx.run) &&
+        mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true)) ||
+      (!!ctx.helperDoors &&
+        ctx.run.state === "RUNNING" &&
+        !isBackgroundRun(ctx.run) &&
+        hasAnyDoor(ctx.helperDoors, ATTACH_TILE_DOORS)),
   },
   // Mock r15 T1-c: the Service panel heads the Overview's right column, above Egress. It exists only on a live service
   // run, so the default layouts leave it out and presetLayout / withService add it (and make room) for one.
