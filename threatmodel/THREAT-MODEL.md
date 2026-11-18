@@ -2689,7 +2689,7 @@ These risks are **not closed by v1 Wardyn**.
       - **A run can hold several live PATs until each one's `validTo`.**
         - The proxy keeps one header per Azure DevOps host and wardynd cannot reach it, so a token a host may still hold is never revoked early: renewal and widening leave the older PAT in place.
         - Each is no wider than the newest, and all are revoked on pause, at the end, on drift, when the person disconnects and when they are offboarded.
-        - Drift is judged at the proxy's next fetch: within 10 minutes of a change on the cluster, 15 on a runner.
+        - Drift is judged at the proxy's next fetch: within 10 minutes of a change on the cluster, 15 on a runner, while the run uses Azure DevOps.
       - **"Restrict full-scoped PAT creation" does not bound custom scopes.**
         - It requires new PATs to name "a specific, custom-defined set of scopes", and that set may name every scope.
         - So the policy is not a bound on a stolen minting credential and Wardyn does not treat it as one.
