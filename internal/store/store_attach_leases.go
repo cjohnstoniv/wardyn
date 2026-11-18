@@ -27,6 +27,7 @@ type AttachLease struct {
 	Epoch     int64 // moves at each takeover of the row
 	ExpiresAt time.Time
 	Live      bool // read-only: ExpiresAt was ahead of the database's clock
+	Support   bool // the lease is held under a support grant (migration 0293)
 }
 
 // AttachLeaseStore is the attach lease record. Optional like RunOutputStore: the api layer
@@ -60,15 +61,15 @@ var _ AttachLeaseStore = PG{}
 // AcquireAttachLease — see AttachLeaseStore.
 func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUID, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
+		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at, support)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, $9)
 		ON CONFLICT (run_id) DO UPDATE SET
 			holder_id = EXCLUDED.holder_id, replica = EXCLUDED.replica, principal = EXCLUDED.principal,
 			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
-			epoch = run_attach_leases.epoch + 1
+			support = EXCLUDED.support, epoch = run_attach_leases.epoch + 1
 		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = $8 OR run_attach_leases.holder_id = EXCLUDED.holder_id
 		   OR (run_attach_leases.source = 'reserved' AND run_attach_leases.principal = EXCLUDED.principal)`,
-		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from)
+		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from, l.Support)
 	if err != nil {
 		return false, fmt.Errorf("store: acquire the attach lease: %w", err)
 	}
@@ -79,14 +80,14 @@ func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUI
 // hand-over arms: no from, and no reservation taken by its taker's principal.
 func (s PG) ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
+		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at, support)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, $8)
 		ON CONFLICT (run_id) DO UPDATE SET
 			holder_id = EXCLUDED.holder_id, replica = EXCLUDED.replica, principal = EXCLUDED.principal,
 			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
-			epoch = run_attach_leases.epoch + 1
+			support = EXCLUDED.support, epoch = run_attach_leases.epoch + 1
 		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = EXCLUDED.holder_id`,
-		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String())
+		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), l.Support)
 	if err != nil {
 		return false, fmt.Errorf("store: take back the attach lease: %w", err)
 	}
