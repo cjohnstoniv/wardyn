@@ -152,3 +152,36 @@ func TestTokenSourceQuiet(t *testing.T) {
 		t.Fatalf("quiet after Set %v, want under 5s", q)
 	}
 }
+
+// TestBrokeredTokenEngineIgnoresOfflineBound: the via_org engine has no renewer, so its token source ages;
+// past the bound it still mints, while a runner-side proxy with the same quiet refuses.
+func TestBrokeredTokenEngineIgnoresOfflineBound(t *testing.T) {
+	wire := func(string) string { return gitBrokerUsername }
+	for _, tc := range []struct {
+		name   string
+		engine bool
+	}{{"engine", true}, {"runner proxy", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newGitBrokerUpstream(t, "ghs_engine")
+			p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+			p.engine = tc.engine
+			p.runToken.atMs = time.Now().Add(-45 * time.Minute).UnixMilli()
+			tok, _, err := p.brokeredToken(context.Background(), uuid.New(), wire)
+			if tc.engine {
+				if err != nil || tok != "ghs_engine" {
+					t.Fatalf("token %q err %v, want ghs_engine and no error", tok, err)
+				}
+				if mints, _ := offlineCounts(up); mints != 1 {
+					t.Fatalf("%d mints, want 1", mints)
+				}
+				return
+			}
+			if !errors.Is(err, errBrokerOffline) {
+				t.Fatalf("err %v, want errBrokerOffline", err)
+			}
+			if mints, _ := offlineCounts(up); mints != 0 {
+				t.Fatalf("%d mints, want 0", mints)
+			}
+		})
+	}
+}
