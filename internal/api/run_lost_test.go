@@ -465,7 +465,7 @@ func TestLostRun_RenewStampsAndRefusesAKeptRun(t *testing.T) {
 
 // TestLostRun_DeadIdentityWindowIsBounded pins runTokenLapseAfter itself and
 // that sweepLapsedRunTokens actually plumbs it, unmodified, to the store: the
-// proxy renews at least every 30 minutes and gives up an hour after its last
+// proxy renews at least every 15 minutes (10 on a Kubernetes runner) and gives up an hour after its last
 // good renew (egress/proxy/renew.go renewGiveUpAfter), after which it keeps
 // forwarding allowlisted egress on a dead identity, audit-dark, until this
 // sweep catches it. That window has to be a fixed, small ceiling — never

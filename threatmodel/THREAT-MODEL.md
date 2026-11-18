@@ -4754,8 +4754,8 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 - Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the aggregate outcome,
   plus a distinct `run.revoke` failure event) instead of reporting containment — NOT fully
   contained, retry the kill.
-- SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; GitHub installation tokens are
-  TTL-bound (no per-token revoke API) — residual #7.
+- SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; the kill does not revoke a GitHub
+  installation token, which lasts until it expires (residual #7). The proxy's stop hands its GitHub CLI tokens back.
 - **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, and the Azure DevOps PATs Wardyn created for the run are revoked then. The runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). Wardyn's kill does not revoke a GitHub App token at GitHub, so one already minted stays valid there until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap
   *first* — same C002 invariant, a lost CAS never revokes a still-live run.
