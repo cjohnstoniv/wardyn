@@ -289,3 +289,57 @@ func TestDataOutRule_PrunedRunIsAllowed(t *testing.T) {
 		t.Errorf("revive carry of a pruned run = %+v, want nil", re)
 	}
 }
+
+// dataOutGenViewColumnStore is genViewStore with the agent_runs.data_out column (store.RunDataOuts): every run
+// it reads carries row, nil for none. The generation view (RunPolicyState, the filtered audit reads) is
+// genViewStore's, so a run on generation 2 with no generation row is unreadable here as it is there.
+type dataOutGenViewColumnStore struct {
+	*genViewStore
+	row *types.TransferRule
+}
+
+var _ store.RunDataOuts = (*dataOutGenViewColumnStore)(nil)
+
+func (s *dataOutGenViewColumnStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.genViewStore.GetRun(ctx, id)
+	run.DataOut = s.row
+	return run, err
+}
+
+func (*dataOutGenViewColumnStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// dataOutGenViewColumnFixture is dataOutGenFixture's run (resolve row present, generation 2, no generation
+// row) on a store that keeps the column with row as the run's rule.
+func dataOutGenViewColumnFixture(t *testing.T, row *types.TransferRule) (*Server, types.AgentRun) {
+	t.Helper()
+	srv, run := dataOutGenFixture(t, false, "")
+	srv.cfg.Store = &dataOutGenViewColumnStore{genViewStore: srv.cfg.Store.(*genViewStore), row: row}
+	return srv, run
+}
+
+// A rule on the run's row is the answer whatever its current generation's row: the row is raised before a
+// revive's generation is current, so the generation is never read and its unreadable row is no sentinel.
+func TestDataOutRule_StoredRowWinsOverAnUnreadableGeneration(t *testing.T) {
+	for _, want := range []types.TransferRule{types.TransferReview, types.TransferBlocked} {
+		srv, run := dataOutGenViewColumnFixture(t, &want)
+		rule, found, err := srv.runDataOutRule(context.Background(), run.ID)
+		if errors.Is(err, errDataOutGenerationUnread) {
+			t.Errorf("row %q with an unreadable generation row: err %v, want the row's rule and no sentinel", want, err)
+		}
+		if err != nil || !found || rule != want {
+			t.Errorf("row %q with an unreadable generation row = %q (found %v, err %v), want %q, found, no error", want, rule, found, err, want)
+		}
+	}
+}
+
+// A run with no rule on its row reads its envelope, and on a column store whose current generation's row
+// cannot be read it has no rule to give: the sentinel, never allowed and never found.
+func TestDataOutRule_NullRowWithAnUnreadableGenerationIsUnreadable(t *testing.T) {
+	srv, run := dataOutGenViewColumnFixture(t, nil)
+	rule, found, err := srv.runDataOutRule(context.Background(), run.ID)
+	if !errors.Is(err, errDataOutGenerationUnread) || !strings.Contains(err.Error(), "(generation 2)") || found || rule != types.TransferAllowed {
+		t.Errorf("NULL row with an unreadable generation row = %q (found %v, err %v), want allowed, not found, errDataOutGenerationUnread (generation 2)", rule, found, err)
+	}
+}
