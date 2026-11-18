@@ -144,6 +144,18 @@ func TestReviveRunProxy_ReadsTheGateBetweenTheCeilingAndTheLaptopCopy(t *testing
 	}
 }
 
+// A revive's laptop copy takes its Azure DevOps gate through laptopADOGate, which keeps the stored gate while the
+// copy holds the token injection: no other write of the gate may bypass it.
+func TestRefreshLocalDeploymentConfig_TakesTheGateThroughLaptopADOGate(t *testing.T) {
+	src := declSource(t, "run_placement_revive.go", "refreshLocalDeploymentConfig")
+	if !inOrder(src, "placement.LocalEligibility(p)", "cfg.ADOGrant = laptopADOGate(cfg, stripped.ProxyConfig.ADOGrant)") {
+		t.Error("the refreshed copy does not take its gate through laptopADOGate after the classification")
+	}
+	if n := strings.Count(src, "cfg.ADOGrant ="); n != 1 {
+		t.Errorf("refreshLocalDeploymentConfig writes the gate %d times, want once", n)
+	}
+}
+
 // The one engine build takes the engine options, so the run's engine is built with the 540 s hold ceiling.
 func TestViaOrgEngine_IsBuiltWithTheEngineOptions(t *testing.T) {
 	if src := declSource(t, "via_org.go", "viaOrgEngine"); !strings.Contains(src, "proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, s.viaOrgEngineOptions(run))") {
