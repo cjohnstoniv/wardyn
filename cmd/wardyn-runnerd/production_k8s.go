@@ -37,7 +37,7 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 var errRelayServiceIPs = errors.New("relay_service_not_one_ip")
 
 // k8sOwnNamespaceAndRelayIP reads runnerd's own namespace, checks the runs namespaces against it, and
-// resolves the relay Service to its one ClusterIP (§3.4 item 4).
+// resolves the relay Service to its one ClusterIP.
 func k8sOwnNamespaceAndRelayIP(ctx context.Context, opts serveOptions) (ownNS, clusterIP string, err error) {
 	raw, err := os.ReadFile(serviceAccountNamespace)
 	if err != nil {
