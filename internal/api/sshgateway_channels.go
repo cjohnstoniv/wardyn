@@ -534,9 +534,11 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// clients could both read nil and the loser's exec still clamped the
 	// winner's tmux window.
 	var holder *attachHolder
+	entry, _ := sshSupportOf(ctx) // a helper's shell, so the owner's attach displaces it (support_terminal.go)
 	holder = &attachHolder{
 		sandboxRef: run.SandboxRef,
 		principal:  principal,
+		support:    entry.grant,
 		actorType:  types.ActorHuman,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceSSH,

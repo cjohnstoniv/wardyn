@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -493,6 +494,63 @@ func TestSSHSupport_FailedRunReadClosesAHelper(t *testing.T) {
 	r.st.failRun.Store(true)
 	if !closedWithin(client, 3*time.Second) {
 		t.Fatal("a failed run read left a helper's idle connection open")
+	}
+}
+
+// (j) The owner's web attach takes the writer seat from a helper's SSH shell: the helper's channel reads "The
+// run's owner joined", one session.takeover row has reason owner_joined, and the shell was seated as a helper's.
+func TestSSHSupport_OwnerAttachDisplacesAHelperShell(t *testing.T) {
+	r := newSSHSupportRig(t, []string{"terminal"})
+	client, err := r.dial(t)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if _, err := sess.StdinPipe(); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := sess.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	srv := r.h.srv
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if w := srv.attachHolderFor(r.run.ID); w != nil && w.support == r.grant.ID && w.principal == sshSupportHelper {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the helper's shell never took the writer seat as a support holder")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	owner := &attachHolder{principal: sshSupportOwner, actorType: types.ActorHuman, since: time.Now().UTC(), source: attachSourceWeb,
+		sandboxRef: r.run.SandboxRef, displace: func(string) {}, notify: func(bool, *attachHolder) {}}
+	if readOnly, _ := srv.registerAttachHolder(r.run.ID, owner); readOnly || !owner.writable.Load() {
+		t.Fatalf("the owner joined read-only (%v), want the seat", readOnly)
+	}
+	got := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(stderr); got <- string(b) }()
+	select {
+	case s := <-got:
+		if !strings.Contains(s, "wardyn: The run's owner joined") {
+			t.Errorf("the helper's channel read %q, want %q", s, "wardyn: The run's owner joined")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the helper's shell was never displaced")
+	}
+	ev := waitForAudit(t, r.h.audit, r.run.ID, "session.takeover", "success")
+	if ev == nil || ev.Actor != sshSupportOwner || !strings.Contains(string(ev.Data), `"reason":"owner_joined"`) || !strings.Contains(string(ev.Data), `"previous_holder":"`+sshSupportHelper+`"`) {
+		t.Errorf("session.takeover row = %+v, want the owner's with reason owner_joined naming the helper", ev)
 	}
 }
 

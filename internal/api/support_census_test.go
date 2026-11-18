@@ -27,8 +27,8 @@ var supportCallList = map[string]bool{
 	"uiTicketMayEnter":         true,  // the UI gateway's ticket entry, inside ta.caller == ""
 	"uiSessionStillAuthorized": true,  // the UI session's re-check
 	"desktopRun":               true,  // the Files panel
-	"sshAuth":                  true,  // the SSH gateway's authentication
-	"sshCurrentKey":            true,  // the SSH gateway's re-check of an open connection
+	"sshAuth":                  false, // the SSH gateway's authentication, inside the operator-owned rule's branch
+	"sshCurrentKey":            false, // the SSH gateway's re-check of an open connection
 }
 
 // supportNeverList is every function that must never call supportMayEnter, nor any function of the call list,
@@ -150,10 +150,24 @@ func callerlessBranch(body *ast.BlockStmt) *ast.IfStmt {
 	return found
 }
 
+// notOperatorOwnedBranch is the first if in body whose condition is `reason == "" && !run.OperatorOwned`, sshAuth's
+// rule that a fresh admin key opens no shell in a person's run, the only place its support arm may clear the reason.
+func notOperatorOwnedBranch(body *ast.BlockStmt) *ast.IfStmt {
+	var found *ast.IfStmt
+	ast.Inspect(body, func(n ast.Node) bool {
+		if stmt, ok := n.(*ast.IfStmt); ok && found == nil && gotypes.ExprString(stmt.Cond) == `reason == "" && !run.OperatorOwned` {
+			found = stmt
+		}
+		return found == nil
+	})
+	return found
+}
+
 // TestSupportCensus_TheArmSitsInsideTheTicketLane: in refuseAttachEntry and attachAuthority every call to the
 // arm is inside the block that reads the ticket actor, so the cookie lane (a super admin's own session, which a
 // helper never uses) cannot reach it; in uiTicketMayEnter inside the branch for a ticket no inbound caller
-// minted.
+// minted; in sshAuth inside the `if reason == "" && !run.OperatorOwned` branch, so no other branch can clear the
+// refusal.
 func TestSupportCensus_TheArmSitsInsideTheTicketLane(t *testing.T) {
 	bodies := funcBodies(t, false)
 	for _, tc := range []struct {
@@ -164,6 +178,7 @@ func TestSupportCensus_TheArmSitsInsideTheTicketLane(t *testing.T) {
 		{"refuseAttachEntry", ticketBranch, "the `if ta, ... := ticketActorFromContext(...)` block"},
 		{"attachAuthority", ticketBranch, "the `if ta, ... := ticketActorFromContext(...)` block"},
 		{"uiTicketMayEnter", callerlessBranch, "the `if ta.caller == \"\"` branch"},
+		{"sshAuth", notOperatorOwnedBranch, "the `if reason == \"\" && !run.OperatorOwned` branch"},
 	} {
 		body, ok := bodies[tc.name]
 		if !ok {
