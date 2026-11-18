@@ -830,7 +830,7 @@ func (s *Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleInternalActivity serves POST /internal/activity: the proxy reporting
-// that bytes moved on one of the run's tunnel or MITM streams in the last
+// that bytes moved on one of the run's tunnel or MITM streams, or its plain via_org requests, in the last
 // minute, so a long download or a model stream in I/O wait is not "nobody
 // there". The run is the verified token's, never one the caller names.
 func (s *Server) handleInternalActivity(w http.ResponseWriter, r *http.Request) {
