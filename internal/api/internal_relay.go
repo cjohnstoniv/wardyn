@@ -410,9 +410,10 @@ func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID
 // recorded via_org, may be resolved for run's engine now: relayedResidentADO's
 // re-judge with judgeViaOrgADO. The engine resolves at least every
 // residentRejudgeEvery, so a withdraw that no write announced refuses within
-// that interval. A withdrawn delivery revokes the run's tokens (reason drift)
-// and releases the run's engine, so the token it holds is dropped as well as
-// dead at Azure DevOps.
+// that interval. A withdrawn delivery revokes the run's tokens (reason drift).
+// The engine that asked is not released: the refusal itself makes its injector
+// drop the header, and a release would end the stream that asked (and the
+// run's other via_org streams) before the refusal is written and audited.
 func (s *Server) viaOrgADOStillAdmitted(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
 	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
 		return false
@@ -424,7 +425,6 @@ func (s *Server) viaOrgADOStillAdmitted(ctx context.Context, runID, runner uuid.
 	admitted, withdrawn := s.judgeViaOrgADO(ctx, run, runIdentitySubject(ctx, run.CreatedBy), grant)
 	if withdrawn {
 		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
-		s.releaseViaOrgEngineOf(runID)
 	}
 	return admitted
 }
