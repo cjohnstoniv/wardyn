@@ -240,7 +240,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.reviveCarryRecordedRules(ctx, run.ID, cfg); rerr != nil {
+	if rerr := s.reviveCarryRecordedRules(ctx, run.ID, &cfg.Policy); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it

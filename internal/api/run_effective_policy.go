@@ -61,7 +61,12 @@ func (s *Server) runEffectivePolicy(ctx context.Context, runID uuid.UUID) (envel
 			Policy *types.RunPolicySpec `json:"policy"`
 		}
 		if json.Unmarshal(ev.Data, &g) == nil && g.Policy != nil {
+			resolved := envelope.DataOut
 			envelope.RunPolicySpec = *g.Policy
+			// A generation only tightens data_out (the seal), and an in-place Kubernetes edit records its proxy's policy, which never carries the rule.
+			if v := types.StricterTransfer(resolved.DataOut(), g.Policy.DataOut.DataOut()); v != envelope.DataOut.DataOut() {
+				envelope.DataOut = v
+			}
 			return envelope, ev.Time, true, nil
 		}
 	}
