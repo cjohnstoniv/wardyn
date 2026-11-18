@@ -39,9 +39,10 @@ const (
 
 // runSupportCmd is `wardyn run support`: a super admin asks to help inside someone's running run, the run's
 // owner accepts or declines with the doors and minutes they choose, and either of them (or a security admin)
-// ends it. It needs a CLI sign-in as a person; a personal token alone is refused by the server.
+// ends it. request, accept and decline need a CLI sign-in as a person; the owner's status and end also work
+// with a personal token (support_grant.go: supportPerson, supportOwnerRead).
 func runSupportCmd(client clientFn) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := subcommandGroup(&cobra.Command{
 		Use:   "support",
 		Short: "Ask to help inside a run, or answer or end a help request (support sessions)",
 		Long: `Support sessions let a super admin help inside another person's running run.
@@ -52,7 +53,7 @@ admin, ends it with 'end'. Nothing opens until the owner accepts, and help canno
 be extended: more time needs a new request.
 
 Doors: ` + strings.Join(supportDoors, ", ") + `.`,
-	}
+	})
 	cmd.AddCommand(runSupportRequestCmd(client), runSupportAcceptCmd(client), runSupportDeclineCmd(client),
 		runSupportEndCmd(client), runSupportStatusCmd(client))
 	return cmd
@@ -155,7 +156,7 @@ status <run-id>' first: it shows who asked, their reason and what is recorded.`,
 			if g.ExpiresAt != nil {
 				until = g.ExpiresAt.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "accepted: %s may use %s until %s\n", g.Helper, strings.Join(g.Doors, ", "), until)
+			fmt.Fprintf(cmd.OutOrStdout(), "accepted: %s may use %s until %s\n", termLine(g.Helper), strings.Join(g.Doors, ", "), until)
 			return nil
 		},
 	}
@@ -173,7 +174,8 @@ func runSupportDeclineCmd(client clientFn) *cobra.Command {
 }
 
 func runSupportEndCmd(client clientFn) *cobra.Command {
-	return supportAnswerCmd(client, "end <run-id> <grant-id>", "End a help request or session now", "ended: the helper's doors are closed",
+	return supportAnswerCmd(client, "end <run-id> <grant-id>", "End a help request or session now",
+		"ended: the helper can open nothing new; an open terminal, SSH or web session closes within about 35 seconds",
 		func(cmd *cobra.Command, c *sdk.Client, run, grant uuid.UUID) (sdk.SupportGrant, error) {
 			return c.EndSupport(cmd.Context(), run, grant)
 		})
@@ -270,9 +272,9 @@ func printSupportStatus(w io.Writer, st sdk.SupportStatus) error {
 
 func printSupportGrant(w io.Writer, label string, g sdk.SupportGrant) {
 	fmt.Fprintf(w, "%s: grant %s (%s)\n", label, g.Grant, g.State)
-	fmt.Fprintf(w, "  helper:     %s\n", g.Helper)
+	fmt.Fprintf(w, "  helper:     %s\n", termLine(g.Helper))
 	if g.Reason != "" {
-		fmt.Fprintf(w, "  reason:     %s\n", g.Reason)
+		fmt.Fprintf(w, "  reason:     %s\n", termLine(g.Reason))
 	}
 	fmt.Fprintf(w, "  asked:      %s\n", strings.Join(g.DoorsAsked, ", "))
 	fmt.Fprintf(w, "  requested:  %s\n", g.RequestedAt.UTC().Format(time.RFC3339))

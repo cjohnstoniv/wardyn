@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -105,7 +106,7 @@ func TestRunSupportStatusShowsTheOwnerWhatTheyAnswer(t *testing.T) {
 	run := uuid.New()
 	srv := newCmdServer(t, http.StatusOK, map[string]any{
 		"open": map[string]any{"grant": uuid.New(), "helper": "Sam Rivera", "reason": "build stalls", "state": "requested",
-			"doors_asked": []string{"terminal", "desktop"}, "requested_at": "2026-11-17T14:05:00Z", "recorded_doors": []string{"terminal"}},
+			"doors_asked": []string{"terminal", "desktop"}, "requested_at": time.Now().Add(-5 * time.Minute), "recorded_doors": []string{"terminal"}},
 		"ended": nil, "doors_offered": []string{"terminal"}, "recorded_doors": []string{"terminal"},
 	})
 	out, err := execCmdCapture(t, supportArgs(srv.URL, "status", run.String())...)
@@ -114,6 +115,32 @@ func TestRunSupportStatusShowsTheOwnerWhatTheyAnswer(t *testing.T) {
 	}
 	for _, want := range []string{"Sam Rivera", "build stalls", "terminal, desktop", "Terminal: recorded on this run.", "No credential is paused: the helper can use every connection this run has, as you.",
 		"Terminal and Commands each run anything the agent can", "Desktop: not recorded on this run."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRunSupportStatusEscapesOtherPeoplesText: the helper's name and reason are text another person wrote, so
+// status prints them through termLine: a line break cannot forge a row and an escape sequence cannot reach the
+// terminal.
+func TestRunSupportStatusEscapesOtherPeoplesText(t *testing.T) {
+	run := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, map[string]any{
+		"open": map[string]any{"grant": uuid.New(), "helper": "sam\x1b]0;owned\x07", "reason": "stuck\n  doors:      desktop\x1b[2J",
+			"state": "active", "doors_asked": []string{"terminal"}, "doors": []string{"terminal"}, "requested_at": time.Now().Add(-5 * time.Minute)},
+	})
+	out, err := execCmdCapture(t, supportArgs(srv.URL, "status", run.String())...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Errorf("status passed a control character through:\n%q", out)
+	}
+	if strings.Contains(out, "\n  doors:      desktop") {
+		t.Errorf("the reason's line break forged a row:\n%s", out)
+	}
+	for _, want := range []string{`helper:     sam\x1b]0;owned\x07`, `reason:     stuck\n  doors:      desktop\x1b[2J`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output lacks %q:\n%s", want, out)
 		}

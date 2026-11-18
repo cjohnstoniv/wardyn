@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -27,7 +28,7 @@ func TestSupportCalls_RouteAndBody(t *testing.T) {
 		var raw json.RawMessage
 		_ = json.NewDecoder(r.Body).Decode(&raw)
 		got = append(got, seen{r.Method + " " + r.URL.Path, string(raw)})
-		writeJSON(w, http.StatusOK, map[string]any{"grant": grant, "helper": "sam@example.test", "state": "requested", "doors_asked": []string{"terminal"}, "requested_at": "2026-11-17T14:05:00Z"})
+		writeJSON(w, http.StatusOK, map[string]any{"grant": grant, "helper": "sam@example.test", "state": "requested", "doors_asked": []string{"terminal"}, "requested_at": time.Now().Add(-5 * time.Minute)})
 	}))
 	t.Cleanup(srv.Close)
 	c := newTestClient(srv)
@@ -72,7 +73,7 @@ func TestSupportStatus_DecodesOpenEndedAndDoors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"open":           nil,
-			"ended":          map[string]any{"grant": uuid.New(), "helper": "sam", "state": "ended", "end_reason": "expired", "doors_asked": []string{"files"}, "requested_at": "2026-11-17T14:05:00Z"},
+			"ended":          map[string]any{"grant": uuid.New(), "helper": "sam", "state": "ended", "end_reason": "expired", "doors_asked": []string{"files"}, "requested_at": time.Now().Add(-5 * time.Minute)},
 			"doors_offered":  []string{"terminal", "commands", "files", "forward"},
 			"recorded_doors": []string{"terminal"},
 		})
