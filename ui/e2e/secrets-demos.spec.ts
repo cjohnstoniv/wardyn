@@ -23,8 +23,8 @@ import { test, expect, ADMIN_TOKEN } from "./fixtures";
 // ACHIEVED LEVEL — UI-only, matching demos.spec.ts's own honest ceiling on
 // this backend, not the full live proof the plan describes. `-runner none`
 // means POST /api/v1/runs never produces a running sandbox: no terminal ever
-// attaches (.xterm-screen never appears), so the mint sequence
-// (409 pending -> approve -> 200 rule -> 409 already_minted), the audit
+// attaches (.xterm-screen never appears), so the git token sequence
+// (git held -> approve -> credential.mint -> direct mint 403 -> git 502), the audit
 // panel's credential.mint/secret.read rows, the LiveApprovals credential
 // card, and the 404 store-probe output are all UNPROVABLE here — they need a
 // real runner (WARDYN_DEMO against the compose stack; see
@@ -138,10 +138,18 @@ test.describe("Secrets demos", () => {
     await expect(page.getByTestId("demo-card-authorized-not-issued")).toBeVisible();
     await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();
     await expect(page.getByTestId("demo-start-authorized-not-issued")).toBeDisabled();
-    // requires_approval is what makes this demo's mint a held human decision
+    // requires_approval is what makes this demo's git token a held human decision
     // rather than an auto-grant — the load-bearing field over demo #1's policy.
     const approvalPolicy = page.getByTestId("demo-policy-authorized-not-issued");
     await expect(approvalPolicy).toContainText("requires_approval: true");
     await expect(approvalPolicy).toContainText("ttl_seconds");
+    await expect(approvalPolicy).toContainText("git_pat");
+    // Steps 1 and 4 are the same git command, so both pills carry it.
+    await expect(
+      page
+        .getByTestId("demo-card-authorized-not-issued")
+        .getByTestId("demo-steps")
+        .getByText("git ls-remote https://example.com/wardyn-demo.git", { exact: true }),
+    ).toHaveCount(2);
   });
 });

@@ -67,9 +67,21 @@ func boundaryLocksRefusal(body *types.BoundaryWrite, cur types.Boundary, units [
 	return nil
 }
 
+// boundaryGrants is the eligible grants a stored boundary holds.
+func boundaryGrants(b types.Boundary) []types.GrantSpec {
+	if b.Spec.EligibleGrants == nil {
+		return nil
+	}
+	return *b.Spec.EligibleGrants
+}
+
 // validateBoundary refuses a write the boundary cannot hold: a missing or unknown mode, a bad
 // contact, or knobs validateBoundarySpec refuses. An all-empty contact is stored as none.
-func validateBoundary(b *types.BoundaryWrite) error {
+func validateBoundary(b *types.BoundaryWrite) error { return validateBoundaryHolding(b, nil) }
+
+// validateBoundaryHolding is validateBoundary for a replacement of a stored boundary: held is the
+// grants it holds, which a write that leaves one unchanged does not refuse (authoredAPIKeyApprovalRefusal).
+func validateBoundaryHolding(b *types.BoundaryWrite, held []types.GrantSpec) error {
 	if b.Mode != types.BoundaryNoLimits && b.Mode != types.BoundaryHardLimits {
 		return errors.New("mode is required: no_limits or hard_limits")
 	}
@@ -81,13 +93,13 @@ func validateBoundary(b *types.BoundaryWrite) error {
 			return err
 		}
 	}
-	return validateBoundarySpec(b.Spec, b.Limits)
+	return validateBoundarySpec(b.Spec, b.Limits, held)
 }
 
 // validateBoundarySpec refuses knobs the boundary cannot hold. They are judged by the validator a
 // stored policy passes (an unnamed confinement floor reads as the lowest), so a boundary allowlist,
 // deny list or grant is spelled as a policy's is.
-func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) error {
+func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits, held []types.GrantSpec) error {
 	if sp.AllowAllEgress != nil && *sp.AllowAllEgress && sp.AllowedDomains != nil {
 		return errors.New("allow_all_egress true allows every host, so allowed_domains bounds nothing: name one of them")
 	}
@@ -122,7 +134,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if err := validateVCSCaps(sp.AzureDevOpsCapabilities, sp.GitHubCapabilities); err != nil {
 		return err
 	}
-	return validateAuthoredPolicySpec(spec)
+	return validateAuthoredPolicySpecHolding(spec, held)
 }
 
 // handleGetBoundary returns the boundary, with the ETag PUT's If-Match is judged against.
@@ -153,13 +165,13 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &body) {
 		return
 	}
-	if err := validateBoundary(&body); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
-		return
-	}
 	cur, err := bs.GetBoundary(r.Context())
 	if err != nil {
 		writeServerError(w, r, "read the Wardyn boundary", err)
+		return
+	}
+	if err := validateBoundaryHolding(&body, boundaryGrants(cur)); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
 		return
 	}
 	before := boundaryState(cur)
@@ -211,6 +223,19 @@ func boundaryAuditData(before, after types.BoundaryWrite) map[string]any {
 	return map[string]any{"mode": after.Mode, "was_mode": before.Mode, "changed": changedPaths(before, after)}
 }
 
+// boundaryReplayRefusal is what a held replacement is refused with against the boundary as it now
+// stands: stale when it moved since the proposal was reviewed, else invalid when the replacement
+// itself is, judged against the grants the stored boundary holds.
+func boundaryReplayRefusal(held *types.BoundaryWrite, cur types.Boundary, baseHash string) error {
+	if computeETag(boundaryState(cur)) != baseHash {
+		return store.ErrGovernanceChangeStale
+	}
+	if err := validateBoundaryHolding(held, boundaryGrants(cur)); err != nil {
+		return writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
+	}
+	return nil
+}
+
 // applyBoundaryChange applies a held replacement inside the decision transaction: the target lock,
 // the boundary as it now stands compared with what the proposal reviewed, then the write on q.
 func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
@@ -219,9 +244,6 @@ func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if err := decodeHeldPayload(ch.Payload, &held); err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
 	}
-	if err := validateBoundary(&held); err != nil {
-		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
-	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindBoundary); err != nil {
 		return govApplied{}, err
 	}
@@ -229,10 +251,10 @@ func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if err != nil {
 		return govApplied{}, err
 	}
-	before := boundaryState(cur)
-	if computeETag(before) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
+	if err := boundaryReplayRefusal(&held, cur, ch.BaseHash); err != nil {
+		return govApplied{}, err
 	}
+	before := boundaryState(cur)
 	if held.LockedKnobs != nil {
 		units, err := store.ListGovernanceUnitsQ(ctx, q)
 		if err != nil {
@@ -307,7 +329,13 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
-	if err := validateBoundarySpec(body.Spec, body.Limits); err != nil {
+	var held []types.GrantSpec
+	if bs, ok := s.cfg.Store.(store.BoundaryStore); ok {
+		if cur, err := bs.GetBoundary(r.Context()); err == nil {
+			held = boundaryGrants(cur)
+		}
+	}
+	if err := validateBoundarySpec(body.Spec, body.Limits, held); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
 		return
 	}
