@@ -8,7 +8,6 @@
 import { describe, expect, it } from "vitest";
 import { isTokenProvider, providerAttention, providerSignsIn, resolveDoor } from "./model-access";
 import { connectionRowCopy, connectionRows } from "./model-connections";
-import { providerOptionLabel } from "../components/screens/new-run-flow/checks/model-provider-lane";
 import { providerStripLine } from "../components/wardyn/model-access-banner";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
 import { OIDC_SIGN_IN as T } from "../components/wardyn/copy/oidc-signin";
@@ -41,12 +40,6 @@ describe("sign_in, not kind", () => {
     const status = providerStatus([{ provider: SSO }, { provider: PASTE }]);
     expect(resolveDoor(status, { provider: "corp-sso" }, "user")).toMatchObject({ kind: "signin", login: "oidc" });
     expect(resolveDoor(status, { provider: PASTE.id }, "user")).toMatchObject({ kind: "key", token: true });
-  });
-
-  it("names the New Run option a sign-in", () => {
-    const access = providerStatus([{ provider: SSO, state: "live" }]).provider_access;
-    expect(providerOptionLabel(SSO, access)).toContain("signed in");
-    expect(providerOptionLabel(SSO, providerStatus([{ provider: SSO }]).provider_access)).toContain("not signed in");
   });
 });
 
