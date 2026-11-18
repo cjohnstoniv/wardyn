@@ -257,6 +257,18 @@ func (s *Server) restrictionAttribution(ctx context.Context, run types.AgentRun)
 	return policyref.Project(policyref.SourceUnit, list[0].Name, list[0].Contact) // the wire knows two sources; a restriction reads as a named profile
 }
 
+// approvalRunUnreadableMsg is the answer an egress approve gives when its run cannot be read, whichever gate read
+// it first. The network-preset check needs the run on every approve, so the sentence holds at each gate.
+const approvalRunUnreadableMsg = "This approval's run could not be read to check its network preset, so nothing was decided. Try again."
+
+// approvalRunUnreadable answers an egress approve whose run could not be read: 503 run_unreadable, logged.
+// Without the run neither its restrictions nor its frozen preset can be checked, so the approval stays pending.
+func approvalRunUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "api: read an approval's run",
+		slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
+	writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, approvalRunUnreadableMsg)
+}
+
 // admitApprovalBounds is the boundary's bound on an egress approval, then the restrictions', then
 // the run owner's own walls' (wallsAdmitApproval).
 func (s *Server) admitApprovalBounds(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
@@ -272,7 +284,7 @@ func (s *Server) admitApprovalBounds(w http.ResponseWriter, r *http.Request, ap 
 
 // restrictionAdmitApproval is the restrictions' bound on an egress approval, beside the boundary's:
 // for any decider, a host a restriction the run captured denies, or its allowlist leaves out, is not admitted. ok=false: the 403 is
-// written and the approval stays pending. It returns the run, read here when the gate before it had not.
+// written and the approval stays pending. A run that cannot be read refuses the approve (503 run_unreadable, approvalRunUnreadable). It returns the run, read here when the gate before it had not.
 func (s *Server) restrictionAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
 	rs, ok := s.restrictionStore()
 	if !ok {
@@ -281,7 +293,7 @@ func (s *Server) restrictionAdmitApproval(w http.ResponseWriter, r *http.Request
 	if !haveRun {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-			writeServerError(w, r, "get run", err)
+			approvalRunUnreadable(w, r, err)
 			return run, false, false
 		}
 		haveRun = true
