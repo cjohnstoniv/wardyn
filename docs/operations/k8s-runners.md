@@ -207,7 +207,7 @@
 
 - The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
-- A runnerd rolled back below the release that checks relay keys fails closed for runs that have a key. Its relay forwards the proxy's first bytes unread, so TLS fails and those runs cannot renew: they end at their self-lapse deadline, and rolling forward again does not restore them. Stop them before a rollback.
+- A runnerd rolled back below the release that checks relay keys fails closed for keyed runs. Its relay forwards the proxy's first bytes unread, so TLS fails and they cannot renew. They end at their self-lapse deadline unless a key-checking runnerd is READY again first. Stop them before a rollback.
 
 ## Self-lapse and outages
 
