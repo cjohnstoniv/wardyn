@@ -926,3 +926,14 @@ const (
 	reasonModelUsageReadFailed  = "model_usage_read_failed"  // 500: the run's usage rows could not be read
 	reasonModelUsageWriteFailed = "model_usage_write_failed" // 500: a usage record could not be stored; the proxy retries
 )
+
+// Support sessions (support_grant.go, support_entry.go): an admin's request to help inside someone's run.
+const (
+	reasonSupportDisabled      = "support_disabled"        // 409: WARDYN_SUPPORT_SESSIONS is off, so a request or an accept is refused
+	reasonSupportNotAllowed    = "support_not_allowed"     // 403: the caller may not ask for help in a run: not a super admin signed in as a person, or the run's own owner
+	reasonSupportRunIneligible = "support_run_ineligible"  // 409: the run cannot take a helper (not running, lost, operator-owned, a service's, a background task, or local mode)
+	reasonSupportGrantOpen     = "support_grant_open"      // 409: the run already has a request or help session open
+	reasonSupportGrantNotFound = "support_grant_not_found" // 404: no such open help request on this run, or it was already answered, ended or lapsed
+	reasonSupportRequestBad    = "support_request_invalid" // 400: the doors, reason or minutes are not what the route reads
+	reasonSupportUnavailable   = "support_unavailable"     // 503: the support grant store is not available here, or could not be read
+)

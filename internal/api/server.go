@@ -931,6 +931,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState                 // the device routes' process state (server_devices.go)
+	supportState                     // the open support grants this replica knows, for the audit window (support_grant.go)
 	cliSignInState                   // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState                        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState                    // the run lease sweep's process state (run_lease_server.go)
@@ -973,10 +974,9 @@ type Server struct {
 	// adoSignInEnds counts each person's disconnects and erases, so a run
 	// token created while one ran revokes itself (ado_pat_console.go).
 	adoSignInEnds adoSignInEnds
-	// adoPATs replaces the sign-in configuration's own vssps client
-	// (ADOEntraConfig.patClient) for a `minted_pat` run's creates and revokes;
-	// set by tests only. adoRunPATs holds each run's current token in memory
-	// (ado_run_pat_cache.go).
+	// adoPATs replaces the sign-in configuration's own vssps client (ADOEntraConfig.patClient) for a
+	// `minted_pat` run's creates and revokes; set by tests only. adoRunPATs holds each run's current
+	// token in memory (ado_run_pat_cache.go).
 	adoPATs    adoPATClient
 	adoRunPATs adoRunPATCache
 	// bg tracks every goroutine spawned through goBackground — work detached

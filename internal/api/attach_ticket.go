@@ -89,7 +89,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
 		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App,
-		tokenID: t.TokenID, cliSessionID: t.CLISessionID}, true, nil
+		tokenID: t.TokenID, cliSessionID: t.CLISessionID, support: t.SupportGrant, supportExpires: t.SupportExpires}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -128,6 +128,10 @@ type ticketActor struct {
 	// window; a cli_admin step-up binds to its own token (credentialBinding). The ticket's authority check asks after whichever is set, so a revoke, an expiry or a sign-out of that
 	// credential ends the terminal it opened (ticketAuthority).
 	tokenID, cliSessionID uuid.UUID
+	// support is the support grant a helper's ticket was minted under (uuid.Nil on every other ticket), and
+	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
+	support        uuid.UUID
+	supportExpires time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
