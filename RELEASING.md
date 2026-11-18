@@ -549,7 +549,7 @@ JSON
   - [`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml) builds and pushes `wardynd` only, to `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`).
   - **Signed (keyless, by digest) but not SBOM- or provenance-attested**, and under the `publish-image.yml@refs/heads/main` certificate identity — not the exact `release.yml@refs/tags/vX.Y.Z` one every command in [`docs/VERIFY.md`](docs/VERIFY.md) pins, so that page's recipes structurally cannot verify these tags.
   - See [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that can.
-  - The compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
+  - The compose stack pulls release tags or builds, never these.
 - **Release (every `vX.Y.Z` tag).**
   - [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and
     pushes all NINE images a release ships —
