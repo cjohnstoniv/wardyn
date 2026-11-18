@@ -82,6 +82,9 @@ func TestPG_AttachLeaseSupportArm(t *testing.T) {
 	if acquire(lease(helper2, "helper", true), uuid.Nil) {
 		t.Error("live helper | the same helper, another tab: refused row was taken")
 	}
+	if got := held(); !got.Support {
+		t.Errorf("GetAttachLease of a helper's lease = %+v, want Support true", got)
+	}
 	// Row "live helper | owner": taken, epoch +1, support false.
 	before := held()
 	if !acquire(lease(owner, "owner", false), uuid.Nil) {
@@ -104,10 +107,10 @@ func TestPG_AttachLeaseSupportArm(t *testing.T) {
 		t.Fatal("none | helper: a free lease was refused")
 	}
 	prev, reservation, found, err := pg.ReserveAttachLease(ctx, run, uuid.Nil, "owner", "r1", time.Minute)
-	if err != nil || !found || prev.HolderID != helper || reservation == uuid.Nil {
+	if err != nil || !found || prev.HolderID != helper || !prev.Support || reservation == uuid.Nil {
 		t.Fatalf("reserve over the helper's lease = %+v %s found=%v err=%v", prev, reservation, found, err)
 	}
-	if supportCol() {
+	if supportCol() || held().Support {
 		t.Error("a reservation kept the replaced helper lease's support flag")
 	}
 	if acquire(lease(owner2, "someone-else", false), uuid.Nil) {

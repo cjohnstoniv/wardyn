@@ -201,7 +201,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 			case v == supportOK && !known:
 				v = supportDoorRefused // no support ticket carries any other purpose (L7)
 			}
-			if s.refuseSupport(w, r, run, v) {
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
 				return
 			}
 			asSupport = v == supportOK

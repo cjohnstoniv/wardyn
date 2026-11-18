@@ -94,7 +94,7 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 			if v == supportOff {
 				v = supportNone // the switch is off: the owner rule's refusal, as before (value list, row A)
 			}
-			if s.refuseSupport(w, r, run, v) {
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
 				return
 			}
 			if viaSupport = v == supportOK; viaSupport {
