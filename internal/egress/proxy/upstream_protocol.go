@@ -122,13 +122,13 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 		}
 		key := memoKeyFromAddr(addr)
 		if v, seen := p.h2.hosts.Load(key); tc.ConnectionState().NegotiatedProtocol != "" || (seen && !v.(bool)) {
-			return tc, nil
+			return tapTLSHeads(ctx, tc), nil
 		}
 		conn, err := sniffH2(tc)
 		if errors.Is(err, errNoUnpromptedBytes) {
 			// HTTP/1.1 peer: skip the probe on later connections.
 			p.h2.hosts.Store(key, false)
-			return tc, nil
+			return tapTLSHeads(ctx, tc), nil
 		}
 		return conn, err
 	}
@@ -316,13 +316,17 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 		}
 	}
 	ctx, alpnState := alpnCapture(req.Context())
+	ctx, head := tapResponseHead(ctx, p.transport.MaxResponseHeaderBytes)
 	resp, err := p.transport.RoundTrip(req.WithContext(ctx))
+	if err == nil {
+		head.stripFolded(resp)
+	}
 	sniffed := errors.Is(err, errPeerSpeaksH2)
 	if err == nil || (!sniffed && !isH2Preface(err)) {
 		return resp, err
 	}
 	// hadTLS comes from the request, not the trace: net/http records the
-	// handshake only for a *tls.Conn, and sniffH2 may have wrapped one.
+	// handshake only for a conn that reports its TLS state, and sniffH2 may have wrapped one in a conn that does not.
 	mm := &h2MismatchError{err: err, hadTLS: tlsLane}
 	if !sniffed {
 		mm.alpn, _ = alpnState()
