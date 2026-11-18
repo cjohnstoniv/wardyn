@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -146,6 +147,9 @@ type uiSession struct {
 	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
 	CredToken   uuid.UUID `json:"ct,omitzero"`
 	CredSession uuid.UUID `json:"cs,omitzero"`
+	// SupportGrant is the support grant a helper's ticket carried, uuid.Nil for everyone else. A session with one
+	// is re-checked against that grant, not the owner rule, and its rows name the grant (uigateway_support.go).
+	SupportGrant uuid.UUID `json:"g,omitzero"`
 	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
@@ -166,6 +170,9 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	}
 	if sess.Service != "" {
 		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
+	}
+	if sess.SupportGrant != uuid.Nil {
+		maps.Copy(data, supportEntryFields(sess.SupportGrant))
 	}
 	s.recordStreamAudit(s.uiAuditCtx(s.cfg.BaseCtx, sess), sess.SandboxRef, s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, target, outcome, mustJSON(data)))
 }
@@ -195,7 +202,7 @@ func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, po
 		Run: run.ID, App: app, Port: port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
 		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
-		CredToken: ta.tokenID, CredSession: ta.cliSessionID,
+		CredToken: ta.tokenID, CredSession: ta.cliSessionID, SupportGrant: ta.support,
 	}
 }
 
@@ -214,6 +221,9 @@ func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run type
 	})
 	if sess.Service != "" {
 		data = withSponsorEntry(run, data)
+	}
+	if sess.SupportGrant != uuid.Nil {
+		maps.Copy(data, supportEntryFields(sess.SupportGrant))
 	}
 	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success", ta.withVia(data))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
@@ -335,7 +345,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // An inbound session (uigateway_inbound.go) skips the background-only arm, a named caller's skips the
 // ownership one (sess.Caller), and both answer to the run's profile's deny_ui_apps and deny_interactive.
 // Any other session answers to the profile as its door did (uiSessionUnitDenies), so a profile edit ends it
-// at its next re-check.
+// at its next re-check. A support helper's session answers to its grant in place of the ownership rule, and
+// never has the exemption: its role is member.
 //
 // Three arms are needed: the ownership re-assert catches a handed-over run but
 // NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
@@ -379,7 +390,18 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		}
 	}
-	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
+	if sess.SupportGrant != uuid.Nil {
+		// A helper's session answers to its grant: live, ticking this app's door, the owner and helper still signed in.
+		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, uiSupportDoor(sess.App)); v {
+		case supportOK:
+		case supportUnavailable: // fail closed: a grant that cannot be read is not a grant
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
+				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		default:
+			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
+				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		}
+	} else if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
