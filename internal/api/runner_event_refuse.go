@@ -48,11 +48,11 @@ var (
 const (
 	workloadEventRatePerSec = 10.0
 	workloadEventBurst      = workloadEventRatePerSec * 600
-	workloadEventMaxRunners = 4096 // enrolLimiterMaxPeers' bound (devices_auth.go:67)
+	workloadEventMaxRunners = 4096 // enrolLimiterMaxPeers' bound
 )
 
-// runnerEventRefusals is the per-runner bounds on runner.event.refuse rows and on workload events, in memory
-// (DR-0436). The zero value is ready to use.
+// runnerEventRefusals is the per-runner bounds on runner.event.refuse rows and on workload events, in memory.
+// The zero value is ready to use.
 type runnerEventRefusals struct {
 	mu        sync.Mutex
 	byRunner  map[uuid.UUID]*refusalWindow
