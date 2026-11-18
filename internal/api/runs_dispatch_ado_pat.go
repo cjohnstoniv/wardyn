@@ -46,7 +46,8 @@ const (
 	// relayedResidentADO judges the delivery policy, trust class, owner kind,
 	// posture and opt-in again. Outside its renew window runPATFor hands back the
 	// same cached token, so a re-resolve mints nothing; a refusal drops the
-	// proxy's header at once and revokes the run's tokens.
+	// asking host's header at once and revokes the run's tokens, which is what
+	// ends the proxy's other hosts' copies before their own next resolve.
 	residentRejudgeEvery = 15 * time.Minute
 
 	// Reasons beyond the contract's: a mint Azure DevOps' refusal of the

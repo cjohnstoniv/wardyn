@@ -64,3 +64,4 @@ reason sponsor_not_entitled
 reason unit_scope_denied
 reason not_a_decider
 reason decision_scope_above_rule
+reason run_paused

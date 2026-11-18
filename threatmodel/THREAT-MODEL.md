@@ -341,6 +341,10 @@ A run gets what every layer allows. The run's policy record names the layer that
   - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
     developer (root on the laptop) sees each request and response in plaintext and can make any request
     the rule's pins and the policy allow while the run lives (residual #75).
+  - **Azure DevOps minted tokens [0.10.1].** A minted token is also a `via_org` class, when the connection's
+    `runner_via_org` is on and the policy sends it `via_org`. The token stays at the organisation, which serves it
+    only on hosts the run's gate covers. `/wardyn/git/` is tied to the Azure DevOps grant by the host in the
+    path, never the request's authority, and `/wardyn/gh/` to a GitHub grant.
 
 ### B8 — Untrusted build container vs. host daemon + registry
 
@@ -3001,6 +3005,7 @@ These risks are **not closed by v1 Wardyn**.
     - An engine built from the run's stored config re-runs the proxy's checks as authoritative: allow and deny lists, `AllowsInjection` pins, `stripSandboxCredentials`, the IP guard, the git broker's repository, branch and push rules, inspection, caps and holds.
     - An idle or offline release retires that engine's generation, and a retired generation serves no stream (`admitViaOrg`).
     - **What stays open.** The developer can use the credential through any request those rules admit while the run lives, and an echoing host returns the value (§5.1a). The stream and byte limits hold per server replica and reset on restart.
+    - For Azure DevOps, the runner's operator, an organisation cluster's operators included, can make requests within the run's capabilities while the run lives; the token never leaves the server.
 
 76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
     <details><summary>Details</summary>

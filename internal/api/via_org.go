@@ -179,7 +179,8 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 
 // refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
 // after the grant id is the sandbox's, so the route never relies on a gate that reads the path. A
-// terminal or kept run is refused as refuseTerminalRun refuses it, with no grace.
+// terminal or kept run is refused as refuseTerminalRun refuses it, with no grace. A paused run is refused for every
+// via_org grant (409 run_paused) until it is resumed.
 func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	switch {
@@ -195,6 +196,9 @@ func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, cl
 	case runIsKept(run):
 		s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
+	case run.PausedAt != nil:
+		s.auditInternalDenied(r, claims, authz.ReasonRunPaused, "run_state", "paused")
+		writeErrorReason(w, http.StatusConflict, string(authz.ReasonRunPaused), "run is paused")
 	default:
 		return false
 	}
