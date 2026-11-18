@@ -5,7 +5,10 @@ package offline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -132,6 +136,156 @@ func TestProvisionalDeadlineAfterRestart(t *testing.T) {
 	}
 	if sub.stops != 0 {
 		t.Fatal("a running self-lapsing proxy was contained at restart")
+	}
+}
+
+// TestProvisionalDeadlineKeepsEndsAtAfterRestart: a restart keeps a sooner ends_at, not restart + RunTokenTTL.
+func TestProvisionalDeadlineKeepsEndsAtAfterRestart(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(20 * time.Minute)})
+	*elapsed = 10 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 21 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlineKeepsTokenLegAfterRestart: a token renewed long ago keeps its sooner lapse across a restart.
+func TestProvisionalDeadlineKeepsTokenLegAfterRestart(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	// The token leg is RunTokenLapseAfter (1h5m) less the 40m since the renewal: 25m.
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(-40 * time.Minute), EndsAt: org.Add(3 * time.Hour)})
+	*elapsed = 10 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 24 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 26 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlineKeepsRenewalAfterRestart: a renewal after the create moves the saved bound with it.
+func TestProvisionalDeadlineKeepsRenewalAfterRestart(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(3 * time.Hour)})
+	*elapsed = 50 * time.Minute
+	// The renewal moves the token leg from base+1h5m to base+1h55m.
+	if err := m.Lease(context.Background(), runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(50 * time.Minute), EndsAt: org.Add(3 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	*elapsed = 70 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 114 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 116 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlinePassedLapseByGetsReadyGrace: a LapseBy that passed during the downtime still
+// leaves restartReadyGrace for the org's READY re-lease.
+func TestProvisionalDeadlinePassedLapseByGetsReadyGrace(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base, id := m.now(), uuid.New()
+	leaseAndCreate(t, m, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(20 * time.Minute)})
+	*elapsed = 30 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, false)
+	*elapsed = 39 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 41 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// TestProvisionalDeadlineNoLapseByIsToday: a state file an older runnerd wrote (no lapse_by) still gets
+// restart + RunTokenTTL.
+func TestProvisionalDeadlineNoLapseByIsToday(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	base := m.now()
+	id := createLocal(t, m, org)
+	*elapsed = 10 * time.Minute
+	restarted := restartSelfLapsing(t, m, sub, elapsed, base, id, true)
+	*elapsed = 69 * time.Minute
+	expectStops(t, restarted, sub, 0)
+	*elapsed = 71 * time.Minute
+	expectStops(t, restarted, sub, 1)
+}
+
+// leaseAndCreate gives l's run its lease and creates its sandbox.
+func leaseAndCreate(t *testing.T, m *Manager, l runnerwire.Lease) {
+	t.Helper()
+	ctx := context.Background()
+	if err := m.Lease(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+	spec := runner.SandboxSpec{RunID: l.RunID}
+	if err := m.BeforeCreate(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Created(ctx, spec, l.RunID.String()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// restartSelfLapsing closes m and reloads its state on the same fake clock, with id's proxy running and
+// given its provisional deadline. dropLapseBy first removes lapse_by from the state file, as an older
+// runnerd wrote it.
+func restartSelfLapsing(t *testing.T, m *Manager, sub *localSub, elapsed *time.Duration, base time.Time, id uuid.UUID, dropLapseBy bool) *Manager {
+	t.Helper()
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if dropLapseBy {
+		path := filepath.Join(m.dir, "offline", "state.json")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var st struct {
+			Runs map[string]map[string]json.RawMessage `json:"runs"`
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &top); err != nil || json.Unmarshal(raw, &st) != nil {
+			t.Fatal("state file does not parse")
+		}
+		if _, ok := st.Runs[id.String()]["lapse_by"]; !ok {
+			t.Fatal("state file has no lapse_by to drop")
+		}
+		delete(st.Runs[id.String()], "lapse_by")
+		top["runs"], _ = json.Marshal(st.Runs)
+		older, _ := json.Marshal(top)
+		if err := os.WriteFile(path, older, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	restarted.now = func() time.Time { return base.Add(*elapsed) }
+	restarted.since = func(at time.Time) time.Duration { return base.Add(*elapsed).Sub(at) }
+	restarted.sub = &observedSub{localSub: sub, seen: map[uuid.UUID]runner.ProxyObservation{id: runner.ProxyRunning}}
+	if err := restarted.SetOptions(Options{ProxySelfLapses: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ObserveProxies(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restarted.ProvisionalDeadlines()
+	return restarted
+}
+
+// expectStops runs one lapse check and wants want proxy stops in all.
+func expectStops(t *testing.T, m *Manager, sub *localSub, want int) {
+	t.Helper()
+	if err := m.CheckLapses(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sub.stops != want {
+		t.Fatalf("stops=%d, want %d", sub.stops, want)
 	}
 }
 
