@@ -32,8 +32,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `runner_event_refusal_windows` to every role that was granted `UPDATE` on `runner_spool_cursors`, in each case other than
   that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
   through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
-  run. Until then no support request or answer is recorded, and no event the organisation refuses for good is recorded
-  or acknowledged, so a runner keeps resending it.
+  run. Until then no support request or answer is recorded, though approving and denying a request works as before,
+  and no event the organisation refuses for good is recorded or acknowledged, so a runner keeps resending it.
   An upgrade from before 0.10.0-rc.22 also needs that release's grants. On an install whose app role does not pick up
   new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant the app role `SELECT, INSERT, UPDATE` on
   `mcp_call_sends`. Without it, no `approve_each` MCP call that carries an operation key is asked about or sent, and
