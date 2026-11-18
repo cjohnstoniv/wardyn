@@ -19,42 +19,55 @@ import (
 // runEffectivePolicy is the policy the run's proxy enforces now, and when it was recorded: the
 // run.policy.resolve envelope dispatch recorded, with its policy replaced by the current generation's
 // once a revive replaced the run's proxy. Every effective-policy reader takes it (the run policy view,
-// UI apps, desktop rules, approval-rule capabilities).
+// UI apps, desktop rules, approval-rule capabilities); only the data_out readers tell its two ok=false
+// cases apart (runEffectivePolicyGen).
+func (s *Server) runEffectivePolicy(ctx context.Context, runID uuid.UUID) (envelope effectivePolicyDatum, at time.Time, ok bool, err error) {
+	envelope, at, ok, _, err = s.runEffectivePolicyGen(ctx, runID)
+	return envelope, at, ok, err
+}
+
+// runEffectivePolicyGen is runEffectivePolicy, and unread besides: the run's current generation when ok is
+// false because that generation's row could not be read, else 0. ok is false in two cases the callers must
+// not mix up: the run has no run.policy.resolve row (unread is 0; a pruned run), and the run's current
+// generation is 2 or later and its run.policy.generation row cannot be read (unread is that number).
+// Callers that fail closed on ok=false need not look at it. A caller that would read a missing envelope as
+// the permissive default (runDataOutRule) looks at it and answers unreadable instead, since the dispatch
+// envelope's policy is no longer the one enforced and its generation may only have tightened it.
 //
 // The current generation is the one agent_runs says is current (store.RunPolicyGenerations), never the
 // newest run.policy.generation row: a revive records its generation before the new proxy starts, and one
 // that leaves the old proxy running abandons it, but its row stays. While a revive is still replacing
 // the proxy, its generation is already current here, as it is for the run's audit stamps. A revived
-// generation's own row is looked up by its number; if it cannot be read, ok is false and every caller
-// fails closed, since the dispatch envelope's policy is no longer the one enforced. A store that keeps no generations has none,
-// so the dispatch envelope stands.
+// generation's own row is looked up by its number. The row is written best-effort (advanceRunPolicyGeneration
+// records it after the store advance and drops a failed write), so it may be missing. A store that keeps no
+// generations has none, so the dispatch envelope stands.
 //
 // Both rows are asked for on their own, so a run's later rows cannot push them out of the read. A store
 // without filtered reads (store.Pager; Postgres has them) is read as before, from the run's first
 // effectivePolicyAuditScan rows.
-func (s *Server) runEffectivePolicy(ctx context.Context, runID uuid.UUID) (envelope effectivePolicyDatum, at time.Time, ok bool, err error) {
+func (s *Server) runEffectivePolicyGen(ctx context.Context, runID uuid.UUID) (envelope effectivePolicyDatum, at time.Time, ok bool, unread int, err error) {
 	if s.cfg.Store == nil {
-		return envelope, at, false, nil
+		return envelope, at, false, 0, nil
 	}
 	gen := 1
 	if gs, isGen := s.cfg.Store.(store.RunPolicyGenerations); isGen {
 		st, _, serr := gs.RunPolicyState(ctx, runID)
 		if serr != nil {
-			return envelope, at, false, serr
+			return envelope, at, false, 0, serr
 		}
 		gen = st.CurrentGeneration()
 	}
 	resolve, err := s.runPolicyRows(ctx, runID, spellingsOf("run.policy.resolve"), "")
 	if err != nil {
-		return envelope, at, false, err
+		return envelope, at, false, 0, err
 	}
 	envelope, at, ok = latestPolicyResolve(resolve)
 	if !ok || gen <= 1 {
-		return envelope, at, ok, nil
+		return envelope, at, ok, 0, nil
 	}
 	rows, err := s.runPolicyRows(ctx, runID, []string{"run.policy.generation"}, fmt.Sprintf(`{"generation":%d}`, gen))
 	if err != nil {
-		return effectivePolicyDatum{}, time.Time{}, false, err
+		return effectivePolicyDatum{}, time.Time{}, false, 0, err
 	}
 	for _, ev := range slices.Backward(rows) {
 		var g struct {
@@ -67,10 +80,10 @@ func (s *Server) runEffectivePolicy(ctx context.Context, runID uuid.UUID) (envel
 			if v := types.StricterTransfer(resolved.DataOut(), g.Policy.DataOut.DataOut()); v != envelope.DataOut.DataOut() {
 				envelope.DataOut = v
 			}
-			return envelope, ev.Time, true, nil
+			return envelope, ev.Time, true, 0, nil
 		}
 	}
-	return effectivePolicyDatum{}, time.Time{}, false, nil
+	return effectivePolicyDatum{}, time.Time{}, false, gen, nil
 }
 
 // runPolicyRows is the run's newest rows under the first of actions that has any, whose data contains

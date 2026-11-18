@@ -242,15 +242,20 @@ func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Con
 // neither), from the policy the run is recorded under now, so the re-seal and the new generation start
 // from the run's own rules. Without it a revive would keep only what an outer layer imposes, and an edit
 // would record none. A store that keeps no generations has no new row to carry them into, and a run with
-// no recorded policy keeps what the stored config holds. A recorded policy that cannot be read refuses
-// the revive or the edit.
+// no recorded policy (a pruned run) keeps what the stored config holds. A recorded policy that cannot be
+// read, or a run whose current policy generation's row cannot be read, refuses the revive or the edit: the
+// rules to carry are unknown, and carrying none would record them as allowed.
 func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, policy *types.RunPolicySpec) *reviveError {
 	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
 		return nil
 	}
-	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
+	envelope, _, ok, unread, err := s.runEffectivePolicyGen(ctx, runID)
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's recorded policy", err))
+	}
+	if unread > 0 {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable,
+			loggedMsg(ctx, fmt.Sprintf("the run's current policy generation %d could not be read; try again shortly, or kill or end the run if it persists", unread), errors.New("no readable run.policy.generation row")))
 	}
 	if !ok {
 		return nil
