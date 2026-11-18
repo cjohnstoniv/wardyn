@@ -472,11 +472,12 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // holds a macOS VM run's picked base alone (types.VMMachine.MacOSBase), until SetRunVMMachine.
 // wall_preset (0248, types.AgentRun.WallPreset) and image_admission (types.AgentRun.ImageAdmission) are in
 // runCols too, and a queued start rewrites both. proxy_addr (0275) is read through COALESCE AS proxy_addr,
-// so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names.
+// so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names. data_out
+// (0292, types.AgentRun.DataOut) is written only by RaiseRunDataOut.
 const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission`
 
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, ` +
-	`COALESCE(proxy_addr, '') AS proxy_addr`
+	`COALESCE(proxy_addr, '') AS proxy_addr, data_out`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
@@ -485,7 +486,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel, shape string
 	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw, wallPresetRaw, imageAdmissionRaw, viaActorRaw []byte
-	var containmentErr *string
+	var containmentErr, dataOut *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
@@ -497,7 +498,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs, &serviceRaw, &shape, &r.ImageInput, &r.CorrelationID, &viaActorRaw,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches, &serviceStatusRaw,
-		&wallPresetRaw, &r.PolicyDigest, &imageAdmissionRaw, &r.ProxyAddr,
+		&wallPresetRaw, &r.PolicyDigest, &imageAdmissionRaw, &r.ProxyAddr, &dataOut,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -519,6 +520,10 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.RecordingLevel = types.RecordingLevel(recordingLevel)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
+	}
+	if dataOut != nil {
+		rule := types.TransferRule(*dataOut)
+		r.DataOut = &rule
 	}
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)

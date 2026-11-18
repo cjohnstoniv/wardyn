@@ -1069,3 +1069,27 @@ func TestEgressEdit_AuditRowApplied(t *testing.T) {
 		t.Errorf("Docker row = %v", row)
 	}
 }
+
+// A restart re-sealed the run's data_out from allowed to blocked as generation 2, and the stored config
+// it left is the proxy's copy, which carries none. An in-place edit after it records generation 3 with the
+// run's recorded rule, so the doors still read blocked.
+func TestNarrowEdit_KeepsTheRestartsDataOut(t *testing.T) {
+	f := newNarrowFixture(t)
+	ctx, gs, id := context.Background(), f.rb.generationStore, f.run.ID
+	row := func(action string, data any) types.AuditEvent {
+		b, _ := json.Marshal(data)
+		return types.AuditEvent{ID: uuid.New(), RunID: &id, Action: action, Outcome: "success", Data: b}
+	}
+	if g, err := gs.AdvanceRunPolicyGeneration(ctx, id, store.NewestPolicySlot(gs.state), "d2", nil, f.jti, nil); err != nil || g != 2 {
+		t.Fatalf("restart's generation = %d, %v; want 2", g, err)
+	}
+	gs.recorded = []types.AuditEvent{
+		row("run.policy.resolve", effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{DataOut: types.TransferAllowed}}),
+		row("run.policy.generation", map[string]any{"generation": 2, "policy": types.RunPolicySpec{DataOut: types.TransferBlocked}}),
+	}
+	f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusOK, "")
+	gs.recorded = append(gs.recorded, f.audit.eventsFor(id, "run.policy.generation")...) // the edit's row, as the audit log keeps it
+	if rule, found, err := f.srv.runDataOutRule(ctx, id); err != nil || !found || rule != types.TransferBlocked {
+		t.Errorf("data_out after the edit = %q (found %v, err %v), want blocked", rule, found, err)
+	}
+}

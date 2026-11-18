@@ -652,14 +652,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
 		return
 	}
-	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
+	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
 		return
 	}
-	// Recorded now, not at the snapshot: the file_secret placeholders and the placement
-	// classification are the last writers of the proxy config, and the host marks must describe
-	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
-	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
-	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec) // before the row below, so it is stamped too
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
 	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
@@ -743,6 +738,25 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
 	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy, onPrepared)
+}
+
+// admitAndStampPolicy is sandboxCreateAdmitted, then what must hold before dispatch writes the
+// run.policy.resolve row. The host marks are set now, not at the snapshot: the file_secret
+// placeholders and the placement classification are the last writers of the proxy config, and the
+// host marks must describe the config the runner is sent. Nothing between the snapshot and here
+// reads the envelope. The digest is recorded before the row, so the row is stamped too, and the
+// run row's data_out rule is stored before it (keepRunDataOut). False when the run was refused or
+// failed, which has answered.
+func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, siteCfg types.SiteConfig,
+	spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, p dispatchParams, envelope *effectivePolicyDatum,
+	stopLease func(),
+) bool {
+	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, spec, orgConfigKeys, llm, p) {
+		return false
+	}
+	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
+	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec)
+	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

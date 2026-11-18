@@ -145,10 +145,8 @@ func (s PG) RevokeInvitation(ctx context.Context, id uuid.UUID, by string, now t
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "never existed" from "no longer pending" so the caller can answer 404 for both
 		// without a second read of its own.
-		if _, gerr := s.GetInvitation(ctx, id, ""); gerr == nil {
-			return types.Invitation{}, ErrInvitationNotPending
-		}
-		return types.Invitation{}, ErrNotFound
+		_, gerr := s.GetInvitation(ctx, id, "")
+		return types.Invitation{}, missReadErr(gerr, ErrInvitationNotPending, "invitation after a revoke missed")
 	}
 	out.State = types.InvitationRevoked
 	return out, err

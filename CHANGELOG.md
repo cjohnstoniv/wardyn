@@ -11,6 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A workspace or invitation write that matched no row, when the read that follows to explain the miss also fails for another reason, is no longer reported as a missing workspace or invitation. The `workspace.requirement.write`, `workspace.egress.approve` and `workspace.egress.deny` audit rows say `Store error`, not `Workspace not found`, and the server log keeps the store's own error. A workspace edit, an egress list saved with `If-Match`, and `DELETE /api/v1/invitations/{id}` answer `500` `internal_error`, which a retry may clear, where they answered `404`.
+- The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
+- A run's `data_out` rule is now kept on the run itself, so audit retention removing the run's policy records no longer reopens output and replay reads, web apps, SSH (file transfer, commands, port forwards and `wardyn sync` down) or computer-folder bring-back. Migration `0292_agent_runs_data_out` fills it on existing runs from the policy records retention has kept. An existing run left with no policy record reads as `blocked` when it was created before the newest audit record retention removed, or within a day after it, and is not still queued or starting with no sandbox: only a security admin reads its output and a super admin replays it. Any other run with no policy record, one that has not started among them, reads as `allowed` as before.
+
+### Before you upgrade
+
+- Existing runs left with no policy record that were created before the newest audit record retention removed, or within a day after it, now read their `data_out` as `blocked`, unless they are still queued or starting with no sandbox: only a security admin can read their output and only a super admin replay them, and their SSH file transfer, commands, port forwards, `wardyn sync` down, web apps and computer-folder bring-back are refused. Runs that failed or were killed before they started are among them; they hold no output. A run still running is among them only when its policy record never reached the audit log, and it then does not copy its computer folder back when it ends. On an install whose retention has removed nothing, no run is set to `blocked`.
+- Stop every server of an older release before the first server of this release starts. An older server left running after migration `0292` keeps no `data_out` on the runs it starts or revives, so retention can later reopen their content. The Helm chart already stops the old servers first; this is for servers you run by hand.
+- Migration `0292` reads the policy record of every run the audit log still holds and fills each run's `data_out` from it, so an install with many runs in its retained audit history can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes. A timeout rolls it back and the next boot starts it again; raise the timeout before you upgrade (see "Before you upgrade: a large recording store" in docs/OPERATIONS.md for how).
+
+## [0.10.0-rc.23] — 2026-11-17
+
 ### Added
 
 - `deploy/macos-guest/mdm/inspection-ca.mobileconfig.template`, a `com.apple.security.root` profile for one Mac's inspection CA, and a "Managing macOS VMs with MDM" section in the base image page: what an MDM vendor needs, why only MDM delivery gives TLS trust, what the runner package and profile do with no sudo, and the open question of many clones of one enrolled guest.

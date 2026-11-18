@@ -120,6 +120,11 @@ func (s *Server) narrowRunEgress(r *http.Request, run types.AgentRun, edit liveE
 	if rerr != nil {
 		return reviveResult{}, rerr, inPlace
 	}
+	// The stored config is the proxy's copy, which never carries data_out or recording: the generation
+	// takes the run's recorded rules, so an edit after a restart that raised them keeps them.
+	if rerr := s.reviveCarryRecordedRules(sctx, run.ID, &policy); rerr != nil {
+		return reviveResult{}, rerr, inPlace
+	}
 	next, err := proxy.WithLiveDenies(rd.stored, denies)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
