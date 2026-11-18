@@ -27,7 +27,11 @@ type AttachLease struct {
 	Epoch     int64 // moves at each takeover of the row
 	ExpiresAt time.Time
 	Live      bool // read-only: ExpiresAt was ahead of the database's clock
-	Support   bool // the lease is held under a support grant (migration 0293)
+	// Support: the lease is held under a support grant (migration 0293). A live helper's lease is taken by an
+	// acquirer that is not a helper (AcquireAttachLease). Only Acquire and Reacquire write it: a reservation
+	// is never a helper's (ReserveAttachLease sets false), and Get's and Reserve's prev always read false,
+	// which fails closed.
+	Support bool
 }
 
 // AttachLeaseStore is the attach lease record. Optional like RunOutputStore: the api layer
@@ -58,7 +62,9 @@ type AttachLeaseStore interface {
 
 var _ AttachLeaseStore = PG{}
 
-// AcquireAttachLease — see AttachLeaseStore.
+// AcquireAttachLease — see AttachLeaseStore. The last WHERE arm is the owner's: a live lease a helper holds
+// (support) is taken by an acquirer that is not one, and once taken its support is false, so a second owner
+// tab no longer matches the arm.
 func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUID, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
 		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at, support)
@@ -68,7 +74,8 @@ func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUI
 			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
 			support = EXCLUDED.support, epoch = run_attach_leases.epoch + 1
 		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = $8 OR run_attach_leases.holder_id = EXCLUDED.holder_id
-		   OR (run_attach_leases.source = 'reserved' AND run_attach_leases.principal = EXCLUDED.principal)`,
+		   OR (run_attach_leases.source = 'reserved' AND run_attach_leases.principal = EXCLUDED.principal)
+		   OR (run_attach_leases.support AND NOT EXCLUDED.support)`,
 		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from, l.Support)
 	if err != nil {
 		return false, fmt.Errorf("store: acquire the attach lease: %w", err)
@@ -138,7 +145,7 @@ func (s PG) ReserveAttachLease(ctx context.Context, runID, from uuid.UUID, taker
 			WHERE run_id = $1 AND expires_at > now() AND source <> '`+attachLeaseReserved+`' AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR holder_id = $2)
 			FOR UPDATE)
 		UPDATE run_attach_leases l SET holder_id = gen_random_uuid(), replica = $4, principal = $3, source = '`+attachLeaseReserved+`',
-			since = now(), expires_at = now() + $5::interval, epoch = l.epoch + 1
+			since = now(), expires_at = now() + $5::interval, support = false, epoch = l.epoch + 1
 		FROM old WHERE l.run_id = old.run_id
 		RETURNING old.run_id, old.holder_id, old.replica, old.principal, old.source, old.since, old.epoch, old.expires_at, l.holder_id`,
 		runID, from, taker, replica, ttl.String()).
