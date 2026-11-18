@@ -315,7 +315,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - an operator runs it to get the cluster the target above needs, and to rehearse the day-2 commands in [OPERATIONS.md](OPERATIONS.md#kubernetes-day-2).
   - It binds `127.0.0.1:8080`, so a leftover compose stack on that port fails it loudly at cluster-create.
 
-Notes on this repository's own GitHub Actions (jobs, required checks, nightly scope, flake history) are for contributors; they live in [REPO-CI.md](REPO-CI.md).
+Notes on this repository's own GitHub Actions (jobs, required checks, nightly scope, flake history) are for contributors; they live in [REPO-CI.md](REPO-CI.md), which also describes the image-build knobs `WARDYN_MITM_CA_DIR`, `WARDYN_TRUSTED_CA_PATH` and `WARDYN_BUILD_GOMODCACHE`.
 
 ## Driving an existing control plane instead
 
