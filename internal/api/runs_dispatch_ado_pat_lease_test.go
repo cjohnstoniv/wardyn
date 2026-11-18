@@ -54,7 +54,8 @@ func TestMintedPAT_ClusterAnswerExpiresWithinStoredKeyTTL(t *testing.T) {
 }
 
 // A write to the row, or a cap, reaches a cluster run at the resolve its proxy
-// makes one lease after its last: the run is refused and its token revoked.
+// makes one lease after its last: the run is refused and its token revoked, or
+// the revoke recorded as failed when the row is gone.
 func TestMintedPAT_ClusterRowWriteReachesTheRunWithinALease(t *testing.T) {
 	for name, tc := range map[string]struct {
 		write     func(fx *adoPATFixture)
@@ -78,8 +79,9 @@ func TestMintedPAT_ClusterRowWriteReachesTheRunWithinALease(t *testing.T) {
 		"row deleted": {func(fx *adoPATFixture) {
 			live := fx.srv.cfg.ADOEntra
 			fx.srv.cfg.ADOEntraByRow = func(ctx context.Context, id string) (ADOEntraConfig, bool, error) {
-				cfg, ok, err := live(ctx)
-				return cfg, ok && id == cfg.RowID, err
+				cfg, _, err := live(ctx)
+				_, found := gitProviderRowByID(fx.st.site, id)
+				return cfg, found, err
 			}
 			fx.st.site.WorkspaceProviders.Git = nil
 		}, reasonScopeChanged, true},
