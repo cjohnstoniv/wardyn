@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -50,6 +51,7 @@ var supportPersonas = map[string]supportPersona{
 	"admin-token":    {},
 	"device":         {device: true},
 	"helper-creator": {human: supportHelperSub, role: oidc.RoleAdmin},
+	"former-helper":  {human: supportHelperSub, role: oidc.RoleUser},
 }
 
 // supportRig is one replica over the fake grant record, serving only the five support routes behind a
@@ -255,6 +257,13 @@ func TestSupportRequest(t *testing.T) {
 		wantSupportStatus(t, "unknown field", rig.do("helper", http.MethodPost, rig.base(), `{"doors":["files"],"reason":"r","minutes":15}`),
 			http.StatusBadRequest, reasonInvalidRequestBody)
 	})
+	t.Run("the reason is counted in characters", func(t *testing.T) {
+		// 500 two-byte characters are 1000 bytes: the table's CHECK counts characters, so the route does too.
+		ok := newSupportRig(t, nil)
+		wantSupportStatus(t, "500 characters", ok.do("helper", http.MethodPost, ok.base(), `{"doors":["files"],"reason":"`+strings.Repeat("é", supportMaxReason)+`"}`), http.StatusCreated, "")
+		over := newSupportRig(t, nil)
+		wantSupportStatus(t, "501 characters", over.do("helper", http.MethodPost, over.base(), `{"doors":["files"],"reason":"`+strings.Repeat("é", supportMaxReason+1)+`"}`), http.StatusBadRequest, reasonSupportRequestBad)
+	})
 	t.Run("a run that cannot take a helper", func(t *testing.T) {
 		lost := time.Now()
 		for name, mutate := range map[string]func(*types.AgentRun){
@@ -394,6 +403,20 @@ func TestSupportDecline(t *testing.T) {
 	}
 }
 
+// TestSupportEndFromAPersonalToken pins that the owner may end from a personal token, which cannot accept or decline:
+// ending only restricts. A portal's delegated request still may not.
+func TestSupportEndFromAPersonalToken(t *testing.T) {
+	rig := newSupportRig(t, nil)
+	g := rig.seed()
+	wantSupportStatus(t, "the owner's personal token", rig.do("owner-token", http.MethodPost, rig.base()+"/"+g.ID.String()+"/end", ""), http.StatusOK, "")
+	if row, _ := rig.be.row(g.ID); row.EndReason != "revoked" || !row.EndAudited {
+		t.Errorf("row after the owner's token ended it = %+v, want revoked and audited", row)
+	}
+	if n := len(rig.auditRows("support.end")); n != 1 {
+		t.Errorf("support.end rows = %d, want 1", n)
+	}
+}
+
 func TestSupportEnd(t *testing.T) {
 	for _, tc := range []struct{ who, reason string }{
 		{"owner", "revoked"}, {"helper", "ended_by_helper"}, {"security", "ended_by_security"}, {"other-admin", "ended_by_security"},
@@ -428,7 +451,6 @@ func TestSupportEnd(t *testing.T) {
 		rig := newSupportRig(t, nil)
 		g := rig.seed()
 		wantSupportStatus(t, "another member", rig.do("member", http.MethodPost, rig.base()+"/"+g.ID.String()+"/end", ""), http.StatusNotFound, reasonRunNotFound)
-		wantSupportStatus(t, "the owner's personal token", rig.do("owner-token", http.MethodPost, rig.base()+"/"+g.ID.String()+"/end", ""), http.StatusForbidden, reasonSupportNotAllowed)
 		if row, _ := rig.be.row(g.ID); row.EndedAt != nil {
 			t.Fatal("a refused end moved the row")
 		}
@@ -458,6 +480,9 @@ func TestSupportStatus(t *testing.T) {
 		}
 	}
 	wantSupportStatus(t, "another member", rig.do("member", http.MethodGet, rig.base(), ""), http.StatusNotFound, reasonRunNotFound)
+	if open, _ := read("owner-token")["open"].(map[string]any); open == nil || open["grant"] != g {
+		t.Errorf("the owner's personal token reads open = %v", open)
+	}
 	wantSupportStatus(t, "another admin who is not the helper is the security tier", rig.do("other-admin", http.MethodGet, rig.base(), ""), http.StatusOK, "")
 	if offered, _ := read("owner")["doors_offered"].([]any); len(offered) != 4 {
 		t.Errorf("doors_offered in path mode = %v, want the first four", offered)
@@ -466,6 +491,61 @@ func TestSupportStatus(t *testing.T) {
 	got := read("owner")
 	if got["open"] != nil || got["ended"] == nil || got["ended"].(map[string]any)["end_reason"] != "revoked" {
 		t.Fatalf("after the end: %v", got)
+	}
+	// An ended grant shows its state and end reason to its helper, never the reason text.
+	for _, who := range []string{"helper", "former-helper"} {
+		ended, _ := read(who)["ended"].(map[string]any)
+		if ended == nil || ended["state"] != "ended" || ended["end_reason"] != "revoked" {
+			t.Errorf("%s reads ended = %v, want the ended state and its end reason", who, ended)
+		}
+		if _, has := ended["reason"]; has {
+			t.Errorf("%s was shown the reason text of an ended grant", who)
+		}
+	}
+	if ended, _ := read("owner")["ended"].(map[string]any); ended["reason"] == nil {
+		t.Error("the owner lost the reason text of an ended grant")
+	}
+	// The former helper (no longer a super admin) reads that grant alone: no open key, nobody else's grant.
+	if fh := read("former-helper"); fh["open"] != nil || len(fh) != 2 {
+		t.Errorf("former helper's view = %v, want only ended and doors_offered", fh)
+	}
+	wantSupportStatus(t, "a member who was never the helper", rig.do("member", http.MethodGet, rig.base(), ""), http.StatusNotFound, reasonRunNotFound)
+
+	// Before any grant exists a super admin about to ask reads doors_offered, with no grant fields.
+	fresh := newSupportRig(t, nil)
+	first := supportBody(t, fresh.do("helper", http.MethodGet, fresh.base(), ""))
+	if offered, _ := first["doors_offered"].([]any); len(offered) != 4 || first["open"] != nil || first["ended"] != nil {
+		t.Errorf("a super admin before any grant reads %v, want doors_offered and no grant", first)
+	}
+	// recorded_doors is a list (never null) naming what support.accept would record on this run.
+	if got, ok := first["recorded_doors"].([]any); !ok || len(got) != 0 {
+		t.Errorf("recorded_doors on a run with no recording store = %v, want []", first["recorded_doors"])
+	}
+	if want := fresh.srv.supportRecordedDoors(fresh.run); len(want) != 0 {
+		t.Fatalf("setup: recording store absent but supportRecordedDoors = %v", want)
+	}
+	recorded := newSupportRig(t, func(c *Config) {
+		rs, err := recording.NewFSStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.RecordingStore = rs
+	})
+	for level, want := range map[types.RecordingLevel]string{"": "terminal", types.RecordingScreenActions: "terminal,desktop", types.RecordingOff: ""} {
+		recorded.run.RecordingLevel = level
+		recorded.be.putRun(recorded.run)
+		var got []string
+		for _, d := range supportBody(t, recorded.do("helper", http.MethodGet, recorded.base(), ""))["recorded_doors"].([]any) {
+			got = append(got, d.(string))
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("recorded_doors at recording level %q = %v, want %q", level, got, want)
+		}
+	}
+	offeredNow := fresh.srv.supportDoorsOffered(fresh.run)
+	offeredNow[0] = "mutated"
+	if fresh.srv.supportDoorsOffered(fresh.run)[0] == "mutated" {
+		t.Error("supportDoorsOffered returned the shared door list, not a copy")
 	}
 
 	host := newSupportRig(t, func(c *Config) { c.UIOriginTemplate = "https://{run}.apps.example.test" })
@@ -497,8 +577,21 @@ func TestSupportMayEnterVerdicts(t *testing.T) {
 	}
 	cases := []tc{
 		{name: "ok", door: supportDoorTerminal, want: supportOK, wantNil: supportOK},
-		{name: "switch off", env: "0", door: supportDoorTerminal, want: supportOff, wantNil: supportOff},
-		{name: "no grant record in the store", config: func(c *Config) { c.Store = newAuthzStore() }, door: supportDoorTerminal, want: supportUnavailable, wantNil: supportUnavailable},
+		{name: "switch off", env: "0", door: supportDoorTerminal, want: supportOff, wantNil: supportNone},
+		{name: "no grant record in the store", config: func(c *Config) { c.Store = newAuthzStore() }, door: supportDoorTerminal, want: supportUnavailable, wantNil: supportNone},
+		{name: "requested only", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone,
+			arrange: func(_ *testing.T, rig *supportRig, g store.SupportGrant) {
+				// Put the answered row back to requested: the 15-minute window is still open, so it is not ended.
+				rig.be.edit(g.ID, func(row *store.SupportGrant) {
+					row.AcceptedAt, row.ExpiresAt, row.Doors, row.Minutes = nil, nil, nil, 0
+				})
+			}},
+		// The grant row names the run's own creator as its helper, so only supportMayEnter's creator check
+		// (not "no row for this principal") keeps the owner out of the helper arm.
+		{name: "the creator as the grant's helper", who: supportOwnerSub, door: supportDoorTerminal, want: supportEnded, wantNil: supportNone,
+			arrange: func(_ *testing.T, rig *supportRig, g store.SupportGrant) {
+				rig.be.edit(g.ID, func(row *store.SupportGrant) { row.Helper = supportOwnerSub })
+			}},
 		{name: "a read error", door: supportDoorTerminal, want: supportUnavailable, wantNil: supportUnavailable,
 			arrange: func(_ *testing.T, rig *supportRig, _ store.SupportGrant) {
 				rig.be.failOn("SupportGrantLive", context.DeadlineExceeded)
@@ -785,6 +878,9 @@ func TestSupportTicketCarriesTheGrant(t *testing.T) {
 	far := ticketActor{support: grant, supportExpires: now.Add(3 * time.Hour)}
 	if got := far.sessionExpiry(now, time.Hour); !got.Equal(now.Add(time.Hour)) {
 		t.Errorf("a grant longer than the lifetime moved the session end to %v", got.Sub(now))
+	}
+	if got := (ticketActor{support: grant}).sessionExpiry(now, time.Hour); !got.Equal(now) {
+		t.Errorf("a support ticket with no expiry opens a session that ends %v, want now", got.Sub(now))
 	}
 	st := newAuthzStore()
 	exp := now.Add(10 * time.Minute)

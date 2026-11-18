@@ -95,6 +95,17 @@ func (f *fakeSupportGrants) put(g store.SupportGrant) {
 	f.list = append(f.list, g)
 }
 
+// edit changes one stored row in place, for a test that needs a state the routes cannot reach.
+func (f *fakeSupportGrants) edit(id uuid.UUID, change func(*store.SupportGrant)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.list {
+		if f.list[i].ID == id {
+			change(&f.list[i])
+		}
+	}
+}
+
 func (f *fakeSupportGrants) end(i int, reason string, audited bool) {
 	at := f.now
 	f.list[i].EndedAt, f.list[i].EndReason, f.list[i].EndAudited = &at, reason, audited
@@ -158,7 +169,7 @@ func (f *fakeSupportGrants) AcceptSupportGrant(_ context.Context, run, grant uui
 	}
 	r, found := f.runOf(run)
 	for i, g := range f.list {
-		if g.ID != grant || g.RunID != run || g.EndedAt != nil || g.AcceptedAt != nil ||
+		if g.ID != grant || g.RunID != run || g.EndedAt != nil || g.AcceptedAt != nil || len(doors) == 0 ||
 			!g.RequestedAt.After(f.now.Add(-15*time.Minute)) || !found || f.runOver(run) || r.CreatedBy != owner {
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -451,6 +452,44 @@ func TestPG_SupportGrants(t *testing.T) {
 		f.exec(`UPDATE run_attach_leases SET expires_at = now() - interval '1 second' WHERE run_id = $1`, r.ID)
 		if ok, err := f.pg.ReacquireAttachLease(f.ctx, lease, time.Minute); err != nil || !ok || !support() {
 			t.Fatalf("reacquire as a helper = %v, %v, support %v; want held with support true", ok, err, support())
+		}
+	})
+
+	t.Run("a role without the table's grant gets an empty sweep and list", func(t *testing.T) {
+		f := supportFixture{t: t, ctx: f.ctx, pool: f.pool, pg: f.pg}
+		r := f.run("")
+		g := f.request(r, "helper-a")
+		f.accept(r, g, 15)
+		role := "wardyn_nogrant_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		f.exec(`CREATE ROLE ` + role + ` NOLOGIN`)
+		t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DROP ROLE IF EXISTS `+role) })
+		cfg := f.pool.Config()
+		cfg.ConnConfig.RuntimeParams["role"] = role // every connection of this pool runs as the role
+		restricted, err := pgxpool.NewWithConfig(f.ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(restricted.Close)
+		pg := store.NewPG(restricted)
+
+		if got, err := pg.SweepSupportGrants(f.ctx, true); err != nil || len(got) != 0 {
+			t.Errorf("sweep without UPDATE = %v, %v; want no rows and no error", got, err)
+		}
+		if f.read(g.ID).EndedAt != nil {
+			t.Error("the sweep of a role without UPDATE still ended a grant (off = true)")
+		}
+		if got, err := pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 0 {
+			t.Errorf("live list without SELECT = %v, %v; want no rows and no error", got, err)
+		}
+		if got, err := f.pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 1 {
+			t.Fatalf("setup: the owner role lists %v, %v; want the one live grant", got, err)
+		}
+		f.exec(`GRANT SELECT ON run_support_grants TO ` + role)
+		if got, err := pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 1 {
+			t.Errorf("live list with SELECT = %v, %v; want the one live grant", got, err)
+		}
+		if got, err := pg.SweepSupportGrants(f.ctx, false); err != nil || len(got) != 0 {
+			t.Errorf("sweep with SELECT only = %v, %v; want still no rows and no error", got, err)
 		}
 	})
 }

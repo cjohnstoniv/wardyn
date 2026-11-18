@@ -247,8 +247,13 @@ func (s *Server) delegationLive(ctx context.Context, via types.DelegationVia) (t
 // configured lifetime, or the portal grant's expiry if that comes first.
 func (a ticketActor) sessionExpiry(now time.Time, ttl time.Duration) time.Time {
 	exp := now.Add(ttl)
-	if a.support != uuid.Nil && !a.supportExpires.IsZero() && a.supportExpires.Before(exp) {
-		exp = a.supportExpires // a helper's session ends with its grant
+	if a.support != uuid.Nil {
+		if a.supportExpires.IsZero() {
+			return now // a helper's ticket that carries no grant expiry opens no session
+		}
+		if a.supportExpires.Before(exp) {
+			exp = a.supportExpires // a helper's session ends with its grant
+		}
 	}
 	if a.via != nil && a.grantExpires.Before(exp) {
 		return a.grantExpires

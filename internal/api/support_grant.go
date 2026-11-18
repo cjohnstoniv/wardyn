@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -40,7 +41,7 @@ const (
 
 const (
 	supportDisabledMsg = "Support sessions are turned off on this deployment."
-	supportMaxReason   = 500 // bytes, as the table's CHECK
+	supportMaxReason   = 500 // characters, as the table's CHECK
 )
 
 // supportMinutes are the lifetimes an owner may pick when accepting.
@@ -195,7 +196,9 @@ func (s *Server) supportView(g store.SupportGrant, run types.AgentRun, person st
 	default:
 		v.State = "active"
 	}
-	if owner || (person != "" && person == g.Helper) {
+	// The helper's own words show to the owner, and to the helper while the grant is open; once it has ended the
+	// helper reads its state and end reason, not the text.
+	if owner || (person != "" && person == g.Helper && g.EndedAt == nil) {
 		v.Reason = g.Reason
 	}
 	if g.EndedAt == nil {
@@ -222,9 +225,9 @@ func (s *Server) supportRecordedDoors(run types.AgentRun) []string {
 // (path) mode, where every run's apps share one origin.
 func (s *Server) supportDoorsOffered(run types.AgentRun) []string {
 	if s.uiRunOrigin(run.ID) != "" {
-		return supportDoorNames
+		return slices.Clone(supportDoorNames)
 	}
-	return supportDoorNames[:4]
+	return slices.Clone(supportDoorNames[:4])
 }
 
 // mountSupportRoutes registers the five support routes on the authenticated group. All are passive run routes:
@@ -291,6 +294,12 @@ func (s *Server) refuseNotSupportParty(w http.ResponseWriter, r *http.Request, r
 	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 }
 
+// supportOwnerRead is the run's owner when the caller is that person on any sign-in but a portal's delegated
+// request, a personal token included: ending a grant only restricts, and reading its state decides nothing.
+func supportOwnerRead(ctx context.Context, run types.AgentRun) bool {
+	return !delegatedRequest(ctx) && run.CreatedBy != "" && oidcHumanFromContext(ctx) == run.CreatedBy
+}
+
 // supportOwner is the run's owner when the caller is that person on a sign-in that may answer, else "".
 func supportOwner(ctx context.Context, run types.AgentRun) string {
 	if p := supportPerson(ctx); p != "" && p == run.CreatedBy {
@@ -353,8 +362,8 @@ func (s *Server) handleSupportRequest(w http.ResponseWriter, r *http.Request) {
 	case !validSupportDoors(body.Doors):
 		writeErrorReasonField(w, http.StatusBadRequest, reasonSupportRequestBad, "doors must name at least one of "+strings.Join(supportDoorNames, ", ")+", each once", "doors")
 		return
-	case body.Reason == "" || len(body.Reason) > supportMaxReason:
-		writeErrorReasonField(w, http.StatusBadRequest, reasonSupportRequestBad, "reason must be 1 to 500 bytes", "reason")
+	case body.Reason == "" || utf8.RuneCountInString(body.Reason) > supportMaxReason:
+		writeErrorReasonField(w, http.StatusBadRequest, reasonSupportRequestBad, "reason must be 1 to 500 characters", "reason")
 		return
 	}
 	run, ok := s.getRunOr404(w, r, id)
@@ -560,7 +569,7 @@ func (s *Server) handleSupportEnd(w http.ResponseWriter, r *http.Request) {
 	person := supportPerson(ctx)
 	reason := ""
 	switch {
-	case supportOwner(ctx, run) != "":
+	case supportOwnerRead(ctx, run):
 		reason = supportEndRevoked
 	case open != nil && open.ID == grant && person != "" && person == open.Helper:
 		reason = supportEndByHelper
@@ -592,10 +601,12 @@ func (s *Server) handleSupportEnd(w http.ResponseWriter, r *http.Request) {
 
 // handleSupportStatus reports a run's help request or session, and the last one that ended:
 //
-//	GET /api/v1/runs/{id}/support  ->  {open, ended, doors_offered}
+//	GET /api/v1/runs/{id}/support  ->  {open, ended, doors_offered, recorded_doors}
 //
-// Readable by the run's owner, the helper of the open grant and a security operator; anyone else gets the
-// foreign-run 404. The helper's written reason shows to the owner and the helper only.
+// Readable by the run's owner (a personal token included), the helper of the open grant, a security operator
+// (every super admin is one, so any support caller reads doors_offered before a grant exists), and the helper
+// of the last ended grant, who sees that grant alone and never its reason text; anyone else gets the foreign-run
+// 404. recorded_doors is the doors this run would record, as support.accept computes it.
 func (s *Server) handleSupportStatus(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -616,12 +627,17 @@ func (s *Server) handleSupportStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	person := supportPerson(ctx)
-	owner := supportOwner(ctx, run) != ""
+	owner := supportOwnerRead(ctx, run)
 	if !owner && !s.isSecurityOperator(ctx) && (open == nil || person == "" || person != open.Helper) {
+		if ended != nil && person != "" && person == ended.Helper {
+			writeJSON(w, http.StatusOK, map[string]any{"ended": s.supportView(*ended, run, person, false), "doors_offered": s.supportDoorsOffered(run)})
+			return
+		}
 		s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 		return
 	}
-	out := map[string]any{"open": nil, "ended": nil, "doors_offered": s.supportDoorsOffered(run)}
+	out := map[string]any{"open": nil, "ended": nil, "doors_offered": s.supportDoorsOffered(run),
+		"recorded_doors": append([]string{}, s.supportRecordedDoors(run)...)}
 	if open != nil {
 		out["open"] = s.supportView(*open, run, person, owner)
 	}
