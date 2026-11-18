@@ -67,7 +67,7 @@ var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md|sql)$`)
 // auditReasonsHeading opens an action's reasons table in docs/AUDIT-ACTIONS.md:
 // a row whose reason list is long keeps a short When cell and moves the list to
 // a `Reason | When` table under "### <action> reasons".
-var auditReasonsHeading = regexp.MustCompile("^### (\\S+) reasons$")
+var auditReasonsHeading = regexp.MustCompile(`^### (\S+) reasons$`)
 
 // foldAuditReasonTables returns lines with every action's reasons table folded
 // back into that action's row: each table row's When text is appended to the
@@ -534,6 +534,20 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 	helperKeys := regexp.MustCompile(`data\["([a-z0-9_]+)"\]`).FindAllStringSubmatch(string(sessSrc), -1)
 	if len(helperKeys) == 0 {
 		t.Fatal("found no data[\"...\"] assignments in auditUISession — re-anchor this guard")
+	}
+	// It also copies a support helper's keys in from supportEntryFields (support_terminal.go).
+	if strings.Contains(string(sessSrc), "supportEntryFields(") {
+		termSrc, err := os.ReadFile(filepath.Join(root, "internal", "api", "support_terminal.go"))
+		if err != nil {
+			t.Fatalf("read internal/api/support_terminal.go: %v", err)
+		}
+		lit := regexp.MustCompile(`func supportEntryFields\([^)]*\) map\[string\]any \{\s*return map\[string\]any\{([^}]*)\}`).FindSubmatch(termSrc)
+		if lit == nil {
+			t.Fatal("could not find supportEntryFields' map literal in internal/api/support_terminal.go — re-anchor this guard")
+		}
+		for _, kv := range mapLit.FindAllStringSubmatch(string(lit[1]), -1) {
+			helperKeys = append(helperKeys, []string{kv[0], kv[1] + kv[2]}) // one group is empty
+		}
 	}
 	for _, tc := range []struct {
 		action string
