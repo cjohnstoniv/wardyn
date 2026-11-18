@@ -218,7 +218,7 @@ describe("TerminalPane — Watch desktop", () => {
     expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
   });
 
-  it("is never offered to a support helper, whatever their doors: the server refuses a helper that ticket", async () => {
+  it("is never offered to a support helper, whatever their doors", async () => {
     attach.mounted = false;
     attach.barAction = undefined;
     render(

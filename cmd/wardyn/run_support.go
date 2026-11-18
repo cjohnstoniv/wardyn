@@ -175,7 +175,7 @@ func runSupportDeclineCmd(client clientFn) *cobra.Command {
 
 func runSupportEndCmd(client clientFn) *cobra.Command {
 	return supportAnswerCmd(client, "end <run-id> <grant-id>", "End a help request or session now",
-		"ended: the helper can open nothing new; an open terminal, SSH or web session closes within about 35 seconds",
+		"ended: the helper can open nothing new; an open terminal, SSH or web session, or a running command, closes within about 35 seconds",
 		func(cmd *cobra.Command, c *sdk.Client, run, grant uuid.UUID) (sdk.SupportGrant, error) {
 			return c.EndSupport(cmd.Context(), run, grant)
 		})
