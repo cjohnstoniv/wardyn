@@ -336,6 +336,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		ping:       c.Ping,
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
+	if ta, ok := ticketActorFromContext(ctx); ok && ta.support != uuid.Nil {
+		holder.support, wa.fields = ta.support, supportEntryFields(ta.support)
+	}
 	wa.holder = holder
 	la := newLocalAttach(wa, local, r.URL.Query().Get("local_nonce"))
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
@@ -524,10 +527,29 @@ func parseUint16(s string) uint16 {
 // that fails the rule gets the 403 naming why; a member stamp keeps its own.
 // superAdmin is true past this block only on the admin's own run or an
 // operator-owned one, so the deny_interactive exemption cannot reach a
-// person's run.
+// person's run. A helper's ticket (one that carries a support grant) is asked of the support arm instead, and
+// never takes the exemption.
 func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	id := run.ID
 	if ta, tok := ticketActorFromContext(r.Context()); tok {
+		if ta.support != uuid.Nil {
+			// A helper's ticket (supportMayEnter, support_terminal.go): a grant that is live and ticks the terminal
+			// door, then the run's deny_interactive door with no exemption: a helper is never a super admin here.
+			// A ticket minted for one app never opens a terminal.
+			if ta.caller != "" || ta.app != "" {
+				s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+				writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				return true
+			}
+			if _, v := s.supportMayEnter(r.Context(), run, ta.principal, ta.support, supportDoorTerminal); v != supportOK {
+				if !s.refuseSupport(w, r, run, v) {
+					s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+					writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				}
+				return true
+			}
+			return s.refuseInteractiveAttach(w, r, run)
+		}
 		superAdmin := ta.role == oidc.RoleAdmin
 		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
 		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.

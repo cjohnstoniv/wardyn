@@ -102,6 +102,12 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 				return errAttachAuthorityEnded
 			}
 			entry := func(run types.AgentRun) bool {
+				if ta.support != uuid.Nil {
+					// A helper's socket lasts while its grant is live and ticks the terminal door: revoked, ended,
+					// expired, the helper signed out, or a grant read that fails all end it (fail closed).
+					_, v := s.supportMayEnter(lctx, run, ta.principal, ta.support, supportDoorTerminal)
+					return v == supportOK
+				}
 				return s.mayEnterRunOrSponsor(lctx, run, ta.principal, superAdmin, ta.authorizedAt)
 			}
 			return s.attachUnitCheck(lctx, runID, entry, func(run types.AgentRun) bool { return superAdmin && s.adminDoorExempt(run) })
