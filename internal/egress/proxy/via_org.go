@@ -156,7 +156,8 @@ func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrg
 
 // forwardViaOrg sends one sandbox request to the organisation's via_org route,
 // bodies streamed both ways. The run token rides Authorization toward the
-// control plane only, as forwardToControlPlane sends it.
+// control plane only, as forwardToControlPlane sends it. Bytes moved either way
+// count as the run in use, as a tunnel's do.
 func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrgRoute, authority string) {
 	if p.controlPlaneURL == "" {
 		http.Error(w, "wardyn: control plane url not configured", http.StatusBadGateway)
@@ -174,6 +175,8 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 	body := r.Body
 	if r.ContentLength == 0 {
 		body = http.NoBody
+	} else {
+		body = activityReader{ReadCloser: body, moved: &p.streamMoved}
 	}
 	out, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, u, body)
 	if err != nil {
@@ -207,12 +210,26 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	copyStreamed(w, resp)
+	copyStreamed(w, resp, &p.streamMoved)
+}
+
+// activityReader marks moved when a Read returns bytes.
+type activityReader struct {
+	io.ReadCloser
+	moved *atomic.Bool
+}
+
+func (a activityReader) Read(b []byte) (int, error) {
+	n, err := a.ReadCloser.Read(b)
+	if n > 0 {
+		a.moved.Store(true)
+	}
+	return n, err
 }
 
 // copyStreamed writes resp to w, flushing as bytes arrive: a model response
-// streams for as long as it runs.
-func copyStreamed(w http.ResponseWriter, resp *http.Response) {
+// streams for as long as it runs, and each write counts as the run in use.
+func copyStreamed(w http.ResponseWriter, resp *http.Response, moved *atomic.Bool) {
 	removeHopByHop(resp.Header)
 	for k, vs := range resp.Header {
 		w.Header()[k] = vs
@@ -226,6 +243,7 @@ func copyStreamed(w http.ResponseWriter, resp *http.Response) {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return
 			}
+			moved.Store(true)
 			_ = rc.Flush()
 		}
 		if err != nil {
