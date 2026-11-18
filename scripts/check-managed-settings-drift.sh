@@ -218,6 +218,13 @@ echo "ok: Claude Code $pin drops every built-in tool the attended-rules document
 # stand-in (node, which the image has) asks the CLI to call WebFetch; `--print` records a call it refused in
 # the result event's permission_denials, so no model, network or credential is needed. A control run without
 # the managed file must let WebFetch through under each condition, or the assertions prove nothing.
+# Every run happens under two tool-search arms. `off` sets ENABLE_TOOL_SEARCH=false, so WebFetch is in the
+# request's tools from the first turn; dispatch sets it for a run on the proxy's route or an operator gateway.
+# `default` sets nothing, as a run on api.anthropic.com, Bedrock, Foundry or Vertex runs: since 2.1.3xx a deferred
+# tool such as WebFetch is left out of the tools until tool search surfaces it, even behind a local
+# ANTHROPIC_BASE_URL, so the stand-in first calls ToolSearch (toolu_probe0) for WebFetch, then WebFetch.
+# `ran` needs the stand-in's WebFetch call (toolu_probe1) in the stream; a run that never called it is `uncalled`.
+# `denied` needs a denial whose tool_name is WebFetch: a refused ToolSearch carries "select:WebFetch" in its input.
 mkdir -p "$tmp/ws-empty" "$tmp/ws-allow/.claude"
 echo '{"permissions":{"allow":["WebFetch"]}}' > "$tmp/ws-allow/.claude/settings.json"
 echo '{"hasCompletedOnboarding":true,"projects":{"/ws":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' > "$tmp/claude.json"
@@ -230,11 +237,15 @@ http.createServer((req, res) => {
   req.on("end", () => {
     const body = JSON.parse(raw || "{}");
     if (!req.url.startsWith("/v1/messages") || req.url.includes("count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"input_tokens":1}'); }
-    const last = (body.messages || []).slice(-1)[0];
-    const answered = last && Array.isArray(last.content) && last.content.some((c) => c.type === "tool_result");
-    const call = !answered && (body.tools || []).some((t) => t.name === "WebFetch");
-    const block = call ? { type: "tool_use", id: "toolu_probe1", name: "WebFetch", input: {} } : { type: "text", text: "" };
-    const delta = call ? { type: "input_json_delta", partial_json: '{"url":"https://example.com/","prompt":"summarise"}' } : { type: "text_delta", text: "ok" };
+    const results = (body.messages || []).flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((c) => c.type === "tool_result");
+    const answered = results.some((c) => c.tool_use_id === "toolu_probe1");
+    const searched = results.some((c) => c.tool_use_id === "toolu_probe0");
+    const has = (name) => (body.tools || []).some((t) => t.name === name);
+    const call = answered ? null : has("WebFetch") ? "WebFetch" : !searched && has("ToolSearch") ? "ToolSearch" : null;
+    const block = call === "WebFetch" ? { type: "tool_use", id: "toolu_probe1", name: "WebFetch", input: {} }
+      : call === "ToolSearch" ? { type: "tool_use", id: "toolu_probe0", name: "ToolSearch", input: {} } : { type: "text", text: "" };
+    const delta = call === "WebFetch" ? { type: "input_json_delta", partial_json: '{"url":"https://example.com/","prompt":"summarise"}' }
+      : call === "ToolSearch" ? { type: "input_json_delta", partial_json: '{"query":"select:WebFetch","max_results":1}' } : { type: "text_delta", text: "ok" };
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.end(ev("message_start", { type: "message_start", message: { id: "m", type: "message", role: "assistant", model: "claude-sonnet-4-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } })
       + ev("content_block_start", { type: "content_block_start", index: 0, content_block: block })
@@ -246,30 +257,36 @@ http.createServer((req, res) => {
 }).listen(8080, "127.0.0.1");
 JS
 chmod -R a+rX "$tmp/ws-empty" "$tmp/ws-allow" "$tmp/stub.js" "$tmp/claude.json"
-webfetch_of() { # <settings dir or ""> <workspace dir> [claude args...] -> denied | ran | "" (no result event)
-    local mount=() ws="$2" out; [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro"); shift 2
+webfetch_of() { # <arm: off | default> <settings dir or ""> <workspace dir> [claude args...] -> denied | ran | uncalled | "" (no result event)
+    local env=() mount=() ws="$3" out denials; [ "$1" = default ] || env=(-e ENABLE_TOOL_SEARCH=false); [ -z "$2" ] || mount=(-v "$2:/etc/claude-code:ro"); shift 3
     out="$(docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
         --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
         -v "$tmp/stub.js:/probe/stub.js:ro" -v "$tmp/claude.json:/probe/claude.json:ro" -v "$ws:/ws:ro" -w /ws \
-        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token \
-        --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" \
-        | grep -oE '"permission_denials":\[[^]]*\]' | head -1 || true)"
-    case "$out" in "") ;; *WebFetch*) echo denied ;; *) echo ran ;; esac
+        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token ${env[@]+"${env[@]}"} \
+        --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" || true)"
+    denials="$(grep -oE '"permission_denials":\[[^]]*\]' <<<"$out" | head -1 || true)"
+    case "$denials" in "") ;; *'"tool_name":"WebFetch"'*) echo denied ;; *) if grep -qF '"toolu_probe1"' <<<"$out"; then echo ran; else echo uncalled; fi ;; esac
 }
-[ "$(webfetch_of "" "$tmp/ws-empty" --dangerously-skip-permissions)" = ran ] || die "WebFetch did not run under --dangerously-skip-permissions without a managed file — the ask-under-bypass check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
-[ "$(webfetch_of "" "$tmp/ws-allow")" = ran ] || die "a repository permissions.allow did not let WebFetch run without a managed file — the repository-allow check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
-asked=0; allowed=0
-for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
-    grep -q '"WebFetch"' <(sed -n '/"ask": \[/,/\]/p' "$doc") || continue
-    dir="$tmp/settings-attended-rules-$(basename "$doc" .json)"
-    if ! grep -q '"disableBypassPermissionsMode"' "$doc"; then
-        [ "$(webfetch_of "$dir" "$tmp/ws-empty" --dangerously-skip-permissions)" = denied ] || die "attended-rules/$(basename "$doc"): WebFetch ran under --dangerously-skip-permissions although the file's permissions.ask names it — ask no longer beats bypass; stderr: $(head -c 400 "$tmp/stderr")"
-        asked=$((asked + 1))
-    fi
-    if grep -q '"allowManagedPermissionRulesOnly": true' "$doc"; then
-        [ "$(webfetch_of "$dir" "$tmp/ws-allow")" = denied ] || die "attended-rules/$(basename "$doc"): a repository permissions.allow let WebFetch run although the file sets allowManagedPermissionRulesOnly and asks for it; stderr: $(head -c 400 "$tmp/stderr")"
-        allowed=$((allowed + 1))
-    fi
+for arm in off default; do
+    got="$(webfetch_of "$arm" "" "$tmp/ws-empty" --dangerously-skip-permissions)"
+    [ "$got" = ran ] || die "tool search $arm: WebFetch did not run under --dangerously-skip-permissions without a managed file (got: ${got:-no result event}) — the ask-under-bypass check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+    got="$(webfetch_of "$arm" "" "$tmp/ws-allow")"
+    [ "$got" = ran ] || die "tool search $arm: a repository permissions.allow did not let WebFetch run without a managed file (got: ${got:-no result event}) — the repository-allow check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+    asked=0; allowed=0
+    for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
+        grep -q '"WebFetch"' <(sed -n '/"ask": \[/,/\]/p' "$doc") || continue
+        dir="$tmp/settings-attended-rules-$(basename "$doc" .json)"
+        if ! grep -q '"disableBypassPermissionsMode"' "$doc"; then
+            got="$(webfetch_of "$arm" "$dir" "$tmp/ws-empty" --dangerously-skip-permissions)"
+            [ "$got" = denied ] || die "tool search $arm: attended-rules/$(basename "$doc"): WebFetch was not refused under --dangerously-skip-permissions although the file's permissions.ask names it (got: ${got:-no result event}) — ask no longer beats bypass; stderr: $(head -c 400 "$tmp/stderr")"
+            asked=$((asked + 1))
+        fi
+        if grep -q '"allowManagedPermissionRulesOnly": true' "$doc"; then
+            got="$(webfetch_of "$arm" "$dir" "$tmp/ws-allow")"
+            [ "$got" = denied ] || die "tool search $arm: attended-rules/$(basename "$doc"): WebFetch was not refused with a repository permissions.allow although the file sets allowManagedPermissionRulesOnly and asks for it (got: ${got:-no result event}); stderr: $(head -c 400 "$tmp/stderr")"
+            allowed=$((allowed + 1))
+        fi
+    done
+    [ "$asked" -gt 0 ] && [ "$allowed" -gt 0 ] || die "no attended-rules document asks for WebFetch with bypass launchable and allowManagedPermissionRulesOnly — the ask and repository-allow checks have nothing to prove"
 done
-[ "$asked" -gt 0 ] && [ "$allowed" -gt 0 ] || die "no attended-rules document asks for WebFetch with bypass launchable and allowManagedPermissionRulesOnly — the ask and repository-allow checks have nothing to prove"
-echo "ok: Claude Code $pin still asks for WebFetch under --dangerously-skip-permissions ($asked document(s)) and ignores a repository allow ($allowed document(s))"
+echo "ok: Claude Code $pin still asks for WebFetch under --dangerously-skip-permissions ($asked document(s)) and ignores a repository allow ($allowed document(s)), with tool search off and at its default"

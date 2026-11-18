@@ -8,6 +8,7 @@
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CURL_CA_BUNDLE": "/tmp/wardyn/ca-bundle.pem",
     "DISABLE_TELEMETRY": "1",
+    "ENABLE_TOOL_SEARCH": "false",
     "GIT_ASKPASS": "",
     "GIT_AUTHOR_EMAIL": "sub-bob@wardyn.local",
     "GIT_AUTHOR_NAME": "sub-bob",

@@ -73,6 +73,7 @@ import {
   SEEN_URL,
   WALK_PROVIDER,
   WALK_PROVIDER_NAME,
+  chooseTrustYes,
   dexSignIn,
   launchFromReview,
   makeMemberActionable,
@@ -290,8 +291,9 @@ const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);
  *
  *  The step list is the W0 spike's, pre-declared (see the recovery file's case
  *  H): with `hasCompletedOnboarding` seeded the only screen left is the
- *  workspace-trust one, whose default option is already the accepting one, so
- *  ONE bare Enter clears it. */
+ *  workspace-trust one. It opens on "No, exit", so the pointer is moved to
+ *  "Yes, I trust this folder" first (as the recovery file's step 5 does), and
+ *  then ONE Enter clears it. */
 async function startInteractiveRun(page: Page, title: string): Promise<{ id: string; screen: ReturnType<Page["locator"]> }> {
   await page.goto("/runs/new");
   await walkNewRunToReview(page, { mode: "interactive", startsWithRun: true });
@@ -303,7 +305,9 @@ async function startInteractiveRun(page: Page, title: string): Promise<{ id: str
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
+  // chooseTrustYes: the dialog opens on No, ignores keys at first and wraps past Yes.
   await screen.click();
+  await chooseTrustYes(page, screen);
   await page.keyboard.press("Enter");
   await expect
     .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })

@@ -16,6 +16,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A workspace or invitation write that matched no row, when the read that follows to explain the miss also fails for another reason, is no longer reported as a missing workspace or invitation. The `workspace.requirement.write`, `workspace.egress.approve` and `workspace.egress.deny` audit rows say `Store error`, not `Workspace not found`, and the server log keeps the store's own error. A workspace edit, an egress list saved with `If-Match`, and `DELETE /api/v1/invitations/{id}` answer `500` `internal_error`, which a retry may clear, where they answered `404`.
 - The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
 
+### Security
+
+- `agent-claude-code` now pins Claude Code 2.1.312. The earlier pin, 2.1.231, runs on its own embedded runtime, whose
+  Brotli decoder a crafted stream can make write out of bounds (CVE-2026-111497); 2.1.312 carries the fixed runtime. A
+  crafted Brotli response from a site a Claude Code run may reach could run code as the agent, inside its sandbox and
+  its egress policy. Rebuild locally built `agent-claude-code` images.
+
 ## [0.10.0-rc.23] — 2026-11-17
 
 ### Added
