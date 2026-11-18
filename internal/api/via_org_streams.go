@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -187,7 +188,7 @@ func (st *viaOrgStream) moved(n int) bool {
 }
 
 // watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
-// while the run is away (kept, its runner offline, or two reads of it failing in a row) every stream
+// while the run is away (kept, idle-paused, its runner offline, or two reads of it failing in a row) every stream
 // is ended and the engine released, and so is an engine idle with no stream; the run's byte total is kept through all of these. The
 // state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run).
 func (s *Server) watchViaOrgRun(run *viaOrgRun) {
@@ -256,7 +257,7 @@ type viaOrgRunStatus int
 
 const (
 	viaOrgRunLive       viaOrgRunStatus = iota
-	viaOrgRunAway                       // kept, or its runner offline: nothing may stream
+	viaOrgRunAway                       // kept, idle-paused, or its runner offline: nothing may stream
 	viaOrgRunUnreadable                 // the run could not be read: away only once it fails twice in a row
 	viaOrgRunMoved                      // placed on another runner: this runner's state is dropped
 	viaOrgRunEnded                      // terminal or gone: the state and the run's byte total are dropped
@@ -274,7 +275,9 @@ func (s *Server) viaOrgRunState(run *viaOrgRun) viaOrgRunStatus {
 		return viaOrgRunEnded
 	case got.RunnerID == nil || *got.RunnerID != run.runner:
 		return viaOrgRunMoved
-	case runIsKept(got) || (s.cfg.RunnerOnline != nil && !s.cfg.RunnerOnline(run.runner)):
+	// A waiting pause is parked on a request nobody has answered yet, which may be a request this run's org engine
+	// holds open: ending its stream would leave the answer nothing to release. A run paused for any other reason is away.
+	case runIsKept(got) || (got.PausedAt != nil && got.PausedReason != types.PauseWaiting) || (s.cfg.RunnerOnline != nil && !s.cfg.RunnerOnline(run.runner)):
 		return viaOrgRunAway
 	}
 	return viaOrgRunLive
