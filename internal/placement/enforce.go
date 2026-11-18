@@ -257,6 +257,10 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	// that needs it is refused rather than left to dial the vendor host.
 	// The one exception is a laptop local model's own entry (laptopLocalModel).
 	"ProxyConfig.LLMUpstreams": func(p LocalPlan) *Refusal {
+		// The GatewayIdentity gate refuses this run later in the walk and names the server or provider; deferring lets that refusal answer.
+		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
+			return nil
+		}
 		for _, u := range p.Spec.ProxyConfig.LLMUpstreams {
 			if !laptopLocalModel(p, u) {
 				return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
@@ -268,6 +272,7 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	// through a mint no runner relays, so a run that needs it is refused. Create,
 	// Review and dispatch all ask this gate, so the refusal names the route's
 	// server or provider rather than the field (Refusal.Sentence).
+	// Gates earlier in the walk defer to it while it has routes, so it must stay unconditional.
 	"ProxyConfig.GatewayIdentity": func(p LocalPlan) *Refusal {
 		if routes := p.Spec.ProxyConfig.GatewayIdentity; len(routes) > 0 {
 			r := refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", gatewayIdentityDetail(routes))
@@ -278,6 +283,10 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	},
 	// The headers set on a provider's gateway belong with the gateway's address, which is never sent.
 	"ProxyConfig.LLMHeaders": func(p LocalPlan) *Refusal {
+		// The GatewayIdentity gate refuses this run later in the walk and names the server or provider; deferring lets that refusal answer.
+		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
+			return nil
+		}
 		if len(p.Spec.ProxyConfig.LLMHeaders) > 0 {
 			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMHeaders", "credential variant has no permitted local rule")
 		}
