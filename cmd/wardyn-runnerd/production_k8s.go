@@ -36,6 +36,24 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 // errRelayServiceIPs: the relay Service must resolve to exactly one ClusterIP (§3.4 item 4).
 var errRelayServiceIPs = errors.New("relay_service_not_one_ip")
 
+// k8sOwnNamespaceAndRelayIP reads runnerd's own namespace, checks the runs namespaces against it, and
+// resolves the relay Service to its one ClusterIP (§3.4 item 4).
+func k8sOwnNamespaceAndRelayIP(ctx context.Context, opts serveOptions) (ownNS, clusterIP string, err error) {
+	raw, err := os.ReadFile(serviceAccountNamespace)
+	if err != nil {
+		return "", "", fmt.Errorf("read runnerd's own namespace: %w", err)
+	}
+	ownNS = strings.TrimSpace(string(raw))
+	if err := checkRunsNamespaces(opts.runsNamespaces, ownNS); err != nil {
+		return "", "", err
+	}
+	addrs, err := net.DefaultResolver.LookupHost(ctx, opts.relayService)
+	if err != nil || len(addrs) != 1 {
+		return "", "", fmt.Errorf("%w: %s resolved to %v (%v)", errRelayServiceIPs, opts.relayService, addrs, err)
+	}
+	return ownNS, addrs[0], nil
+}
+
 // k8sRunnerHooks builds the k8s runner (design K1 §3): the driver in runner mode over the runs
 // namespace, the pod-IP relay with its fence, the own-namespace keystore and the self-lapse
 // options, then the §3.4 startup checks. Each refusal is named.
@@ -60,19 +78,10 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	if opts.relayListen != env.podIP.String() {
 		return runnerRuntime{}, fmt.Errorf("--relay-listen %q is not this pod's IP %s: the k8s relay binds only the pod IP", opts.relayListen, env.podIP)
 	}
-	raw, err := os.ReadFile(serviceAccountNamespace)
+	ownNS, clusterIP, err := k8sOwnNamespaceAndRelayIP(ctx, opts)
 	if err != nil {
-		return runnerRuntime{}, fmt.Errorf("read runnerd's own namespace: %w", err)
-	}
-	ownNS := strings.TrimSpace(string(raw))
-	if err := checkRunsNamespaces(opts.runsNamespaces, ownNS); err != nil {
 		return runnerRuntime{}, err
 	}
-	addrs, err := net.DefaultResolver.LookupHost(ctx, opts.relayService)
-	if err != nil || len(addrs) != 1 {
-		return runnerRuntime{}, fmt.Errorf("%w: %s resolved to %v (%v)", errRelayServiceIPs, opts.relayService, addrs, err)
-	}
-	clusterIP := addrs[0]
 	hardDeny, err := k8s.NewHardDeny(env.clusterDomain, []string{clusterIP, env.podIP.String()}, append(env.apiserverPeers, env.hardDenyCIDRs...))
 	if err != nil {
 		return runnerRuntime{}, err

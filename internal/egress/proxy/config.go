@@ -650,30 +650,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 			return fmt.Errorf("config: upstream_proxy_no_proxy[%d]: %q is neither a CIDR nor a host/domain suffix", i, e)
 		}
 	}
-	// Warn (never fail boot — the operator may genuinely want the portal
-	// proxied) when a corp upstream is configured and this run carries an AWS
-	// SSO injection host (isAWSSSOPortalHost) with no bypass entry covering
-	// it: every SSO call on that host then CONNECTs through the corporate
-	// upstream, which a corp forward proxy frequently cannot reach (it is a
-	// PrivateLink-style host resolving into CGNAT/private space — see
-	// mitm_upstream_test.go) and which times out looking exactly like a
-	// network fault instead of a routing gap the operator can name. Shares
-	// noProxyRulesCoverHost with the live routing decision (bypassUpstream)
-	// so the two can never disagree about what counts as covered.
-	if c.UpstreamProxyURL != "" {
-		rules := compileNoProxy(c.UpstreamProxyNoProxy)
-		for _, inj := range c.Injection {
-			h := strings.ToLower(strings.TrimSpace(inj.Host))
-			if h == "" || !isAWSSSOPortalHost(h) {
-				continue
-			}
-			if !noProxyRulesCoverHost(rules, h) {
-				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream; "+
-					"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change",
-					slog.String("host", inj.Host))
-			}
-		}
-	}
+	c.warnUncoveredSSOPortals()
 	// Validate (but do not retain) the trusted CA PEM, same shape as the
 	// upstream proxy URL above: fail fast on garbage. NewServer builds and
 	// RETAINS the real pool (system roots + this bundle) for the live proxy.
@@ -714,6 +691,35 @@ func (c *Config) applyDefaultsAndValidate() error {
 		return err
 	}
 	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts(), c.validateLLMHeaders())
+}
+
+// warnUncoveredSSOPortals warns (never fails boot) when a corp upstream is configured and an AWS SSO
+// injection host has no upstream_proxy_no_proxy entry covering it.
+func (c *Config) warnUncoveredSSOPortals() {
+	// Warn (never fail boot — the operator may genuinely want the portal
+	// proxied) when a corp upstream is configured and this run carries an AWS
+	// SSO injection host (isAWSSSOPortalHost) with no bypass entry covering
+	// it: every SSO call on that host then CONNECTs through the corporate
+	// upstream, which a corp forward proxy frequently cannot reach (it is a
+	// PrivateLink-style host resolving into CGNAT/private space — see
+	// mitm_upstream_test.go) and which times out looking exactly like a
+	// network fault instead of a routing gap the operator can name. Shares
+	// noProxyRulesCoverHost with the live routing decision (bypassUpstream)
+	// so the two can never disagree about what counts as covered.
+	if c.UpstreamProxyURL != "" {
+		rules := compileNoProxy(c.UpstreamProxyNoProxy)
+		for _, inj := range c.Injection {
+			h := strings.ToLower(strings.TrimSpace(inj.Host))
+			if h == "" || !isAWSSSOPortalHost(h) {
+				continue
+			}
+			if !noProxyRulesCoverHost(rules, h) {
+				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream; "+
+					"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change",
+					slog.String("host", inj.Host))
+			}
+		}
+	}
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside
