@@ -23,7 +23,7 @@
 | `spec.eligible_grants` | A credential grant the boundary's grants do not cover is dropped from the run's eligible grants. |
 | `spec.desktop` | Each direction it blocks (`paste_in`, `copy_out`, `upload`, `download`) is blocked for every run, at resolve and at the seal. An unset direction keeps its default: copy out and download blocked. |
 | `spec.data_out` | Every run's data_out rule is at least this strict ([POLICIES.md](../POLICIES.md#data_out)). `blocked` also denies drives, member drives, kept machines and git pushes. |
-| `spec.azure_devops_capabilities` | The only Azure DevOps capabilities a run may hold, checked at launch, at each request and approval, and at each credential resolve. `pr` means its three parts. A capability added later stays out until you list it. |
+| `spec.azure_devops_capabilities` | The only Azure DevOps capabilities a run may hold, checked at launch, at each request for a capability the run does not hold, at each approval and credential resolve. `pr` means its three parts. Later ones stay out until listed. |
 | `spec.github_capabilities` | The only GitHub capabilities the GitHub CLI and git pushes may use, checked at launch. |
 | `limits.max_end_ahead_sec` | No run's end may be set further ahead than this, at create or by a later change, including a run created in `no_limits`. |
 
@@ -65,7 +65,7 @@ The mint and redeem doors check the same rules live, before anything is minted: 
 - The two caps are allowlists. A run holds only what they list, whatever a provider row's `capability_ceiling`, a default profile, a policy, your walls or an approval would give. Omit a field for no cap; an empty list is refused at write.
 - Azure DevOps launch: a policy that names a capability the cap leaves out is refused (`ado_capabilities_capped`). A default profile, or access an admin granted a person, is cut to the cap. A cap that leaves nothing refuses the launch.
 - Azure DevOps requests: one for a capability the cap leaves out is refused (`capability_capped`) and raises no approval. A held request for one cannot be approved. A `minted_pat` run's tokens are minted inside the capped ceiling.
-- A cap saved while a run is going applies at its next credential resolve. If it leaves out a capability the run holds, the resolve is refused (`capability_capped`) and a `minted_pat` run's tokens are revoked. The run needs a new launch to get Azure DevOps access back.
+- A cap saved while a run is going applies at its next credential resolve, within 10 minutes on the cluster and 15 on a runner. If it leaves out a capability the run holds, the resolve is refused (`capability_capped`) and a `minted_pat` run's tokens are revoked. The run needs a new launch to get access back.
 - GitHub: the cap bounds the GitHub CLI at launch and refuses the launch when it leaves none (`github_capabilities_capped`). A cap without `code_write` keeps git pushes from that forge, GitHub or Azure DevOps.
 - At launch, a boundary or restriction that cannot be read is a cap that lists nothing. At a credential resolve it is a retryable `503` (`run_unreadable`) and nothing is revoked.
 - The dry run lists `provider_rows`: per Azure DevOps provider row, the ceiling and default profile entries the drafted cap removes (`pr` as its parts). It lists no GitHub rows, since those lists live on components and policies.
