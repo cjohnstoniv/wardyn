@@ -244,7 +244,10 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 		kinds[k.p.ID] = k
 	}
 	laneOf := func(id string) (providerLane, string) {
-		k := kinds[id]
+		k, ok := kinds[id]
+		if !ok {
+			t.Fatalf("no join kind with provider id %q", id)
+		}
 		lane := providerLane{chosen: &chosenProvider{provider: k.p, owner: joinCreateOwner}, blob: blob}
 		if providerKeyKind(k.p.Kind) {
 			lane.key, _ = providerKeyLaneFor(k.p, k.agent)
@@ -265,8 +268,8 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 	anthropicKey, _ := laneOf("anthropic-key")
 	customEndpoint, _ := laneOf("corp-gw")
 	subscription, _ := laneOf("claude")
-	sso, _ := laneOf("sso")
-	bearer, _ := laneOf("bearer")
+	sso, _ := laneOf(brSSOProvider().ID)
+	bearer, _ := laneOf(brBearerProvider().ID)
 	openai, _ := laneOf("openai-key")
 	rows := []struct {
 		name   string
@@ -287,9 +290,9 @@ func TestClaudeToolSearchDefault(t *testing.T) {
 		{name: "foundry", lane: foundry, run: types.AgentRun{Agent: "claude-code"}, wired: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "1"}},
 		// Foundry and Bedrock stay on the default even when a base URL is also set; only the provider decides.
 		{name: "foundry with a base URL", lane: foundry, run: types.AgentRun{Agent: "claude-code"},
-			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}, wired: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "1"}},
 		{name: "bedrock with a base URL", lane: sso, run: types.AgentRun{Agent: "claude-code"},
-			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
+			preset: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.corp.example"}, wired: map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}},
 		{name: "vertex with a base URL", lane: anthropicKey, run: types.AgentRun{Agent: "claude-code"},
 			preset: map[string]string{"CLAUDE_CODE_USE_VERTEX": "1", "ANTHROPIC_BASE_URL": "https://gw.corp.example"}},
 		{name: "sign-in task", run: types.AgentRun{Agent: "claude-code", Task: harnessLoginTask}},
