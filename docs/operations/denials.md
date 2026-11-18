@@ -6,7 +6,8 @@ Every `authz.denied` reason, including the ones that answer `404` like a missing
 
 - Every member denial that isn't a plain foreign-resource 404 is audited under `authz.denied`, whose `reason` field is the whole vocabulary.
 - Four of the reasons below are NOT member denials at all.
-  - A RUN-TOKEN tier (`run_terminal`, `run_not_found`, `run_kept`, `run_paused`) is raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
+  - A RUN-TOKEN tier (`run_terminal`, `run_not_found`, `run_kept`) is raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
+  - `run_paused` is raised against the same run token, by the `via_org` route's own check; other internal doors still serve a paused run.
   - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
 - The reasons of a Kubernetes runner's node-loss containment are not `authz.denied` reasons, so they have no row below.
   - `run_containment_pending` (`403`): token renewal refuses a run its runner deleted but cannot yet prove stopped. It is written on the `identity.renew` row, beside the runner's own relay fence, which is what bounds the run's egress.

@@ -69,8 +69,13 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
-- `ado_minted_pat` also needs the connection's opt-in: as `runner_resident`, its `runner_resident` and a person's own runner; as `via_org`, its `runner_via_org` and a runner of known trust class, on 0.10.1 or later. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
-- A run's Azure DevOps token delivered `via_org` is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes. A withdrawn delivery revokes the run's tokens and restarts the organisation's proxy for the run; a runner trust change does not withdraw it ([Azure DevOps](../AZURE-DEVOPS.md#via-the-organisation-via_org)).
+- `ado_minted_pat` also needs the connection's opt-in:
+  - as `runner_resident`, its `runner_resident` and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart, and a refused fetch revokes it;
+  - as `via_org`, its `runner_via_org` and a runner of known trust class, on 0.10.1 or later. The runner never holds the token.
+  - See [Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement).
+- A run's Azure DevOps token delivered `via_org` is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes ([Azure DevOps](../AZURE-DEVOPS.md#via-the-organisation-via_org)).
+  - A withdraw revokes the run's tokens, and a write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests.
+  - A change of the runner's trust class does not affect it.
 - A paused run's requests through the organisation (`via_org`) are refused `409 run_paused` until it is resumed, for every `via_org` grant.
 - A `require_posture` on a class whose mode is not `runner_resident` (or `via_org` for `ado_minted_pat`) is refused when the policy is saved (`credential_delivery_invalid`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
