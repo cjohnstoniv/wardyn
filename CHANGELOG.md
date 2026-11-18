@@ -20,7 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - The sandbox sweep writes its `sandbox.sweep` row for a computer folder record it cannot read once while the record stays unreadable, not on every pass; each server process writes its own, and a new row follows once the record has read or the sandbox has been stopped.
-- The `runner.event.refuse` row for such a count carries `count` and `drop_end` when it moved the run's overflow mark.
+- When the organisation refuses a runner's count of the decisions its full spool dropped, the `runner.event.refuse` row carries `count` and `drop_end` if it moved the run's overflow mark.
 - When a CLI sign-in can no longer renew, `wardyn` says whether it was signed out, reached its lifetime or went unused past its idle lifetime. A revoke, a cut, a deactivation or a reuse still reads only that the sign-in ended.
 - A paused run's requests through the organisation (`via_org`) are refused with 409 `run_paused` until the run is resumed, for Azure DevOps, GitHub and `api_key` credentials; GitHub and `api_key` requests were served on a paused run before.
 - Withdrawing an Azure DevOps token's `via_org` delivery revokes the run's tokens; a write that withdraws it also restarts this server replica's organisation proxy for the run, and a later Azure DevOps request is refused.

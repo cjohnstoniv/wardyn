@@ -382,7 +382,6 @@ That has two consequences:
 ### Via the organisation (`via_org`)
 
 - `entra.runner_via_org` (labelled "Allow on runners via the server") is a per-connection setting on `PUT /workspace-providers`. It is off by default, applies only to `minted_pat` rows (an `own_pat` row is refused) and needs no `runner_resident`. The switch is the connection's whole consent; the delivery policy must also send `ado_minted_pat` `via_org` (**Keep in the organisation**, under **Governance → Runner credentials**).
-  - The setting is in the API now. The console control comes with the console change that builds it.
 - The token stays on the server. The runner sends the run's Azure DevOps traffic to Wardyn, and the organisation's engine runs the gate, holds and push rules and adds the token. The runner never holds it.
 - **What the runner must meet.** Any runner owner is served, an organisation's cluster runner included. The run is refused (`placement_credential` or `runner_posture_unmet`) unless:
   - the runner has a known trust class;
@@ -390,7 +389,7 @@ That has two consequences:
   - the `ado_minted_pat` row's `require_posture` is met. A Kubernetes runner reports no posture, so a row with `require_posture` refuses every Kubernetes runner;
   - the runner and the proxy image are 0.10.1 (any release candidate) or later. An older one is refused with "This run was not launched: its runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later". An image that names no release (a digest, a development tag) passes.
 - **Bounds of the relay**, per run: 16 streams, 8 GiB per server replica (reset on restart) and 10 minutes idle. A request through the organisation's proxy waits at most 9 minutes in all for approvals and sign-in.
-- Every open stream ends, and the engine is released, when the run's runner goes offline, so Azure DevOps stops at once.
+- Every open stream ends, and the engine is released, when the run's runner goes offline or an idle pause takes effect, so Azure DevOps stops at once.
 - **A paused run.** Every request a paused run sends through the organisation (`via_org`) is refused `409 run_paused` until the run is resumed: Azure DevOps, GitHub and `api_key` credentials alike (`refuseViaOrgEndedRun`).
 - **Withdraw.** The token's `via_org` delivery is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes.
   - A withdraw revokes the run's tokens at Azure DevOps (`drift`). A write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests. Another replica's organisation proxy is not restarted: its next token refresh is refused, at most 15 minutes later. A later Azure DevOps request is refused (`placement_credential`).
