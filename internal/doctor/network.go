@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -153,15 +154,10 @@ func (n *Network) orgStage() (*url.URL, Stage) {
 		if err := federation.CheckOrgURL(n.OrgURL); err != nil {
 			return nil, FailStage("org-url", fmt.Sprintf("%s (from %s): %v", u.Redacted(), n.Source, err), n.OrgSetting, "your organisation's public HTTPS address")
 		}
-	case u.Scheme == "http" && !isLoopback(u.Hostname()):
+	case u.Scheme == "http" && !loopback.Host(u.Hostname()):
 		return u, OKStage("org-url", detail(u)+": plain http://, so a token sent to it travels in cleartext")
 	}
 	return u, OKStage("org-url", detail(u))
-}
-
-func isLoopback(host string) bool {
-	ip := net.ParseIP(host)
-	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 // proxyVar is the variable that names the proxy for this URL's scheme.

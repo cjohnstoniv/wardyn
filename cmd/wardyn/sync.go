@@ -26,6 +26,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/foldersync"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -270,7 +271,7 @@ func refusePlainHTTPGateway(verb, rawURL string) error {
 		return nil
 	}
 	host := u.Hostname()
-	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+	if loopback.Host(host) {
 		return nil
 	}
 	return fmt.Errorf("%s: %s is plain http: the gateway's address, host key fingerprint and ProxyCommand are read from its /healthz, so anyone on the path could supply all three; use https://", verb, host)

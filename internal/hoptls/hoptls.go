@@ -30,6 +30,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 )
 
 // caTTL is the internal CA's validity. rotateBefore is how much of it must
@@ -45,14 +47,10 @@ const (
 // IsLocalHost reports whether host names this machine's loopback interface:
 // "localhost" or a loopback IP literal. No DNS lookup, deliberately — a name
 // that happens to resolve to 127.0.0.1 is a resolver's claim, not the
-// operator's, and both ends of the hop must reach the same verdict.
+// operator's, and both ends of the hop must reach the same verdict. It trims
+// space, lower-cases and drops one trailing dot, then asks loopback.Host.
 func IsLocalHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if h == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
+	return loopback.Host(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."))
 }
 
 // CheckURL is the one rule wardynd, every proxy and wardyn-tetragon-ingest
