@@ -500,5 +500,14 @@ func TestPG_SupportGrants(t *testing.T) {
 		if got, err := pg.SweepSupportGrants(f.ctx, false); err != nil || len(got) != 0 {
 			t.Errorf("sweep with SELECT only = %v, %v; want still no rows and no error", got, err)
 		}
+		// UPDATE without SELECT: the sweep's statements read the rows they end, so its guard asks for both.
+		f.exec(`REVOKE SELECT ON run_support_grants FROM ` + role)
+		f.exec(`GRANT UPDATE ON run_support_grants TO ` + role)
+		if got, err := pg.SweepSupportGrants(f.ctx, true); err != nil || len(got) != 0 {
+			t.Errorf("sweep with UPDATE only = %v, %v; want no rows and no error", got, err)
+		}
+		if f.read(g.ID).EndedAt != nil {
+			t.Error("the sweep of a role with UPDATE and no SELECT still ended a grant (off = true)")
+		}
 	})
 }
