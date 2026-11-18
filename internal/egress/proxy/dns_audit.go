@@ -26,7 +26,8 @@ import (
 //     query's outcome here (routeVMNetDNS), on the relay's lane only;
 //   - a container or pod agent's resolver is this proxy's listener (ServeDNS),
 //     which answers every query REFUSED except an AAAA for its own name, which
-//     gets an empty answer and no row: those sandboxes had no DNS before it.
+//     gets an empty answer and no row. On k8s the pod's one nameserver is this
+//     listener (DNSNone), not kube-dns.
 const (
 	routeVMNetDNS = "/wardyn/v1/vmnet/dns"
 
