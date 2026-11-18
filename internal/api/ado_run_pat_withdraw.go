@@ -19,6 +19,9 @@ package api
 //   - the runner's trust class: handlePutRunnerTrust and its held change
 //     (applyRunnerTrustChange);
 //   - the runner's posture: PostureFromRunner, for that runner's runs only.
+//
+// A run whose Azure DevOps grant is recorded via_org is judged the same way with judgeViaOrgADO; a withdraw also
+// releases the run's via_org engine, which may hold the token in memory.
 
 import (
 	"context"
@@ -30,7 +33,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// revokeWithdrawnLocalPATs judges the runner_resident delivery of every live
+// revokeWithdrawnLocalPATs judges the runner_resident or via_org delivery of every live
 // local run still holding an Azure DevOps token against the configuration as it
 // now stands, and revokes the tokens of each run it no longer admits (reason
 // drift). Best-effort: the write stands whatever happens here. A failed revoke
@@ -62,34 +65,44 @@ func (s *Server) revokeWithdrawn(ctx context.Context, onRunner uuid.UUID) {
 			continue
 		}
 		judged[p.RunID] = true
-		if s.localResidentWithdrawn(ctx, p.RunID, onRunner) {
+		withdrawn, viaOrg := s.localADOWithdrawn(ctx, p.RunID, onRunner)
+		if withdrawn {
 			s.revokeRunPATs(ctx, p.RunID, adoPATRevokeDrift)
+		}
+		if withdrawn && viaOrg {
+			s.releaseViaOrgEngineOf(p.RunID)
 		}
 	}
 }
 
-// localResidentWithdrawn reports whether runID is a live local run, bound to
-// onRunner unless that is uuid.Nil, with a runner_resident Azure DevOps grant its
-// delivery no longer admits. A read that fails withdraws nothing.
-func (s *Server) localResidentWithdrawn(ctx context.Context, runID, onRunner uuid.UUID) bool {
+// localADOWithdrawn reports whether runID is a live local run, bound to onRunner
+// unless that is uuid.Nil, with an Azure DevOps grant its delivery no longer
+// admits: a runner_resident one judged by judgeResidentADO, a via_org one by
+// judgeViaOrgADO. viaOrg is true when the withdrawn grant was via_org. A read
+// that fails withdraws nothing.
+func (s *Server) localADOWithdrawn(ctx context.Context, runID, onRunner uuid.UUID) (withdrawn, viaOrg bool) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.State.IsTerminal() || run.Placement != types.PlacementLocal || run.RunnerID == nil ||
 		(onRunner != uuid.Nil && *run.RunnerID != onRunner) {
-		return false
+		return false, false
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, g := range grants {
-		if g.Delivery != types.GrantDeliveryResident || g.Spec.Kind != types.GrantAPIKey {
-			continue
-		}
-		if _, withdrawn := s.judgeResidentADO(ctx, run, run.CreatedBy, g); withdrawn {
-			return true
+		switch {
+		case viaOrgADOLaneGrant(g):
+			if _, w := s.judgeViaOrgADO(ctx, run, run.CreatedBy, g); w {
+				return true, true
+			}
+		case g.Delivery == types.GrantDeliveryResident && g.Spec.Kind == types.GrantAPIKey:
+			if _, w := s.judgeResidentADO(ctx, run, run.CreatedBy, g); w {
+				return true, false
+			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // judgeResidentADO judges one runner_resident grant of run, owned by owner, as
@@ -106,4 +119,21 @@ func (s *Server) judgeResidentADO(ctx context.Context, run types.AgentRun, owner
 		return false, false
 	}
 	return r == nil, r != nil
+}
+
+// judgeViaOrgADO judges an Azure DevOps minted token's via_org delivery for run against the configuration and the
+// runner as they are now (localADODelivery, one read): admitted, or withdrawn (the policy no longer sends the class
+// via_org, or the via_org gate refuses it now). It is neither for a grant of any other class and for a read that
+// failed.
+func (s *Server) judgeViaOrgADO(ctx context.Context, run types.AgentRun, owner string, grant types.CredentialGrant) (admitted, withdrawn bool) {
+	origin, ref := s.localGrantOrigin(ctx, owner, grant.Spec)
+	if ref != nil || !residentADOOrigin(origin) {
+		return false, false
+	}
+	delivery, r, err := s.localADODelivery(ctx, run, origin)
+	if err != nil {
+		return false, false
+	}
+	ok := r == nil && delivery == types.GrantDeliveryViaOrg
+	return ok, !ok
 }

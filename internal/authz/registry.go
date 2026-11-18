@@ -130,6 +130,9 @@ const (
 	// ReasonDecisionScopeAboveRule: a decision_scope that reaches further than the unit deciders rule allows
 	// (its max_scope, and never always under a rule), for every decider.
 	ReasonDecisionScopeAboveRule Reason = "decision_scope_above_rule"
+	// ReasonRunPaused: a paused run's sandbox asked the organisation to forward a request for a credential delivered
+	// via_org. 409, audited with run_state paused; the run is served again once it is resumed.
+	ReasonRunPaused Reason = "run_paused"
 )
 
 // Refusal is one reason's registry row.
@@ -174,6 +177,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunOwnerOnly:                   {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
 	ReasonRecordingGoverned:              {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
+	ReasonRunPaused:                      {Effect: EffectConflict, Audit: true},
 	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                       {Effect: EffectUnprocessable},
 	ReasonModelProviderUnavailable:       {Effect: EffectUnprocessable, Audit: true},

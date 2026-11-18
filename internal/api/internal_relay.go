@@ -355,11 +355,16 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 	delivery := grant.Delivery
 	// The organisation's own via_org engine (viaOrgTransport) is served a
 	// via_org grant and nothing else; no relayed request can carry its mark.
+	// An Azure DevOps token's injection is judged again on every resolve
+	// (viaOrgADOStillAdmitted).
 	if viaOrgCall(r.Context()) {
-		if delivery == types.GrantDeliveryViaOrg {
-			return false
+		switch {
+		case delivery != types.GrantDeliveryViaOrg:
+			return s.denyRelayed(w, r, claims, placement.ReasonDeliveryNotViaOrg, runner.String())
+		case injection && viaOrgADOLaneGrant(grant) && !s.viaOrgADOStillAdmitted(r.Context(), claims.RunID, runner, grant):
+			return s.denyRelayed(w, r, claims, placement.ReasonPlacementCredential, runner.String())
 		}
-		return s.denyRelayed(w, r, claims, placement.ReasonDeliveryNotViaOrg, runner.String())
+		return false
 	}
 	reason := placement.ReasonRelayRouteRefused
 	switch delivery {
@@ -397,6 +402,29 @@ func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID
 	admitted, withdrawn := s.judgeResidentADO(ctx, run, runIdentitySubject(ctx, run.CreatedBy), grant)
 	if withdrawn {
 		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
+	}
+	return admitted
+}
+
+// viaOrgADOStillAdmitted reports whether grant, an Azure DevOps minted token
+// recorded via_org, may be resolved for run's engine now: relayedResidentADO's
+// re-judge with judgeViaOrgADO. The engine resolves at least every
+// residentRejudgeEvery, so a withdraw that no write announced refuses within
+// that interval. A withdrawn delivery revokes the run's tokens (reason drift)
+// and releases the run's engine, so the token it holds is dropped as well as
+// dead at Azure DevOps.
+func (s *Server) viaOrgADOStillAdmitted(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
+	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
+		return false
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != runner {
+		return false
+	}
+	admitted, withdrawn := s.judgeViaOrgADO(ctx, run, runIdentitySubject(ctx, run.CreatedBy), grant)
+	if withdrawn {
+		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
+		s.releaseViaOrgEngineOf(runID)
 	}
 	return admitted
 }
