@@ -391,7 +391,7 @@ That has two consequences:
 - Every open stream ends, and the engine is released, when the run's runner goes offline, so Azure DevOps stops at once.
 - **A paused run.** Every request a paused run sends through the organisation (`via_org`) is refused `409 run_paused` until the run is resumed: Azure DevOps, GitHub and `api_key` credentials alike (`refuseViaOrgEndedRun`).
 - **Withdraw.** The token's `via_org` delivery is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes.
-  - A withdraw revokes the run's tokens at Azure DevOps (`drift`). A write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests. A later Azure DevOps request is refused (`placement_credential`).
+  - A withdraw revokes the run's tokens at Azure DevOps (`drift`). A write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests. Another replica's organisation proxy is not restarted: its next token refresh is refused, at most 15 minutes later. A later Azure DevOps request is refused (`placement_credential`).
   - A change made outside those settings is caught at the next token refresh, at most 15 minutes apart while the run uses Azure DevOps. It is refused there without ending the run's other requests.
   - A change of the runner's trust class does not affect `via_org` delivery: it is never trust-gated (`DeliveryPolicy.Validate`, `DeliveryPolicy.ForTrust`, `ViaOrgADOAdmits`).
 - A global `via_org` row of the delivery policy applies to every runner and turns `runner_resident` off for that class; a per-trust row cannot deliver `via_org` or override one.

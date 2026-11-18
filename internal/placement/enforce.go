@@ -95,10 +95,11 @@ var strippers = map[string]stripper{
 // stripViaOrg reduces every via_org grant of the laptop copy (design §7.3): the
 // policy drops the grant, an injection becomes a ViaOrgRoutes entry naming its
 // grant and host (the rule and its secret name stay at the organisation) and
-// its host joins MITMHosts, since the runner's proxy must terminate that TLS to
-// forward the plaintext. A GitHub grant keeps its repository allowlist (no
-// credential) and gains a github.com route for /wardyn/gh/. It runs on the
-// Policy field, ahead of MITMHosts, so that stripper sees the routes.
+// its host is also kept in MITMHosts (viaOrgMITMHosts); the runner's proxy
+// serves the route from ViaOrgRoutes (serveViaOrg), not from that entry, so a
+// revive that prunes it changes nothing. A GitHub grant keeps its repository
+// allowlist (no credential) and gains a github.com route for /wardyn/gh/. It
+// runs on the Policy field, ahead of MITMHosts, so that stripper sees the routes.
 func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	pc := &s.ProxyConfig
 	pc.Policy.EligibleGrants = deleteIndexed(pc.Policy.EligibleGrants, func(i int) bool {
@@ -131,7 +132,8 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	pc.ViaOrgRoutes = slices.Compact(routes)
 }
 
-// viaOrgMITMHosts is hosts with the interception entry a via_org injection's destination needs. An Azure DevOps
+// viaOrgMITMHosts is hosts with the interception entry kept for a via_org injection's destination (the runner's proxy
+// serves the route from ViaOrgRoutes, not from this entry). An Azure DevOps
 // credential's host keeps the entry production wrote for it (host:443, which scopes it to the TLS port): a bare
 // entry would mean any port, so it adds none beside one and writes the :443 spelling when it finds none.
 func viaOrgMITMHosts(hosts []string, in runner.InjectionGrant) []string {
