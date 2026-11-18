@@ -29,10 +29,31 @@ type tokenSource struct {
 	// atMs is when tok was installed, the start-up token's or a renewal's, in unix ms. It is read on the
 	// wall clock, as brokeredToken's expiry and inject.go's lastGood are, so a computer's sleep counts.
 	atMs int64
+	// nudge carries a request to renew sooner than the timed loop would; wake fills it, the plain loop drains it.
+	nudge chan struct{}
 }
 
 func newTokenSource(tok string) *tokenSource {
-	return &tokenSource{tok: tok, atMs: time.Now().UnixMilli()}
+	return &tokenSource{tok: tok, atMs: time.Now().UnixMilli(), nudge: make(chan struct{}, 1)}
+}
+
+// wake asks the renew loop to try soon without blocking; a nil source or channel does nothing.
+func (t *tokenSource) wake() {
+	if t == nil || t.nudge == nil {
+		return
+	}
+	select {
+	case t.nudge <- struct{}{}:
+	default:
+	}
+}
+
+// nudged is the channel wake fills; nil for a nil source, which a select never receives from.
+func (t *tokenSource) nudged() <-chan struct{} {
+	if t == nil {
+		return nil
+	}
+	return t.nudge
 }
 
 // quiet is how long ago the current token was installed: how long this proxy has gone without renewing
@@ -77,6 +98,9 @@ const (
 	// brokerOfflineBound (git_broker.go), so a proxy that reaches the organisation never meets that bound.
 	renewMaxInterval = 15 * time.Minute
 	renewTimeout     = 10 * time.Second // bounds one renew request
+	// renewNudgeFloor is the least gap between tries when a refused Git request wakes the loop. It matches
+	// inject.go's on-demand retry and caps renew tries, and so the server's auth rows, at 2 a minute.
+	renewNudgeFloor = 30 * time.Second
 	// renewClosedTimeout bounds one request while a replacement proxy's gate has not opened: the runner
 	// waits 10 s for the proxy, so a first request that hangs must leave room for a retry.
 	renewClosedTimeout = 3 * time.Second
@@ -112,6 +136,7 @@ type renewerTuning struct {
 	giveUpAfter  time.Duration
 	expiryMargin time.Duration
 	closedRetry  time.Duration // the gap between tries while a gate has not yet opened
+	nudgeFloor   time.Duration // the least gap between a try and one a wake asks for
 	// closedTimeout bounds one request while the gate is closed, so a hung first renewal cannot use up
 	// the replace's whole wait before the next try. Zero means renewTimeout.
 	closedTimeout time.Duration
@@ -125,6 +150,7 @@ func defaultRenewerTuning() renewerTuning {
 		giveUpAfter:   renewGiveUpAfter,
 		expiryMargin:  renewExpiryMargin,
 		closedRetry:   time.Second,
+		nudgeFloor:    renewNudgeFloor,
 		closedTimeout: renewClosedTimeout,
 		now:           time.Now,
 	}
@@ -174,6 +200,12 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 	var heldExp time.Time  // the held token's expiry; unknown for the startup token
 	backoff := tune.firstRetry
 	for {
+		// A wake that came before this try is answered by it.
+		select {
+		case <-ts.nudged():
+		default:
+		}
+		lastTry := time.Now()
 		var sent time.Duration
 		if g != nil {
 			sent = g.clock.Now()
@@ -230,13 +262,34 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 				next = half
 			}
 		}
+		// A wake (a refused Git request) cuts the wait short, but never below nudgeFloor since the last try.
+		// runSelfLapseRenewer (self_lapse.go) already retries every 30 s after a failure, so it takes no nudge.
+		timer := time.NewTimer(next)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
 		case <-g.Done():
+			timer.Stop()
 			return
-		case <-time.After(next):
+		case <-timer.C:
+		case <-ts.nudged():
+			floor := time.NewTimer(max(tune.nudgeFloor-time.Since(lastTry), 0))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				floor.Stop()
+				return
+			case <-g.Done():
+				timer.Stop()
+				floor.Stop()
+				return
+			case <-timer.C:
+			case <-floor.C:
+			}
+			floor.Stop()
 		}
+		timer.Stop()
 	}
 }
 

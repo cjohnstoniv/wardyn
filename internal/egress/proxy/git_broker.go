@@ -348,6 +348,8 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // keeps the cache.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	if p.runToken.quiet(time.Now()) >= brokerOfflineBound {
+		// The refusal is what tells the renewer that someone is waiting on the organisation.
+		p.runToken.wake()
 		return "", "", errBrokerOffline
 	}
 	p.gitTokMu.Lock()
