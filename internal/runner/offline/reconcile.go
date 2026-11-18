@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/retrylog"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
@@ -242,32 +241,6 @@ func (m *Manager) settleFinishedLocked(id uuid.UUID, r *localRun, kind types.Run
 		r.Containment = &marker
 	}
 	return contained
-}
-
-// AgentExited records exit before reporting it. Only org reconciliation may
-// decide whether a kept headless run becomes terminal.
-func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string, code int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	r, ok := m.state.Runs[id]
-	if !ok || r.Ref != localRef || r.Generation == uuid.Nil || r.ExecID == "" {
-		return errors.New("agent exit has no matching local run")
-	}
-	if r.Retirement != nil {
-		return errors.New("agent exit observer started after retirement settlement")
-	}
-	if r.Exit != nil {
-		if r.Exit.Code != code {
-			return errors.New("agent exit code changed")
-		}
-		return m.ensureDurable()
-	}
-	r.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + localRef, Code: code, ObservedAt: m.now().UTC()}
-	m.state.Runs[id] = r
-	return m.save()
 }
 
 func (m *Manager) runIDs() []uuid.UUID {

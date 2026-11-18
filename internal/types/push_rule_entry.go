@@ -24,7 +24,7 @@ import (
 // "Ａcme" file rules where the git route's own derivation never looks, so the
 // rules would silently not apply. Authoring refuses what cannot be canonical
 // (never re-keys it), and the git route derives the same pair from the remote
-// with PushRuleEntryOfRemote. The TypeScript twin (pushRuleKey in the console)
+// with PushRuleEntryOfRemoteAt. The TypeScript twin (pushRuleKey in the console)
 // is held to the same table of cases, push-rule-key.golden.json.
 
 // The public host of each provider, which an authored set or override that names
@@ -195,7 +195,7 @@ func PushRuleKey(provider, host, org string) (string, error) {
 	return h + "/" + o, nil
 }
 
-// PushRuleEntryOfRemote is how the git route finds the entry a remote belongs
+// PushRuleEntryOfRemoteAt is how the git route finds the entry a remote belongs
 // to, from the remote's own address and never from a request body. It returns
 // the CANONICAL host and organisation (the pair PushRuleKey files rules under).
 // The host is the remote's host with the ssh. alias of a public host folded; the
@@ -208,21 +208,15 @@ func PushRuleKey(provider, host, org string) (string, error) {
 //     dev.azure.com), and, on the SSH hosts only, git@ssh.dev.azure.com:v3/org/project/repo
 //     and git@vs-ssh.visualstudio.com:v3/org/project/repo.
 //   - Azure DevOps Server (any other host): the collection, in
-//     [basePath/]Collection[/Project]/_git/Repo. Without the provider row's base
-//     path only Collection/Project/_git/Repo is read; a server under a prefix
-//     such as /tfs needs it (PushRuleEntryOfRemoteAt), or the remote is an error,
-//     never every collection under one entry.
+//     [basePath/]Collection[/Project]/_git/Repo, where basePath is the provider
+//     row's (for example "/tfs"). With no base path only Collection/Project/_git/Repo
+//     is read, so a server under a prefix such as /tfs needs one, or the remote
+//     is an error, never every collection under one entry.
 //
 // A path segment that is empty, "." or "..", or that holds an encoded "/", is
 // refused: git and curl resolve them, so the push would go somewhere else than
 // the entry derived here. A remote whose entry cannot be derived is an error,
 // which the caller must treat as a refusal and never as "no rules".
-func PushRuleEntryOfRemote(provider, remote string) (host, org string, err error) {
-	return PushRuleEntryOfRemoteAt(provider, remote, "")
-}
-
-// PushRuleEntryOfRemoteAt is PushRuleEntryOfRemote for a provider row whose
-// Azure DevOps Server lives under basePath (for example "/tfs").
 func PushRuleEntryOfRemoteAt(provider, remote, basePath string) (host, org string, err error) {
 	h, path, err := splitRemote(remote)
 	if err != nil {
