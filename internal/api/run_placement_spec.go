@@ -59,9 +59,10 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	}
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
-		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail
+		prefix := localRefusalPrefix(p.OwnerKind)
+		data, hint := map[string]any{"reason": ref.Reason}, prefix+ref.Detail
 		if ref.Reason != placement.ReasonPlacementComponentSelfDefine {
-			data["field"], hint = ref.Field, "This run was not launched on your own runner: "+ref.Field+": "+ref.Detail
+			data["field"], hint = ref.Field, prefix+ref.Field+": "+ref.Detail
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
@@ -79,6 +80,15 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		return false
 	}
 	return true
+}
+
+// localRefusalPrefix opens a classification refusal's hint: a person's runner is theirs ("your own"); a run
+// on any other owner's runner, an organisation's cluster runner via_org included, is not.
+func localRefusalPrefix(owner types.RunnerOwnerKind) string {
+	if owner == types.RunnerOwnerPerson {
+		return "This run was not launched on your own runner: "
+	}
+	return "This run was not launched on its runner: "
 }
 
 // localResolvedPlan is the one classification of a local run's spec, at dispatch and at revive. llm is the
