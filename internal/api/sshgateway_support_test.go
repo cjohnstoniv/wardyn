@@ -421,8 +421,14 @@ func TestSSHSupport_RevokeAndExpiryCutTheConnection(t *testing.T) {
 			tc.cut(r)
 			checkSSHNewChannels(t, client, false)
 			ev := waitForAudit(t, r.h.audit, r.run.ID, "ssh.channel.reject", "failure")
-			if ev == nil || !strings.Contains(string(ev.Data), sshSupportEnded) {
-				t.Errorf("reject row = %v, want reason %q", ev, sshSupportEnded)
+			if ev == nil || !strings.Contains(string(ev.Data), sshSupportEnded) || !strings.Contains(string(ev.Data), `"entry":"support"`) ||
+				!strings.Contains(string(ev.Data), r.grant.ID.String()) {
+				t.Errorf("reject row = %v, want reason %q, entry support and the grant", ev, sshSupportEnded)
+			}
+			_, _, err = client.OpenChannel("session", nil)
+			var oce *ssh.OpenChannelError
+			if !errors.As(err, &oce) || oce.Message != "the support session ended" {
+				t.Errorf("a refused channel told the helper %v, want %q", err, "the support session ended")
 			}
 		})
 		t.Run(tc.name+"/idle connection", func(t *testing.T) {
@@ -652,6 +658,60 @@ func TestSSHSupport_OwnerAndOverrideRowsUnchanged(t *testing.T) {
 	for _, c := range r.st.liveCalls() {
 		if c.Run == opRun.ID {
 			t.Errorf("an operator-owned run's auth read a support grant: %+v", c)
+		}
+	}
+}
+
+// sshSupportDoorOfKind and sshSupportDoorRefused fail closed: a kind with no door is refused to a helper even when
+// the grant's door list holds the empty name, an empty support_doors extension is no doors at all, and a
+// connection that is not a helper's is never refused here.
+func TestSSHSupportDoorRefusedFailsClosed(t *testing.T) {
+	const unmapped sshChannelKind = "agent-forward"
+	if got := sshSupportDoorOfKind(unmapped); got != "" {
+		t.Fatalf("sshSupportDoorOfKind(%q) = %q, want no door", unmapped, got)
+	}
+	for kind, want := range map[sshChannelKind]string{sshKindShell: "terminal", sshKindExec: "commands", sshKindSFTP: "files", sshKindSync: "files", sshKindForward: "forward"} {
+		if got := sshSupportDoorOfKind(kind); got != want {
+			t.Errorf("sshSupportDoorOfKind(%q) = %q, want %q", kind, got, want)
+		}
+	}
+	entry := func(doors ...string) context.Context {
+		return context.WithValue(context.Background(), sshSupportCtxKey{}, sshSupportEntry{grant: uuid.New(), doors: doors})
+	}
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		kind sshChannelKind
+		want bool
+	}{
+		{"unmapped kind, every door ticked", entry(sshAllSupportDoors...), unmapped, true},
+		{"unmapped kind, the empty door listed", entry(""), unmapped, true},
+		{"mapped kind, door ticked", entry("files"), sshKindSync, false},
+		{"mapped kind, door not ticked", entry("files"), sshKindExec, true},
+		{"no doors", entry(), sshKindShell, true},
+		{"not a helper", context.Background(), unmapped, false},
+	} {
+		if got := sshSupportDoorRefused(tc.ctx, tc.kind); got != tc.want {
+			t.Errorf("%s: sshSupportDoorRefused = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// An empty extension is no doors: withSupportDoors must not turn "" into the one door named "".
+	perms := &ssh.Permissions{Extensions: map[string]string{sshExtSupportGrant: uuid.NewString(), sshExtSupportDoors: ""}}
+	ctx := withSupportDoors(context.Background(), perms)
+	if e, ok := sshSupportOf(ctx); !ok || len(e.doors) != 0 {
+		t.Errorf("an empty support_doors gave doors %q (helper %v), want none", e.doors, ok)
+	}
+	for _, kind := range []sshChannelKind{sshKindShell, sshKindExec, sshKindSFTP, sshKindSync, sshKindForward, unmapped} {
+		if !sshSupportDoorRefused(ctx, kind) {
+			t.Errorf("a grant with no doors admitted %q", kind)
+		}
+	}
+	for reason, want := range map[string]string{
+		sshSupportEnded: "the support session ended", sshSupportUnverified: "the support session could not be verified",
+		"SSH key registration changed": "SSH key is no longer authorized", runOwnerOnlyReason: "SSH key is no longer authorized",
+	} {
+		if got := sshRejectMessage(reason); got != want {
+			t.Errorf("sshRejectMessage(%q) = %q, want %q", reason, got, want)
 		}
 	}
 }

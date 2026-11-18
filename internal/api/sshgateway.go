@@ -647,10 +647,8 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
 			if reason := s.sshCurrentKey(connCtx, sconn.Permissions); reason != "" {
 				s.recordAudit(connCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
-					sconn.Permissions.Extensions["key_fingerprint"], "failure", mustJSON(map[string]any{
-						"channel_type": newCh.ChannelType(), "reason": reason,
-					})))
-				_ = newCh.Reject(ssh.Prohibited, "SSH key is no longer authorized")
+					sconn.Permissions.Extensions["key_fingerprint"], "failure", sshRejectData(connCtx, newCh.ChannelType(), reason)))
+				_ = newCh.Reject(ssh.Prohibited, sshRejectMessage(reason))
 				continue
 			}
 		}

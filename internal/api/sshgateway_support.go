@@ -98,7 +98,10 @@ func withSupportDoors(ctx context.Context, perms *ssh.Permissions) context.Conte
 	if grant == uuid.Nil {
 		return ctx
 	}
-	doors := strings.Split(perms.Extensions[sshExtSupportDoors], ",")
+	var doors []string // an empty extension is no doors, not the one door named ""
+	if joined := perms.Extensions[sshExtSupportDoors]; joined != "" {
+		doors = strings.Split(joined, ",")
+	}
 	return context.WithValue(ctx, sshSupportCtxKey{}, sshSupportEntry{grant: grant, doors: doors})
 }
 
@@ -109,9 +112,14 @@ func sshSupportOf(ctx context.Context) (sshSupportEntry, bool) {
 }
 
 // sshSupportDoorRefused reports whether ctx's connection is a helper's and its grant does not tick the door for k.
+// A kind with no door is refused outright, whatever the grant holds.
 func sshSupportDoorRefused(ctx context.Context, k sshChannelKind) bool {
 	e, ok := sshSupportOf(ctx)
-	return ok && !slices.Contains(e.doors, sshSupportDoorOfKind(k))
+	if !ok {
+		return false
+	}
+	door := sshSupportDoorOfKind(k)
+	return door == "" || !slices.Contains(e.doors, door)
 }
 
 // sshSupportOffMsg is the one sentence a channel the owner did not allow gets.
@@ -125,8 +133,30 @@ func (s *Server) sshAuditSupportDoorOff(ctx context.Context, runID uuid.UUID, pr
 	e, _ := sshSupportOf(ctx)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
 		runID.String(), "failure", mustJSON(map[string]any{
-			"channel_type": channelType, "reason": string(authz.ReasonSupportDoorNotGranted), "support_grant": e.grant,
+			"channel_type": channelType, "reason": string(authz.ReasonSupportDoorNotGranted), "support_grant": e.grant, "entry": "support",
 		})))
+}
+
+// sshRejectData is the data of a re-check refusal's ssh.channel.reject row: the channel and the reason, and on a
+// helper's connection the grant and entry support, as the other helper rows carry them.
+func sshRejectData(ctx context.Context, channelType, reason string) json.RawMessage {
+	data := map[string]any{"channel_type": channelType, "reason": reason}
+	if e, ok := sshSupportOf(ctx); ok {
+		data["support_grant"], data["entry"] = e.grant, "support"
+	}
+	return mustJSON(data)
+}
+
+// sshRejectMessage is what a refused channel's client reads: the key sentence, or on a helper's connection whose
+// grant ended or could not be read, the support sentence.
+func sshRejectMessage(reason string) string {
+	switch reason {
+	case sshSupportEnded:
+		return "the support session ended"
+	case sshSupportUnverified:
+		return "the support session could not be verified"
+	}
+	return "SSH key is no longer authorized"
 }
 
 // sshSupportReason is the connection's re-check reason for supportMayEnter's verdict: "" while the grant stands.
