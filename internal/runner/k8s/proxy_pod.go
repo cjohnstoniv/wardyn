@@ -113,9 +113,7 @@ func (d *Driver) buildProxyPod(in proxyPodInputs) (*corev1.Pod, error) {
 		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
-	if !d.runnerMode() {
-		withLiveDenyDir(proxyPod)
-	}
+	withLiveDenyDir(proxyPod, d.runnerMode())
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}

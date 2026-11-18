@@ -28,6 +28,11 @@ func TestErrorCodeToSentinelMap(t *testing.T) {
 		"proxy_fenced":           runner.ErrProxyFenced,
 		"proxy_generation_newer": runner.ErrProxyGenerationNewer,
 		"observe_unsupported":    runner.ErrObserveUnsupported,
+		"narrow_unsupported":     runner.ErrNarrowUnsupported,
+		"narrow_refused":         runner.ErrNarrowRefused,
+		"narrow_not_listening":   runner.ErrNarrowNotListening,
+		"narrow_not_sent":        runner.ErrNarrowNotSent,
+		"narrow_uncertain":       runner.ErrNarrowUncertain,
 	}
 	if len(codeSentinels) != len(want) {
 		t.Fatalf("%d sentinel-mapped codes, design lists %d", len(codeSentinels), len(want))

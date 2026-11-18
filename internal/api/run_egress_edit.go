@@ -577,18 +577,29 @@ const egressEditUnsupportedMsg = "This run's network can't be changed while it r
 // egressEditUpdateRunnerMsg is egressEditUnsupportedMsg for a runner that must be updated first (egressEditRunnerToUpdate).
 const egressEditUpdateRunnerMsg = "This run's network can't be changed while it runs: the runner on %s must be updated first. Update it, or start a new run with the narrower policy."
 
-// egressEditRunnerToUpdate names the computer of a container run on a runner whose last caps say it
-// can keep a sandbox (not Kubernetes). Such a runner can replace a container's proxy, so an unsupported
-// answer from it means the runner is older; "" for any other run. It picks the text only, never a refusal.
+// egressEditUpdateK8sRunnerMsg is egressEditUpdateRunnerMsg for a Kubernetes runner: the updated runner narrows
+// only a proxy pod it started, so this run cannot be narrowed even after the update.
+const egressEditUpdateK8sRunnerMsg = "This run's network can't be changed while it runs: the runner on %s must be updated first. Update it, then start a new run with the narrower policy; a run started before the update cannot be narrowed in place."
+
+// egressEditRunnerToUpdate is the sentence naming the computer of a container run on a runner that must be
+// updated first: one that can keep a sandbox (Docker), which can replace a container's proxy once updated,
+// or a Kubernetes runner whose last caps lack ProxyNarrow (older than 0.10.1), whose update narrows only the
+// runs started after it. An unsupported answer from either means the runner is older; "" for any other run.
+// It picks the text only, never a refusal.
 func (s *Server) egressEditRunnerToUpdate(run types.AgentRun) string {
 	if run.RunnerID == nil || run.MachineKind.IsVM() {
 		return ""
 	}
 	caps, ok := s.runnerLastCaps(*run.RunnerID)
-	if !ok || caps.EndsUnkept {
+	onK8s := s.runOnKubernetes(run)
+	if !ok || (onK8s && caps.ProxyNarrow) {
 		return ""
 	}
-	return cmp.Or(caps.MachineName, "its computer")
+	msg := egressEditUpdateRunnerMsg
+	if onK8s {
+		msg = egressEditUpdateK8sRunnerMsg
+	}
+	return fmt.Sprintf(msg, cmp.Or(caps.MachineName, "its computer"))
 }
 
 // egressEditRefusal is a revive refusal as an edit answers it: a new proxy that did not confirm its
@@ -597,14 +608,11 @@ func (s *Server) egressEditRunnerToUpdate(run types.AgentRun) string {
 // egress_edit_unsupported, not the revive's own reason, and where the revive's own
 // words name only the owner's profile they also name the edit, whose denies are checked as that
 // profile's are.
-func egressEditRefusal(rerr *reviveError, updateOn string) *reviveError {
+func egressEditRefusal(rerr *reviveError, updateMsg string) *reviveError {
 	if rerr.reason == reasonReviveUnsupported || rerr.reason == reasonReviveReadbackUnsupported {
 		out := *rerr
 		out.reason = reasonEgressEditUnsupported
-		out.msg = egressEditUnsupportedMsg
-		if updateOn != "" {
-			out.msg = fmt.Sprintf(egressEditUpdateRunnerMsg, updateOn)
-		}
+		out.msg = cmp.Or(updateMsg, egressEditUnsupportedMsg)
 		return &out
 	}
 	door := map[string]string{

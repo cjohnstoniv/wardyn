@@ -14,6 +14,7 @@ type ProxyNarrowState struct {
 	BaseSHA256   string   // proxy.LiveDenyBaseSHA256 of the config it was started with
 	LiveDenies   []string // the list it enforces now, normalized
 	Changed      bool     // NarrowProxy only: the call added a host
+	BaseChecked  bool     // runner mode: the runner matched BaseSHA256 to the base it recorded at create
 }
 
 // ProxyNarrower narrows a live sandbox's proxy in place: hosts join its deny list, which never shrinks.
@@ -30,5 +31,6 @@ var (
 	ErrNarrowUnsupported  = errors.New("runner: this sandbox's proxy cannot be narrowed in place")
 	ErrNarrowRefused      = errors.New("runner: the proxy refused the narrowing and changed nothing")
 	ErrNarrowNotListening = errors.New("runner: the proxy is not taking narrowings now, so nothing was delivered")
+	ErrNarrowNotSent      = errors.New("runner: nothing reached the proxy, so nothing changed")
 	ErrNarrowUncertain    = errors.New("runner: the narrowing may have reached the proxy")
 )

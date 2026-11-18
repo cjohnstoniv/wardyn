@@ -272,3 +272,68 @@ func TestDispatch_GenerationRoutesToAt(t *testing.T) {
 		}
 	}
 }
+
+// narrowingFake is a substrate that narrows a proxy in place and records what it was asked.
+type narrowingFake struct {
+	*runnertest.Fake
+	read, narrowed [][]string
+	state          runner.ProxyNarrowState
+	err            error
+}
+
+func (n *narrowingFake) ProxyNarrowState(context.Context, string) (runner.ProxyNarrowState, error) {
+	n.read = append(n.read, nil)
+	return n.state, n.err
+}
+
+func (n *narrowingFake) NarrowProxy(_ context.Context, _ string, denies []string) (runner.ProxyNarrowState, error) {
+	n.narrowed = append(n.narrowed, denies)
+	return n.state, n.err
+}
+
+func TestDispatch_NarrowProxyRoutes(t *testing.T) {
+	id := uuid.NewString()
+	ref := placement.RunnerRefPrefix(id) + "fake-ref"
+	cfg := func(sub substrate.Substrate) Config {
+		return Config{RunnerID: id, Substrate: sub,
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }}
+	}
+
+	// A substrate that cannot narrow answers the code the org reads as "not offered here".
+	bare, err := newTestDispatcher(cfg(runnertest.NewFake()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callRefArgs(t, bare, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref, Deny: []string{"a.example"}}); !errors.Is(err, runner.ErrNarrowUnsupported) {
+		t.Errorf("narrow_proxy on a substrate that cannot narrow = %v; want runner.ErrNarrowUnsupported", err)
+	}
+
+	want := runner.ProxyNarrowState{ConfigSHA256: "cfg", BaseSHA256: "base", LiveDenies: []string{"a.example"}, Changed: true, BaseChecked: true}
+	n := &narrowingFake{Fake: runnertest.NewFake(), state: want}
+	d, err := newTestDispatcher(cfg(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An empty Deny reads the list; a non-empty one narrows. BaseChecked survives the answer.
+	res, err := callRefArgs(t, d, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref})
+	if err != nil || len(n.read) != 1 || len(n.narrowed) != 0 {
+		t.Fatalf("an empty Deny: %v; reads %d, narrows %d; want one read", err, len(n.read), len(n.narrowed))
+	}
+	if got := res.(runnerwire.NarrowProxyResult); got.ConfigSHA256 != "cfg" || got.BaseSHA256 != "base" || !got.Changed || !got.BaseChecked || len(got.LiveDenies) != 1 {
+		t.Errorf("the read answered %+v; want the substrate's state with BaseChecked", got)
+	}
+	res, err = callRefArgs(t, d, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref, Deny: []string{"a.example", "b.example"}})
+	if err != nil || len(n.read) != 1 || len(n.narrowed) != 1 || len(n.narrowed[0]) != 2 || n.narrowed[0][1] != "b.example" {
+		t.Fatalf("a Deny list: %v; reads %d, narrows %v; want one narrow of both hosts", err, len(n.read), n.narrowed)
+	}
+	if !res.(runnerwire.NarrowProxyResult).BaseChecked {
+		t.Error("BaseChecked did not survive the narrow's answer")
+	}
+
+	// The substrate's error comes back as is, for the wire to map to its code.
+	n.err = runner.ErrNarrowNotSent
+	if _, err := callRefArgs(t, d, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref, Deny: []string{"a.example"}}); !errors.Is(err, runner.ErrNarrowNotSent) {
+		t.Errorf("a substrate's ErrNarrowNotSent came back as %v", err)
+	}
+}

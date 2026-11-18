@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -41,6 +43,14 @@ type narrowRunner struct {
 	onProbe         func(call int)
 	report          func(hash string) // the proxy's own report of what it now enforces
 	afterNarrow     func()
+	// A runner's proxy (onRunner): the runner proves the base and answers BaseChecked, unless probeUnchecked
+	// or answerUnchecked.
+	onRunner, probeUnchecked, answerUnchecked bool
+	// probeLeft and narrowLeft are the time each call had left before its context's deadline.
+	probeLeft  []time.Duration
+	narrowLeft []time.Duration
+	// reviveUnsupported: the revive path cannot replace this run's proxy, as on Kubernetes.
+	reviveUnsupported bool
 }
 
 var _ runner.ProxyNarrower = (*narrowRunner)(nil)
@@ -48,12 +58,20 @@ var _ runner.ProxyNarrower = (*narrowRunner)(nil)
 func (r *narrowRunner) state() runner.ProxyNarrowState {
 	base, _ := proxy.LiveDenyBaseSHA256(r.base)
 	eff, _ := proxy.WithLiveDenies(r.base, r.list)
-	return runner.ProxyNarrowState{ConfigSHA256: proxy.ConfigSHA256(eff), BaseSHA256: base, LiveDenies: slices.Clone(r.list)}
+	return runner.ProxyNarrowState{ConfigSHA256: proxy.ConfigSHA256(eff), BaseSHA256: base, LiveDenies: slices.Clone(r.list), BaseChecked: r.onRunner}
 }
 
-func (r *narrowRunner) ProxyNarrowState(context.Context, string) (runner.ProxyNarrowState, error) {
+func (r *narrowRunner) CanReplaceProxy(ctx context.Context, ref string) error {
+	if r.reviveUnsupported {
+		return runner.ErrReviveUnsupported
+	}
+	return r.hashedReviveRunner.CanReplaceProxy(ctx, ref)
+}
+
+func (r *narrowRunner) ProxyNarrowState(ctx context.Context, _ string) (runner.ProxyNarrowState, error) {
 	r.mu.Lock()
 	r.probes++
+	r.probeLeft = append(r.probeLeft, timeLeft(ctx))
 	call, hook, notOffered, perr := r.probes, r.onProbe, r.notOffered, r.probeErr[r.probes]
 	r.mu.Unlock()
 	if notOffered {
@@ -67,12 +85,15 @@ func (r *narrowRunner) ProxyNarrowState(context.Context, string) (runner.ProxyNa
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.state(), nil
+	st := r.state()
+	st.BaseChecked = st.BaseChecked && !r.probeUnchecked
+	return st, nil
 }
 
-func (r *narrowRunner) NarrowProxy(_ context.Context, _ string, denies []string) (runner.ProxyNarrowState, error) {
+func (r *narrowRunner) NarrowProxy(ctx context.Context, _ string, denies []string) (runner.ProxyNarrowState, error) {
 	r.mu.Lock()
 	r.narrows++
+	r.narrowLeft = append(r.narrowLeft, timeLeft(ctx))
 	r.sent = append(r.sent, slices.Clone(denies))
 	if r.narrowErr != nil {
 		err := r.narrowErr
@@ -96,10 +117,19 @@ func (r *narrowRunner) NarrowProxy(_ context.Context, _ string, denies []string)
 	if r.wrongHash {
 		st.ConfigSHA256 = "not-the-hash"
 	}
+	st.BaseChecked = st.BaseChecked && !r.answerUnchecked
 	if after != nil {
 		after()
 	}
 	return st, nil
+}
+
+// timeLeft is how long ctx has before its deadline, 0 with none.
+func timeLeft(ctx context.Context) time.Duration {
+	if d, ok := ctx.Deadline(); ok {
+		return time.Until(d)
+	}
+	return 0
 }
 
 func (r *narrowRunner) counts() (probes, narrows int) {
@@ -118,6 +148,20 @@ type narrowStore struct {
 	afterBegin     func()
 	begun          []string
 	mu2            sync.Mutex
+}
+
+// narrowRowStore is narrowStore that also reads a runner's row: what a runner's name falls back to while its
+// caps are not held.
+type narrowRowStore struct {
+	*narrowStore
+	row types.Runner
+}
+
+func (s *narrowRowStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	if s.row.ID != id {
+		return types.Runner{}, errors.New("no such runner")
+	}
+	return s.row, nil
 }
 
 func (s *narrowStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
@@ -326,22 +370,6 @@ func TestNarrowEdit_ConfirmsAndAnswers200(t *testing.T) {
 	}
 	if row := f.editRow(t); row["applied"] != "in_place" || row["policy_generation"] != float64(2) {
 		t.Errorf("run.egress.edit row = %v", row)
-	}
-}
-
-// A run on a registered runner is not edited in place: the router answers "not in place" before any
-// exec, so the revive path decides, as before.
-func TestNarrowEdit_RunnerRunKeepsRevivePath(t *testing.T) {
-	f := newNarrowFixture(t)
-	run := f.run
-	rid := uuid.New()
-	run.RunnerID = &rid
-	_, rerr, inPlace := f.srv.narrowRunEgress(f.request(), run, liveEgressEdit{deny: []string{"evil.example"}})
-	if inPlace != nil || rerr != nil {
-		t.Fatalf("narrowRunEgress for a runner's run = %v, %v; want not in place", rerr, inPlace)
-	}
-	if p, n := f.nr.counts(); p != 0 || n != 0 {
-		t.Errorf("probes %d, narrowings %d; want no call", p, n)
 	}
 }
 
@@ -1091,5 +1119,272 @@ func TestNarrowEdit_KeepsTheRestartsDataOut(t *testing.T) {
 	gs.recorded = append(gs.recorded, f.audit.eventsFor(id, "run.policy.generation")...) // the edit's row, as the audit log keeps it
 	if rule, found, err := f.srv.runDataOutRule(ctx, id); err != nil || !found || rule != types.TransferBlocked {
 		t.Errorf("data_out after the edit = %q (found %v, err %v), want blocked", rule, found, err)
+	}
+}
+
+// newRunnerNarrowFixture is newNarrowFixture's run placed on a Kubernetes runner whose last caps are caps. Its
+// proxy's bytes carry a key the org never holds, so neither the base nor the hash it answers is one the org
+// can compute: only the runner's BaseChecked and its answered hash can confirm an edit.
+func newRunnerNarrowFixture(t *testing.T, caps runnerwire.Caps) *narrowFixture {
+	t.Helper()
+	f := newNarrowFixture(t)
+	rid := uuid.New()
+	f.st.mu.Lock()
+	f.st.run.RunnerID = &rid
+	f.run = f.st.run
+	f.st.mu.Unlock()
+	seedRunnerCaps(t, f.srv, rid, caps)
+	var held map[string]any
+	if err := json.Unmarshal(f.nr.base, &held); err != nil {
+		t.Fatal(err)
+	}
+	held["decision_sink_key"] = "held-by-the-runner"
+	base, err := json.Marshal(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.nr.mu.Lock()
+	f.nr.base, f.nr.onRunner = base, true
+	f.nr.mu.Unlock()
+	return f
+}
+
+// runnerNarrows is a Kubernetes runner at 0.10.1 or later: it ends a sandbox unkept and narrows in place.
+var runnerNarrows = runnerwire.Caps{MachineName: "build-k8s", EndsUnkept: true, ProxyNarrow: true}
+
+// runnerHash is the hash the runner's proxy answers for the list it holds now.
+func (f *narrowFixture) runnerHash() string {
+	f.nr.mu.Lock()
+	defer f.nr.mu.Unlock()
+	return f.nr.state().ConfigSHA256
+}
+
+// A runner's proxy whose base the runner proved takes the edit in place: one generation, and the start is
+// answered with the runner's hash, which is not the hash of the org's stored config. Catches the RunnerID skip
+// (no narrowing at all) and an expected hash the org computed (the proxy's report then never matches).
+func TestNarrowEdit_RunnerConfirmsWithItsOwnHash(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusOK, "")
+	var out egressEditResult
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.PolicyGeneration != 2 {
+		t.Fatalf("answer %s (%v), want policy_generation 2", w.Body.String(), err)
+	}
+	if _, n := f.nr.counts(); n != 1 || len(f.rr.replaced) != 0 {
+		t.Errorf("NarrowProxy ran %d times and %d proxies were replaced; want one narrowing and no replace", n, len(f.rr.replaced))
+	}
+	p := f.active(t)
+	if p.State != types.ProxyStartEnforced || p.Generation != 2 || p.ExpectedSHA256 != f.runnerHash() || !p.InPlace {
+		t.Errorf("start = %+v, want generation 2 enforced on the runner's hash %s, in place", p, f.runnerHash())
+	}
+	if p.ExpectedSHA256 == proxy.ConfigSHA256(f.stored(t)) {
+		t.Error("the start expects the hash of the org's stored config, which no runner proxy holds")
+	}
+}
+
+// A probe the runner could not prove the base of is refused before anything is written. Catches a runner run
+// that skips the base requirement.
+func TestNarrowEdit_RunnerBaseUncheckedIs409(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	f.nr.probeUnchecked = true
+	f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusConflict, reasonEgressEditUnsupported)
+	f.nothingChanged(t)
+}
+
+// A delivery whose answer lacks the runner's base proof may have reached the proxy: the start fails with no
+// hash, the generation stays current and the run is contained.
+func TestNarrowEdit_RunnerAnswerUnprovedFails(t *testing.T) {
+	for name, arrange := range map[string]func(*narrowRunner){
+		"base not checked": func(r *narrowRunner) { r.answerUnchecked = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRunnerNarrowFixture(t, runnerNarrows)
+			arrange(f.nr)
+			w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusServiceUnavailable, "")
+			if r := errorReason(w); r != reasonEgressEditUnconfirmed && r != reasonEgressEditContainmentUnresolved {
+				t.Errorf("reason = %s", r)
+			}
+			if got := f.rb.get(f.run.ID, 2); got.State != types.ProxyStartFailed || got.ExpectedSHA256 != "" {
+				t.Errorf("the edit's start = %+v, want failed with no hash", got)
+			}
+			if g := f.gens(); len(g) != 2 || g[1].Abandoned {
+				t.Errorf("generations = %+v, want the edit's still current", g)
+			}
+		})
+	}
+}
+
+// Nothing reached the proxy (the runner went offline before the send, or its cap went away): 502, the start
+// abandoned, the generation undone, and nothing stopped. Catches NotSent missing from the undo case, which reads
+// it as uncertain and ends the run.
+func TestNarrowEdit_RunnerNotSentUndoes(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	f.nr.narrowErr = fmt.Errorf("%w: %w", runner.ErrNarrowNotSent, runner.ErrRunnerOffline)
+	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusBadGateway, reasonReviveProxyKeptCurrent)
+	if want := fmt.Sprintf(narrowRunnerAwayMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
+		t.Errorf("answer %s; want %q, which names the runner", w.Body.String(), want)
+	}
+	if g := f.gens(); len(g) != 2 || !g[1].Abandoned || string(f.stored(t)) != string(f.orig) {
+		t.Errorf("generations %+v: want the edit abandoned and the config put back", g)
+	}
+	if got := f.rb.get(f.run.ID, 2).State; got != types.ProxyStartAbandoned {
+		t.Errorf("the edit's start = %s, want abandoned", got)
+	}
+	if n := f.lr.proxyStopCount(); n != 0 {
+		t.Errorf("proxy stops = %d, want none: nothing reached the proxy", n)
+	}
+}
+
+// A probe that reached nothing changes nothing and answers a 502 naming the runner, never the revive path's 409.
+// The sentence follows the cause: a runner away (offline, or its caps not known since wardynd started, when its
+// name comes from its row) or a connected runner that could not reach the proxy pod.
+func TestNarrowEdit_RunnerNotReachedAtProbeNamesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		perr    error
+		unknown bool // the runner's caps are not held, so its name comes from its row
+		want    string
+	}{
+		{"caps not known yet", fmt.Errorf("%w: no caps yet", runner.ErrNarrowNotSent), true, fmt.Sprintf(narrowRunnerAwayMsg, "row-host")},
+		{"no substrate", fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline), false, fmt.Sprintf(narrowRunnerAwayMsg, "build-k8s")},
+		{"pod not reached", fmt.Errorf("%w: read proxy pod: timeout", runner.ErrNarrowNotSent), false, fmt.Sprintf(narrowRunnerPodMsg, "build-k8s")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRunnerNarrowFixture(t, runnerNarrows)
+			if tc.unknown {
+				f.srv.runnerStreams.subsMu.Lock()
+				delete(f.srv.runnerStreams.subs, *f.run.RunnerID)
+				f.srv.runnerStreams.subsMu.Unlock()
+				f.srv.cfg.Store = &narrowRowStore{narrowStore: f.ns, row: types.Runner{ID: *f.run.RunnerID, MachineName: "row-host"}}
+			}
+			f.nr.probeErr = map[int]error{1: tc.perr}
+			w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusBadGateway, reasonReviveProxyKeptCurrent)
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("answer %s; want %q", w.Body.String(), tc.want)
+			}
+			f.nothingChanged(t)
+		})
+	}
+}
+
+// A delivery that may have reached the proxy ends the run: the start fails and the generation stays current.
+func TestNarrowEdit_RunnerUncertainEndsTheRun(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	f.nr.narrowErr = fmt.Errorf("%w: the link dropped after the send", runner.ErrNarrowUncertain)
+	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusServiceUnavailable, "")
+	if r := errorReason(w); r != reasonEgressEditUnconfirmed && r != reasonEgressEditContainmentUnresolved {
+		t.Errorf("reason = %s", r)
+	}
+	if got := f.rb.get(f.run.ID, 2).State; got != types.ProxyStartFailed {
+		t.Errorf("the edit's start = %s, want failed", got)
+	}
+	if g := f.gens(); len(g) != 2 || g[1].Abandoned {
+		t.Errorf("generations = %+v, want the edit's still current", g)
+	}
+	if n := f.lr.proxyStopCount() + f.rn.stopCount() + f.rn.endCount(); n == 0 {
+		t.Error("no proxy stop, sandbox stop or end was issued for the uncertain edit")
+	}
+}
+
+// A runner's probe gets 10 s and its delivery 25 s, a wire round trip on top of the runner's own 5 s probe and
+// 5 s + 15 s probe-then-apply; a hosted run keeps 5 s and 15 s.
+func TestNarrowEdit_RunnerBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		fixture        func(*testing.T) *narrowFixture
+		probe, deliver time.Duration
+	}{
+		{"hosted", newNarrowFixture, narrowRouteTimeout, narrowDeliverTimeout},
+		{"runner", func(t *testing.T) *narrowFixture { return newRunnerNarrowFixture(t, runnerNarrows) }, narrowRunnerRouteTimeout, narrowRunnerDeliverTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.fixture(t)
+			f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusOK, "")
+			f.nr.mu.Lock()
+			probe, deliver := f.nr.probeLeft[0], f.nr.narrowLeft[0]
+			f.nr.mu.Unlock()
+			// Each bound is the one that applies when its call had at most that long, and more than the shorter one.
+			if probe > tc.probe || probe <= tc.probe-3*time.Second {
+				t.Errorf("the routing probe had %s left, want just under %s", probe, tc.probe)
+			}
+			if deliver > tc.deliver || deliver <= tc.deliver-5*time.Second {
+				t.Errorf("the delivery had %s left, want just under %s", deliver, tc.deliver)
+			}
+		})
+	}
+}
+
+// The same, with the runner away: its stop is only queued, so the answer is containment unresolved.
+func TestNarrowEdit_RunnerAwayIsContainmentUnresolved(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	f.nr.narrowErr = fmt.Errorf("%w: the link dropped after the send", runner.ErrNarrowUncertain)
+	f.setProxyStopErr(fmt.Errorf("remote: %w", runner.ErrPendingOnRunner))
+	f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusServiceUnavailable, reasonEgressEditContainmentUnresolved)
+	if got := f.rb.get(f.run.ID, 2).State; got != types.ProxyStartFailed {
+		t.Errorf("the edit's start = %s, want failed", got)
+	}
+}
+
+// A Kubernetes runner without ProxyNarrow (older than 0.10.1) is not narrowed: the revive path refuses, and the 409
+// names the runner to update. One with the cap whose pod is too old gets the runner's own sentence. Catches the
+// EndsUnkept test that named no runner.
+func TestNarrowEdit_OlderRunnerIs409NamingIt(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerwire.Caps{MachineName: "build-k8s", EndsUnkept: true})
+	f.nr.notOffered, f.nr.reviveUnsupported = true, true
+	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusConflict, reasonEgressEditUnsupported)
+	if want := fmt.Sprintf(egressEditUpdateK8sRunnerMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
+		t.Errorf("answer %s; want %q", w.Body.String(), want)
+	}
+	if _, n := f.nr.counts(); n != 0 {
+		t.Errorf("NarrowProxy ran %d times on a runner without the cap", n)
+	}
+
+	old := newRunnerNarrowFixture(t, runnerNarrows)
+	old.nr.probeErr = map[int]error{1: runner.ErrNarrowUnsupported}
+	w = old.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusConflict, reasonEgressEditUnsupported)
+	if !strings.Contains(w.Body.String(), "a runner older than 0.10.1") {
+		t.Errorf("answer %s; want the runner variant", w.Body.String())
+	}
+	old.nothingChanged(t)
+}
+
+// TestNarrowEdit_KeepsTheRestartsDataOut on a runner's run: the edit's generation takes the run's recorded data_out.
+func TestNarrowEdit_RunnerKeepsTheRestartsDataOut(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	ctx, gs, id := context.Background(), f.rb.generationStore, f.run.ID
+	row := func(action string, data any) types.AuditEvent {
+		b, _ := json.Marshal(data)
+		return types.AuditEvent{ID: uuid.New(), RunID: &id, Action: action, Outcome: "success", Data: b}
+	}
+	if g, err := gs.AdvanceRunPolicyGeneration(ctx, id, store.NewestPolicySlot(gs.state), "d2", nil, f.jti, nil); err != nil || g != 2 {
+		t.Fatalf("restart's generation = %d, %v; want 2", g, err)
+	}
+	gs.recorded = []types.AuditEvent{
+		row("run.policy.resolve", effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{DataOut: types.TransferAllowed}}),
+		row("run.policy.generation", map[string]any{"generation": 2, "policy": types.RunPolicySpec{DataOut: types.TransferBlocked}}),
+	}
+	f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusOK, "")
+	gs.recorded = append(gs.recorded, f.audit.eventsFor(id, "run.policy.generation")...)
+	if rule, found, err := f.srv.runDataOutRule(ctx, id); err != nil || !found || rule != types.TransferBlocked {
+		t.Errorf("data_out after the edit = %q (found %v, err %v), want blocked", rule, found, err)
+	}
+}
+
+// Over three edits the stored config's base never moves: each generation is the first one's config with a longer
+// list, which is what the runner's record of its proxy's base is compared with.
+func TestNarrowEdit_RunnerStoredBaseIsStable(t *testing.T) {
+	f := newRunnerNarrowFixture(t, runnerNarrows)
+	want, err := proxy.LiveDenyBaseSHA256(f.orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, host := range []string{"a.example", "b.example", "c.example"} {
+		f.edit(t, `{"deny_hosts":["`+host+`"]}`, http.StatusOK, "")
+		got, err := proxy.LiveDenyBaseSHA256(f.stored(t))
+		if err != nil || got != want {
+			t.Errorf("edit %d: stored base %s (%v), want generation 1's %s", i+1, got, err, want)
+		}
+		if p := f.active(t); p.Generation != i+2 || p.State != types.ProxyStartEnforced {
+			t.Errorf("edit %d: start = %+v, want generation %d enforced", i+1, p, i+2)
+		}
 	}
 }

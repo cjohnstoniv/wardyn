@@ -356,9 +356,10 @@ func TestEgressEdit_UnsupportedSaysWhatToDo(t *testing.T) {
 		srv.runnerStreams.subsMu.Unlock()
 	}
 	srv := &Server{}
-	kept, unkept, unnamed := uuid.New(), uuid.New(), uuid.New()
+	kept, unkept, narrows, unnamed := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	seed(srv, kept, runnerwire.Caps{MachineName: "build-mac"})
 	seed(srv, unkept, runnerwire.Caps{MachineName: "build-mac", EndsUnkept: true})
+	seed(srv, narrows, runnerwire.Caps{MachineName: "build-mac", EndsUnkept: true, ProxyNarrow: true})
 	seed(srv, unnamed, runnerwire.Caps{})
 	held := uuid.New() // a runner id no caps were seeded for
 	for _, tc := range []struct {
@@ -368,7 +369,8 @@ func TestEgressEdit_UnsupportedSaysWhatToDo(t *testing.T) {
 	}{
 		{"container run on a runner that can keep a sandbox", types.AgentRun{RunnerID: &kept}, fmt.Sprintf(egressEditUpdateRunnerMsg, "build-mac")},
 		{"the same runner with no name", types.AgentRun{RunnerID: &unnamed}, fmt.Sprintf(egressEditUpdateRunnerMsg, "its computer")},
-		{"runner that ends unkept", types.AgentRun{RunnerID: &unkept}, egressEditUnsupportedMsg},
+		{"Kubernetes runner older than 0.10.1", types.AgentRun{RunnerID: &unkept}, fmt.Sprintf(egressEditUpdateK8sRunnerMsg, "build-mac")},
+		{"Kubernetes runner that narrows in place", types.AgentRun{RunnerID: &narrows}, egressEditUnsupportedMsg},
 		{"a VM run on that runner", types.AgentRun{RunnerID: &kept, MachineKind: types.MachineMacOSVM}, egressEditUnsupportedMsg},
 		{"no runner id", types.AgentRun{}, egressEditUnsupportedMsg},
 		{"runner with no caps held", types.AgentRun{RunnerID: &held}, egressEditUnsupportedMsg},

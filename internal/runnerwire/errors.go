@@ -28,6 +28,11 @@ const (
 	CodeFolderPassBusy       Code = "folder_pass_busy"
 	CodeProxyFenced          Code = "proxy_fenced"
 	CodeProxyGenerationNewer Code = "proxy_generation_newer"
+	CodeNarrowUnsupported    Code = "narrow_unsupported"
+	CodeNarrowRefused        Code = "narrow_refused"
+	CodeNarrowNotListening   Code = "narrow_not_listening"
+	CodeNarrowNotSent        Code = "narrow_not_sent"
+	CodeNarrowUncertain      Code = "narrow_uncertain"
 	CodeRefused              Code = "refused"
 	CodeInternal             Code = "internal"
 )
@@ -49,6 +54,11 @@ var codeSentinels = []struct {
 	{CodeFolderPassBusy, runner.ErrFolderPassBusy},
 	{CodeProxyFenced, runner.ErrProxyFenced},
 	{CodeProxyGenerationNewer, runner.ErrProxyGenerationNewer},
+	{CodeNarrowUnsupported, runner.ErrNarrowUnsupported},
+	{CodeNarrowRefused, runner.ErrNarrowRefused},
+	{CodeNarrowNotListening, runner.ErrNarrowNotListening},
+	{CodeNarrowNotSent, runner.ErrNarrowNotSent},
+	{CodeNarrowUncertain, runner.ErrNarrowUncertain},
 }
 
 // Valid reports whether c is in the closed list.

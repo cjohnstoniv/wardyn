@@ -36,11 +36,12 @@ func (o *Orchestrator) ProxyNarrowState(ctx context.Context, ref string) (runner
 
 // NarrowProxy forwards a narrowing of ref's proxy to its substrate
 // (runner.ProxyNarrower). A substrate that does not narrow in place answers
-// ErrNarrowNotOffered with no call.
+// ErrNarrowNotOffered with no call, and a ref no substrate can be found for
+// answers ErrNarrowNotSent.
 func (o *Orchestrator) NarrowProxy(ctx context.Context, ref string, denies []string) (runner.ProxyNarrowState, error) {
 	s, err := o.subForRef(ctx, ref)
 	if err != nil {
-		return runner.ProxyNarrowState{}, err
+		return runner.ProxyNarrowState{}, fmt.Errorf("%w: %w", runner.ErrNarrowNotSent, err)
 	}
 	n, ok := s.(runner.ProxyNarrower)
 	if !ok {
