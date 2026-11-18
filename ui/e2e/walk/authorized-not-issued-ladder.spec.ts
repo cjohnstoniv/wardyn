@@ -31,10 +31,12 @@ const DEMO_ID = "authorized-not-issued";
 const SECRET_NAME = "wardyn-demo-key";
 const GIT_CMD = "git ls-remote https://example.com/wardyn-demo.git";
 // The demo's ttl_seconds is 60 and the proxy reuses the minted token until 30 s before it ends (git_broker.go:84),
-// so a second ask 31 s after the mint reaches the broker, which refuses it as already_minted.
-const AFTER_TTL_MS = 31_000;
+// so a second ask 35 s after the mint reaches the broker, which refuses it as already_minted. The 5 s over the
+// 30 s margin keeps a second or so of clock skew between this host and the cluster out of the reuse window.
+const AFTER_TTL_MS = 35_000;
 // The rule_source the proxy stamps on the deny it writes when the token cannot be minted (pat_broker.go:38, :200-203).
-// A reused token that fails at the dial or the vet writes other rules, which must not pass for a spent mint.
+// The vet arm writes the same rule (pat_broker.go:211, :251-259), so a reused token that fails the vet is not told
+// apart by it; a reused token that fails the dial writes another rule (builtin:dial-failed), which this excludes.
 const MINT_DENIED_RULE = "brokered:git-pat:denied";
 
 type AuditRow = { action: string; outcome: string; time: string; target?: string; data?: Record<string, unknown> };
@@ -62,8 +64,8 @@ async function typeLine(page: Page, line: string): Promise<void> {
 
 test("an approved git token is minted once at the proxy, never handed to the sandbox, and refused a second time", async ({ page }) => {
   // One budget for the whole ladder: launching the sandbox (SANDBOX_UP), up to 120 s of git held for the person's
-  // decision, the wait until 31 s after the mint, plus sign-in, the terminal and the audit polls. Their own timeouts
-  // add up to about 450 s beyond SANDBOX_UP, so this sets 10 minutes beyond it.
+  // decision, the wait until 35 s after the mint, plus sign-in, the terminal and the audit polls. Their own timeouts
+  // add up to about 515 s beyond SANDBOX_UP, so this sets 10 minutes (600 s) beyond it.
   test.setTimeout(SANDBOX_UP + 10 * 60_000);
   expect(ADMIN_TOKEN, "WARDYN_WALK_ADMIN_TOKEN is unset: it stores the demo secret").not.toBe("");
 
@@ -76,15 +78,19 @@ test("an approved git token is minted once at the proxy, never handed to the san
   });
   await walkSignIn(page, ADMIN_EMAIL);
 
-  // 1. Store the secret the card needs. Any value works; the sandbox never sees it. A secret already stored
-  // (a film take, a hand setup) is left in place at the end.
+  // 1. The secret the card needs. A secret already stored (a film take, a hand setup) is used as it is: not
+  // written over, and left in place at the end. Any value works for one this walk stores; the sandbox never sees it.
+  // An unreadable listing fails the test here, before any write or delete on a state that is not known.
   const listed = await page.request.get("/api/v1/secrets", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } });
-  const secretExisted = listed.ok() && ((await listed.json()) as { names?: string[] }).names?.includes(SECRET_NAME) === true;
-  const put = await page.request.put(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, {
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
-    data: { value: "walk-demo-key-value" },
-  });
-  expect(put.ok(), `PUT /secrets: ${await put.text()}`).toBeTruthy();
+  expect(listed.ok(), `GET /secrets: ${listed.status()} ${await listed.text()}`).toBeTruthy();
+  const secretExisted = ((await listed.json()) as { names?: string[] }).names?.includes(SECRET_NAME) === true;
+  if (!secretExisted) {
+    const put = await page.request.put(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
+      data: { value: "walk-demo-key-value" },
+    });
+    expect(put.ok(), `PUT /secrets: ${await put.text()}`).toBeTruthy();
+  }
 
   let runId = "";
   try {
@@ -136,8 +142,14 @@ test("an approved git token is minted once at the proxy, never handed to the san
     expect((await auditFor(page, runId, "credential.mint")).filter((e) => e.outcome === "success")).toHaveLength(1);
   } finally {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-    // End the run so the sandbox does not idle out its lease, then drop the secret this walk stored.
-    if (runId) await page.request.post(`/api/v1/runs/${encodeURIComponent(runId)}/kill`, { headers: auth }).catch(() => {});
-    if (!secretExisted) await page.request.delete(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, { headers: auth }).catch(() => {});
+    // End the run so the sandbox does not idle out its lease, then drop the secret this walk stored. A failed
+    // cleanup is logged, never thrown: it must not mask the result of the ladder itself.
+    const cleanup = async (what: string, call: Promise<{ ok(): boolean; status(): number }>) => {
+      const res = await call.catch((e: unknown) => String(e));
+      if (typeof res === "string") console.warn(`cleanup: ${what} failed: ${res}`);
+      else if (!res.ok()) console.warn(`cleanup: ${what} answered ${res.status()}`);
+    };
+    if (runId) await cleanup("kill the run", page.request.post(`/api/v1/runs/${encodeURIComponent(runId)}/kill`, { headers: auth }));
+    if (!secretExisted) await cleanup("delete the secret", page.request.delete(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, { headers: auth }));
   }
 });
