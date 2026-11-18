@@ -174,7 +174,7 @@ func (s *Server) refuseLocalModeAttach(w http.ResponseWriter, r *http.Request) b
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Local-mode loopback refusals: before the upgrade, the ticket redeem and the origin check.
+	// Local-mode loopback refusals: before the origin check and the upgrade.
 	if s.refuseLocalModeAttach(w, r) {
 		return
 	}
