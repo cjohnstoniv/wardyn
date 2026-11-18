@@ -1356,7 +1356,7 @@ The rest reach the wire only through
 | `support_request_invalid` | `POST /runs/{id}/support` and `.../accept` (400): `doors` is empty, repeats a door, names one of the six doors wrongly or (on accept) one the helper did not ask for; `reason` is empty or over 500 characters; or `minutes` is not 15, 30 or 60. `field` names the part. |
 | `support_unavailable` | The support routes and a helper's entry (503): this deployment keeps no support grants, or the grant could not be read, so the entry is refused. |
 | `support_door_not_granted` | A helper's entry (403): the run's owner did not tick the door asked for. |
-| `support_grant_ended` | A helper's entry (403): the help grant it names has ended. |
+| `support_grant_ended` | A helper's entry (403): the help grant it names has ended, or it names none and the caller's help on this run has ended. |
 | `support_helper_decision` | `POST /approvals/{id}/{approve,deny}` (403): the caller helped in this run, so they decide none of its holds. |
 | `user_view_type_deleted` | An admin viewing through a user type that has since been deleted. `admin_view` (below) is the launch-door row this same cause answers with on `POST /runs`/`/runs/preflight`/`/runs/policy-preview`. |
 | `admin_view` | An admin in the user view launched a run after the type the view looks through was deleted — the launch-door twin of `user_view_type_deleted`; the underlying cause is audited under that reason, this one is not audited on its own. |

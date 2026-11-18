@@ -714,6 +714,7 @@ func TestRefuseSupport(t *testing.T) {
 	}{
 		{supportDoorRefused, http.StatusForbidden, string(authz.ReasonSupportDoorNotGranted), true},
 		{supportEnded, http.StatusForbidden, string(authz.ReasonSupportGrantEnded), true},
+		{supportEndedUnnamed, http.StatusForbidden, string(authz.ReasonSupportGrantEnded), true},
 		{supportOff, http.StatusConflict, reasonSupportDisabled, false},
 		{supportUnavailable, http.StatusServiceUnavailable, reasonSupportUnavailable, false},
 		{supportNone, 0, "", false},
