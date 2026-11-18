@@ -49,6 +49,9 @@ func (k MachineKind) IsVM() bool { return k == MachineLinuxVM || k == MachineMac
 // IsMacOSVM reports whether the kind is a macOS virtual machine.
 func (k MachineKind) IsMacOSVM() bool { return k == MachineMacOSVM }
 
+// RunStatusDetailMacPrepRunning is the status detail of an interactive macOS VM run while its prep runs.
+const RunStatusDetailMacPrepRunning = "prep: running"
+
 // VMMachine is the virtual hardware a VM sandbox was started with, recorded on its run so a later
 // move or restore can check the target can give the same machine. The runner reports what it
 // actually started; the CPU model is started with QEMU's enforce flag, so a host that lacks one of
