@@ -3003,7 +3003,8 @@ These risks are **not closed by v1 Wardyn**.
     - The destination comes from the grant, never the request: another host or port is refused `via_org_destination_refused`, and the organisation's internal hosts lift only for a host a grant names.
     - An engine built from the run's stored config re-runs the proxy's checks as authoritative: allow and deny lists, `AllowsInjection` pins, `stripSandboxCredentials`, the IP guard, the git broker's repository, branch and push rules, inspection, caps and holds.
     - An idle or offline release retires that engine's generation, and a retired generation serves no stream (`admitViaOrg`).
-    - **What stays open.** The developer can use the credential through any request those rules admit while the run lives, and an echoing host returns the value (§5.1a). For Azure DevOps, the runner's operator, an organisation cluster's operators included, can make requests within the run's capabilities while the run lives; the token never leaves the server. The stream and byte limits hold per server replica and reset on restart.
+    - **What stays open.** The developer can use the credential through any request those rules admit while the run lives, and an echoing host returns the value (§5.1a). The stream and byte limits hold per server replica and reset on restart.
+    - For Azure DevOps, the runner's operator, an organisation cluster's operators included, can make requests within the run's capabilities while the run lives; the token never leaves the server.
 
 76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
     <details><summary>Details</summary>
