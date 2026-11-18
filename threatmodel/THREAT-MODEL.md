@@ -3260,7 +3260,7 @@ These risks are **not closed by v1 Wardyn**.
     </details>
 
 97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
-    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - The cap is 32 `runner.event.refuse` rows per runner per hour, counted in the database across every replica and restart, then one `suppressed` row.
     - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
     - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
     - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.

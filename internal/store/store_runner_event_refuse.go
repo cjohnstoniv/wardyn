@@ -26,9 +26,6 @@ type RunnerEventRefusal struct {
 	Spool                *RunnerEventRefusalSpool // a spool record's place: the run's cursor moves past it when it is next
 	PayloadSHA256        string
 	PayloadBytes         int
-	Row                  bool                       // write the runner.event.refuse row (false: suppressed by the caller's bound)
-	Marker               bool                       // the row is the last of its window: it carries suppressed: true
-	Summary              *RunnerEventRefusalSummary // a previous window's summary row, when the caller owes one
 }
 
 // RunnerEventRefusalSpool is where a refused spool record says it sits in its run's stream, in the runner's word.
@@ -38,31 +35,41 @@ type RunnerEventRefusalSpool struct {
 	Hash           string
 }
 
-// RunnerEventRefusalSummary is how many refusals a previous window left without a row of their own.
-type RunnerEventRefusalSummary struct {
-	Suppressed             int
-	WindowStart, WindowEnd time.Time
+// runnerEventRefuseRows runner.event.refuse rows are written per runner per runnerEventRefuseWindow, whichever
+// replica takes its events; the next carries suppressed, and the rest of the window is counted for a summary row,
+// written by the runner's first refusal of a later window. A window opens at the first refusal after the last one
+// ended, on the database's clock.
+const (
+	runnerEventRefuseRows   = 32
+	runnerEventRefuseWindow = time.Hour
+)
+
+// refusalSummary is how many refusals a previous window left without a row of their own.
+type refusalSummary struct {
+	suppressed int
+	start, end time.Time
 }
 
 // RefuseRunnerEvent records, in one READ COMMITTED transaction, an event the organisation refused for good, before
 // the event is acknowledged (DR-0436): an action_result's open action of this runner is settled as refused with its
 // runner.action.refuse receipt (reason org_refused:<code>), a spool record next in its run's stream moves the run's
-// cursor past it, then the summary row the caller owes, then the event's own runner.event.refuse row unless the
-// caller's bound suppressed it. It takes the shared order runner, run, action (lockRunnerActionRun), the spool cursor
-// (as IngestRunnerDecision takes it after the run), then the audit chain. It reports whether it settled an action;
-// with nothing to write, settle or move it returns (false, nil) without a transaction.
+// cursor past it, then the summary row a previous window owes, then the event's own runner.event.refuse row unless
+// the runner's window suppressed it (refusalWindowTx). It takes the runner's refusal window first, then the shared
+// order runner, run, action (lockRunnerActionRun), the spool cursor (as IngestRunnerDecision takes it after the run),
+// then the audit chain. It reports whether it settled an action.
 func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
 	if prepare == nil {
 		return false, errors.New("store: refuse runner event: no audit policy")
-	}
-	if r.ActionID == nil && r.Spool == nil && !r.Row && r.Summary == nil {
-		return false, nil
 	}
 	tx, err := beginRunnerActionTx(ctx, s)
 	if err != nil {
 		return false, err
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
+	row, marker, summary, err := refusalWindowTx(ctx, tx, runnerID)
+	if err != nil {
+		return false, err
+	}
 	settled := false
 	if r.ActionID != nil {
 		if settled, err = s.settleRefusedActionTx(ctx, tx, runnerID, *r.ActionID, "org_refused:"+r.Code, prepare); err != nil {
@@ -74,12 +81,68 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 			return false, err
 		}
 	}
-	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+	var rows []types.AuditEvent
+	if row || summary != nil {
+		if rows, err = writeRefusalRowsTx(ctx, tx, runnerID, r, row, marker, summary, prepare); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
+	}
+	if s.SIEM != nil {
+		for _, ev := range rows {
+			_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+		}
+	}
+	return settled, nil
+}
+
+// refusalWindowTx counts one refusal of runnerID in its window and says what the refusal writes: its own row (the
+// last of the window marked suppressed), and the summary a previous window that suppressed rows still owes. The
+// window row is locked for the rest of the transaction, so two replicas refusing for one runner at once count one
+// after the other and the rows written always match the count. Only a refusal takes this lock, and first, so it
+// orders before every other lock the refusal takes. A runner keeps one row, deleted with the runner.
+func refusalWindowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (row, marker bool, summary *refusalSummary, err error) {
+	if _, err := tx.Exec(ctx, `INSERT INTO runner_event_refusal_windows (runner_id, window_start) VALUES ($1, clock_timestamp())
+ ON CONFLICT (runner_id) DO NOTHING`, runnerID); err != nil {
+		return false, false, nil, fmt.Errorf("store: open refusal window: %w", err)
+	}
+	var start, now time.Time
+	var written, suppressed int
+	if err := tx.QueryRow(ctx, `SELECT window_start, written, suppressed, clock_timestamp() FROM runner_event_refusal_windows
+ WHERE runner_id = $1 FOR UPDATE`, runnerID).Scan(&start, &written, &suppressed, &now); err != nil {
+		return false, false, nil, fmt.Errorf("store: lock refusal window: %w", err)
+	}
+	if now.Sub(start) >= runnerEventRefuseWindow {
+		if suppressed > 0 {
+			summary = &refusalSummary{suppressed: suppressed, start: start, end: start.Add(runnerEventRefuseWindow)}
+		}
+		start, written, suppressed = now, 0, 0
+	}
+	row, marker = written <= runnerEventRefuseRows, written == runnerEventRefuseRows
+	if row {
+		written++
+	} else {
+		suppressed++
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runner_event_refusal_windows SET window_start = $2, written = $3, suppressed = $4 WHERE runner_id = $1`,
+		runnerID, start, written, suppressed); err != nil {
+		return false, false, nil, fmt.Errorf("store: count refusal: %w", err)
+	}
+	return row, marker, summary, nil
+}
+
+// writeRefusalRowsTx writes the summary row a previous window owes, then the refusal's own row when its window has
+// room, under the audit chain lock, and returns them for the audit sinks.
+func writeRefusalRowsTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, r RunnerEventRefusal, row, marker bool, summary *refusalSummary,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) ([]types.AuditEvent, error) {
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return nil, err
 	}
 	target, runID, claimed, err := refusalTargetTx(ctx, tx, runnerID, r.RunID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	var rows []types.AuditEvent
 	write := func(fields map[string]any) error {
@@ -102,34 +165,26 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		rows = append(rows, ev)
 		return nil
 	}
-	if r.Summary != nil {
-		if err := write(map[string]any{"suppressed_count": r.Summary.Suppressed, "window_start": r.Summary.WindowStart,
-			"window_end": r.Summary.WindowEnd}); err != nil {
-			return false, err
+	if summary != nil {
+		if err := write(map[string]any{"suppressed_count": summary.suppressed, "window_start": summary.start,
+			"window_end": summary.end}); err != nil {
+			return nil, err
 		}
 	}
-	if r.Row {
+	if row {
 		fields := map[string]any{"kind": r.Kind, "code": r.Code, "sentinel": r.Sentinel, "payload_sha256": r.PayloadSHA256,
 			"payload_bytes": r.PayloadBytes}
-		if r.Marker {
+		if marker {
 			fields["suppressed"] = true
 		}
 		if claimed != "" {
 			fields["claimed_run_id"] = claimed
 		}
 		if err := write(fields); err != nil {
-			return false, err
+			return nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-	if s.SIEM != nil {
-		for _, ev := range rows {
-			_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
-		}
-	}
-	return settled, nil
+	return rows, nil
 }
 
 // advanceRefusedSpoolCursorTx moves a run's spool cursor past a refused record. The runner acknowledges a refused
