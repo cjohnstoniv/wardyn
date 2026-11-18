@@ -286,7 +286,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
 # internal/api AND test/apie2e. Parallel packages therefore race each other
-# through the DB (seen: LegacyArtifactOverridesFold vs the apie2e integrations
+# through the DB (seen: a site-config test vs the apie2e integrations
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."

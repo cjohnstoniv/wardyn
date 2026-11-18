@@ -1,12 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//lint:file-ignore SA1019 TestFoldCompat_ArtifactOverridesGoldenBehavior
-// deliberately constructs and reads the deprecated SiteConfig.ArtifactOverrides
-// to prove foldLegacyArtifactOverrides produces byte-identical behavior to the
-// pre-refactor shape — see internal/api/site_config.go's own file-scope ignore
-// for why the field still exists.
-
 package api
 
 import (
@@ -301,100 +295,6 @@ func TestArtifactRepoCheck(t *testing.T) {
 		if !strings.Contains(c.Detail, eco) {
 			t.Errorf("detail should mention %q; got %q", eco, c.Detail)
 		}
-	}
-}
-
-// TestFoldCompat_ArtifactOverridesGoldenBehavior is the fold-compat golden the
-// Wave A gate requires: an existing ecosystem-keyed config, folded into
-// EgressRedirects (foldLegacyArtifactOverrides — the same fold PUT /site-config
-// applies to a legacy body) must produce dispatch-relevant output IDENTICAL to
-// the documented pre-refactor ArtifactOverrides behavior: the same emitted
-// config files/env, the same egress substitution (including an ecosystem —
-// go, pointed at ITS OWN host — that shares no host with anything else, so its
-// drop/add is independently verifiable), and the same token injection for a
-// HOST SHARED across ecosystems (artifactory.corp, fronting both npm+pip) —
-// proving the "first sighted wins" dedup determinism survives the fold (npm
-// sorts before pip, so npm's token wins either way).
-func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
-	legacy := types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-		"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
-		"pip": {BaseURL: "https://artifactory.corp/api/pip/pip-remote/"},
-		"go":  {BaseURL: "https://go-mirror.corp/repo"},
-	}}
-
-	folded := legacy
-	if err := foldLegacyArtifactOverrides(&folded); err != nil {
-		t.Fatalf("fold: %v", err)
-	}
-	if len(folded.ArtifactOverrides) != 0 {
-		t.Fatalf("fold left ArtifactOverrides non-empty: %+v", folded.ArtifactOverrides)
-	}
-	if len(folded.EgressRedirects) != 3 {
-		t.Fatalf("fold produced %d redirects, want 3: %+v", len(folded.EgressRedirects), folded.EgressRedirects)
-	}
-
-	// Same emitted config files/env the old BaseURL-keyed map produced —
-	// EmitArtifactConfig itself is unchanged, only its input's SOURCE moved
-	// from ArtifactOverrides to the Ecosystem-tier of EgressRedirects.
-	wantBases := map[string]string{
-		"npm": "https://artifactory.corp/api/npm/npm-remote/",
-		"pip": "https://artifactory.corp/api/pip/pip-remote/",
-		"go":  "https://go-mirror.corp/repo",
-	}
-	wantFiles, wantEnv := hostrules.EmitArtifactConfig(wantBases, false)
-	gotFiles, gotEnv := hostrules.EmitArtifactConfig(artifactBaseURLs(folded), artifactGoSumDBOff(folded))
-	if !reflect.DeepEqual(wantFiles, gotFiles) {
-		t.Errorf("emitted config files diverged after fold:\n want: %v\n got:  %v", wantFiles, gotFiles)
-	}
-	if !reflect.DeepEqual(wantEnv, gotEnv) {
-		t.Errorf("emitted env diverged after fold:\n want: %v\n got:  %v", wantEnv, gotEnv)
-	}
-
-	// Same egress substitution: npm+pip+go are ALL configured, so ALL their
-	// public hosts drop (the WHOLE per-ecosystem table, e.g. pip's file-CDN
-	// host too); github.com is unrelated and stays; artifactory.corp is added
-	// exactly once despite npm+pip sharing it, and go-mirror.corp once for go.
-	in := []string{"registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "proxy.golang.org", "sum.golang.org", "github.com"}
-	got := substituteArtifactEgress(in, folded)
-	gotSet := map[string]bool{}
-	for _, d := range got {
-		gotSet[d] = true
-	}
-	for _, dropped := range []string{"registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "proxy.golang.org", "sum.golang.org"} {
-		if gotSet[dropped] {
-			t.Errorf("post-fold substitution: %q should be dropped (its ecosystem is configured); got %v", dropped, got)
-		}
-	}
-	if !gotSet["github.com"] {
-		t.Errorf("post-fold substitution: unrelated host github.com should be kept; got %v", got)
-	}
-	if !gotSet["go-mirror.corp:443"] {
-		t.Errorf("post-fold substitution: go-mirror.corp:443 should have been added; got %v", got)
-	}
-	corpCount := 0
-	for _, d := range got {
-		if d == "artifactory.corp:443" {
-			corpCount++
-		}
-	}
-	if corpCount != 1 {
-		t.Errorf("post-fold substitution: artifactory.corp should appear exactly once, got %d in %v", corpCount, got)
-	}
-
-	// Same token injection for the shared host: planArtifactRedirect dedupes by
-	// TO-host in EgressRedirects' STORED order (its seenHost loop), and the fold
-	// emits ecosystems in key order — so npm (sorting before pip) is the row
-	// whose token artifactory.corp injects, exactly the pre-refactor
-	// map-iteration code's "first alphabetically" winner.
-	first := ""
-	for _, red := range folded.EgressRedirects {
-		if strings.EqualFold(hostrules.HostOf(red.To), "artifactory.corp") {
-			first = red.TokenSecretRef
-			break
-		}
-	}
-	if first != "npm-token" {
-		t.Errorf("post-fold shared-host token = %q, want npm-token (first ecosystem alphabetically)", first)
 	}
 }
 

@@ -49,7 +49,7 @@ func HostOf(rawURL string) string {
 }
 
 // ecosystemPublicHosts maps an artifact ecosystem key (matching
-// types.SiteConfig.ArtifactOverrides) to the public-registry hosts a corporate redirect
+// types.EgressRedirect.Ecosystem) to the public-registry hosts a corporate redirect
 // replaces. maven maps to Central's mirror hosts; plugins.gradle.org is a separate concern
 // a mirror override doesn't touch.
 var ecosystemPublicHosts = map[string][]string{

@@ -110,7 +110,7 @@ func TestUntestedClientMethods_Table(t *testing.T) {
 					checkAuth(t, r)
 					var body map[string]string
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					if body["task_key"] != "onboard" {
+					if body["name"] != "onboard" {
 						t.Errorf("unexpected body: %v", body)
 					}
 					writeJSON(w, http.StatusAccepted, client.RecordTaskResult{

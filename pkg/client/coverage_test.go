@@ -35,7 +35,6 @@ var (
 	_ client.WorkspaceLLMCred
 	_ client.BaseImageEntry
 	_ client.SiteConfig
-	_ map[string]client.ArtifactOverride
 	_ []client.EgressRedirect
 	_ client.ModelProviders
 	_ client.ModelProvidersRead

@@ -516,7 +516,7 @@ func (s *Server) routes() chi.Router {
 			// integration credential refs included" — and the GET returns that
 			// same whole document, refs included. UpstreamProxySecretRef and
 			// every integrations[].secrets[].secret_name are credential REFS;
-			// UpstreamProxyURL, ScmHosts, ArtifactOverrides and EgressRedirects
+			// UpstreamProxyURL, ScmHosts and EgressRedirects
 			// are the operator's internal topology.
 			//
 			// The console degrades rather than breaks: both callers already
