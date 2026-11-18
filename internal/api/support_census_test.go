@@ -19,9 +19,9 @@ import (
 // door that may, the second every function that must never. A new door, or a door moved, needs a design change
 // (DESIGN-support-sessions.md section 2), not an edit of these lists.
 
-// supportCallList is every function that may mention supportMayEnter, keyed by receiver type and name
-// ("Server.sshAuth"), with the door it guards. A mention is a call or a method value, so taking the arm as a value
-// and calling it later counts as a caller.
+// supportCallList is every function that may mention supportMayEnter, and must call it, keyed by receiver type
+// and name ("Server.sshAuth"), with the door it guards. A mention is a call or a method value, so taking the arm
+// as a value and calling it later counts as a caller.
 var supportCallList = map[string]string{
 	"Server.handleAttachTicket":       "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
 	"Server.refuseAttachEntry":        "the terminal's WebSocket entry, its ticket branch only",
@@ -176,8 +176,9 @@ func mentionsArm(nodes []ast.Node) bool {
 }
 
 // TestSupportCensus_OnlyTheListedDoorsCallTheArm: every unit that mentions supportMayEnter is inside
-// supportCallList, and every key on it does mention it. The scan holds each func declaration by receiver and
-// name and each package-level var, so a call added to any function sharing a bare name with another is seen.
+// supportCallList, and every key on it calls it: a bare mention there (`_ = s.supportMayEnter`) asks nothing. The
+// scan holds each func declaration by receiver and name and each package-level var, so a call added to any
+// function sharing a bare name with another is seen.
 func TestSupportCensus_OnlyTheListedDoorsCallTheArm(t *testing.T) {
 	units := censusUnits(t)
 	for _, key := range sortedKeys(units) {
@@ -191,8 +192,8 @@ func TestSupportCensus_OnlyTheListedDoorsCallTheArm(t *testing.T) {
 			t.Errorf("supportCallList names %s, which no longer exists: a rename or a move is a design change too. %s", key, supportCensusEdit)
 			continue
 		}
-		if !mentionsArm(nodes) {
-			t.Errorf("%s is on supportCallList and does not mention supportMayEnter: a door that stopped asking the arm lets a helper in or out unchecked. %s", key, supportCensusEdit)
+		if !slices.ContainsFunc(nodes, func(n ast.Node) bool { return callsAny(n, "supportMayEnter") }) {
+			t.Errorf("%s is on supportCallList and does not call supportMayEnter: a door that stopped asking the arm lets a helper in or out unchecked. %s", key, supportCensusEdit)
 		}
 	}
 }
@@ -225,7 +226,8 @@ func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
 }
 
 // TestSupportCensus_NeverListedFunctionsStayOut: every function on supportNeverList exists (a rename fails here
-// rather than silently leaving the door unwatched) and mentions neither supportMayEnter nor calls any call-list function.
+// rather than silently leaving the door unwatched) and mentions neither supportMayEnter nor any call-list function,
+// so a door taken as a method value and called later counts as reaching it.
 func TestSupportCensus_NeverListedFunctionsStayOut(t *testing.T) {
 	units := censusUnits(t)
 	var doors []string
@@ -242,8 +244,8 @@ func TestSupportCensus_NeverListedFunctionsStayOut(t *testing.T) {
 			t.Errorf("%s mentions supportMayEnter but must never (%s). %s", key, supportNeverList[key], supportCensusEdit)
 		}
 		for _, door := range doors {
-			if slices.ContainsFunc(nodes, func(n ast.Node) bool { return callsAny(n, door) }) {
-				t.Errorf("%s calls %s, a door of the support arm, but must never (%s). %s", key, door, supportNeverList[key], supportCensusEdit)
+			if slices.ContainsFunc(nodes, func(n ast.Node) bool { return len(mentionSites(n, door)) > 0 }) {
+				t.Errorf("%s mentions %s, a door of the support arm, but must never (%s). %s", key, door, supportNeverList[key], supportCensusEdit)
 			}
 		}
 	}
