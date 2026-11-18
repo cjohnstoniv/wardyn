@@ -225,10 +225,18 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	}
 	// What a helper gave as a reason and the emails a revoke may name, on the grants the person asked for or
 	// owns. A blank email only weakens an email-only revoke check on a grant that lasts an hour at most.
-	if _, err := s.Pool.Exec(ctx, `UPDATE run_support_grants SET reason = '', helper_email = '', owner_email = ''
-		WHERE (reason <> '' OR helper_email <> '' OR owner_email <> '')
-		  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`, createdBy); err != nil {
-		return 0, fmt.Errorf("store: blank a person's support grants: %w", err)
+	// Skipped for a role without UPDATE on the table (a split-role app role the grant missed): it can have
+	// written no row, and the erasure must not fail on it.
+	var canBlank bool
+	if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_support_grants', 'UPDATE')`).Scan(&canBlank); err != nil {
+		return 0, fmt.Errorf("store: read the support grant privilege: %w", err)
+	}
+	if canBlank {
+		if _, err := s.Pool.Exec(ctx, `UPDATE run_support_grants SET reason = '', helper_email = '', owner_email = ''
+			WHERE (reason <> '' OR helper_email <> '' OR owner_email <> '')
+			  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`, createdBy); err != nil {
+			return 0, fmt.Errorf("store: blank a person's support grants: %w", err)
+		}
 	}
 	return n, nil
 }

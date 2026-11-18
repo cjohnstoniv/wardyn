@@ -114,13 +114,16 @@ func TestPG_SupportGrants(t *testing.T) {
 		if _, err := f.pg.RequestSupportGrant(f.ctx, store.SupportGrant{RunID: r.ID, Helper: "helper-b", Reason: "x", DoorsAsked: []string{"ssh"}}); !errors.Is(err, store.ErrSupportGrantOpen) {
 			t.Errorf("a second request on an open run = %v, want ErrSupportGrantOpen", err)
 		}
-		other := f.run("")
+		other := f.run(r.CreatedBy) // the same owner, so the case below pins run_id and not the owner join
 		for name, try := range map[string]func() (store.SupportGrant, error){
 			"a person who is not the owner": func() (store.SupportGrant, error) {
 				return f.pg.AcceptSupportGrant(f.ctx, r.ID, g.ID, "someone-else", "", []string{"ssh"}, 30, 1)
 			},
 			"a door that was not asked": func() (store.SupportGrant, error) {
 				return f.pg.AcceptSupportGrant(f.ctx, r.ID, g.ID, r.CreatedBy, "", []string{"desktop"}, 30, 1)
+			},
+			"no doors": func() (store.SupportGrant, error) {
+				return f.pg.AcceptSupportGrant(f.ctx, r.ID, g.ID, r.CreatedBy, "", []string{}, 30, 1)
 			},
 			"another run's id": func() (store.SupportGrant, error) {
 				return f.pg.AcceptSupportGrant(f.ctx, other.ID, g.ID, other.CreatedBy, "", []string{"ssh"}, 30, 1)
@@ -163,6 +166,9 @@ func TestPG_SupportGrants(t *testing.T) {
 			_, err := f.pg.AcceptSupportGrant(f.ctx, c.r.ID, g.ID, c.r.CreatedBy, "", []string{"ssh"}, 15, 1)
 			if (err == nil) != c.want || (err != nil && !errors.Is(err, store.ErrNotFound)) {
 				t.Errorf("accept of a request %s old on a run (lost %v, stopped %v) = %v; want accepted %v", c.age, c.r.ID == lost.ID, c.r.ID == stopped.ID, err, c.want)
+			}
+			if !c.want && f.read(g.ID).EndedAt != nil {
+				t.Errorf("a refused accept of a request %s old ended the grant; it must stay open", c.age)
 			}
 		}
 	})
@@ -209,6 +215,7 @@ func TestPG_SupportGrants(t *testing.T) {
 		if got, found, live, err := f.pg.SupportGrantLive(f.ctx, r.ID, "helper-a", g.ID, false); err != nil || !found || !live || got.LastSeenAt != nil {
 			t.Errorf("just before expiry: found %v live %v seen %v err %v; want live and unstamped", found, live, got.LastSeenAt, err)
 		}
+		f.exec(`UPDATE run_support_grants SET expires_at = now() + interval '1 hour' WHERE id = $1`, g.ID) // a slow database cannot cross the 3 seconds below
 		// Stamped once, left alone inside 30 seconds, moved after.
 		first, _, _, _ := f.pg.SupportGrantLive(f.ctx, r.ID, "helper-a", uuid.Nil, true)
 		if first.LastSeenAt == nil {

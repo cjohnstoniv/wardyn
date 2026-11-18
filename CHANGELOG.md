@@ -13,27 +13,27 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- An admin can ask to help inside someone else's running run, and the run's owner decides which doors the helper may use and for 15, 30 or 60 minutes. The feature is off unless `WARDYN_SUPPORT_SESSIONS` is on. Migration `0293_run_support_grants` adds the grant record. <!-- WORDING PENDING -->
+- A super admin can ask to help inside someone else's running run, and the run's owner decides which doors the helper may use and for 15, 30 or 60 minutes. The feature is off unless `WARDYN_SUPPORT_SESSIONS` is on. Migration `0293_run_support_grants` adds the grant record. <!-- WORDING PENDING -->
 
 ### Fixed
 
 - A workspace or invitation write that matched no row, when the read that follows to explain the miss also fails for another reason, is no longer reported as a missing workspace or invitation. The `workspace.requirement.write`, `workspace.egress.approve` and `workspace.egress.deny` audit rows say `Store error`, not `Workspace not found`, and the server log keeps the store's own error. A workspace edit, an egress list saved with `If-Match`, and `DELETE /api/v1/invitations/{id}` answer `500` `internal_error`, which a retry may clear, where they answered `404`.
 - The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
 - A run's `data_out` rule is now kept on the run itself, so audit retention removing the run's policy records no longer reopens output and replay reads, web apps, SSH (file transfer, commands, port forwards and `wardyn sync` down) or computer-folder bring-back. Migration `0292_agent_runs_data_out` fills it on existing runs from the policy records retention has kept. An existing run left with no policy record reads as `blocked` when it was created before the newest audit record retention removed, or within a day after it, and is not still queued or starting with no sandbox: only a security admin reads its output and a super admin replays it. Any other run with no policy record, one that has not started among them, reads as `allowed` as before.
+- The organisation now writes at most 32 `runner.event.refuse` rows an hour for a runner whose events it refuses for good, then one row marked `suppressed`, counted across all replicas and restarts, and the summary of the rest is written at the runner's next refusal however long it stays quiet. Before, each replica kept its own count, a restart reset it, and a summary owed for more than a day was dropped.
 
 ### Before you upgrade
 
 - Existing runs left with no policy record that were created before the newest audit record retention removed, or within a day after it, now read their `data_out` as `blocked`, unless they are still queued or starting with no sandbox: only a security admin can read their output and only a super admin replay them, and their SSH file transfer, commands, port forwards, `wardyn sync` down, web apps and computer-folder bring-back are refused. Runs that failed or were killed before they started are among them; they hold no output. A run still running is among them only when its policy record never reached the audit log, and it then does not copy its computer folder back when it ends. On an install whose retention has removed nothing, no run is set to `blocked`.
 - Stop every server of an older release before the first server of this release starts. An older server left running after migration `0292` keeps no `data_out` on the runs it starts or revives, so retention can later reopen their content. The Helm chart already stops the old servers first; this is for servers you run by hand.
 - Migration `0292` reads the policy record of every run the audit log still holds and fills each run's `data_out` from it, so an install with many runs in its retained audit history can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes. A timeout rolls it back and the next boot starts it again; raise the timeout before you upgrade (see "Before you upgrade: a large recording store" in docs/OPERATIONS.md for how).
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants `SELECT, INSERT, UPDATE, DELETE` on
-  `run_support_grants` to every role that was granted `DELETE` on `run_attach_leases`, other than that table's owner.
-  If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations, grant it the same on `run_support_grants` as soon as the migration has run.
-  Until then no support request or answer is recorded, and erasing a person's run tasks fails. An upgrade from before
-  0.10.0-rc.23 also needs that release's grant: `SELECT, INSERT, UPDATE` on `runner_event_refusal_windows`, which the
-  migration gives to every role that was granted `UPDATE` on `runner_spool_cursors`, other than that table's owner.
-  Without it no event the organisation refuses for good is recorded or acknowledged, so a runner keeps resending it.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_support_grants` to every role that was granted `DELETE` on `run_attach_leases`, and `SELECT, INSERT, UPDATE` on
+  `runner_event_refusal_windows` to every role that was granted `UPDATE` on `runner_spool_cursors`, in each case other than
+  that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then no support request or answer is recorded, and no event the organisation refuses for good is recorded
+  or acknowledged, so a runner keeps resending it.
   An upgrade from before 0.10.0-rc.22 also needs that release's grants. On an install whose app role does not pick up
   new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant the app role `SELECT, INSERT, UPDATE` on
   `mcp_call_sends`. Without it, no `approve_each` MCP call that carries an operation key is asked about or sent, and
@@ -94,7 +94,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A VM guest's plain HTTP request whose target does not start with `/`, such as `OPTIONS *`, is answered `400` and not forwarded to the proxy.
 - A command run through the SSH gateway (an `ssh` command, an sftp session, a forwarded port or a folder sync) no longer loses the end of its error output, which is usually the line that says why it failed: the gateway now waits for all of it, for up to 5 seconds after the command's output ends, before it sends the exit status and closes the channel.
 - SSH gateway audit: an sftp transfer or port forward whose process failed is now recorded as a failure that names its exit, also when the client closed its channel or connection after the process's output had ended and before the gateway read the exit; before, that close made the row a success. On the Docker runner a command whose output had already ended when its client closed now reports its own exit, so `ssh.exec` records that exit and a folder sync that ended cleanly is no longer recorded as a failure. Two cases keep the earlier outcome: on the Docker runner, a close that arrives before Docker has recorded the exit; and on a remote runner, a close that reaches the runner before the gateway asks it for the exit. A transfer or forward its client closed while the process still ran stays a success.
-- The organisation now writes at most 32 `runner.event.refuse` rows an hour for a runner whose events it refuses for good, then one row marked `suppressed`, counted across all replicas and restarts, and the summary of the rest is written at the runner's next refusal however long it stays quiet. Before, each replica kept its own count, a restart reset it, and a summary owed for more than a day was dropped.
 
 ### Security
 
@@ -107,7 +106,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - An organisation whose runners or proxy image predate this release: a VM run with `host_rules` now passes create and fails at its proxy's start, because the older proxy refuses the config. Upgrade the runners and the proxy image first.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants `SELECT, INSERT, UPDATE` on `runner_event_refusal_windows` to every role that was granted `UPDATE` on `runner_spool_cursors`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on `runner_event_refusal_windows` as soon as the migration has run. Until then no event the organisation refuses for good is recorded or acknowledged, so a runner keeps resending it.
 
 ### Before you downgrade
 

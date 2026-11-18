@@ -176,7 +176,7 @@ func (s PG) AcceptSupportGrant(ctx context.Context, run, grant uuid.UUID, owner,
 		WHERE g.id = $1 AND g.run_id = $2 AND g.ended_at IS NULL AND g.accepted_at IS NULL
 		  AND g.requested_at > now() - `+supportGrantRequestWindow+`
 		  AND r.id = g.run_id AND r.state = 'RUNNING' AND r.lost_at IS NULL AND r.created_by = $3
-		  AND $5::text[] <@ g.doors_asked
+		  AND cardinality($5::text[]) >= 1 AND $5::text[] <@ g.doors_asked
 		RETURNING `+supportGrantCols,
 		grant, run, owner, minutes, doors, revSeq, ownerEmail)
 }
@@ -220,7 +220,7 @@ func (s PG) SupportGrantLive(ctx context.Context, run uuid.UUID, helper string, 
 		return SupportGrant{}, false, false, fmt.Errorf("store: read a support grant: %w", err)
 	}
 	if g.AcceptedAt != nil && !live {
-		// M1's lazy end: left audited-false, so the sweep writes the support.end row.
+		// The lazy end: left audited-false, so the sweep writes the support.end row.
 		reason := "expired"
 		if over {
 			reason = "run_ended"
