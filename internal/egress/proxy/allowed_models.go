@@ -311,11 +311,8 @@ func (p *Proxy) refuseOpaqueModelTunnel(w http.ResponseWriter, r *http.Request, 
 	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceAllowedModels)
 	w.Header().Set(egressHeaderDetail, opaqueModelTunnelRefusal)
 	w.Header().Set(egressHeaderWardynReason, reasonEgressDenied)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	out, _ := json.Marshal(map[string]any{"wardyn": map[string]string{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]any{"wardyn": map[string]string{
 		"reason": reasonEgressDenied, "host": host, "rule_source": ruleSourceAllowedModels, "detail": opaqueModelTunnelRefusal}})
-	_, _ = w.Write(out)
 	return true
 }
 

@@ -25,7 +25,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -752,10 +751,7 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 		body["attribution"] = attribution
 	}
 	w.Header().Set(egressHeaderWardynReason, reasonEgressDenied)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	out, _ := json.Marshal(map[string]any{"wardyn": body})
-	_, _ = w.Write(out)
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]any{"wardyn": body})
 }
 
 // IPGuardResult records the outcome of resolving + vetting a target host.

@@ -64,12 +64,11 @@ func TestJSONWriters_StatusContentTypeAndBodyPerDoor(t *testing.T) {
 			p.answerResidentMint(w, r, ResidentMint{GrantID: uuid.Nil, Kind: types.GrantGitPAT, Token: "t", Username: "u",
 				ExpiresAt: time.Unix(3600, 0).UTC()})
 		}, 200, plain, `{"kind":"` + string(types.GrantGitPAT) + `","token":"t","username":"u","expires_at":"` + time.Unix(3600, 0).UTC().Format(time.RFC3339) + `"}` + "\n"},
-		// The sites below keep their own writers: they differ in body bytes
-		// (no trailing newline), headers or status handling.
+		{"aws sdk error", func(w http.ResponseWriter) { writeAWSSDKError(w, 400, "T", "m") },
+			400, plain, `{"__type":"T","message":"m"}` + "\n"},
+		// The site below keeps its own writer: its body is hand-formatted.
 		{"approval pending", func(w http.ResponseWriter) { writeApprovalPending(w, nil) },
 			403, plain, `{"wardyn":"approval-pending","approval_id":""}`},
-		{"aws sdk error", func(w http.ResponseWriter) { writeAWSSDKError(w, 400, "T", "m") },
-			400, plain, `{"__type":"T","message":"m"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
