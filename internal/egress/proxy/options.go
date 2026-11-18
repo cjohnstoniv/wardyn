@@ -134,5 +134,9 @@ type Options struct {
 	// ControlTLS pins the control-plane transport to wardynd's internal CA
 	// (hoptls.ClientConfig). nil pins an EMPTY pool: https fails closed.
 	ControlTLS *tls.Config
-	Now        func() time.Time
+	// RelayPreamble, set only for a keyed run, makes the control-plane transport write the relay preamble
+	// on its connections to the control-plane address and no other (relay_preamble.go). The egress
+	// transport never carries it.
+	RelayPreamble *relayPreamble
+	Now           func() time.Time
 }

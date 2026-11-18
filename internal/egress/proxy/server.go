@@ -138,7 +138,11 @@ func egressTLSConfig(pemBundle string) (*tls.Config, error) {
 // explicitly: Transport.Clone() PRESERVES the proxy function, so this
 // can't skip the clearing. A nil client is built here, never left to a
 // callee's fallback.
-func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
+//
+// A keyed run (relay != nil) also writes the relay preamble on its connections to the control-plane address
+// and no other: a redirect to another host dials another address and gets none, so redirects need no refusal.
+// Only the client built here carries it; the egress transports never do.
+func controlPlaneClient(client *http.Client, cpTLS *tls.Config, relay *relayPreamble) *http.Client {
 	if client == nil {
 		client = &http.Client{Timeout: controlPlaneCallTimeout}
 	}
@@ -149,6 +153,9 @@ func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
 		// and enabling it prepends "h2" to the config's own NextProtos on
 		// first use — a shared config made the egress transport offer h2 (#359).
 		tr.TLSClientConfig = cpTLS.Clone()
+		if relay != nil {
+			tr.DialContext = relay.wrap(tr.DialContext)
+		}
 		c := *client
 		c.Transport = tr
 		client = &c
@@ -255,7 +262,11 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	if err != nil {
 		return nil, err
 	}
-	client = controlPlaneClient(client, cpTLS)
+	relay, err := relayPreambleFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client = controlPlaneClient(client, cpTLS, relay)
 
 	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
 	if err != nil {
@@ -333,6 +344,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		UpstreamNoProxy:      cfg.UpstreamProxyNoProxy,
 		TLSClientConfig:      tlsCfg,
 		ControlTLS:           cpTLS,
+		RelayPreamble:        relay,
 		InternalHosts:        cfg.InternalHosts,
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMChannelHosts:      cfg.LLMChannelHosts,

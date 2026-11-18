@@ -85,6 +85,10 @@ type Config struct {
 	// DecisionSink (runners) streams decisions to runnerd, the only spool
 	// writer, instead of a shared DecisionSpoolDir.
 	DecisionSink *DecisionSinkConfig `json:"decision_sink,omitempty"`
+	// RelayKey (k8s runners only) is the run's relay key, base64 of exactly 32 bytes. When set, the
+	// control-plane client writes a 34-byte preamble (0x57, 0x01, the key) before TLS on its connections
+	// to the control-plane address, and on no other connection. It never prints (relayKeyValue).
+	RelayKey relayKeyValue `json:"relay_key,omitempty"`
 	// HardDeny (k8s runners only) refuses in-cluster names and addresses before
 	// the InternalHosts lift, for agent egress.
 	HardDeny *HardDenyConfig `json:"hard_deny,omitempty"`
@@ -613,6 +617,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 		return fmt.Errorf("config: run_token is required")
 	}
 	if err := c.validateSigninListen(); err != nil {
+		return err
+	}
+	if err := c.validateRelayKey(); err != nil {
 		return err
 	}
 	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {

@@ -514,6 +514,9 @@ func newProxy(opts Options) *Proxy {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
 	}
 	p.controlTransport.TLSClientConfig = opts.ControlTLS.Clone()
+	if opts.RelayPreamble != nil {
+		p.controlTransport.DialContext = opts.RelayPreamble.wrap(p.controlTransport.DialContext)
+	}
 	// localClient uses the CONTROL transport: local-route forwards to the control
 	// plane carry the vetted dial target on the request context so the host is
 	// never re-resolved (same TOCTOU guard), and they NEVER chain through the
