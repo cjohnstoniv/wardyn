@@ -622,6 +622,34 @@ describe("PolicySummary: the Host rules row", () => {
     ]);
   });
 
+  it("a host two sets name keeps its line unmarked when only another host changes in one of them", () => {
+    const A = { rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/v1"] }] };
+    const B = { rules: [{ host: "api.example.com", effect: "allow", methods: ["POST"], paths: ["/v1"] }, { host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/a"] }] };
+    const B2 = { rules: [{ host: "api.example.com", effect: "allow", methods: ["POST"], paths: ["/v1"] }, { host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/b"] }] };
+    const now = [A, B2] as never as import("../../../lib/types").HostRuleSet[];
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "host_rules" && entry === hostRuleSetKey(now[1]) ? "added" : undefined),
+      removed: (field) => (field === "host_rules" ? [JSON.stringify(B)] : []),
+    };
+    render(<PolicySummary spec={withRules(now)} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent("api.example.com: 2 rule sets name this host. Set 1: allows GET within /v1. Set 2: allows POST within /v1.");
+    expect(items[0]).not.toHaveTextContent("at start");
+    expect(items[1]).toHaveTextContent("files.example.com: allows GET within /b. Any other request is refused.Added at start");
+    expect(items[2]).toHaveTextContent("files.example.com: allows GET within /a. Any other request is refused.Removed at start");
+  });
+
+  it("matches the server's set keys written out by hand, not ones this file builds", () => {
+    const REG = { rules: [{ host: "registry.example.com", effect: "allow", methods: ["HEAD", "GET"], paths: ["/z", "/a"] }] };
+    const keys = ['{"rules":[{"host":"api.example.com","methods":["GET"],"paths":["/public"],"effect":"allow"}]}', '{"rules":[{"host":"registry.example.com","methods":["GET","HEAD"],"paths":["/a","/z"],"effect":"allow"}]}'];
+    const marks: PolicyChangeMarks = { of: (field, entry) => (field === "host_rules" && keys.includes(entry) ? "added" : undefined), removed: () => [] };
+    render(<PolicySummary spec={withRules([API, REG])} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Added at start");
+    expect(items[1]).toHaveTextContent("registry.example.com: allows HEAD, GET within /z, /a. Any other request is refused.Added at start");
+  });
+
   it("builds the server's set key: methods and paths sorted, empty ones left out, < > & escaped as Go does", () => {
     expect(hostRuleSetKey({ rules: [{ host: "a.example.com", effect: "allow", methods: ["POST", "GET", "GET"], paths: ["/b&c", "/a"] }, { host: "b.example.com", effect: "deny", methods: [], paths: [] }] })).toBe(
       '{"rules":[{"host":"a.example.com","methods":["GET","POST"],"paths":["/a","/b\\u0026c"],"effect":"allow"},{"host":"b.example.com","effect":"deny"}]}',

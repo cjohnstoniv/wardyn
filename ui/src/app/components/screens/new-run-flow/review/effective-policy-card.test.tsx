@@ -260,6 +260,14 @@ describe("Effective policy card: the Network row's notes", () => {
     expect(screen.getByText(NR_REVIEW.POLICY_HOSTS_OPEN(2))).toBeInTheDocument();
   });
 
+  it("reads open egress from the server's access facts when the preview does not say it", () => {
+    const access = { ...SCENARIO_ACCESS.member, unlisted: { ...SCENARIO_ACCESS.member.unlisted, allow_all: true } };
+    const pre = { ...SCENARIO_PREFLIGHT.member, access } as ReviewPreflight;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={previewOf({ refuse_ip_literals: true })} />);
+    const network = document.querySelector('[data-policy-row="network"]') as HTMLElement;
+    expect(Array.from(network.querySelectorAll("small")).map((n) => n.textContent)).toEqual([SOURCE, IP_NOTE]);
+  });
+
   it.each([
     ["refused but egress is not open", { refuse_ip_literals: true }],
     ["open but not refused", { allow_all_egress: true, refuse_ip_literals: false }],

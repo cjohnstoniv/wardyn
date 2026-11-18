@@ -240,8 +240,9 @@ function summarize(
       ], "refuse_ip_literals"),
     );
   }
-  // One line per host the rules name, the same words Review uses. Marks are per rule set on the wire: a line is added when a
-  // set that names its host is, unless an identical line was removed, and a removed set's lines show when no current line says the same.
+  // One line per host the rules name, the same words Review uses. Marks are per rule set on the wire, so the lines before launch
+  // are read from the sets before launch (the current sets less the added ones, plus the removed ones): a line is added when
+  // no line before said the same, and removed when no line now says the same.
   const hostRules = take("host_rules", asHostRuleSets);
   const removedSets = (marks?.removed("host_rules") ?? []).flatMap((e) => {
     try {
@@ -251,13 +252,13 @@ function summarize(
     }
   });
   const nowLines = hostRuleLines(hostRules).lines;
-  const wasLines = hostRuleLines(removedSets).lines;
+  const wasSets = [...(hostRules ?? []).filter((set) => marks?.of("host_rules", hostRuleSetKey(set)) !== "added"), ...removedSets];
+  const wasLines = hostRuleLines(wasSets).lines;
   const wasText = new Set(wasLines.map((l) => l.text));
   const nowText = new Set(nowLines.map((l) => l.text));
-  const addedSets = (hostRules ?? []).filter((set) => marks?.of("host_rules", hostRuleSetKey(set)) === "added");
   const ruleValue = (l: { host: string; text: string }, mark?: PolicyMark): Value => ({ head: l.host, text: l.text.slice(l.host.length), mark });
   const hostRuleValues = [
-    ...nowLines.map((l) => ruleValue(l, !wasText.has(l.text) && addedSets.some((set) => set.rules.some((r) => r.host === l.host)) ? "added" : undefined)),
+    ...nowLines.map((l) => ruleValue(l, wasText.has(l.text) ? undefined : "added")),
     ...wasLines.filter((l) => !nowText.has(l.text)).map((l) => ruleValue(l, "removed")),
   ];
   if (hostRuleValues.length > 0) {
