@@ -29,6 +29,7 @@ type refuseStoreFake struct {
 	store.RunnerStore
 	resultErr, spoolErr, runErr, refuseErr error
 	run                                    types.AgentRun
+	fullUntil                              time.Time // what RefuseRunnerEvent answers: the runner's window full until then
 
 	mu    sync.Mutex
 	calls []store.RunnerEventRefusal
@@ -47,11 +48,11 @@ func (f *refuseStoreFake) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 	return f.run, f.runErr
 }
 
-func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, bool, error) {
+func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
-	return r.ActionID != nil, true, f.refuseErr
+	return r.ActionID != nil, f.fullUntil, f.refuseErr
 }
 
 func (f *refuseStoreFake) recorded() []store.RunnerEventRefusal {
@@ -251,4 +252,34 @@ func TestRefusalReadsTheSpoolPlace(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Once the store reports a runner's refusal window full, this replica sends that runner's later rate_limited refusals
+// no further until the window ends: no store call, so no transaction, lock or log line. Another code still reaches the
+// store, another runner is not held back, and the first refusal after the window's end asks the store again.
+func TestRateLimitedRefusalSkipsAFullWindow(t *testing.T) {
+	now := time.Now()
+	fake := &refuseStoreFake{fullUntil: now.Add(time.Minute)}
+	srv := refuseTestServer(fake, &now)
+	runnerID := uuid.New()
+	ctx, ev := validWorkloadFrame(t)
+	refuse := func(id uuid.UUID, cause error, want string, calls int) {
+		t.Helper()
+		var refusal *runnerwire.EventRefusal
+		if err := srv.classifyRunnerEvent(ctx, id, ev, cause); !errors.As(err, &refusal) || refusal.Code != want {
+			t.Fatalf("refusal = %v, want an acknowledged %q", err, want)
+		}
+		if got := len(fake.recorded()); got != calls {
+			t.Fatalf("%d RefuseRunnerEvent calls, want %d", got, calls)
+		}
+	}
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // the store reports the window full
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // skipped
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // skipped
+	refuse(runnerID, errReportShape, runnerwire.RefusalShape, 2)                      // another code reaches the store
+	refuse(uuid.New(), errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 3) // another runner is asked for
+	now = now.Add(time.Minute)
+	fake.fullUntil = time.Time{} // a new window, with room
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 4)
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 5) // a row written holds nothing back
 }

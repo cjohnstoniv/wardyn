@@ -41,11 +41,13 @@ const (
 	workloadEventMaxRunners = 4096 // enrolLimiterMaxPeers' bound
 )
 
-// runnerEventRefusals is the per-runner bound on workload events, in memory. The bound on runner.event.refuse rows is
-// the store's (runner_event_refusal_windows). The zero value is ready to use.
+// runnerEventRefusals is, in memory on this replica, the per-runner bound on workload events and the runners whose
+// refusal window the store last reported full. The bound on runner.event.refuse rows is the store's
+// (runner_event_refusal_windows). The zero value is ready to use.
 type runnerEventRefusals struct {
 	mu        sync.Mutex
-	workloads *principalLimiter // per-runner workload event rate, built on first use
+	workloads *principalLimiter       // per-runner workload event rate, built on first use
+	full      map[uuid.UUID]time.Time // runner → when the full refusal window the store reported ends (its clock)
 }
 
 // allowWorkload spends one of runnerID's workload events at now.
@@ -59,10 +61,50 @@ func (r *runnerEventRefusals) allowWorkload(runnerID uuid.UUID, now time.Time) b
 	return l.allow(runnerID.String(), now)
 }
 
-// runnerEventRefuser is the store side of a refusal (store.PG): settled says it settled an action, row that it wrote
-// the refusal's own row (false once the runner's window is full).
+// windowFull reports whether the store last reported runnerID's refusal window full and that window has not ended at
+// now; an entry whose window has ended is dropped, so the next refusal asks the store again. The end is on the
+// database's clock: a replica clock behind it holds the entry that much longer, one ahead asks the store sooner.
+func (r *runnerEventRefusals) windowFull(runnerID uuid.UUID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	end, ok := r.full[runnerID]
+	if ok && !now.Before(end) {
+		delete(r.full, runnerID)
+		return false
+	}
+	return ok
+}
+
+// noteWindow keeps what the store answered for runnerID's refusal: its window full until end, or (a zero end) a row
+// written, which drops the entry. At workloadEventMaxRunners entries it prunes the ended ones and, still full, keeps
+// none new: that runner's refusals keep reaching the store.
+func (r *runnerEventRefusals) noteWindow(runnerID uuid.UUID, end, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if end.IsZero() {
+		delete(r.full, runnerID)
+		return
+	}
+	if r.full == nil {
+		r.full = map[uuid.UUID]time.Time{}
+	}
+	if _, ok := r.full[runnerID]; !ok && len(r.full) >= workloadEventMaxRunners {
+		for id, e := range r.full {
+			if !now.Before(e) {
+				delete(r.full, id)
+			}
+		}
+		if len(r.full) >= workloadEventMaxRunners {
+			return
+		}
+	}
+	r.full[runnerID] = end
+}
+
+// runnerEventRefuser is the store side of a refusal (store.PG): settled says it settled an action, fullUntil when the
+// runner's refusal window ends if it was full, so the refusal got no row of its own (zero when it got one).
 type runnerEventRefuser interface {
-	RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r store.RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (settled, row bool, err error)
+	RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r store.RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (settled bool, fullUntil time.Time, err error)
 }
 
 // runnerEventRefusalCodes are the permanent refusals, in the order they are matched; every other error is transient.
@@ -136,13 +178,21 @@ func (s *Server) classifyRunnerEvent(ctx context.Context, runnerID uuid.UUID, ev
 			}
 		}
 	}
-	settled, row, werr := st.RefuseRunnerEvent(ctx, runnerID, r, s.cfg.RunnerAuditPrepare)
+	now := s.cfg.Now()
+	// A rate-limited workload refusal in a window the store already reported full would get no row: skip the store on
+	// this replica until that window ends, so a flooding runner costs no transaction, lock or log line. Every other
+	// code still reaches the store, and the first refusal after the window's end asks it again.
+	if code == runnerwire.RefusalRateLimited && r.ActionID == nil && r.Spool == nil && s.eventRefusals.windowFull(runnerID, now) {
+		return &runnerwire.EventRefusal{Code: code, Err: err}
+	}
+	settled, fullUntil, werr := st.RefuseRunnerEvent(ctx, runnerID, r, s.cfg.RunnerAuditPrepare)
 	if werr != nil {
 		slog.WarnContext(ctx, "runner event refusal not recorded; the event stays unacknowledged", "runner_id", runnerID,
 			"kind", ev.Kind, "code", code, "error", werr)
 		return err
 	}
-	if row || code != runnerwire.RefusalRateLimited {
+	s.eventRefusals.noteWindow(runnerID, fullUntil, now)
+	if fullUntil.IsZero() || code != runnerwire.RefusalRateLimited {
 		slog.WarnContext(ctx, "runner event refused for good and acknowledged", "runner_id", runnerID, "kind", ev.Kind,
 			"run_id", ev.RunID, "code", code, "settled", settled)
 	}
