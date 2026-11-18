@@ -54,6 +54,7 @@ func TestViaOrgRunState_PausedIsAway(t *testing.T) {
 		{"live", running, nil, nil, viaOrgRunLive},
 		{"idle paused", with(func(r *types.AgentRun) { r.PausedAt, r.PausedReason = &now, types.PauseIdle }), nil, nil, viaOrgRunAway},
 		{"waiting pause", with(func(r *types.AgentRun) { r.PausedAt, r.PausedReason = &now, types.PauseWaiting }), nil, nil, viaOrgRunLive},
+		{"paused with no reason", with(func(r *types.AgentRun) { r.PausedAt = &now }), nil, nil, viaOrgRunAway},
 		{"kept", with(func(r *types.AgentRun) { r.LostAt = &now }), nil, nil, viaOrgRunAway},
 		{"runner offline", running, nil, offline, viaOrgRunAway},
 		{"moved", with(func(r *types.AgentRun) { r.RunnerID = &other }), nil, nil, viaOrgRunMoved},
@@ -97,7 +98,7 @@ func TestViaOrg_PausedRunEndsItsOpenStreamsAndServesAfterResume(t *testing.T) {
 			ds.run.PausedAt, ds.run.PausedReason = &now, types.PauseIdle
 		}
 	}
-	// The watcher asks RunnerOnline only of a run it read as neither paused nor kept, so the count is of live reads.
+	// The watcher asks RunnerOnline only of a run it read as neither idle-paused nor kept, so the count is of live reads.
 	var liveReads atomic.Int32
 	srv.cfg.RunnerOnline = func(uuid.UUID) bool { liveReads.Add(1); return true }
 	srv.cfg.BaseCtx = ctx
