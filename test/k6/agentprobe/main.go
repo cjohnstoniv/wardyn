@@ -7,15 +7,18 @@
 //
 //	agentprobe connect HOST:PORT   CONNECT through the proxy; prints the proxy's status line and body
 //	agentprobe hold URL SECONDS    CONNECT, TLS and a GET of URL; prints how and when the request ended
-//	agentprobe h2watch ADDR SNI SECONDS
+//	agentprobe h2watch ADDR SNI SECONDS [RELAYKEY]
 //	                               no proxy: one TLS connection to ADDR (HTTP/2 when offered), a GET every
 //	                               500 ms on it until it fails, then one fresh dial; run in a proxy pod's
-//	                               network namespace, it is a proxy's renew connection through the relay
+//	                               network namespace, it is a proxy's renew connection through the relay.
+//	                               RELAYKEY (base64, 32 bytes) is the run's relay key: every dial opens with
+//	                               the relay preamble carrying it, as a keyed proxy's does
 package main
 
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -30,10 +33,14 @@ import (
 
 func main() {
 	if len(os.Args) < 3 {
-		fail("usage: agentprobe connect HOST:PORT | agentprobe hold URL SECONDS | agentprobe h2watch ADDR SNI SECONDS")
+		fail("usage: agentprobe connect HOST:PORT | agentprobe hold URL SECONDS | agentprobe h2watch ADDR SNI SECONDS [RELAYKEY]")
 	}
-	if os.Args[1] == "h2watch" && len(os.Args) == 5 {
-		h2watch(os.Args[2], os.Args[3], os.Args[4])
+	if os.Args[1] == "h2watch" && (len(os.Args) == 5 || len(os.Args) == 6) {
+		key := ""
+		if len(os.Args) == 6 {
+			key = os.Args[5]
+		}
+		h2watch(os.Args[2], os.Args[3], os.Args[4], key)
 		return
 	}
 	proxy := os.Getenv("HTTPS_PROXY")
@@ -129,15 +136,24 @@ func hold(proxy, raw, seconds string) {
 }
 
 // h2watch prints "proto P" once connected, "ok N" per answered GET, then "cut after D: ERR" when the
-// connection fails and "redial: RESULT" for one new connection from the same address.
-func h2watch(addr, sni, seconds string) {
+// connection fails and "redial: RESULT" for one new connection from the same address. A non-empty
+// relayKey makes every connection open with the relay preamble, which the relay answers by closing a
+// connection whose key is not the run's own: the dial then fails and "proto" is never printed.
+func h2watch(addr, sni, seconds, relayKey string) {
 	secs, err := strconv.Atoi(seconds)
 	if err != nil {
 		fail(err.Error())
 	}
+	var key []byte
+	if relayKey != "" {
+		if key, err = base64.StdEncoding.DecodeString(relayKey); err != nil || len(key) != relayKeyLen {
+			fail("relay key is not 32 bytes of base64")
+		}
+	}
 	// The probe judges the relay's admission, not the organisation's certificate.
 	cfg := &tls.Config{ServerName: sni, NextProtos: []string{"h2", "http/1.1"}, InsecureSkipVerify: true} //nolint:gosec // see above
-	tc, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", addr, cfg)
+	dial := func() (*tls.Conn, error) { return dialRelay(addr, cfg, key) }
+	tc, err := dial()
 	if err != nil {
 		fail("dial: " + err.Error())
 	}
@@ -167,7 +183,7 @@ func h2watch(addr, sni, seconds string) {
 		resp, err := rt(req)
 		if err != nil {
 			fmt.Printf("cut after %s: %v\n", time.Since(start).Round(time.Millisecond), err)
-			c, derr := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", addr, cfg)
+			c, derr := dial()
 			if derr != nil {
 				fmt.Println("redial:", derr)
 			} else {
@@ -187,4 +203,35 @@ func h2watch(addr, sni, seconds string) {
 func fail(msg string) {
 	fmt.Fprintln(os.Stderr, "agentprobe: "+msg)
 	os.Exit(2)
+}
+
+// relayKeyLen, relayPreambleMagic and relayPreambleVersion are the relay preamble's wire format as
+// internal/egress/proxy writes it: magic, version, then the 32-byte key, before the TLS ClientHello.
+const (
+	relayKeyLen          = 32
+	relayPreambleMagic   = 0x57
+	relayPreambleVersion = 0x01
+)
+
+// dialRelay dials addr and, when key is set, writes the relay preamble before the TLS handshake.
+func dialRelay(addr string, cfg *tls.Config, key []byte) (*tls.Conn, error) {
+	if key == nil {
+		return tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", addr, cfg)
+	}
+	c, err := (&net.Dialer{Timeout: 5 * time.Second}).Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Write(append([]byte{relayPreambleMagic, relayPreambleVersion}, key...)); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	tc := tls.Client(c, cfg)
+	if err := tc.Handshake(); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	_ = c.SetDeadline(time.Time{})
+	return tc, nil
 }

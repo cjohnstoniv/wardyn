@@ -207,7 +207,7 @@
 
 - The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
-- A runnerd rolled back below the release that checks relay keys fails closed for runs that have a key. Its relay forwards the proxy's first bytes unread, so TLS fails and those runs lose the control plane until their proxies restart. Stop them before a rollback.
+- A runnerd rolled back below the release that checks relay keys fails closed for runs that have a key. Its relay forwards the proxy's first bytes unread, so TLS fails and those runs cannot renew: they end at their self-lapse deadline, and rolling forward again does not restore them. Stop them before a rollback.
 
 ## Self-lapse and outages
 
@@ -236,7 +236,7 @@
 | Proxy cannot renew its run token at start | It exits about a minute after it starts; the run fails with "the run's proxy could not renew its run token with the organisation:" and its last renew error | Let the cluster reach the host and port the error names |
 | Proxy crashes, runs out of memory or lapses | Terminal: the pod stays `Failed`, runnerd contains the run and settles its decisions | Start a new run |
 | Relay lost | First-use approvals are denied; decisions buffer | Restore the relay Service |
-| New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
+| New proxy pod's IP still fenced for an earlier run, with a proxy image older than 0.11.0-rc.1 or without a readable release tag, or the fenced proxy on another node or with no node record | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
 | Revoked while online | The org ends the runner's runs `runner_revoked`; runnerd stops every proxy, tears down every sandbox and deletes the per-run and keystore Secrets | Reinstall with a fresh token if wanted |
 | Revoked while offline and never returning | Nothing releases the stop-proof finalizer or the policies | Follow [Revoked and gone](#revoked-and-gone) |
 | A stop an earlier release held | Its proxy pod stays `Failed` and deleting with the proxy never started; its policies and its Secret, with the run's secret values and managed files, stay | Upgrade the runner: it retries the stop when it reconnects. A run still held after that keeps its fence: see [A stop still held after the upgrade](#a-stop-still-held-after-the-upgrade) |
@@ -367,6 +367,6 @@ The run did not cover:
 | R12 | Clusters that rewrite pod-to-ClusterIP source addresses are unsupported |
 | R14 | The ServiceAccount lists every Node and patches pods in its runs namespace |
 | R16 | Reusing a Node name for another machine while a run's pods remain is unsupported |
-| R17 | A run given an address still fenced for an earlier run fails at start; the address can be given again until that run's stop is confirmed |
+| R17 | Start fails with `relay_ip_fenced` on an address another run fences if the proxy image is older than 0.11.0-rc.1 or not a release tag, or the fenced proxy is on another node or has no node record |
 
 - All residuals, with the rejected alternatives: [the design note](../design/0.9/k8s-runnerd.md#residuals).

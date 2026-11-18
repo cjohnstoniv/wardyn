@@ -1993,8 +1993,10 @@ jobs:
           K6_SUITES: ${{ matrix.suite }}
           # A release-shaped tag, so the proxy image counts as one that sends the relay key and the
           # relay-key arm of pod-ip-reuse-after-stop runs; REQUIRE makes a skip of it a failure. No
-          # real release has this tag, as the never-pulled cases need a pull that fails. The images are
-          # built on this runner and loaded into kind: nothing pushes them.
+          # release has this tag on docker.io, which is the registry the never-pulled cases pull
+          # docker.io/wardyn/wardyn-proxy:0.11.0-rc.999 from, so that pull fails; real releases are
+          # published to ghcr.io, never docker.io. The images are built on this runner and loaded into
+          # kind: nothing pushes them.
           K6_IMAGE_TAG: 0.11.0-rc.999
           K6_REQUIRE_RELAY_KEY: "1"
         shell: bash

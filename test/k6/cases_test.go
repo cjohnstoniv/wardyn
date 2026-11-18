@@ -32,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
@@ -580,7 +581,23 @@ func (e *env) newKeyedDriver(t *testing.T) *k8s.Driver {
 // relayKeyOf reads the run's relay key from its proxy config Secret.
 func (e *env) relayKeyOf(t *testing.T, id uuid.UUID) []byte {
 	t.Helper()
-	secs, err := e.admin.CoreV1().Secrets(e.runsNS).List(bg, metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()})
+	return relayKeyIn(t, e.admin, e.runsNS, id.String())
+}
+
+// relayKeyIn reads run id's relay key from its proxy config Secret in the runs namespace ns.
+func relayKeyIn(t *testing.T, admin kubernetes.Interface, ns, id string) []byte {
+	t.Helper()
+	key := findRelayKey(t, admin, ns, id)
+	if key == nil {
+		t.Fatalf("no proxy config Secret of run %s carries relay_key", id)
+	}
+	return key
+}
+
+// findRelayKey is relayKeyIn that returns nil when no proxy config Secret of the run carries a key.
+func findRelayKey(t *testing.T, admin kubernetes.Interface, ns, id string) []byte {
+	t.Helper()
+	secs, err := admin.CoreV1().Secrets(ns).List(bg, metav1.ListOptions{LabelSelector: labelRun + "=" + id})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +615,6 @@ func (e *env) relayKeyOf(t *testing.T, id uuid.UUID) []byte {
 			}
 		}
 	}
-	t.Fatalf("no proxy config Secret of run %s carries relay_key", id)
 	return nil
 }
 

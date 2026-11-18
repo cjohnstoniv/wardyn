@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -112,7 +113,31 @@ func (o *orgEnv) followProxyLog(ctx context.Context, id string) *proxyLog {
 const lapseLine = "refused permanently, lapsing"
 
 // fencedProxy is fence-live-http2's run, fenced while its node's kubelet is stopped so its proxy lives on.
-type fencedProxy struct{ id, node, pid string }
+type fencedProxy struct{ id, node, pid, key string } // key: the run's relay key, base64, "" when unkeyed
+
+// relayKeyArg is run id's relay key as base64 for h2watch's fifth argument, read as relayKeyOf reads
+// it: "" when the run's proxy is not keyed (an image older than 0.11.0-rc.1), which K6_REQUIRE_RELAY_KEY=1
+// makes a failure, as it does for the relay-key arm of pod-ip-reuse-after-stop.
+func (o *orgEnv) relayKeyArg(t *testing.T, id string) string {
+	t.Helper()
+	key := findRelayKey(t, o.admin, o.runsNS, id)
+	if key == nil {
+		if os.Getenv("K6_REQUIRE_RELAY_KEY") == "1" {
+			t.Fatalf("run %s has no relay key but K6_REQUIRE_RELAY_KEY=1: set K6_IMAGE_TAG to a release tag", id)
+		}
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(key)
+}
+
+// h2watchArgs is h2watch's arguments for a dial to the relay, with the run's relay key when it has one.
+func (o *orgEnv) h2watchArgs(seconds, key string) []string {
+	args := []string{"h2watch", net.JoinHostPort(o.relayIP, "8443"), o.orgHost, seconds}
+	if key != "" {
+		args = append(args, key)
+	}
+	return args
+}
 
 func newOrgEnv(t *testing.T) *orgEnv {
 	t.Helper()
@@ -652,10 +677,25 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 	o.sched(t, ws[0])
 	id := o.live(t, nil)
 	nodeName, pid := o.proxyNetns(t, id)
-	ch := lines(t, o.probeIn(t, nodeName, pid, "h2watch", net.JoinHostPort(o.relayIP, "8443"), o.orgHost, "300"))
+	key := o.relayKeyArg(t, id)
+	ch := lines(t, o.probeIn(t, nodeName, pid, o.h2watchArgs("300", key)...))
 	proto := next(t, ch, "proto", 20*time.Second)
 	for range 3 {
 		next(t, ch, "ok", 20*time.Second)
+	}
+	if key != "" {
+		// The real relay, not the harness's fake: the run's own key is admitted (the connection above), and
+		// the same opening with one byte of the key changed, which no run holds, is closed.
+		raw, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw[0] ^= 0xff
+		out, _ := o.probeIn(t, nodeName, pid, o.h2watchArgs("5", base64.StdEncoding.EncodeToString(raw))...).CombinedOutput()
+		if strings.Contains(string(out), "proto") || !strings.Contains(string(out), "dial:") || !(strings.Contains(string(out), "EOF") || strings.Contains(string(out), "reset by peer")) {
+			t.Fatalf("an opening from the run's proxy address with a wrong relay key: %q, want the relay to close it", out)
+		}
+		note(t, "real relay: the run's own key admitted, a wrong key closed (%s)", strings.TrimSpace(string(out)))
 	}
 	kubelet(t, nodeName, false) // restarted by restart-fence-replay-reregister-sinks, or at the suite's end
 	killed := time.Now()
@@ -675,7 +715,7 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 	if phase := strings.TrimSpace(o.kubectl(t, "-n", o.runsNS, "get", "pod", "wardyn-proxy-"+id, "-o", "jsonpath={.status.phase}")); phase != "Running" {
 		t.Fatalf("proxy pod phase %q after the kill, want Running (the kubelet is stopped): the cut is not the fence's", phase)
 	}
-	o.fenced = &fencedProxy{id: id, node: nodeName, pid: pid}
+	o.fenced = &fencedProxy{id: id, node: nodeName, pid: pid, key: key}
 	note(t, "%s; connection cut %s after the kill (%s); %s; proxy pod still Running on %s (kubelet stopped)", proto, after, cut, redial, nodeName)
 }
 
@@ -713,7 +753,7 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 	}
 	note(t, "runnerd relay up again %s after the restart", time.Since(restarted).Round(time.Second))
 
-	out, _ := o.probeIn(t, f.node, f.pid, "h2watch", net.JoinHostPort(o.relayIP, "8443"), o.orgHost, "5").CombinedOutput()
+	out, _ := o.probeIn(t, f.node, f.pid, o.h2watchArgs("5", f.key)...).CombinedOutput()
 	if strings.Contains(string(out), "proto") {
 		t.Fatalf("after the restart a connection from the fenced proxy's address was admitted: %s", out)
 	}
