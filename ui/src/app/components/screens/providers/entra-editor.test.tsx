@@ -246,7 +246,7 @@ describe("EntraEditor", () => {
 
   it("lets a row send its minted tokens through the server, and writes nothing once it is off again", async () => {
     let latest: GitProvider | undefined;
-    const row = entraRow();
+    const row = entraRow({ token_mode: "minted_pat" });
     render(<Harness initial={row} onLatest={(r) => (latest = r)} />);
     expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(E.VIA_ORG_TOGGLE_HINT)).toBeInTheDocument();
@@ -259,20 +259,24 @@ describe("EntraEditor", () => {
 
   it("the via-the-server and on-a-runner switches are independent", async () => {
     let latest: GitProvider | undefined;
-    render(<Harness initial={entraRow({ runner_resident: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={entraRow({ token_mode: "minted_pat", runner_resident: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
     await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
     expect(latest?.entra?.runner_resident).toBeUndefined();
     expect(latest?.entra?.runner_via_org).toBe(true);
     expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("offers the via-the-server switch on the sign-in mode too, where it has no effect", () => {
-    render(<Harness initial={entraRow({ token_mode: "bearer" })} />);
+  it("offers the via-the-server switch only on a minted row: the server ignores it on the sign-in mode", () => {
+    const { unmount } = render(<Harness initial={entraRow({ token_mode: "bearer" })} />);
+    expect(screen.getByRole("switch", { name: E.RUNNER_TOGGLE })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: E.VIA_ORG_TOGGLE })).not.toBeInTheDocument();
+    unmount();
+    render(<Harness initial={entraRow({ token_mode: "minted_pat" })} />);
     expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toBeInTheDocument();
   });
 
   it("is read-only for a caller who can't edit", () => {
-    render(<Harness initial={entraRow()} operator={false} />);
+    render(<Harness initial={entraRow({ token_mode: "minted_pat" })} operator={false} />);
     expect(screen.getByText(E.READ_ONLY_NOTE)).toBeInTheDocument();
     expect(screen.getByLabelText(E.FIELD_TENANT)).toBeDisabled();
     expect(screen.getByLabelText(E.FIELD_CLIENT)).toBeDisabled();

@@ -255,6 +255,35 @@ describe("ConnectSSHCard for a helper", () => {
     expect(screen.queryByText(RUN_CLI.TITLE)).toBeNull();
   });
 
+  it("web apps without desktop: a declared novnc app says P-01 for the desktop and has no Open", async () => {
+    attach(["web_apps"], "helper", { ui_apps: [...run.ui_apps!, { name: "novnc", port: 6080, path: "/" }] });
+    expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("code-server") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: UI_APPS_LANE.cta("novnc") })).toBeNull();
+    expect(screen.getByText(closed("desktop"))).toBeInTheDocument();
+  });
+
+  it("web apps and desktop: the declared novnc app keeps its Open", async () => {
+    attach(["web_apps", "desktop"], "helper", { ui_apps: [...run.ui_apps!, { name: "novnc", port: 6080, path: "/" }] });
+    expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("novnc") })).toBeInTheDocument();
+  });
+
+  it("an owner's novnc app keeps its Open with no doors in play", async () => {
+    attach(null, "owner", { ui_apps: [{ name: "novnc", port: 6080, path: "/" }] });
+    expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("novnc") })).toBeInTheDocument();
+  });
+
+  it("a helper whose only key is capped, or not stamped admin, is told the gateway will refuse it", async () => {
+    const LINE = /cannot open this run/;
+    listKeysMock.mockResolvedValue([{ ...KEY, role: "admin", capped: true }, { ...KEY, fingerprint: "SHA256:y", role: "user", capped: false }]);
+    const { unmount } = attach(ALL);
+    expect(await screen.findByText(LINE)).toBeInTheDocument();
+    unmount();
+    listKeysMock.mockResolvedValue([{ ...KEY, role: "admin", capped: false }]);
+    attach(ALL);
+    expect(await screen.findByText("ssh " + run.id + "@ssh.example.com -p 2222")).toBeInTheDocument();
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
+
   it("files only on a run with no web apps door: the Files lane is the open one", async () => {
     attach(["files"]);
     expect(await screen.findByText(RUN_SYNC.LANE_COMMAND(run.id))).toBeInTheDocument();

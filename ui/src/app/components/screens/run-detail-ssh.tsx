@@ -75,6 +75,9 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const sshDoorsMissing = asHelper ? missingDoors(helperDoors, SSH_LANE_DOORS) : [];
   const filesDoor = !asHelper || helperDoors.includes("files");
   const webAppsDoor = !asHelper || helperDoors.includes("web_apps");
+  // The server puts a declared novnc app behind the desktop door, not web_apps (uiSupportDoor).
+  const desktopDoor = !asHelper || helperDoors.includes("desktop");
+  const appBehindClosedDoor = (a: UIApp) => !desktopDoor && a.name === "novnc";
   const running = run.state === "RUNNING";
   // A service identity's sponsor opens the terminal and apps, never SSH (the server answers it run_owner_only).
   const sponsorOnly = resolved && !asHelper && sponsorOnlyEntry(run, principal, operator);
@@ -193,12 +196,16 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     ...(proxy ? [`  ProxyCommand ${proxy}`] : []),
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
+  // A helper enters another person's run on the gateway's admin override, which refuses a capped key and any key not
+  // stamped admin (sshOverrideRefusal). How old the stamp may be is the server's WARDYN_SSH_ROLE_TTL, which the page
+  // does not have, so a stale stamp is not told apart here.
+  const helperKeysRefused = asHelper && keys !== null && keys.length > 0 && !keys.some((k) => !k.capped && k.role === "admin");
   const sshBase = !!ssh?.enabled && !sponsorOnly;
   const sshOn = sshBase && sshDoorsOpen;
   const uiApps: UIApp[] = run.ui_apps ?? [];
   const uiSandboxOn = !!uiSandbox?.enabled;
   // The card's one teal Open button: the first inbound app, else the first.
-  const primaryApp = Math.max(0, uiApps.findIndex((a) => a.inbound));
+  const primaryApp = Math.max(0, uiApps.findIndex((a) => a.inbound && !appBehindClosedDoor(a)));
   // ponytail: "external:" is a bare description-string prefix, not a typed
   // field on AgentRun — cheaper than a labels map for the one consumer this
   // card is. Upgrade to a labels map (or a real field) once a second
@@ -316,6 +323,14 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
               </Link>
             </Button>
           )}
+        </div>
+      )}
+
+      {sshOn && helperKeysRefused && (
+        <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+          <p className="text-meta leading-relaxed text-muted-foreground">
+            Your registered SSH keys cannot open this run: the gateway takes only a fresh, uncapped admin key for someone else&apos;s run.
+          </p>
         </div>
       )}
 
@@ -442,7 +457,10 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
               {UI_APPS_LANE.intro}
             </p>
-            {uiApps.map((app, i) => (
+            {uiApps.map((app, i) =>
+              appBehindClosedDoor(app) ? (
+                <ClosedLane key={app.name} title={app.name} doors={["desktop"]} className="mt-3 border-t border-border pt-3 first-of-type:border-t-0 first-of-type:pt-0" />
+              ) : (
               <UIAppRow
                 key={app.name}
                 runId={run.id}
@@ -473,7 +491,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
                   </div>
                 )}
               </UIAppRow>
-            ))}
+              ),
+            )}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
           </>

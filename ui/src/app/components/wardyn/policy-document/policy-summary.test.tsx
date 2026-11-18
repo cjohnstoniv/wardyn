@@ -546,7 +546,7 @@ describe("PolicySummary: the wall preset's notes (P-63, P-62b)", () => {
 
 describe("PolicySummary: the Host rules row", () => {
   // The board's text (RN-3), written out in full.
-  const MEANING = "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for the rest of the run.";
+  const MEANING = "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for this proxy; a new proxy asks again.";
   const NARROWS = "Host rules only narrow a host: a request must also pass the rest of the network settings.";
   const API = { rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/public"] }] };
   const API_LINE = "api.example.com: allows GET within /public. Any other request is refused.";

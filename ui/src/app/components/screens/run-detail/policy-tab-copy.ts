@@ -107,7 +107,7 @@ export const HOST_RULES = {
   setItem: (i: number, clauses: string) => `Set ${i}: ${clauses}.`,
   moreHosts: (n: number) => `and ${n} more hosts with rules`,
   moreOne: "and 1 more host with rules",
-  meaning: "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for the rest of the run.",
+  meaning: "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for this proxy; a new proxy asks again.",
   narrows: "Host rules only narrow a host: a request must also pass the rest of the network settings.",
 } as const;
 

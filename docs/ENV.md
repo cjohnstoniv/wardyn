@@ -1580,7 +1580,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Turns on support sessions: a super admin asks to help inside someone else's running run, and that run's owner answers in the console or the CLI.
 - Off (the default): a request or an accept is refused with `409` `support_disabled`. An open help session closes at its next check, and the sweep ends open grants as `support_off`.
 - On, the owner picks the doors to open (terminal, commands, files, forward, web apps, desktop) and 15, 30 or 60 minutes. There is no extension; more time is a new request.
-- Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background task, and not in local mode.
+- Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background, sign-in or workspace task, and not in local mode.
 - A helper enters governed. The run's profile, the channel switches and the data-out rule apply as for its owner.
 - A request left unanswered for 15 minutes lapses. The run ending, the helper signing out and the owner being revoked each end the grant.
 - Every request, answer and end is audited as `support.request`, `support.accept`, `support.decline` and `support.end`.
