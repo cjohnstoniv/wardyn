@@ -321,7 +321,7 @@ jobs:
       # daemon-proxy-secret-kind (T-59, #719), provider-subscription-docker-pg
       # (T-17, #677) and managed-settings-drift (#1395) each joined after a
       # green hosted run (see nightly.yml's own comment on each job). ssh-editors-live
-      # (#2988) is watched too; the lead confirmed its nightly record at the merge.
+      # (#2988) is watched too (nightly.yml's comment on the job).
       # runner-compat-walk joined before its first hosted run, on purpose: it is
       # the check that a released runner and a released organisation keep working
       # with this tag (nightly.yml's own comment on the job).
