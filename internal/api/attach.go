@@ -114,6 +114,27 @@ type resizeMsg struct {
 	Rows uint16 `json:"rows"`
 }
 
+// refuseLocalModeAttach writes the local-mode loopback refusal and returns true
+// when it refused; handleAttachWS runs it first, before any upgrade.
+func (s *Server) refuseLocalModeAttach(w http.ResponseWriter, r *http.Request) bool {
+	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
+	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
+	// so the socket is never opened. Two gates, same as the REST surface in
+	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
+	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
+	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
+	// require a credential, so this is local-mode-only.
+	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
+		return true
+	}
+	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+		return true
+	}
+	return false
+}
+
 // handleAttachWS is the interactive-attach WebSocket endpoint:
 //
 //	GET /api/v1/runs/{id}/attach
@@ -153,19 +174,8 @@ type resizeMsg struct {
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
-	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
-	// so the socket is never opened. Two gates, same as the REST surface in
-	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
-	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
-	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
-	// require a credential, so this is local-mode-only.
-	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
-		return
-	}
-	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+	// Local-mode loopback refusals: before the upgrade, the ticket redeem and the origin check.
+	if s.refuseLocalModeAttach(w, r) {
 		return
 	}
 
