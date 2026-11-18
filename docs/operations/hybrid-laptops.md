@@ -69,8 +69,8 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
-- `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
-- A `require_posture` on a class whose mode is not `runner_resident` is refused when the policy is saved (`credential_delivery_invalid`).
+- `ado_minted_pat` also needs the connection's opt-in: as `runner_resident`, its `runner_resident` and a person's own runner; as `via_org`, its `runner_via_org` and a runner of known trust class, on 0.10.1 or later. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
+- A `require_posture` on a class whose mode is not `runner_resident` (or `via_org` for `ado_minted_pat`) is refused when the policy is saved (`credential_delivery_invalid`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 - Placement judges the posture on record, the runner's last report, however old. A change on the laptop counts once the runner reports it: at every connect and within 15 minutes of a change.
