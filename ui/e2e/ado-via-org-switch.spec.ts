@@ -36,7 +36,6 @@ test.describe("Azure DevOps via the server", () => {
       }
       return route.fallback();
     });
-    await asRealSecurityAdmin(page);
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
     await page.getByTestId("providers-card").getByRole("link").click();

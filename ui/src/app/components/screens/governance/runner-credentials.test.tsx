@@ -352,6 +352,17 @@ describe("RunnerCredentials — save", () => {
     expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeEnabled();
   });
 
+  it("an invalid minimum typed under the runner does not block Save once another class moves to the organisation", async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "runner_resident"));
+    setField(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.windows)), "latest");
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
+    await user.click(option("api_key", "via_org"));
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeEnabled();
+  });
+
   it("a 202 is the submitted note and nothing says saved", async () => {
     putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
     const onSubmitted = vi.fn();
