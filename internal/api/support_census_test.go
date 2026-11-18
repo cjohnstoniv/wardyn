@@ -119,7 +119,7 @@ func censusReceiver(fn *ast.FuncDecl) string {
 
 // censusUnits is every place in the package's non-test files that can hold a call: each func declaration keyed by
 // receiver type and name ("Server.sshAuth"; a plain function by its name), and each package-level var with a value
-// ("var x"), which covers a func literal and a method expression. A name can repeat (an init, a build-tagged
+// ("var x", under each of its names), which covers a func literal and a method expression. A name can repeat (an init, a build-tagged
 // pair), so a key holds every node. A func declaration's node is its body, a var's its spec.
 func censusUnits(t *testing.T) map[string][]ast.Node {
 	t.Helper()
@@ -179,7 +179,9 @@ func censusParse(t *testing.T) (map[string][]ast.Node, map[ast.Node]map[string]b
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
 					if vs, ok := spec.(*ast.ValueSpec); ok && d.Tok == token.VAR && len(vs.Values) > 0 {
-						out["var "+vs.Names[0].Name] = append(out["var "+vs.Names[0].Name], vs)
+						for _, name := range vs.Names { // `var a, b = ...` holds its spec under each name
+							out["var "+name.Name] = append(out["var "+name.Name], vs)
+						}
 						imports[vs] = names
 					}
 				}
@@ -348,21 +350,21 @@ func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
 }
 
 // censusEdges is the names of the units node calls or mentions, split by how a unit answers to them. A selector
-// whose left side is one of the file's imports is another package and no edge. A bare identifier is a package-level
-// function or var (funcs). Any other selector `x.Name`, a call or a method value, is a method of any receiver
-// (methods).
+// with an exported name whose left side is one of the file's imports is another package and no edge (an unexported
+// one is a value named like an import). A bare identifier, `_` apart, is a package-level function or var (funcs). Any other
+// selector `x.Name`, a call or a method value, is a method of any receiver (methods).
 func censusEdges(node ast.Node, imported map[string]bool) (funcs, methods []string) {
 	viaSelector := map[*ast.Ident]bool{}
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.SelectorExpr:
 			viaSelector[n.Sel] = true
-			if x, ok := n.X.(*ast.Ident); ok && imported[x.Name] {
+			if x, ok := n.X.(*ast.Ident); ok && imported[x.Name] && ast.IsExported(n.Sel.Name) {
 				return false
 			}
 			methods = append(methods, n.Sel.Name)
 		case *ast.Ident:
-			if !viaSelector[n] {
+			if !viaSelector[n] && n.Name != "_" {
 				funcs = append(funcs, n.Name)
 			}
 		}
