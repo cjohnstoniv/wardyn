@@ -91,7 +91,7 @@ import {
   denyDialogCopy,
 } from "./copy";
 import { ScopeMenu, ReauthRow } from "./live-approvals-rows";
-import { deriveTitle } from "../screens/approvals";
+import { deriveBanner, deriveTitle } from "../screens/approvals";
 
 const POLL_MS = 2000;
 
@@ -194,6 +194,7 @@ export function LiveApprovals({
   // nothing: its door moves with its dependency line and switch link in M-6
   // (#637).
   adminView = false,
+  carryCredentialKinds,
 }: {
   runId: string;
   reasonApprove?: string;
@@ -202,6 +203,10 @@ export function LiveApprovals({
   hasWorkspace?: boolean;
   run?: AdoCardRun | null;
   adminView?: boolean;
+  // Credential kinds this strip carries beyond what stripCarries admits. Only the demo card sets it, to show its
+  // git_pat approval; the run page leaves it unset, so stripCarries alone decides there. A row admitted this way
+  // shows the /approvals what and blast lines under its title.
+  carryCredentialKinds?: readonly string[];
 }) {
   const { status: setupStatus } = useShellSetupStatus();
   // Decides here go straight to the API with no ReasonDialog stop, so this is
@@ -278,7 +283,8 @@ export function LiveApprovals({
       // TTL) is the whole point of deciding it — a bare one-click host row
       // there would be a regression. The run page's decision bar carries those
       // (stripCarries is false for them) and opens the Approvals tab's
-      // kind-aware card.
+      // kind-aware card. The demo card opts git_pat in through carryCredentialKinds, and with the blast line
+      // shown, which is what this comment guards.
       // The one "it worked" moment for a re-auth row. The row simply VANISHES
       // from the PENDING list on the next 4s poll — whether the person signed
       // in, the run ended, or the 24h sweeper aged it out — so without this the
@@ -312,7 +318,10 @@ export function LiveApprovals({
           // run_id is a belt-and-braces no-op now that the fetch above carries
           // ?run_id=; it stays so a backend that ignored the predicate cannot
           // surface another run's holds on this run's strip.
-          (a) => a.run_id === runId && stripCarries(a),
+          (a) =>
+            a.run_id === runId &&
+            (stripCarries(a) ||
+              (a.kind === "credential" && !!carryCredentialKinds?.includes(credentialKind(a.requested_scope)))),
         ),
       );
       setPollError(false);
@@ -321,7 +330,7 @@ export function LiveApprovals({
       // the idle render doesn't claim a confirmed-empty poll.
       setPollError(true);
     }
-  }, [runId]);
+  }, [runId, carryCredentialKinds]);
 
   // usePoll drives the BACKGROUND refreshes only; the initial load is ours.
   React.useEffect(() => {
@@ -592,6 +601,8 @@ export function LiveApprovals({
         const label = rowLabel(a);
         const title = deriveTitle(a.kind, a.requested_scope ?? {});
         const held = isHeld(a);
+        // A row stripCarries does not admit is here only because carryCredentialKinds named its kind.
+        const banner = stripCarries(a) ? null : deriveBanner(a.kind, a.requested_scope ?? {});
         // Only egress decisions carry a scope (decide rule 4) — see decide().
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
@@ -680,6 +691,12 @@ export function LiveApprovals({
               />
             )}
             </div>
+            {banner && (
+              <div className="basis-full pl-[22px]" data-testid={`live-approval-banner-${a.id}`}>
+                <div className="text-meta text-foreground">{banner.what}</div>
+                <div className="text-meta text-muted-foreground">{banner.blast}</div>
+              </div>
+            )}
           </div>
         );
       })}

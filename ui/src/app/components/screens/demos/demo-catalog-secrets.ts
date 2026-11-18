@@ -101,44 +101,46 @@ export const SECRETS_DEMOS: Demo[] = [
     title: "Authorized, not issued",
     needsSecret: "wardyn-demo-key",
     teaches:
-      "requires_approval doesn't hand out a credential on request — it raises a human decision, and even an approved mint returns a RULE, never a value.",
+      "requires_approval doesn't hand out a credential on request: it holds the request for a person, then the proxy spends exactly one mint on the way out. The sandbox never holds the token, and can't ask for it.",
     overview:
-      "This grant needs a live approval before the broker will mint it, and it's single-use once it does. The sandbox asks for it itself, over the same broker route the proxy uses at startup, with no auth of its own — the proxy injects the run's own token. The first ask is refused pending review; approve it and the very next ask succeeds, returning an injection rule with no secret in it; ask a third time and it's refused again, because it already spent itself. Start this one as an OPERATOR — a member launch silently drops the inline grant, so there's nothing to approve.",
+      "This git token needs a live approval before the broker will mint it, and it's single-use once it does. git asks for it without knowing: its https URL goes to the proxy's broker path, and the proxy asks the broker. The first ask is held while a person decides. Approve it and the same git command resumes, with the token attached by the proxy on the way out. Ask the broker for the token directly and you're refused: it is minted proxy-side only. Ask git again after the minute is up and it's refused: the one mint is spent. Start this one as an OPERATOR.",
     policy: {
       ...SHARED,
-      allowed_domains: ["example.com"],
+      allowed_domains: [],
       first_use_approval: "always_deny",
       eligible_grants: [
         {
-          kind: "api_key",
+          kind: "git_pat",
           requires_approval: true,
-          ttl_seconds: 300,
-          scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key", format: "%s" },
+          ttl_seconds: 60,
+          scope: { host: "example.com", secret_name: "wardyn-demo-key" },
         },
       ],
     },
     steps: [
       {
-        cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
-        text: 'First mint — the sandbox\'s own request AUTO-CREATES the pending approval and comes back 409 {"code":"pending"}.',
+        cmd: "git ls-remote https://example.com/wardyn-demo.git",
+        text: "It hangs, and that's the mechanism. git was routed to the proxy; the broker refused the mint pending review and raised the approval below. The proxy holds git's request open (up to two minutes) while a person decides.",
       },
       {
-        text: "Approve it below — the credential card appears right where you're already watching, not off on a separate screen.",
-      },
-      {
-        cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
-        text: "Same command again — 200, returning the injection RULE (host/header/format), never a value: the response's token field stays empty.",
+        text: "Approve it below. The same command resumes by itself: the proxy minted the token once and attached it to the request to example.com. example.com isn't a git server, so git ends in an error. The proof is the Audit panel: credential.mint, then allow example.com.",
       },
       {
         cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
-        text: 'A third time — 409 {"code":"already_minted"}: single-use, already spent on the mint above. Check the Audit panel: deny → allow → deny, in that order — the two denials are the mechanism working, not a failure.',
+        text: "Ask the broker for the token directly: 403. It is minted proxy-side and never enters the sandbox. Authorized, not issued.",
+      },
+      {
+        cmd: "git ls-remote https://example.com/wardyn-demo.git",
+        text: "After the minute is up, ask again: git gets a 502, because the broker refused a second mint. One approval bought one mint, and that mint lived ttl_seconds at the proxy. The proof is the Audit panel: the refused mint (already_minted) and a deny for example.com, with no new credential.mint.",
       },
     ],
     setupUi: [
-      "New Run → the barrier picker is not the lever here: an api_key grant to a host outside the coding-agent baseline (the agent's own model/VCS endpoints) raises this run's floor to Vault (CC3) at create, whatever tier you pick — a run holding a third-party credential is itself worth stealing.",
-      "In Policy, add an eligible grant: kind \"api_key\" with \"requires_approval\": true and a ttl_seconds — this is what raises the human decision instead of auto-minting.",
-      "Set \"first_use_approval\": \"always_deny\".",
-      "Launch interactive, attach the terminal, and mint from inside the sandbox — approve it in the panel below the terminal when it asks.",
+      "New Run → pick the Fence (CC1) barrier.",
+      "On /secrets, add a secret named \"wardyn-demo-key\". Any value works; this demo never shows it.",
+      "In Policy, add an eligible grant: kind \"git_pat\", host \"example.com\", secret_name \"wardyn-demo-key\", \"requires_approval\": true, \"ttl_seconds\": 60.",
+      "Leave allowed_domains empty and set \"first_use_approval\": \"always_deny\". The grant is the only route to example.com, and only through git.",
+      "This needs the deployment's PAT broker on (WARDYN_GIT_PAT_BROKER, on by default).",
+      "Launch interactive as an operator, attach the terminal, and approve in the panel below it when git hangs.",
     ],
   },
 
