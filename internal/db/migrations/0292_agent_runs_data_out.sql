@@ -6,7 +6,8 @@
 -- stricter raises it before its policy generation is stored. It is never lowered. Audit retention prunes the
 -- audit rows and never this column, so a run whose policy rows are pruned keeps its rule. NULL is a run not
 -- yet dispatched, which has no sandbox and so no content to keep in: the doors read its recorded policy, and a
--- run with none as allowed. A run from before the column is filled by one of the two UPDATEs below, or stays
+-- run with none as allowed. A run left NULL because its current policy generation (2 or later) has no readable
+-- row (unread, below) is answered by the doors as unreadable instead. A run from before the column is filled by one of the two UPDATEs below, or stays
 -- NULL when neither applies. Nullable with no default, but the inline rule makes Postgres read every existing
 -- run once, and the whole file runs in one transaction: the ALTER's exclusive lock on agent_runs is held
 -- through that read, the fill's scan of the run.policy.resolve, run.policy.effective and run.policy.generation
@@ -52,7 +53,7 @@ UPDATE agent_runs r
  WHERE r.id = f.run_id AND r.data_out IS NULL AND f.rule IS NOT NULL
    AND r.id NOT IN (SELECT run_id FROM unread);
 
--- A run still NULL has no policy row with a rule left. One whose policy rows retention dropped, and which was
+-- A run still NULL, other than one in unread, has no policy row with a rule left. One whose policy rows retention dropped, and which was
 -- dispatched, may hold content whose rule is unknown, so it is set to blocked rather than read as allowed.
 --   Dropped: retention removes audit rows only as whole partitions, oldest first by recorded_at, and records
 --   each drop in audit_chain_anchors (kind 'drop', recorded_hi = the partition's largest recorded_at). A
