@@ -20,8 +20,8 @@ import (
 // (DESIGN-support-sessions.md section 2), not an edit of these lists.
 
 // supportCallList is every function that may mention supportMayEnter, and must call it, keyed by receiver type
-// and name ("Server.sshAuth"), with the door it guards. A mention is a call or a method value, so taking the arm
-// as a value and calling it later counts as a caller.
+// and name ("Server.sshAuth"), with the door it guards. Every mention of the arm is a call: the arm is called
+// where it is named, so a method value (the arm passed or stored as a value) is refused in any unit.
 var supportCallList = map[string]string{
 	"Server.handleAttachTicket":       "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
 	"Server.refuseAttachEntry":        "the terminal's WebSocket entry, its ticket branch only",
@@ -84,8 +84,7 @@ func callsAny(body ast.Node, names ...string) bool {
 	return len(callSites(body, names...)) > 0
 }
 
-// mentionSites is every mention of name in node, a call or a method value alike: taking supportMayEnter as a
-// value and calling it later is a caller too.
+// mentionSites is every mention of name in node, a call or a value alike.
 func mentionSites(node ast.Node, name string) []ast.Node {
 	var out []ast.Node
 	ast.Inspect(node, func(n ast.Node) bool {
@@ -124,12 +123,38 @@ func censusReceiver(fn *ast.FuncDecl) string {
 // pair), so a key holds every node. A func declaration's node is its body, a var's its spec.
 func censusUnits(t *testing.T) map[string][]ast.Node {
 	t.Helper()
+	units, _ := censusParse(t)
+	return units
+}
+
+// censusImportNames is the names a file's imports go by in it: the alias, or the last path element (without a
+// version suffix) when there is none.
+func censusImportNames(f *ast.File) map[string]bool {
+	names := map[string]bool{}
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		name := path[strings.LastIndex(path, "/")+1:]
+		if rest, ok := strings.CutSuffix(path, "/"+name); ok && len(name) > 1 && name[0] == 'v' && strings.Trim(name[1:], "0123456789") == "" {
+			name = rest[strings.LastIndex(rest, "/")+1:]
+		}
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		names[name] = true
+	}
+	return names
+}
+
+// censusParse is censusUnits with, for each unit's node, the import names of the file it sits in.
+func censusParse(t *testing.T) (map[string][]ast.Node, map[ast.Node]map[string]bool) {
+	t.Helper()
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string][]ast.Node{}
+	imports := map[ast.Node]map[string]bool{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -138,6 +163,7 @@ func censusUnits(t *testing.T) map[string][]ast.Node {
 		if err != nil {
 			t.Fatal(err)
 		}
+		names := censusImportNames(f)
 		for _, d := range f.Decls {
 			switch d := d.(type) {
 			case *ast.FuncDecl:
@@ -149,16 +175,18 @@ func censusUnits(t *testing.T) map[string][]ast.Node {
 					key = recv + "." + key
 				}
 				out[key] = append(out[key], d.Body)
+				imports[d.Body] = names
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
 					if vs, ok := spec.(*ast.ValueSpec); ok && d.Tok == token.VAR && len(vs.Values) > 0 {
 						out["var "+vs.Names[0].Name] = append(out["var "+vs.Names[0].Name], vs)
+						imports[vs] = names
 					}
 				}
 			}
 		}
 	}
-	return out
+	return out, imports
 }
 
 // censusBody is the one func body under key, nil when it is absent or not a func declaration.
@@ -171,17 +199,47 @@ func censusBody(units map[string][]ast.Node, key string) *ast.BlockStmt {
 	return nil
 }
 
+// armValueMentions is every mention of supportMayEnter in node that is not the function of a call: a method value,
+// the arm passed or stored to be called somewhere else.
+func armValueMentions(node ast.Node) []ast.Node {
+	called := map[*ast.Ident]bool{}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				called[fn] = true
+			case *ast.SelectorExpr:
+				called[fn.Sel] = true
+			}
+		}
+		return true
+	})
+	var out []ast.Node
+	for _, n := range mentionSites(node, "supportMayEnter") {
+		if !called[n.(*ast.Ident)] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func mentionsArm(nodes []ast.Node) bool {
 	return slices.ContainsFunc(nodes, func(n ast.Node) bool { return len(mentionSites(n, "supportMayEnter")) > 0 })
 }
 
 // TestSupportCensus_OnlyTheListedDoorsCallTheArm: every unit that mentions supportMayEnter is inside
-// supportCallList, and every key on it calls it: a bare mention there (`_ = s.supportMayEnter`) asks nothing. The
-// scan holds each func declaration by receiver and name and each package-level var, so a call added to any
-// function sharing a bare name with another is seen.
+// supportCallList, every key on it calls it, and no unit, listed or not, mentions it other than as a call: the arm
+// is called where it is named, so a method value (`f := s.supportMayEnter`, the arm passed as an argument) is
+// refused. The scan holds each func declaration by receiver and name and each package-level var, so a call added
+// to any function sharing a bare name with another is seen.
 func TestSupportCensus_OnlyTheListedDoorsCallTheArm(t *testing.T) {
 	units := censusUnits(t)
 	for _, key := range sortedKeys(units) {
+		for _, node := range units[key] {
+			if len(armValueMentions(node)) > 0 {
+				t.Errorf("%s takes supportMayEnter as a value: the arm is called where it is named; taking it as a value hides where it is asked. %s", key, supportCensusEdit)
+			}
+		}
 		if _, listed := supportCallList[key]; !listed && mentionsArm(units[key]) {
 			t.Errorf("%s mentions supportMayEnter and is not on supportCallList. %s", key, supportCensusEdit)
 		}
@@ -198,55 +256,185 @@ func TestSupportCensus_OnlyTheListedDoorsCallTheArm(t *testing.T) {
 	}
 }
 
+// recheckLiteral is the func literal whose body calls supportMayEnter that expr is, or that expr names when it is
+// an identifier assigned exactly once in body (`check := func(...) {...}`), nil for anything else.
+func recheckLiteral(body *ast.BlockStmt, expr ast.Expr) *ast.FuncLit {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	armLit := func(e ast.Expr) *ast.FuncLit {
+		if lit, ok := e.(*ast.FuncLit); ok && callsAny(lit, "supportMayEnter") {
+			return lit
+		}
+		return nil
+	}
+	id, ok := expr.(*ast.Ident)
+	if !ok {
+		return armLit(expr)
+	}
+	var assigned []ast.Expr
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range n.Lhs {
+				if l, ok := lhs.(*ast.Ident); ok && l.Name == id.Name {
+					if len(n.Lhs) == len(n.Rhs) {
+						assigned = append(assigned, n.Rhs[i])
+					} else {
+						assigned = append(assigned, nil)
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				if name.Name == id.Name {
+					if len(n.Names) == len(n.Values) {
+						assigned = append(assigned, n.Values[i])
+					} else {
+						assigned = append(assigned, nil)
+					}
+				}
+			}
+		}
+		return true
+	})
+	if len(assigned) != 1 || assigned[0] == nil {
+		return nil
+	}
+	return armLit(assigned[0])
+}
+
 // TestSupportCensus_RunExecKeepsItsRecheck: handleRunExec asks the arm twice, once at the door and once in the
 // func literal its open command hands to holdAttachAuthority, which ends the command when the grant does. The
-// door's call alone must not satisfy the census, so the re-check is pinned however it reaches the arm.
+// re-check is the check argument of that call (holdAttachAuthority(ctx, check, end)): a func literal that calls
+// the arm, or an identifier assigned once from one. A literal that calls the arm and is never handed over is no
+// re-check, and the door's call alone must not satisfy the census.
 func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
 	body := censusBody(censusUnits(t), "Server.handleRunExec")
 	if body == nil {
 		t.Fatalf("Server.handleRunExec no longer exists. %s", supportCensusEdit)
 	}
-	if !callsAny(body, "holdAttachAuthority") {
+	holds := callSites(body, "holdAttachAuthority")
+	if len(holds) == 0 {
 		t.Errorf("handleRunExec does not call holdAttachAuthority: an open command would outlive its grant. %s", supportCensusEdit)
 	}
-	recheck := 0
-	ast.Inspect(body, func(n ast.Node) bool {
-		if lit, ok := n.(*ast.FuncLit); ok {
-			recheck += len(mentionSites(lit, "supportMayEnter"))
-			return false
+	var handed []*ast.FuncLit
+	for _, site := range holds {
+		call := site.(*ast.CallExpr)
+		if len(call.Args) != 3 {
+			t.Errorf("handleRunExec calls holdAttachAuthority with %d arguments, want (ctx, check, end). %s", len(call.Args), supportCensusEdit)
+			continue
 		}
-		return true
-	})
-	if recheck == 0 {
-		t.Errorf("handleRunExec has no func literal that asks supportMayEnter: the open command's re-check is gone. %s", supportCensusEdit)
+		lit := recheckLiteral(body, call.Args[1])
+		if lit == nil {
+			t.Errorf("handleRunExec hands holdAttachAuthority a check that is not a func literal calling supportMayEnter, nor a name assigned once from one: the open command's re-check is gone. %s", supportCensusEdit)
+			continue
+		}
+		handed = append(handed, lit)
 	}
-	if got := len(mentionSites(body, "supportMayEnter")); got-recheck == 0 {
+	outside := 0
+	for _, site := range callSites(body, "supportMayEnter") {
+		if !slices.ContainsFunc(handed, func(lit *ast.FuncLit) bool { return site.Pos() >= lit.Pos() && site.End() <= lit.End() }) {
+			outside++
+		}
+	}
+	if outside == 0 {
 		t.Errorf("handleRunExec asks supportMayEnter only in its re-check: the door's own call is gone. %s", supportCensusEdit)
 	}
 }
 
+// censusEdges is the names of the units node calls or mentions, split by how a unit answers to them. A selector
+// whose left side is one of the file's imports is another package and no edge. A bare identifier is a package-level
+// function or var (funcs). Any other selector `x.Name`, a call or a method value, is a method of any receiver
+// (methods).
+func censusEdges(node ast.Node, imported map[string]bool) (funcs, methods []string) {
+	viaSelector := map[*ast.Ident]bool{}
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			viaSelector[n.Sel] = true
+			if x, ok := n.X.(*ast.Ident); ok && imported[x.Name] {
+				return false
+			}
+			methods = append(methods, n.Sel.Name)
+		case *ast.Ident:
+			if !viaSelector[n] {
+				funcs = append(funcs, n.Name)
+			}
+		}
+		return true
+	})
+	return funcs, methods
+}
+
+// censusReach is the first path from the unit start to a unit in targets, following every call and every mention
+// of another unit in a unit's nodes, as censusEdges resolves them (conservative: a method name answers for every
+// receiver). The path is the unit keys from start to the target; nil when targets cannot be reached.
+func censusReach(units map[string][]ast.Node, imports map[ast.Node]map[string]bool, funcs, methods map[string][]string, start string, targets map[string]bool) []string {
+	parent := map[string]string{start: ""}
+	queue := []string{start}
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		var next []string
+		for _, node := range units[key] {
+			f, m := censusEdges(node, imports[node])
+			for _, name := range slices.Compact(slices.Sorted(slices.Values(f))) {
+				next = append(next, funcs[name]...)
+			}
+			for _, name := range slices.Compact(slices.Sorted(slices.Values(m))) {
+				next = append(next, methods[name]...)
+			}
+		}
+		for _, k := range next {
+			if _, seen := parent[k]; seen {
+				continue
+			}
+			parent[k] = key
+			if targets[k] {
+				path := []string{k}
+				for p := key; p != ""; p = parent[p] {
+					path = append([]string{p}, path...)
+				}
+				return path
+			}
+			queue = append(queue, k)
+		}
+	}
+	return nil
+}
+
 // TestSupportCensus_NeverListedFunctionsStayOut: every function on supportNeverList exists (a rename fails here
-// rather than silently leaving the door unwatched) and mentions neither supportMayEnter nor any call-list function,
-// so a door taken as a method value and called later counts as reaching it.
+// rather than silently leaving the door unwatched) and reaches neither supportMayEnter nor any call-list function,
+// directly or through any chain of calls and mentions across the package's units, so a wrapper or a door taken as a
+// method value and called later counts as reaching it. A call into an imported package is no edge, a bare name is a
+// package-level function or var, and `x.Name` is a method of any receiver.
 func TestSupportCensus_NeverListedFunctionsStayOut(t *testing.T) {
-	units := censusUnits(t)
-	var doors []string
-	for _, key := range sortedKeys(supportCallList) {
-		doors = append(doors, key[strings.LastIndex(key, ".")+1:])
+	units, imports := censusParse(t)
+	funcs, methods := map[string][]string{}, map[string][]string{}
+	for _, key := range sortedKeys(units) {
+		if i := strings.LastIndex(key, "."); i >= 0 {
+			methods[key[i+1:]] = append(methods[key[i+1:]], key)
+		} else {
+			name := strings.TrimPrefix(key, "var ")
+			funcs[name] = append(funcs[name], key)
+		}
+	}
+	targets := map[string]bool{"Server.supportMayEnter": true}
+	for key := range supportCallList {
+		targets[key] = true
 	}
 	for _, key := range sortedKeys(supportNeverList) {
-		nodes, ok := units[key]
-		if !ok {
+		if _, ok := units[key]; !ok {
 			t.Errorf("supportNeverList names %s, which no longer exists: a rename moves the guard off the door. %s", key, supportCensusEdit)
 			continue
 		}
-		if mentionsArm(nodes) {
-			t.Errorf("%s mentions supportMayEnter but must never (%s). %s", key, supportNeverList[key], supportCensusEdit)
-		}
-		for _, door := range doors {
-			if slices.ContainsFunc(nodes, func(n ast.Node) bool { return len(mentionSites(n, door)) > 0 }) {
-				t.Errorf("%s mentions %s, a door of the support arm, but must never (%s). %s", key, door, supportNeverList[key], supportCensusEdit)
-			}
+		if path := censusReach(units, imports, funcs, methods, key, targets); path != nil {
+			t.Errorf("%s reaches a door of the support arm but must never (%s): %s. %s", key, supportNeverList[key], strings.Join(path, " → "), supportCensusEdit)
 		}
 	}
 }
