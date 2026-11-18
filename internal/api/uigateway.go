@@ -449,7 +449,7 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 
 // relayUISession serves one request of an authenticated session, a cookie's or an inbound token's.
 func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiSession) {
-	// Re-assert the human here as well as in uiDial, debounced: net/http dials
+	// Re-assert the human here as well as in uiDial, debounced but for a helper: net/http dials
 	// only when its pool has nothing reusable, so most requests of a busy
 	// session never reach uiDial at all (uiReassertRelay).
 	if de := s.uiReassertRelay(r.Context(), sess); de != nil {

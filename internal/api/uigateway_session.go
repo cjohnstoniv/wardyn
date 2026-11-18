@@ -510,7 +510,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 // Debounced per session to uiReassertInterval so this stays a couple of store
 // reads per session rather than a pair per relayed request — and so it never
 // turns a pooled request into a dial, which would undo the per-run connection
-// bound the pool exists to hold.
+// bound the pool exists to hold. A helper's session is not debounced (uiReassertDue).
 //
 // ponytail: the debounce map is pruned wholesale past a bound, like
 // shouldTouch's. Worst case is one extra re-check per live session.
@@ -565,7 +565,14 @@ func uiReassertKey(sess uiSession) string {
 	return sess.Principal + "\x00" + sess.Run.String() + "\x00" + sess.App + "\x00" + strconv.FormatInt(sess.IssuedAt, 10)
 }
 
+// uiReassertDue answers whether sess's request re-checks now. A helper's session (one carrying a support grant)
+// always does, with no debounce: the check then refuses a revoked grant with a clean 403 before the request is
+// relayed, where a debounced pass would relay it and leave a stream to the watch (supportWatchCtx) to cut later.
+// The cost is the run and the grant read on every request of a helper's session, and of no other.
 func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
+	if sess.SupportGrant != uuid.Nil {
+		return true
+	}
 	s.uiReassertMu.Lock()
 	defer s.uiReassertMu.Unlock()
 	at, ok := s.uiReassert[uiReassertKey(sess)]

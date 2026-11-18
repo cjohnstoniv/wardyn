@@ -201,8 +201,19 @@ func requireStreamOpen(t *testing.T, ended <-chan error) {
 
 // openStream opens a long-lived request of kind through the gateway under cookie and answers a channel that
 // receives once the stream has ended: "socket" an app's WebSocket, "novnc" the declared desktop's, "events" a
-// plain response that never completes.
+// plain response that never completes. It fails unless the gateway relayed the request.
 func (rig *supportUIRig) openStream(kind string, cookie *http.Cookie) <-chan error {
+	rig.t.Helper()
+	status, reason, ended := rig.startStream(kind, cookie)
+	if ended == nil {
+		rig.t.Fatalf("open the %s stream = %d %s, want it relayed", kind, status, reason)
+	}
+	return ended
+}
+
+// startStream is openStream that answers a refusal instead of failing on it: the gateway's status and, when it
+// refused the request (anything but a socket's 101 or the event stream's 200), the reason it gave and a nil channel.
+func (rig *supportUIRig) startStream(kind string, cookie *http.Cookie) (int, string, <-chan error) {
 	rig.t.Helper()
 	gw := httptest.NewServer(rig.gateway)
 	rig.t.Cleanup(gw.Close)
@@ -223,11 +234,14 @@ func (rig *supportUIRig) openStream(kind string, cookie *http.Cookie) <-chan err
 			rig.t.Fatalf("open the event stream: %v", err)
 		}
 		rig.t.Cleanup(func() { _ = resp.Body.Close() })
+		if resp.StatusCode != http.StatusOK {
+			return resp.StatusCode, refusedReason(resp), nil
+		}
 		go func() {
 			_, err := io.Copy(io.Discard, resp.Body)
 			ended <- err
 		}()
-		return ended
+		return resp.StatusCode, "", ended
 	}
 	conn, err := net.Dial("tcp", gw.Listener.Addr().String())
 	if err != nil {
@@ -241,15 +255,25 @@ func (rig *supportUIRig) openStream(kind string, cookie *http.Cookie) <-chan err
 	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
-	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
-		rig.t.Fatalf("relayed upgrade = %v %v, want 101", resp, err)
+	if err != nil {
+		rig.t.Fatalf("read the upgrade's answer: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return resp.StatusCode, refusedReason(resp), nil
 	}
 	go func() {
 		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		_, err := io.Copy(io.Discard, br)
 		ended <- err
 	}()
-	return ended
+	return resp.StatusCode, "", ended
+}
+
+// refusedReason is the reason in a refusal's error body.
+func refusedReason(resp *http.Response) string {
+	var body errorBody
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body)
+	return body.Reason
 }
 
 // wantStreamEnded waits for the stream to end the way a cut does, not by timing out, and answers how it ended.
@@ -503,28 +527,49 @@ func TestSupportUI_WatchEndsRelayedStreams(t *testing.T) {
 	})
 }
 
-// A stream opened inside the re-assert debounce after a revoke is cut by the watch's first check, which runs as
-// the stream starts and not at the first tick: the watch's interval here is an hour, so only that check can end it.
-func TestSupportUI_WatchChecksAtOnceWhenTheStreamOpens(t *testing.T) {
+// A helper's session re-checks on every request, with no debounce: a request just after a revoke, well inside
+// the window an owner's session waits out, is refused with a 403 before anything is relayed, so no socket or
+// event stream opens and only the one denial row is written. The watch's interval here is an hour, so no tick
+// can be what refuses it. An owner's session keeps the debounce: the same request after the owner's sign-in is
+// revoked is still served, and refused once the window has passed.
+func TestSupportUI_EveryHelperRequestRechecksWithNoDebounce(t *testing.T) {
 	for _, kind := range []string{"socket", "events"} {
-		t.Run(kind, func(t *testing.T) {
+		t.Run("helper/"+kind, func(t *testing.T) {
 			setSupportWatch(t, time.Hour, 2*time.Second)
 			rig := newSupportUIRig(t, "web_apps")
 			cookie := rig.helperSession("code")
-			if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK { // a clean pass starts the debounce window
+			if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK { // a clean pass, which would start an owner's window
 				t.Fatalf("first request = %d %s", rec.Code, rec.Body)
 			}
 			rig.endGrant("revoked")
-			// Inside the debounce the gateway's own re-assert has not asked again, so the request is still served.
-			if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK {
-				t.Fatalf("request inside the debounce = %d %s, want it served", rec.Code, rec.Body)
+			status, reason, ended := rig.startStream(kind, cookie)
+			if ended != nil || status != http.StatusForbidden || reason != uiDeniedReasonNotAuthorized {
+				t.Fatalf("the %s request after the revoke = %d %q (opened %v), want 403 %s and no stream", kind, status, reason, ended != nil, uiDeniedReasonNotAuthorized)
 			}
-			ended := rig.openStream(kind, cookie)
-			if err := wantStreamEnded(t, ended); kind == "events" && err == nil {
-				t.Fatal("the event stream ended as if it had completed; a cut must abort it")
+			rows := rig.audit.auditRows("ui.authorize", "denied")
+			if len(rows) != 1 || uiRowData(t, rows[0])["support_grant"] != rig.grant.ID.String() {
+				t.Fatalf("denied rows = %+v, want the one refusal naming the grant", rows)
 			}
 		})
 	}
+	t.Run("owner keeps the debounce", func(t *testing.T) {
+		setSupportWatch(t, time.Hour, 2*time.Second)
+		rig := newSupportUIRig(t, "web_apps")
+		rev := &uiRevocations{}
+		rig.srv.cfg.SessionRevocations = rev
+		cookie := rig.session(rig.ticket(rig.run.ID, rig.owner, oidc.RoleUser), "code")
+		if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK {
+			t.Fatalf("first request = %d %s", rec.Code, rec.Body)
+		}
+		rev.revoke()
+		if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK {
+			t.Fatalf("the owner's request inside the debounce = %d %s, want it served", rec.Code, rec.Body)
+		}
+		rig.clock.advance(uiReassertInterval + time.Second)
+		if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusForbidden || respondedReason(t, rec) != uiDeniedReasonRevoked {
+			t.Fatalf("the owner's request past the debounce = %d %s, want 403 %s", rec.Code, rec.Body, uiDeniedReasonRevoked)
+		}
+	})
 }
 
 // check-2 M7: an owner's relayed request is not watched, and neither is any session without a grant: the
