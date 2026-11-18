@@ -301,10 +301,11 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 }
 
 // errRunExecSupportEnded and errRunExecSupportUnverified are the causes a helper's command's context is
-// cancelled with when its grant is gone or cannot be read.
+// cancelled with when its grant is gone or cannot be read. Their text reaches a log only: runExecCutReason maps
+// each to its sentence.
 var (
-	errRunExecSupportEnded      = errors.New(runExecSupportEnded)
-	errRunExecSupportUnverified = errors.New(runExecSupportUnverified)
+	errRunExecSupportEnded      = errors.New("api: the support grant ended")
+	errRunExecSupportUnverified = errors.New("api: the support grant could not be read")
 )
 
 // runExecCutReason is the audit error for a command cut short, when it was not the timeout: the support grant's
