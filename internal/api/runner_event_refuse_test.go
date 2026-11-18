@@ -47,11 +47,11 @@ func (f *refuseStoreFake) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 	return f.run, f.runErr
 }
 
-func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
+func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
-	return r.ActionID != nil, f.refuseErr
+	return r.ActionID != nil, true, f.refuseErr
 }
 
 func (f *refuseStoreFake) recorded() []store.RunnerEventRefusal {
@@ -176,7 +176,7 @@ func TestRefusalRowBeforeAck(t *testing.T) {
 	}
 	calls := fake.recorded()
 	sum := sha256.Sum256(data)
-	if len(calls) != 1 || !calls[0].Row || calls[0].Marker || calls[0].Summary != nil || calls[0].Kind != runnerwire.EventSpool ||
+	if len(calls) != 1 || calls[0].Kind != runnerwire.EventSpool ||
 		calls[0].Code != runnerwire.RefusalShape || calls[0].Sentinel != errRunnerEventShape.Error() ||
 		calls[0].PayloadSHA256 != hex.EncodeToString(sum[:]) || calls[0].PayloadBytes != len(data) || calls[0].RunID == nil || *calls[0].RunID != runID {
 		t.Fatalf("RefuseRunnerEvent calls = %+v, want one row of codes, hash and size", calls)
@@ -189,78 +189,32 @@ func TestRefusalRowBeforeAck(t *testing.T) {
 	}
 }
 
-// One runner writes at most 32 rows in an hour, the 33rd marked; the rest are counted and summarised by the first
-// row of a later window. Each runner has its own count.
-func TestRefusalRowsBounded(t *testing.T) {
-	now := time.Now().UTC()
-	start := now
+// The bound on refusal rows is the store's, counted in the transaction that writes them: no replica drops, plans or
+// counts a refusal itself, so two replicas hand every refusal of one runner to the store, each with its own hash, and
+// acknowledge each one it records.
+func TestRefusalBoundIsTheStores(t *testing.T) {
+	now := time.Now()
 	fake := &refuseStoreFake{}
-	srv := refuseTestServer(fake, &now)
+	replicas := []*Server{refuseTestServer(fake, &now), refuseTestServer(fake, &now)}
 	runnerID, runID := uuid.New(), uuid.New()
-	refuse := func(id uuid.UUID, i int) {
-		t.Helper()
-		data := []byte(fmt.Sprintf(`{"n":%d}`, i)) // distinct events: dedupe could not bound these
-		err := srv.eventFromRunner(t.Context(), id, "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: data})
+	// Past the 33 rows a window writes, and distinct events: dedupe could not bound these.
+	const n = 70
+	payload := func(i int) []byte { return []byte(fmt.Sprintf(`{"n":%d}`, i)) }
+	for i := range n {
+		err := replicas[i%2].eventFromRunner(t.Context(), runnerID, "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: payload(i)})
 		var refusal *runnerwire.EventRefusal
 		if !errors.As(err, &refusal) {
-			t.Fatalf("refusal %d = %v", i, err)
+			t.Fatalf("refusal %d = %v, want an EventRefusal", i, err)
 		}
-	}
-	for i := range 133 {
-		now = start.Add(time.Duration(i) * time.Second)
-		refuse(runnerID, i)
 	}
 	calls := fake.recorded()
-	rows, markers := 0, 0
+	if len(calls) != n {
+		t.Fatalf("%d RefuseRunnerEvent calls, want %d: a replica dropped a refusal the store must count", len(calls), n)
+	}
 	for i, c := range calls {
-		if c.Row {
-			rows++
+		if sum := sha256.Sum256(payload(i)); c.PayloadSHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("call %d carries %s, want the hash of refusal %d", i, c.PayloadSHA256, i)
 		}
-		if c.Marker {
-			markers++
-			if i != runnerEventRefuseRows {
-				t.Errorf("marker on refusal %d, want %d", i+1, runnerEventRefuseRows+1)
-			}
-		}
-		if c.Summary != nil {
-			t.Errorf("summary inside the first window: %+v", c.Summary)
-		}
-	}
-	if len(calls) != 133 || rows != runnerEventRefuseRows+1 || markers != 1 {
-		t.Fatalf("%d calls, %d rows, %d markers: want 133, %d, 1", len(calls), rows, markers, runnerEventRefuseRows+1)
-	}
-	refuse(uuid.New(), 0)
-	if other := fake.recorded()[133]; !other.Row || other.Marker {
-		t.Fatalf("a second runner shares the first one's bound: %+v", other)
-	}
-	now = start.Add(runnerEventRefuseWindow)
-	refuse(runnerID, 133)
-	last := fake.recorded()[134]
-	if !last.Row || last.Marker || last.Summary == nil || last.Summary.Suppressed != 100 || !last.Summary.WindowStart.Equal(start) ||
-		!last.Summary.WindowEnd.Equal(start.Add(runnerEventRefuseWindow)) {
-		t.Fatalf("first refusal of the next window = %+v (summary %+v), want its row and a summary of 100", last, last.Summary)
-	}
-}
-
-// A runner that suppressed rows and then goes quiet (revoked, say) owes its summary for a day; after that its window
-// is dropped by the next refusal of any other runner, instead of staying in memory.
-func TestRefusalWindowOwingASummaryIsDroppedAfterADay(t *testing.T) {
-	start := time.Now().UTC()
-	var r runnerEventRefusals
-	quiet, other := uuid.New(), uuid.New()
-	for range runnerEventRefuseRows + 6 {
-		r.count(quiet, start)
-	}
-	r.count(other, start.Add(runnerEventRefuseWindow))
-	if _, ok := r.byRunner[quiet]; !ok {
-		t.Fatal("a window that suppressed rows was dropped before its summary was owed for a day")
-	}
-	if _, _, sum := r.plan(quiet, start.Add(runnerEventRefuseWindow)); sum == nil || sum.Suppressed != 5 {
-		t.Fatalf("summary owed after an hour = %+v, want 5 suppressed", sum)
-	}
-	r.count(other, start.Add(runnerEventRefuseOwedKeep))
-	if _, ok := r.byRunner[quiet]; ok {
-		t.Fatal("a window that suppressed rows stayed in memory a day after it opened")
 	}
 }
 

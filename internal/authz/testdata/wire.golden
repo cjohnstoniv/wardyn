@@ -65,3 +65,6 @@ reason unit_scope_denied
 reason not_a_decider
 reason decision_scope_above_rule
 reason run_paused
+reason support_door_not_granted
+reason support_grant_ended
+reason support_helper_decision

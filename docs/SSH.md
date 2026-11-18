@@ -199,7 +199,7 @@ Host wardyn-<run-id>
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
   - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
-    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
+    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset. Leaving `exec` out of `WARDYN_SSH_CHANNELS` turns it off.
     - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
@@ -211,6 +211,7 @@ Host wardyn-<run-id>
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
+- An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials. `sftp` also covers `wardyn sync`, and `exec` also covers `POST /runs/{id}/exec` ([ENV.md](ENV.md#wardyn_ssh_channels)).
 - When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 
 ### Without SSH: `wardyn attach`
@@ -283,7 +284,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 `wardyn run --task ... --local-folder ./project` creates the run, waits for its sandbox and syncs the folder in once. The agent starts only after that pass completes, within `WARDYN_LOCAL_FOLDER_SEED_WAIT` (10 minutes) and the run's end. A failed or missing pass fails the run with a reason naming the folder. `wardyn sync <run-id> ./project` can seed it within the wait. Audit: `run.seed.hold`, `run.seed`.
 
-Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
+Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway, or whose operator left `sftp` out of `WARDYN_SSH_CHANNELS` (the sync follows it), refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
 
 `rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 
@@ -461,6 +462,11 @@ ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
   - A fresh admin key on a person's run is
     refused with reason `run_owner_only`, at connect and again at every new channel
     of an open connection.
+  - The one exception is a support helper: a super admin's fresh, uncapped key enters a person's run while the run's owner has accepted their help request and ticked a terminal, commands, files or forward door.
+    - Each channel kind needs its own door (shell, exec, sftp and sync, forward); an unticked kind is refused with its own sentence and an `ssh.channel.reject` row with reason `support_door_not_granted`.
+    - The helper is governed as the owner is: `deny_interactive`, the channel switch and `data_out` all apply, and the admin exemption never does.
+    - The connection is re-checked on every keepalive; a revoked, expired or unreadable grant refuses new channels and closes it.
+    - The success row on `ssh.authenticate` carries `support_grant` and `entry` `support`.
   - A member's key never satisfies the override — only the
     owner check does, same as before.
   - Existing admin-stamped keys are not revoked:

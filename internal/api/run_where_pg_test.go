@@ -28,6 +28,10 @@ func (e *poolEnv) boundRun(bind func(*types.AgentRun)) uuid.UUID {
 	if _, err := e.pg.CreateRun(context.Background(), run); err != nil {
 		e.t.Fatalf("create run: %v", err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := e.pg.RaiseRunDataOut(context.Background(), id, types.TransferAllowed); err != nil {
+		e.t.Fatalf("give the run its data_out rule: %v", err)
+	}
 	return id
 }
 

@@ -55,7 +55,8 @@ func passes(t *testing.T, srv *Server, runnerID uuid.UUID, n int) {
 }
 
 // TestWorkloadEventRate_RefusesPastBurst: a runner may send a full burst at once; the next frame is refused
-// rate_limited, recorded as a row, and acknowledged; a second later 10 more pass.
+// rate_limited, handed to the store (which writes its row within the runner's window), and acknowledged; a second
+// later 10 more pass.
 func TestWorkloadEventRate_RefusesPastBurst(t *testing.T) {
 	fake := &refuseStoreFake{}
 	now := time.Now()
@@ -71,8 +72,8 @@ func TestWorkloadEventRate_RefusesPastBurst(t *testing.T) {
 		t.Fatalf("the frame past the burst = %v, want an EventRefusal %q", err, runnerwire.RefusalRateLimited)
 	}
 	got := fake.recorded()
-	if len(got) != 1 || got[0].Code != runnerwire.RefusalRateLimited || got[0].Kind != runnerwire.EventWorkload || !got[0].Row {
-		t.Fatalf("RefuseRunnerEvent calls = %+v, want one rate_limited workload refusal with its own row", got)
+	if len(got) != 1 || got[0].Code != runnerwire.RefusalRateLimited || got[0].Kind != runnerwire.EventWorkload {
+		t.Fatalf("RefuseRunnerEvent calls = %+v, want one rate_limited workload refusal handed to the store", got)
 	}
 	now = now.Add(time.Second)
 	passes(t, srv, runnerID, int(workloadEventRatePerSec))

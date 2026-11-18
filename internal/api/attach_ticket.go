@@ -89,7 +89,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
 		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App,
-		tokenID: t.TokenID, cliSessionID: t.CLISessionID}, true, nil
+		tokenID: t.TokenID, cliSessionID: t.CLISessionID, support: t.SupportGrant, supportExpires: t.SupportExpires}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -128,6 +128,10 @@ type ticketActor struct {
 	// window; a cli_admin step-up binds to its own token (credentialBinding). The ticket's authority check asks after whichever is set, so a revoke, an expiry or a sign-out of that
 	// credential ends the terminal it opened (ticketAuthority).
 	tokenID, cliSessionID uuid.UUID
+	// support is the support grant a helper's ticket was minted under (uuid.Nil on every other ticket), and
+	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
+	support        uuid.UUID
+	supportExpires time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -163,6 +167,11 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 // role, which is the ONLY authorization signal the WS handler has left to
 // check at consume time, since the ?ticket= lane bypasses humanOrAdminAuth
 // entirely.
+//
+// A super admin signed in as a person who holds a live support grant on the run, naming the terminal door
+// (purpose "") or a UI door (purpose "ui"), gets a member-stamped ticket that carries the grant instead
+// (supportMayEnter). Any other purpose is refused under a grant. Without a grant, or with the switch off, the
+// owner rule above answers as before.
 func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// The ticket's authority time, taken before any store call so nothing the
 	// client can stretch falls before it (the same convention as apitokens.go).
@@ -171,8 +180,38 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, asSponsor, ok := s.admitRunEntry(w, r, id, authorizedAt)
-	if !ok {
+	purpose := r.URL.Query().Get("purpose")
+	// The support arm (support_terminal.go): a super admin signed in as a person who is not the run's creator
+	// asks it first. supportNone, which is every caller without a grant, goes on to admitRunEntry's owner rule
+	// unchanged; any other answer but supportOK is a refusal.
+	var run types.AgentRun
+	var grant store.SupportGrant
+	var asSponsor, asSupport bool
+	if s.supportCaller(r.Context()) {
+		if run, ok = s.getRunAuthorizedBy(w, r, id, s.ownsRunOrAdmin); !ok {
+			return
+		}
+		if principal := principalFromRequest(r); run.CreatedBy != principal {
+			door, known := supportTicketDoor(purpose)
+			var v supportVerdict
+			grant, v = s.supportMayEnter(r.Context(), run, principal, uuid.Nil, door)
+			switch {
+			case v == supportOff:
+				v = supportNone // the switch is off: the owner rule's refusal, as before (value list, row A)
+			case v == supportOK && !known:
+				v = supportDoorRefused // no support ticket carries any other purpose (L7)
+			}
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
+				return
+			}
+			asSupport = v == supportOK
+		}
+	}
+	if asSupport {
+		if s.refuseSupportTicket(w, r, run, purpose) {
+			return
+		}
+	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt); !ok {
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
@@ -191,7 +230,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// (?purpose=ui) skips them: a UI session holds no terminal slot, and a ticket that names ui but is
 	// spent on a terminal still meets the upgrade's own check.
 	at, principal := actorFromRequest(r)
-	if r.URL.Query().Get("purpose") != "ui" {
+	if purpose != "ui" {
 		if refused := s.attachSlotsFull(run, principal); refused != "" {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 			return
@@ -205,11 +244,16 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// because a token carries a whole session identity rather than run reach.
 	// A sponsor's ticket is stamped member whatever the minter's role, so refuseAttachEntry never takes
 	// adminDoorExempt and the run's deny_interactive door always runs (F6).
+	// A support ticket is member-stamped too, so nothing downstream reads the helper's role as the exemption's.
 	role := oidc.RoleUser
-	if s.isOperator(r.Context()) && !asSponsor {
+	if s.isOperator(r.Context()) && !asSponsor && !asSupport {
 		role = oidc.RoleAdmin
 	}
-	s.issueAttachTicket(w, r, store.AttachTicket{RunID: id, ActorType: at, Principal: principal, Role: role}, authorizedAt)
+	t := store.AttachTicket{RunID: id, ActorType: at, Principal: principal, Role: role}
+	if asSupport {
+		t.SupportGrant, t.SupportExpires = supportTicketGrant(grant)
+	}
+	s.issueAttachTicket(w, r, t, authorizedAt)
 }
 
 // issueAttachTicket is the end both ticket routes share (this file's and inbound_ticket.go's): it mints t,

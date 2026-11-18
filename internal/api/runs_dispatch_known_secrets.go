@@ -85,3 +85,18 @@ func (s *Server) keepFinalRunProxyConfig(ctx context.Context, run types.AgentRun
 		run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepProxyConfig, err, slog.String("run_id", run.ID.String()))})))
 	return false
 }
+
+// keepRunDataOut stores the run's data_out rule on its row (raiseRunDataOut) before the run.policy.resolve row
+// records it, so the doors read it there once audit retention prunes that row. A rule that cannot be stored
+// fails the run, as an unstored proxy config does: no sandbox starts whose rule only the audit log keeps.
+func (s *Server) keepRunDataOut(ctx context.Context, run types.AgentRun, rule types.TransferRule, stopLease func()) bool {
+	err := s.raiseRunDataOut(ctx, run.ID, rule)
+	if err == nil {
+		return true
+	}
+	stopLease()
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's data_out rule could not be stored")
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+		run.ID.String(), "failure", mustJSON(map[string]any{"error": auditStep(ctx, auditStepDataOut, err, slog.String("run_id", run.ID.String()))})))
+	return false
+}

@@ -355,6 +355,8 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 		},
 	}
 	cases = append(cases, decidersMDCases()...) // the same agreement under unit deciders (deciders_decide_test.go)
+	// and for an accepted support helper (support_decide_test.go)
+	cases = append(cases, supportDecideMDCases()...)
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

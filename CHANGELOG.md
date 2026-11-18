@@ -11,6 +11,50 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A super admin can ask to help inside someone else's running run, and the run's owner decides which doors the helper may use and for 15, 30 or 60 minutes. The feature is off unless `WARDYN_SUPPORT_SESSIONS` is on. Migration `0293_run_support_grants` adds the grant record. <!-- WORDING PENDING -->
+
+### Fixed
+
+- A run's `data_out` rule is now kept on the run itself, so audit retention removing the run's policy records no longer reopens output and replay reads, web apps, SSH (file transfer, commands, port forwards and `wardyn sync` down) or computer-folder bring-back. Migration `0292_agent_runs_data_out` fills it on existing runs from the policy records retention has kept. A run restarted or edited since it started (policy generation 2 or later) whose current generation's record is gone is left without a rule and its rule reads as unreadable (see Changed). Any other existing run left with no policy record reads as `blocked` when it was created before the newest audit record retention removed, or within a day after it, and is not still queued or starting with no sandbox: only a security admin reads its output and a super admin replays it. Any other run with no policy record, one that has not started among them, reads as `allowed` as before.
+- The organisation now writes at most 32 `runner.event.refuse` rows an hour for a runner whose events it refuses for good, then one row marked `suppressed`, counted across all replicas and restarts, and the summary of the rest is written at the runner's next refusal however long it stays quiet. Before, each replica kept its own count, a restart reset it, and a summary owed for more than a day was dropped.
+
+### Before you upgrade
+
+- Existing runs left with no policy record that were created before the newest audit record retention removed, or within a day after it, now read their `data_out` as `blocked`, unless they are still queued or starting with no sandbox, or were restarted or edited since they started (policy generation 2 or later), which answer 503 `data_out_unreadable` instead: only a security admin can read their output and only a super admin replay them, and their SSH file transfer, commands, port forwards, `wardyn sync` down, web apps and computer-folder bring-back are refused. Runs that failed or were killed before they started are among them; they hold no output. A run still running is among them only when its policy record never reached the audit log, and it then does not copy its computer folder back when it ends. On an install whose retention has removed nothing, no run is set to `blocked`.
+- Stop every server of an older release before the first server of this release starts. An older server left running after migration `0292` keeps no `data_out` on the runs it starts or revives, so retention can later reopen their content. The Helm chart already stops the old servers first; this is for servers you run by hand.
+- Migration `0292` reads the policy record of every run the audit log still holds and fills each run's `data_out` from it, so an install with many runs in its retained audit history can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes. A timeout rolls it back and the next boot starts it again; raise the timeout before you upgrade (see "Before you upgrade: a large recording store" in docs/OPERATIONS.md for how).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_support_grants` to every role that was granted `DELETE` on `run_attach_leases`, and `SELECT, INSERT, UPDATE` on
+  `runner_event_refusal_windows` to every role that was granted `UPDATE` on `runner_spool_cursors`, in each case other than
+  that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then no support request or answer is recorded, though approving and denying approval holds works as before,
+  and no event the organisation refuses for good is recorded or acknowledged, so a runner keeps resending it.
+  An upgrade from before 0.10.0-rc.22 also needs that release's grants. On an install whose app role does not pick up
+  new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant the app role `SELECT, INSERT, UPDATE` on
+  `mcp_call_sends`. Without it, no `approve_each` MCP call that carries an operation key is asked about or sent, and
+  erasing any person's run tasks (`run_tasks`) fails. A call without a key is unaffected only in a run with no
+  `correlation_id`; in a run that has one, every `approve_each` call needs the grant. Grant it `SELECT, INSERT,
+  UPDATE, DELETE` on `principal_groups` too, unless it holds `DELETE` on `key_domain_login_groups`, itself or through
+  a role it is a member of: the migration grants the table to those roles. Without it every SSO sign-in and portal
+  token exchange is refused, and so are a SCIM removal from a group and erasing a person's credentials or purging
+  them, and a running run that a person owns and that carries a component gets no credential, no gateway token for an
+  organisation MCP server and no gateway client certificate (`503`). The admin token still signs in. An upgrade from
+  before 0.10.0-rc.21 also needs the 0.10.0-rc.21 grants: `SELECT, INSERT, UPDATE` on `principal_identity_unbinds` and
+  `run_teardown_holds`. An upgrade from before 0.10.0-rc.18 also needs the 0.10.0-rc.18 grant: `SELECT, INSERT,
+  UPDATE` on `run_proxy_starts`. An upgrade from before 0.10.0-rc.17 also needs the 0.10.0-rc.16 grants: `SELECT,
+  INSERT, UPDATE, DELETE` on `governance_unit_deciders` and `governance_envelopes`. An upgrade from before
+  0.10.0-rc.14 also needs every grant the 0.10.0-rc.14 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `run_create_keys`, `wall_presets`, `kept_machines`, `workloads`, `workload_bindings`, `workload_run_ends`,
+  `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`,
+  `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`, `governance_restrictions`,
+  `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`, `SELECT,
+  INSERT, UPDATE` on `groundtruth_sensors`, `runner_health`, `launch_preset_version_floor`, `cli_sessions` and
+  `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT` on
+  `audit_checkpoints` and `run_model_usage`. <!-- WORDING PENDING -->
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

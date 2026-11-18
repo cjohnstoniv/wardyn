@@ -32,6 +32,7 @@ func TestParseBootFlagsRefusesGarbageEnvToggle(t *testing.T) {
 		"WARDYN_ALLOW_USER_ENV_SECRET",
 		"WARDYN_ALLOW_AGENT_TELEMETRY",
 		"WARDYN_SCHEDULED_RUNS",
+		"WARDYN_SUPPORT_SESSIONS",
 		"WARDYN_APPROVAL_RULES",
 	} {
 		t.Run(name, func(t *testing.T) {

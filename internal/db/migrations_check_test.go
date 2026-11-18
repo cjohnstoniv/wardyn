@@ -438,6 +438,8 @@ func closedEnumChecks() []closedEnumCheck {
 		// Go and rejected by Postgres with every gate green. DERIVED from
 		// types.ApprovalKinds for the reason the state entry above gives.
 		{"approvals", "kind", enumSet(types.ApprovalKinds)},
+		// 0292: the run row's data_out rule, NULL for a run with none on its row.
+		{"agent_runs", "data_out", stringSet(string(types.TransferAllowed), string(types.TransferReview), string(types.TransferBlocked))},
 		// 0118: the notification outbox's own lifecycle, derived for the same reason.
 		{"approval_notifications", "state", enumSet(types.ApprovalNotifyStates)},
 		{"approvals", "decision_scope", stringSet(

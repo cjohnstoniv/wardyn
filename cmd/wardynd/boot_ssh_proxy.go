@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
@@ -57,4 +58,36 @@ func validateSSHMaxSessionsPerRun(n int) error {
 		return fmt.Errorf("refusing to start: WARDYN_SSH_MAX_SESSIONS_PER_RUN is %d; want an integer from 1 to %d", n, maxSSHSessionsPerRunLimit)
 	}
 	return nil
+}
+
+// parseSSHChannels reads WARDYN_SSH_CHANNELS: unset (or empty, which the env helper cannot tell from unset) is
+// nil, every kind served; otherwise a comma list of shell, exec, sftp and forward, anything else refusing boot.
+func parseSSHChannels(v string) (map[string]bool, error) {
+	if v == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(v) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_SSH_CHANNELS: empty list")
+	}
+	set := map[string]bool{}
+	for _, item := range strings.Split(v, ",") {
+		name := strings.TrimSpace(item)
+		switch name {
+		case "shell", "exec", "sftp", "forward":
+			set[name] = true
+		default:
+			return nil, fmt.Errorf("refusing to start: WARDYN_SSH_CHANNELS: unknown channel %q (want shell, exec, sftp or forward)", name)
+		}
+	}
+	return set, nil
+}
+
+// sshChannelSet is parseSSHChannels' value for api.Config, once boot has validated it. A flag left
+// unregistered (a test's partial bootFlags) is nil.
+func sshChannelSet(v *string) map[string]bool {
+	if v == nil {
+		return nil
+	}
+	set, _ := parseSSHChannels(*v)
+	return set
 }

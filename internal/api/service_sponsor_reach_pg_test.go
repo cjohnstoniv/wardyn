@@ -122,6 +122,10 @@ func (e sponsorEnv) seedRun(t *testing.T, owner string, mut func(*types.AgentRun
 	if err != nil {
 		t.Fatalf("seed run for %s: %v", owner, err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := e.st.RaiseRunDataOut(context.Background(), created.ID, types.TransferAllowed); err != nil {
+		t.Fatalf("give the run its data_out rule: %v", err)
+	}
 	return created
 }
 

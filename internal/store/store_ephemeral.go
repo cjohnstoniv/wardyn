@@ -62,6 +62,10 @@ type AttachTicket struct {
 	// terminal asks after the credential on every authority check and closes when it is gone.
 	TokenID      uuid.UUID
 	CLISessionID uuid.UUID
+	// SupportGrant is the support grant a ticket was minted under and SupportExpires when that grant ends
+	// (migration 0293); uuid.Nil and the zero time on any other ticket.
+	SupportGrant   uuid.UUID
+	SupportExpires time.Time
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -73,8 +77,15 @@ type AttachTicket struct {
 // holds only unredeemed tickets inside a 30s TTL, i.e. a handful of rows. Add a
 // sweeper (or an expires_at index) only if mint volume ever makes that false.
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
-	var viaDelegate, viaGrant, tokenID, cliSessionID *uuid.UUID
+	var viaDelegate, viaGrant, tokenID, cliSessionID, supportGrant *uuid.UUID
+	var supportExpires *time.Time
 	var viaActor []byte
+	if t.SupportGrant != uuid.Nil {
+		supportGrant = &t.SupportGrant
+	}
+	if !t.SupportExpires.IsZero() {
+		supportExpires = &t.SupportExpires
+	}
 	if t.TokenID != uuid.Nil {
 		tokenID = &t.TokenID
 	}
@@ -90,10 +101,10 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
-		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID,
+		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID, supportGrant, supportExpires,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -112,16 +123,16 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error) {
 	var t AttachTicket
 	var actorType string
-	var viaDelegate, viaGrant, tokenID, cliSessionID *uuid.UUID
+	var viaDelegate, viaGrant, tokenID, cliSessionID, supportGrant *uuid.UUID
 	var viaActor []byte
-	var authorizedAt *time.Time
+	var authorizedAt, supportExpires *time.Time
 	var email *string
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor, &tokenID, &cliSessionID)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor, &tokenID, &cliSessionID, &supportGrant, &supportExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -134,6 +145,12 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	}
 	if cliSessionID != nil {
 		t.CLISessionID = *cliSessionID
+	}
+	if supportGrant != nil {
+		t.SupportGrant = *supportGrant
+	}
+	if supportExpires != nil {
+		t.SupportExpires = *supportExpires
 	}
 	if authorizedAt != nil {
 		t.AuthorizedAt = *authorizedAt

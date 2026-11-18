@@ -357,6 +357,8 @@ export interface SetupStatus {
     macos_vms?: boolean;
     /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */
     mac_window?: boolean;
+    /** WARDYN_SUPPORT_SESSIONS: a super admin may ask to help inside someone's running run. Absent when off. */
+    support_sessions?: boolean;
   };
   checks: SetupCheck[];
   auth: {
