@@ -337,6 +337,21 @@ describe("RunnerCredentials — save", () => {
     expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
   });
 
+  it("an invalid minimum typed under the runner still blocks Save once the organisation's Azure DevOps tokens move to the organisation", async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("ado_minted_pat", "runner_resident"));
+    setField(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.windows)), "latest");
+    await user.click(option("ado_minted_pat", "via_org"));
+    expect(screen.queryByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.windows))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
+    // Any other class does not carry the posture across, so it saves.
+    await user.click(option("env_secret", "runner_resident"));
+    await user.click(option("ado_minted_pat", "refuse"));
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeEnabled();
+  });
+
   it("a 202 is the submitted note and nothing says saved", async () => {
     putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
     const onSubmitted = vi.fn();
