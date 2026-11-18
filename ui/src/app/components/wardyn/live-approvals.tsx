@@ -272,12 +272,11 @@ export function LiveApprovals({
       // producer with the toolgate (a `hold` run raises one per mutating tool
       // call) and this strip is that run's primary decision surface.
       //
-      // credential is admitted ONLY for an api_key mint: unlike a dispatch-time
-      // grant, the secrets demos' authorized-not-issued mint is raised from
-      // INSIDE the sandbox, mid-run, over the broker's own mint route — the
-      // same decision-visible-where-it-happens principle the egress/tool_call
-      // rows already follow, so it belongs on this strip too. git_pat/ssh_key
-      // credential approvals stay OUT: those mounts also occur on run-detail and
+      // credential is admitted by stripCarries only for an api_key mint: unlike a
+      // dispatch-time grant, it is raised mid-run, over the broker's own mint
+      // route — the same decision-visible-where-it-happens principle the
+      // egress/tool_call rows already follow, so it belongs on this strip too.
+      // git_pat/ssh_key credential approvals stay OUT of stripCarries: those mounts also occur on run-detail and
       // twice in record-pane, where a mid-run mint's blast-radius banner (the
       // git_pat "the agent's process can read this" nuance, the resident-key
       // TTL) is the whole point of deciding it — a bare one-click host row

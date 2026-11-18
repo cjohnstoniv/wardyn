@@ -159,9 +159,13 @@ describe("LiveApprovals", () => {
       });
 
     it("(a) without the prop, a git_pat credential is not on the strip", async () => {
-      listApprovalsMock.mockResolvedValue([gitPat()]);
+      // The egress row is the positive control: once it renders, the poll has answered, so the git_pat row's absence is
+      // the filter's doing and not a first render before the poll.
+      listApprovalsMock.mockResolvedValue([gitPat(), pending({ id: "egress-ctl", requested_scope: { host: "ctl.example" } })]);
       render(<LiveApprovals runId="r1" />);
-      expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
+      expect(await screen.findByText("Reach ctl.example")).toBeInTheDocument();
+      expect(screen.getAllByTestId("live-approval-row")).toHaveLength(1);
+      expect(screen.queryByText("Hand git a token for example.com")).not.toBeInTheDocument();
       expect(screen.queryByTestId("live-approval-banner-cred-pat")).not.toBeInTheDocument();
     });
 

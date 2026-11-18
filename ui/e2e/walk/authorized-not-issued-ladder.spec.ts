@@ -30,11 +30,14 @@ test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TE
 const DEMO_ID = "authorized-not-issued";
 const SECRET_NAME = "wardyn-demo-key";
 const GIT_CMD = "git ls-remote https://example.com/wardyn-demo.git";
-// The demo's ttl_seconds is 60 and the proxy re-mints only inside the last 30 s of it (git_broker.go:84), so a
-// second ask 31 s after the approval reaches the broker, which refuses it as already_minted.
+// The demo's ttl_seconds is 60 and the proxy reuses the minted token until 30 s before it ends (git_broker.go:84),
+// so a second ask 31 s after the mint reaches the broker, which refuses it as already_minted.
 const AFTER_TTL_MS = 31_000;
+// The rule_source the proxy stamps on the deny it writes when the token cannot be minted (pat_broker.go:38, :200-203).
+// A reused token that fails at the dial or the vet writes other rules, which must not pass for a spent mint.
+const MINT_DENIED_RULE = "brokered:git-pat:denied";
 
-type AuditRow = { action: string; outcome: string; target?: string; data?: Record<string, unknown> };
+type AuditRow = { action: string; outcome: string; time: string; target?: string; data?: Record<string, unknown> };
 
 /** The run's own audit trail, filtered by the server on action (internal/api/audit.go). */
 async function auditFor(page: Page, runId: string, action: string): Promise<AuditRow[]> {
@@ -58,10 +61,10 @@ async function typeLine(page: Page, line: string): Promise<void> {
 }
 
 test("an approved git token is minted once at the proxy, never handed to the sandbox, and refused a second time", async ({ page }) => {
-  // The budget: launching the sandbox (SANDBOX_UP), up to 120 s of git held for the person's decision, the 31 s
-  // wait for the minted token to age past ttl_seconds - 30, and the audit polls around them. The 30 s default
-  // would fail this test before the sandbox even came up.
-  test.setTimeout(SANDBOX_UP + 120_000 + AFTER_TTL_MS + 120_000);
+  // One budget for the whole ladder: launching the sandbox (SANDBOX_UP), up to 120 s of git held for the person's
+  // decision, the wait until 31 s after the mint, plus sign-in, the terminal and the audit polls. Their own timeouts
+  // add up to about 450 s beyond SANDBOX_UP, so this sets 10 minutes beyond it.
+  test.setTimeout(SANDBOX_UP + 10 * 60_000);
   expect(ADMIN_TOKEN, "WARDYN_WALK_ADMIN_TOKEN is unset: it stores the demo secret").not.toBe("");
 
   await page.addInitScript(() => {
@@ -73,13 +76,17 @@ test("an approved git token is minted once at the proxy, never handed to the san
   });
   await walkSignIn(page, ADMIN_EMAIL);
 
-  // 1. Store the secret the card needs. Any value works; the sandbox never sees it.
+  // 1. Store the secret the card needs. Any value works; the sandbox never sees it. A secret already stored
+  // (a film take, a hand setup) is left in place at the end.
+  const listed = await page.request.get("/api/v1/secrets", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } });
+  const secretExisted = listed.ok() && ((await listed.json()) as { names?: string[] }).names?.includes(SECRET_NAME) === true;
   const put = await page.request.put(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
     data: { value: "walk-demo-key-value" },
   });
   expect(put.ok(), `PUT /secrets: ${await put.text()}`).toBeTruthy();
 
+  let runId = "";
   try {
     // 2. Launch the card as an operator and attach.
     await page.goto(`/setup?step=${DEMO_ID}`);
@@ -91,7 +98,7 @@ test("an approved git token is minted once at the proxy, never handed to the san
     await waitForShell(page, screen);
 
     const stored = await page.evaluate(() => localStorage.getItem("wardyn-demo-runs"));
-    const runId = (JSON.parse(stored ?? "{}") as Record<string, string>)[DEMO_ID];
+    runId = (JSON.parse(stored ?? "{}") as Record<string, string>)[DEMO_ID] ?? "";
     expect(runId, "the card stores the run it started").toBeTruthy();
 
     // 3. Step 1: git is held, and the strip row appears.
@@ -99,16 +106,15 @@ test("an approved git token is minted once at the proxy, never handed to the san
     const row = card.getByTestId("live-approval-row").filter({ hasText: "Hand git a token for example.com" });
     await expect(row).toBeVisible({ timeout: 60_000 });
 
-    // 4. Approve it. The clock for the token's age starts here.
+    // 4. Approve it.
     await row.getByRole("button", { name: "Approve" }).click();
-    const approvedAt = Date.now();
 
-    // 5. The proxy minted the token once.
-    await expect
-      .poll(async () => (await auditFor(page, runId, "credential.mint")).filter((e) => e.outcome === "success").length, {
-        timeout: 120_000,
-      })
-      .toBe(1);
+    // 5. The proxy minted the token once, on its next 2 s poll after the decision. The token's age runs from that
+    // row's own time, not from the click.
+    const mints = async () => (await auditFor(page, runId, "credential.mint")).filter((e) => e.outcome === "success");
+    await expect.poll(async () => (await mints()).length, { timeout: 120_000 }).toBe(1);
+    const mintedAt = Date.parse((await mints())[0].time);
+    expect(Number.isNaN(mintedAt), "the mint row carries a time").toBe(false);
 
     // 6. Step 3: ask the broker for the token directly. The card's own curl, with its status printed after the body.
     const mintLine = card.getByTestId("demo-steps").locator("li").nth(2);
@@ -119,16 +125,19 @@ test("an approved git token is minted once at the proxy, never handed to the san
     await expect.poll(async () => termText(screen).catch(() => ""), { timeout: 30_000 }).toContain("http=403");
 
     // 7. Step 4, once the minted token is past ttl_seconds - 30: refused, and no second mint.
-    await page.waitForTimeout(Math.max(0, approvedAt + AFTER_TTL_MS - Date.now()));
+    await page.waitForTimeout(Math.max(0, mintedAt + AFTER_TTL_MS - Date.now()));
     const denies = async () =>
-      (await auditFor(page, runId, "egress.deny")).filter((e) => `${e.target ?? ""} ${JSON.stringify(e.data ?? {})}`.includes("example.com")).length;
+      (await auditFor(page, runId, "egress.deny")).filter(
+        (e) => e.data?.rule_source === MINT_DENIED_RULE && `${e.target ?? ""} ${JSON.stringify(e.data)}`.includes("example.com"),
+      ).length;
     const deniedBefore = await denies();
     await typeLine(page, GIT_CMD);
     await expect.poll(denies, { timeout: 60_000 }).toBeGreaterThan(deniedBefore);
     expect((await auditFor(page, runId, "credential.mint")).filter((e) => e.outcome === "success")).toHaveLength(1);
   } finally {
-    await page.request
-      .delete(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })
-      .catch(() => {});
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    // End the run so the sandbox does not idle out its lease, then drop the secret this walk stored.
+    if (runId) await page.request.post(`/api/v1/runs/${encodeURIComponent(runId)}/kill`, { headers: auth }).catch(() => {});
+    if (!secretExisted) await page.request.delete(`/api/v1/secrets/${encodeURIComponent(SECRET_NAME)}`, { headers: auth }).catch(() => {});
   }
 });
