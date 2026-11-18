@@ -383,37 +383,3 @@ func TestLaptopADOGate_KeepsTheGateBesideTheTokenInjection(t *testing.T) {
 		}
 	}
 }
-
-// A revive runs dispatch's recorded-mode door: a grant recorded runner_resident revives while the policy still gives
-// its class that mode, and is refused, with dispatch's reason, once the policy no longer does.
-func TestLocalRevive_RefusesAGrantWhoseRecordedModeMoved(t *testing.T) {
-	f := newComponentFixture(t)
-	runnerID := uuid.New()
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, RunnerID: &runnerID}
-	env := types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Delivery: types.GrantDeliveryResident,
-		Spec: types.GrantSpec{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"name":"TOKEN","secret_name":"ci-token"}`)}}
-	st := residentFactsStore{localPlanTestStore: localPlanTestStore{f.st},
-		policy:  json.RawMessage(`{"classes":{},"by_trust":{"org_cluster":{"classes":{"env_secret":{"mode":"runner_resident"}}}}}`),
-		posture: types.RunnerPosture{OS: "linux", Evidence: types.PostureEvidenceOSProbe},
-		trust:   types.RunnerTrustOrgCluster, recorded: types.RunnerTrustOrgCluster}
-	f.srv.cfg.Store = st
-	f.st.grants = []types.CredentialGrant{env}
-	revive := func() *placement.Refusal {
-		t.Helper()
-		cfg := proxy.Config{RunID: run.ID}
-		err := f.srv.refreshLocalDeploymentConfig(context.Background(), run, types.SiteConfig{}, &cfg)
-		r, _ := err.(*placement.Refusal)
-		if err != nil && r == nil {
-			t.Fatalf("revive: %v", err)
-		}
-		return r
-	}
-	if r := revive(); r != nil {
-		t.Fatalf("revive while the policy gives the recorded mode: %v", r)
-	}
-	st.policy = json.RawMessage(`{"classes":{}}`)
-	f.srv.cfg.Store = st
-	if r := revive(); r == nil || r.Reason != placement.ReasonPlacementCredential || r.Field != "eligible_grants" || !strings.Contains(r.Detail, "recorded runner_resident") {
-		t.Fatalf("revive after the policy moved: %+v, want placement_credential on eligible_grants naming the recorded mode", r)
-	}
-}

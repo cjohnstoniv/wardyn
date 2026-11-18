@@ -46,14 +46,6 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if err := s.trustChangedRefusal(ctx, run, p.Trust); err != nil {
 		return err
 	}
-	// Dispatch's door too: a grant recorded via_org or runner_resident revives only while the policy gives it that mode.
-	ref, err := s.dispatchTrustRefusal(ctx, run, p)
-	if err != nil {
-		return err
-	}
-	if ref != nil {
-		return ref
-	}
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		return ref
