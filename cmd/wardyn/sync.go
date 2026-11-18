@@ -286,6 +286,7 @@ func portOr22(port string) string {
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
 	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
+		sess.report(syncPassReport{Started: true})
 		rep, err := sy.Pass(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -538,9 +539,12 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 // row and, for a run that holds its agent for this folder, takes a complete
 // pass as the first sync landing (or an error as it failing). It is the
 // client's own account; a gateway that predates it refuses it, which is ignored.
+// One with Started goes before each pass, so a session cut before the pass's
+// account records a failure; a gateway that predates Started ignores the field.
 const syncPassRequest = "wardyn-sync-pass"
 
 type syncPassReport struct {
+	Started         bool   `json:"started,omitempty"`
 	Complete        bool   `json:"complete"`
 	Error           string `json:"error,omitempty"`
 	DeletedOnLaptop int    `json:"deleted_on_laptop"`
