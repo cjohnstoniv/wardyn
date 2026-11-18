@@ -166,7 +166,7 @@ func TestSupportHelperDecisionRefusal(t *testing.T) {
 				if c.reason == "support_helper_decision" && !strings.Contains(w.Body.String(), SupportHelperDecisionBody) {
 					t.Fatalf("%s: body %s lacks the helper sentence", verb, w.Body.String())
 				}
-				if c.reason == "second_human_required" && !strings.Contains(w.Body.String(), SupportHelperSecondHumanWhy) {
+				if c.reason == "second_human_required" && !strings.Contains(w.Body.String(), "you are helping in this run, so someone else approves or denies it") {
 					t.Fatalf("%s: body %s lacks the second-human helper sentence", verb, w.Body.String())
 				}
 				if got, _ := f.srv.cfg.Approvals.Get(context.Background(), f.ap.ID); got.State != types.ApprovalPending {

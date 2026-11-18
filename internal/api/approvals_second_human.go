@@ -288,7 +288,8 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 		return "", false
 	}
 	if helper {
-		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+" is set: a second human must decide this — "+SupportHelperSecondHumanWhy).
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you are helping in this run, so someone else approves or denies it").
 			OnRun(ap.RunID))
 		return "", false
 	}

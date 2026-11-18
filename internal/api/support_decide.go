@@ -24,9 +24,6 @@ import (
 // SupportHelperDecisionBody answers a helper's decision on a hold raised after their request.
 const SupportHelperDecisionBody = "You are helping in this run, so someone else approves or denies this request."
 
-// SupportHelperSecondHumanWhy is the sentence a helper meets when the hold needs a second human.
-const SupportHelperSecondHumanWhy = "you are helping in this run, so someone else approves or denies it"
-
 // supportHelperOf reports whether principal was accepted as a helper on the run by a grant requested at or
 // before at; a zero at is any accepted grant. A store without the grant record has no helper.
 func (s *Server) supportHelperOf(ctx context.Context, runID uuid.UUID, principal string, at time.Time) (bool, error) {
