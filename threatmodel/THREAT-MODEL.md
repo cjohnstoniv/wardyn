@@ -4756,7 +4756,7 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
   contained, retry the kill.
 - SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; GitHub installation tokens are
   TTL-bound (no per-token revoke API) — residual #7.
-- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, so the run's tokens and broker credentials end on time (residual #77). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
+- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once: Azure DevOps PATs are revoked then, and the runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). A GitHub App token has no revoke and stays valid at GitHub until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap
   *first* — same C002 invariant, a lost CAS never revokes a still-live run.
 - But the caller wins it BEFORE calling the shared `finalizeRunTail`, whose internal order is
