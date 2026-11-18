@@ -422,6 +422,54 @@ func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
 	}
 }
 
+// A helper's web attach refused at the run's session cap, through the real attach handler and a ticket the helper's
+// grant minted, answers 503 and writes the refusal row naming the grant and the support entry (attach.go hands the
+// ticket actor's grant to webAttachSlot); the owner's row, in the same rig, carries neither.
+func TestWebAttach_HelperRefusedAtTheCapNamesItsGrant(t *testing.T) {
+	rig := newSupportTermRig(t, "terminal")
+	for range maxAttachSessionsPerRun {
+		release, ok := rig.srv.reserveAttachSlot(rig.run, "holder")
+		if !ok {
+			t.Fatal("a slot was refused before the cap")
+		}
+		t.Cleanup(release)
+	}
+	for _, tc := range []struct {
+		principal string
+		helper    bool
+	}{{supportHelperSub, true}, {supportOwnerSub, false}} {
+		w := do(t, rig.srv, http.MethodGet, rig.path("/attach?ticket="+rig.ticket(tc.principal, tc.helper)), "", "")
+		if w.Code != http.StatusServiceUnavailable || wireReason(t, w) != reasonAttachSessionCapReached {
+			t.Fatalf("%s: attach = %d %s, want 503 %s", tc.principal, w.Code, w.Body, reasonAttachSessionCapReached)
+		}
+		var row types.AuditEvent
+		waitFor(t, "the refusal row of "+tc.principal, func() bool {
+			for _, ev := range rig.rows("session.attach") {
+				if ev.Actor == tc.principal {
+					row = ev
+					return true
+				}
+			}
+			return false
+		})
+		var d map[string]any
+		if err := json.Unmarshal(row.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if row.Outcome != "failure" || d["reason"] != reasonAttachSessionCapReached {
+			t.Fatalf("%s: row = %s %s, want a failure with reason %s", tc.principal, row.Outcome, row.Data, reasonAttachSessionCapReached)
+		}
+		_, hasGrant := d["support_grant"]
+		_, hasEntry := d["entry"]
+		switch {
+		case tc.helper && (d["support_grant"] != rig.grant.ID.String() || d["entry"] != supportEntryHelper):
+			t.Errorf("the helper's row = %s, want support_grant %s and entry %s", row.Data, rig.grant.ID, supportEntryHelper)
+		case !tc.helper && (hasGrant || hasEntry):
+			t.Errorf("the owner's row = %s, want no support_grant or entry", row.Data)
+		}
+	}
+}
+
 // (j) take-over by the helper is refused: handleAttachTakeover reads no grant. The cookie lane of the
 // terminal stays closed to the helper too.
 func TestSupportTerminalHelperCannotTakeOverOrUseTheCookieLane(t *testing.T) {
