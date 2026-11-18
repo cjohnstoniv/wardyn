@@ -114,7 +114,9 @@ function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
       continue;
     }
     const cp: ClassPolicy = { mode: row.mode };
-    if (row.mode === "runner_resident") {
+    // An organisation's Azure DevOps tokens kept in the organisation keep their posture too: the connection's
+    // "via the server" switch reads it, though this editor shows the block only under Store on the runner.
+    if (row.mode === "runner_resident" || (c === "ado_minted_pat" && row.mode === "via_org")) {
       const os_min = osMinOf(row);
       const req = {
         ...(row.mdm && { mdm_managed: true }),
