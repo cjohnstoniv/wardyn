@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.23] — 2026-11-17
+
 ### Added
 
 - `deploy/macos-guest/mdm/inspection-ca.mobileconfig.template`, a `com.apple.security.root` profile for one Mac's inspection CA, and a "Managing macOS VMs with MDM" section in the base image page: what an MDM vendor needs, why only MDM delivery gives TLS trust, what the runner package and profile do with no sudo, and the open question of many clones of one enrolled guest.
