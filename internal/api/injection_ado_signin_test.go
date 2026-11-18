@@ -265,6 +265,7 @@ func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 	// Post-raise, usable sign-ins for A and for B, written without the eager
 	// resolve a capture door would run.
 	blob.CapturedAt = time.Now().Add(time.Hour)
+	blob.CapturedDBAt = blob.CapturedAt // the capture's database stamp, as a capture writes it
 	const other = "someone-else"
 	for _, owner := range []string{f.subject, other} {
 		if err := f.srv.storeADOEntraBlob(ctx, owner, f.cfg.RowID, blob); err != nil {
@@ -309,6 +310,7 @@ func TestADOSignIn_CaptureReadsOnlyPendingReauthRows(t *testing.T) {
 	f.at(time.Now().Add(time.Minute))
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 	blob.CapturedAt = time.Now().Add(time.Hour)
+	blob.CapturedDBAt = blob.CapturedAt // the capture's database stamp, as a capture writes it
 	if err := f.srv.storeADOEntraBlob(ctx, f.subject, f.cfg.RowID, blob); err != nil {
 		t.Fatal(err)
 	}
@@ -433,6 +435,7 @@ func TestADOSignIn_AnEndedCaptureResolvesNothing(t *testing.T) {
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 	blob, _ := f.stored(t, f.subject)
 	blob.CapturedAt = time.Now().Add(time.Hour)
+	blob.CapturedDBAt = blob.CapturedAt // the capture's database stamp, as a capture writes it
 	if err := f.srv.storeADOEntraBlob(context.Background(), f.subject, f.cfg.RowID, blob); err != nil {
 		t.Fatal(err)
 	}

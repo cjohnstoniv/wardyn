@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -73,11 +74,33 @@ func (s *Server) runIsOverNow(ctx context.Context, run types.AgentRun) (bool, er
 	return runIsOver(run, now), nil
 }
 
-// boundNow is the database's now for a bound handed on (a token's life), and this server's when that clock cannot be
-// read: a bound is never withheld for it, as podLifetimeCap does.
+// boundNow is the database's now for a bound handed on (a token's life) or a time shown or measured from a database
+// stamp (a hold, a wait), and this server's when that clock cannot be read: a bound or a display is never withheld for
+// it, as podLifetimeCap does.
 func (s *Server) boundNow(ctx context.Context) time.Time {
 	if now, err := s.dbNow(ctx); err == nil {
 		return now
 	}
 	return s.cfg.Now()
+}
+
+// databaseStamp is at, an instant this server's clock (Config.Now) read, on the database's clock, through an anchor
+// read here: the database's clock first and this server's after it, so the delay between the two reads moves at
+// earlier, never later. Zero when the database's clock cannot be read.
+func (s *Server) databaseStamp(ctx context.Context, at time.Time) time.Time {
+	dbAt, err := s.dbNow(ctx)
+	if err != nil {
+		return time.Time{}
+	}
+	return db.AppClockAnchor{DatabaseAt: dbAt, AppAt: s.cfg.Now()}.Translate(at).UTC()
+}
+
+// capturedAfter reports whether a sign-in captured at capturedAt on this server's clock came after at, a time the
+// database stamped: an approval's requested_at. It is exact only for a capture this server stamped, since another
+// server's clock may differ from this one's; signedInAfter prefers the capture's own database stamp. The anchor's read
+// order keeps a capture before the raise from ever counting here. A database clock that cannot be read answers false:
+// the request stays pending, and the next read or sign-in asks again.
+func (s *Server) capturedAfter(ctx context.Context, capturedAt, at time.Time) bool {
+	t := s.databaseStamp(ctx, capturedAt)
+	return !t.IsZero() && t.After(at)
 }
