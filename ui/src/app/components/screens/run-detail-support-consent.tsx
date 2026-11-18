@@ -100,7 +100,7 @@ export function SupportConsentDialog({
         </DialogHeader>
 
         <section className="space-y-1.5">
-          <h3 className="text-meta font-semibold uppercase tracking-wide text-muted-foreground">{SUPPORT_CONSENT.THEIR_REASON}</h3>
+          <h3 className="label-eyebrow">{SUPPORT_CONSENT.THEIR_REASON}</h3>
           <p className="whitespace-pre-wrap rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm text-foreground [overflow-wrap:anywhere]" data-testid="support-reason">
             {grant.reason}
           </p>
@@ -150,7 +150,7 @@ export function SupportConsentDialog({
         </section>
 
         <section className="space-y-1">
-          <h3 className="text-meta font-semibold uppercase tracking-wide text-muted-foreground">{SUPPORT_CONSENT.WHERE}</h3>
+          <h3 className="label-eyebrow">{SUPPORT_CONSENT.WHERE}</h3>
           <p className="text-sm text-foreground" data-testid="support-place">
             {sandboxPlace(run)}
           </p>

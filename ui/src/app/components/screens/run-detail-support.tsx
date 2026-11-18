@@ -122,7 +122,7 @@ function DoorChips({ doors }: { doors: SupportDoor[] }) {
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-meta font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dt className="label-eyebrow">{label}</dt>
       <dd className="mt-1 text-sm text-foreground">{children}</dd>
     </div>
   );
