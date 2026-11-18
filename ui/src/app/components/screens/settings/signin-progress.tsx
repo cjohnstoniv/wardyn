@@ -108,19 +108,23 @@ export function DeviceCode({ code, label }: { code: string; label?: string }) {
 export function SignInDoorState({
   provider,
   url,
+  code: paneCode = "",
   opened,
   showUrl,
   onOpen,
 }: {
   provider: string;
   url: string;
+  // The code the pane printed beside a link that carries none (extractDeviceSignIn); a
+  // pre-filled link's own user_code wins.
+  code?: string;
   opened: boolean;
   // AWS prints its device link beside the fallback; Claude's OAuth link is
   // ~250 characters, so it is copied, never printed.
   showUrl: boolean;
   onOpen: () => void;
 }) {
-  const code = deviceCodeOf(url);
+  const code = deviceCodeOf(url) || paneCode;
   if (opened) {
     return (
       <div className="space-y-2" data-testid="signin-tab-open">
