@@ -57,6 +57,10 @@ notices_keep_url() {
     }
     $2 == "Unknown" && ($1 in url) {
       for (i = 1; i <= ne; i++) if (index(errs[i], pfx $1 ":")) {
+        # Keep the URL only for the version that failed: a bumped module must still show as drift.
+        v = ""
+        if (match(errs[i], /ModuleInfo\(ctx, "[^"]*", "[^"]*"\)/)) { split(substr(errs[i], RSTART, RLENGTH), q, "\""); v = q[4] }
+        if (v == "" || !index(url[$1], "/" v "/")) continue
         print "WARNING: notices: could not check the licence URL of " $1 " (go-licenses could not reach it); keeping the committed URL." > "/dev/stderr"
         $2 = url[$1]
         break
@@ -96,7 +100,8 @@ fi
 [ -s "$tmp/go-darwin.csv" ] || { echo "ERROR: the darwin pass listed no modules. Failing closed."; exit 1; }
 # Keep only what the first pass lacks, matched by licence URL: the darwin pass reports a package where the
 # first reports its module (golang.org/x/sys/unix for golang.org/x/sys).
-awk -F, 'NR==FNR { seen[$2] = 1; next } !seen[$2]' "$tmp/go.csv" "$tmp/go-darwin.csv" > "$tmp/go-darwin-new.csv"
+# Two `Unknown` URLs must not merge two modules, so an `Unknown` is keyed by its module.
+awk -F, 'NR==FNR { seen[$2 == "Unknown" ? $1 : $2] = 1; next } !seen[$2 == "Unknown" ? $1 : $2]' "$tmp/go.csv" "$tmp/go-darwin.csv" > "$tmp/go-darwin-new.csv"
 while IFS=, read -r mod _; do
   mkdir -p "$tmp/gotexts/$(dirname "$mod")"
   cp -r "$tmp/gotexts-darwin/$mod" "$tmp/gotexts/$(dirname "$mod")/"
