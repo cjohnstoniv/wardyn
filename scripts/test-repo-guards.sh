@@ -64,7 +64,7 @@
 #      mirror-base-images.yml copies to GHCR, and every base-images digest a
 #      workflow names is in that list — so a Dependabot base-image bump fails
 #      here until it is mirrored, instead of quietly going back to Docker Hub
-#      and its pull quota (docs/CI.md, "Docker Hub base-image mirror").
+#      and its pull quota (docs/REPO-CI.md, "Docker Hub base-image mirror").
 #  18. nightly.yml's scope=candidate skips exactly the lanes a release does not
 #      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
 #      carries `if: inputs.scope != 'candidate'`, a job inside it never does.

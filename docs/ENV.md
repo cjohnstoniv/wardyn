@@ -36,7 +36,7 @@ Topics in the order the [`wardynd`](#wardynd-control-plane) table lists them:
 - A `WARDYN_*` literal read in non-test Go but missing here fails the build, and so does a row here whose last Go reader was deleted.
 - Three more forward-only legs (`#202`) extend the same "undocumented fails the build" rule past Go.
 - Those legs are `pkg/` (folded into the Go walk above), the Playwright e2e backend's shell scripts, and `install.sh`, [`scripts/ci-run.sh`](../scripts/ci-run.sh) and everything under `deploy/images/**`.
-- The last leg is checked against this file **and** [docs/CI.md](CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
+- The last leg is checked against this file, [docs/CI.md](CI.md) **and** [docs/REPO-CI.md](REPO-CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
 - That closes the undocumented-name gap for those three surfaces only.
 - The rest of `scripts/` (the demo, take and verify harness, `test-report.sh`, `test-repo-guards.sh`, and a few shell-local variables in `setup.sh` and `up.sh`) still uses `WARDYN_*` names with no row here, and no leg checks them.
 - To regenerate the raw list:
@@ -2851,7 +2851,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Read only by the shell scripts baked into an agent/tool image.
 - Never by Go, so like the two tables above they carry no flag and are exempted from the reverse ratchet by name (`envDocShellOnly`).
-- `TestEnvDoc_OperatorScriptsVarsAreDocumented` ([`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)) is what enforces every `WARDYN_*` name under `deploy/images/**`, `install.sh` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) stays documented here or in [docs/CI.md](CI.md).
+- `TestEnvDoc_OperatorScriptsVarsAreDocumented` ([`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)) is what enforces every `WARDYN_*` name under `deploy/images/**`, `install.sh` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) stays documented here, in [docs/CI.md](CI.md) or in [docs/REPO-CI.md](REPO-CI.md).
 - Before #202 these 13 had no ratchet on them in either direction, in a curated six-file list that never walked `deploy/images/` at all.
 - Several of these are never actually `export`ed.
 - A same-shell bash array or local variable that happens to share the `WARDYN_*` prefix with real env vars in the same script family, never read by a child process.

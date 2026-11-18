@@ -3,7 +3,7 @@ name: Overlay proofs
 # Revert proofs on hosted runners, by hand. A proof puts one reverted source file
 # back at an exact sha and demands that `go test` exits 1 with the named
 # `--- FAIL:` line; a green run or a build error is a failed proof. The logic is
-# scripts/overlay-proof.sh (the same script runs locally); see docs/CI.md.
+# scripts/overlay-proof.sh (the same script runs locally); see docs/REPO-CI.md.
 #
 # Operational rule: never dispatch while a train attempt 1 is queued. Every proof
 # compiles internal/api, and these jobs take runner slots that attempt waits on.
@@ -44,7 +44,7 @@ permissions:
   contents: read
 
 # Every job sets timeout-minutes, at least twice its measured maximum with a
-# ten-minute floor (docs/CI.md). The prove value is computed per group by
+# ten-minute floor (docs/REPO-CI.md). The prove value is computed per group by
 # `overlay-proof.sh plan` from the allowances in that script's header; plan
 # gets 10.
 jobs:

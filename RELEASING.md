@@ -55,7 +55,7 @@
     - a red preflight fails every downstream release job, so catching it before pushing the tag is still cheaper than a failed release run.
 - **Nightly coverage is not a reliable signal until it has run green for 7 consecutive nights.**
   - `preflight-green` only proves the latest nightly on the tag's tree was green, not that the lane it ran is stable —
-    - a lane that just started passing after weeks red (see [`docs/CI.md`](docs/CI.md)'s nightly section) can still be one flake away from red again.
+    - a lane that just started passing after weeks red (see [`docs/REPO-CI.md`](docs/REPO-CI.md)'s nightly section) can still be one flake away from red again.
   - Until a lane has 7 consecutive green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for that lane needs its own separately-run proof too, not just a green `preflight-green`.
 
 - Run the local gate first:
@@ -514,7 +514,7 @@ JSON
 - Run as written, the command drops nothing that is required now and adds those four contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
-- Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
+- Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/REPO-CI.md](docs/REPO-CI.md), "Incremental CI"), so each is an eligible context.
 - `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the ten images a release publishes.
 - Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
 - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
@@ -539,7 +539,7 @@ JSON
 - Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch build) included.
 - `ci.yml`'s change classifier (#932) is not such a filter:
   - a required job whose work a change cannot affect is skipped by a job-level `if:` and reports as skipped, which branch protection accepts, and it runs whenever the classification is missing.
-- The one required matrix job, `gates`, never skips that way: a skipped matrix reports a single check with its name unexpanded, never the per-cell contexts ([docs/CI.md](docs/CI.md), "Incremental CI").
+- The one required matrix job, `gates`, never skips that way: a skipped matrix reports a single check with its name unexpanded, never the per-cell contexts ([docs/REPO-CI.md](docs/REPO-CI.md), "Incremental CI").
 - A job's check name is its `name:` when it sets one, otherwise its job id, so renaming either is the same protection change as deleting the job.
 
 ## Container images
@@ -576,7 +576,7 @@ JSON
       `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
-  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).
+  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/REPO-CI.md](docs/REPO-CI.md)).
   - The supply-chain artifacts are no longer yours to remember; the demo videos
     in step 7 still are.
   - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`

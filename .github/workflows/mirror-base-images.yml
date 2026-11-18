@@ -7,7 +7,7 @@ name: Mirror base images
 # Hub's pull quota: .github/actions/base-image-mirror serves it back under the
 # docker.io names, and the Postgres service containers name it directly.
 # Dockerfiles keep their docker.io FROM lines, so Dependabot and the release
-# images' provenance are unchanged. See docs/CI.md, "Docker Hub base-image
+# images' provenance are unchanged. See docs/REPO-CI.md, "Docker Hub base-image
 # mirror".
 #
 # Each pin is tagged <namespace>-<name>-<tag>-<first 12 digest hex> so two pins
