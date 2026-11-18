@@ -99,8 +99,7 @@ export type WidgetContext = {
    *  Connect-via-SSH door, even on the admin's own run. */
   view: ConsoleView;
   /** The doors of the OPEN support grant the viewer helps through on this run; null or absent for anyone else. A helper is
-   *  an admin in the admin view, so the Desktop and Attach tiles admit them here, for the doors the grant opens only
-   * . */
+   *  an admin in the admin view, so the Desktop and Attach tiles admit them here, for the doors the grant opens only. */
   helperDoors?: readonly SupportDoor[] | null;
   grants: CredentialGrant[];
   egress: EgressDecision[];
