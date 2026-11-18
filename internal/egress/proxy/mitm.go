@@ -338,7 +338,7 @@ func (p *Proxy) clientHandshakeCause(err error) string {
 	return "client tls handshake (sandbox to wardyn-proxy): " + p.dialFailureCause(err)
 }
 
-func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int) {
+func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int, seen *egress.DecisionLog) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -383,6 +383,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 				dl := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceTunnelFailed)
 				dl.Cause = p.clientHandshakeCause(err)
 				dl.Via = p.viaHop(host)
+				nameGivenBackUse(&dl, seen)
 				p.sink.emit(dl)
 			}
 			_ = clientConn.Close()

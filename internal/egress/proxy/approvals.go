@@ -275,7 +275,11 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 // `consumed` is returned explicitly rather than re-derived from state==apNone:
 // an EXPIRY reset is also apNone, so the derived form would conflate "spent a
 // grant" with "the grant timed out".
-func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consumed bool) {
+//
+// givenBack reports that the grant it spent is one refundOnce gave back (spent here before, refunds above zero).
+// It is decided here, under the lock, so the request that took the grant carries it, and no later change to the
+// host's entry can lose it.
+func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consumed, givenBack bool) {
 	if !st.expiresAt.IsZero() && time.Now().After(st.expiresAt) {
 		// `until T` elapsed -> UNKNOWN, not denied: the operator is re-asked, not
 		// forbidden. Folded into the helper (not checked once at Resolve's top) so
@@ -290,6 +294,7 @@ func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consume
 			left.spent = id
 			if st.spent == id {
 				left.refunds = st.refunds
+				givenBack = st.refunds > 0
 			}
 		}
 		*st = left
@@ -297,7 +302,7 @@ func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consume
 	}
 	// Either reset also zeroes lastPoll — benign, since cur is apNone there and
 	// needRaise overwrites lastPoll before anything acts on it.
-	return state, id, consumed
+	return state, id, consumed, givenBack
 }
 
 // ResolveWait implements wait_for_review: it HOLDS the caller until the host's
@@ -402,8 +407,8 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 				st.verifiedAt = st.lastPoll
 				// (3) Consume if this was a `once` grant, expiring it if stale — an
 				// already-past expiresAt returns apNone, fail-closed via evaluate's default arm.
-				s, id, _ := consumeIfOnce(st)
-				return resolveResult{State: s, ApprovalID: id}
+				s, id, _, gb := consumeIfOnce(st)
+				return resolveResult{State: s, ApprovalID: id, GivenBack: gb}
 			}()
 		}
 	}
@@ -417,6 +422,8 @@ type resolveResult struct {
 	State approvalState
 	// ApprovalID is set when pending/decided.
 	ApprovalID uuid.UUID
+	// GivenBack: the once grant this request took is one refundOnce gave back, so it is that approval's second use.
+	GivenBack bool
 }
 
 // approvalHostKey is the ONE spelling of "which host this approval is about",
@@ -468,7 +475,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 	// Snapshot under lock; perform network calls without holding the lock. The
 	// snapshot is also a CLAIM-AND-CONSUME: consumeIfOnce drops an expired
 	// `until` grant then SPENDS a `once` grant so no concurrent caller can take it.
-	cur, id, consumed := consumeIfOnce(st)
+	cur, id, consumed, givenBack := consumeIfOnce(st)
 	needRaise := cur == apNone
 	if needRaise {
 		// Claim the raise UNDER the lock so a concurrent caller polls instead of
@@ -491,7 +498,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 	if consumed {
 		// We SPENT the grant; must return BEFORE the switch, or falling through
 		// would re-raise on the very request the operator's decision released.
-		return resolveResult{State: cur, ApprovalID: id}
+		return resolveResult{State: cur, ApprovalID: id, GivenBack: givenBack}
 	}
 
 	switch {
@@ -578,8 +585,8 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		// This branch is ITSELF a grant-serving site: without this call, a `once`
 		// grant observed here for the first time would be served AND left
 		// APPROVED for the next caller — served twice.
-		s, sid, _ := consumeIfOnce(st)
-		return resolveResult{State: s, ApprovalID: sid}
+		s, sid, _, gb := consumeIfOnce(st)
+		return resolveResult{State: s, ApprovalID: sid, GivenBack: gb}
 	default:
 		// Pending but throttled: report pending without a network call.
 		return resolveResult{State: apPending, ApprovalID: id}

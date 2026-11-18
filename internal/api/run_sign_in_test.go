@@ -138,15 +138,57 @@ func TestRunSignIn_SharedFixture(t *testing.T) {
 			f.audit.mu.Lock()
 			rows := slices.Clone(f.audit.events)
 			f.audit.mu.Unlock()
-			for _, ev := range rows {
-				if strings.Contains(string(ev.Data), "user_code") || strings.Contains(ev.Target, "user_code") {
-					t.Errorf("an audit row carries the pane: %+v", ev)
+			// The answer's own link and code, and the words that mark a pane.
+			secrets := []string{"user_code", "signin.aws"}
+			for _, v := range []string{tc.Go.UserCode, tc.Go.VerificationURL} {
+				if v != "" {
+					secrets = append(secrets, v)
+				}
+			}
+			for _, v := range secrets {
+				for _, ev := range rows {
+					if strings.Contains(string(ev.Data), v) || strings.Contains(ev.Target, v) {
+						t.Errorf("an audit row carries %q from the pane: %+v", v, ev)
+					}
+				}
+				if strings.Contains(logs.String(), v) {
+					t.Errorf("a log line carries %q from the pane: %s", v, logs.String())
 				}
 			}
 		})
 	}
-	if strings.Contains(logs.String(), "user_code") || strings.Contains(logs.String(), "amazonaws") {
+	if strings.Contains(logs.String(), "user_code") || strings.Contains(logs.String(), "amazonaws") || strings.Contains(logs.String(), "signin.aws") || strings.Contains(logs.String(), "ABCD-EFGH") {
 		t.Errorf("a log line carries the pane: %s", logs.String())
+	}
+}
+
+// A pane of row clears and short links parses in linear time: the row clears
+// are found once, not rescanned for every link. At four times the read's cap a
+// rescan takes about 20 s, so the bound can leave room for a busy runner.
+func TestParseSignInPane_RowClearsScannedOnce(t *testing.T) {
+	unit := "\x1b[2;23H\x1b[1K\r\nhttps://a.awsapps.com/x\r\n"
+	pane := []byte(strings.Repeat(unit, 4*signInPaneMaxBytes/len(unit)))
+	start := time.Now()
+	if _, _, ok := parseSignInPane(pane); ok {
+		t.Fatal("a pane of links without a code is waiting")
+	}
+	if d, limit := time.Since(start), 2*time.Second*raceSlowdown; d > limit {
+		t.Fatalf("a %d-byte pane of row clears and links took %v to parse, want under %v", len(pane), d, limit)
+	}
+}
+
+// A pane at the cap of full-width link rows still printing parses in linear
+// time: the link still printing runs to the end, so the parser stops there
+// instead of re-joining it from each later row (that took 40 s a read).
+func TestParseSignInPane_PrintingRowsJoinedOnce(t *testing.T) {
+	head, row := "\x1b[2;23H\x1b[1K\r\n", "https://a.awsapps.com/x\r\n"
+	pane := []byte(head + strings.Repeat(row, (signInPaneMaxBytes-len(head)-12)/len(row)) + "https://a.aw")
+	start := time.Now()
+	if _, _, ok := parseSignInPane(pane); ok {
+		t.Fatal("a link still printing is waiting")
+	}
+	if d, limit := time.Since(start), time.Second*raceSlowdown; d > limit {
+		t.Fatalf("a %d-byte pane of full-width rows took %v to parse, want under %v", len(pane), d, limit)
 	}
 }
 

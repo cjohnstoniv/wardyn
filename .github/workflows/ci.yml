@@ -1816,6 +1816,10 @@ jobs:
       # test-desktop-profile.sh) — was genuinely absent from every workflow;
       # this job is the natural home, already daemon-free and already named
       # for exactly this kind of static/config check.
+      # node: test-check-managed-settings-drift.sh drives the probe's WebFetch stand-in offline.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
       - name: Shell regression tests (scripts/test-*.sh)
         run: make test-scripts
 

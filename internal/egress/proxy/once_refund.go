@@ -50,12 +50,23 @@ func (a *approvalClient) refundOnce(host string, id uuid.UUID) bool {
 	return true
 }
 
+// nameGivenBackUse marks dl, the failure's row, with the approval seen's request went ahead on when that approval
+// was one refundOnce gave back (seen.GivenBackUse, decided when the request took the grant): the use that spends it
+// for good names it, without the not-spent note. It marks nothing for any other request and gives nothing back.
+func nameGivenBackUse(dl, seen *egress.DecisionLog) {
+	if seen != nil && seen.GivenBackUse && seen.ApprovalID != nil {
+		dl.ApprovalID = seen.ApprovalID
+	}
+}
+
 // refundOnceUse gives back the once grant that released seen, the use's allow, after that use got nothing back
 // from the far side, and then marks dl, the failure's row: it names the approval and says it was not spent. At the
 // dial it runs before the 502, so the sandbox's retry finds the grant. At a dead tunnel the sandbox's leg is already
 // closed, so a retry that arrives first asks again. A run with no network gets none back: its retry cannot succeed
-// either.
+// either. A use of a grant already given back once is spent by its failure, and its row names the approval too
+// (nameGivenBackUse).
 func (p *Proxy) refundOnceUse(dl, seen *egress.DecisionLog, host string) {
+	nameGivenBackUse(dl, seen)
 	if p.approval == nil || p.noNetwork || seen == nil || seen.ApprovalID == nil {
 		return
 	}

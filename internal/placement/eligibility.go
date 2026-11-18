@@ -75,10 +75,23 @@ type Refusal struct {
 	Reason Reason
 	Field  string
 	Detail string
+	// named: Detail names what the run carries as the person knows it, so a person reads it without Field.
+	named bool
 }
 
-func (r *Refusal) Error() string                          { return r.Field + ": " + r.Detail }
-func refuse(reason Reason, field, detail string) *Refusal { return &Refusal{reason, field, detail} }
+func (r *Refusal) Error() string { return r.Field + ": " + r.Detail }
+func refuse(reason Reason, field, detail string) *Refusal {
+	return &Refusal{Reason: reason, Field: field, Detail: detail}
+}
+
+// Sentence is the refusal as a person reads it: the detail alone where it names what the run
+// carries, else the field and the detail (Error).
+func (r *Refusal) Sentence() string {
+	if r.named {
+		return r.Detail
+	}
+	return r.Error()
+}
 
 // LocalEligibility classifies the complete resolved plan with the canonical
 // table. It does not select placement. An org-held class is admitted only by a

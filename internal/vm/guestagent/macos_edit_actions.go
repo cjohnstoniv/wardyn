@@ -34,11 +34,11 @@ import (
 // 202 and halts the guest as root, which the host can already do to the VM.
 //
 //	POST /edit/admin-terminal      open Terminal at `su - wardyn-admin`
-//	POST /edit/trust-cas           open Terminal at one `sudo security add-trusted-cert` per staged ca item
+//	POST /edit/trust-cas           open Terminal at one `sudo security add-trusted-cert` per staged ca item not yet trusted
 //	POST /edit/full-disk-access    open Privacy & Security > Full Disk Access and show this agent in Finder
 //	POST /edit/shut-down           shut the guest down as root, with no dialog (the window's close)
 //
-// A request with nobody at the console, or (trust-cas) no staged certificate, is refused with 409 and
+// A request with nobody at the console, or (trust-cas) no staged certificate left to trust, is refused with 409 and
 // does nothing; one that fails answers 500 with the guest's reason. These are handlers, not allowed exec
 // argv: ToolsExecAllowed is unchanged.
 const (
@@ -155,8 +155,9 @@ func (t *Tools) handleEditAdminTerminal(w http.ResponseWriter, r *http.Request) 
 	writeJSONAny(w, EditActionResult{Opened: true})
 }
 
-// stagedCA is one ca item staged in the guest: its name, certificate subject and SHA-256.
-type stagedCA struct{ name, subject, sha256 string }
+// stagedCA is one ca item staged in the guest: its name, certificate subject and SHA-256. skip, when set,
+// says why the trust script asks nothing for it (untrustedCAs).
+type stagedCA struct{ name, subject, sha256, skip string }
 
 // stagedCAs lists the stage directory's ca items in name order: a directory named as an item whose
 // item.cer is a regular file holding one certificate, PEM or DER. Anything else is skipped, and so is
@@ -198,7 +199,35 @@ func (t *Tools) stagedCert(name string) (stagedCA, bool) {
 		return stagedCA{}, false
 	}
 	sum := sha256.Sum256(der)
-	return stagedCA{name, cert.Subject.String(), colonHex(sum[:])}, true
+	return stagedCA{name: name, subject: cert.Subject.String(), sha256: colonHex(sum[:])}, true
+}
+
+// untrustedCAs marks, in cas (name order), each item the trust script must not ask for again: one whose
+// certificate an earlier item already holds, by SHA-256, and one the guest already trusts for SSL. It says
+// how many are left to ask for. Trusted is the read the tools update records (`security verify-cert -L -p
+// ssl` exits 0), made here as root: it changes nothing and shows no dialog. Any other answer, a failed run
+// included, leaves the item to ask for, so a partial or unread trust is asked again.
+func (t *Tools) untrustedCAs(ctx context.Context, cas []stagedCA) int {
+	run := t.run
+	if run == nil {
+		run = runCombined
+	}
+	first := map[string]string{}
+	left := 0
+	for i, c := range cas {
+		if prev, ok := first[c.sha256]; ok {
+			cas[i].skip = "the same certificate as " + prev + ", not asked again"
+			continue
+		}
+		first[c.sha256] = c.name
+		_, code, err := run(ctx, []string{"/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", filepath.Join(t.itemStageDir(), c.name, ItemCert)})
+		if err == nil && code == 0 {
+			cas[i].skip = "already trusted in this base, not asked"
+			continue
+		}
+		left++
+	}
+	return left
 }
 
 func colonHex(b []byte) string {
@@ -213,7 +242,8 @@ func colonHex(b []byte) string {
 // shellQuote is s as one single-quoted shell word.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// trustScript prints each ca item's name, subject and SHA-256, then trusts it for SSL as the setup admin.
+// trustScript prints each ca item's name, subject and SHA-256, then trusts it for SSL as the setup admin;
+// for an item with skip set it prints why instead, and asks nothing.
 // A subject is the CA's own text, so it is printed quoted (strconv.Quote leaves no newline) and as a
 // printf argument, never as shell.
 //
@@ -227,6 +257,10 @@ func (t *Tools) trustScript(cas []stagedCA, consoleUID uint32) string {
 	b.WriteString("#!/bin/sh\n")
 	line := func(c stagedCA, label string) {
 		fmt.Fprintf(&b, "printf '%%s\\n' '' %s %s %s\n", shellQuote(label), shellQuote("  subject  "+strconv.Quote(c.subject)), shellQuote("  SHA-256  "+c.sha256))
+		if c.skip != "" {
+			fmt.Fprintf(&b, "printf '%%s\\n' %s\n", shellQuote("  "+c.skip))
+			return
+		}
 		fmt.Fprintf(&b, "/usr/bin/su - %s -c '/usr/bin/sudo /bin/launchctl asuser %d /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k %s %s'\n",
 			MacAdminUser, consoleUID, MacSystemKeychain, filepath.Join(t.itemStageDir(), c.name, ItemCert))
 	}
@@ -247,6 +281,11 @@ func (t *Tools) handleEditTrustCAs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the install list has no certificates staged", http.StatusConflict)
 		return
 	}
+	left := t.untrustedCAs(r.Context(), cas)
+	if left == 0 {
+		http.Error(w, "every certificate in the install list is already trusted in this base", http.StatusConflict)
+		return
+	}
 	script, err := t.writeEditScript(EditTrustCAsScript, t.trustScript(cas, uid))
 	if err != nil {
 		slog.Warn("guest agent: tools mode: trust script not written", "err", err)
@@ -257,7 +296,7 @@ func (t *Tools) handleEditTrustCAs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Terminal was not opened", http.StatusInternalServerError)
 		return
 	}
-	writeJSONAny(w, EditActionResult{Opened: true, Certificates: len(cas)})
+	writeJSONAny(w, EditActionResult{Opened: true, Certificates: left})
 }
 
 func (t *Tools) handleEditFullDiskAccess(w http.ResponseWriter, r *http.Request) {

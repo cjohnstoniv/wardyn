@@ -162,44 +162,12 @@ func clampExitCode(code int) int {
 	return code
 }
 
-// drainExecStderr starts copying sess.Stderr to the channel's own extended-
-// data stderr stream IMMEDIATELY — before the caller ever touches Stdout.
-//
-// HARD CONTRACT (runner.ExecSession's doc): Stdout/Stderr are UNBUFFERED
-// io.Pipes fed by ONE demux goroutine; a single undrained stderr byte blocks
-// that goroutine, Stdout, AND Wait. Every ExecStream consumer here (exec,
-// sftp, direct-tcpip/socat) MUST start this before the first Stdout read;
-// sftp-server's error path writes stderr before any stdout. The returned
-// channel closes when the copy ends (already closed with no Stderr), so the
-// caller can hold exit-status and Close for the stderr tail.
-func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) <-chan struct{} {
-	done := make(chan struct{})
-	if sess.Stderr == nil {
-		close(done)
-		return done
-	}
-	go func() {
-		defer close(done)
-		_, _ = io.Copy(channel.Stderr(), sess.Stderr)
-	}()
-	return done
-}
-
-// execStderrTailGraceNS bounds the wait for stderr to end after stdout did (also
-// ended by ctx.Done()), so a client that stopped reading cannot hold the bridge.
-// The copy itself ends when the client answers the Close or the connection
-// ends. An atomic only so a test can shrink it.
-var execStderrTailGraceNS = func() *atomic.Int64 {
-	var v atomic.Int64
-	v.Store(int64(5 * time.Second))
-	return &v
-}()
-
 // sshBridgeExecSession bridges channel<->sess for the lifetime of one
 // ExecStream session: drains stderr first (see drainExecStderr), pumps
 // channel->Stdin and Stdout->channel concurrently, and on Stdout EOF waits for
 // stderr to end too (at most execStderrTailGraceNS), so all of it is on the
-// channel before Wait, the "exit-status" report (when sendExit) and the Close.
+// channel before Wait, the "exit-status" report (when sendExit) and the Close;
+// it does not wait when the copy ended on a channel write error.
 //
 // CLOSES channel itself before returning (deferred, so every path takes it):
 // exit-status alone is not enough. A real ssh client's Session.Wait() blocks
@@ -231,7 +199,7 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
-			// Bytes a person sends are presence (run_pause.go); the count is read atomically, as Stdout may end mid-copy.
+			// The bytes a person sends are presence (run_pause.go); `in` counts the bytes written to the sandbox's stdin, and is read atomically, off this goroutine, because this copy may still be running when Stdout ends.
 			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
 			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
 			// Half-close only (Stdout/Stderr may still flow), and not on a cut: its Close ends stdin, and a half-close first could let the process end cleanly.
@@ -241,14 +209,18 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 		}()
 	}
 
+	toChannel := firstWriteErrWriter{w: channel}
 	if sess.Stdout != nil {
-		bytesOut, _ = io.Copy(channel, sess.Stdout)
+		bytesOut, _ = io.Copy(&toChannel, sess.Stdout)
 	}
 
-	select {
-	case <-stderrDone:
-	case <-ctx.Done():
-	case <-time.After(time.Duration(execStderrTailGraceNS.Load())):
+	// A channel that refused a write carries no stderr either, so only a copy that ended on the sandbox's side waits for it.
+	if toChannel.err == nil {
+		select {
+		case <-stderrDone:
+		case <-ctx.Done():
+		case <-time.After(time.Duration(execStderrTailGraceNS.Load())):
+		}
 	}
 
 	exitCode = 1
@@ -965,6 +937,13 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
+	// The forward's own context, as a session channel's chCtx: the client's close of this channel ends it with the
+	// client's cause, so the bridge closes the relay then, not when the connection ends. A relay parked writing to
+	// an unread pipe (a k8s or VM exec whose channel refused a write) has no other way to reach its Wait.
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(errSSHChannelClosed)
+	ctx = chCtx
+
 	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
@@ -984,7 +963,12 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 	defer channel.Close()
-	go ssh.DiscardRequests(reqs)
+	// The requests end at the client's CHANNEL_CLOSE or the connection's end, never at its EOF: a half-closed
+	// forward still gets its reply.
+	go func() {
+		ssh.DiscardRequests(reqs)
+		chCancel(errSSHChannelClosed)
+	}()
 
 	var end bridgeEnd
 	exit, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noteBridgeEnd(ctx, sess, &end), false)

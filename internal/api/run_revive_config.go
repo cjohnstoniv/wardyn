@@ -237,23 +237,29 @@ func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Con
 	return encodeRevivedConfig(ctx, &org)
 }
 
-// reviveCarryRecordedRules gives the revived policy the rules the stored proxy config leaves off, data_out and
-// recording (sidecarPolicy blanks both: the proxy enforces neither), from the policy the run is recorded
-// under now, so the re-seal and the new generation start from the run's own rules. Without it a revive
-// would keep only what an outer layer imposes. A store that keeps no generations has no new row to carry
-// them into, and a run with no recorded policy keeps what the stored config holds. A recorded policy that
-// cannot be read refuses the revive.
-func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, cfg *proxy.Config) *reviveError {
+// reviveCarryRecordedRules gives policy, read from the stored proxy config by a revive or an in-place edit,
+// the rules that config leaves off, data_out and recording (sidecarPolicy blanks both: the proxy enforces
+// neither), from the policy the run is recorded under now, so the re-seal and the new generation start
+// from the run's own rules. Without it a revive would keep only what an outer layer imposes, and an edit
+// would record none. A store that keeps no generations has no new row to carry them into, and a run with
+// no recorded policy (a pruned run) keeps what the stored config holds. A recorded policy that cannot be
+// read, or a run whose current policy generation's row cannot be read, refuses the revive or the edit: the
+// rules to carry are unknown, and carrying none would record them as allowed.
+func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, policy *types.RunPolicySpec) *reviveError {
 	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
 		return nil
 	}
-	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
+	envelope, _, ok, unread, err := s.runEffectivePolicyGen(ctx, runID)
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's recorded policy", err))
+	}
+	if unread > 0 {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable,
+			loggedMsg(ctx, fmt.Sprintf("the run's current policy generation %d could not be read; try again shortly, or kill or end the run if it persists", unread), errors.New("no readable run.policy.generation row")))
 	}
 	if !ok {
 		return nil
 	}
-	cfg.Policy.DataOut, cfg.Policy.Recording = envelope.DataOut, envelope.Recording
+	policy.DataOut, policy.Recording = envelope.DataOut, envelope.Recording
 	return nil
 }

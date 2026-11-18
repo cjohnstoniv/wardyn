@@ -38,12 +38,23 @@ func validateDataOut(r types.TransferRule) error {
 	return nil
 }
 
+// errDataOutGenerationUnread is a run's data_out rule that cannot be told because its current policy
+// generation's row cannot be read (runEffectivePolicyGen). It is an error and never a rule: the rule is at least
+// the resolved one, whose value is no longer enforced, so no answer is safe, and the callers that treat a read
+// error as unreadable (a 503 at the doors, blocked on SSH, the kept sandbox at a run's end) already do the right
+// thing. Answering blocked instead would stop an ended run's sandbox and lose its computer folder's changes.
+var errDataOutGenerationUnread = errors.New("the run's current policy generation could not be read")
+
 // runDataOutRule is the run's data_out rule from its policy envelope, "" read as allowed. found is false for a
-// run that recorded no envelope, which carries no rule.
+// run that recorded no envelope, which carries no rule. A run whose current policy generation's row cannot be
+// read has no rule to give, and is an error wrapping errDataOutGenerationUnread with the generation.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
-	envelope, _, found, err := s.runEffectivePolicy(ctx, runID)
+	envelope, _, found, unread, err := s.runEffectivePolicyGen(ctx, runID)
 	if err != nil {
 		return types.TransferAllowed, false, err
+	}
+	if unread > 0 {
+		return types.TransferAllowed, false, fmt.Errorf("%w (generation %d)", errDataOutGenerationUnread, unread)
 	}
 	if !found {
 		// A run with no recorded policy (its audit rows were pruned) carries no rule; refusing it would close output and replay on every pruned run.

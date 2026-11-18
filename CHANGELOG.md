@@ -11,6 +11,33 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.24] — 2026-11-18
+
+### Changed
+
+- The `component_host_serves_model` refusal now says that the port does not count, and to give the component a host name no model uses.
+- Claude Code's tool search stays off, as it was in 2.1.231, for a run whose agent reaches its model through a gateway base URL, and for a run on a container whose agent reaches its model through an Anthropic API key, a custom endpoint, a local model or a Claude subscription provider with a gateway base URL, and for a run with no model provider: Wardyn sets `ENABLE_TOOL_SEARCH=false` in the sandbox env. On an image that sets no Anthropic base URL, such as one built from agent-base, tool search is now turned off too; 2.1.231 left it on there. A Claude subscription provider with no gateway, Bedrock, Foundry, Vertex, the Claude sign-in task and a virtual machine run with no base URL keep Claude Code's default. To turn it back on, give the run a component config entry that sets `ENABLE_TOOL_SEARCH` to `true` (or `auto`); a value set that way is kept.
+
+### Fixed
+
+- A workspace or invitation write that matched no row, when the read that follows to explain the miss also fails for another reason, is no longer reported as a missing workspace or invitation. The `workspace.requirement.write`, `workspace.egress.approve` and `workspace.egress.deny` audit rows say `Store error`, not `Workspace not found`, and the server log keeps the store's own error. A workspace edit, an egress list saved with `If-Match`, and `DELETE /api/v1/invitations/{id}` answer `500` `internal_error`, which a retry may clear, where they answered `404`.
+- The SSH gateway no longer waits up to 5 seconds for a forwarded port's error output after the client closed that port's channel while the connection stayed up; a closed channel cannot carry it.
+- A forwarded port whose client closed its channel while the sandbox was still sending now ends at once, on every runner. Its `ssh.forward` row is written then. On Kubernetes and VM runners it no longer holds one of the run's SSH channels or keeps the run from idling until the SSH connection ends.
+- `wardyn sync` now reports when each pass starts, so a pass the session ended before it finished is recorded as a failure in its `ssh.sync.transfer` row ("the session ended before its sync pass finished"), not as a success. This needs both this CLI and this server: an older CLI against this server, or this CLI against an older server, records as before. Stopping `wardyn sync --watch` with Ctrl-C in the middle of a pass now records that pass as failed.
+- macOS VM: edit-base's Trust the list's CAs asks only for a CA the base does not trust yet, and once for a certificate listed twice. When every CA is already trusted, it opens nothing and says so.
+- A CONNECT that went ahead on a `once` approval given back after a failed first try now names that approval in `approval_id` on its own `builtin:dial-failed` or `builtin:tunnel-failed` row, without the not-spent note. Before, that row read null. When an approval is spent or given back has not changed.
+- A run on a runner (your own, or your organisation's self-hosted one) that carries an MCP server or Bedrock provider sending your organisation's run identity is now refused at Review, preflight and create (`placement_credential`). The refusal names every such server or provider and says they run only on your organisation's remote-hosted runners. The refusal at dispatch names them too, in place of `ProxyConfig.GatewayIdentity`.
+- Bedrock SSO sign-in now shows its link and code when AWS IAM Identity Center sends the newer sign-in page (`signin.aws`) and a separate code, including on newer regions. The console also shows the whole link when the terminal splits it across rows, and the run page's "Open the verification page" button is back for that page. Look-alike hosts are still refused.
+
+### Security
+
+- `agent-claude-code` now pins Claude Code 2.1.312. The earlier pin, 2.1.231, runs on its own embedded runtime, whose
+  Brotli decoder a crafted stream can make write out of bounds (CVE-2026-111497); 2.1.312 carries the fixed runtime. A
+  crafted Brotli response from a site a Claude Code run may reach could run code as the agent, inside its sandbox and
+  its egress policy. Rebuild locally built `agent-claude-code` images.
+- A run on Kubernetes keeps its `data_out` rule after a live egress edit, including after a restart with current limits. Before, the edit let content out until the run ended through every door the rule guards: run output and recording replay, web apps, the Files panel, desktop copy out and download, SSH file transfer, commands and port forwards, `wardyn sync` down, and bringing the computer folder back. A later restart kept that unless a restriction set the rule.
+- When a run's current policy generation record cannot be read, every door its `data_out` rule guards now refuses. Output, web apps and bringing the computer folder back answer 503 `data_out_unreadable`; commands and SSH transfers are refused as blocked. A restart or egress edit answers 503 until the record can be read. Before, the rule read as allowed and content could leave. A run with a computer folder that syncs back keeps its sandbox at its end, so the folder can be brought back once the record reads, until the keep expires. A run with no recorded policy (pruned) is unchanged.
+
 ## [0.10.0-rc.23] — 2026-11-17
 
 ### Added

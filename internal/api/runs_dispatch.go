@@ -363,6 +363,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
 	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
 	addPlacedSecrets(&policy, placedEnv...) // before the sidecar policy and the audited snapshot copy it
+	// After every writer above, so a value an operator set for it stands.
+	applyClaudeToolSearchDefault(run, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them

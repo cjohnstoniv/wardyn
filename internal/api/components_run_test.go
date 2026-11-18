@@ -806,7 +806,7 @@ func TestRunComponents_HostRefusals(t *testing.T) {
 		"api.anthropic.com", "anthropic.com", "*.anthropic.com", "console.anthropic.com:8443",
 	} {
 		cases = append(cases, componentCase{name: "model host " + h, setup: host(h), status: 422, reason: "component_host_serves_model",
-			sentence: `components[0]: inline.hosts[0]: "` + h + `" serves a model on this deployment, and a component may not reach a model's host`})
+			sentence: `components[0]: inline.hosts[0]: "` + h + `" serves a model on this deployment, and a component may not reach a model's host; the port does not count, so give this component a host name no model uses`})
 	}
 	cases = append(cases,
 		componentCase{name: "an organisation's component on a model host", setup: func(f *componentFixture) []any {

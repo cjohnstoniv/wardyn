@@ -605,15 +605,27 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 		RETURNING `+wsReadCols, id, patch))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" for the caller.
-		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
-			return types.Workspace{}, ErrConflict
-		}
-		return types.Workspace{}, ErrNotFound
+		_, gerr := s.GetWorkspace(ctx, id)
+		return types.Workspace{}, missReadErr(gerr, ErrConflict, "workspace after a requirements merge missed")
 	}
 	if err != nil {
 		return types.Workspace{}, err
 	}
 	return s.hydrated(ctx, ws)
+}
+
+// missReadErr is the error for a guarded write that matched no row, given the error of the read that
+// follows it: no error means the row exists, so the guard refused it (held); a missing row is
+// ErrNotFound; any other read failure is returned as itself, so a transient fault is not reported as a
+// row that is gone.
+func missReadErr(gerr, held error, what string) error {
+	switch {
+	case gerr == nil:
+		return held
+	case errors.Is(gerr, ErrNotFound):
+		return ErrNotFound
+	}
+	return fmt.Errorf("store: read %s: %w", what, gerr)
 }
 
 // Hydration: attachments → the derived view

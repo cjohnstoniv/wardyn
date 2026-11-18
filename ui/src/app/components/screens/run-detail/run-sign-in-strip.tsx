@@ -16,8 +16,18 @@ import { STATES } from "../../wardyn/states";
 import { DeviceCode } from "../settings/signin-progress";
 import { useRunSignIn } from "./use-run-sign-in";
 
-function Opens({ url }: { url: string }) {
-  const host = new URL(url).host;
+// The link's host, or "" for a link the browser cannot parse (an
+// `xn--` label that is not valid punycode, say): that link gets no button and
+// no "Opens" line, rather than a throw during render.
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function Opens({ host }: { host: string }) {
   const line = RUN_SIGN_IN.OPENS(host);
   const at = line.indexOf(host);
   return (
@@ -34,6 +44,7 @@ function Opens({ url }: { url: string }) {
 export default function RunSignInStrip({ runId, onWaiting }: { runId: string; onWaiting?: () => void }) {
   const read = useRunSignIn(runId, true);
   const w = read.waiting;
+  const host = w ? hostOf(w.verification_url) : "";
   React.useEffect(() => {
     if (w) onWaiting?.();
   }, [w, onWaiting]);
@@ -59,11 +70,13 @@ export default function RunSignInStrip({ runId, onWaiting }: { runId: string; on
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <DeviceCode code={w.user_code} label={RUN_SIGN_IN.CODE_LABEL} />
-              <Button size="sm" asChild>
-                <a href={w.verification_url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="size-3.5" aria-hidden /> {RUN_SIGN_IN.OPEN}
-                </a>
-              </Button>
+              {host && (
+                <Button size="sm" asChild>
+                  <a href={w.verification_url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="size-3.5" aria-hidden /> {RUN_SIGN_IN.OPEN}
+                  </a>
+                </Button>
+              )}
               <CopyButton
                 text={w.user_code}
                 label={RUN_SIGN_IN.COPY}
@@ -72,7 +85,7 @@ export default function RunSignInStrip({ runId, onWaiting }: { runId: string; on
                 {RUN_SIGN_IN.COPY}
               </CopyButton>
             </div>
-            <Opens url={w.verification_url} />
+            {host && <Opens host={host} />}
           </div>
         </div>
       )}

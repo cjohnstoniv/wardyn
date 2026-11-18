@@ -3,7 +3,12 @@
 
 package api
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"net/url"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 const mpRunModelEnvSecret = "This run's policy grants env_secret %s as %s, but on this deployment a run's model credential " +
 	"comes only from its model provider — remove that grant from the policy, or ask your admin."
@@ -36,6 +41,7 @@ var (
 	envAWSRegion          = modelEnvVar("AWS_REGION")
 	envClaudeUseFoundry   = modelEnvVar("CLAUDE_CODE_USE_FOUNDRY")
 	envFoundryBaseURL     = modelEnvVar("ANTHROPIC_FOUNDRY_BASE_URL")
+	envClaudeUseVertex    = modelEnvVar("CLAUDE_CODE_USE_VERTEX")
 	envFoundryAuthToken   = modelEnvVar("ANTHROPIC_FOUNDRY_AUTH_TOKEN")
 	envDefaultOpusModel   = modelEnvVar("ANTHROPIC_DEFAULT_OPUS_MODEL")
 	envDefaultSonnetModel = modelEnvVar("ANTHROPIC_DEFAULT_SONNET_MODEL")
@@ -60,7 +66,6 @@ var (
 	_ = modelEnvVar("ANTHROPIC_CUSTOM_HEADERS")
 	_ = modelEnvVar("ANTHROPIC_FOUNDRY_API_KEY")
 	_ = modelEnvVar("ANTHROPIC_FOUNDRY_RESOURCE")
-	_ = modelEnvVar("CLAUDE_CODE_USE_VERTEX")
 	_ = modelEnvVar("ANTHROPIC_VERTEX_BASE_URL")
 	_ = modelEnvVar("ANTHROPIC_VERTEX_PROJECT_ID")
 	_ = modelEnvVar("ANTHROPIC_AWS_API_KEY")
@@ -82,4 +87,40 @@ func modelEnvSecretGrant(spec types.RunPolicySpec) (name, secretName string, fou
 		}
 	}
 	return "", "", false
+}
+
+// envEnableToolSearch is Claude Code's switch for deferring tools behind tool search.
+const envEnableToolSearch = "ENABLE_TOOL_SEARCH"
+
+// applyClaudeToolSearchDefault turns Claude Code's tool search off for a run whose
+// claude would reach a host that is not first-party Anthropic: a base URL in the env
+// (a subscription provider's gateway, or a custom endpoint that sets the variable), or
+// no base URL but a model key on a container, which is taken as the claude-code image's
+// proxy route (its own ENV, left in place by the key arm). A container image that sets no
+// Anthropic base URL, such as one built from agent-base, is therefore treated the same.
+// Claude Code 2.1.231 did this itself, for the first-party provider only; later versions
+// dropped the check and would send tool-reference blocks and a beta header a gateway
+// may reject. Bedrock, Foundry and Vertex are left on the CLI default, as are the
+// sign-in task, a base URL on api.anthropic.com, and a virtual machine run with no base
+// URL (its guest gets this env only, no image ENV, so claude reaches the vendor host). The
+// default is the last word only when nothing else sets the variable, so call this after
+// every env writer: a value any of them set for it, a component config entry for one, is kept.
+func applyClaudeToolSearchDefault(run types.AgentRun, env map[string]string) {
+	if _, set := env[envEnableToolSearch]; set || run.Task == harnessLoginTask {
+		return
+	}
+	for _, k := range []string{envClaudeUseBedrock, envClaudeUseFoundry, envClaudeUseVertex} {
+		if env[k] != "" {
+			return
+		}
+	}
+	base := env[envAnthropicBaseURL]
+	if base == "" {
+		if env[envAnthropicAPIKey] == "" || run.MachineKind.IsVM() {
+			return
+		}
+	} else if u, err := url.Parse(base); err == nil && strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), "api.anthropic.com") {
+		return
+	}
+	env[envEnableToolSearch] = "false"
 }

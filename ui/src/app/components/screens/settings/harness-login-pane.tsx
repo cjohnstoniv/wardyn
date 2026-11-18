@@ -70,7 +70,7 @@ export type { CaptureMode, LoginFlow } from "./login-flows";
 import {
   SANDBOX_REFUSAL_LEAD_IN,
   extractAuthUrl,
-  extractDeviceVerificationUrl,
+  extractDeviceSignIn,
   extractFailSentence,
   extractSetupToken,
 } from "./login-pty-extract";
@@ -203,6 +203,8 @@ export function HarnessLoginPane({
   // answer — but a separate flag, because who can fix it differs. Reset per launch.
   const [stuck, setStuck] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
+  // The device code beside authUrl: a sign-in page link carries none, so it is read off the pane.
+  const [deviceCode, setDeviceCode] = React.useState("");
   const [code, setCode] = React.useState("");
   // #628: the door's own steps. `pulling` is the substrate saying the image is
   // downloading; `imageFailed` is state 7 (that download failed); `tabOpened`
@@ -307,6 +309,7 @@ export function HarnessLoginPane({
     setRefused(false);
     setStuck(false);
     setAuthUrl("");
+    setDeviceCode("");
     pullingRef.current = false;
     setPulling(false);
     interactiveStartedRef.current = false;
@@ -584,11 +587,13 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       // extractor returns the first URL, so that flow stays latched. openedUrlRef only says a URL has
       // been seen (the self-run grace check).
       const helper = flow.capture === "helper";
-      const url = helper ? extractDeviceVerificationUrl(outBufRef.current) : openedUrlRef.current ? null : extractAuthUrl(outBufRef.current);
+      const device = helper ? extractDeviceSignIn(outBufRef.current) : null;
+      const url = helper ? (device?.url ?? null) : openedUrlRef.current ? null : extractAuthUrl(outBufRef.current);
       if (url && url !== authUrlRef.current) {
         openedUrlRef.current = true;
         authUrlRef.current = url;
         setAuthUrl(url);
+        setDeviceCode(device?.code ?? "");
         setTabOpened(false); // a tab opened for the old code is not this one
       }
       // Finding 7b: a HINT; only swaps CAPTURE_HANDOFF in (checked before the
@@ -804,6 +809,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
             <SignInDoorState
               provider={flow.providerName}
               url={authUrl}
+              code={deviceCode}
               opened={tabOpened}
               showUrl={flow.capture === "helper"}
               // Finding 7a: this click is the gesture the popup needs — never
