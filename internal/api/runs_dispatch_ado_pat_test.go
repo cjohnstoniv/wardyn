@@ -217,6 +217,19 @@ func (fx *adoPATFixture) clock() time.Time {
 	return fx.now
 }
 
+// validTo is the stored validTo of the token jti. The ExpiresAt a resolve tells
+// the proxy is the lease, not this.
+func (fx *adoPATFixture) validTo(t *testing.T, jti string) time.Time {
+	t.Helper()
+	for _, row := range fx.st.unrevoked(t) {
+		if row.AuthorizationID.String() == jti {
+			return row.ValidTo
+		}
+	}
+	t.Fatalf("no open row for token %s", jti)
+	return time.Time{}
+}
+
 func (fx *adoPATFixture) advance(d time.Duration) {
 	fx.mu.Lock()
 	defer fx.mu.Unlock()
@@ -361,11 +374,12 @@ func TestMintedPAT_DispatchCreatesOneTokenScopedToTheRun(t *testing.T) {
 		t.Fatalf("ado_pat.mint reasons = %v, want [dispatch]", got)
 	}
 	token := fx.pats.tokens[0]
+	lease := fx.clock().Add(storedKeyTTL).UnixMilli()
 	for _, host := range []string{"dev.azure.com", "vssps.dev.azure.com", "contoso.visualstudio.com"} {
 		resp := fx.ok(t, host, nil)
 		if resp.Header != "Authorization" || resp.Value != "Basic "+base64.StdEncoding.EncodeToString([]byte(":"+token)) ||
-			resp.JTI != rows[0].AuthorizationID.String() || resp.ExpiresAt != validTo.UnixMilli() {
-			t.Fatalf("%s: response = %+v, want Basic of the token, JTI %s, ExpiresAt %d", host, resp, rows[0].AuthorizationID, validTo.UnixMilli())
+			resp.JTI != rows[0].AuthorizationID.String() || resp.ExpiresAt != lease {
+			t.Fatalf("%s: response = %+v, want Basic of the token, JTI %s, ExpiresAt %d (now + storedKeyTTL)", host, resp, rows[0].AuthorizationID, lease)
 		}
 	}
 	if n := fx.pats.createCount(); n != 1 {
@@ -419,7 +433,7 @@ func TestMintedPAT_DispatchRefusals(t *testing.T) {
 func TestMintedPAT_RenewalIsResolveDriven(t *testing.T) {
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	validTo := time.UnixMilli(first.ExpiresAt)
+	validTo := fx.validTo(t, first.JTI)
 
 	fx.setClock(validTo.Add(-adoRunPATRenewWindow - time.Minute))
 	if got := fx.ok(t, "dev.azure.com", nil); got.JTI != first.JTI || fx.pats.createCount() != 1 {
@@ -445,7 +459,7 @@ func TestMintedPAT_RenewalIsResolveDriven(t *testing.T) {
 func TestMintedPAT_RenewFailureKeepsTheCurrentToken(t *testing.T) {
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(-time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(-time.Minute))
 	fx.pats.createErr = &adoPATError{Status: http.StatusServiceUnavailable}
 	if got := fx.ok(t, "dev.azure.com", nil); got.JTI != first.JTI {
 		t.Fatalf("JTI %s, want the current token while it still works", got.JTI)
@@ -459,7 +473,7 @@ func TestMintedPAT_RenewFailureKeepsTheCurrentToken(t *testing.T) {
 func TestMintedPAT_RenewFailureNeverServesAnExpiredToken(t *testing.T) {
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(time.Minute))
 	fx.pats.createErr = &adoPATError{Status: http.StatusServiceUnavailable}
 	rec, got := fx.resolve(t, "dev.azure.com", nil)
 	if rec.Code == http.StatusOK && got.JTI == first.JTI {
@@ -534,7 +548,7 @@ func TestMintedPAT_PauseRevokesAndResumeRemints(t *testing.T) {
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
 	second := fx.ok(t, "dev.azure.com", stale(first.JTI)) // two rows: one revoked, one live
-	fx.setClock(time.UnixMilli(second.ExpiresAt).Add(-time.Minute))
+	fx.setClock(fx.validTo(t, second.JTI).Add(-time.Minute))
 	third := fx.ok(t, "dev.azure.com", nil) // a renewal: two live rows now
 	if live := fx.st.unrevoked(t); len(live) != 2 {
 		t.Fatalf("live rows before pause = %d, want 2", len(live))
@@ -630,7 +644,7 @@ func TestMintedPAT_EveryEndPathRevokes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fx := newADOPATFixture(t)
 			first := fx.ok(t, "dev.azure.com", nil)
-			fx.setClock(time.UnixMilli(first.ExpiresAt).Add(-time.Minute))
+			fx.setClock(fx.validTo(t, first.JTI).Add(-time.Minute))
 			second := fx.ok(t, "dev.azure.com", nil) // renewal: two live tokens
 			fx.audit.rows = nil
 			tc.end(fx)
@@ -667,7 +681,7 @@ func TestMintedPAT_RestartRemintsAndTheSweepCleansUp(t *testing.T) {
 
 	// Past the first token's validTo, the sweep closes its row as expired and
 	// calls nothing.
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(time.Minute))
 	if err := fx.srv.sweepRunPATs(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +867,7 @@ func TestMintedPAT_SweepKeepsAnExpiredRowsLastError(t *testing.T) {
 	if len(live) != 1 || live[0].LastError == "" {
 		t.Fatalf("after a failed revoke: live rows %+v, want the row open with its error", live)
 	}
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(time.Minute))
 	if err := fx.srv.sweepRunPATs(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -230,7 +230,7 @@ func (fx *adoPATFixture) runTokens(t *testing.T) *httptest.ResponseRecorder {
 func TestRunADOTokens_OldestFirstWithoutSecrets(t *testing.T) {
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(-adoRunPATRenewWindow + time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(-adoRunPATRenewWindow + time.Minute))
 	fx.ok(t, "dev.azure.com", nil) // renewal: a second token
 	rows := fx.st.unrevoked(t)
 	if len(rows) != 2 {

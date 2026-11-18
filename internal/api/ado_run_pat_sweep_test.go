@@ -85,7 +85,7 @@ func TestRunPATSweepLeavesRetainedTokensOnLiveRun(t *testing.T) {
 	ctx := context.Background()
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(-adoRunPATRenewWindow + time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(-adoRunPATRenewWindow + time.Minute))
 	renewed := fx.ok(t, "vssps.dev.azure.com", nil)
 	if renewed.JTI == first.JTI || len(fx.st.unrevoked(t)) != 2 {
 		t.Fatalf("renewal: JTI %s, %d open rows, want a second token beside the first", renewed.JTI, len(fx.st.unrevoked(t)))
