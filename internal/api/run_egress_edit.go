@@ -246,19 +246,6 @@ func editedHost(host string, entries []string) bool {
 	})
 }
 
-// retireViaOrgEngine retires this replica's cached via_org engine for the run, cancelling its open
-// streams, once the edited config is stored: the next via_org request rebuilds the engine from that
-// config. Another replica's engine is reached only through the run's proxy, and the new proxy no
-// longer routes an edited host to the organisation.
-func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
-	s.viaOrg.mu.Lock()
-	run := s.viaOrg.runs[runID]
-	s.viaOrg.mu.Unlock()
-	if run != nil {
-		s.releaseViaOrgRun(run, false, false)
-	}
-}
-
 // editRunEgress refuses an edit the run cannot take before anything changes, holds the edit's mark,
 // and replaces the run's proxy through the live revive path with the edit applied. Every outcome
 // past the body check writes one run.egress.edit row.

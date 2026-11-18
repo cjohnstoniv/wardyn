@@ -37,7 +37,7 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 		}
 		return 0, proxyStartRec{}, s.reviveGenerationFailed(ctx, run, fence, data, actorType, actor, retiring, freshJTI, renewed, gerr)
 	case edited && gen > 0:
-		s.retireViaOrgEngine(run.ID) // the edited config is stored: no engine built from the pre-edit one serves again
+		s.releaseViaOrgEngineOf(run.ID) // the edited config is stored: no engine built from the pre-edit one serves again
 	}
 	// A hold lost since the claim is a lock another replica may now hold, under which a newer revive may
 	// have replaced the proxy: a replace from here would remove that proxy. The old (or newer) proxy is left
