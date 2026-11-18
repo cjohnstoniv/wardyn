@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
 func offlineCounts(up *gitBrokerUpstream) (mints, hits int) {
@@ -52,15 +54,15 @@ func TestGitBrokerOfflineBound(t *testing.T) {
 
 	p.runToken.atMs = time.Now().Add(-30 * time.Minute).UnixMilli()
 	rec := get()
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not reached the organisation") {
-		t.Fatalf("(c) status %d body %q, want 502 naming the organisation", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not renewed its run token") {
+		t.Fatalf("(c) status %d body %q, want 502 saying the run token was not renewed", rec.Code, rec.Body)
 	}
 	mints, hitsC := offlineCounts(up)
 	if mints != 1 || hitsC != hitsB {
 		t.Fatalf("(c) %d mints, %d forge hits (was %d), want 1 and no new hit", mints, hitsC, hitsB)
 	}
-	if !strings.Contains(buf.String(), `"decision":"deny"`) || !strings.Contains(buf.String(), `"rule_source":"`+ruleSourceGit+`"`) {
-		t.Fatalf("(c) decision log %q, want a %s deny row", buf, ruleSourceGit)
+	if d := findDecision(t, buf, ruleSourceGit); d.Decision != egress.Deny {
+		t.Fatalf("(c) last %s row %+v, want deny", ruleSourceGit, d)
 	}
 
 	p.runToken.Set("RUNTOK2")
@@ -92,8 +94,8 @@ func TestPATBrokerOfflineBound(t *testing.T) {
 
 	p.runToken.atMs = time.Now().Add(-30 * time.Minute).UnixMilli()
 	rec := get()
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not reached the organisation") {
-		t.Fatalf("(b) status %d body %q, want 502 naming the organisation", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not renewed its run token") {
+		t.Fatalf("(b) status %d body %q, want 502 saying the run token was not renewed", rec.Code, rec.Body)
 	}
 	if mints, _ := offlineCounts(up); mints != 1 {
 		t.Fatalf("(b) %d mints, want 1", mints)

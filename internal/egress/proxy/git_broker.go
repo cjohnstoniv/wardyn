@@ -91,7 +91,7 @@ const brokerRefreshMargin = 30 * time.Second
 const brokerOfflineBound = 30 * time.Minute
 
 // errBrokerOffline is brokeredToken's answer past brokerOfflineBound.
-var errBrokerOffline = errors.New("this proxy has not reached the organisation for 30 minutes, so it adds no Git credential until it does")
+var errBrokerOffline = errors.New("this proxy has not renewed its run token with the organisation for 30 minutes, so it adds no Git credential until it does")
 
 // gitApprovalBudget is the operator's ceiling for ONE brokered-credential
 // acquisition: the first mint call, the approval wait, and every poll inside
