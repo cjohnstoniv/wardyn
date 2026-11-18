@@ -81,9 +81,9 @@ func TestLocalDispatchRefusesAGatewayRouteNamingTheServer(t *testing.T) {
 	if srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 		t.Fatal("a run identity route was classified for a local runner")
 	}
-	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+	ev := findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementCredential)) || !strings.Contains(string(ev.Data), "ProxyConfig.GatewayIdentity") {
-		t.Fatalf("no canonical refusal: %s", auditDump(audit.events, run.ID))
+		t.Fatalf("no canonical refusal: %s", auditDump(audit.snapshot(), run.ID))
 	}
 	if want := "This run was not launched on your own runner: " + gatewayLocalSentence; st.failureHint != want {
 		t.Fatalf("failure hint %q, want %q", st.failureHint, want)
