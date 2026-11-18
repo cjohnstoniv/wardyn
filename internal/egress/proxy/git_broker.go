@@ -347,7 +347,9 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // Past brokerOfflineBound without a run-token renewal it answers errBrokerOffline, mints nothing and
 // keeps the cache.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
-	if p.runToken.quiet(time.Now()) >= brokerOfflineBound {
+	// The via_org engine runs inside the organisation and has no renewer, so its token source only ever ages;
+	// the bound is for a runner-side proxy that cannot reach the organisation.
+	if !p.engine && p.runToken.quiet(time.Now()) >= brokerOfflineBound {
 		// The refusal is what tells the renewer that someone is waiting on the organisation.
 		p.runToken.wake()
 		return "", "", errBrokerOffline
