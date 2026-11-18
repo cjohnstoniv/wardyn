@@ -147,8 +147,8 @@ ok()  { echo "ok: $*"; }
 # already published, so it must never block the next release — and the next
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
-# ssh-editors-live (#2988): real Mutagen and JetBrains backend runs against the SSH gateway, never run on a
-# hosted runner (a 1.5 GB IDE download and a full compose stack). Same promotion rule; its date is below.
+# ssh-editors-live (#2988): real Mutagen and JetBrains backend runs against the SSH gateway; now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 # k6-rerun-rate (#3538) only writes a job-summary table from the job history and is continue-on-error:
 # no release waits on it and a red one would say nothing about the code.
 NIGHTLY=.github/workflows/nightly.yml
@@ -158,12 +158,12 @@ NIGHTLY=.github/workflows/nightly.yml
 # in watched= from day one, and is promoted after a scheduled green, not before. Its own
 # notify-ai-gateway-kind job opens the issue for a scheduled red, and the date below is renewed or the
 # job promoted before it passes.
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan ssh-editors-live k6-rerun-rate ai-gateway-kind notify-ai-gateway-kind kind-node-restart kind-agent-sandbox-keep-walk"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan k6-rerun-rate ai-gateway-kind notify-ai-gateway-kind kind-node-restart kind-agent-sandbox-keep-walk"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
 # and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
 # date is renewed in a reviewed change. Empty while no job is waiting.
-NOTIFY_EXEMPT_UNTIL="ssh-editors-live=2026-11-20 ai-gateway-kind=2026-11-28 kind-node-restart=2026-11-24 kind-agent-sandbox-keep-walk=2026-11-28"
+NOTIFY_EXEMPT_UNTIL="ai-gateway-kind=2026-11-28 kind-node-restart=2026-11-24 kind-agent-sandbox-keep-walk=2026-11-28"
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max

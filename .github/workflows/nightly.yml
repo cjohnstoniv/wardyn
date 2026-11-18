@@ -390,11 +390,9 @@ jobs:
   # docs/SSH.md's "Editors over the gateway" table cites this job by name, so a rename
   # changes that table too. It reuses run-e2e-ssh.sh's dedicated stack in its editors mode.
   #
-  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT_UNTIL (scripts/test-repo-guards.sh),
-  # kept out of notify-new-lanes' needs and release.yml's watched= until it has gone green
-  # on a real scheduled run. Not a required check.
+  # It is in notify-new-lanes' needs and release.yml's watched= (guard 13), so it runs under
+  # scope=candidate (guard 18) and a release waits on it. Not a required check.
   ssh-editors-live:
-    if: inputs.scope != 'candidate'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
@@ -3046,7 +3044,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk, ssh-editors-live]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
@@ -3071,7 +3069,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk or ssh-editors-live." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
