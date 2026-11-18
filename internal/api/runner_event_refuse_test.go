@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -260,5 +261,40 @@ func TestRefusalWindowOwingASummaryIsDroppedAfterADay(t *testing.T) {
 	r.count(other, start.Add(runnerEventRefuseOwedKeep))
 	if _, ok := r.byRunner[quiet]; ok {
 		t.Fatal("a window that suppressed rows stayed in memory a day after it opened")
+	}
+}
+
+// A refusal reads an overflow summary's interval for the store, and a sequenced record's place never depends on it.
+func TestRefusalReadsTheSpoolPlace(t *testing.T) {
+	now := time.Now()
+	runID, spoolID := uuid.New(), uuid.New()
+	hash := strings.Repeat("a", 64)
+	for name, tc := range map[string]struct {
+		data string
+		want *store.RunnerEventRefusalSpool
+	}{
+		"summary": {`{"spool_id":"` + spoolID.String() + `","seq":0,"hash":"` + hash + `","count":2,"drop_end":5,"later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Hash: hash, Count: 2, DropEnd: 5}},
+		"summary with an unreadable interval": {`{"spool_id":"` + spoolID.String() + `","seq":0,"hash":"` + hash + `","count":"x","drop_end":5,"later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Hash: hash}},
+		"sequenced record": {`{"spool_id":"` + spoolID.String() + `","seq":2,"hash":"` + hash + `","count":"x","later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Seq: 2, Hash: hash}},
+		"data with no place": {`{`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &refuseStoreFake{}
+			err := refuseTestServer(fake, &now).eventFromRunner(t.Context(), uuid.New(), "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: []byte(tc.data)})
+			var refusal *runnerwire.EventRefusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("err = %v, want an EventRefusal", err)
+			}
+			calls := fake.recorded()
+			if len(calls) != 1 {
+				t.Fatalf("RefuseRunnerEvent calls = %+v, want one", calls)
+			}
+			if got := calls[0].Spool; (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("spool place = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }

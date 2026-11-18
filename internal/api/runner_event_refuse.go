@@ -157,6 +157,14 @@ func (s *Server) classifyRunnerEvent(ctx context.Context, runnerID uuid.UUID, ev
 		}
 		if json.Unmarshal(ev.Data, &named) == nil && named.SpoolID != uuid.Nil {
 			r.Spool = &store.RunnerEventRefusalSpool{RunID: *ev.RunID, SpoolID: named.SpoolID, Seq: named.Seq, Hash: named.Hash}
+			// Read apart, so these fields can only matter to an overflow summary, never cost a record its place.
+			var summary struct {
+				Count   uint64 `json:"count"`
+				DropEnd uint64 `json:"drop_end"`
+			}
+			if named.Seq == 0 && json.Unmarshal(ev.Data, &summary) == nil {
+				r.Spool.Count, r.Spool.DropEnd = summary.Count, summary.DropEnd
+			}
 		}
 	}
 	now := s.cfg.Now()
