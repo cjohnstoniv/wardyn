@@ -459,7 +459,7 @@ func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, user
 // gitApprovalTimeout elapses, re-minting exactly once on APPROVED. A
 // transient poll error is retried, not fatal.
 func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (token, username string, expMs int64, err error) {
-	timeout := gitApprovalBudget()
+	timeout := holdFor(ctx, gitApprovalBudget()) // under a via_org engine, what is left of this request's hold time
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(gitApprovalPollInterval)

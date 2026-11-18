@@ -150,11 +150,14 @@ func transientResolveFailure(err error) bool {
 // secret to a wildcard/approved host — and so is a second rule for a host that already has one.
 // Any mint failure fails the whole startup closed.
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
-	return buildInjectorFor(ctx, uuid.Nil, base, token, pol, rules, client)
+	return buildInjectorFor(ctx, uuid.Nil, false, base, token, pol, rules, client)
 }
 
-// buildInjectorFor is buildInjector filing its credentials under maskKey.
-func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
+// buildInjectorFor is buildInjector filing its credentials under maskKey. A via_org engine (lazyADO) resolves an Azure
+// DevOps credential at its first request, where a lapsed sign-in raises a re-auth hold, not at boot: a boot resolve has
+// no hold, and an engine is rebuilt after each idle release, so a sign-in that lapsed mid-run would fail the build and
+// take the run's other via_org grants down with it.
+func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, lazyADO bool, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
 	inj := &injector{
 		maskKey: maskKey,
 		byHost:  make(map[string]*injEntry), base: base, token: token, client: client,
@@ -176,6 +179,11 @@ func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token
 		// a second rule would replace the first and its credential would ride the first's traffic.
 		if _, dup := inj.byHost[host]; dup {
 			return nil, fmt.Errorf("injection rule host %q has more than one rule; a host carries one credential", host)
+		}
+		if lazyADO && r.SecretName == types.ADOEntraAccessTokenSecret {
+			// An entry with no header is never served: its first resolve is the request's own, with the hold.
+			inj.byHost[host] = &injEntry{grantID: r.GrantID, requireTLS: r.RequireTLS, rule: r.InjectionRule}
+			continue
 		}
 		// No hold at boot: this runs under the proxy's 30s startupCtx, seconds after dispatch refreshed the
 		// credential synchronously, so a 423 here just fails closed like any other error.
@@ -291,7 +299,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
 				errReauthEnded{reason: "this proxy has no re-auth hold lane"})
 		}
-		wf, fresh, admitted := i.reauth.admit(pending.approvalID, credentialReauthBudget())
+		wf, fresh, admitted := i.reauth.admit(pending.approvalID, holdCap(ctx, credentialReauthBudget()))
 		if !admitted {
 			e.reMu.Unlock()
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthCapped)

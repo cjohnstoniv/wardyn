@@ -25,7 +25,7 @@ var localDispatchFields = map[reflect.Type][]string{
 
 	reflect.TypeFor[time.Time]():             nil, // opaque timestamp, not credential authority
 	reflect.TypeFor[adoEntraGrade]():         strings.Fields("graded rowID org tokenMode"),
-	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost residentOptIn"),
+	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost residentOptIn viaOrgOptIn"),
 	reflect.TypeFor[adoStandingBound]():      strings.Fields("operator governance"),
 	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject sigv4Hosts sigv4Why sigv4Gateway residentGrant maskErr"),
 	reflect.TypeFor[bedrockCredGrade]():      strings.Fields("graded host"),
@@ -56,7 +56,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[userMountPosture]():          strings.Fields("Roots Sources Writable Bound"),
 	reflect.TypeFor[policyref.Contact]():         strings.Fields("Owner Email RequestURL RequestText"),
 	reflect.TypeFor[policyref.Provenance]():      strings.Fields("Layer Name Contact Locked"),
-	reflect.TypeFor[types.ADOEntraConfig]():      strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox"),
+	reflect.TypeFor[types.ADOEntraConfig]():      strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox RunnerViaOrg"),
 	reflect.TypeFor[types.AgentProvider]():       strings.Fields("ID Disabled DefaultProvider DesktopSignInsOff"),
 	reflect.TypeFor[types.AgentProviders]():      strings.Fields("Agents"),
 	reflect.TypeFor[types.AzureSettings]():       strings.Fields("Endpoint Route"),

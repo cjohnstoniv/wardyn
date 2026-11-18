@@ -5,12 +5,14 @@ package placement
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -29,6 +31,9 @@ type CredentialOrigin struct {
 	// ResidentOptIn is an Azure DevOps connection's admin opt-in to
 	// runner_resident (types.ADOEntraConfig.RunnerResident); off by default.
 	ResidentOptIn bool
+	// ViaOrgOptIn is an Azure DevOps connection's admin switch allowing its minted tokens on runners via the
+	// organisation (types.ADOEntraConfig.RunnerViaOrg); off by default.
+	ViaOrgOptIn bool
 }
 
 // CredentialIntent records a resolved credential-producing configuration before mint.
@@ -131,6 +136,9 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 			return runner.SandboxSpec{}, r
 		}
 	}
+	if r := mixedADODelivery(p); r != nil {
+		return runner.SandboxSpec{}, r
+	}
 	out, r := enforceTable(Entries, p)
 	if r != nil {
 		return runner.SandboxSpec{}, r
@@ -148,16 +156,48 @@ func trustName(t types.RunnerTrustClass) string {
 	return string(t)
 }
 
+// mixedADODelivery refuses a plan whose Azure DevOps gate is delivered via_org while a credential on one of the
+// gate's hosts is not: the laptop copy drops the gate with the via_org routes, which would leave that credential
+// (an own PAT injection, or a git PAT grant the runner's own broker serves) with no gate.
+func mixedADODelivery(p LocalPlan) *Refusal {
+	const path = "ProxyConfig.ADOGrant"
+	gate := p.Spec.ProxyConfig.ADOGrant
+	if gate == nil || !viaOrgPath(p, path) {
+		return nil
+	}
+	onGate := func(host string) bool {
+		return slices.ContainsFunc(gate.Hosts, func(h string) bool { return gateHostKey(h) == gateHostKey(host) })
+	}
+	for i, in := range p.Spec.ProxyConfig.Injection {
+		ipath := indexed("ProxyConfig.Injection", i)
+		if onGate(in.Rule.Host) && !viaOrgPath(p, ipath) {
+			return refuse(ReasonPlacementCredential, ipath, "mixed Azure DevOps delivery: the gate is delivered via_org but this injection on its host is not, so it would run with no gate")
+		}
+	}
+	for _, host := range slices.Sorted(maps.Keys(p.Spec.ProxyConfig.PATGrants)) {
+		ppath := "ProxyConfig.PATGrants[" + host + "]"
+		if onGate(host) && !viaOrgPath(p, ppath) {
+			return refuse(ReasonPlacementCredential, ppath, "mixed Azure DevOps delivery: the gate is delivered via_org but this git PAT grant on its host is not, so it would run with no gate")
+		}
+	}
+	return nil
+}
+
+// gateHostKey is a host as the proxy keys its host tables (its hostKey): spaces trimmed, then canonicalised.
+func gateHostKey(h string) string { return domainmatch.CanonHost(strings.TrimSpace(h)) }
+
 // viaOrgAdmits is the via_org gate (OD-12, design §7.2-§7.3): a row of the
 // via_org shape whose class the stored policy delivers via_org, and whose class
-// may be. Every other configured mode still refuses here until its delivery is built.
+// may be (an Azure DevOps minted token also needs ViaOrgADOAdmits). Every other
+// configured mode still refuses here until its delivery is built.
 func viaOrgAdmits(row Entry, mode Mode) bool {
 	return row.ViaOrg && row.Rule != RuleNotConfigured && mode == ModeViaOrg && slices.Contains(classModes[row.Delivery], ModeViaOrg)
 }
 
 // ViaOrgGrant reports whether an org-held grant of origin is delivered via_org
 // under policy on a runner of trust class trust: the same table rows and gate
-// LocalEligibility applies to it.
+// LocalEligibility applies to it. An Azure DevOps origin (ViaOrgADOAdmits) is never one: no Brokered api_key
+// row exists for the eligible_grants walk, and TestViaOrgGrant_ADOOriginIsNeverAnEligibleGrant pins that.
 func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy, trust types.RunnerTrustClass) bool {
 	return origin.Class != ClassOwn && origin.Class != "" &&
 		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy, Trust: trust}, reflect.Value{}) == nil &&
@@ -222,6 +262,9 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
 			mode := p.Delivery.ForTrust(row.Delivery, p.Trust).Mode
 			if viaOrgAdmits(row, mode) {
+				if row.Delivery == ClassADOMintedPAT {
+					return ViaOrgADOAdmits(origin, p, path)
+				}
 				return nil
 			}
 			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
@@ -282,6 +325,26 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
+	return postureRefusal(class, cp, p, path)
+}
+
+// ViaOrgADOAdmits is the via_org gate for an Azure DevOps minted token: the token stays in
+// the organisation, and the run is judged as runner_resident is, except that any runner owner is served (the token
+// never reaches the runner). The connection's via_org switch is its consent; runner_resident is not needed.
+func ViaOrgADOAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal {
+	switch {
+	case !p.Trust.Valid():
+		return refuse(ReasonPlacementCredential, path, "an Azure DevOps minted token is never delivered to a runner of unknown trust class")
+	case !origin.ViaOrgOptIn:
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection does not allow its tokens on runners via the organisation, or its token mode is not minted_pat")
+	case p.ConfinementFloor != "":
+		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for an Azure DevOps minted token")
+	}
+	return postureRefusal(ClassADOMintedPAT, p.Delivery.ForTrust(ClassADOMintedPAT, p.Trust), p, path)
+}
+
+// postureRefusal is the refusal of a runner whose reported posture does not meet cp's require_posture, or nil.
+func postureRefusal(class string, cp ClassPolicy, p LocalPlan, path string) *Refusal {
 	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
 	case len(unmet) == 0:
 	case p.Posture == nil:

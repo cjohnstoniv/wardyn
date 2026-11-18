@@ -254,6 +254,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		s.auditReviveCeilingRefusal(ctx, run, rerr, actorType, actor)
 		return reviveResult{}, rerr
 	}
+	adoGate := cfg.ADOGrant // the organisation's, after the ceiling kept or withdrew the lane and before a laptop copy drops it
 	imageMark, rerr := s.reviveImageRefusals(ctx, run, c.requiredImageSigners, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -281,7 +282,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	storedJSON, rerr := revivedStoredConfig(ctx, run, cfg, corpus, cfgJSON)
+	storedJSON, rerr := revivedStoredConfig(ctx, run, cfg, corpus, adoGate, cfgJSON)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}

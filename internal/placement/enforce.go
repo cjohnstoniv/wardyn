@@ -6,6 +6,7 @@ package placement
 import (
 	"fmt"
 	"maps"
+	"net"
 	"reflect"
 	"slices"
 	"strconv"
@@ -69,6 +70,13 @@ var strippers = map[string]stripper{
 				!slices.ContainsFunc(s.ProxyConfig.ViaOrgRoutes, func(r proxy.ViaOrgRoute) bool { return h == r.Host })
 		})
 	},
+	// A via_org Azure DevOps grant's gate runs in the organisation's engine: the laptop copy keeps none, so its proxy
+	// forwards /wardyn/git/ for the grant's hosts instead of serving it. Dispatch keeps it in the sealed row only.
+	"ProxyConfig.ADOGrant": func(p LocalPlan, s *runner.SandboxSpec) {
+		if viaOrgPath(p, "ProxyConfig.ADOGrant") {
+			s.ProxyConfig.ADOGrant = nil
+		}
+	},
 	// Every grant left in the policy was proven own and OwnerOnly, or via_org,
 	// by the credential classification that ran first. A via_org grant leaves
 	// the policy and keeps only its grant id and host (stripViaOrg).
@@ -105,9 +113,7 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	for i, in := range pc.Injection {
 		if routed(i) {
 			routes = append(routes, proxy.ViaOrgRoute{GrantID: in.GrantID, Host: in.Rule.Host})
-			if !slices.Contains(pc.MITMHosts, in.Rule.Host) {
-				pc.MITMHosts = append(slices.Clip(pc.MITMHosts), in.Rule.Host)
-			}
+			pc.MITMHosts = viaOrgMITMHosts(pc.MITMHosts, in)
 		}
 	}
 	pc.Injection = deleteIndexed(pc.Injection, routed)
@@ -125,6 +131,26 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	})
 	pc.ViaOrgRoutes = slices.Compact(routes)
 }
+
+// viaOrgMITMHosts is hosts with the interception entry a via_org injection's destination needs. An Azure DevOps
+// credential's host keeps the entry production wrote for it (host:443, which scopes it to the TLS port): a bare
+// entry would mean any port, so it adds none beside one and writes the :443 spelling when it finds none.
+func viaOrgMITMHosts(hosts []string, in runner.InjectionGrant) []string {
+	host := in.Rule.Host
+	if in.Rule.SecretName != types.ADOEntraAccessTokenSecret {
+		if slices.Contains(hosts, host) {
+			return hosts
+		}
+		return append(slices.Clip(hosts), host)
+	}
+	if slices.ContainsFunc(hosts, func(h string) bool { return hostrules.HostOf(h) == host }) {
+		return hosts
+	}
+	return append(slices.Clip(hosts), net.JoinHostPort(host, adoMITMPort))
+}
+
+// adoMITMPort is the one port an Azure DevOps host is intercepted on (the dispatch lane's adoEntraHostPort).
+const adoMITMPort = "443"
 
 // residentFillPath reports whether the admitted injection at path is a
 // runner_resident class's placeholder fill (RuleResidentViaOrg), which is

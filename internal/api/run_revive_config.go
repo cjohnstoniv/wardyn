@@ -226,14 +226,17 @@ func (s *Server) auditReviveCeilingRefusal(ctx context.Context, run types.AgentR
 }
 
 // revivedStoredConfig is the revived config as the run row stores it. The stored row stays the
-// organisation's: a run on a runner keeps the inspection corpus its laptop copy drops, as dispatch stores it
-// (classifyLocalDispatch). A remote run's stored config is cfgJSON itself.
-func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config, corpus inspectionCorpus, cfgJSON []byte) ([]byte, *reviveError) {
+// organisation's: a run on a runner keeps the inspection corpus and the via_org Azure DevOps gate its laptop copy
+// drops, as dispatch stores it (classifyLocalDispatch). A remote run's stored config is cfgJSON itself.
+func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config, corpus inspectionCorpus, adoGate *proxy.ADOGrantConfig, cfgJSON []byte) ([]byte, *reviveError) {
 	if remotePlacement(run.Placement) {
 		return cfgJSON, nil
 	}
 	org := *cfg
 	org.Policy = corpus.restoredOn(cfg.Policy)
+	if org.ADOGrant == nil {
+		org.ADOGrant = adoGate // a via_org run's gate, dropped from the laptop copy
+	}
 	return encodeRevivedConfig(ctx, &org)
 }
 

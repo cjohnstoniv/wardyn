@@ -231,15 +231,44 @@ describe("EntraEditor", () => {
     render(<Harness initial={entraRow({ token_mode: "own_pat" })} />);
     expect(screen.queryByRole("switch", { name: E.RUNNER_TOGGLE })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: E.SANDBOX_TOGGLE })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: E.VIA_ORG_TOGGLE })).not.toBeInTheDocument();
   });
 
   it("switching a row to the person's own token drops its runner settings", async () => {
     let latest: GitProvider | undefined;
-    render(<Harness initial={entraRow({ runner_resident: true, runner_resident_sandbox: true })} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={entraRow({ runner_resident: true, runner_resident_sandbox: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
     await userEvent.click(screen.getByRole("radio", { name: ADO_PAT.MODE_OWN }));
+    expect(latest?.entra?.runner_via_org).toBeUndefined();
     expect(latest?.entra?.token_mode).toBe("own_pat");
     expect(latest?.entra?.runner_resident).toBeUndefined();
     expect(latest?.entra?.runner_resident_sandbox).toBeUndefined();
+  });
+
+  it("lets a row send its minted tokens through the server, and writes nothing once it is off again", async () => {
+    let latest: GitProvider | undefined;
+    const row = entraRow();
+    render(<Harness initial={row} onLatest={(r) => (latest = r)} />);
+    expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(E.VIA_ORG_TOGGLE_HINT)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE }));
+    expect(latest?.entra?.runner_via_org).toBe(true);
+    expect(latest?.entra?.runner_resident).toBeUndefined();
+    await userEvent.click(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE }));
+    expect(JSON.stringify(latest?.entra)).toBe(JSON.stringify(row.entra));
+  });
+
+  it("the via-the-server and on-a-runner switches are independent", async () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ runner_resident: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
+    await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
+    expect(latest?.entra?.runner_resident).toBeUndefined();
+    expect(latest?.entra?.runner_via_org).toBe(true);
+    expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("offers the via-the-server switch on the sign-in mode too, where it has no effect", () => {
+    render(<Harness initial={entraRow({ token_mode: "bearer" })} />);
+    expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toBeInTheDocument();
   });
 
   it("is read-only for a caller who can't edit", () => {
@@ -248,6 +277,8 @@ describe("EntraEditor", () => {
     expect(screen.getByLabelText(E.FIELD_TENANT)).toBeDisabled();
     expect(screen.getByLabelText(E.FIELD_CLIENT)).toBeDisabled();
     expect(screen.getByRole("switch", { name: E.REST_TOGGLE })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: E.VIA_ORG_TOGGLE })).toBeDisabled();
+    expect(screen.queryByText(E.VIA_ORG_TOGGLE_HINT)).not.toBeInTheDocument();
     for (const box of screen.getAllByRole("checkbox")) expect(box).toBeDisabled();
     expect(screen.queryByText(E.CEILING_LEAD)).not.toBeInTheDocument();
     // The Azure DevOps lines stay, so a person who can't edit still sees what each row means there.

@@ -163,7 +163,7 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if pending.state == capabilityPendingState {
 		hq.Set("approval", pending.approvalID.String())
 	}
-	wf, fresh, admitted := inj.reauth.admitCapability(pending.approvalID, hq)
+	wf, fresh, admitted := inj.reauth.admitCapability(ctx, pending.approvalID, hq)
 	if !admitted {
 		return false, adoHoldCappedRefusal
 	}

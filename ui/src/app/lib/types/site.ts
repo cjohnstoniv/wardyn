@@ -477,6 +477,9 @@ export interface ADOEntraConfig {
   runner_resident?: boolean;
   // Also put that token into the sandbox. Requires runner_resident.
   runner_resident_sandbox?: boolean;
+  // Let a runner reach this connection's minted tokens through the server, which adds the token (via_org).
+  // Absent reads as off; it applies only with token_mode minted_pat.
+  runner_via_org?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is

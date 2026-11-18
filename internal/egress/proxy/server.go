@@ -262,7 +262,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		return nil, err
 	}
 
-	inj, err := buildInjectorFor(ctx, hooks.maskKey, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
+	inj, err := buildInjectorFor(ctx, hooks.maskKey, hooks.engine, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
