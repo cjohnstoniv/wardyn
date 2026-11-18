@@ -201,13 +201,22 @@ func TestPG_RefuseRunnerEventBoundsRowsPerRunner(t *testing.T) {
 		return f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1`+where,
 			append([]any{"runner:" + runner.String()}, args...)...)
 	}
+	refuseFor := func(st store.PG, runner uuid.UUID) (time.Duration, error) {
+		_, fullFor, err := st.RefuseRunnerEvent(ctx, runner, eventRefusal(nil, nil), prepareSpoolTest)
+		return fullFor, err
+	}
 	refuse := func(st store.PG, runner uuid.UUID) error {
-		_, _, err := st.RefuseRunnerEvent(ctx, runner, eventRefusal(nil, nil), prepareSpoolTest)
+		_, err := refuseFor(st, runner)
 		return err
 	}
 	for i := 1; i <= 34; i++ {
-		if err := refuse(replicas[i%2], f.rn.ID); err != nil {
+		fullFor, err := refuseFor(replicas[i%2], f.rn.ID)
+		if err != nil {
 			t.Fatalf("refusal %d: %v", i, err)
+		}
+		// The window is full only once a refusal gets no row: the 33rd, marked, still has one.
+		if (i <= 33 && fullFor != 0) || (i == 34 && (fullFor <= 0 || fullFor > time.Hour)) {
+			t.Fatalf("refusal %d: window full for %v, want zero through the 33rd and more than zero, at most an hour, after", i, fullFor)
 		}
 		marked := 0
 		if i > 32 {
@@ -249,8 +258,8 @@ func TestPG_RefuseRunnerEventBoundsRowsPerRunner(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, `UPDATE runner_event_refusal_windows SET window_start = window_start - interval '1 hour' WHERE runner_id = $1`, busy.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := refuse(f.st, busy.ID); err != nil {
-		t.Fatal(err)
+	if fullFor, err := refuseFor(f.st, busy.ID); err != nil || fullFor != 0 {
+		t.Fatalf("first refusal of the next window: err=%v, window full for %v, want a row (zero)", err, fullFor)
 	}
 	if got := rows(busy.ID, ""); got != 35 {
 		t.Fatalf("first refusal of the next window: %d rows, want 35 (its summary and its own row)", got)

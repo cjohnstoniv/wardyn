@@ -29,7 +29,7 @@ type refuseStoreFake struct {
 	store.RunnerStore
 	resultErr, spoolErr, runErr, refuseErr error
 	run                                    types.AgentRun
-	fullUntil                              time.Time // what RefuseRunnerEvent answers: the runner's window full until then
+	fullFor                                time.Duration // what RefuseRunnerEvent answers: the runner's window full for that much more
 
 	mu    sync.Mutex
 	calls []store.RunnerEventRefusal
@@ -48,11 +48,11 @@ func (f *refuseStoreFake) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 	return f.run, f.runErr
 }
 
-func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, time.Time, error) {
+func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
-	return r.ActionID != nil, f.fullUntil, f.refuseErr
+	return r.ActionID != nil, f.fullFor, f.refuseErr
 }
 
 func (f *refuseStoreFake) recorded() []store.RunnerEventRefusal {
@@ -190,9 +190,10 @@ func TestRefusalRowBeforeAck(t *testing.T) {
 	}
 }
 
-// The bound on refusal rows is the store's, counted in the transaction that writes them: no replica drops, plans or
-// counts a refusal itself, so two replicas hand every refusal of one runner to the store, each with its own hash, and
-// acknowledge each one it records.
+// The bound on refusal rows is the store's, counted in the transaction that writes them: no replica plans or counts a
+// refusal itself, so two replicas hand every refusal of one runner to the store, each with its own hash, and
+// acknowledge each one it records. The one refusal a replica holds back is a rate_limited one in a window the store
+// already reported full, which would get no row (TestRateLimitedRefusalSkipsAFullWindow); these are not.
 func TestRefusalBoundIsTheStores(t *testing.T) {
 	now := time.Now()
 	fake := &refuseStoreFake{}
@@ -259,8 +260,9 @@ func TestRefusalReadsTheSpoolPlace(t *testing.T) {
 // store, another runner is not held back, and the first refusal after the window's end asks the store again.
 func TestRateLimitedRefusalSkipsAFullWindow(t *testing.T) {
 	now := time.Now()
-	fake := &refuseStoreFake{fullUntil: now.Add(time.Minute)}
+	fake := &refuseStoreFake{fullFor: time.Minute}
 	srv := refuseTestServer(fake, &now)
+	logs := captureSlog(t)
 	runnerID := uuid.New()
 	ctx, ev := validWorkloadFrame(t)
 	refuse := func(id uuid.UUID, cause error, want string, calls int) {
@@ -273,13 +275,54 @@ func TestRateLimitedRefusalSkipsAFullWindow(t *testing.T) {
 			t.Fatalf("%d RefuseRunnerEvent calls, want %d", got, calls)
 		}
 	}
-	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // the store reports the window full
-	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // skipped
-	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1)   // skipped
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // the store reports the window full
+	before := logs.String()
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // skipped
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // skipped
+	if got := logs.String(); got != before {
+		t.Fatalf("skipped refusals logged %q, want no line", strings.TrimPrefix(got, before))
+	}
 	refuse(runnerID, errReportShape, runnerwire.RefusalShape, 2)                      // another code reaches the store
 	refuse(uuid.New(), errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 3) // another runner is asked for
 	now = now.Add(time.Minute)
-	fake.fullUntil = time.Time{} // a new window, with room
+	fake.fullFor = 0 // a new window, with room
 	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 4)
 	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 5) // a row written holds nothing back
+}
+
+// The full windows a replica keeps are capped at workloadEventMaxRunners: with that many live, a new runner's full
+// window is not kept, so its rate_limited refusals keep reaching the store; an entry whose window has ended is pruned
+// first, which makes room for it.
+func TestRefusalFullWindowCacheIsCapped(t *testing.T) {
+	now := time.Now()
+	fake := &refuseStoreFake{fullFor: time.Hour}
+	srv := refuseTestServer(fake, &now)
+	ctx, ev := validWorkloadFrame(t)
+	ended := uuid.New()
+	srv.eventRefusals.noteWindow(ended, time.Minute, now)
+	for range workloadEventMaxRunners - 1 {
+		srv.eventRefusals.noteWindow(uuid.New(), time.Hour, now)
+	}
+	newcomer := uuid.New()
+	refuse := func(calls int) {
+		t.Helper()
+		var refusal *runnerwire.EventRefusal
+		if err := srv.classifyRunnerEvent(ctx, newcomer, ev, errWorkloadEventRateLimited); !errors.As(err, &refusal) || refusal.Code != runnerwire.RefusalRateLimited {
+			t.Fatalf("refusal = %v, want an acknowledged %q", err, runnerwire.RefusalRateLimited)
+		}
+		if got := len(fake.recorded()); got != calls {
+			t.Fatalf("%d RefuseRunnerEvent calls, want %d", got, calls)
+		}
+	}
+	refuse(1)
+	refuse(2) // not kept: the cap is reached with live windows
+	now = now.Add(time.Minute)
+	refuse(3) // the ended entry is pruned, which makes room
+	refuse(3) // kept now: skipped
+	if _, ok := srv.eventRefusals.full[ended]; ok {
+		t.Fatal("an ended window is still kept")
+	}
+	if n := len(srv.eventRefusals.full); n != workloadEventMaxRunners {
+		t.Fatalf("%d windows kept, want %d", n, workloadEventMaxRunners)
+	}
 }

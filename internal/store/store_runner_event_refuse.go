@@ -58,40 +58,41 @@ type refusalSummary struct {
 // the event's own runner.event.refuse row unless the runner's window suppressed it (refusalWindowTx). It takes the
 // runner's refusal window first, then the shared order runner, run, action (lockRunnerActionRun), the spool cursor
 // (as IngestRunnerDecision takes it after the run), then the audit chain. It reports whether it settled an action
-// and, when the runner's window was full so the event got no row of its own, when that window ends (the database's
-// clock); zero when the event's own row was written.
-func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (settled bool, fullUntil time.Time, err error) {
+// and, when the runner's window was full so the event got no row of its own, how long that window has left on the
+// database's clock (a duration, so a replica adds it to its own clock and the two clocks' skew cancels); zero when
+// the event's own row was written.
+func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (settled bool, fullFor time.Duration, err error) {
 	if prepare == nil {
-		return false, time.Time{}, errors.New("store: refuse runner event: no audit policy")
+		return false, 0, errors.New("store: refuse runner event: no audit policy")
 	}
 	tx, err := beginRunnerActionTx(ctx, s)
 	if err != nil {
-		return false, time.Time{}, err
+		return false, 0, err
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
-	row, marker, summary, end, err := refusalWindowTx(ctx, tx, runnerID)
+	row, marker, summary, left, err := refusalWindowTx(ctx, tx, runnerID)
 	if err != nil {
-		return false, time.Time{}, err
+		return false, 0, err
 	}
 	if r.ActionID != nil {
 		if settled, err = s.settleRefusedActionTx(ctx, tx, runnerID, *r.ActionID, "org_refused:"+r.Code, prepare); err != nil {
-			return false, time.Time{}, err
+			return false, 0, err
 		}
 	}
 	markMoved := false
 	if r.Spool != nil {
 		if markMoved, err = advanceRefusedSpoolCursorTx(ctx, tx, runnerID, *r.Spool); err != nil {
-			return false, time.Time{}, err
+			return false, 0, err
 		}
 	}
 	var rows []types.AuditEvent
 	if row || summary != nil {
 		if rows, err = writeRefusalRowsTx(ctx, tx, runnerID, r, row, marker, markMoved, summary, prepare); err != nil {
-			return false, time.Time{}, err
+			return false, 0, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, time.Time{}, err
+		return false, 0, err
 	}
 	if s.SIEM != nil {
 		for _, ev := range rows {
@@ -99,27 +100,27 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		}
 	}
 	if !row {
-		fullUntil = end
+		fullFor = left
 	}
-	return settled, fullUntil, nil
+	return settled, fullFor, nil
 }
 
 // refusalWindowTx counts one refusal of runnerID in its window and says what the refusal writes: its own row (the
 // last of the window marked suppressed), and the summary a previous window that suppressed rows still owes. The
 // window row is locked for the rest of the transaction, so two replicas refusing for one runner at once count one
 // after the other and the rows written always match the count. Only a refusal takes this lock, and first, so it
-// orders before every other lock the refusal takes. A runner keeps one row, deleted with the runner. end is when the
-// window this refusal was counted in ends.
-func refusalWindowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (row, marker bool, summary *refusalSummary, end time.Time, err error) {
+// orders before every other lock the refusal takes. A runner keeps one row, deleted with the runner. left is how
+// long the window this refusal was counted in has to run, on the database's clock: more than zero, at most the window.
+func refusalWindowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (row, marker bool, summary *refusalSummary, left time.Duration, err error) {
 	if _, err := tx.Exec(ctx, `INSERT INTO runner_event_refusal_windows (runner_id, window_start) VALUES ($1, clock_timestamp())
  ON CONFLICT (runner_id) DO NOTHING`, runnerID); err != nil {
-		return false, false, nil, time.Time{}, fmt.Errorf("store: open refusal window: %w", err)
+		return false, false, nil, 0, fmt.Errorf("store: open refusal window: %w", err)
 	}
 	var start, now time.Time
 	var written, suppressed int
 	if err := tx.QueryRow(ctx, `SELECT window_start, written, suppressed, clock_timestamp() FROM runner_event_refusal_windows
  WHERE runner_id = $1 FOR UPDATE`, runnerID).Scan(&start, &written, &suppressed, &now); err != nil {
-		return false, false, nil, time.Time{}, fmt.Errorf("store: lock refusal window: %w", err)
+		return false, false, nil, 0, fmt.Errorf("store: lock refusal window: %w", err)
 	}
 	if now.Sub(start) >= runnerEventRefuseWindow {
 		if suppressed > 0 {
@@ -135,9 +136,9 @@ func refusalWindowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (row, m
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runner_event_refusal_windows SET window_start = $2, written = $3, suppressed = $4 WHERE runner_id = $1`,
 		runnerID, start, written, suppressed); err != nil {
-		return false, false, nil, time.Time{}, fmt.Errorf("store: count refusal: %w", err)
+		return false, false, nil, 0, fmt.Errorf("store: count refusal: %w", err)
 	}
-	return row, marker, summary, start.Add(runnerEventRefuseWindow), nil
+	return row, marker, summary, start.Add(runnerEventRefuseWindow).Sub(now), nil
 }
 
 // writeRefusalRowsTx writes the summary row a previous window owes, then the refusal's own row when its window has
