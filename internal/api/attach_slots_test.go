@@ -174,6 +174,44 @@ func (r *holderTestRunner) attachCount() int {
 	return len(r.sessions)
 }
 
+// A helper's web attach refused at the cap writes the same refusal row as an owner's, naming the helper's grant
+// and the support entry; the owner's row carries neither.
+func TestWebAttachCapRefusal_HelperRowNamesItsGrant(t *testing.T) {
+	srv, _, audit, run, _, _ := attachSlotsTestServer(t)
+	for i := range maxAttachSessionsPerRun {
+		if _, ok := srv.reserveAttachSlot(run, fmt.Sprintf("holder-%d", i)); !ok {
+			t.Fatalf("slot %d refused before the cap", i)
+		}
+	}
+	grant := uuid.New()
+	for _, tc := range []struct {
+		principal string
+		support   uuid.UUID
+	}{{holderOwner, uuid.Nil}, {holderSecond, grant}} {
+		w := httptest.NewRecorder()
+		if release := srv.webAttachSlot(context.Background(), w, run, types.ActorHuman, tc.principal, tc.support); release != nil {
+			t.Fatalf("%s: a slot past the cap was granted", tc.principal)
+		}
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: refused with %d, want 503", tc.principal, w.Code)
+		}
+		ev := waitForActorAudit(t, audit, run.ID, "session.attach", tc.principal)
+		d := uiRowData(t, *ev)
+		if ev.Outcome != "failure" || d["reason"] != reasonAttachSessionCapReached {
+			t.Errorf("%s: row = %s %s, want a failure with reason %s", tc.principal, ev.Outcome, ev.Data, reasonAttachSessionCapReached)
+		}
+		_, hasGrant := d["support_grant"]
+		_, hasEntry := d["entry"]
+		if tc.support == uuid.Nil {
+			if hasGrant || hasEntry {
+				t.Errorf("the owner's row = %s, want no support_grant or entry", ev.Data)
+			}
+		} else if d["support_grant"] != grant.String() || d["entry"] != supportEntryHelper {
+			t.Errorf("the helper's row = %s, want support_grant %s and entry %s", ev.Data, grant, supportEntryHelper)
+		}
+	}
+}
+
 func TestAttachSlots_TheNinthSessionIsRefusedBeforeItsExecOnBothLanes(t *testing.T) {
 	srv, fr, audit, run, ts, _ := attachSlotsTestServer(t)
 	for i := range maxAttachSessionsPerRun {

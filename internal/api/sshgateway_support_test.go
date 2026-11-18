@@ -576,6 +576,37 @@ func TestSSHSupport_OwnerAttachDisplacesAHelperShell(t *testing.T) {
 	}
 }
 
+// A helper's shell refused at the session cap writes the cap row naming its grant and the support entry, on the
+// ssh transport, as the helper's other rows do.
+func TestSSHSupport_CapRefusedShellNamesItsGrant(t *testing.T) {
+	r := newSSHSupportRig(t, []string{"terminal"})
+	for i := range maxAttachSessionsPerRun {
+		if _, ok := r.h.srv.reserveAttachSlot(r.run, "holder-"+strings.Repeat("x", i+1)); !ok {
+			t.Fatalf("slot %d refused before the cap", i)
+		}
+	}
+	client, err := r.dial(t)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	_ = sess.Shell() // refused at the cap: the channel is told and closed
+	ev := waitForAudit(t, r.h.audit, r.run.ID, "session.attach", "failure")
+	if ev == nil {
+		t.Fatal("no session.attach failure row for the capped shell")
+	}
+	d := uiRowData(t, *ev)
+	if ev.Actor != sshSupportHelper || d["reason"] != reasonAttachSessionCapReached || d["transport"] != "ssh" ||
+		d["support_grant"] != r.grant.ID.String() || d["entry"] != supportEntryHelper {
+		t.Errorf("cap row = %s by %s, want reason %s, transport ssh, support_grant %s and entry %s", ev.Data, ev.Actor, reasonAttachSessionCapReached, r.grant.ID, supportEntryHelper)
+	}
+}
+
 // A helper promoted from the queue to the writer seat is written as a helper: the session.promote row names the
 // grant and the support entry.
 func TestSSHSupport_PromotedHelperRowNamesTheEntry(t *testing.T) {

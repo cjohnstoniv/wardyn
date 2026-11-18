@@ -254,7 +254,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
-	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	var support uuid.UUID
+	if ta, ok := ticketActorFromContext(ctx); ok {
+		support = ta.support
+	}
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal, support) // the per-run session cap
 	if releaseSlot == nil {
 		return
 	}
