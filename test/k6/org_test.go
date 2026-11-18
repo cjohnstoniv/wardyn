@@ -695,6 +695,9 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 		if strings.Contains(string(out), "proto") || !strings.Contains(string(out), "dial:") || !(strings.Contains(string(out), "EOF") || strings.Contains(string(out), "reset by peer")) {
 			t.Fatalf("an opening from the run's proxy address with a wrong relay key: %q, want the relay to close it", out)
 		}
+		for len(ch) > 0 { // drop lines printed before the probe: the next ok must come after it
+			<-ch
+		}
 		next(t, ch, "ok", 20*time.Second) // the relay is still up: the close above was the key's
 		note(t, "real relay: the run's own key admitted, a wrong key closed (%s)", strings.TrimSpace(string(out)))
 	}
