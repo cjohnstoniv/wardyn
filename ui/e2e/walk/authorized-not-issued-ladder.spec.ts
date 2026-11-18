@@ -134,7 +134,7 @@ test("an approved git token is minted once at the proxy, never handed to the san
     await page.waitForTimeout(Math.max(0, mintedAt + AFTER_TTL_MS - Date.now()));
     const denies = async () =>
       (await auditFor(page, runId, "egress.deny")).filter(
-        (e) => e.data?.rule_source === MINT_DENIED_RULE && `${e.target ?? ""} ${JSON.stringify(e.data)}`.includes("example.com"),
+        (e) => e.data?.rule_source === MINT_DENIED_RULE && /(?:^|[^a-z0-9.-])example\.com(?:$|[^a-z0-9.-])/i.test(`${e.target ?? ""} ${JSON.stringify(e.data)}`),
       ).length;
     const deniedBefore = await denies();
     await typeLine(page, GIT_CMD);
