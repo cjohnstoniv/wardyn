@@ -241,7 +241,7 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 				g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
 			}
 			// SECURITY: do not log the token; the error carries status + body only.
-			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off",
+			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off (a refused Git request can bring the next try sooner)",
 				slog.Duration("retry_in", next), slog.Any("err", err))
 			if !closed {
 				if backoff = backoff * 2; backoff > tune.maxInterval {
@@ -250,6 +250,11 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			}
 		} else {
 			ts.Set(tok)
+			// A wake that arrived while this renewal was in flight is already answered.
+			select {
+			case <-ts.nudged():
+			default:
+			}
 			if g != nil && !g.renewed(sent, func() {}) {
 				return
 			}

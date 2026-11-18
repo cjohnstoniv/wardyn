@@ -89,7 +89,7 @@ func TestRenewNudgeBurstIsRateLimited(t *testing.T) {
 		t.Fatalf("renew attempts %d inside the floor, want 1", got)
 	}
 	waitAttempts(t, cp, 2)
-	time.Sleep(floor / 2) // the rest of the burst was answered by that try
+	time.Sleep(floor + floor/2) // the rest of the burst was answered by that try
 	if got := cp.renewAttempts(); got != 2 {
 		t.Fatalf("renew attempts %d after the burst, want 2", got)
 	}
