@@ -189,7 +189,7 @@
 | The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
 | The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
 | A header credential the proxy injects (a stored key, a provider key, a sign-in token) | Asked again from 5 minutes before its lease ends, on a request. If it cannot be read, added up to 15 minutes past the lease, then dropped |
-| A Git broker token (GitHub App, `git_pat` through the PAT broker, or the GitHub CLI's) | Not added once the proxy has gone 30 minutes without renewing its run token, and added again after the next renewal. Before that, used until 30 seconds before its own expiry, at most 1 hour |
+| A Git broker token (GitHub App, `git_pat` through the PAT broker, or the GitHub CLI's) | Not added once the proxy goes 30 minutes without renewing its run token. Added again at its next renewal, up to 15 minutes after the organisation is back. Before that, used until 30 seconds before expiry, at most 1 hour |
 | The SSH agent key | The `claude-code` image drops it once the start-up clone ends. An image that never closes the agent holds the key until the proxy stops, at 1h5m offline |
 | An MCP credential | Refused from 5 minutes before its lease ends. No grace |
 | The VM's audit spool fills (50,000 decisions, or about 29 MiB once the proxy is refused) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
