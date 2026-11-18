@@ -50,11 +50,11 @@ describe("the host call card (HC-1)", () => {
     expect(within(card).getAllByRole("term").map((d) => d.textContent)).toEqual(["Host", "Method", "Path"]);
     expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toEqual([scope.host, "POST", "/v1/refunds"]);
     expect(card).toHaveTextContent(
-      "allowing POST requests to /v1/refunds on api.payments.example.com for the rest of this run.",
+      "allowing POST requests to /v1/refunds on api.payments.example.com for the rest of this run in this proxy.",
     );
     expect(card).toHaveTextContent("This covers any query or body sent with this host, method and path. Other policy rules still apply.");
     expect(card).toHaveTextContent("If the request is still waiting, approving lets it proceed when all other rules allow it.");
-    expect(card).toHaveTextContent("Refuses this method and path on this host for the rest of the run.");
+    expect(card).toHaveTextContent("Refuses this method and path on this host in this proxy; a new proxy asks again.");
     expect(card).not.toHaveTextContent("Another method or path asks again");
     expect(within(card).queryByText(APPROVAL_MCP_CALL.ONCE)).toBeNull();
     expect(card).not.toHaveTextContent("Approve once");
@@ -68,7 +68,7 @@ describe("the host call card (HC-1)", () => {
     renderCard(row(scope, { held: false, held_until: inPast() }));
     const card = screen.getByTestId("host-call-card");
     expect(card).toHaveTextContent(
-      "No longer waiting. This approval covers retries with the same host, method and path for the rest of the run. Other policy rules still apply.",
+      "No longer waiting. This approval covers retries with the same host, method and path in this proxy; a new proxy asks again. Other policy rules still apply.",
     );
     expect(card).not.toHaveTextContent(C.HELD_NOTE);
   });

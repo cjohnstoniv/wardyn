@@ -220,7 +220,7 @@ export function approvalScopeBadge(
   }
   // A held host request (B5): approving covers the method and path for the rest of the run, whatever scope the row
   // recorded; a denial needs no badge.
-  if (isHostCallRequest(item)) return item.state === "APPROVED" ? "Allowed for this run" : undefined;
+  if (isHostCallRequest(item)) return item.state === "APPROVED" ? "Allowed in this proxy" : undefined;
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;

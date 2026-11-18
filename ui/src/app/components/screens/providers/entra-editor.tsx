@@ -243,8 +243,8 @@ export function EntraEditor({
             {operator && <span className="block text-meta text-muted-foreground">{E.REST_TOGGLE_HINT}</span>}
           </span>
         </div>
-        {/* Only a token Wardyn creates can be held on a runner; a token the person pastes in is theirs. */}
-        {tokenMode !== "own_pat" && (
+        {/* Only a minted token can be held on a runner or sent through the server; the server ignores both on the other modes. */}
+        {tokenMode === "minted_pat" && (
           <>
             <div className="mt-4 flex items-start gap-2.5">
               <Switch
