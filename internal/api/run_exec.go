@@ -28,7 +28,8 @@ import (
 
 // POST /runs/{id}/exec runs one command in a running run and answers with its output: the SSH
 // gateway's exec channel (bridgeSSHExec) over plain HTTP, and no wider. Before the runner is called it
-// checks, in order, who may enter the run (getRunForEntry), the governance profile the run was launched
+// checks, in order, who may enter the run (getRunForEntry, or a live support grant that ticks the commands
+// door, which lasts only while the grant does), the governance profile the run was launched
 // under (refuseExecGovernance: deny_interactive, and deny_task_mode_exec on a background run), the run's
 // data_out rule (as an SSH exec channel does), the run's state (execFreshRun) and the run's SSH channel
 // cap, which a command shares with SSH (sshAcquireSession). A background run takes a command too, though it
@@ -77,14 +78,40 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunForEntry(w, r, id)
-	if !ok {
-		return
+	// The support arm (support_terminal.go): a super admin signed in as a person who is not the run's creator
+	// asks it first, for the commands door. supportNone, which is every caller without a grant, goes on to
+	// getRunForEntry's owner rule unchanged; any other answer but supportOK is a refusal.
+	var run types.AgentRun
+	var grant store.SupportGrant
+	viaSupport := false
+	if s.supportCaller(r.Context()) {
+		if run, ok = s.getRunAuthorizedBy(w, r, id, s.ownsRunOrAdmin); !ok {
+			return
+		}
+		if principal := principalFromRequest(r); run.CreatedBy != principal {
+			var v supportVerdict
+			grant, v = s.supportMayEnter(r.Context(), run, principal, uuid.Nil, supportDoorCommands)
+			if v == supportOff {
+				v = supportNone // the switch is off: the owner rule's refusal, as before (value list, row A)
+			}
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
+				return
+			}
+			if viaSupport = v == supportOK; viaSupport {
+				r = r.WithContext(withSupportExec(r.Context(), grant.ID))
+			}
+		}
+	}
+	if !viaSupport {
+		if run, ok = s.getRunForEntry(w, r, id); !ok {
+			return
+		}
 	}
 	// The governance door, exempt for a super admin as sshAuth's deny_interactive door is: a super admin is
 	// past getRunForEntry only on their own run or an operator-owned one, so the exemption cannot reach a
-	// person's run.
-	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
+	// person's run. A helper under a support grant is never exempt, whatever the profile or GovernAdminRuns
+	// say: the exemption is the admin's own, not a person's run's.
+	if (!s.isOperator(r.Context()) || viaSupport || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
 		return
 	}
 	if !s.sshChannelOn(sshKindExec) {
@@ -127,6 +154,20 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.sshReleaseSession(run.ID)
+	if viaSupport {
+		// A helper's command lasts while its grant does: the grant is asked again every authority tick, and
+		// the end of it cancels the request's context, which ends runExec's execCtx.
+		hctx, hcancel := context.WithCancel(r.Context())
+		defer hcancel()
+		check := func(lctx context.Context) error {
+			if _, v := s.supportMayEnter(lctx, fresh, actor, grant.ID, supportDoorCommands); v != supportOK {
+				return errAttachAuthorityEnded
+			}
+			return nil
+		}
+		s.holdAttachAuthority(hctx, check, hcancel)
+		r = r.WithContext(hctx)
+	}
 	s.runExec(w, r, fresh, req.Command, timeout, start)
 }
 
@@ -299,6 +340,7 @@ func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 // bytes and its exit code, or the error, never output. A cut command adds command_bytes and command_sha256,
 // its full length and hash, so padding cannot hide what ran. It outlives a caller who left before the command ended.
 func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.ActorType, actor, outcome string, data map[string]any) {
+	data = supportExecFields(ctx, data) // a helper's command names its grant and entry
 	if c, ok := data["command"].(string); ok && len(c) > runExecAuditCommandCap {
 		cut := runExecAuditCommandCap
 		for cut > 0 && !utf8.RuneStart(c[cut]) {

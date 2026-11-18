@@ -141,7 +141,8 @@ func (l *leaseCovLeases) AcquireAttachLease(_ context.Context, lease store.Attac
 	cur, held := l.rows[lease.RunID]
 	if held {
 		free := !cur.ExpiresAt.After(l.now) || cur.HolderID == from || cur.HolderID == lease.HolderID ||
-			(cur.Source == attachLeaseReservedSource && cur.Principal == lease.Principal)
+			(cur.Source == attachLeaseReservedSource && cur.Principal == lease.Principal) ||
+			(cur.Support && !lease.Support) // the owner's arm: a live helper's lease is taken by a non-helper
 		if !free {
 			return false, nil
 		}
@@ -242,6 +243,7 @@ func (l *leaseCovLeases) ReserveAttachLease(_ context.Context, run, from uuid.UU
 	l.rows[run] = store.AttachLease{
 		RunID: run, HolderID: reservation, Replica: replica, Principal: taker, Source: attachLeaseReservedSource,
 		Since: l.now, ExpiresAt: l.now.Add(ttl), Epoch: cur.Epoch + 1,
+		Support: false, // a reservation is never a helper's, whoever held the lease it replaced
 	}
 	cur.Live = true
 	return cur, reservation, true, nil
