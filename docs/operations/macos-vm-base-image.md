@@ -108,8 +108,8 @@
    - Grant it once. Wardyn signs the guest agent on this Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
    - The base does not need to trust the agent's signing certificate: Full Disk Access keeps to the agent's designated requirement.
    - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact trust command.
-     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate. Each asks for the code, then macOS shows a dialog: enter `wardyn-admin` and the code.
-     - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
+     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate not yet trusted. Each asks for the code, then macOS shows a dialog: enter `wardyn-admin` and the code.
+     - Check each subject and SHA-256 and confirm macOS's prompt. One already trusted or listed twice is not asked for. With nothing to trust the button does nothing and says so.
    - **Rosetta is off unless you press Install Rosetta**, for Intel-only tools. It runs Apple's installer in the guest through the prep proxy ([The prep proxy](#the-prep-proxy)).
      - A TLS-inspecting proxy must exempt Apple's hosts (Apple support article 101555).
      - From macOS 26.4, an Intel app's first launch shows an end-of-Rosetta notice. macOS 27 is the last release with full Rosetta.
