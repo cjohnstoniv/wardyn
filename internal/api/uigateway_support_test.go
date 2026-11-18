@@ -503,6 +503,30 @@ func TestSupportUI_WatchEndsRelayedStreams(t *testing.T) {
 	})
 }
 
+// A stream opened inside the re-assert debounce after a revoke is cut by the watch's first check, which runs as
+// the stream starts and not at the first tick: the watch's interval here is an hour, so only that check can end it.
+func TestSupportUI_WatchChecksAtOnceWhenTheStreamOpens(t *testing.T) {
+	for _, kind := range []string{"socket", "events"} {
+		t.Run(kind, func(t *testing.T) {
+			setSupportWatch(t, time.Hour, 2*time.Second)
+			rig := newSupportUIRig(t, "web_apps")
+			cookie := rig.helperSession("code")
+			if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK { // a clean pass starts the debounce window
+				t.Fatalf("first request = %d %s", rec.Code, rec.Body)
+			}
+			rig.endGrant("revoked")
+			// Inside the debounce the gateway's own re-assert has not asked again, so the request is still served.
+			if rec := rig.get("code", "/ide", cookie); rec.Code != http.StatusOK {
+				t.Fatalf("request inside the debounce = %d %s, want it served", rec.Code, rec.Body)
+			}
+			ended := rig.openStream(kind, cookie)
+			if err := wantStreamEnded(t, ended); kind == "events" && err == nil {
+				t.Fatal("the event stream ended as if it had completed; a cut must abort it")
+			}
+		})
+	}
+}
+
 // check-2 M7: an owner's relayed request is not watched, and neither is any session without a grant: the
 // context comes back as it went in and the grant record is never read.
 func TestSupportUI_OwnersStreamIsNotWatched(t *testing.T) {

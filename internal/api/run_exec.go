@@ -49,6 +49,10 @@ const (
 	runExecAuditCommandCap = 4 << 10
 	// runExecCallerLeft is the run.command.exec error for a caller who left before the command ended.
 	runExecCallerLeft = "The caller left before the command ended."
+	// runExecSupportEnded and runExecSupportUnverified are that error for a helper's command cut because its
+	// grant ended, or because the grant could not be read, which is not the caller leaving.
+	runExecSupportEnded      = "The support session ended."
+	runExecSupportUnverified = "The support session could not be verified."
 	// runExecStreamCap is how much of each stream the reply keeps. Reading never stops there: a stream
 	// nobody reads blocks the command (runner.ExecSession's streaming contract).
 	runExecStreamCap = 1 << 20
@@ -157,15 +161,23 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if viaSupport {
 		// A helper's command lasts while its grant does: the grant is asked again every authority tick, and
 		// the end of it cancels the request's context, which ends runExec's execCtx.
-		hctx, hcancel := context.WithCancel(r.Context())
-		defer hcancel()
+		// The cut carries its cause, so runExec audits it as the grant's end and not as the caller leaving. check
+		// and end run on the one goroutine holdAttachAuthority starts, so cause needs no lock.
+		hctx, hcancel := context.WithCancelCause(r.Context())
+		defer hcancel(nil)
+		var cause error
 		check := func(lctx context.Context) error {
-			if _, v := s.supportMayEnter(lctx, fresh, actor, grant.ID, supportDoorCommands); v != supportOK {
-				return errAttachAuthorityEnded
+			_, v := s.supportMayEnter(lctx, fresh, actor, grant.ID, supportDoorCommands)
+			if v == supportOK {
+				return nil
 			}
-			return nil
+			cause = errRunExecSupportEnded
+			if v == supportUnavailable {
+				cause = errRunExecSupportUnverified
+			}
+			return errAttachAuthorityEnded
 		}
-		s.holdAttachAuthority(hctx, check, hcancel)
+		s.holdAttachAuthority(hctx, check, func() { hcancel(cause) })
 		r = r.WithContext(hctx)
 	}
 	s.runExec(w, r, fresh, req.Command, timeout, start)
@@ -282,10 +294,29 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 	case res.TimedOut:
 		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
 	case res.ExitCode == -1:
-		data["error"], outcome = runExecCallerLeft, "failure"
+		data["error"], outcome = runExecCutReason(ctx), "failure"
 	}
 	s.auditRunExec(ctx, fresh, at, actor, outcome, data)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// errRunExecSupportEnded and errRunExecSupportUnverified are the causes a helper's command's context is
+// cancelled with when its grant is gone or cannot be read.
+var (
+	errRunExecSupportEnded      = errors.New(runExecSupportEnded)
+	errRunExecSupportUnverified = errors.New(runExecSupportUnverified)
+)
+
+// runExecCutReason is the audit error for a command cut short, when it was not the timeout: the support grant's
+// end or failed read when that cancelled the request, else the caller leaving.
+func runExecCutReason(ctx context.Context) string {
+	switch context.Cause(ctx) {
+	case errRunExecSupportEnded:
+		return runExecSupportEnded
+	case errRunExecSupportUnverified:
+		return runExecSupportUnverified
+	}
+	return runExecCallerLeft
 }
 
 // runExecTimeout is the request's timeout, or the sentence refusing the request.

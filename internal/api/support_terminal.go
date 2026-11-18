@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -68,6 +69,15 @@ func supportTicketGrant(g store.SupportGrant) (uuid.UUID, time.Time) {
 // supportEntryFields are the fields a row a helper's door wrote carries beside the window stamp.
 func supportEntryFields(grant uuid.UUID) map[string]any {
 	return map[string]any{"support_grant": grant, "entry": supportEntryHelper}
+}
+
+// supportFields adds the entry fields to data when h is a helper's session, as every row of a helper's attach carries
+// them, and returns data.
+func (h *attachHolder) supportFields(data map[string]any) map[string]any {
+	if h.support != uuid.Nil {
+		maps.Copy(data, supportEntryFields(h.support))
+	}
+	return data
 }
 
 type supportExecCtxKey struct{}

@@ -279,7 +279,7 @@ func (s PG) SupportGrantStatus(ctx context.Context, run uuid.UUID) (*SupportGran
 func (s PG) SweepSupportGrants(ctx context.Context, off bool) ([]SupportGrant, error) {
 	// A split-role app role the table's grant missed can have written no row, so there is nothing to end or
 	// claim; answer empty instead of failing the run watcher's tick every pass.
-	if ok, err := s.hasSupportGrantPrivilege(ctx, "UPDATE"); err != nil || !ok {
+	if ok, err := s.hasSupportGrantPrivilege(ctx, "SELECT", "UPDATE"); err != nil || !ok {
 		return nil, err
 	}
 	steps := []struct{ what, sql string }{
@@ -325,20 +325,28 @@ func (s PG) LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error) {
 	return refs, nil
 }
 
-// hasSupportGrantPrivilege reports whether the connected role holds privilege (SELECT, INSERT or UPDATE) on
-// run_support_grants. Without the table's grant (a split-role install the migrator's grant loop missed) the
-// sweep, the live list and the erasure blank skip their statements instead of failing.
-func (s PG) hasSupportGrantPrivilege(ctx context.Context, privilege string) (bool, error) {
-	var ok bool
-	if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_support_grants', $1)`, privilege).Scan(&ok); err != nil {
-		return false, fmt.Errorf("store: read the support grant privilege: %w", err)
+// hasSupportGrantPrivilege reports whether the connected role holds every one of privileges (SELECT, INSERT or
+// UPDATE) on run_support_grants. Without the table's grant (a split-role install the migrator's grant loop
+// missed) the sweep, the live list, the helper read and the erasure blank skip their statements instead of failing.
+func (s PG) hasSupportGrantPrivilege(ctx context.Context, privileges ...string) (bool, error) {
+	for _, privilege := range privileges {
+		var ok bool
+		if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_support_grants', $1)`, privilege).Scan(&ok); err != nil {
+			return false, fmt.Errorf("store: read the support grant privilege: %w", err)
+		}
+		if !ok {
+			return false, nil
+		}
 	}
-	return ok, nil
+	return true, nil
 }
 
 // SupportHelperSince — see SupportGrantStore. A zero at goes in as SQL NULL: Go's zero time is year 1,
 // which would make "requested at or before at" false for every grant.
 func (s PG) SupportHelperSince(ctx context.Context, run uuid.UUID, principal string, at time.Time) (bool, error) {
+	if ok, err := s.hasSupportGrantPrivilege(ctx, "SELECT"); err != nil || !ok {
+		return false, err // as SweepSupportGrants: a role without the table's grant has no helper to find
+	}
 	var since *time.Time
 	if !at.IsZero() {
 		since = &at

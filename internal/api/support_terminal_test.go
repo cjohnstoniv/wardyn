@@ -385,27 +385,40 @@ func TestSupportTerminalEntryNeedsALiveGrantThatTicksTheDoor(t *testing.T) {
 	}
 }
 
-// (g) a running POST /exec is cancelled within a tick of the revoke, and its row says the caller's side ended.
+// (g) a running POST /exec is cancelled within a tick of the revoke or of a grant that cannot be read, and its row
+// says the support session ended or could not be verified, not that the caller left.
 func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
-	rig := newSupportTermRig(t, "commands")
-	var closed atomic.Bool
-	rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
-	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() { done <- rig.exec(rig.helper, "sleep 100") }()
-	waitFor(t, "the command to start", func() bool { return rig.fr.execs.Load() == 1 })
-	rig.endGrant("revoked")
-	waitFor(t, "the command to be cut", closed.Load)
-	select {
-	case w := <-done:
-		if res := execResult(t, w); res.ExitCode != -1 {
-			t.Errorf("exit code = %d, want -1 for a cut command", res.ExitCode)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("POST /exec did not answer after the revoke")
-	}
-	rows := rig.rows("run.command.exec")
-	if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), runExecCallerLeft) || !strings.Contains(string(rows[0].Data), `"entry":"support"`) {
-		t.Fatalf("run.command.exec rows = %+v, want one failure naming the cut and the support entry", rows)
+	for _, tc := range []struct {
+		name string
+		cut  func(*supportTermRig)
+		why  string
+	}{
+		{"revoked", func(r *supportTermRig) { r.endGrant("revoked") }, runExecSupportEnded},
+		{"unreadable", func(r *supportTermRig) { r.st.failOn("SupportGrantLive", errors.New("database down")) }, runExecSupportUnverified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newSupportTermRig(t, "commands")
+			var closed atomic.Bool
+			rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- rig.exec(rig.helper, "sleep 100") }()
+			waitFor(t, "the command to start", func() bool { return rig.fr.execs.Load() == 1 })
+			tc.cut(rig)
+			waitFor(t, "the command to be cut", closed.Load)
+			select {
+			case w := <-done:
+				if res := execResult(t, w); res.ExitCode != -1 {
+					t.Errorf("exit code = %d, want -1 for a cut command", res.ExitCode)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("POST /exec did not answer after the cut")
+			}
+			rows := rig.rows("run.command.exec")
+			if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), tc.why) ||
+				strings.Contains(string(rows[0].Data), runExecCallerLeft) || !strings.Contains(string(rows[0].Data), `"entry":"support"`) {
+				t.Fatalf("run.command.exec rows = %+v, want one failure naming %q and the support entry, not the caller leaving", rows, tc.why)
+			}
+		})
 	}
 }
 

@@ -455,7 +455,7 @@ func TestPG_SupportGrants(t *testing.T) {
 		}
 	})
 
-	t.Run("a role without the table's grant gets an empty sweep and list", func(t *testing.T) {
+	t.Run("a role without the table's grant gets an empty sweep, list and helper read", func(t *testing.T) {
 		f := supportFixture{t: t, ctx: f.ctx, pool: f.pool, pg: f.pg}
 		r := f.run("")
 		g := f.request(r, "helper-a")
@@ -481,12 +481,21 @@ func TestPG_SupportGrants(t *testing.T) {
 		if got, err := pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 0 {
 			t.Errorf("live list without SELECT = %v, %v; want no rows and no error", got, err)
 		}
+		if got, err := pg.SupportHelperSince(f.ctx, r.ID, "helper-a", time.Time{}); err != nil || got {
+			t.Errorf("helper read without SELECT = %v, %v; want false and no error", got, err)
+		}
 		if got, err := f.pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 1 {
 			t.Fatalf("setup: the owner role lists %v, %v; want the one live grant", got, err)
+		}
+		if got, err := f.pg.SupportHelperSince(f.ctx, r.ID, "helper-a", time.Time{}); err != nil || !got {
+			t.Fatalf("setup: the owner role reads the helper as %v, %v; want true", got, err)
 		}
 		f.exec(`GRANT SELECT ON run_support_grants TO ` + role)
 		if got, err := pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 1 {
 			t.Errorf("live list with SELECT = %v, %v; want the one live grant", got, err)
+		}
+		if got, err := pg.SupportHelperSince(f.ctx, r.ID, "helper-a", time.Time{}); err != nil || !got {
+			t.Errorf("helper read with SELECT = %v, %v; want true", got, err)
 		}
 		if got, err := pg.SweepSupportGrants(f.ctx, false); err != nil || len(got) != 0 {
 			t.Errorf("sweep with SELECT only = %v, %v; want still no rows and no error", got, err)

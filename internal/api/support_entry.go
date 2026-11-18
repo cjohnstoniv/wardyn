@@ -103,11 +103,14 @@ const (
 	supportIneligibleOperator   = "operator_owned"
 	supportIneligibleService    = "service"
 	supportIneligibleBackground = "background"
+	supportIneligibleReserved   = "reserved_task"
 )
 
 // supportRunIneligible names why run cannot take a helper, or "" when it can: it must be RUNNING and not lost, a
 // person's own (not operator-owned: admins already enter those; not a service identity's: no person to
-// consent), not a background task (no person watches it to revoke), and not local mode (one seat).
+// consent), not a background task (no person watches it to revoke), not a run of a reserved task (a harness
+// sign-in binds the owner's own cloud identity) and not local mode (one seat). Every case reads the run alone, so
+// the answer never costs a store read.
 func (s *Server) supportRunIneligible(run types.AgentRun) string {
 	switch {
 	case s.cfg.LocalMode:
@@ -122,6 +125,8 @@ func (s *Server) supportRunIneligible(run types.AgentRun) string {
 		return supportIneligibleService
 	case run.BackgroundOnly():
 		return supportIneligibleBackground
+	case reservedRunTasks[run.Task]:
+		return supportIneligibleReserved
 	}
 	return ""
 }

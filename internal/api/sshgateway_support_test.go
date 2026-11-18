@@ -715,3 +715,42 @@ func TestSSHSupportDoorRefusedFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A support-grant extension that is present and not a grant id is refused: it closes at the re-check and its
+// channels have no doors, so it is never read as the run's owner. A good one passes.
+func TestSSHSupportUnreadableGrantRefuses(t *testing.T) {
+	r := newSSHSupportRig(t, sshAllSupportDoors)
+	pub, err := ssh.NewPublicKey(r.priv.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	perms, err := r.h.srv.sshAuth(fakeSSHConn{user: r.run.ID.String()}, pub)
+	if err != nil {
+		t.Fatalf("setup: the helper's auth: %v", err)
+	}
+	if reason := r.h.srv.sshCurrentKey(context.Background(), perms); reason != "" {
+		t.Fatalf("a good grant extension re-checked as %q, want it to stand", reason)
+	}
+	if sshSupportGrantUnreadable(perms) {
+		t.Fatal("a good grant extension reads as unreadable")
+	}
+	perms.Extensions[sshExtSupportGrant] = "not-a-grant-id"
+	if !sshSupportGrantUnreadable(perms) {
+		t.Fatal("an unparseable grant extension reads as readable")
+	}
+	if reason := r.h.srv.sshCurrentKey(context.Background(), perms); reason != sshSupportUnverified {
+		t.Errorf("an unparseable grant extension re-checked as %q, want %q", reason, sshSupportUnverified)
+	}
+	ctx := withSupportDoors(context.Background(), perms)
+	if _, helper := sshSupportOf(ctx); !helper {
+		t.Fatal("an unparseable grant extension gave a context that reads as the owner's")
+	}
+	for _, kind := range []sshChannelKind{sshKindShell, sshKindExec, sshKindSFTP, sshKindSync, sshKindForward} {
+		if !sshSupportDoorRefused(ctx, kind) {
+			t.Errorf("an unparseable grant extension admitted %q", kind)
+		}
+	}
+	if sshSupportGrantUnreadable(&ssh.Permissions{Extensions: map[string]string{}}) {
+		t.Error("an owner's connection reads as an unreadable grant")
+	}
+}

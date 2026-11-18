@@ -742,6 +742,9 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 	if reason := s.sshKeyRevocationRefusal(ctx, key); reason != "" {
 		return reason
 	}
+	if sshSupportGrantUnreadable(permissions) {
+		return sshSupportUnverified // a grant id that cannot be read is no grant, and no owner's connection either
+	}
 	grant := sshSupportGrant(permissions)
 	if permissions.Extensions[sshExtOverride] == "true" || grant != uuid.Nil {
 		if reason := s.sshOverrideRefusal(key); reason != "" {

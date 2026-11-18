@@ -48,19 +48,22 @@ func (s *Server) supportWatchCtx(ctx context.Context, sess uiSession) (context.C
 	return ctx, cancel
 }
 
-// supportWatch re-checks sess every uiReassertInterval until ctx ends, and cancels it when a check does not pass.
+// supportWatch re-checks sess once as the stream starts and then every uiReassertInterval until ctx ends, and
+// cancels it when a check does not pass. The first check is the one the request's own re-assert may have
+// skipped (that is debounced for uiReassertInterval after the last one), so a stream opened just after a revoke
+// ends within one check, not at the first tick. It is bounded as every check is, by supportWatchWait.
 func (s *Server) supportWatch(ctx context.Context, cancel context.CancelFunc, sess uiSession) {
 	tick := time.NewTicker(time.Duration(cmp.Or(supportWatchEveryNS.Load(), int64(uiReassertInterval))))
 	defer tick.Stop()
 	for {
+		if !s.supportWatchHolds(ctx, sess) {
+			cancel()
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-		}
-		if !s.supportWatchHolds(ctx, sess) {
-			cancel()
-			return
 		}
 	}
 }

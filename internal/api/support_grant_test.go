@@ -272,6 +272,7 @@ func TestSupportRequest(t *testing.T) {
 			"operator owned": func(r *types.AgentRun) { r.OperatorOwned = true },
 			"service":        func(r *types.AgentRun) { r.CreatedBy = types.ServicePrincipalPrefix + "bot" },
 			"background":     func(r *types.AgentRun) { r.Experience = types.ExperienceBackground },
+			"sign-in run":    func(r *types.AgentRun) { r.Task = harnessLoginTask },
 		} {
 			rig := newSupportRig(t, nil)
 			mutate(&rig.run)
@@ -602,6 +603,7 @@ func TestSupportMayEnterVerdicts(t *testing.T) {
 		{name: "operator-owned run", arrange: runMut(func(r *types.AgentRun) { r.OperatorOwned = true }), door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "service run", arrange: runMut(func(r *types.AgentRun) { r.CreatedBy = types.ServicePrincipalPrefix + "bot" }), door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "background run", arrange: runMut(func(r *types.AgentRun) { r.Experience = types.ExperienceBackground }), door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
+		{name: "reserved task (a harness sign-in run)", arrange: runMut(func(r *types.AgentRun) { r.Task = harnessLoginTask }), door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "local mode", config: func(c *Config) { c.LocalMode = true }, door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "no row for this principal", who: "someone-else", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "expired", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone, endReason: "expired",

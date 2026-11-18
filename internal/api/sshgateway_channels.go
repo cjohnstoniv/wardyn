@@ -563,7 +563,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 				}
 				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
 				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true})))
+					runID.String(), "failure", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true}))))
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
 				cancel()
 				return
@@ -608,9 +608,9 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// The first of two session.attach rows (see handleAttachWS): registered, exec
 	// not yet open.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-		runID.String(), "success", mustJSON(map[string]any{
+		runID.String(), "success", mustJSON(holder.supportFields(map[string]any{
 			"transport": "ssh", "cols": cols, "rows": rows, "state": "attaching", "read_only": readOnly,
-		})))
+		}))))
 	if readOnly {
 		// The holder object STAYS (holder.writable is the observer marker now);
 		// sshShellPump drops this client's keystrokes while canWrite is false, and
@@ -629,16 +629,16 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	attachErr := s.establishExec(pumpCtx, run, holder)
 	if attachErr != nil {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)})))
+			runID.String(), "failure", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)}))))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
 		}
 		closeReason = "attach failed"
 	} else {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "success", mustJSON(map[string]any{
+			runID.String(), "success", mustJSON(holder.supportFields(map[string]any{
 				"transport": "ssh", "state": "ready", "read_only": !holder.writable.Load(),
-			})))
+			}))))
 		_ = s.cfg.Store.TouchRun(pumpCtx, runID)
 		go s.attachKeepalive(pumpCtx, runID)
 		closeReason = s.sshShellPump(pumpCtx, runID, channel, castTee, resizeCh, holder)
@@ -653,7 +653,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// read_only is the LIVE flag (see attach.go's twin): a channel that
 	// arrived as an observer and was promoted mid-session detaches as a writer.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
-		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()})))
+		runID.String(), "success", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()}))))
 
 	if attachErr == nil {
 		sendExitStatus(channel, 0)

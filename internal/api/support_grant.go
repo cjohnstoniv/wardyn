@@ -254,6 +254,8 @@ func supportIneligibleMsg(kind string) string {
 		return "This run has no personal owner, and admins can already open it."
 	case supportIneligibleService:
 		return "This run belongs to a service identity, which has no person to answer a request."
+	case supportIneligibleReserved:
+		return "This run is a sign-in, which belongs to its owner alone, so nobody can help inside it."
 	}
 	return "This run is a background task, which cannot take a helper."
 }

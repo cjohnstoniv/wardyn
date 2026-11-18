@@ -548,11 +548,11 @@ func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder
 			ctx = audit.WithDelegation(ctx, *promoted.via)
 		}
 		s.recordStreamAudit(ctx, promoted.sandboxRef, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
-			runID.String(), "success", mustJSON(map[string]any{
+			runID.String(), "success", mustJSON(promoted.supportFields(map[string]any{
 				"principal":       promoted.principal,
 				"source":          promoted.source,
 				"previous_holder": previous,
-			})))
+			}))))
 		if promoted.notify != nil {
 			promoted.notify(false, promoted)
 		}

@@ -79,6 +79,18 @@ func sshSupportGrant(perms *ssh.Permissions) uuid.UUID {
 	return id
 }
 
+// sshSupportGrantUnreadable reports a support-grant extension that is present and not a grant id. Such a
+// connection is a helper's, never an owner's: sshSupportGrant reads it as no grant, so a caller that did not ask
+// here would take it for the run's owner.
+func sshSupportGrantUnreadable(perms *ssh.Permissions) bool {
+	raw, ok := perms.Extensions[sshExtSupportGrant]
+	if !ok {
+		return false
+	}
+	_, err := uuid.Parse(raw)
+	return err != nil
+}
+
 // sshAuthData is the ssh.authenticate success row's data: override for an admin key's operator-owned entry,
 // support_grant and entry for a helper's, nothing for the owner.
 func sshAuthData(ext map[string]string) json.RawMessage {
@@ -92,10 +104,14 @@ func sshAuthData(ext map[string]string) json.RawMessage {
 }
 
 // withSupportDoors puts a support connection's grant and doors on ctx for its channels. Any other
-// connection's ctx comes back unchanged.
+// connection's ctx comes back unchanged; one whose grant extension cannot be read gets no doors.
 func withSupportDoors(ctx context.Context, perms *ssh.Permissions) context.Context {
 	grant := sshSupportGrant(perms)
 	if grant == uuid.Nil {
+		if sshSupportGrantUnreadable(perms) {
+			// No doors: every channel is refused until the re-check closes the connection.
+			return context.WithValue(ctx, sshSupportCtxKey{}, sshSupportEntry{})
+		}
 		return ctx
 	}
 	var doors []string // an empty extension is no doors, not the one door named ""
