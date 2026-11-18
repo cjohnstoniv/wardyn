@@ -52,12 +52,15 @@ var errDataOutGenerationUnread = errors.New("the run's current policy generation
 // release dispatched after the upgrade's migration. Such a run whose current policy generation's row cannot be
 // read has no rule to give, and is an error wrapping errDataOutGenerationUnread with the generation; a run
 // with a rule on its row never reads the generation, since a revive raises the row before its generation is
-// current. found is false when neither holds a rule, and the rule is then allowed, as for a run never
-// dispatched: dispatch writes the row before any sandbox exists, so no content was kept in. A run from before
-// the column that was dispatched but whose policy rows retention had pruned gets its row set to blocked by the
-// migration (0292), so it never reaches this answer.
+// current, and the migration (0292) leaves a run whose current generation's row is missing NULL so that it
+// reaches the read below. found is false when neither holds a rule. The rule is then allowed, as for a run
+// never dispatched, only at generation 1: dispatch writes the row before any sandbox exists, so no content was
+// kept in. On a store that keeps the column, a run past generation 1 with no envelope and no rule on its row
+// has lost the rows that said what its revive enforced, and is the same error. A run from before the column
+// that was dispatched but whose policy rows retention had pruned gets its row set to blocked by the migration
+// (0292), so it never reaches this answer.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
-	stored, _, err := s.storedRunDataOut(ctx, runID)
+	stored, keeps, err := s.storedRunDataOut(ctx, runID)
 	if err != nil {
 		return types.TransferAllowed, false, err
 	}
@@ -72,6 +75,17 @@ func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule type
 		return types.TransferAllowed, false, fmt.Errorf("%w (generation %d)", errDataOutGenerationUnread, unread)
 	}
 	if !found {
+		if keeps {
+			if gs, ok := s.cfg.Store.(store.RunPolicyGenerations); ok {
+				st, _, err := gs.RunPolicyState(ctx, runID)
+				if err != nil {
+					return types.TransferAllowed, false, err
+				}
+				if gen := st.CurrentGeneration(); gen >= 2 {
+					return types.TransferAllowed, false, fmt.Errorf("%w (generation %d)", errDataOutGenerationUnread, gen)
+				}
+			}
+		}
 		return types.TransferAllowed, false, nil
 	}
 	return envelope.DataOut.DataOut(), true, nil

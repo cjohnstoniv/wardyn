@@ -120,3 +120,69 @@ func TestMigration0292_NothingDroppedMarksNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestMigration0292_LeavesARunWhoseCurrentGenerationIsUnreadNull: a run's rule is read from its policy rows only
+// when the row of its current policy generation (the last policy_generations entry not abandoned, 1 when none)
+// is there. A run past generation 1 without that row (it is written best-effort) is left NULL by both UPDATEs, so
+// the doors answer it as unreadable, even when it is old enough for the second to set blocked; with the row
+// present, or with the missing row's generation abandoned, it is filled as before.
+func TestMigration0292_LeavesARunWhoseCurrentGenerationIsUnreadNull(t *testing.T) {
+	pool, _ := partialSchemaPool(t, agentRunsDataOutMigration)
+	// Retention dropped a partition whose newest row is 30 days old, so a run with no policy row left and created
+	// before it would be set to blocked.
+	pgExec(t, pool, `INSERT INTO audit_chain_anchors (kind, partition_name, recorded_lo, recorded_hi, row_count, actor)
+		VALUES ('drop', 'audit_events_dropped', now() - interval '60 days', now() - interval '30 days', 3, 'test')`)
+	seq := 0
+	seed := func(gens string) uuid.UUID {
+		t.Helper()
+		seq++
+		id := uuid.New()
+		pgExec(t, pool, `INSERT INTO agent_runs (id, created_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target, policy_generations)
+			VALUES ($1, now() - interval '60 days', 'sub-a', 'claude-code', 'repo', 'CC1', 'STOPPED', $2, 'docker', $3::jsonb)`,
+			id, "spiffe://run/g"+string(rune('a'+seq)), gens)
+		return id
+	}
+	policyRow := func(run uuid.UUID, action, data string) {
+		t.Helper()
+		pgExec(t, pool, `SELECT audit_append(gen_random_uuid(), now(), $1, 'system', 'wardynd', $2, $3, 'success', '', $4::jsonb)`,
+			run, action, run.String(), data)
+	}
+	const (
+		gens2   = `[{"generation":1,"digest":"d1"},{"generation":2,"digest":"d2"}]`
+		gens3   = `[{"generation":1,"digest":"d1"},{"generation":2,"digest":"d2"},{"generation":3,"digest":"d3"}]`
+		gens3ab = `[{"generation":1,"digest":"d1"},{"generation":2,"digest":"d2"},{"generation":3,"digest":"d3","abandoned":true}]`
+	)
+	rowless := seed(gens3) // current generation 3, whose row never landed: the older rows are not its rule
+	policyRow(rowless, "run.policy.resolve", `{"data_out":"allowed"}`)
+	policyRow(rowless, "run.policy.generation", `{"generation":2,"policy":{"data_out":"review"}}`)
+	present := seed(gens2) // current generation 2, its row there
+	policyRow(present, "run.policy.resolve", `{"data_out":"allowed"}`)
+	policyRow(present, "run.policy.generation", `{"generation":2,"policy":{"data_out":"review"}}`)
+	pruned := seed(gens2)      // every policy row pruned, old enough to be set blocked at generation 1
+	abandoned := seed(gens3ab) // generation 3 abandoned: generation 2 is current, and its row is there
+	policyRow(abandoned, "run.policy.resolve", `{"data_out":"allowed"}`)
+	policyRow(abandoned, "run.policy.generation", `{"generation":2,"policy":{"data_out":"review"}}`)
+	noPolicy := seed(gens2) // its generation row carries no policy object: unreadable too
+	policyRow(noPolicy, "run.policy.resolve", `{"data_out":"allowed"}`)
+	policyRow(noPolicy, "run.policy.generation", `{"generation":2}`)
+	first := seed(`[]`) // generation 1 with every row pruned: blocked, as before
+
+	migrateBefore(t, pool, "0293")
+
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+		want string
+	}{
+		{"current generation 3 with no row, older rows kept", rowless, "none"},
+		{"current generation 2 with its row", present, "review"},
+		{"current generation 2, every policy row pruned, old enough to be blocked", pruned, "none"},
+		{"last generation abandoned, the one before it current with its row", abandoned, "review"},
+		{"current generation 2 whose row has no policy object", noPolicy, "none"},
+		{"generation 1, every policy row pruned", first, "blocked"},
+	} {
+		if got := pgScalar[string](t, pool, `SELECT COALESCE(data_out, 'none') FROM agent_runs WHERE id = $1`, tc.id); got != tc.want {
+			t.Errorf("%s: data_out = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

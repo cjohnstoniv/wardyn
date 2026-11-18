@@ -261,6 +261,34 @@ func TestRunEnd_UnreadableGenerationRowKeepsTheFolderSandbox(t *testing.T) {
 	}
 }
 
+// genUnreadColumnFolderStore is genUnreadFolderStore on a store that keeps the data_out column: the run's row
+// holds no rule and its policy rows are gone (the computer-folder store answers none), the run pruned past
+// generation 1.
+type genUnreadColumnFolderStore struct {
+	genUnreadFolderStore
+}
+
+func (genUnreadColumnFolderStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// The same run-end paths on a run with no resolve row and a NULL row, on generation 2: the new unread answer of
+// runDataOutRule keeps the sandbox, as the unreadable generation row does.
+func TestRunEnd_NullRowWithNoEnvelopeKeepsTheFolderSandbox(t *testing.T) {
+	s, cs, _, run := giveUpFixture(t)
+	s.cfg.Store = genUnreadColumnFolderStore{genUnreadFolderStore{computerFolderStore: cs}}
+	ctx := context.Background()
+	if got, err := s.folderBackEligible(ctx, run.ID); !errors.Is(err, errDataOutGenerationUnread) || got {
+		t.Errorf("folderBackEligible = %v, %v; want an error, not false", got, err)
+	}
+	if !s.endMayPass(ctx, run.ID) {
+		t.Error("endMayPass = false; want true: a rule that cannot be read counts as a pass that can happen")
+	}
+	if folder, unreadable := s.forcedFolder(ctx, run.ID); folder != nil || !unreadable {
+		t.Errorf("forcedFolder = %v, unreadable %v; want unreadable", folder, unreadable)
+	}
+}
+
 // With the generation's row present the rule is that row's, stricter than the resolved one, and a revive carries it.
 func TestDataOutRule_GenerationRowStillRead(t *testing.T) {
 	srv, run := dataOutGenFixture(t, true, types.TransferReview)
@@ -341,5 +369,33 @@ func TestDataOutRule_NullRowWithAnUnreadableGenerationIsUnreadable(t *testing.T)
 	rule, found, err := srv.runDataOutRule(context.Background(), run.ID)
 	if !errors.Is(err, errDataOutGenerationUnread) || !strings.Contains(err.Error(), "(generation 2)") || found || rule != types.TransferAllowed {
 		t.Errorf("NULL row with an unreadable generation row = %q (found %v, err %v), want allowed, not found, errDataOutGenerationUnread (generation 2)", rule, found, err)
+	}
+}
+
+// A run with no rule on its row and no resolve row (retention pruned it) is allowed at generation 1, as for a
+// run never dispatched, but past generation 1 a revive enforced a policy whose rows are gone: on a column
+// store it is the sentinel, never allowed. A store without the column keeps allowed (the pruned-run test).
+func TestDataOutRule_NullRowWithNoEnvelopeIsUnreadablePastGenerationOne(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		revived bool
+	}{{"generation 1", false}, {"generation 2", true}} {
+		srv, st := pvFixture(t, &capStore{})
+		gs := &genViewStore{pvStore: st}
+		if tc.revived {
+			gs.state, _ = gs.state.Advance(genViewRevived.Digest(), nil, "jti-revived")
+		}
+		srv.cfg.Store = &dataOutGenViewColumnStore{genViewStore: gs}
+		run := st.seedRun(pvOwner, types.RunRunning)
+		rule, found, err := srv.runDataOutRule(context.Background(), run.ID)
+		if !tc.revived {
+			if err != nil || found || rule != types.TransferAllowed {
+				t.Errorf("%s: data_out = %q (found %v, err %v), want allowed, not found, no error", tc.name, rule, found, err)
+			}
+			continue
+		}
+		if !errors.Is(err, errDataOutGenerationUnread) || !strings.Contains(err.Error(), "(generation 2)") || found || rule != types.TransferAllowed {
+			t.Errorf("%s: data_out = %q (found %v, err %v), want allowed, not found, errDataOutGenerationUnread (generation 2)", tc.name, rule, found, err)
+		}
 	}
 }
