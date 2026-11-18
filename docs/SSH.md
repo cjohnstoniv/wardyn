@@ -728,6 +728,11 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - A fresh admin key on a person's run is
     refused with reason `run_owner_only`, at connect and again at every new channel
     of an open connection.
+  - The one exception is a support helper: a super admin's fresh, uncapped key enters a person's run while the run's owner has accepted their help request and ticked a terminal, commands, files or forward door.
+    - Each channel kind needs its own door (shell, exec, sftp and sync, forward); an unticked kind is refused with its own sentence and an `ssh.channel.reject` row with reason `support_door_not_granted`.
+    - The helper is governed as the owner is: `deny_interactive`, the channel switch and `data_out` all apply, and the admin exemption never does.
+    - The connection is re-checked on every keepalive; a revoked, expired or unreadable grant refuses new channels and closes it.
+    - The success row on `ssh.authenticate` carries `support_grant` and `entry` `support`.
   - A member's key never satisfies the override — only the
     owner check does, same as before.
   - Existing admin-stamped keys are not revoked:

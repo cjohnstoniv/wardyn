@@ -37,20 +37,38 @@ func (s *Server) sshChannelOn(k sshChannelKind) bool {
 	return s.cfg.SSHChannels == nil || s.cfg.SSHChannels[string(k)]
 }
 
-// sshChannelOffMsg is the one sentence a refused channel gets.
-func sshChannelOffMsg(k sshChannelKind) string {
-	word := string(k)
+// sshKindWord names a channel kind for the sentence a refused channel gets.
+func sshKindWord(k sshChannelKind) string {
 	switch k {
 	case sshKindShell:
-		word = "a terminal"
+		return "a terminal"
 	case sshKindExec:
-		word = "commands (exec)"
+		return "commands (exec)"
 	case sshKindSFTP, sshKindSync:
-		word = "file transfer (sftp)"
+		return "file transfer (sftp)"
 	case sshKindForward:
-		word = "port forwarding"
+		return "port forwarding"
 	}
-	return "wardyn: this deployment's SSH gateway does not serve " + word + " (WARDYN_SSH_CHANNELS)"
+	return string(k)
+}
+
+// sshChannelOffMsg is the one sentence a channel the switch leaves out gets.
+func sshChannelOffMsg(k sshChannelKind) string {
+	return "wardyn: this deployment's SSH gateway does not serve " + sshKindWord(k) + " (WARDYN_SSH_CHANNELS)"
+}
+
+// sshKindRefusal is the sentence for a kind the switch leaves out or, on a support connection, the owner did not
+// tick, with the one ssh.channel.reject row written for it; "" when the kind may run.
+func (s *Server) sshKindRefusal(ctx context.Context, runID uuid.UUID, principal string, k sshChannelKind, channelType string) string {
+	if !s.sshChannelOn(k) {
+		s.sshAuditChannelOff(ctx, runID, types.ActorHuman, principal, channelType)
+		return sshChannelOffMsg(k)
+	}
+	if sshSupportDoorRefused(ctx, k) {
+		s.sshAuditSupportDoorOff(ctx, runID, principal, channelType)
+		return sshSupportOffMsg(k)
+	}
+	return ""
 }
 
 // sshAuditChannelOff writes the ssh.channel.reject row for a channel the switch turned off, as the actor type at:
@@ -62,11 +80,11 @@ func (s *Server) sshAuditChannelOff(ctx context.Context, runID uuid.UUID, at typ
 		})))
 }
 
-// sshRefuseForward refuses a direct-tcpip channel when forward is off, else applies the data_out rule.
+// sshRefuseForward refuses a direct-tcpip channel when forward is off or, for a helper, not ticked, else applies
+// the data_out rule.
 func (s *Server) sshRefuseForward(ctx context.Context, runID uuid.UUID, principal string, ch ssh.NewChannel, rule types.TransferRule) bool {
-	if !s.sshChannelOn(sshKindForward) {
-		s.sshAuditChannelOff(ctx, runID, types.ActorHuman, principal, "direct-tcpip")
-		_ = ch.Reject(ssh.Prohibited, sshChannelOffMsg(sshKindForward))
+	if msg := s.sshKindRefusal(ctx, runID, principal, sshKindForward, "direct-tcpip"); msg != "" {
+		_ = ch.Reject(ssh.Prohibited, msg)
 		return true
 	}
 	return s.sshRefuseDataOut(ctx, runID, principal, ch, rule)
@@ -102,24 +120,24 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 	return out
 }
 
-// mayDispatch first refuses a kind WARDYN_SSH_CHANNELS leaves out (the one sentence on the channel, then a
-// false reply, or for sync an ack and then the sentence, as the sync cap does; one ssh.channel.reject row). It then refuses (and replies false to) a second dispatch, and — when
+// mayDispatch first refuses a kind WARDYN_SSH_CHANNELS leaves out, or that a helper's owner did not tick (the one
+// sentence on the channel, then a false reply, or for sync an ack and then the sentence, as the sync cap does;
+// one ssh.channel.reject row). It then refuses (and replies false to) a second dispatch, and — when
 // shared is set — one a sync-only channel (admitted past the shared cap, see
 // sshOpenSlot) may not make: that one is audited once, answered with the cap
 // text and closed, which frees the sync slot it was holding.
 func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string, kind sshChannelKind) bool {
-	if !g.s.sshChannelOn(kind) {
-		g.s.sshAuditChannelOff(g.ctx, g.runID, types.ActorHuman, g.principal, string(kind))
+	if msg := g.s.sshKindRefusal(g.ctx, g.runID, g.principal, kind, string(kind)); msg != "" {
 		if kind == sshKindSync {
 			// Acked, then ended with the sentence, as the sync cap is: the sync client stops on a false reply
 			// before it reads the channel's stderr.
 			_ = req.Reply(true, nil)
-			sendChannelError(g.channel, sshChannelOffMsg(kind))
+			sendChannelError(g.channel, msg)
 			return false
 		}
 		// The sentence first, as sshDataOutRefused writes it: a reply after the close is dropped, so a client
 		// reads the sentence and the exit status and not only a failed request.
-		sendChannelError(g.channel, sshChannelOffMsg(kind))
+		sendChannelError(g.channel, msg)
 		_ = req.Reply(false, nil)
 		return false
 	}
