@@ -68,23 +68,3 @@ func TestLocalDirScanFailureDetail(t *testing.T) {
 		})
 	}
 }
-
-// A sibling-prefix path must not count as inside the root — /home/x-evil is
-// not within /home/x.
-func TestPathWithinRoot(t *testing.T) {
-	cases := []struct {
-		root, path string
-		want       bool
-	}{
-		{"/home/operator/projects", "/home/operator/projects/app", true},
-		{"/home/operator/projects", "/home/operator/projects", true},
-		{"/home/operator/projects", "/home/operator/projects-evil", false},
-		{"/home/operator/projects", "/home/operator", false},
-		{"/home/operator/projects/", "/home/operator/projects/app/", true},
-	}
-	for _, c := range cases {
-		if got := pathWithinRoot(c.root, c.path); got != c.want {
-			t.Errorf("pathWithinRoot(%q, %q) = %v, want %v", c.root, c.path, got, c.want)
-		}
-	}
-}

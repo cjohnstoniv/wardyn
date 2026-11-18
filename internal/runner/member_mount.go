@@ -565,7 +565,8 @@ func resolveEntry(entry string) string {
 // or nested under one. Each root is canonicalized the same way before the
 // comparison (falling back to its cleaned lexical form when it does not
 // resolve), so a root behind a symlinked parent — /home -> /mnt/home — still
-// matches a resolved source under it.
+// matches a resolved source under it. It is not pathutil.Within: a root of "/" holds nothing here
+// (bootWarnings), where Within's holds every path.
 func withinAnyRoot(real string, roots []string) bool {
 	return withinAnyCanon(real, roots, resolveEntry)
 }

@@ -9,7 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 )
 
 // The fixed guest display: 1920 x 1080 pixels at 80 pixels per inch, so the
@@ -150,7 +151,7 @@ func BuildPlan(s MachineSpec) (Plan, error) {
 	}
 	if s.BaseDir != "" {
 		for _, p := range []string{s.DiskPath, s.AuxPath} {
-			if within(s.BaseDir, p) {
+			if pathutil.Within(s.BaseDir, p) {
 				return Plan{}, fmt.Errorf("macvm: %s is inside the base image; a VM boots only its own clone", p)
 			}
 		}
@@ -210,7 +211,7 @@ func checkDisk(n int, d Disk, baseDir string) error {
 	if !filepath.IsAbs(d.Path) || filepath.Clean(d.Path) != d.Path {
 		return fmt.Errorf("macvm: disk %s needs an absolute, clean image path", d.ID)
 	}
-	if baseDir != "" && within(baseDir, d.Path) {
+	if baseDir != "" && pathutil.Within(baseDir, d.Path) {
 		return fmt.Errorf("macvm: disk %s is inside the base image", d.ID)
 	}
 	return nil
@@ -226,15 +227,9 @@ func checkShares(shares []Share, baseDir string) error {
 		if !filepath.IsAbs(sh.HostPath) || filepath.Clean(sh.HostPath) != sh.HostPath || sh.HostPath == "/" {
 			return fmt.Errorf("macvm: share %s needs an absolute, clean folder path other than /", sh.Tag)
 		}
-		if baseDir != "" && (within(baseDir, sh.HostPath) || within(sh.HostPath, baseDir)) {
+		if baseDir != "" && (pathutil.Within(baseDir, sh.HostPath) || pathutil.Within(sh.HostPath, baseDir)) {
 			return fmt.Errorf("macvm: share %s overlaps the base image", sh.Tag)
 		}
 	}
 	return nil
-}
-
-// within reports whether p is dir or inside it, after cleaning both.
-func within(dir, p string) bool {
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

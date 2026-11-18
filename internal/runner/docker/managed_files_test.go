@@ -639,6 +639,7 @@ func TestVolumeOverSecretDir(t *testing.T) {
 		{},
 		{mounts: []string{"/home/agent/work", "/home/agent/drive"}},
 		{mounts: []string{"/run"}, want: "/run"},
+		{mounts: []string{"/"}, want: "/"},
 		{mounts: []string{runner.ComponentSecretDir + "/api-token"}, want: runner.ComponentSecretDir + "/api-token"},
 		{mounts: []string{"/home/agent/work"}, volumes: []string{"/run/wardyn"}, want: "/run/wardyn"},
 	} {
