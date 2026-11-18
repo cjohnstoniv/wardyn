@@ -130,22 +130,26 @@ func (s *Server) supportRunIneligible(run types.AgentRun) string {
 // caller's ticket, session or connection carries, or uuid.Nil for "the open grant naming principal on run".
 // The row comes back whenever one was read, so a caller can name its id.
 //
-// Order: switch off is supportOff; a store without grants is supportUnavailable; an ineligible run, the run's
+// Order: switch off is supportOff; a store without grants is supportUnavailable (both are supportNone when grant
+// is Nil, as is the whole arm being absent); an ineligible run, the run's
 // own creator, no row, a requested-only row or a row no longer live (ended on the spot) is supportEnded when
 // grant is set and supportNone when it is Nil, so a new entry after an end meets the unchanged owner-rule
 // refusal; a door the owner did not tick is supportDoorRefused; then two standing checks each end the grant on
 // failure: the helper's session was cut (helper_signed_out) or the owner's was revoked (owner_revoked).
 func (s *Server) supportMayEnter(ctx context.Context, run types.AgentRun, principal string, grant uuid.UUID, door supportDoor) (store.SupportGrant, supportVerdict) {
+	// With no grant named, a switch that is off or a store that keeps none means no support arm at all, so the
+	// caller's unchanged owner-rule refusal stands; a ticket, session or connection that names a grant is told.
+	off, unavailable := supportNone, supportNone
+	gone := supportNone
+	if grant != uuid.Nil {
+		off, unavailable, gone = supportOff, supportUnavailable, supportEnded
+	}
 	if !envEnabled(envSupportSessions) {
-		return store.SupportGrant{}, supportOff
+		return store.SupportGrant{}, off
 	}
 	st, ok := s.cfg.Store.(store.SupportGrantStore)
 	if !ok {
-		return store.SupportGrant{}, supportUnavailable
-	}
-	gone := supportNone
-	if grant != uuid.Nil {
-		gone = supportEnded
+		return store.SupportGrant{}, unavailable
 	}
 	if principal == "" || run.CreatedBy == principal || s.supportRunIneligible(run) != "" {
 		return store.SupportGrant{}, gone

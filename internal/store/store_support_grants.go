@@ -77,9 +77,10 @@ type SupportGrantStore interface {
 	SupportGrantStatus(ctx context.Context, run uuid.UUID) (open, ended *SupportGrant, err error)
 	// SweepSupportGrants ends the open grants of runs that are not RUNNING or are lost, then lapsed and
 	// expired ones, then (when off) every other open one as 'support_off'; and claims up to 100 ended grants
-	// no route audited, returning them with EndAudited now true.
+	// no route audited, returning them with EndAudited now true. A role without UPDATE on the table gets none.
 	SweepSupportGrants(ctx context.Context, off bool) ([]SupportGrant, error)
-	// LiveSupportGrants lists every open accepted grant that has not expired.
+	// LiveSupportGrants lists every open accepted grant that has not expired. A role without SELECT on the
+	// table gets none.
 	LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error)
 	// SupportHelperSince reports whether principal was ever accepted as helper on run, ended or not, by a
 	// grant requested at or before at. A zero at is any accepted grant.
@@ -276,6 +277,11 @@ func (s PG) SupportGrantStatus(ctx context.Context, run uuid.UUID) (*SupportGran
 
 // SweepSupportGrants — see SupportGrantStore.
 func (s PG) SweepSupportGrants(ctx context.Context, off bool) ([]SupportGrant, error) {
+	// A split-role app role the table's grant missed can have written no row, so there is nothing to end or
+	// claim; answer empty instead of failing the run watcher's tick every pass.
+	if ok, err := s.hasSupportGrantPrivilege(ctx, "UPDATE"); err != nil || !ok {
+		return nil, err
+	}
 	steps := []struct{ what, sql string }{
 		{"end the support grants of ended runs", `UPDATE run_support_grants g SET ended_at = now(), end_reason = 'run_ended'
 			FROM agent_runs r WHERE r.id = g.run_id AND g.ended_at IS NULL AND (r.state <> 'RUNNING' OR r.lost_at IS NOT NULL)`},
@@ -304,6 +310,9 @@ func (s PG) SweepSupportGrants(ctx context.Context, off bool) ([]SupportGrant, e
 
 // LiveSupportGrants — see SupportGrantStore.
 func (s PG) LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error) {
+	if ok, err := s.hasSupportGrantPrivilege(ctx, "SELECT"); err != nil || !ok {
+		return nil, err // as SweepSupportGrants: a role without the table's grant has no grant to list
+	}
 	rows, err := s.Pool.Query(ctx, `SELECT run_id, id FROM run_support_grants
 		WHERE ended_at IS NULL AND accepted_at IS NOT NULL AND expires_at > now()`)
 	if err != nil {
@@ -314,6 +323,17 @@ func (s PG) LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error) {
 		return nil, fmt.Errorf("store: list the live support grants: %w", err)
 	}
 	return refs, nil
+}
+
+// hasSupportGrantPrivilege reports whether the connected role holds privilege (SELECT, INSERT or UPDATE) on
+// run_support_grants. Without the table's grant (a split-role install the migrator's grant loop missed) the
+// sweep, the live list and the erasure blank skip their statements instead of failing.
+func (s PG) hasSupportGrantPrivilege(ctx context.Context, privilege string) (bool, error) {
+	var ok bool
+	if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_support_grants', $1)`, privilege).Scan(&ok); err != nil {
+		return false, fmt.Errorf("store: read the support grant privilege: %w", err)
+	}
+	return ok, nil
 }
 
 // SupportHelperSince — see SupportGrantStore. A zero at goes in as SQL NULL: Go's zero time is year 1,
