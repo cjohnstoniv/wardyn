@@ -13,7 +13,8 @@ import type { RunDetail, RunOutput } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeMacOSVMRun, makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { SupportHelperContext } from "../../wardyn/support-helper-context";
+import { SupportHelperContext, SupportHelperDoorsContext } from "../../wardyn/support-helper-context";
+import type { SupportDoor } from "../../../lib/api/support";
 import { RUN_COCKPIT, RUN_MODE, RUN_OUTPUT } from "../../wardyn/copy";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 import { TerminalPane } from "./terminal-notice";
@@ -176,6 +177,24 @@ describe("TerminalPane — the Watch link needs a recording", () => {
     );
     expect(screen.getByText(/Only priya/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Watch the captured session/ })).toBeNull();
+  });
+
+  // Board M5c: a helper of an open grant whose owner left the terminal door closed reads P-01, not E-48.
+  it("a helper whose grant leaves the terminal closed reads P-01; anyone else keeps the owner line", () => {
+    const pane = (doors: readonly SupportDoor[] | null) =>
+      render(
+        <OperatorProvider operator principal="sam">
+          <SupportHelperDoorsContext.Provider value={doors}>
+            <TerminalPane onGoOutput={vi.fn()} run={makeRun({ id: "run-1", state: "STARTING", created_by: "maya", interactive: true, has_recording: false })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+          </SupportHelperDoorsContext.Provider>
+        </OperatorProvider>,
+      );
+    const first = pane(["files", "web_apps"]);
+    expect(screen.getByText("The run's owner did not allow Terminal in this help session.")).toBeInTheDocument();
+    expect(screen.queryByText(/Only maya/)).toBeNull();
+    first.unmount();
+    pane(null);
+    expect(screen.getByText(/Only maya/)).toBeInTheDocument();
   });
 
   it("a run with a recording keeps it", () => {

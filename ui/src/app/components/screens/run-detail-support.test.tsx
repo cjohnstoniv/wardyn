@@ -57,6 +57,7 @@ function Page({ r }: { r: RunDetail }) {
       <RunSupportStrip run={r} sup={sup} />
       {/* What the run page hands the cockpit (SupportHelperContext), and a read on demand in place of the poll. */}
       <span data-testid="helper-terminal">{String(sup.helperTerminal)}</span>
+      <span data-testid="helper-doors">{JSON.stringify(sup.helperDoors)}</span>
       <button type="button" onClick={() => void sup.refresh()}>
         read again
       </button>
@@ -275,6 +276,39 @@ describe("support strip: a security admin who is not a super admin", () => {
     expect(screen.queryByRole("button", { name: "Cancel request" })).toBeNull();
     await userEvent.setup().click(screen.getByRole("button", { name: "End now" }));
     expect(api.end).toHaveBeenCalledWith("run-1", "g-1");
+  });
+});
+
+describe("support strip: the doors the run page's entry points read", () => {
+  const doors = () => screen.getByTestId("helper-doors").textContent;
+
+  it("hands the open grant's doors to the helper and null to everyone else", async () => {
+    answer({ open: active({ doors: ["files", "web_apps"] }) });
+    mount({ principal: "sam", operator: true });
+    await waitFor(() => expect(doors()).toBe('["files","web_apps"]'));
+    expect(screen.getByTestId("helper-terminal").textContent).toBe("false");
+    cleanup();
+    for (const who of [{ principal: "maya" }, { principal: "other", operator: true }, { principal: "sec", operator: false, security: true }]) {
+      answer({ open: active({ doors: ["files", "web_apps"] }) });
+      mount(who);
+      await waitFor(() => expect(api.status).toHaveBeenCalled());
+      await screen.findByTestId("helper-doors");
+      expect(doors()).toBe("null");
+      cleanup();
+      api.status.mockReset();
+    }
+  });
+
+  it("is null for a grant that is only requested or has ended", async () => {
+    answer({ open: grant() });
+    mount({ principal: "sam", operator: true });
+    await screen.findByText("Cancel request");
+    expect(doors()).toBe("null");
+    cleanup();
+    answer({ open: null, ended: grant({ state: "ended", end_reason: "expired", doors: ["terminal"] }) });
+    mount({ principal: "sam", operator: true });
+    await screen.findByText("Help ended: the time ran out.");
+    expect(doors()).toBe("null");
   });
 });
 

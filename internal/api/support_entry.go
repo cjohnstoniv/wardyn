@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -70,6 +71,10 @@ const (
 	supportOK
 	// supportEnded: the entry named a grant that is no longer live.
 	supportEnded
+	// supportEndedUnnamed: the entry named no grant, and the caller was a helper on this run whose grant is no
+	// longer live. The same refusal as supportEnded (support_grant_ended), reached by a new entry where
+	// supportEnded is reached by a ticket, session or connection that carries the grant.
+	supportEndedUnnamed
 	// supportDoorRefused: a live grant that does not tick the door.
 	supportDoorRefused
 	// supportOff: WARDYN_SUPPORT_SESSIONS is off.
@@ -135,12 +140,14 @@ func (s *Server) supportRunIneligible(run types.AgentRun) string {
 // caller's ticket, session or connection carries, or uuid.Nil for "the open grant naming principal on run".
 // The row comes back whenever one was read, so a caller can name its id.
 //
-// Order: switch off is supportOff; a store without grants is supportUnavailable (both are supportNone when grant
-// is Nil, as is the whole arm being absent); an ineligible run, the run's
-// own creator, no row, a requested-only row or a row no longer live (ended on the spot) is supportEnded when
-// grant is set and supportNone when it is Nil, so a new entry after an end meets the unchanged owner-rule
-// refusal; a door the owner did not tick is supportDoorRefused; then two standing checks each end the grant on
-// failure: the helper's session was cut (helper_signed_out) or the owner's was revoked (owner_revoked).
+// Order: switch off is supportOff; a store without grants is supportUnavailable (both are supportNone when
+// grant is Nil, as is the whole arm being absent); an ineligible run, the run's own creator, no row, a
+// requested-only row or a row no longer live (ended on the spot) is supportEnded when grant is set. When it is
+// Nil the answer is supportEndedUnnamed for a caller who was accepted as helper on this run
+// (supportHelperEnded), so a new entry after an end names the end, and supportNone for one who never was (no
+// row, or a request that lapsed unanswered), who meets the unchanged owner-rule refusal; a door the owner did
+// not tick is supportDoorRefused; then two standing checks each end the grant on failure: the helper's session
+// was cut (helper_signed_out) or the owner's was revoked (owner_revoked).
 func (s *Server) supportMayEnter(ctx context.Context, run types.AgentRun, principal string, grant uuid.UUID, door supportDoor) (store.SupportGrant, supportVerdict) {
 	// With no grant named, a switch that is off or a store that keeps none means no support arm at all, so the
 	// caller's unchanged owner-rule refusal stands; a ticket, session or connection that names a grant is told.
@@ -168,6 +175,9 @@ func (s *Server) supportMayEnter(ctx context.Context, run types.AgentRun, princi
 		return store.SupportGrant{}, supportUnavailable
 	}
 	if !found || !live {
+		if grant == uuid.Nil {
+			return g, supportHelperEnded(ctx, st, run.ID, principal)
+		}
 		return g, gone
 	}
 	if !supportDoorTicked(g.Doors, door) {
@@ -185,7 +195,26 @@ func (s *Server) supportMayEnter(ctx context.Context, run types.AgentRun, princi
 	if _, err := st.EndSupportGrant(ctx, run.ID, g.ID, reason, false); err != nil && !errors.Is(err, store.ErrNotFound) {
 		slog.WarnContext(ctx, "wardynd: support grant end failed", "run_id", run.ID, "err", err)
 	}
+	if grant == uuid.Nil {
+		return g, supportEndedUnnamed // the grant this entry just met was accepted, and has ended on the spot
+	}
 	return g, gone
+}
+
+// supportHelperEnded is the verdict of an entry that names no grant, whose caller has none live on run:
+// supportEndedUnnamed when the caller was ever accepted as helper there, ended or not, supportNone when not (a
+// request nobody accepted opened no door, so the owner rule's refusal stands). A failed read refuses, as the
+// grant read does.
+func supportHelperEnded(ctx context.Context, st store.SupportGrantStore, run uuid.UUID, principal string) supportVerdict {
+	had, err := st.SupportHelperSince(ctx, run, principal, time.Time{})
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: support helper read failed; refusing", "run_id", run, "err", err)
+		return supportUnavailable
+	}
+	if had {
+		return supportEndedUnnamed
+	}
+	return supportNone
 }
 
 // supportStandingEnd runs the two checks that end a live grant: "helper_signed_out" when the helper's session was
@@ -217,15 +246,15 @@ func (s *Server) supportStandingEnd(ctx context.Context, run types.AgentRun, g s
 	return "", nil
 }
 
-// refuseSupport writes the refusal for v and reports whether it did. supportDoorRefused and supportEnded are 403
-// authz denials (support_door_not_granted, support_grant_ended), supportOff is 409 support_disabled and
+// refuseSupport writes the refusal for v and reports whether it did. supportDoorRefused, supportEnded and
+// supportEndedUnnamed are 403 authz denials (support_door_not_granted, support_grant_ended), supportOff is 409 support_disabled and
 // supportUnavailable 503 support_unavailable. supportNone and supportOK write nothing: the caller answers with
 // its own refusal (supportNone) or goes on (supportOK).
 func (s *Server) refuseSupport(w http.ResponseWriter, r *http.Request, run types.AgentRun, v supportVerdict) bool {
 	switch v {
 	case supportDoorRefused:
 		return s.refuse(w, r, authz.Deny(authz.ReasonSupportDoorNotGranted, run.ID.String(), "").OnRun(run.ID))
-	case supportEnded:
+	case supportEnded, supportEndedUnnamed:
 		return s.refuse(w, r, authz.Deny(authz.ReasonSupportGrantEnded, run.ID.String(), "").OnRun(run.ID))
 	case supportOff:
 		writeErrorReason(w, http.StatusConflict, reasonSupportDisabled, supportDisabledMsg)

@@ -61,6 +61,8 @@ export interface RunSupport {
   open: SupportGrantView | null;
   /** The signed-in person helps through an accepted grant that opens the terminal door. */
   helperTerminal: boolean;
+  /** The doors of the open grant the signed-in person helps through; null for anyone else. The same "helping" state as helperTerminal. */
+  helperDoors: SupportDoor[] | null;
   refresh: () => Promise<void>;
 }
 
@@ -102,8 +104,10 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
     else if (grant && principal !== "" && principal === grant.helper) viewer = "helper";
     else if (securityOperator) viewer = "security";
   }
-  const helperTerminal = viewer === "helper" && open?.state === "active" && !!open.doors?.includes("terminal");
-  return { on: mayRead, viewer, status, open, helperTerminal, refresh };
+  const helping = viewer === "helper" && open?.state === "active";
+  const helperDoors = helping ? (open?.doors ?? []) : null;
+  const helperTerminal = !!helperDoors?.includes("terminal");
+  return { on: mayRead, viewer, status, open, helperTerminal, helperDoors, refresh };
 }
 
 /** The door chips of a banner, in the board's order. */

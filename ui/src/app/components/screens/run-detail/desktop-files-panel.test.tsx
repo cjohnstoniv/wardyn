@@ -13,6 +13,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
 import { DATA_OUT_RUN } from "../../wardyn/copy/data-out-run";
+import { SUPPORT_HELPER } from "../../wardyn/copy/support";
 
 const listMock = vi.fn();
 const uploadMock = vi.fn();
@@ -191,6 +192,23 @@ describe("DesktopFilesPanel", () => {
     expect(screen.queryByTestId("desktop-files-paused")).toBeNull();
     await act(() => vi.advanceTimersByTimeAsync(20000));
     expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a helper's ended grant reads P-02 on the load and an upload, never the wire sentence", async () => {
+    const ended = () => new HttpError(403, "the support grant on this run ended", "support_grant_ended");
+    listMock.mockRejectedValueOnce(ended());
+    const { unmount } = render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(SUPPORT_HELPER.ended)).toBeTruthy();
+    unmount();
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    uploadMock.mockRejectedValueOnce(ended());
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.upload(within(panel).getByLabelText(C.choose), new File(["abc"], "notes.csv"));
+    const row = await within(panel).findByTestId("desktop-upload");
+    await waitFor(() => expect(row.textContent).toContain(SUPPORT_HELPER.ended));
+    // The server's sentence is not what the helper reads.
+    expect(row.textContent).not.toContain("the support grant");
   });
 
   it("writes sizes the way the board does", () => {

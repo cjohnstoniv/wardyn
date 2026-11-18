@@ -11,6 +11,7 @@ import { RotateCw } from "lucide-react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
 import { approvals as approvalsApi } from "../../../lib/api/approvals";
 import { getExpectedPrincipal, HttpError, waitEnded } from "../../../lib/api/core";
+import { SUPPORT_GRANT_ENDED_REASON } from "../../../lib/run-entry";
 import { shortTime } from "../../../lib/format";
 import type { ApprovalRequest, FileDownloadScope } from "../../../lib/types/approvals";
 import { usePoll } from "../../../lib/use-poll";
@@ -19,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Mono } from "../../wardyn/code-block";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
 import { DATA_OUT_RUN } from "../../wardyn/copy/data-out-run";
+import { SUPPORT_HELPER } from "../../wardyn/copy/support";
 import { DesktopReviewRow } from "./desktop-review-row";
 import { useRunDataOut } from "./use-run-data-out";
 
@@ -46,7 +48,9 @@ const PAUSED_POLL_MS = 4000;
 export const REVIEW_POLL_MS = 5000;
 
 const clock = () => shortTime(new Date().toISOString());
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+// A refusal is printed as the server worded it, except a helper's ended grant, which has console words.
+const message = (e: unknown) =>
+  e instanceof HttpError && e.reason === SUPPORT_GRANT_ENDED_REASON ? SUPPORT_HELPER.ended : e instanceof Error ? e.message : String(e);
 
 function Blocked({ title, why }: { title: string; why?: string }) {
   return (
