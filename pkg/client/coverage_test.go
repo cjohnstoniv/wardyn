@@ -115,7 +115,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "EditRunEgress", "ExecRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine"},
+		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "EditRunEgress", "ExecRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine", "RequestSupport", "SupportStatus", "AcceptSupport", "DeclineSupport", "EndSupport"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "ListApprovalsDecidable", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetPolicyDocument", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
