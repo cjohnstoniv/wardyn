@@ -140,13 +140,14 @@ func (s *Server) supportRunIneligible(run types.AgentRun) string {
 // caller's ticket, session or connection carries, or uuid.Nil for "the open grant naming principal on run".
 // The row comes back whenever one was read, so a caller can name its id.
 //
-// Order: switch off is supportOff; a store without grants is supportUnavailable (both are supportNone when grant
-// is Nil, as is the whole arm being absent); an ineligible run, the run's
-// own creator, no row, a requested-only row or a row no longer live (ended on the spot) is supportEnded when
-// grant is set. When it is Nil the answer is supportEndedUnnamed for a caller who was accepted as helper on this
-// run (supportHelperEnded), so a new entry after an end names the end, and supportNone for one who never was
-// (no row, or a request that lapsed unanswered), who meets the unchanged owner-rule refusal; a door the owner did not tick is supportDoorRefused; then two standing checks each end the grant on
-// failure: the helper's session was cut (helper_signed_out) or the owner's was revoked (owner_revoked).
+// Order: switch off is supportOff; a store without grants is supportUnavailable (both are supportNone when
+// grant is Nil, as is the whole arm being absent); an ineligible run, the run's own creator, no row, a
+// requested-only row or a row no longer live (ended on the spot) is supportEnded when grant is set. When it is
+// Nil the answer is supportEndedUnnamed for a caller who was accepted as helper on this run
+// (supportHelperEnded), so a new entry after an end names the end, and supportNone for one who never was (no
+// row, or a request that lapsed unanswered), who meets the unchanged owner-rule refusal; a door the owner did
+// not tick is supportDoorRefused; then two standing checks each end the grant on failure: the helper's session
+// was cut (helper_signed_out) or the owner's was revoked (owner_revoked).
 func (s *Server) supportMayEnter(ctx context.Context, run types.AgentRun, principal string, grant uuid.UUID, door supportDoor) (store.SupportGrant, supportVerdict) {
 	// With no grant named, a switch that is off or a store that keeps none means no support arm at all, so the
 	// caller's unchanged owner-rule refusal stands; a ticket, session or connection that names a grant is told.

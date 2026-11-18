@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -151,4 +152,40 @@ func TestSupportMayEnterEndedUnnamed(t *testing.T) {
 			t.Errorf("verdict %d, want supportUnavailable", v)
 		}
 	})
+}
+
+// A live grant the standing check ends on the spot, with no grant named, is told the help ended
+// (supportEndedUnnamed, 403 support_grant_ended), not met as a caller who was never let in; named, it is
+// supportEnded. The row is ended with the check's own reason.
+func TestSupportMayEnterEndsALiveGrantOnTheStandingCheck(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		cut    string
+		reason string
+	}{
+		{"the helper's sign-in was cut", supportHelperSub, supportEndHelperSignedOut},
+		{"the owner's session was revoked", supportOwnerSub, supportEndOwnerRevoked},
+	} {
+		for _, named := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, named=%v", tc.name, named), func(t *testing.T) {
+				rig := newSupportTermRig(t, "terminal")
+				rev := newAttachRevocations()
+				rig.srv.cfg.SessionRevocations = rev
+				if err := rev.RevokeSub(ctx, tc.cut); err != nil {
+					t.Fatal(err)
+				}
+				grant, want := uuid.Nil, supportEndedUnnamed
+				if named {
+					grant, want = rig.grant.ID, supportEnded
+				}
+				if _, v := rig.srv.supportMayEnter(ctx, rig.run, supportHelperSub, grant, supportDoorTerminal); v != want {
+					t.Fatalf("named=%v: verdict %d, want %d", named, v, want)
+				}
+				if row, ok := rig.st.row(rig.grant.ID); !ok || row.EndReason != tc.reason {
+					t.Errorf("the grant row = %+v, want it ended with %q", row, tc.reason)
+				}
+			})
+		}
+	}
 }
