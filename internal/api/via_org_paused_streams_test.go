@@ -35,7 +35,8 @@ func (f fixedRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error
 	return f.run, f.err
 }
 
-// A run's state for its via_org egress: a paused run is away, like a kept run or one whose runner is offline.
+// A run's state for its via_org egress: an idle-paused run is away, like a kept run or one whose runner is offline. A
+// waiting pause is not: the request it waits on may be one the org engine holds open.
 func TestViaOrgRunState_PausedIsAway(t *testing.T) {
 	mine := uuid.New()
 	other := uuid.New()
@@ -51,7 +52,8 @@ func TestViaOrgRunState_PausedIsAway(t *testing.T) {
 		want   viaOrgRunStatus
 	}{
 		{"live", running, nil, nil, viaOrgRunLive},
-		{"paused", with(func(r *types.AgentRun) { r.PausedAt = &now }), nil, nil, viaOrgRunAway},
+		{"idle paused", with(func(r *types.AgentRun) { r.PausedAt, r.PausedReason = &now, types.PauseIdle }), nil, nil, viaOrgRunAway},
+		{"waiting pause", with(func(r *types.AgentRun) { r.PausedAt, r.PausedReason = &now, types.PauseWaiting }), nil, nil, viaOrgRunLive},
 		{"kept", with(func(r *types.AgentRun) { r.LostAt = &now }), nil, nil, viaOrgRunAway},
 		{"runner offline", running, nil, offline, viaOrgRunAway},
 		{"moved", with(func(r *types.AgentRun) { r.RunnerID = &other }), nil, nil, viaOrgRunMoved},
@@ -70,7 +72,7 @@ func TestViaOrgRunState_PausedIsAway(t *testing.T) {
 	}
 }
 
-// A stream open when its run is paused ends on the watcher's next tick, and the engine is released; the run keeps its
+// A stream open when its run is idle-paused ends on the watcher's next tick, and the engine is released; the run keeps its
 // state and byte total. Once the run is resumed its next request is served by a fresh engine.
 func TestViaOrg_PausedRunEndsItsOpenStreamsAndServesAfterResume(t *testing.T) {
 	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
@@ -89,10 +91,10 @@ func TestViaOrg_PausedRunEndsItsOpenStreamsAndServesAfterResume(t *testing.T) {
 	setPaused := func(paused bool) {
 		ds.mu.Lock()
 		defer ds.mu.Unlock()
-		ds.run.PausedAt = nil
+		ds.run.PausedAt, ds.run.PausedReason = nil, ""
 		if paused {
 			now := time.Now()
-			ds.run.PausedAt = &now
+			ds.run.PausedAt, ds.run.PausedReason = &now, types.PauseIdle
 		}
 	}
 	// The watcher asks RunnerOnline only of a run it read as neither paused nor kept, so the count is of live reads.
