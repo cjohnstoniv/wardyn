@@ -57,8 +57,9 @@ func TestMintedPAT_ClusterAnswerExpiresWithinStoredKeyTTL(t *testing.T) {
 // makes one lease after its last: the run is refused and its token revoked.
 func TestMintedPAT_ClusterRowWriteReachesTheRunWithinALease(t *testing.T) {
 	for name, tc := range map[string]struct {
-		write  func(fx *adoPATFixture)
-		reason string
+		write     func(fx *adoPATFixture)
+		reason    string
+		abandoned bool // the revoke is abandoned: the row is gone, so nothing is revoked
 	}{
 		"row disabled": {func(fx *adoPATFixture) {
 			live := fx.srv.cfg.ADOEntra
@@ -73,19 +74,24 @@ func TestMintedPAT_ClusterRowWriteReachesTheRunWithinALease(t *testing.T) {
 				return live(ctx)
 			}
 			fx.st.site.WorkspaceProviders.Git[0].Disabled = true
-		}, reasonScopeChanged},
+		}, reasonScopeChanged, false},
 		"row deleted": {func(fx *adoPATFixture) {
+			live := fx.srv.cfg.ADOEntra
+			fx.srv.cfg.ADOEntraByRow = func(ctx context.Context, id string) (ADOEntraConfig, bool, error) {
+				cfg, ok, err := live(ctx)
+				return cfg, ok && id == cfg.RowID, err
+			}
 			fx.st.site.WorkspaceProviders.Git = nil
-		}, reasonScopeChanged},
+		}, reasonScopeChanged, true},
 		"ceiling narrowed": {func(fx *adoPATFixture) {
 			fx.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead}
-		}, reasonScopeChanged},
+		}, reasonScopeChanged, false},
 		"token mode switched": {func(fx *adoPATFixture) {
 			fx.st.site.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer
-		}, reasonScopeChanged},
+		}, reasonScopeChanged, false},
 		"boundary cap without a held capability": {func(fx *adoPATFixture) {
 			fx.srv.cfg.Store = &vcsPATStore{adoPATStore: fx.st, b: capBoundary(adoRead)}
-		}, reasonCapabilityCapped},
+		}, reasonCapabilityCapped, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := newADOPATFixture(t)
@@ -99,14 +105,20 @@ func TestMintedPAT_ClusterRowWriteReachesTheRunWithinALease(t *testing.T) {
 			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), tc.reason) {
 				t.Fatalf("resolve one lease later: status %d body %s, want 403 %s", w.Code, w.Body.String(), tc.reason)
 			}
-			if got := fx.pats.revokedIDs(); !slices.Equal(got, []string{first.JTI}) {
-				t.Fatalf("revoked %v, want the run's token %s", got, first.JTI)
+			wantRevoked := []string{first.JTI}
+			if tc.abandoned {
+				wantRevoked = nil
+			}
+			if got := fx.pats.revokedIDs(); !slices.Equal(got, wantRevoked) {
+				t.Fatalf("revoked %v, want %v", got, wantRevoked)
 			}
 			if live := fx.st.unrevoked(t); len(live) != 0 {
 				t.Fatalf("live rows = %+v, want none", live)
 			}
 			if last := fx.st.marks[len(fx.st.marks)-1]; last.reason != adoPATRevokeDrift {
 				t.Fatalf("closed with %+v, want reason %q", last, adoPATRevokeDrift)
+			} else if tc.abandoned && last.lastError == "" {
+				t.Fatalf("closed with %+v, want the abandoned revoke's error recorded", last)
 			}
 		})
 	}
