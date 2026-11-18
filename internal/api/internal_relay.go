@@ -412,8 +412,10 @@ func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID
 // residentRejudgeEvery, so a withdraw that no write announced refuses within
 // that interval. A withdrawn delivery revokes the run's tokens (reason drift).
 // The engine that asked is not released: the refusal itself makes its injector
-// drop the header, and a release would end the stream that asked (and the
-// run's other via_org streams) before the refusal is written and audited.
+// drop the asking host's header (its other hosts keep theirs until their own
+// next resolve; the revoke above is what ends those at Azure DevOps), and a
+// release would end the stream that asked (and the run's other via_org streams)
+// before the refusal is written and audited.
 func (s *Server) viaOrgADOStillAdmitted(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
 	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
 		return false

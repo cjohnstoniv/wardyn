@@ -69,8 +69,9 @@ func TestHandleViaOrg_RefusesAPausedRunForEveryGrant(t *testing.T) {
 		{name: "api_key grant", g: key, rest: "/v1/models", authority: keyHost + ":443"},
 	}
 
+	// A waiting pause, whose open streams stay up, still refuses every new request.
 	paused := time.Now()
-	ls.dispatchTestStore.run.PausedAt = &paused
+	ls.dispatchTestStore.run.PausedAt, ls.dispatchTestStore.run.PausedReason = &paused, types.PauseWaiting
 	for _, tc := range requests {
 		w := serve(tc.g, tc.rest, tc.authority)
 		if w.Code != http.StatusConflict || errorReason(w) != string(authz.ReasonRunPaused) {
@@ -91,7 +92,7 @@ func TestHandleViaOrg_RefusesAPausedRunForEveryGrant(t *testing.T) {
 		t.Errorf("authz.denied rows with reason %s and run_state paused = %d, want %d", authz.ReasonRunPaused, rows, len(requests))
 	}
 
-	ls.dispatchTestStore.run.PausedAt = nil
+	ls.dispatchTestStore.run.PausedAt, ls.dispatchTestStore.run.PausedReason = nil, ""
 	for _, tc := range requests {
 		if w := serve(tc.g, tc.rest, tc.authority); errorReason(w) == string(authz.ReasonRunPaused) {
 			t.Errorf("%s on a resumed run = %d %q, want no %s", tc.name, w.Code, w.Body, authz.ReasonRunPaused)
