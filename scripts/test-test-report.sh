@@ -277,13 +277,14 @@ eph_names=(TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Tmp
 build_names=(TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI
   TestFinalizeBase_IDEqualsTheDaemonsAuxID)
 aws_names=(TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore)
+egress_names=(TestL0_ProxyIsSoleEgressPath TestL0_HostAddressUnreachable TestRunnerTrustedCADocker)
 unit_names=(TestSSHGateway_DirectTCPIPLoopbackRestriction TestSSHGateway_ForwardAuditSurvivesKill
   TestSSHGateway_VMRunDoors TestSSHGateway_ContainerRunForwardStaysSocat
   TestSSHGateway_RemoteSSHChannelsOnOneConnection TestUIGateway_MacOSVMScreenSharingPortRefused
   TestUIRelay_AnotherAppsIdlePoolDoesNotRefuseAnApp TestUIRelay_ActiveConnectionsStillRefuseAnApp
   TestForwardRefusesMacScreenSharingPorts TestForwardDialsLoopbackOnly)
 l0_names=(TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable
-  TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)
+  TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce TestL0_DNSResolverAfterAKeptRevive)
 vm_names=(TestLinuxVMSandbox TestLinuxVMSandbox/ForwardDialsGuestLoopbackOnly TestLinuxVMSandbox/HostRulesJudgedInTheGuest TestLinuxVMDrives)
 sandbox_names=(TestAgentSandboxGoneAfterTeardown TestAgentSandboxNetworkPolicyFirst)
 
@@ -298,12 +299,12 @@ floor_events "${tmp}/floor.json" conformance-k8s - "${k8s_names[@]}" "${eph_name
 log="$(floor_run conformance-k8s "${tmp}/floor.json" WARDYN_TEST_K8S=1)" || fail "AGENT_SANDBOX unset: the pair must not be required, got: ${log}"
 ok "floor AGENT_SANDBOX: the pair is not required while WARDYN_TEST_K8S_AGENT_SANDBOX is unset"
 floor_each "envbuild" envbuild WARDYN_TEST_DOCKER=1 "${build_names[@]}"
-# The docker suite's list: the AWS three where Docker is declared, the gateway recipes only on the hosted runner,
-# and the revive case always.
-floor_each "docker" docker "WARDYN_TEST_DOCKER=1 GITHUB_ACTIONS=true" "${aws_names[@]}" TestGatewayRecipes_Live TestStartSandbox_OnlyBehindARunningProxy
+# The docker suite's list: the AWS three and the egress-path and corporate-CA three where Docker is declared, the
+# gateway recipes only on the hosted runner, and the revive case always.
+floor_each "docker" docker "WARDYN_TEST_DOCKER=1 GITHUB_ACTIONS=true" "${aws_names[@]}" "${egress_names[@]}" TestGatewayRecipes_Live TestStartSandbox_OnlyBehindARunningProxy
 floor_each "docker revive" docker "" TestStartSandbox_OnlyBehindARunningProxy
 # The gateway recipes are required only on the hosted runner: with Docker declared and no GITHUB_ACTIONS they are not.
-floor_events "${tmp}/floor.json" docker - "${aws_names[@]}" TestStartSandbox_OnlyBehindARunningProxy
+floor_events "${tmp}/floor.json" docker - "${aws_names[@]}" "${egress_names[@]}" TestStartSandbox_OnlyBehindARunningProxy
 log="$(floor_run docker "${tmp}/floor.json" WARDYN_TEST_DOCKER=1)" || fail "GITHUB_ACTIONS unset: TestGatewayRecipes_Live must not be required, got: ${log}"
 ok "floor docker: TestGatewayRecipes_Live is not required while GITHUB_ACTIONS is unset"
 floor_each "l0-docker" l0-docker WARDYN_TEST_DOCKER=1 "${l0_names[@]}"
