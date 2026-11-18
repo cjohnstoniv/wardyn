@@ -117,7 +117,7 @@ func (rig *supportRig) do(who, method, path, body string) *httptest.ResponseReco
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("X-Persona", who)
 	w := httptest.NewRecorder()
-	rig.router.ServeHTTP(w, req)
+	panicFails(rig.t, rig.router).ServeHTTP(w, req)
 	return w
 }
 
