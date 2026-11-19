@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- Resuming a paused run now checks its owner again first. If the owner was deactivated or suspended while the run was paused, or its service identity was suspended or retired, the run is ended instead of resumed (`identity_deactivated` or `service_identity_inactive`). If the owner's governance profile was deleted, no longer holds them, or now denies the run's placement or macOS base, the run stays paused and Resume says why; stop it and start a new run under the current rules. Before, a resume thawed the run without these checks. A paused run's token still renews, because the proxy needs it to wait on a decision.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security
