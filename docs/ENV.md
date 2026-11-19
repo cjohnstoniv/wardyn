@@ -343,6 +343,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
+| `WARDYN_START_AFTER_READBACK` | enum | `off` | `on` starts a run's agent only after its proxy confirms its policy; the run stays `STARTING` until then and fails if it does not confirm (flag `-start-after-readback`). [Details](#wardyn_start_after_readback) |
 | `WARDYN_APPROVAL_RULES` | enum | `off` | approval rules, `off`, `dry_run` or `on`: a security admin's rule may approve a held `tool_call` or first-use `egress_domain` approval on a service identity's run. [Details](#wardyn_approval_rules) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
@@ -1738,6 +1739,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **Registries.** With `on`, the registry or mirror that serves `agent-novnc` must also carry `agent-novnc-signin` at the same tag, or desktop runs fail to pull.
 - **Runners.** A run on a self-hosted runner, a remote-hosted runner or Kubernetes gets no sign-in store, no sign-in image and no `signin_listen` key (a runner's own proxy may predate the key and would refuse the run). Such a run starts normally, and a sign-in on it answers `desktop_signin_runner_unsupported`.
 - The person's sign-in browser runs as a different uid in the same sandbox, not in a sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md) says what that does and does not protect. A login reaches the agent only when the person shares that site, and after a share the agent holds those cookies within its egress.
+- Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
+### `WARDYN_START_AFTER_READBACK`
+
+- Start after the policy readback (flag `-start-after-readback`; [`internal/api/run_start_after_readback.go`](../internal/api/run_start_after_readback.go)). `off` (the default) starts the agent as before, while the proxy's [policy readback](operations/run-lifetime.md#policy-readback) may still be pending.
+- `on`: a run stays `STARTING` until its proxy confirms the policy it loaded. No agent task, attach or exec runs before then, on any substrate.
+- The run fails with its sandbox stopped when the readback fails or is not in within 60 seconds, the runner or proxy image is older than 0.10.0-rc.18, or the store keeps no readback.
+- An interactive run with a task is refused, since its agent starts as the sandbox boots.
+- The sandbox's own startup still runs before the readback: the CA install, and an interactive run's workspace preparation.
 - Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
 
 ### `WARDYN_APPROVAL_RULES`
