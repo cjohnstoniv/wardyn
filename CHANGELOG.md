@@ -16,7 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 Developer sandboxes. A run can be a Linux VM with its own desktop, or a macOS VM, which is a preview, off by default
 and not retested on a real Mac for this release. Runs can use folders from your computer, local model servers and
 services, and desktop controls decide what crosses in and out. Organisations set walls through governance units, with
-deciders for held changes, per-host method and path rules, and a No network preset. Images can be held to their
+deciders for held requests, per-host method and path rules, and a No network preset. Images can be held to their
 signatures, and the audit log is signed with receipts you can check offline.
 
 This is the first final release of the 0.10 line, after 26 release candidates. Upgrading from 0.9.x, read the
@@ -24,11 +24,14 @@ candidates' sections below, newest first: they list every change in detail, and 
 applies to you. 0.10 cannot be rolled back by redeploying 0.9.x, so take a database backup first. Docker runs need
 Docker Engine 28 or later. Upgrade the runners, the proxy image and the Linux VM guest image too, in the order the
 candidates' notes give. The 0.10.0-rc.22 notes' first "Split-role installs" bullet names the grant for every table
-the 0.10 migrations add.
+the 0.10 migrations add. Two settings now stop wardynd starting, each in its "Before you
+upgrade" notes: a `WARDYN_ADMIN_TOKEN` shorter than 32 bytes off loopback (rc.14), and
+`WARDYN_AWS_SSO_PROXY_INJECT=off` (rc.1).
 
 ### Defaults changed by this upgrade
 
-Each entry names the candidate that first shipped it; its notes have the detail.
+Setup status does not list these nine yet, so read them here. Each entry names the candidate that first shipped it;
+its notes have the detail.
 
 - **Copying out of a desktop is blocked by default** (rc.1). Paste into the desktop still works; copy out of the
   `novnc` desktop app is dropped and audited as `ui.clipboard.transfer`. It reaches every deployment with desktop
