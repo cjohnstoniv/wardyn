@@ -191,7 +191,9 @@ func (st *viaOrgStream) moved(n int) bool {
 // watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
 // while the run is away (kept, idle-paused, its runner offline, or two reads of it failing in a row) every stream
 // is ended and the engine released, and so is an engine idle with no stream; the run's byte total is kept through all of these. The
-// state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run).
+// state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run). An engine
+// whose run's policy generation moved is retired with its streams (retireViaOrgStale), so a replica that gets no new
+// request does not keep streaming under the old rules; a failed read of the generation counts as a failed read of the run.
 func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 	t := time.NewTicker(run.period)
 	defer t.Stop()
@@ -206,6 +208,9 @@ func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 		case <-t.C:
 		}
 		status := s.viaOrgRunState(run)
+		if status == viaOrgRunLive && s.retireViaOrgStale(run) {
+			status = viaOrgRunUnreadable
+		}
 		if status == viaOrgRunUnreadable {
 			// One failed read is a database blip, not an answer: closing every relayed stream on it would cut a
 			// run's streams for nothing. A second in a row is treated as the run being away.
@@ -231,6 +236,33 @@ func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 			}
 		}
 	}
+}
+
+// retireViaOrgStale retires the run's engine and ends its streams when the run's policy generation slot has moved
+// past the one the engine was built at, as the request path does (viaOrgEngine). A run with no engine reads nothing.
+// unread is true when the slot could not be read: the caller counts it as a failed read of the run.
+func (s *Server) retireViaOrgStale(run *viaOrgRun) (unread bool) {
+	run.mu.Lock()
+	built := run.engine != nil
+	run.mu.Unlock()
+	if !built {
+		return false
+	}
+	slot, err := s.viaOrgPolicySlot(s.cfg.BaseCtx, run.id)
+	if err != nil {
+		return true
+	}
+	// A request may have rebuilt the engine since the read; one built at this slot or later is kept.
+	run.mu.Lock()
+	var gen *viaOrgGen
+	if run.engine != nil && viaOrgSlotNewer(slot, run.slot) {
+		gen = run.retireStale()
+	}
+	run.mu.Unlock()
+	if gen != nil {
+		s.goBackground(func() { closeViaOrgGen(run.id, gen) })
+	}
+	return false
 }
 
 // closeIdle ends every stream idle past the timeout and, when the run has had nothing open that long,

@@ -25,11 +25,13 @@ type viaOrgSlotStore struct {
 	gmu     sync.Mutex
 	state   types.RunPolicyState
 	readErr error
+	reads   atomic.Int32
 }
 
 var _ store.RunPolicyGenerations = (*viaOrgSlotStore)(nil)
 
 func (s *viaOrgSlotStore) RunPolicyState(context.Context, uuid.UUID) (types.RunPolicyState, bool, error) {
+	s.reads.Add(1)
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	return s.state, true, s.readErr
@@ -155,6 +157,51 @@ func TestViaOrg_AnotherReplicaRebuildsAtTheNewGeneration(t *testing.T) {
 	if viaOrgEngineOf(t, other, vr) != after {
 		t.Fatal("the other replica rebuilt its engine again at the same generation")
 	}
+}
+
+// On a replica that gets no new request, the watch retires an engine whose generation moved: its next tick ends the
+// stream still open on the engine built before the restart. A generation that then stays unreadable ends the next
+// engine's stream too, once two reads in a row have failed, as two failed reads of the run do.
+func TestViaOrg_WatchEndsTheStreamOfAnEngineWhoseGenerationMoved(t *testing.T) {
+	srv, gs, run := viaOrgSlotFixture(t)
+	vr := newViaOrgSlotRun(t, run.ID)
+	ds := gs.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.RunnerID, ds.state = &vr.runner, types.RunRunning
+	ds.mu.Unlock()
+	first := viaOrgEngineOf(t, srv, vr)
+	st, refused, retired := vr.open(context.Background(), first)
+	if st == nil || refused != "" || retired {
+		t.Fatalf("open = %v %q retired=%v, want a stream", st, refused, retired)
+	}
+	vr.period = 2 * time.Millisecond
+	srv.cfg.RunnerOnline = func(uuid.UUID) bool { return true } // the run's runner is connected to this replica
+	go srv.watchViaOrgRun(vr)
+	defer srv.releaseViaOrgRun(vr, true, false)
+
+	from := gs.reads.Load()
+	waitFor(t, "the watch to read the generation", func() bool { return gs.reads.Load() >= from+3 })
+	if st.ctx.Err() != nil {
+		t.Fatal("the watch ended a stream on an engine at the run's current generation")
+	}
+	gs.advance()
+	waitFor(t, "the watch to end the stream of the engine built before the restart", func() bool { return st.ctx.Err() != nil })
+	vr.release(st)
+	waitFor(t, "the earlier engine to close", first.engine.Closed)
+	if vr.isClosed() {
+		t.Fatal("retiring a stale engine dropped the run's via_org state")
+	}
+
+	second := viaOrgEngineOf(t, srv, vr)
+	st2, refused, retired := vr.open(context.Background(), second)
+	if st2 == nil || refused != "" || retired {
+		t.Fatalf("open = %v %q retired=%v, want a stream", st2, refused, retired)
+	}
+	defer vr.release(st2)
+	gs.gmu.Lock()
+	gs.readErr = errors.New("connection reset")
+	gs.gmu.Unlock()
+	waitFor(t, "the watch to end the stream once the generation stays unreadable", func() bool { return st2.ctx.Err() != nil })
 }
 
 // Requests racing the rebuild after a restart build one engine between them, and none is served the earlier one.
