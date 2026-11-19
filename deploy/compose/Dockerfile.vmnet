@@ -3,7 +3,7 @@
 # to the run's wardyn-proxy and drops the rest. It runs unprivileged on the
 # run's internal network and reaches nothing but the proxy. Pure-Go static
 # build; same builder and corporate-build conventions as Dockerfile.proxy.
-FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 
 WORKDIR /build
 
