@@ -41,9 +41,10 @@ const (
 	// narrowDeliverTimeout bounds the delivery. It is not cancelled by a lost lock: a delivered list is
 	// always a subset of the stored one, and cancelling would only turn a likely success into a cut run.
 	narrowDeliverTimeout = 15 * time.Second
-	// narrowRunnerRouteTimeout and narrowRunnerDeliverTimeout are a runner's bounds: a wire round trip on top of the
-	// runner's own probe (5 s) and its probe-then-apply (5 s + 15 s).
-	narrowRunnerRouteTimeout   = 10 * time.Second
+	// narrowRunnerRouteTimeout and narrowRunnerDeliverTimeout are a runner's bounds: a wire round trip and the runner's
+	// pod reads on top of its own probe (5 s) and its probe-then-apply (5 s + 15 s). The probe's 8 s is also the most
+	// a revive after it can take inside the edit's call budget (TestEgressEditBudget_CoversEveryWindowAfterTheClaim).
+	narrowRunnerRouteTimeout   = 8 * time.Second
 	narrowRunnerDeliverTimeout = 25 * time.Second
 )
 

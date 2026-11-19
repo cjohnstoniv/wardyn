@@ -424,7 +424,9 @@ func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 	// (cmd/wardynd fanoutRecorder): past the hard end that is the proxy stop's failure row and the sandbox stop's.
 	sinkLookup := sourceSeconds(t, "audit/sinks/correlation.go", "correlationLookupBudget")
 
-	if before := narrowRouteTimeout + leaseWait + lock + reviveRunnerTimeout; before > egressEditCallBudget {
+	// The longest chain is a runner run's: its routing probe has the runner bound (narrowBound) and its revive waits
+	// leaseWait for the owner's slot (lockRevive). A hosted run's probe is shorter and takes no slot.
+	if before := max(narrowRouteTimeout, narrowRunnerRouteTimeout) + leaseWait + lock + reviveRunnerTimeout; before > egressEditCallBudget {
 		t.Errorf("a revive's own windows take %v before its claim, past the edit's call budget %v", before, egressEditCallBudget)
 	}
 	claimed := win("run_revive.go:reviveRunProxy", 0)

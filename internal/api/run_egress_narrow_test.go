@@ -1286,7 +1286,7 @@ func TestNarrowEdit_RunnerUncertainEndsTheRun(t *testing.T) {
 	}
 }
 
-// A runner's probe gets 10 s and its delivery 25 s, a wire round trip on top of the runner's own 5 s probe and
+// A runner's probe gets 8 s and its delivery 25 s, a wire round trip on top of the runner's own 5 s probe and
 // 5 s + 15 s probe-then-apply; a hosted run keeps 5 s and 15 s.
 func TestNarrowEdit_RunnerBounds(t *testing.T) {
 	for _, tc := range []struct {
