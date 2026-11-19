@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -20,10 +21,11 @@ import (
 // the captured profile's chain and memberships, and the capability rows.
 type resumeRecheckStore struct {
 	*pauseStore
-	profiles []types.GovernanceUnit
-	blocked  bool
-	caps     []types.CapabilityGrant
-	enforced map[string]bool
+	profiles   []types.GovernanceUnit
+	blocked    bool
+	blockedErr error // IdentityBlocked's answer when the identity rows cannot be read
+	caps       []types.CapabilityGrant
+	enforced   map[string]bool
 }
 
 func (s *resumeRecheckStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
@@ -39,7 +41,7 @@ func (s *resumeRecheckStore) GetCapabilityEnforcement(context.Context) (map[stri
 }
 
 func (s *resumeRecheckStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
-	return s.blocked, nil
+	return s.blocked, s.blockedErr
 }
 
 func (s *resumeRecheckStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
@@ -236,5 +238,80 @@ func TestResumeRun_RevokedSessionsDoNotEndTheRun(t *testing.T) {
 	}
 	if got := f.st.State(); got != types.RunKilled {
 		t.Errorf("run state = %s, want KILLED for a blocked owner", got)
+	}
+}
+
+// resumeServiceStore is resumeRecheckStore with the service identity a run was created by read back as svc.
+type resumeServiceStore struct {
+	*resumeRecheckStore
+	store.ServiceIdentityStore // only GetServiceIdentity and ServiceStillSponsored are asked
+	svc                        types.ServiceIdentity
+}
+
+func (s *resumeServiceStore) GetServiceIdentity(_ context.Context, name string) (types.ServiceIdentity, error) {
+	if name != s.svc.Name {
+		return types.ServiceIdentity{}, store.ErrNotFound
+	}
+	return s.svc, nil
+}
+
+// ServiceStillSponsored answers as the real store does for a sponsorship that began before the run.
+func (s *resumeServiceStore) ServiceStillSponsored(_ context.Context, name, sponsor string, _ time.Time) (bool, error) {
+	if name != s.svc.Name {
+		return false, store.ErrNotFound
+	}
+	return s.svc.Usable() && s.svc.Sponsor == sponsor, nil
+}
+
+// TestResumeRun_ServiceRunResumesAfterSessionRevokes: a revoke of the service principal's or its
+// sponsor's sessions leaves a paused service-identity run resumable; a suspended service identity still
+// has the run ended with service_identity_inactive.
+func TestResumeRun_ServiceRunResumesAfterSessionRevokes(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	ss := &resumeServiceStore{resumeRecheckStore: rs, svc: types.ServiceIdentity{Name: "nightly", Sponsor: pauseOwner}}
+	f.srv.cfg.Store = ss
+	f.srv.cfg.SessionRevocations = &macWindowRevocations{revoked: true}
+	f.st.run.CreatedBy = types.ServicePrincipalPrefix + "nightly"
+	paused := *f.st.run.PausedAt
+	run := f.st.run
+
+	if err := f.srv.resumeRun(context.Background(), ss, run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("resume of a service run after session revokes = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 || f.st.State() != types.RunRunning {
+		t.Fatalf("thaws %d, state %s; want the run thawed once and RUNNING", thaws, f.st.State())
+	}
+
+	suspended := time.Now().UTC()
+	ss.svc.SuspendedAt = &suspended
+	run.PausedAt = &paused
+	err := f.srv.resumeRun(context.Background(), ss, run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.reason != reasonServiceIdentityInactive {
+		t.Fatalf("resume for a suspended service identity = %v, want a %s refusal", err, reasonServiceIdentityInactive)
+	}
+	if got := f.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED for a suspended service identity", got)
+	}
+}
+
+// TestResumeRun_UnreadableIdentityRefusesWithoutEnding: an identity read that fails refuses the resume
+// with 503, writes no run.kill row, and leaves the run RUNNING and paused for the next resume.
+func TestResumeRun_UnreadableIdentityRefusesWithoutEnding(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	rs.blockedErr = errors.New("identity rows unreachable")
+
+	err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.status != http.StatusServiceUnavailable || refused.ref.reason != reasonOwnerUnverifiable {
+		t.Fatalf("resume with an unreadable identity = %v, want a 503 %s refusal", err, reasonOwnerUnverifiable)
+	}
+	for _, ev := range f.audit.snapshot() {
+		if ev.Action == "run.kill" {
+			t.Errorf("run.kill row written for an unreadable identity: %+v", ev)
+		}
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 || f.st.State() != types.RunRunning || f.st.run.PausedAt == nil {
+		t.Errorf("thaws %d, state %s, paused %v; want no thaw, RUNNING and still paused", thaws, f.st.State(), f.st.run.PausedAt != nil)
 	}
 }
