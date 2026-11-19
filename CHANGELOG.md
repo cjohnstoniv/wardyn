@@ -24,9 +24,9 @@ candidates' sections below, newest first: they list every change in detail, and 
 applies to you. 0.10 cannot be rolled back by redeploying 0.9.x, so take a database backup first. Docker runs need
 Docker Engine 28 or later. Upgrade the runners, the proxy image and the Linux VM guest image too, in the order the
 candidates' notes give. The 0.10.0-rc.22 notes' first "Split-role installs" bullet names the grant for every table
-the 0.10 migrations add. Two settings now stop wardynd starting, each in its "Before you
-upgrade" notes: a `WARDYN_ADMIN_TOKEN` shorter than 32 bytes off loopback (rc.14), and
-`WARDYN_AWS_SSO_PROXY_INJECT=off` (rc.1).
+the 0.10 migrations add. Some settings now stop wardynd starting, each named in its
+candidate's "Before you upgrade" notes, among them a `WARDYN_ADMIN_TOKEN` shorter than 32 bytes off loopback (rc.14),
+`WARDYN_AWS_SSO_PROXY_INJECT=off` (rc.1) and a 0.9 setting name that was renamed (rc.1).
 
 ### Defaults changed by this upgrade
 
