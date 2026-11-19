@@ -682,15 +682,9 @@ type approvalRejoiner interface {
 	Rejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
 }
 
-// handleInternalRequestApproval raises (or dedups to an existing) approval on
-// behalf of a run — the first-use egress approval flow. The run id is bound from
-// the verified token, never the body.
-func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Request) {
-	claims, err := claimsFromContext(r)
-	if err != nil {
-		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
-		return
-	}
+// decodeInternalApprovalRaise reads and checks a raise body. On false it has already answered: a bad call scope
+// with its own reason, anything else with 400 internal_approval_request_invalid.
+func (s *Server) decodeInternalApprovalRaise(w http.ResponseWriter, r *http.Request) (internalApprovalRequest, bool) {
 	var body internalApprovalRequest
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody))
 	if err == nil {
@@ -699,7 +693,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	if err == nil {
 		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
 		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
-			return
+			return body, false
 		}
 		// After the call scope's own readers, which answer a bad call scope with their own reason and
 		// auth.fail row, also when text follows it: then one value, with no key written twice.
@@ -711,6 +705,22 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	if err != nil || !stamped || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+		return body, false
+	}
+	return body, true
+}
+
+// handleInternalRequestApproval raises (or dedups to an existing) approval on
+// behalf of a run — the first-use egress approval flow. The run id is bound from
+// the verified token, never the body.
+func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
+		return
+	}
+	body, ok := s.decodeInternalApprovalRaise(w, r)
+	if !ok {
 		return
 	}
 	switch body.Kind {
