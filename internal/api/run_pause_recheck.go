@@ -23,10 +23,11 @@ const resumeServiceInactiveMsg = "The service identity that started this run is 
 
 // resumeRefusal re-checks, before a paused run is thawed, what a pause may have outlived: the owner's
 // identity, as a pool start re-checks it (queueOwnerLive; serviceRunLive for a service identity), and
-// the captured profile, as an extension of the run's end re-checks it (ownerCeilingRefusal). An owner
-// who is deactivated or suspended, or a service identity that is suspended or retired, ends the run
-// through the kill cascade. A profile that no longer admits the run leaves it paused and refused. A
-// check that cannot be answered refuses with 503 and writes no row; the next resume asks again.
+// the authority an extension of the run's end needs (extendRefusal): the captured profile, its
+// placement walls, the launch-door capabilities and the model provider. An owner who is deactivated or
+// suspended, or a service identity that is suspended or retired, ends the run through the kill cascade.
+// Authority the owner no longer holds leaves the run paused and refused. A check that cannot be
+// answered refuses with 503 and writes no row; the next resume asks again.
 func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal string, data map[string]any) error {
 	live, err := s.resumeOwnerLive(ctx, run)
 	if err != nil {
@@ -36,7 +37,9 @@ func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorTyp
 	var ref *ownerRefusal
 	switch {
 	case live:
-		ref = s.ownerCeilingRefusal(ctx, run)
+		// As the owner's own session only when ctx carries it (ownerCapabilityRefusal); a gateway's or the
+		// sweep's ctx is held to the rows that could match the owner by sub and type.
+		ref = s.extendRefusal(ctx, run, run.CreatedBy != "" && oidcHumanFromContext(ctx) == run.CreatedBy)
 	case isServicePrincipal(run.CreatedBy):
 		ref = &ownerRefusal{status: http.StatusForbidden, reason: reasonServiceIdentityInactive, msg: resumeServiceInactiveMsg}
 	default:

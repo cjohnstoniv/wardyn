@@ -750,9 +750,8 @@ func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIs
 	return ref
 }
 
-// ownerCeilingRefusal is extendRefusal's profile half, which a resume asks too (resumeRefusal): the captured
-// profile as it stands now (ownerUnit), and its deny_placements and allowed_macos_bases judged against where
-// the run already is.
+// ownerCeilingRefusal is extendRefusal's profile half: the captured profile as it stands now (ownerUnit), and
+// its deny_placements and allowed_macos_bases judged against where the run already is.
 func (s *Server) ownerCeilingRefusal(ctx context.Context, run types.AgentRun) *ownerRefusal {
 	prof, ref := s.ownerUnit(ctx, run)
 	if ref != nil || prof == nil {

@@ -16,12 +16,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// resumeRecheckStore is pauseStore with the reads a resume's re-check makes: the owner's identity rows
-// and the captured profile's chain and memberships.
+// resumeRecheckStore is pauseStore with the reads a resume's re-check makes: the owner's identity rows,
+// the captured profile's chain and memberships, and the capability rows.
 type resumeRecheckStore struct {
 	*pauseStore
 	profiles []types.GovernanceUnit
 	blocked  bool
+	caps     []types.CapabilityGrant
+}
+
+func (s *resumeRecheckStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return s.caps, nil
 }
 
 func (s *resumeRecheckStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
@@ -125,5 +130,28 @@ func TestResumeRun_AllowedWhileStillValid(t *testing.T) {
 	}
 	if rows := f.rows("run.resume", "denied"); len(rows) != 0 {
 		t.Errorf("run.resume denied rows = %+v, want none", rows)
+	}
+}
+
+// TestResumeRun_RefusedForARevokedCapability: a deny on the run's agent written while it was paused
+// refuses the resume with the extension's capability_agent, and the run stays paused and RUNNING.
+func TestResumeRun_RefusedForARevokedCapability(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	rs.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capAgent, f.st.run.Agent, types.CapabilityDeny)}
+
+	err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.status != http.StatusForbidden || refused.ref.reason != reasonOwnerCapabilityAgent {
+		t.Fatalf("resume after the agent's grant was revoked = %v, want a 403 %s refusal", err, reasonOwnerCapabilityAgent)
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Errorf("thaws = %d, want 0", thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil || f.st.State() != types.RunRunning {
+		t.Errorf("paused at %v, state %s; want the run left paused and RUNNING", pausedAt, f.st.State())
+	}
+	rows := f.rows("run.resume", "denied")
+	if len(rows) != 1 || leaseAuditData(t, rows[0])["refusal"] != reasonOwnerCapabilityAgent {
+		t.Errorf("run.resume denied rows = %+v, want one with refusal %s", rows, reasonOwnerCapabilityAgent)
 	}
 }

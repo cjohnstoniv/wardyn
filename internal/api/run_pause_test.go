@@ -156,6 +156,23 @@ func (s *pauseStore) RunHasOpenRequest(context.Context, uuid.UUID) (bool, error)
 	return s.open, nil
 }
 
+// pauseStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (*pauseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (*pauseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 func (s *pauseStore) paused() (*time.Time, types.PauseReason) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
