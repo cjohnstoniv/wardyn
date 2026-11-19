@@ -171,6 +171,7 @@ export function UnitDeciders({
       if (e instanceof PendingChangeError) {
         heldDraft.current = JSON.stringify(draft);
         setHeld(true);
+        for (const warning of e.change.warnings ?? []) toast.warning(warning);
         void onChanged();
       } else if (e instanceof HttpError) {
         const named = e.status === 409 ? null : /rules\[(\d+)\]/.exec(e.message);

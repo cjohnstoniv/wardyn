@@ -150,6 +150,9 @@ type GovernanceChange struct {
 	// it could not end every live run of the identity. Detail is the server's remedy.
 	RunsEndFailed bool   `json:"runs_end_failed,omitempty"`
 	Detail        string `json:"detail,omitempty"`
+	// Warnings is set on a 202's pending_change only: advisory sentences for the proposer, such as a deciders
+	// rule that leaves host rule holds to security. They are not stored with the change.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // GovernanceChangeNote is what the proposer wrote on a held change: why it is wanted, and an optional

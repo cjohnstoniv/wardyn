@@ -130,8 +130,8 @@ const decidersHostHoldWarning = "Host rule holds are egress_domain approvals dec
 	"so with max_scope %q the deciders listed for egress_domain cannot approve them and only security can: " +
 	"raise max_scope to run for egress_domain, or expect those approvals to wait for security"
 
-// decidersSaveWarnings is what a direct deciders save still tells its admin; the save stays 200 and the
-// decision rule is unchanged. A host rule hold is an egress_domain approval (deciderKindOf) that is decided
+// decidersSaveWarnings is what a deciders save still tells its admin, on the 200 or on a held write's 202
+// (its pending_change); the save stands and the decision rule is unchanged. A host rule hold is an egress_domain approval (deciderKindOf) that is decided
 // for the rest of the run (hostCallDecisionRule), so a rule naming egress_domain that lists deciders and caps
 // max_scope below run leaves them unable to answer one (decision_scope_above_rule). No other kind needs more
 // than once: an MCP call, a kubectl write, a download and an Azure DevOps escalation are decided once, and a
@@ -360,7 +360,7 @@ func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unit
 	after := &unitDecidersDiffView{UnitID: p.UnitID, UnitName: row.Name, Rules: p.Rules}
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindUnitDeciders, op: "set", key: p.UnitID.String(), payload: p, baseState: base,
-		before: before, after: after, changed: changedPaths(before, after),
+		before: before, after: after, changed: changedPaths(before, after), warnings: decidersSaveWarnings(p.Rules),
 	})
 }
 
