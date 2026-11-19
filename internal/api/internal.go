@@ -670,6 +670,11 @@ type internalApprovalRequest struct {
 	// stamps that row (approval.Rejoin) instead of creating or deduplicating one. A previous-release
 	// sidecar sends none.
 	RejoinID *uuid.UUID `json:"rejoin_id"`
+	// AcceptsOnce says the raising proxy spends a "once" answer to a host rule hold on the one held request;
+	// the row's scope then carries accepts_once (hostCallAcceptingOnce). It sits outside requested_scope, whose
+	// keys a previous-release control plane checks exactly, because that one ignores an unknown key here. A
+	// previous-release proxy sends none. Refused on any other raise.
+	AcceptsOnce bool `json:"accepts_once"`
 }
 
 // approvalRejoiner is the optional ApprovalService method behind a raise's rejoin_id.
@@ -700,7 +705,11 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		// auth.fail row, also when text follows it: then one value, with no key written twice.
 		err = types.DecodeOneJSON(bytes.NewReader(raw), new(internalApprovalRequest), false)
 	}
-	if err != nil || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
+	stamped := true // accepts_once is refused on any raise but a host rule hold's
+	if err == nil && body.AcceptsOnce {
+		body.RequestedScope, stamped = hostCallAcceptingOnce(body.RequestedScope)
+	}
+	if err != nil || !stamped || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
 		return
 	}

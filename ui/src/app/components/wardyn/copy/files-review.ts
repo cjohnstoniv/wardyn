@@ -57,7 +57,12 @@ export const HOST_CALL_CARD = {
   WHAT: (method: string, path: string, host: string) => `allowing ${method} requests to ${path} on ${host} for the rest of this run.`,
   BLAST: "This covers any query or body sent with this host, method and path. Other policy rules still apply.",
   APPROVE: "Approve for this run",
+  // Offered only on a row whose proxy accepts once (requested_scope.accepts_once).
+  APPROVE_ONCE: "Just this request",
+  ONCE_NOTE: "Just this request lets one request through, the one waiting or else the next one sent. The same host, method and path then asks again.",
   DENY_NOTE: "Refuses this method and path on this host for the rest of the run.",
+  // A row whose proxy accepts once, under a unit deciders rule whose max_scope is below run.
+  CAP_NOTE: "This unit's deciders rule allows one request at most, so Approve for this run is off and Deny refuses only the waiting request.",
   HELD_NOTE: "If the request is still waiting, approving lets it proceed when all other rules allow it.",
   HELD_EXPIRED: "No longer waiting. This approval covers retries with the same host, method and path for the rest of the run. Other policy rules still apply.",
   LIST_TITLE: (method: string, path: string, host: string) => `${method} ${path} on ${host}`,

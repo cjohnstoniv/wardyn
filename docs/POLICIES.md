@@ -832,9 +832,10 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 
 A `host_rules` rule with `effect: hold` makes the proxy hold a matching request until a person decides it.
 
-- The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
+- The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`, and `"accepts_once": true` when the proxy can keep a `once` decision.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
-- An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
+- An approval for the run lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline for the run refuses them all. The answer lives in the run's proxy, so a new proxy asks again.
+- A decision `once` answers only the request waiting, or the next one sent if none waits. The next request with that host, method and path asks again.
 - On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
   - when it has had nothing open for 10 minutes;
   - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
@@ -848,7 +849,15 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
 - At most 16 held requests wait at once, and a retry of a waiting call counts.
 - The proxy remembers at most 1024 different calls at once: those waiting or pending, and those approved or declined. A call whose approval expired or was cancelled frees its place once the proxy sees it closed: while a request for it waits, or when the call is sent again. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
-- The decision takes no `decision_scope`, or `"run"`. The row records `run`, since the answer holds for the rest of the run. A unit's deciders rule whose `max_scope` is below `run` refuses the decision (`decision_scope_above_rule`).
+- The row records the decision's scope. A unit's deciders rule whose `max_scope` is below `run` refuses `run` (`decision_scope_above_rule`). Any scope the table does not list is `400 decision_scope_invalid_for_kind`.
+
+  | `decision_scope` | Row with `accepts_once` | Row without it |
+  |---|---|---|
+  | none | `run`; `once` under such a rule | `run` |
+  | `"run"` | `run` | `run` |
+  | `"once"` | `once` | `400 decision_scope_invalid_for_kind` |
+
+- A proxy from an earlier release sends no `accepts_once`: it reads every approval as one for the run.
 - The run's owner or a security operator decides it, as for a kubectl write. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
 - `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. Either one is enough, and then someone other than the run's own people decides it.
 - The decision rows are `policy:host-rule:approval-wait`, `-approval-denied`, `-approval-closed`, `-approval-refused` and `-approval-busy`. A request an approval lets through also gets an allow row, `policy:host-rule:approval-approved`, naming the approval.

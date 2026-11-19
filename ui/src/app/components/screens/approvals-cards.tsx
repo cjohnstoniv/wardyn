@@ -373,9 +373,10 @@ export function ApprovalCard({
           canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
           run={run}
           busy={pushBusy}
-          onApprove={async () => {
+          onApprove={async (scope) => {
             setPushBusy("approve");
-            await onPushDecide(item.id, true);
+            if (scope) await onAdoDecide(item.id, true, [{ scope }]);
+            else await onPushDecide(item.id, true);
             setPushBusy(null);
           }}
           onDeny={async () => {

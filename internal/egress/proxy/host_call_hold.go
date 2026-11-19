@@ -7,8 +7,11 @@ package proxy
 // denies it and at least one holds it) waits until a person decides its host, method and path
 // (types.HostCallScope). A yes lets every request with that host, method and path through for the rest
 // of the run in this proxy, and a no refuses them all; the table lives in this proxy only, so a new proxy
-// asks again. The answer never outranks the rules: each request is judged afresh, so a deny in any set
-// still refuses it, and only a request the rules hold reads the table.
+// asks again. A yes decided once lets exactly one waiting request through, and a no decided once refuses
+// only the requests waiting on it: the next request with that host, method and path asks again. The raise
+// says this proxy keeps to that (accepts_once), so the control plane offers once only for its holds. The
+// answer never outranks the rules: each request is judged afresh, so a deny in any set still refuses it,
+// and only a request the rules hold reads the table.
 //
 // It fails closed, as the kubectl door's hold does (kube_api_hold.go): a raise the control plane refuses
 // or cannot take is refused, and an answer the proxy cannot read is still pending, so the request is never
@@ -52,6 +55,7 @@ const (
 	hostCallHeldPrefix   = "Wardyn did not send this request: "
 	hostCallWaitingText  = hostCallHeldPrefix + "a host rule holds %s %s on %s until a person decides (approval %s). Send it again once it is approved."
 	hostCallDeclinedText = hostCallHeldPrefix + "a person declined %s %s on %s, so it is refused for the rest of the run."
+	hostCallDeclinedOnce = hostCallHeldPrefix + "a person declined %s %s on %s for this request only. Send it again to ask again."
 	hostCallClosedText   = hostCallHeldPrefix + "its approval closed without a decision. Send it again to ask again."
 	hostCallNoAskText    = hostCallHeldPrefix + "Wardyn could not ask a person about it. Send it again to ask again."
 	hostCallRefusedText  = hostCallHeldPrefix + "the control plane refused the request for a person's approval (%d)."
@@ -167,9 +171,6 @@ func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope type
 		return &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalDenied, id, cause,
 			fmt.Sprintf(hostCallDeclinedText, scope.Method, scope.Path, scope.Host)}
 	}
-	refused := func(cause, text string) *hostHoldAnswer {
-		return &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalRefused, uuid.Nil, cause, text}
-	}
 	id, state, why := p.hostCalls.admitKept(key)
 	switch {
 	case state == apApproved: // kept for the run, and no waiting slot taken
@@ -185,7 +186,7 @@ func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope type
 	}
 	defer p.hostCalls.leave(key)
 	if p.approval == nil {
-		return false, refused("this proxy has no way to ask", hostCallNoAskText)
+		return false, hostCallRefused("this proxy has no way to ask", hostCallNoAskText)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hostCallWindow*hostCallSecond)
 	defer cancel()
@@ -193,22 +194,42 @@ func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope type
 		// A retry rejoining the pending request: the console reads it as held for this window too.
 		_, _ = p.raiseHostCall(ctx, scope, id)
 	} else {
-		got, err := p.raiseHostCall(ctx, scope, uuid.Nil)
-		var refusal *raiseRefusedError
-		switch {
-		case errors.As(err, &refusal):
-			return false, refused(fmt.Sprintf("the request for an approval was refused (%d)", refusal.status), fmt.Sprintf(hostCallRefusedText, refusal.status))
-		case err != nil:
-			return false, refused("the request for an approval could not be raised", hostCallNoAskText)
-		}
-		if id = p.hostCalls.install(key, got); id == uuid.Nil {
-			return false, refused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
+		var refusal *hostHoldAnswer
+		if id, refusal = p.askHostCall(ctx, scope); refusal != nil {
+			return false, refusal
 		}
 	}
 	return p.pollHostCall(ctx, r, host, port, scope, id, declined)
 }
 
-// pollHostCall waits on approval id for the scope's key: true once a person approved it.
+// hostCallRefused is the refusal of a held request Wardyn could not ask a person about.
+func hostCallRefused(cause, text string) *hostHoldAnswer {
+	return &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalRefused, uuid.Nil, cause, text}
+}
+
+// askHostCall raises the hold's approval and files it: the approval to wait on, or the refusal.
+func (p *Proxy) askHostCall(ctx context.Context, scope types.HostCallScope) (uuid.UUID, *hostHoldAnswer) {
+	got, err := p.raiseHostCall(ctx, scope, uuid.Nil)
+	var refusal *raiseRefusedError
+	switch {
+	case errors.As(err, &refusal):
+		return uuid.Nil, hostCallRefused(fmt.Sprintf("the request for an approval was refused (%d)", refusal.status), fmt.Sprintf(hostCallRefusedText, refusal.status))
+	case err != nil:
+		return uuid.Nil, hostCallRefused("the request for an approval could not be raised", hostCallNoAskText)
+	}
+	id := p.hostCalls.install(scope.CallSHA256, got)
+	if id == uuid.Nil {
+		return uuid.Nil, hostCallRefused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
+	}
+	return id, nil
+}
+
+// pollHostCall waits on approval id for the scope's key: true once a person approved it for this request.
+//
+// A yes for the run (decision_scope run, or none) is kept for the run. Any other yes is spent by the one
+// waiting request that claims it (mcpCalls.claim), never kept, so admitKept never passes a request on it; a
+// request that loses the claim asks again in what is left of its window. A no decided once is spent the
+// same way and refuses the requests waiting on it; any other no is kept for the run.
 func (p *Proxy) pollHostCall(ctx context.Context, r *http.Request, host string, port int, scope types.HostCallScope,
 	id uuid.UUID, declined func(uuid.UUID, string) *hostHoldAnswer) (bool, *hostHoldAnswer) {
 	key := scope.CallSHA256
@@ -218,14 +239,28 @@ func (p *Proxy) pollHostCall(ctx context.Context, r *http.Request, host string, 
 		// Polled at once as well as on each tick: a request decided while nobody waited is answered
 		// without a delay. An answer that cannot be read is still pending.
 		if ar, ok := p.approval.fetch(ctx, id); ok {
-			switch ar.State {
-			case types.ApprovalApproved:
+			forRun := ar.DecisionScope == "" || ar.DecisionScope == types.ScopeRun
+			switch {
+			case ar.State == types.ApprovalApproved && forRun:
 				p.hostCalls.update(key, id, apApproved)
 				return p.releaseHostCall(r, host, port, id), nil
-			case types.ApprovalDenied:
+			case ar.State == types.ApprovalApproved:
+				if p.hostCalls.claim(key, id) {
+					return p.releaseHostCall(r, host, port, id), nil
+				}
+				var refusal *hostHoldAnswer // another waiting request took it: this one asks again
+				if id, refusal = p.askHostCall(ctx, scope); refusal != nil {
+					return false, refusal
+				}
+				continue
+			case ar.State == types.ApprovalDenied && ar.DecisionScope == types.ScopeOnce:
+				p.hostCalls.claim(key, id)
+				return false, &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalDenied, id, "declined by a person for this request",
+					fmt.Sprintf(hostCallDeclinedOnce, scope.Method, scope.Path, scope.Host)}
+			case ar.State == types.ApprovalDenied:
 				p.hostCalls.update(key, id, apDenied)
 				return false, declined(id, "declined by a person")
-			case types.ApprovalExpired, types.ApprovalCancelled:
+			case ar.State == types.ApprovalExpired || ar.State == types.ApprovalCancelled:
 				p.hostCalls.update(key, id, apNone)
 				return false, &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalClosed, id, "closed without a decision", hostCallClosedText}
 			}
@@ -252,7 +287,9 @@ func (p *Proxy) releaseHostCall(r *http.Request, host string, port int, id uuid.
 	return true
 }
 
-// raiseHostCall posts the hold's tool_call approval, or rejoins the pending one when rejoin is set.
+// raiseHostCall posts the hold's tool_call approval, or rejoins the pending one when rejoin is set. It says
+// this proxy spends a once answer on the one held request (accepts_once) beside requested_scope, never in it:
+// a control plane from before it reads requested_scope's keys exactly and ignores an unknown key beside it.
 func (p *Proxy) raiseHostCall(ctx context.Context, scope types.HostCallScope, rejoin uuid.UUID) (uuid.UUID, error) {
 	var rejoinID *uuid.UUID
 	if rejoin != uuid.Nil {
@@ -262,7 +299,8 @@ func (p *Proxy) raiseHostCall(ctx context.Context, scope types.HostCallScope, re
 		Kind           types.ApprovalKind  `json:"kind"`
 		RequestedScope types.HostCallScope `json:"requested_scope"`
 		RejoinID       *uuid.UUID          `json:"rejoin_id,omitempty"`
-	}{types.ApprovalToolCall, scope, rejoinID})
+		AcceptsOnce    bool                `json:"accepts_once"`
+	}{types.ApprovalToolCall, scope, rejoinID, true})
 	if err != nil {
 		return uuid.Nil, err
 	}

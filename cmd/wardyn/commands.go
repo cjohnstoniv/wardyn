@@ -692,7 +692,7 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "reason recorded in the audit trail")
 	cmd.Flags().StringVar(&scope, "scope", "",
-		"decision scope: once|run|until|always on an egress_domain approval (default run — today's behavior), or run on a CREDENTIAL approval for a per-run git_pat lease (approve once, re-mintable for the run). Rejected otherwise")
+		"decision scope: once|run|until|always on an egress_domain approval (default run — today's behavior), run on a CREDENTIAL approval for a per-run git_pat lease (approve once, re-mintable for the run), or run, or once on a host rule hold whose proxy accepts once. Rejected otherwise")
 	cmd.Flags().StringVar(&until, "until", "",
 		"expiry for --scope=until: a duration (e.g. 2h) or an RFC3339 timestamp; requires --scope=until, rejected otherwise")
 	return cmd

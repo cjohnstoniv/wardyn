@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A host rule hold can be approved for just the held request: send `decision_scope` `"once"`, or choose **Just this request** in the console. The next request with that host, method and path is held and asked about again, and a decline decided `once` refuses only the waiting request. Under an `egress_domain` deciders rule whose `max_scope` is below `run`, such as `once`, the listed deciders can now decide a hold, which is then decided `once`. Before, no one could. Only a hold raised by a proxy of this release offers `once`: its `requested_scope` carries `accepts_once`. A hold from an earlier proxy is decided for the run as before, and the deciders save warning now says so.
+
 ## [0.10.0-rc.26] — 2026-11-19
 
 ### Security

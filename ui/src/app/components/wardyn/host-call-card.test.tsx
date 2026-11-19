@@ -106,3 +106,38 @@ describe("the host call card (HC-1)", () => {
     expect(DECIDERS_INBOX.DECIDED_BY_LABEL).toBeTruthy();
   });
 });
+
+describe("a host call row whose proxy accepts once", () => {
+  const onceScope: HostCallScope = { ...scope, accepts_once: true };
+
+  it("offers Just this request beside Approve for this run, which then names the run", async () => {
+    const { onApprove } = renderCard(row(onceScope));
+    const card = screen.getByTestId("host-call-card");
+    expect(card).toHaveTextContent(C.ONCE_NOTE);
+    expect(card).toHaveTextContent(C.DENY_NOTE);
+    await userEvent.click(within(card).getByRole("button", { name: C.APPROVE_ONCE }));
+    expect(onApprove).toHaveBeenLastCalledWith("once");
+    await userEvent.click(within(card).getByRole("button", { name: C.APPROVE }));
+    expect(onApprove).toHaveBeenLastCalledWith("run");
+  });
+
+  it("under a deciders rule capped below run, Approve for this run is off and the note says Deny refuses one request", () => {
+    renderCard(row(onceScope, { max_scope: "once" }));
+    const card = screen.getByTestId("host-call-card");
+    expect(within(card).getByRole("button", { name: C.APPROVE })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: C.APPROVE_ONCE })).toBeEnabled();
+    expect(card).toHaveTextContent(C.CAP_NOTE);
+    expect(card).not.toHaveTextContent(C.DENY_NOTE);
+  });
+
+  it("a row without accepts_once offers no once and sends no scope, under a cap too", async () => {
+    const { onApprove } = renderCard(row(scope, { max_scope: "once" }));
+    const card = screen.getByTestId("host-call-card");
+    expect(within(card).queryByRole("button", { name: C.APPROVE_ONCE })).toBeNull();
+    expect(card).not.toHaveTextContent(C.ONCE_NOTE);
+    expect(card).not.toHaveTextContent(C.CAP_NOTE);
+    await userEvent.click(within(card).getByRole("button", { name: C.APPROVE }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onApprove.mock.calls[0][0]).toBeUndefined();
+  });
+});

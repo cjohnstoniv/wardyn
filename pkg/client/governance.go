@@ -151,7 +151,7 @@ type GovernanceChange struct {
 	RunsEndFailed bool   `json:"runs_end_failed,omitempty"`
 	Detail        string `json:"detail,omitempty"`
 	// Warnings is set on a 202's pending_change only: advisory sentences for the proposer, such as a deciders
-	// rule under which no one, security included, can decide a host rule hold. They are not stored with the change.
+	// rule under which a host rule hold is decided once at most. They are not stored with the change.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
