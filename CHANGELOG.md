@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- While the proxy cannot reach Wardyn, it no longer keeps adding a credential that has its own expiry, such as a cloud sign-in, an Azure DevOps token or a kubectl token, after that expiry. Before, it kept adding the last value it had for up to 15 minutes past the expiry. Requests that need it are refused as credential unavailable until Wardyn answers again. A stored key, which has no expiry of its own, is still added for up to 15 minutes past its 10-minute lease; set `WARDYN_PROXY_STALE_CREDENTIAL_MAX` on wardynd (for example `0` or `5m`) to shorten that. Both the proxy and wardynd need this version.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

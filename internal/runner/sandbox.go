@@ -146,6 +146,8 @@ var proxySidecarEnvKnobNames = []string{
 	// The admin's opt-out from model token counting: off stops the proxy metering. A proxy older than
 	// the meter ignores it, so an older pinned proxy is never refused for it.
 	"WARDYN_MODEL_USAGE",
+	// The proxy's shorter bound on serving a last-good injected credential past its lease (inject.go).
+	"WARDYN_PROXY_STALE_CREDENTIAL_MAX",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the

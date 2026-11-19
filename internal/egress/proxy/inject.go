@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -51,8 +52,22 @@ type InjectionConfig struct {
 const injectRefreshMargin = 5 * time.Minute
 
 // lastGoodGrace is how long past expiry an entry keeps serving its last-good header while re-resolve
-// fails transiently; a definitive refusal drops the header at once regardless of grace.
+// fails transiently; a definitive refusal drops the header at once regardless of grace. It never
+// carries a header past the credential's own expiry (injEntry.lastGoodDeadline).
 const lastGoodGrace = 15 * time.Minute
+
+// envStaleCredentialMax shortens lastGoodGrace for this proxy (a duration; 0 serves no last-good
+// value). Unset, unparseable, negative or longer than lastGoodGrace keeps lastGoodGrace.
+const envStaleCredentialMax = "WARDYN_PROXY_STALE_CREDENTIAL_MAX"
+
+// staleCredentialMax is the last-good bound past a lease: lastGoodGrace, or envStaleCredentialMax when shorter.
+func staleCredentialMax() time.Duration {
+	d, err := time.ParseDuration(os.Getenv(envStaleCredentialMax))
+	if err != nil || d < 0 || d > lastGoodGrace {
+		return lastGoodGrace
+	}
+	return d
+}
 
 // lastGoodRetry paces re-resolves during last-good serving, so an outage is asked once per interval, not once per request.
 const lastGoodRetry = 30 * time.Second
@@ -99,6 +114,8 @@ type injEntry struct {
 	// rule is the authored rule, kept for PinPath/PinQuery; immutable after buildInjector, so no lock needed.
 	rule      egress.InjectionRule
 	expiresAt int64 // unix ms
+	// credExpiresAt is ResolvedInjection.CredentialExpiresAt: the credential's own expiry, 0 = none stated.
+	credExpiresAt int64
 	// retryAt is set while last-good is served after a transient failure, or a stale re-resolve
 	// (install). Guarded by reMu.
 	retryAt time.Time
@@ -113,25 +130,40 @@ type injEntry struct {
 // inside injectRefreshMargin (else every request would re-resolve: a mint + secret.read row). Caller holds reMu.
 func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
 	e.header = injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI, placeholder: e.rule.Placeholder}
-	e.expiresAt = resolved.ExpiresAt
+	e.expiresAt, e.credExpiresAt = resolved.ExpiresAt, resolved.CredentialExpiresAt
 	e.retryAt, e.staleJTI = time.Time{}, ""
 	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
-		e.retryAt = now.Add(lastGoodRetry)
+		e.retryAt = earlier(now.Add(lastGoodRetry), e.lastGoodDeadline())
 	}
 }
 
+// lastGoodDeadline is when e stops serving its header without a fresh resolve: staleCredentialMax
+// past the lease, but never past the credential's own stated expiry. Caller holds reMu.
+func (e *injEntry) lastGoodDeadline() time.Time {
+	deadline := time.UnixMilli(e.expiresAt).Add(staleCredentialMax())
+	if e.credExpiresAt != 0 {
+		deadline = earlier(deadline, time.UnixMilli(e.credExpiresAt))
+	}
+	return deadline
+}
+
+// earlier returns the earlier of a and b.
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
 // lastGood reports whether e may keep serving its header after a transient re-resolve failure,
-// while the header isn't already dropped and e is within lastGoodGrace of expiry. Caller holds reMu.
+// while the header isn't already dropped and now is before e.lastGoodDeadline. Caller holds reMu.
 func (e *injEntry) lastGood(err error, now time.Time) bool {
-	deadline := time.UnixMilli(e.expiresAt).Add(lastGoodGrace)
+	deadline := e.lastGoodDeadline()
 	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 || !now.Before(deadline) {
 		return false
 	}
-	// Paced, but never past the grace deadline: the fast path serves while now < retryAt.
-	e.retryAt = now.Add(lastGoodRetry)
-	if e.retryAt.After(deadline) {
-		e.retryAt = deadline
-	}
+	// Paced, but never past the deadline: the fast path serves while now < retryAt.
+	e.retryAt = earlier(now.Add(lastGoodRetry), deadline)
 	return true
 }
 
@@ -190,6 +222,8 @@ func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token
 			requireTLS: r.RequireTLS,
 			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
+			// The boot answer's own expiry, so a lapse before the first re-resolve stops at it too.
+			credExpiresAt: resolved.CredentialExpiresAt,
 		}
 
 		// SECURITY: register in the process-global Registry so every rendering is masked from
@@ -270,10 +304,10 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
 		}
 		if e.lastGood(err, time.Now()) {
-			h := e.header
+			h, until := e.header, e.lastGoodDeadline()
 			e.reMu.Unlock()
 			slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
-				slog.String("host", key), slog.Time("until", time.UnixMilli(e.expiresAt).Add(lastGoodGrace)), slog.Any("err", err))
+				slog.String("host", key), slog.Time("until", until), slog.Any("err", err))
 			return h, true, nil
 		}
 		// Definitive, or grace spent: drop the header now so nothing later serves it as last-good (a 423 counts).

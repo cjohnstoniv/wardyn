@@ -50,7 +50,7 @@ Because the control plane answers each time the proxy asks, it can also renew or
 - A stored key is read again on a short lease ([`internal/api/injection.go#Server.storedKeyExpiry`](../internal/api/injection.go)). An approval-gated grant is read once per approval instead: the proxy holds that value for the rest of the run, and removing the key from the store does not stop it.
 - The proxy asks again from `5m` before the lease ends, on the next request ([`internal/egress/proxy/inject.go#injectRefreshMargin`](../internal/egress/proxy/inject.go)).
 - A definitive refusal, such as a key removed from the store, stops the header at the proxy's next ask. A removed key can therefore still be added for up to `5m` after the removal; a grant held for the run (above) keeps being added until the run ends.
-- While the control plane does not answer (a `503` or a transport error), the proxy keeps adding the last good value for up to `15m` past the lease ([`internal/egress/proxy/inject.go#injEntry.lastGood`](../internal/egress/proxy/inject.go)).
+- While the control plane does not answer (a `503` or a transport error), the proxy keeps adding the last good value for up to `15m` past the lease ([`internal/egress/proxy/inject.go#injEntry.lastGood`](../internal/egress/proxy/inject.go)), never past the credential's own expiry. Stored keys, component secrets and model keys state none. `WARDYN_PROXY_STALE_CREDENTIAL_MAX` shortens the `15m` ([ENV.md](ENV.md)).
 
 ### A value the program reads itself
 

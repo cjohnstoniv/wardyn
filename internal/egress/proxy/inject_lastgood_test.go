@@ -259,3 +259,103 @@ func TestInjector_CallerCancelledResolveLeavesTheEntryAlone(t *testing.T) {
 		t.Errorf("control-plane calls = %d, want 2 (boot + the next caller's re-resolve)", got)
 	}
 }
+
+// ownExpiryControlPlane boots an injector whose credential states its own expiry
+// (CredentialExpiresAt) at own, with its lease ending then too, and answers every
+// re-resolve 503: the control plane is down for the rest of the test.
+func ownExpiryControlPlane(t *testing.T, own time.Time) *injector {
+	t.Helper()
+	var booted atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if booted.CompareAndSwap(false, true) {
+			_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
+				Host: "api.test", Header: "x-api-key", Value: "sk-own-expiry-value", JTI: uuid.NewString(),
+				ExpiresAt: own.UnixMilli(), CredentialExpiresAt: own.UnixMilli(),
+			})
+			return
+		}
+		http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"api.test"}})
+	rules := []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "api.test", Header: "x-api-key"}, GrantID: uuid.New()}}
+	inj, err := buildInjector(context.Background(), srv.URL, newTokenSource("tok"), pol, rules, srv.Client())
+	if err != nil {
+		t.Fatalf("buildInjector: %v", err)
+	}
+	return inj
+}
+
+// With the control plane down, a credential past its own expiry is never served as
+// last-good, though lastGoodGrace past the lease has not run out.
+func TestInjector_LastGoodStopsAtTheCredentialsOwnExpiry(t *testing.T) {
+	inj := ownExpiryControlPlane(t, time.Now().Add(-time.Second))
+	if h, ok, err := inj.resolve("api.test"); err == nil || !ok || h.value != "" {
+		t.Fatalf("resolve past the credential's own expiry = %q ok=%v err=%v, want it refused", h.value, ok, err)
+	}
+}
+
+// Before its own expiry, the same outage still serves it, and the pacing never
+// carries it past that expiry.
+func TestInjector_LastGoodServesUntilTheCredentialsOwnExpiry(t *testing.T) {
+	own := time.Now().Add(time.Minute) // inside injectRefreshMargin, so the first resolve re-asks
+	inj := ownExpiryControlPlane(t, own)
+	if h, _, err := inj.resolve("api.test"); err != nil || h.value != "sk-own-expiry-value" {
+		t.Fatalf("resolve before the credential's own expiry = %q err=%v, want the last-good value", h.value, err)
+	}
+	e := inj.byHost["api.test"]
+	e.reMu.Lock()
+	defer e.reMu.Unlock()
+	outage := injectionStatusError{status: http.StatusServiceUnavailable}
+	if !e.lastGood(outage, own.Add(-lastGoodRetry/2)) || e.retryAt.After(own) {
+		t.Fatalf("an outage just before the credential's own expiry paced to %v, want served and paced no later than %v", e.retryAt, own)
+	}
+	if e.lastGood(outage, own) {
+		t.Fatal("an outage at the credential's own expiry still served the last-good header")
+	}
+}
+
+// An answer already inside its refresh margin is paced like an outage, but never
+// past the credential's own expiry.
+func TestInjector_InstallPacingStopsAtTheCredentialsOwnExpiry(t *testing.T) {
+	var e injEntry
+	now := time.Now()
+	own := now.Add(lastGoodRetry / 3)
+	e.install(types.ResolvedInjection{Header: "x-api-key", Value: "v", ExpiresAt: own.UnixMilli(), CredentialExpiresAt: own.UnixMilli()}, now)
+	if e.retryAt.After(own) {
+		t.Fatalf("install paced to %v, past the credential's own expiry %v", e.retryAt, own)
+	}
+}
+
+// A credential that states no expiry of its own (a stored key) keeps today's
+// bound: past its lease, an outage still serves it.
+func TestInjector_LeaseOnlyCredentialKeepsTheGrace(t *testing.T) {
+	inj, _ := lastGoodControlPlane(t, func() int { return http.StatusServiceUnavailable })
+	inj.byHost["api.test"].expiresAt = time.Now().Add(-time.Second).UnixMilli()
+	if h, _, err := inj.resolve("api.test"); err != nil || h.value != "sk-last-good-value" {
+		t.Fatalf("resolve just past a lease-only credential's lease = %q err=%v, want the last-good value", h.value, err)
+	}
+}
+
+// WARDYN_PROXY_STALE_CREDENTIAL_MAX only ever shortens lastGoodGrace.
+func TestStaleCredentialMax(t *testing.T) {
+	for v, want := range map[string]time.Duration{
+		"": lastGoodGrace, "junk": lastGoodGrace, "-1m": lastGoodGrace, "1h": lastGoodGrace,
+		"0": 0, "5m": 5 * time.Minute, "15m": lastGoodGrace,
+	} {
+		t.Setenv(envStaleCredentialMax, v)
+		if got := staleCredentialMax(); got != want {
+			t.Errorf("%s=%q: bound = %v, want %v", envStaleCredentialMax, v, got, want)
+		}
+	}
+}
+
+// Set to 0, a lease-only credential past its lease is refused during an outage.
+func TestInjector_StaleCredentialMaxZeroServesNoLastGood(t *testing.T) {
+	t.Setenv(envStaleCredentialMax, "0")
+	inj, _ := lastGoodControlPlane(t, func() int { return http.StatusServiceUnavailable })
+	inj.byHost["api.test"].expiresAt = time.Now().Add(-time.Second).UnixMilli()
+	if h, _, err := inj.resolve("api.test"); err == nil {
+		t.Fatalf("resolve past the lease with %s=0 served %q, want an error", envStaleCredentialMax, h.value)
+	}
+}
