@@ -169,7 +169,9 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// request in such a spelling, and config load a configured host in one
 		// (refuseIPSpellingEntries); this is the backstop for a host a caller
 		// hands here without evaluate. Canonical literals are NOT re-vetted
-		// here since evaluate has already decided them.
+		// here since evaluate has already decided them: splitHostPort takes
+		// an IPv6 authority's brackets off with or without a port, and step 0
+		// reads a host still in brackets as its address (trimLiteralHost).
 		if ip := nonCanonicalLiteralIP(host); ip != nil {
 			if kind, why := isBlockedIP(ip); kind != blockNone {
 				return "", "", &hostBlockedError{kind: kind,
