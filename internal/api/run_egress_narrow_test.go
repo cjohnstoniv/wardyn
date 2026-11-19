@@ -1219,6 +1219,7 @@ func TestNarrowEdit_RunnerAnswerUnprovedFails(t *testing.T) {
 func TestNarrowEdit_RunnerNotSentUndoes(t *testing.T) {
 	f := newRunnerNarrowFixture(t, runnerNarrows)
 	f.nr.narrowErr = fmt.Errorf("%w: %w", runner.ErrNarrowNotSent, runner.ErrRunnerOffline)
+	stops := f.lr.proxyStopCount() // the fixture's lapsed-token sweep (newReviveFixture) already cut the proxy once
 	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusBadGateway, reasonReviveProxyKeptCurrent)
 	if want := fmt.Sprintf(narrowRunnerAwayMsg, "build-k8s"); !strings.Contains(w.Body.String(), want) {
 		t.Errorf("answer %s; want %q, which names the runner", w.Body.String(), want)
@@ -1229,7 +1230,7 @@ func TestNarrowEdit_RunnerNotSentUndoes(t *testing.T) {
 	if got := f.rb.get(f.run.ID, 2).State; got != types.ProxyStartAbandoned {
 		t.Errorf("the edit's start = %s, want abandoned", got)
 	}
-	if n := f.lr.proxyStopCount(); n != 0 {
+	if n := f.lr.proxyStopCount() - stops; n != 0 {
 		t.Errorf("proxy stops = %d, want none: nothing reached the proxy", n)
 	}
 }
