@@ -29,8 +29,9 @@ func isHostCallRow(ap types.ApprovalRequest) bool {
 		types.IsHostCallScope(ap.RequestedScope)
 }
 
-// hostCallScopeKeys are the keys of types.HostCallScope. Each must appear at most once, spelled exactly
-// so, and no other key may appear.
+// hostCallScopeKeys are the keys of types.HostCallScope a raise may write. Each must appear at most once,
+// spelled exactly so, and no other key may appear: accepts_once is the control plane's to write
+// (hostCallAcceptingOnce), from the raise's own field beside requested_scope.
 var hostCallScopeKeys = []string{"host", "method", "path", "call_sha256", "hold_seconds"}
 
 // hostCallKeysPresent reports whether scope is an object with a top-level key that folds to host, one
@@ -103,19 +104,51 @@ func (s *Server) refuseBadHostCallScope(w http.ResponseWriter, r *http.Request, 
 	return nil, true
 }
 
-// hostCallDecisionRule is decide's scope rule for a host rule hold. The proxy keeps the answer for the rest
-// of the run (internal/egress/proxy/host_call_hold.go), so the row says so: a bodyless decision or "run"
-// stores "run", and any other scope is refused. It runs before the deciders cap (capScopeToRule), so a
-// unit rule whose max_scope is below run refuses the decision (decision_scope_above_rule). isHost reports
-// whether the row is one; ok=false means the refusal is written.
+// hostCallAcceptingOnce is a validated host rule hold scope (refuseBadHostCallScope's answer) stamped
+// accepts_once, for a raise whose proxy said it spends a "once" answer on the one held request; ok=false when
+// scope is not a host rule hold's. The stamp rides in the stored scope, so the console reads it, and a raise
+// without it (a proxy from before it) never folds into a row with it (approval.findPendingDup hashes the scope).
+func hostCallAcceptingOnce(scope json.RawMessage) (json.RawMessage, bool) {
+	var sc types.HostCallScope
+	if !hostCallKeysPresent(scope) || json.Unmarshal(scope, &sc) != nil {
+		return nil, false
+	}
+	sc.AcceptsOnce = true
+	out, err := json.Marshal(sc)
+	return out, err == nil
+}
+
+// hostCallAcceptsOnce reports whether ap is a host rule hold whose proxy spends a "once" answer on the one
+// held request (types.HostCallScope.AcceptsOnce).
+func hostCallAcceptsOnce(ap types.ApprovalRequest) bool {
+	var sc types.HostCallScope
+	return isHostCallRow(ap) && json.Unmarshal(ap.RequestedScope, &sc) == nil && sc.AcceptsOnce
+}
+
+// hostCallDecisionRule is decide's scope rule for a host rule hold. The proxy keeps a "run" answer for the
+// rest of the run (internal/egress/proxy/host_call_hold.go), so the row says so: "run" stores "run". A row
+// whose proxy accepts once (hostCallAcceptsOnce) also takes "once", which answers the one held request, and a
+// bodyless decision on it is left to the deciders cap: once under a rule whose max_scope is below run, as for
+// an egress_domain request (capScopeToRule), else run (decide). On any other row a bodyless decision stores
+// "run" here, before the cap, so a rule whose max_scope is below run refuses it (decision_scope_above_rule):
+// its proxy would read "once" as the run. Any other scope is refused. isHost reports whether the row is one;
+// ok=false means the refusal is written.
 func hostCallDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope types.ApprovalScope) (types.ApprovalScope, bool, bool) {
 	if !isHostCallRow(ap) {
 		return scope, false, true
 	}
-	if scope == "" || scope == types.ScopeRun {
+	once := hostCallAcceptsOnce(ap)
+	switch {
+	case once && (scope == "" || scope == types.ScopeOnce):
+		return scope, true, true
+	case scope == "" || scope == types.ScopeRun:
 		return types.ScopeRun, true, true
+	case once:
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
+			`A host request approval answers the one held request, or that host, method and path for the rest of the run: send no decision_scope, "once" or "run"`)
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
+			`A host request approval answers that host, method and path for the rest of the run: send no decision_scope, or "run"`)
 	}
-	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
-		`A host request approval answers that host, method and path for the rest of the run: send no decision_scope, or "run"`)
 	return scope, true, false
 }

@@ -7,9 +7,11 @@
 // the request and asks a person). Built on KubeCallCard's parts and mounted beside it.
 //
 // SCOPE IS THE WHOLE RUN: approving lets this method and path through on this host for the rest of the run, so the
-// chip, the button and the blast radius say "this run", never "once". The scope has no body (the query and body are not covered by the key), so the card shows no body and no fingerprint.
+// chip, the button and the blast radius say "this run", except where only once is possible. The scope has no body (the query and body are not covered by the key), so the card shows no body and no fingerprint.
 //
-// NO SCOPE MENU: Approve and Deny call straight through.
+// NO SCOPE MENU: Approve and Deny call straight through. A row whose proxy accepts once (requested_scope.accepts_once)
+// adds "Just this request", which approves once; its Approve then names the run, and under a unit deciders rule whose
+// max_scope is below run it is off. A row without accepts_once is decided as before: its proxy reads every yes as the run.
 import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, HostCallScope } from "../../lib/types";
@@ -36,10 +38,17 @@ export function HostCallCard({
   canDecide: boolean;
   run: Pick<AgentRun, "state"> | null | undefined;
   busy: "approve" | "deny" | null;
-  onApprove: () => void;
+  /** "run" or "once" on a row whose proxy accepts once; no scope on any other row. */
+  onApprove: (scope?: "run" | "once") => void;
   onDeny: () => void;
 }) {
   const scope = item.requested_scope;
+  const acceptsOnce = scope.accepts_once === true;
+  // The server decides such a row once at most under a cap below run: run is refused, a bodyless Deny is once.
+  const capped = acceptsOnce && !!item.max_scope && item.max_scope !== "run";
+  const [picked, setPicked] = React.useState<"run" | "once">("run");
+  const what = capped ? C.WHAT_ONE : acceptsOnce ? C.WHAT_EITHER : C.WHAT;
+  const heldExpired = capped ? C.HELD_EXPIRED_ONE : acceptsOnce ? C.HELD_EXPIRED_EITHER : C.HELD_EXPIRED;
   const runEnded = !!run && isTerminalRunState(run.state);
   const host = escapeUnsafeRunes(scope.host);
   const method = escapeUnsafeRunes(scope.method);
@@ -63,7 +72,7 @@ export function HostCallCard({
       <div className="flex flex-wrap items-center gap-2">
         <ApprovalKindChip kind="tool_call" />
         <span className="text-sm font-semibold text-foreground">{C.TITLE}</span>
-        <Chip tone="neutral">{APPROVAL_SCOPE_LABEL.run}</Chip>
+        <Chip tone="neutral">{capped ? APPROVAL_SCOPE_LABEL.once : APPROVAL_SCOPE_LABEL.run}</Chip>
       </div>
       <DecidedByLine item={item} />
       <SecondPersonLine item={item} />
@@ -79,7 +88,7 @@ export function HostCallCard({
 
       <div className="mt-3 space-y-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm leading-relaxed">
         <p className="min-w-0 break-words text-foreground">
-          <span className="font-semibold">{APPROVAL_BANNER_LABEL.what}</span> {C.WHAT(method, path, host)}
+          <span className="font-semibold">{APPROVAL_BANNER_LABEL.what}</span> {what(method, path, host)}
         </p>
         <p className="text-muted-foreground">
           <span className="font-semibold text-foreground/80">{APPROVAL_BANNER_LABEL.blast}</span> {C.BLAST}
@@ -91,9 +100,30 @@ export function HostCallCard({
           <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : canDecide ? (
           <>
-            <Button size="sm" variant="info" disabled={busy !== null} onClick={onApprove}>
-              {busy === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {C.APPROVE}
+            <Button
+              size="sm"
+              variant="info"
+              disabled={busy !== null || capped}
+              onClick={() => {
+                setPicked("run");
+                onApprove(acceptsOnce ? "run" : undefined);
+              }}
+            >
+              {busy === "approve" && picked === "run" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {C.APPROVE}
             </Button>
+            {acceptsOnce && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy !== null}
+                onClick={() => {
+                  setPicked("once");
+                  onApprove("once");
+                }}
+              >
+                {busy === "approve" && picked === "once" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {C.APPROVE_ONCE}
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={onDeny}>
               {busy === "deny" ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />} {MCP.DENY}
             </Button>
@@ -106,8 +136,9 @@ export function HostCallCard({
         </span>
       </div>
 
-      {!runEnded && hasDeadline && <p className="mt-2.5 text-xs text-muted-foreground">{held ? C.HELD_NOTE : C.HELD_EXPIRED}</p>}
-      {!runEnded && canDecide && <p className="mt-1 text-xs text-muted-foreground">{C.DENY_NOTE}</p>}
+      {!runEnded && hasDeadline && <p className="mt-2.5 text-xs text-muted-foreground">{held ? C.HELD_NOTE : heldExpired}</p>}
+      {!runEnded && canDecide && acceptsOnce && <p className="mt-1 text-xs text-muted-foreground">{C.ONCE_NOTE}</p>}
+      {!runEnded && canDecide && <p className="mt-1 text-xs text-muted-foreground">{capped ? C.CAP_NOTE : C.DENY_NOTE}</p>}
     </div>
   );
 }

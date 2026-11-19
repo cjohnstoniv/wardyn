@@ -108,8 +108,8 @@ type UnitDeciders struct {
 	UpdatedBy string        `json:"updated_by,omitempty"`
 	UpdatedAt time.Time     `json:"updated_at,omitzero"`
 	// Warnings is advisory text a save's 200 answer carries for the saver, and never refuses a save:
-	// today, an egress_domain rule whose max_scope leaves no one, security included, able to decide a host
-	// rule hold.
+	// today, an egress_domain rule whose max_scope is below run, under which a host rule hold is decided
+	// once at most, and one from an earlier release's proxy by no one, security included.
 	// Stored rules carry none.
 	Warnings []string `json:"warnings,omitempty"`
 }

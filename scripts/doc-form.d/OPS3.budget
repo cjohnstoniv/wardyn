@@ -144,7 +144,7 @@ docs/operations/governance-writes.md=4702 share=35 # 4702 measured (+39: an appr
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
-docs/operations/member-runs.md=1107 share=35 # 1107 measured (+28: which tool_call requests take a scope); earlier: -7, measured: the onboarding-note citation removed
+docs/operations/member-runs.md=1117 share=35 # 1117 measured (+10: a host request also takes once when its row carries accepts_once); earlier: 1107 measured (+28: which tool_call requests take a scope); earlier: -7, measured: the onboarding-note citation removed
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.

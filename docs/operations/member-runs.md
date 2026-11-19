@@ -9,7 +9,7 @@ an interactive first run still asks the operator.
 
 **A `credential` decision carries one scope: `run` — the per-run credential lease.**
 
-- Every other scope on a `credential` approval is a `400`. A `tool_call` approval takes none, except the requests that set their own: an MCP call and a kubectl change take only `once`, a host request only `run`, and an Azure DevOps access request `once` or `run`.
+- Every other scope on a `credential` approval is a `400`. A `tool_call` approval takes none, except the requests that set their own: an MCP call and a kubectl change take only `once`, a host request `run`, or also `once` when its row carries `accepts_once` ([host rule hold](../POLICIES.md#a-host-rule-hold-effect-hold)), and an Azure DevOps access request `once` or `run`.
 - `run` exists because a `git_pat` installs a *standing* credential helper that git invokes on every operation.
 - Approving with `decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision re-mintable for the rest of the run.
 - Three things bound it:

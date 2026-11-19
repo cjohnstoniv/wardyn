@@ -674,11 +674,44 @@ type internalApprovalRequest struct {
 	// stamps that row (approval.Rejoin) instead of creating or deduplicating one. A previous-release
 	// sidecar sends none.
 	RejoinID *uuid.UUID `json:"rejoin_id"`
+	// AcceptsOnce says the raising proxy spends a "once" answer to a host rule hold on the one held request;
+	// the row's scope then carries accepts_once (hostCallAcceptingOnce). It sits outside requested_scope, whose
+	// keys a previous-release control plane checks exactly, because that one ignores an unknown key here. A
+	// previous-release proxy sends none. Refused on any other raise.
+	AcceptsOnce bool `json:"accepts_once"`
 }
 
 // approvalRejoiner is the optional ApprovalService method behind a raise's rejoin_id.
 type approvalRejoiner interface {
 	Rejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
+}
+
+// decodeInternalApprovalRaise reads and checks a raise body. On false it has already answered: a bad call scope
+// with its own reason, anything else with 400 internal_approval_request_invalid.
+func (s *Server) decodeInternalApprovalRaise(w http.ResponseWriter, r *http.Request) (internalApprovalRequest, bool) {
+	var body internalApprovalRequest
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(raw)).Decode(&body) // the first value
+	}
+	if err == nil {
+		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
+		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
+			return body, false
+		}
+		// After the call scope's own readers, which answer a bad call scope with their own reason and
+		// auth.fail row, also when text follows it: then one value, with no key written twice.
+		err = types.DecodeOneJSON(bytes.NewReader(raw), new(internalApprovalRequest), false)
+	}
+	stamped := true // accepts_once is refused on any raise but a host rule hold's
+	if err == nil && body.AcceptsOnce {
+		body.RequestedScope, stamped = hostCallAcceptingOnce(body.RequestedScope)
+	}
+	if err != nil || !stamped || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
+		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+		return body, false
+	}
+	return body, true
 }
 
 // handleInternalRequestApproval raises (or dedups to an existing) approval on
@@ -690,22 +723,8 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
-	var body internalApprovalRequest
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody))
-	if err == nil {
-		err = json.NewDecoder(bytes.NewReader(raw)).Decode(&body) // the first value
-	}
-	if err == nil {
-		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
-		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
-			return
-		}
-		// After the call scope's own readers, which answer a bad call scope with their own reason and
-		// auth.fail row, also when text follows it: then one value, with no key written twice.
-		err = types.DecodeOneJSON(bytes.NewReader(raw), new(internalApprovalRequest), false)
-	}
-	if err != nil || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
-		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+	body, ok := s.decodeInternalApprovalRaise(w, r)
+	if !ok {
 		return
 	}
 	switch body.Kind {

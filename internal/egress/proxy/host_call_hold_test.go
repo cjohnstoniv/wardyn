@@ -26,9 +26,10 @@ import (
 )
 
 type hcRow struct {
-	id    uuid.UUID
-	scope types.HostCallScope
-	state types.ApprovalState
+	id      uuid.UUID
+	scope   types.HostCallScope
+	state   types.ApprovalState
+	decided types.ApprovalScope // the decision_scope a poll answers with
 }
 
 // hcCP is a control plane for host rule holds: it checks every raised scope as the real route does
@@ -42,6 +43,8 @@ type hcCP struct {
 	raises     int
 	polls      int
 	newState   types.ApprovalState // the state a new row starts in; PENDING when empty
+	newScope   types.ApprovalScope // the decision_scope a new row starts with
+	bodies     [][]byte            // every raise body, as sent
 	refuse     int                 // when set, every raise is answered with this status
 	pollStatus int                 // when set, every poll is answered with this status
 	badScopes  int
@@ -60,7 +63,9 @@ func newHCCP(t *testing.T, p *Proxy) *hcCP {
 				RequestedScope json.RawMessage    `json:"requested_scope"`
 				RejoinID       *uuid.UUID         `json:"rejoin_id"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			raw, _ := io.ReadAll(r.Body)
+			c.bodies = append(c.bodies, raw)
+			_ = json.Unmarshal(raw, &body)
 			var scope types.HostCallScope
 			dec := json.NewDecoder(bytes.NewReader(body.RequestedScope))
 			dec.DisallowUnknownFields()
@@ -90,7 +95,7 @@ func newHCCP(t *testing.T, p *Proxy) *hcCP {
 					return
 				}
 			}
-			row := &hcRow{id: uuid.New(), scope: scope, state: cmpState(c.newState)}
+			row := &hcRow{id: uuid.New(), scope: scope, state: cmpState(c.newState), decided: c.newScope}
 			c.rows = append(c.rows, row)
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: row.id, State: types.ApprovalPending})
@@ -104,7 +109,7 @@ func newHCCP(t *testing.T, p *Proxy) *hcCP {
 			}
 			for _, row := range c.rows {
 				if r.URL.Path == "/api/v1/internal/approvals/"+row.id.String() {
-					_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: row.id, State: row.state})
+					_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: row.id, State: row.state, DecisionScope: row.decided})
 					return
 				}
 			}
