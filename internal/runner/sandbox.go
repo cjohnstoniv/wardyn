@@ -47,22 +47,26 @@ const (
 // REPLACE the client trust store. Keep in lockstep with install_mitm_ca in
 // deploy/images/common/agent-run-lib.sh. A runner's own bundle mounted at
 // TrustedCAMountPath is appended after the PEM. No-op when WARDYN_MITM_CA_PEM is
-// unset and nothing is mounted there. The idle loop is TERM-aware: as PID 1, a bare `sleep` ignores
-// SIGTERM and would wait out the full kill timeout; this exits 143/130, not
-// 0, so an out-of-band stop still reads as a signal kill downstream.
+// unset and nothing is mounted there. Each file is written to a temp file in the same
+// directory and renamed into place, mitm-ca.pem first and ca-bundle.pem last, so a
+// reader (ExecCAWait, a TLS client) never sees a partial file. The idle loop is
+// TERM-aware: as PID 1, a bare `sleep` ignores SIGTERM and would wait out the full
+// kill timeout; this exits 143/130, not 0, so an out-of-band stop still reads as a
+// signal kill downstream.
 const AgentIdleScript = `d=/tmp/wardyn
 t=` + TrustedCAMountPath + `
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s "$t" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
-  { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
+  n="$d/.ca-tmp.$$"
+  { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$n" && chmod 0644 "$n" && mv -f "$n" "$d/mitm-ca.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
   sys=""
   for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
     [ -f "$c" ] && sys="$c" && break
   done
   if [ -n "$sys" ]; then
-    { cat "$sys" "$d/mitm-ca.pem" > "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+    { cat "$sys" "$d/mitm-ca.pem" > "$n" && chmod 0644 "$n" && mv -f "$n" "$d/ca-bundle.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
   else
-    { cp "$d/mitm-ca.pem" "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+    { cp "$d/mitm-ca.pem" "$n" && chmod 0644 "$n" && mv -f "$n" "$d/ca-bundle.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
     echo "wardyn: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
   fi
   if command -v update-ca-certificates >/dev/null 2>&1; then

@@ -102,3 +102,35 @@ func TestExecCAWait_RefusesWhenFilesNeverCome(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q, stderr %q; want 1, no output, the refusal", code, out, errOut)
 	}
 }
+
+// TestAgentIdleScript_RenamesCAFilesIntoPlace: the idle script leaves exactly the two CA files, whole,
+// and no temp file beside them (each is written to a temp file and renamed into place).
+func TestAgentIdleScript_RenamesCAFilesIntoPlace(t *testing.T) {
+	dir := t.TempDir()
+	script := strings.ReplaceAll(AgentIdleScript, "/tmp/wardyn", dir)
+	script = strings.ReplaceAll(script, TrustedCAMountPath, filepath.Join(dir, "no-trusted-ca"))
+	script = strings.ReplaceAll(script, "command -v update-ca-certificates", "false") // never touch the host's store
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "WARDYN_MITM_CA_PEM=RUN-CA"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start idle script: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
+	bundle := filepath.Join(dir, "ca-bundle.pem")
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(bundle); err == nil {
+			break
+		}
+	}
+	ents, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	ca, _ := os.ReadFile(filepath.Join(dir, "mitm-ca.pem"))
+	b, _ := os.ReadFile(bundle)
+	if strings.Join(names, ",") != "ca-bundle.pem,mitm-ca.pem" || string(ca) != "RUN-CA\n" || !strings.HasSuffix(string(b), "RUN-CA\n") {
+		t.Fatalf("dir = %v, mitm-ca.pem = %q, bundle ends %q; want only the two files, whole", names, ca, b[max(0, len(b)-20):])
+	}
+}
