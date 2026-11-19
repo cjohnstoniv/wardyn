@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -261,4 +263,33 @@ func TestViaOrg_SlotOrderKeepsTheNewerEngine(t *testing.T) {
 			t.Errorf("viaOrgSlotNewer(%+v, %+v) = %v, want %v", tc.read, tc.built, got, tc.want)
 		}
 	}
+}
+
+// A restart that is not an edit releases this replica's cached via_org engine before it answers, as an edit does
+// (TestEgressEdit_RetiresTheViaOrgEngineBeforeTheAnswer): the restart stored the run's config in its generation's
+// write, with the owner's walls re-applied, so no engine built before it serves again.
+func TestViaOrg_RestartRetiresThisReplicasEngineBeforeTheAnswer(t *testing.T) {
+	f := newEgressEditFixture(t)
+	eng, err := proxy.NewViaOrgEngine(context.Background(),
+		&proxy.Config{RunID: f.run.ID, ControlPlaneURL: "http://127.0.0.1:9", RunToken: "run-token", DecisionBufferSize: 16},
+		proxy.ViaOrgEngineOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vr := &viaOrgRun{id: f.run.ID, runner: uuid.New(), done: make(chan struct{}), streams: map[*viaOrgStream]struct{}{},
+		bytes: new(atomic.Int64), engine: &viaOrgGen{engine: eng}}
+	f.srv.viaOrg.mu.Lock()
+	f.srv.viaOrg.runs = map[uuid.UUID]*viaOrgRun{f.run.ID: vr}
+	f.srv.viaOrg.mu.Unlock()
+	f.confirmEachReplace(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: %d, want 200", code)
+	}
+	vr.mu.Lock()
+	retired := vr.engine == nil
+	vr.mu.Unlock()
+	if !retired {
+		t.Fatal("the cached via_org engine built before the restart is still served after the restart's 200")
+	}
+	waitFor(t, "the released engine to close", eng.Closed)
 }

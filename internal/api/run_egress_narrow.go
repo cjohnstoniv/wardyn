@@ -459,6 +459,9 @@ func (ne *narrowEdit) write(ctx, sctx context.Context, policy types.RunPolicySpe
 			loggedMsg(ctx, "the edit's policy could not be recorded, so nothing changed", rerr))
 	}
 	ne.gen = gen
+	if gen > 0 {
+		s.releaseViaOrgEngineOf(ne.run.ID) // as a revive does: no engine built from the earlier config serves again here
+	}
 	jti := firstOr(rd.ps.LiveTokenIDs, rd.active.JTI)
 	err = ne.begin(sctx, jti)
 	if err == nil {
