@@ -1,8 +1,24 @@
+## Intermediate tags 0.9.4 through 0.10.0-rc.26, not individually re-scanned (still pullable)
+
+The images above were published at 0.9.4 and at every 0.10.0 release candidate,
+and those tags are still pullable, but the tables above are the 0.10.0 scan.
+`agent-novnc-signin` was first published at 0.10.0-rc.1;
+the other images were published at each of these tags. The previous tables (the
+0.9.4 scan, with a pre-publication scan of `agent-novnc-signin`) are recorded at
+the v0.10.0 tag (`git show v0.10.0:deploy/images/THIRD-PARTY-GPL.md`). The
+corresponding-source obligation for those tags is discharged the same way as for
+the tags above: `https://snapshot.debian.org` pinned to each package's own
+version, or `apt-get source <package>` on a trixie host, which that earlier
+record and the tables above are enough to reconstruct. The offer for them stands
+while the tags remain pullable, and for three years after the last copy is
+conveyed.
+
 ## Intermediate tags 0.7.8 through 0.9.3, not individually re-scanned (still pullable)
 
 The images above were published at every tag from 0.7.8 through 0.9.3, and those
-tags are still pullable, but the tables above are the 0.9.4 scan. The previous
-tables (the 0.8.2 and 0.8.3 scans, the last full scans before 0.9.4) are
+tags are still pullable. The 0.9.4 scan that covered them is recorded at the
+v0.10.0 tag (see the section above). The tables before it (the 0.8.2 and 0.8.3
+scans, the last full scans before 0.9.4) are
 recorded at commit `1cf4815a3` (`git show
 1cf4815a3:deploy/images/THIRD-PARTY-GPL.md`). The corresponding-source
 obligation for those tags is discharged the same way as for the tags above:
