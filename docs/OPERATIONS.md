@@ -2767,7 +2767,7 @@ The residuals an operator should plan for:
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
 
 - `internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space.
-- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
+- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), Azure's WireServer `168.63.129.16` (every port), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
 - No `internal_hosts`, `allowed_domains` or `egress_redirects` entry reaches it, in this run or a new one.
 - The refusal's body names the class and prescribes nothing: there is nothing in site config to change.
 - An agent resolving a name into that space is misconfigured or probing the host's metadata service.

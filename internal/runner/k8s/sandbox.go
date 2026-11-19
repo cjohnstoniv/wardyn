@@ -713,11 +713,15 @@ func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString { return &v }
 // compromised proxy can't reach node/instance credentials.
 const cloudMetadataAddr = "169.254.169.254/32"
 
-// notMetadataIPBlock is 0.0.0.0/0 except the cloud-metadata address, shared
+// azureWireServerAddr is Azure's WireServer and host agent plugin address, carved out with
+// cloudMetadataAddr. It also serves Azure DNS, which the proxy reaches only through CoreDNS.
+const azureWireServerAddr = "168.63.129.16/32"
+
+// notMetadataIPBlock is 0.0.0.0/0 except the cloud-metadata addresses, shared
 // by the proxy netpol's DNS and general egress rules so they can't drift
 // apart. IPv4-only.
 func notMetadataIPBlock() *networkingv1.IPBlock {
-	return &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{cloudMetadataAddr}}
+	return &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{cloudMetadataAddr, azureWireServerAddr}}
 }
 
 // clusterDNSPeer selects the cluster DNS pods: CoreDNS in kube-system, which

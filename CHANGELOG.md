@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- Azure's WireServer address `168.63.129.16` is now refused like the `169.254.169.254` metadata address, on every port including its host agent plugin port 32526: a sandbox can no longer reach it by address or by a host name that resolves to it, and on Kubernetes the proxy pod's NetworkPolicy excludes it too.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

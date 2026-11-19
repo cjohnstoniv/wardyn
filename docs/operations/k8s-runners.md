@@ -158,7 +158,7 @@
 
 - Sandbox pods have no ServiceAccount token mounted, and a pod can name only a ServiceAccount of its own namespace.
 - With `apiServer.peers` empty, runnerd may reach TCP 443 and 6443 at any address, including the pod network. Set `ipBlock` peers for the control plane.
-- With `egress.orgCIDRs` empty, port `relay.servicePort` is open to `0.0.0.0/0` except RFC 1918, `100.64.0.0/10` and `169.254.0.0/16`.
+- With `egress.orgCIDRs` empty, port `relay.servicePort` is open to `0.0.0.0/0` except RFC 1918, `100.64.0.0/10`, `169.254.0.0/16` and Azure's WireServer `168.63.129.16/32`.
 - `pods: patch` can also change a running pod's image. It adds no authority beyond the pod create, exec and NetworkPolicy create the runner already holds in that namespace.
 
 ### RBAC order

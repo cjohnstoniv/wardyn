@@ -561,7 +561,7 @@ is not the deployment described above.**
 | Prompt-injected agent reads resident secrets | Credentials stay out of the sandbox wherever Wardyn can broker them, with a named, bounded exception list — **[§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete set**. | B1, B2, B4 |
 | | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with named unmasked paths (screen recordings, the `-out-dir` fallback, SSH exec/SFTP/direct-tcpip, REST exec) and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the run's network has no route off the host, so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
-| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
+| Direct-IP / non-HTTP / metadata-server (169.254.169.254, Azure WireServer 168.63.129.16) egress | Closed twice over, independently: **L0 [shipped]** (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟢 **[shipped on Kubernetes]**, 🟡 **[Docker planned]**, adds depth; the metadata block does not wait on it | |
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[partial]**: the DECISION half ships — operator-authored `tool_rules` resolved proxy-side by `decideByToolRules`, the in-sandbox `cmd/wardyn-toolgate` relay, and a `tool_call` approval for anything on `hold`. | L3, B3 |
 | | But the relay is cooperative, so the EGRESS-interception half that would close this class is still planned and the class stays open below L2. | |
@@ -622,7 +622,7 @@ is not the deployment described above.**
 ### L1 default-deny
 
 - Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata
-  `169.254.169.254` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
+  `169.254.169.254` and Azure's WireServer `168.63.129.16` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
 - A non-enforcing CNI refuses boot **unless the operator sets `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1`
   or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`; both are disclosed in
   [§5's "Operator overrides that boot past a fail-closed gate"](#operator-overrides-that-boot-past-a-fail-closed-gate)**.
@@ -2332,7 +2332,7 @@ These risks are **not closed by v1 Wardyn**.
 
 43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops saying otherwise.**
     - Only the private/reserved-range class (RFC1918/ULA/CGNAT) is liftable, and only through `internal_hosts`.
-    - Loopback, link-local (including the `169.254.169.254` metadata address), multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
+    - Loopback, link-local (including the `169.254.169.254` metadata address), Azure's WireServer `168.63.129.16` on every port, multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
     - The guard class now rides out of address vetting into the denial body.
     - And the never-liftable classes get their own sentence with NO site-config remedy and NO lifetime clause, because there is nothing to change and a new run would change nothing.
     - Both variants keep rule source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are final.
