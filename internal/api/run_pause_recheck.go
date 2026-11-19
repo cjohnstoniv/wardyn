@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,14 +26,15 @@ func (e *errResumeRefused) Error() string { return e.ref.msg }
 const resumeServiceInactiveMsg = "The service identity that started this run is suspended or retired, so the run was ended"
 
 // resumeRefusal re-checks, before a paused run is thawed, what a pause may have outlived: the owner's
-// identity, as a pool start re-checks it (queueOwnerLive; serviceRunLive for a service identity), and
-// the authority an extension of the run's end needs (extendRefusal): the captured profile, its
-// placement walls, the launch-door capabilities and the model provider. The capabilities are asked only
-// of the owner's own session (resumeAuthorityRefusal). An owner who is deactivated or suspended, or a
-// service identity that is suspended or retired, ends the run through the kill cascade. Authority the
-// owner no longer holds leaves the run paused and refused, with one denied row per pause
-// (pauseClocks.firstDenial). A check that cannot be answered, within one heldStoreCallBound for all its
-// reads (the run's lock is held), refuses with 503 and writes no row; the next resume asks again.
+// identity (IdentityBlocked for a person; for a service identity its record, its sponsorship and its
+// sponsor's IdentityBlocked; no session revoke is asked, resumeOwnerLive), and the authority an
+// extension of the run's end needs (extendRefusal): the captured profile, its placement walls, the
+// launch-door capabilities and the model provider. The capabilities are asked only of the owner's own
+// session (resumeAuthorityRefusal). An owner who is deactivated or suspended, or a service identity
+// that is suspended or retired, ends the run through the kill cascade. Authority the owner no longer
+// holds leaves the run paused and refused, with one denied row per pause (pauseClocks.firstDenial). A
+// check that cannot be answered, within one heldStoreCallBound for all its reads (the run's lock is
+// held), refuses with 503 and writes no row; the next resume asks again.
 func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal string, data map[string]any) error {
 	live, ref := s.resumeRecheck(ctx, run)
 	dead := !live && ref == nil // the owner was read and is not live; an unreadable check is a 503 ref
@@ -138,25 +140,50 @@ func (c *pauseClocks) dropDenial(id uuid.UUID) {
 }
 
 // resumeOwnerLive reports whether the run's owner may still act: a person whose identity is not
-// deactivated or suspended (IdentityBlocked), a service identity neither suspended nor retired and with
-// a live sponsor (serviceRunLive). A revoke of a person's sessions is not asked: it signs them out, and
-// their running runs go on (docs/operations/delegation.md). An operator-owned run (the admin token,
-// local mode) has no one to revoke.
+// deactivated or suspended (IdentityBlocked), or a service identity that resumeServiceLive finds live.
+// A revoke of sessions, the owner's or a sponsor's, is not asked: it signs them out, and their running
+// runs go on (docs/operations/delegation.md). An operator-owned run (the admin token, local mode) has no
+// one to revoke.
 func (s *Server) resumeOwnerLive(ctx context.Context, run types.AgentRun) (bool, error) {
 	if run.OperatorOwned {
 		return true, nil
 	}
-	if isServicePrincipal(run.CreatedBy) {
-		live, err := s.serviceRunLive(ctx, run)
-		if errors.Is(err, store.ErrNotFound) {
-			return false, nil
-		}
-		return live, err
+	if name, ok := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix); ok {
+		return s.resumeServiceLive(ctx, run, name)
 	}
+	return s.resumeNotBlocked(ctx, run.CreatedBy)
+}
+
+// resumeServiceLive is serviceRunLive's identity and sponsor reads without its session checks: the
+// service identity is neither suspended nor retired, is still sponsored by the person who sponsored it
+// when the run started (ServiceStillSponsored), and neither it nor that sponsor is blocked.
+func (s *Server) resumeServiceLive(ctx context.Context, run types.AgentRun, name string) (bool, error) {
+	si, err := s.serviceRecord(ctx, name)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil || !si.Usable():
+		return false, err
+	}
+	// serviceRecord answered, so the store is a ServiceIdentityStore.
+	switch still, err := s.cfg.Store.(store.ServiceIdentityStore).ServiceStillSponsored(ctx, si.Name, si.Sponsor, run.CreatedAt); {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil || !still:
+		return false, err
+	}
+	if live, err := s.resumeNotBlocked(ctx, run.CreatedBy); err != nil || !live {
+		return false, err
+	}
+	return s.resumeNotBlocked(ctx, si.Sponsor)
+}
+
+// resumeNotBlocked reports whether principal's identity is neither deactivated nor suspended.
+func (s *Server) resumeNotBlocked(ctx context.Context, principal string) (bool, error) {
 	ib, ok := s.cfg.Store.(identityBlocker)
 	if !ok {
 		return true, nil // as queueOwnerLive: a store with no identity rows has none to block
 	}
-	blocked, err := ib.IdentityBlocked(ctx, run.CreatedBy, -1)
+	blocked, err := ib.IdentityBlocked(ctx, principal, -1)
 	return err == nil && !blocked, err
 }
