@@ -56,8 +56,8 @@ const injectRefreshMargin = 5 * time.Minute
 // carries a header past the credential's own expiry (injEntry.lastGoodDeadline).
 const lastGoodGrace = 15 * time.Minute
 
-// envStaleCredentialMax shortens lastGoodGrace for this proxy (a duration; 0 serves no last-good
-// value). Unset, unparseable, negative or longer than lastGoodGrace keeps lastGoodGrace.
+// envStaleCredentialMax shortens lastGoodGrace for this proxy (a duration; 0 serves no last-good value past the lease;
+// inside the lease the last value is still served). Unset, unparseable, negative or longer than lastGoodGrace keeps lastGoodGrace.
 const envStaleCredentialMax = "WARDYN_PROXY_STALE_CREDENTIAL_MAX"
 
 // staleCredentialMax is the last-good bound past a lease: lastGoodGrace, or envStaleCredentialMax when shorter.

@@ -49,7 +49,8 @@ const (
 // TrustedCAMountPath is appended after the PEM. No-op when WARDYN_MITM_CA_PEM is
 // unset and nothing is mounted there. Each file is written to a temp file in the same
 // directory and renamed into place, mitm-ca.pem first and ca-bundle.pem last, so a
-// reader (ExecCAWait, a TLS client) never sees a partial file. The idle loop is
+// reader (ExecCAWait, a TLS client) never sees a partial file. The script holds no "$$" or "$(": Kubernetes
+// rewrites those in a pod Command, and bring-back matches PID 1's command line to this text byte for byte. The idle loop is
 // TERM-aware: as PID 1, a bare `sleep` ignores SIGTERM and would wait out the full
 // kill timeout; this exits 143/130, not 0, so an out-of-band stop still reads as a
 // signal kill downstream.
@@ -57,7 +58,7 @@ const AgentIdleScript = `d=/tmp/wardyn
 t=` + TrustedCAMountPath + `
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s "$t" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
-  n="$d/.ca-tmp.$$"
+  n="$d/.ca-tmp"
   { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$n" && chmod 0644 "$n" && mv -f "$n" "$d/mitm-ca.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
   sys=""
   for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
