@@ -210,3 +210,31 @@ func TestResumeRun_RepeatedRefusalsAuditOncePerPause(t *testing.T) {
 		t.Errorf("run.resume denied rows after a new pause = %d, want 2", len(rows))
 	}
 }
+
+// TestResumeRun_RevokedSessionsDoNotEndTheRun: a revoke of the owner's sessions signs them out and
+// leaves their runs running, so a paused run of theirs resumes; an owner whose identity is blocked
+// (deactivated or suspended) still has the run ended.
+func TestResumeRun_RevokedSessionsDoNotEndTheRun(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	f.srv.cfg.SessionRevocations = &macWindowRevocations{revoked: true}
+	paused := *f.st.run.PausedAt
+	run := f.st.run
+
+	if err := f.srv.resumeRun(context.Background(), rs, run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("resume of a run whose owner's sessions were revoked = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 || f.st.State() != types.RunRunning {
+		t.Fatalf("thaws %d, state %s; want the run thawed once and RUNNING", thaws, f.st.State())
+	}
+
+	rs.blocked = true
+	run.PausedAt = &paused
+	err := f.srv.resumeRun(context.Background(), rs, run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.reason != reasonIdentityDeactivated {
+		t.Fatalf("resume for a blocked owner = %v, want an %s refusal", err, reasonIdentityDeactivated)
+	}
+	if got := f.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED for a blocked owner", got)
+	}
+}

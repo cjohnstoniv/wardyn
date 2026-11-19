@@ -31,18 +31,13 @@ const resumeServiceInactiveMsg = "The service identity that started this run is 
 // of the owner's own session (resumeAuthorityRefusal). An owner who is deactivated or suspended, or a
 // service identity that is suspended or retired, ends the run through the kill cascade. Authority the
 // owner no longer holds leaves the run paused and refused, with one denied row per pause
-// (pauseClocks.firstDenial). A check that cannot be answered refuses with 503 and writes no row; the
-// next resume asks again.
+// (pauseClocks.firstDenial). A check that cannot be answered, within one heldStoreCallBound for all its
+// reads (the run's lock is held), refuses with 503 and writes no row; the next resume asks again.
 func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal string, data map[string]any) error {
-	live, err := s.resumeOwnerLive(ctx, run)
-	if err != nil {
-		return &errResumeRefused{&ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
-			msg: loggedMsg(ctx, "re-check the run owner's identity", err)}}
-	}
-	var ref *ownerRefusal
+	live, ref := s.resumeRecheck(ctx, run)
+	dead := !live && ref == nil // the owner was read and is not live; an unreadable check is a 503 ref
 	switch {
-	case live:
-		ref = s.resumeAuthorityRefusal(ctx, run)
+	case !dead:
 	case isServicePrincipal(run.CreatedBy):
 		ref = &ownerRefusal{status: http.StatusForbidden, reason: reasonServiceIdentityInactive, msg: resumeServiceInactiveMsg}
 	default:
@@ -55,7 +50,7 @@ func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorTyp
 		data["subject"], data["refusal"] = run.CreatedBy, ref.reason
 		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume", run.ID.String(), "denied", mustJSON(data)))
 	}
-	if !live {
+	if dead {
 		// The run's lock is held (resumeRun's callers); the kill takes no lock before it (db.LockOrder).
 		s.pause.dropDenial(run.ID)
 		if _, _, kerr := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": ref.reason}); kerr != nil {
@@ -66,12 +61,29 @@ func (s *Server) resumeRefusal(ctx context.Context, run types.AgentRun, actorTyp
 	return &errResumeRefused{ref}
 }
 
+// resumeRecheck is resumeRefusal's reads, on one heldStoreCallBound: whether the owner is live, and for a
+// live owner what refuses the resume (nil when nothing does). A read that fails or runs out of the bound
+// is a 503 refusal.
+func (s *Server) resumeRecheck(ctx context.Context, run types.AgentRun) (bool, *ownerRefusal) {
+	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
+	live, err := s.resumeOwnerLive(ctx, run)
+	if err != nil {
+		return false, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
+			msg: loggedMsg(ctx, "re-check the run owner's identity", err)}
+	}
+	if !live {
+		return false, nil
+	}
+	return true, s.resumeAuthorityRefusal(ctx, run)
+}
+
 // resumeAuthorityRefusal is extendRefusal for a resume. Only the owner's own session resolves their
 // capabilities as launch did (their groups, their email and an admin's exemption; ownerCapabilityRefusal),
 // and a resume is mostly not theirs: an approver's decision, the sweep, a gateway's wake-up or a super
 // admin's Resume. Without it the capabilities are not asked, since rows the owner holds through a group
-// would refuse a run they may still run; the profile and the model provider, which read no capability
-// rows, are asked of every resume. An operator-owned run is never the owner's session (created_by can
+// would refuse a run they may still run; the profile, the run's organisation components and the model
+// provider, which read no capability rows, are asked of every resume. An operator-owned run is never the owner's session (created_by can
 // be spelled alike by an IdP sub).
 func (s *Server) resumeAuthorityRefusal(ctx context.Context, run types.AgentRun) *ownerRefusal {
 	if !run.OperatorOwned && run.CreatedBy != "" && oidcHumanFromContext(ctx) == run.CreatedBy {
@@ -80,10 +92,20 @@ func (s *Server) resumeAuthorityRefusal(ctx context.Context, run types.AgentRun)
 	if ref := s.ownerCeilingRefusal(ctx, run); ref != nil {
 		return ref
 	}
-	ref, err := s.modelProviderRefusal(ctx, run)
+	comps, err := s.runComponentSnapshot(ctx, run.ID)
+	var ref *ownerRefusal
+	if err == nil {
+		ref, err = s.componentGoneRefusal(ctx, comps)
+	}
+	if err == nil && ref == nil {
+		ref, err = s.componentPinRefusal(ctx, run, comps)
+	}
+	if err == nil && ref == nil {
+		ref, err = s.modelProviderRefusal(ctx, run)
+	}
 	if err != nil {
 		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
-			msg: loggedMsg(ctx, "re-check the run's model provider", err)}
+			msg: loggedMsg(ctx, "re-check the run's components and model provider", err)}
 	}
 	return ref
 }
@@ -101,7 +123,7 @@ func (c *pauseClocks) firstDenial(id uuid.UUID, pausedAt *time.Time) bool {
 	if prev, ok := c.denied[id]; ok && prev.Equal(at) {
 		return false
 	}
-	if c.denied == nil {
+	if c.denied == nil || len(c.denied) >= 4096 {
 		c.denied = map[uuid.UUID]time.Time{}
 	}
 	c.denied[id] = at
@@ -115,9 +137,11 @@ func (c *pauseClocks) dropDenial(id uuid.UUID) {
 	delete(c.denied, id)
 }
 
-// resumeOwnerLive reports whether the run's owner may still act: a person not deactivated and with no
-// session cut since the run was created, a service identity neither suspended nor retired and with a
-// live sponsor. An operator-owned run (the admin token, local mode) has no one to revoke.
+// resumeOwnerLive reports whether the run's owner may still act: a person whose identity is not
+// deactivated or suspended (IdentityBlocked), a service identity neither suspended nor retired and with
+// a live sponsor (serviceRunLive). A revoke of a person's sessions is not asked: it signs them out, and
+// their running runs go on (docs/operations/delegation.md). An operator-owned run (the admin token,
+// local mode) has no one to revoke.
 func (s *Server) resumeOwnerLive(ctx context.Context, run types.AgentRun) (bool, error) {
 	if run.OperatorOwned {
 		return true, nil
@@ -129,5 +153,10 @@ func (s *Server) resumeOwnerLive(ctx context.Context, run types.AgentRun) (bool,
 		}
 		return live, err
 	}
-	return s.queueOwnerLive(ctx, queueAuthority{Sub: run.CreatedBy}, run.CreatedAt)
+	ib, ok := s.cfg.Store.(identityBlocker)
+	if !ok {
+		return true, nil // as queueOwnerLive: a store with no identity rows has none to block
+	}
+	blocked, err := ib.IdentityBlocked(ctx, run.CreatedBy, -1)
+	return err == nil && !blocked, err
 }
