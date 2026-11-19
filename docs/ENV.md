@@ -2417,7 +2417,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A brokered repo has no `git_pat` path beside its App lane in any case: policy-write refuses the two grants for the same forge.
 - **Opting either lane's posture is visible, not inferred:** the proxy logs a one-shot `slog` WARN at boot when the App lane is OFF, and INFO when the PAT lane is ON
 - The two postures are announced in opposite directions since they start from opposite defaults.
-- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
+- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) to every proxy sidecar from the environment of whatever starts it: wardynd for runs on the server, `wardyn-runnerd` for runs on a runner's computer. Docker passes it as an `Env` entry and Kubernetes on the proxy pod; host-run proxies read their own env.
 - **This variable is WHERE-only:** a run's `push_rules` (`deny_paths`, `max_inspect_pack_mib`) is WHAT a push may touch, enforced on both brokered lanes independently of either scope here
 - Opting either lane out never opts a push out of its content rules.
 - See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
