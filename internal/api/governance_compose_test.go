@@ -336,6 +336,32 @@ func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 	}
 }
 
+// TestComposeChainUnitClosesAnOpenBase: a unit that turns its open base's egress off with a host the base's
+// own list does not name resolves closed to exactly that host, as its save accepts it; an IP literal the
+// base does not name is still dropped with a warning.
+func TestComposeChainUnitClosesAnOpenBase(t *testing.T) {
+	srv := &Server{cfg: Config{DefaultPolicy: govDeployment()}}
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "open", Ceiling: types.RunPolicySpec{
+		AllowAllEgress: true, AllowedDomains: []string{"api.anthropic.com", "pypi.org"}, MinConfinementClass: types.CC2}}
+	for _, tc := range []struct {
+		list  []string
+		warns bool
+	}{
+		{[]string{"build.corp.example"}, false},
+		{[]string{"build.corp.example", "10.0.0.5"}, true},
+	} {
+		leaf := types.GovernanceUnit{ID: uuid.New(), Name: "locked", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
+			AllowAllEgress: new(false), AllowedDomains: &tc.list}}
+		got, err := srv.composeChain([]types.GovernanceUnit{leaf, base})
+		if err != nil {
+			t.Fatalf("%v: compose: %v", tc.list, err)
+		}
+		if got.Ceiling.AllowAllEgress || !slices.Equal(got.Ceiling.AllowedDomains, []string{"build.corp.example"}) || (len(got.AdminWarnings) > 0) != tc.warns {
+			t.Errorf("%v: open %v allowed %v warnings %v, want closed to build.corp.example", tc.list, got.Ceiling.AllowAllEgress, got.Ceiling.AllowedDomains, got.AdminWarnings)
+		}
+	}
+}
+
 // TestResolverWarningsNameTheLeafOnly: a warning the resolver emits for a chain step reaches a
 // member's 201, so it names the leaf profile and never a base's name, id or overlay.
 func TestResolverWarningsNameTheLeafOnly(t *testing.T) {
