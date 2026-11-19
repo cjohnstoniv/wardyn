@@ -316,6 +316,13 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindServiceIdentity, changed.After.Principal(), "success", nil)
 	}
+	// A suspended identity's live runs end now; a PATCH that suspends it again ends any a failure left.
+	if req.Suspended != nil && *req.Suspended {
+		if err := s.endServiceRuns(r, changed.After.Principal(), killReasonServiceSuspended); err != nil {
+			writeServerError(w, r, "end the service identity's runs", err)
+			return
+		}
+	}
 	if stateErr != nil {
 		writeServerError(w, r, "read the sponsor's session", stateErr)
 		return
@@ -384,6 +391,11 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "cancel the service identity's waiting runs", err)
 		return
 	}
+	// And its live runs end, before their credentials are erased; the same DELETE run again ends any left.
+	if err := s.endServiceRuns(r, retired.After.Principal(), queueCancelServiceRetired); err != nil {
+		writeServerError(w, r, "end the service identity's runs", err)
+		return
+	}
 	// The identity's stored credentials go with it, beside the retire row. The retire is already durable,
 	// so a failure here is recorded and answered 500, and the same DELETE run again erases them.
 	if s.cfg.Secrets != nil {
@@ -407,6 +419,34 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, retired.After)
+}
+
+// The run.kill reasons of a service identity's runs ended by its suspension and by its sponsor's (a SCIM
+// suspension). A retire's is queueCancelServiceRetired, the reason its waiting runs are cancelled with.
+const (
+	killReasonServiceSuspended       = "service_identity_suspended"
+	killReasonServiceSponsorInactive = "service_sponsor_inactive"
+)
+
+// endServiceRuns ends every live run of the service identity principal through the kill a SCIM suspension
+// ends a person's runs with (teardownRunAs): the same bound per run, and a run.kill row as the caller with
+// reason. Every run is tried; the error joins the failures.
+func (s *Server) endServiceRuns(r *http.Request, principal, reason string) error {
+	ls, ok := s.cfg.Store.(store.LeaverStore)
+	if !ok {
+		return nil
+	}
+	ctx := r.Context()
+	runs, err := ls.ListNonTerminalRunsBy(ctx, principal)
+	if err != nil {
+		return err
+	}
+	killerType, killer := actorTypeFromRequest(r), principalFromRequest(r)
+	var errs []error
+	for _, run := range runs {
+		errs = append(errs, s.teardownRunAs(ctx, run.ID, killerType, killer, func(types.AgentRun) string { return reason }))
+	}
+	return errors.Join(errs...)
 }
 
 // sponsoredIdentity is the sponsor-only read behind the token routes: the caller's own identity, or false

@@ -592,14 +592,19 @@ func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverFor
 
 // killStep is step 3. Every non-terminal run a target owns joins the ledger as pending, and so does
 // any run the ledger counted done that is live again; then every pending run, including one already
-// KILLED whose teardown failed, is torn down.
+// KILLED whose teardown failed, is torn down. The runs of every service identity a target sponsors join
+// too: the identity goes sponsor_inactive with the person, and its runs end with theirs.
 func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
 	}
+	services, err := s.sponsoredServicePrincipals(ctx, targets)
+	if err != nil {
+		return err
+	}
 	var add []store.JobKey
-	for _, t := range targets {
+	for _, t := range append(slices.Clip(targets), services...) {
 		runs, err := st.ListNonTerminalRunsBy(ctx, t)
 		if err != nil {
 			return err
@@ -659,11 +664,48 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 	return errors.Join(errs...)
 }
 
-// teardownRun kills a run and confirms the teardown: the cascade's error map must be empty, and a
+// sponsoredServicePrincipals is the principal of every non-retired service identity one of sponsors
+// sponsors. A store without service identities has none.
+func (s *Server) sponsoredServicePrincipals(ctx context.Context, sponsors []string) ([]string, error) {
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return nil, nil
+	}
+	var out []string
+	for _, sponsor := range sponsors {
+		if sponsor == "" { // an empty sponsor would list every identity
+			continue
+		}
+		sis, err := ss.ListServiceIdentities(ctx, sponsor, store.Page{})
+		if err != nil {
+			return nil, err
+		}
+		for _, si := range sis {
+			if si.RetiredAt == nil && !slices.Contains(out, si.Principal()) {
+				out = append(out, si.Principal())
+			}
+		}
+	}
+	return out, nil
+}
+
+// teardownRun is a suspension's teardownRunAs, as the SCIM actor: the reason is the person's suspension, or
+// for a service identity's run the sponsor's.
+func (s *Server) teardownRun(ctx context.Context, _ scimStore, runID uuid.UUID) error {
+	return s.teardownRunAs(ctx, runID, types.ActorSystem, scimActor, func(run types.AgentRun) string {
+		if isServicePrincipal(run.CreatedBy) {
+			return killReasonServiceSponsorInactive
+		}
+		return "scim_suspend"
+	})
+}
+
+// teardownRunAs kills a run and confirms the teardown: the cascade's error map must be empty, and a
 // lost compare-and-swap is read as "someone else moved the run" and re-read, never as success. A run
 // that has ended some other way than KILLED tore itself down. A KILLED run is killed again (the
-// KILLED to KILLED repair), which is how a failed teardown is repaired.
-func (s *Server) teardownRun(ctx context.Context, st scimStore, runID uuid.UUID) error {
+// KILLED to KILLED repair), which is how a failed teardown is repaired. The run.kill row is the killer's,
+// and carries the reason reasonOf gives for the run.
+func (s *Server) teardownRunAs(ctx context.Context, runID uuid.UUID, killerType types.ActorType, killer string, reasonOf func(types.AgentRun) string) error {
 	for range teardownAttempts {
 		run, err := s.cfg.Store.GetRun(ctx, runID)
 		if err != nil {
@@ -672,7 +714,7 @@ func (s *Server) teardownRun(ctx context.Context, st scimStore, runID uuid.UUID)
 		if run.State.IsTerminal() && run.State != types.RunKilled {
 			return nil
 		}
-		applied, killErrs, err := s.killRunCascade(ctx, run, types.ActorSystem, scimActor, map[string]any{"reason": "scim_suspend"})
+		applied, killErrs, err := s.killRunCascade(ctx, run, killerType, killer, map[string]any{"reason": reasonOf(run)})
 		if err != nil {
 			return fmt.Errorf("kill run %s: %w", runID, err)
 		}
