@@ -107,6 +107,10 @@ type UnitDeciders struct {
 	Rules     []DeciderRule `json:"rules"`
 	UpdatedBy string        `json:"updated_by,omitempty"`
 	UpdatedAt time.Time     `json:"updated_at,omitzero"`
+	// Warnings is advisory text a save's 200 answer carries for the saver, and never refuses a save:
+	// today, an egress_domain rule whose max_scope leaves its deciders unable to answer a host rule hold.
+	// Stored rules carry none.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // DeciderRuleError is a rule the model refuses, naming it by its position.

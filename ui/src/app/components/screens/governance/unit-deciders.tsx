@@ -162,14 +162,16 @@ export function UnitDeciders({
     setRefusal(null);
     setHeld(false);
     try {
-      await putUnitDeciders(profile.id, draft);
+      const saved = await putUnitDeciders(profile.id, draft);
       toast.success(DECIDERS.SAVED);
+      for (const warning of saved.warnings ?? []) toast.warning(warning);
       // The reload puts the stored rules back in the draft: the section stays read-only until it has landed.
       await onChanged();
     } catch (e) {
       if (e instanceof PendingChangeError) {
         heldDraft.current = JSON.stringify(draft);
         setHeld(true);
+        for (const warning of e.change.warnings ?? []) toast.warning(warning);
         void onChanged();
       } else if (e instanceof HttpError) {
         const named = e.status === 409 ? null : /rules\[(\d+)\]/.exec(e.message);

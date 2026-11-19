@@ -60,6 +60,7 @@
 | `image` | a person's request for one image by digest ([image requests](#image-requests)) | `owner` | refused |
 | `file_download` | a person's request to download one file from a run's desktop, where `desktop.download` is `review` ([data_out](../POLICIES.md#data_out)) | `owner` | stored as true |
 
+- A host rule hold is an `egress_domain` approval decided for the rest of the run, so an `egress_domain` rule with deciders and a `max_scope` below `run` leaves those holds to security. The save still succeeds, and its answer (or a held write's `pending_change`) carries a `warnings` sentence that says so.
 - `elevation`, `image` and `file_download` are each their own rule and take no `max_scope`. An `elevation` rule also needs `max_elevation` and `eligible_requesters`.
 - A plain tool call is no kind here and is decided as before.
 - The rule for one kind never binds another: an Azure DevOps rule leaves MCP calls alone.
