@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -172,5 +173,72 @@ func TestStartAfterReadback_BootSeedRefusedBeforeCreate(t *testing.T) {
 	}
 	if got := d.st.State(); got != types.RunFailed {
 		t.Fatalf("run state = %s, want FAILED", got)
+	}
+	d.wantCreateFailure(t, "boot_seed_before_readback")
+}
+
+// wantCreateFailure asserts the run's run.create failure row: reason policy_unconfirmed, readback why.
+func (d *dispatchReadback) wantCreateFailure(t *testing.T, why string) {
+	t.Helper()
+	ev := findAudit(d.audit.snapshot(), d.run.ID, "run.create", "failure")
+	if ev == nil || !strings.Contains(string(ev.Data), `"reason":"policy_unconfirmed"`) || !strings.Contains(string(ev.Data), `"readback":"`+why+`"`) {
+		t.Fatalf("want a run.create failure row, reason policy_unconfirmed, readback %s; got %v", why, ev)
+	}
+}
+
+// failedNoAgent asserts a held start that ended with no agent exec, the run FAILED and its sandbox stopped once.
+func (d *dispatchReadback) failedNoAgent(t *testing.T, rn *execOrderRunner) {
+	t.Helper()
+	if n := len(rn.execs()); n != 0 {
+		t.Fatalf("agent execs = %d, want 0", n)
+	}
+	if got := d.st.State(); got != types.RunFailed {
+		t.Fatalf("run state = %s, want FAILED", got)
+	}
+	if d.rn.stopCount() != 1 {
+		t.Errorf("sandbox stops = %d, want 1", d.rn.stopCount())
+	}
+}
+
+// On: a start still pending when the hold runs out (its answer recorded, no report, the deadline not yet
+// read as passed) fails the run with no agent exec.
+func TestStartAfterReadback_WaitTimeoutStartsNoAgent(t *testing.T) {
+	d, rn := newStartGate(t, hashHex([]byte("bytes")), true)
+	old := startReadbackWait
+	startReadbackWait = 60 * time.Millisecond
+	t.Cleanup(func() { startReadbackWait = old })
+	d.dispatch()
+	d.failedNoAgent(t, rn)
+	d.wantCreateFailure(t, "readback_wait_timeout")
+}
+
+// On: a store that keeps no readback cannot confirm a start, so the run fails with no agent exec.
+func TestStartAfterReadback_NoReadbackStoreStartsNoAgent(t *testing.T) {
+	d, rn := newStartGate(t, hashHex([]byte("bytes")), true)
+	d.srv.cfg.Store = d.st.dispatchTestStore
+	d.dispatch()
+	d.failedNoAgent(t, rn)
+	d.wantCreateFailure(t, "start_unconfirmable")
+}
+
+// On: a kill during the hold ends it at once, not at the deadline: no agent exec, the sandbox stopped,
+// and the kill's state kept.
+func TestStartAfterReadback_KillEndsTheHold(t *testing.T) {
+	d, rn := newStartGate(t, hashHex([]byte("bytes")), true)
+	done := make(chan struct{})
+	go func() { d.dispatch(); close(done) }()
+	d.answered(t)
+	d.st.dispatchTestStore.mu.Lock()
+	d.st.dispatchTestStore.state = types.RunKilled
+	d.st.dispatchTestStore.mu.Unlock()
+	waitDone(t, done) // 5 s, far short of the hold's 75 s
+	if n := len(rn.execs()); n != 0 {
+		t.Fatalf("agent execs = %d, want 0", n)
+	}
+	if got := d.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED", got)
+	}
+	if d.rn.stopCount() != 1 {
+		t.Errorf("sandbox stops = %d, want 1", d.rn.stopCount())
 	}
 }

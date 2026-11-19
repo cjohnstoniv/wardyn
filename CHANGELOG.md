@@ -10,9 +10,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 [CHANGELOG-ARCHIVE.md](CHANGELOG-ARCHIVE.md).**
 
 ## [Unreleased]
-- An admin can set `WARDYN_START_AFTER_READBACK=on` so a run's agent starts only after its proxy confirms the policy it
-  loaded. Until then the run shows `STARTING` and takes no attach; a run whose proxy does not confirm fails with nothing
-  started. An interactive run with a task is refused while it is on. Off by default.
+- An admin can set `WARDYN_START_AFTER_READBACK=on` so a run's agent first starts only after its proxy confirms the
+  policy it loaded. Until then the run shows `STARTING` and takes no attach; a run whose proxy does not confirm fails with
+  nothing started. An interactive run with a task is refused while it is on. A revive, restart or live egress edit is not
+  held. Off by default.
 
 ## [0.10.0-rc.25] — 2026-11-18
 
