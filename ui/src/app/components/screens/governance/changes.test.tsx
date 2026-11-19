@@ -333,6 +333,17 @@ describe("the change drawer", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
+  it("an approved suspension that could not end every run keeps the server's remedy until dismissed", async () => {
+    const detail = "The suspension is applied, but Wardyn could not end every live run of the service identity.";
+    approveMock.mockResolvedValue({ ...change({ state: "applied" }), runs_end_failed: true, detail });
+    renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
+    expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it("a decision still out keeps its drawer, so its answer cannot close the next one opened", async () => {
     let answer: ((c: GovernanceChange) => void) | undefined;
     approveMock.mockReturnValue(new Promise((done) => (answer = done)));
