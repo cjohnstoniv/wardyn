@@ -184,8 +184,11 @@ func literalHostIP(host string) net.IP {
 
 // blockedLiteralIPGuard is the blocked-range half of literalIPGuard: a literal in a blocked range is
 // denied unless it is a trusted exact entry, which it returns.
+// The host is read without the brackets of an IPv6 authority (trimLiteralHost), so a bracketed literal is
+// judged as the address it names, never passed on as a name net.ParseIP cannot read.
 func (p *Proxy) blockedLiteralIPGuard(deny func() (net.IP, *egress.DecisionLog), host string, port int) (net.IP, *egress.DecisionLog) {
-	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
+	host = trimLiteralHost(host)
+	if ip := net.ParseIP(host); ip != nil {
 		// A k8s runner's hard deny beats the exact-literal trust below, as it beats every admission in
 		// egressTarget: no allow, approval or redirect reopens it. A trusted literal skips egressTarget,
 		// so it is checked here.

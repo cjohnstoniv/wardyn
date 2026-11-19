@@ -606,7 +606,12 @@ func splitHostPort(hostport string, defaultPort int) (host string, port int) {
 		port, _ = strconv.Atoi(ps)
 		return domainmatch.CanonHost(strings.TrimRight(h, ".")), port
 	}
-	return domainmatch.CanonHost(strings.TrimRight(hostport, ".")), defaultPort
+	// No port: take off an IPv6 authority's brackets as net.SplitHostPort does, so "[::1]" reaches step 0 as an address.
+	h := strings.TrimRight(hostport, ".")
+	if inner, ok := strings.CutPrefix(h, "["); ok && strings.HasSuffix(inner, "]") {
+		h = strings.TrimRight(strings.TrimSuffix(inner, "]"), ".")
+	}
+	return domainmatch.CanonHost(h), defaultPort
 }
 
 // evaluate runs the full decision pipeline for a request, emitting the
