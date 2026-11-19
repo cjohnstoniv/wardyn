@@ -357,7 +357,7 @@ func TestInternalRaiseRefusesAmbiguousMCPCallScope(t *testing.T) {
 }
 
 // The row stores the scope as validated, re-marshalled from its typed form with canonical
-// arguments: never the raw bytes, so an unknown key or another spelling never reaches a reader.
+// arguments: never the raw bytes, so another spelling of the arguments never reaches a reader; an unknown key is refused at the raise.
 func TestInternalRaiseStoresTheValidatedMCPCallScope(t *testing.T) {
 	key, err := types.MCPCallKey("jira", "delete_issue", json.RawMessage(`{"b":1,"a":2}`), nil)
 	if err != nil {
@@ -365,7 +365,7 @@ func TestInternalRaiseStoresTheValidatedMCPCallScope(t *testing.T) {
 	}
 	h := newHarness(t)
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, uuid.New()),
-		`{"kind":"tool_call","requested_scope":{"tool":"mcp__jira__delete_issue","mcp_server":"jira","arguments":{ "b": 1, "a": 2.0 },"note":"x","call_sha256":"`+key+`"}}`)
+		`{"kind":"tool_call","requested_scope":{"tool":"mcp__jira__delete_issue","mcp_server":"jira","arguments":{ "b": 1, "a": 2.0 },"call_sha256":"`+key+`"}}`)
 	if w.Code != http.StatusCreated || len(h.approvals.requested) != 1 {
 		t.Fatalf("status %d body %s, %d rows; want 201 and one row", w.Code, w.Body.String(), len(h.approvals.requested))
 	}
