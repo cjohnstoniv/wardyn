@@ -159,6 +159,14 @@ func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal str
 	return nil
 }
 
+// sshMemStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (*sshMemStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*sshMemStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
+}
+
 // GetCapabilityEnforcement and ListCapabilityGrantsFor are the two reads
 // handleAddSSHKey's capFeature gate makes (denyUserCapability ->
 // capSeamAllowed). No enforcement row and no grants: capFeature is a

@@ -723,18 +723,8 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 // callerIsOwner is ownerCapabilityRefusal's: false for a renewal wardynd makes
 // itself, which knows the owner only by the run row.
 func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool) *ownerRefusal {
-	prof, ref := s.ownerUnit(ctx, run)
-	if ref != nil {
+	if ref := s.ownerCeilingRefusal(ctx, run); ref != nil {
 		return ref
-	}
-	if prof != nil {
-		if p, denied := deniedRunPlacement(run, prof.Limits.DenyPlacements); denied {
-			return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied),
-				msg: placementDeniedMsg(p, prof.Name)}
-		}
-		if msg := macOSBaseDeniedMsg(run, prof.Name, [][]string{prof.Limits.AllowedMacOSBases}); msg != "" {
-			return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied), msg: msg}
-		}
 	}
 	var cfg *proxy.Config
 	raw, err := s.loadRunProxyConfig(ctx, run.ID)
@@ -749,7 +739,7 @@ func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIs
 				msg: "the run's proxy config does not load: " + err.Error()}
 		}
 	}
-	ref, err = s.ownerCapabilityRefusal(ctx, run, callerIsOwner, runRepos(run, cfg))
+	ref, err := s.ownerCapabilityRefusal(ctx, run, callerIsOwner, runRepos(run, cfg))
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)
 	}
@@ -758,4 +748,21 @@ func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIs
 			msg: loggedMsg(ctx, "re-check the run owner's authority", err)}
 	}
 	return ref
+}
+
+// ownerCeilingRefusal is extendRefusal's profile half: the captured profile as it stands now (ownerUnit), and
+// its deny_placements and allowed_macos_bases judged against where the run already is.
+func (s *Server) ownerCeilingRefusal(ctx context.Context, run types.AgentRun) *ownerRefusal {
+	prof, ref := s.ownerUnit(ctx, run)
+	if ref != nil || prof == nil {
+		return ref
+	}
+	if p, denied := deniedRunPlacement(run, prof.Limits.DenyPlacements); denied {
+		return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied),
+			msg: placementDeniedMsg(p, prof.Name)}
+	}
+	if msg := macOSBaseDeniedMsg(run, prof.Name, [][]string{prof.Limits.AllowedMacOSBases}); msg != "" {
+		return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied), msg: msg}
+	}
+	return nil
 }
