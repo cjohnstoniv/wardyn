@@ -23,10 +23,19 @@ type resumeRecheckStore struct {
 	profiles []types.GovernanceUnit
 	blocked  bool
 	caps     []types.CapabilityGrant
+	enforced map[string]bool
 }
 
 func (s *resumeRecheckStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return s.caps, nil
+}
+
+func (s *resumeRecheckStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return s.caps, nil
+}
+
+func (s *resumeRecheckStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return s.enforced, nil
 }
 
 func (s *resumeRecheckStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
@@ -134,15 +143,17 @@ func TestResumeRun_AllowedWhileStillValid(t *testing.T) {
 }
 
 // TestResumeRun_RefusedForARevokedCapability: a deny on the run's agent written while it was paused
-// refuses the resume with the extension's capability_agent, and the run stays paused and RUNNING.
+// refuses the owner's own Resume with the extension's capability_agent, and the run stays paused and
+// RUNNING.
 func TestResumeRun_RefusedForARevokedCapability(t *testing.T) {
 	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	f.st.run.UnitID = nil // the capability refuses; no profile is needed for it
 	rs.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capAgent, f.st.run.Agent, types.CapabilityDeny)}
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
 
-	err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed")
-	var refused *errResumeRefused
-	if !errors.As(err, &refused) || refused.ref.status != http.StatusForbidden || refused.ref.reason != reasonOwnerCapabilityAgent {
-		t.Fatalf("resume after the agent's grant was revoked = %v, want a 403 %s refusal", err, reasonOwnerCapabilityAgent)
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/resume", owner, "")
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonOwnerCapabilityAgent {
+		t.Fatalf("owner's resume after the agent's grant was revoked = %d %s, want 403 %s", w.Code, w.Body.String(), reasonOwnerCapabilityAgent)
 	}
 	if _, thaws := f.rn.counts(); thaws != 0 {
 		t.Errorf("thaws = %d, want 0", thaws)
@@ -153,5 +164,49 @@ func TestResumeRun_RefusedForARevokedCapability(t *testing.T) {
 	rows := f.rows("run.resume", "denied")
 	if len(rows) != 1 || leaseAuditData(t, rows[0])["refusal"] != reasonOwnerCapabilityAgent {
 		t.Errorf("run.resume denied rows = %+v, want one with refusal %s", rows, reasonOwnerCapabilityAgent)
+	}
+}
+
+// TestResumeRun_GroupGrantedOwnerResumesWithoutTheirSession: under an enforced agent kind whose allow
+// names the owner's group, a resume that does not carry the owner's session (an approver's decision,
+// the sweep) cannot see that group, so it does not ask the capabilities: the run resumes.
+func TestResumeRun_GroupGrantedOwnerResumesWithoutTheirSession(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	rs.enforced = map[string]bool{capAgent: true}
+	rs.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectGroup, "engineering", capAgent, f.st.run.Agent, types.CapabilityAllow)}
+
+	if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("system resume of a group-granted owner's run = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d, want 1", thaws)
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 0 {
+		t.Errorf("run.resume denied rows = %+v, want none", rows)
+	}
+}
+
+// TestResumeRun_RepeatedRefusalsAuditOncePerPause: the sweep retries a refused resume every pass; the
+// pause writes one denied row, and a new pause writes its own.
+func TestResumeRun_RepeatedRefusalsAuditOncePerPause(t *testing.T) {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "contractors",
+		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}}
+	f, rs := newResumeRecheckFixture(t, profile, false)
+
+	for range 3 {
+		if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err == nil {
+			t.Fatal("resume outside the narrowed profile succeeded")
+		}
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 1 {
+		t.Fatalf("run.resume denied rows after 3 refusals of one pause = %d, want 1", len(rows))
+	}
+	later := f.st.run.PausedAt.Add(time.Minute)
+	f.st.run.PausedAt = &later
+	if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err == nil {
+		t.Fatal("resume outside the narrowed profile succeeded")
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 2 {
+		t.Errorf("run.resume denied rows after a new pause = %d, want 2", len(rows))
 	}
 }
