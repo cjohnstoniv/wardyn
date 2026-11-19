@@ -86,6 +86,7 @@ type pauseClocks struct {
 	cursor    uuid.UUID
 	probes    map[uuid.UUID]*probeState
 	diskRoot  map[uuid.UUID]diskRootSample
+	denied    map[uuid.UUID]time.Time // the pause a refused resume already audited (firstDenial)
 }
 
 // thawRetryFloor is the first wait before an input retries a thaw that failed;
@@ -559,6 +560,7 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 	if err != nil {
 		return err
 	}
+	s.pause.dropDenial(run.ID)
 	if cleared {
 		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 			run.ID.String(), "success", mustJSON(data)))
