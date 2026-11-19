@@ -41,8 +41,8 @@ export interface GovernanceChange {
   // every live run of the identity; detail is the server's remedy.
   runs_end_failed?: boolean;
   detail?: string;
-  // A 202's pending_change only: advisory sentences for the proposer (a deciders rule that leaves host rule
-  // holds to security). Not stored with the change.
+  // A 202's pending_change only: advisory sentences for the proposer (a deciders rule under which no one,
+  // security included, can decide a host rule hold). Not stored with the change.
   warnings?: string[];
 }
 

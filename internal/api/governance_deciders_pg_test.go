@@ -641,8 +641,8 @@ func TestDecidersBoundaryLockHeldRefusedAtApproval(t *testing.T) {
 }
 
 // TestDecidersSaveWarnsWhenHostHoldsOutOfReach: an egress_domain rule whose max_scope is below run saves
-// with 200 and a warning, since its deciders cannot answer a host rule hold (decided for the run); a rule
-// at run, or one that does not name egress_domain, saves with none.
+// with 200 and a warning, since no one, security included, can answer a host rule hold (decided for the
+// run) under it; a rule at run, or one that does not name egress_domain, saves with none.
 func TestDecidersSaveWarnsWhenHostHoldsOutOfReach(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	save := func(rule map[string]any) types.UnitDeciders {
@@ -668,6 +668,27 @@ func TestDecidersSaveWarnsWhenHostHoldsOutOfReach(t *testing.T) {
 	mcpOnce := map[string]any{"kinds": []string{"mcp_call"}, "who": []string{"unit_admins"}, "max_scope": "once"}
 	if got := save(mcpOnce).Warnings; len(got) != 0 {
 		t.Errorf("a rule not naming egress_domain warnings = %q, want none", got)
+	}
+	// The cap binds security too, so until, a security-only rule and egress_domain beside another kind warn alike.
+	for name, tc := range map[string]struct {
+		rule  map[string]any
+		scope string
+	}{
+		"until":         {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"owner"}, "max_scope": "until"}, "until"},
+		"empty who":     {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{}, "max_scope": "once"}, "once"},
+		"beside mcp":    {map[string]any{"kinds": []string{"egress_domain", "mcp_call"}, "who": []string{"unit_admins"}, "max_scope": "once"}, "once"},
+		"empty who run": {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{}, "max_scope": "run"}, ""},
+	} {
+		got := save(tc.rule).Warnings
+		if tc.scope == "" {
+			if len(got) != 0 {
+				t.Errorf("%s: warnings = %q, want none", name, got)
+			}
+			continue
+		}
+		if want := fmt.Sprintf(decidersHostHoldWarning, tc.scope); len(got) != 1 || got[0] != want {
+			t.Errorf("%s: warnings = %q, want [%q]", name, got, want)
+		}
 	}
 }
 

@@ -127,18 +127,20 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 
 // decidersHostHoldWarning is the save warning for an egress_domain rule whose max_scope is below run.
 const decidersHostHoldWarning = "Host rule holds are egress_domain approvals decided for the rest of the run, " +
-	"so with max_scope %q the deciders listed for egress_domain cannot approve them and only security can: " +
-	"raise max_scope to run for egress_domain, or expect those approvals to wait for security"
+	"so with max_scope %q no one, security included, can decide them and they wait until they time out: " +
+	"set max_scope to run for egress_domain"
 
 // decidersSaveWarnings is what a deciders save still tells its admin, on the 200 or on a held write's 202
 // (its pending_change); the save stands and the decision rule is unchanged. A host rule hold is an egress_domain approval (deciderKindOf) that is decided
-// for the rest of the run (hostCallDecisionRule), so a rule naming egress_domain that lists deciders and caps
-// max_scope below run leaves them unable to answer one (decision_scope_above_rule). No other kind needs more
+// for the rest of the run (hostCallDecisionRule), so a rule naming egress_domain that caps max_scope below run
+// leaves everyone unable to answer one: the cap binds security too (capScopeToRule, decision_scope_above_rule).
+// An empty who changes nothing, so it warns as well. A child's empty max_scope under a capped parent is
+// refused at save (DeciderRuleWithin), and a parent's cap warns at the parent's own save. No other kind needs more
 // than once: an MCP call, a kubectl write, a download and an Azure DevOps escalation are decided once, and a
 // credential decision with no scope passes any cap.
 func decidersSaveWarnings(rules []types.DeciderRule) []string {
 	rule, ok := types.DeciderRuleFor(rules, types.DeciderKindEgressDomain)
-	if !ok || len(rule.Who) == 0 || rule.MaxScope == "" || scopeRank(rule.MaxScope) >= scopeRank(types.ScopeRun) {
+	if !ok || rule.MaxScope == "" || scopeRank(rule.MaxScope) >= scopeRank(types.ScopeRun) {
 		return nil
 	}
 	return []string{fmt.Sprintf(decidersHostHoldWarning, rule.MaxScope)}
