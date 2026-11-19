@@ -5,7 +5,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -17,6 +20,9 @@ import (
 // later (run_proxy_readback.go). On, a dispatch holds its run STARTING until that start is enforced. The
 // agent's task exec, an attach and every other exec need RUNNING, so none of them runs before the
 // readback, on any substrate: the hold is the control plane's, between the create and the first exec.
+// It holds a run's first start only. A revive, a restart with current limits or a live egress edit keeps
+// the readback's 60 s window: its proxy is replaced under the revive's run lock, whose bound
+// (reviveClaimedTimeout) is shorter than the readback's deadline, and its claim reopens attach and exec.
 // A start that is not enforced (a store with no readback, a legacy runner or proxy image, a failed,
 // superseded or abandoned start, or no report by the wait's end) fails the run with its sandbox stopped.
 // What still runs at create is the sandbox's own idle main process (runner.AgentIdleScript, or agent-run
@@ -52,7 +58,8 @@ func (s *Server) startAfterReadbackRefused(ctx context.Context, run types.AgentR
 
 // awaitStartReadback holds a dispatch, after its driver's answer and before its run goes RUNNING, until
 // the start is enforced. true at once when the hold is off. false is a run that must not start: one this
-// wait failed with its sandbox stopped, or a failed start, which its report's handler, the deadline
+// wait failed with its sandbox stopped, one killed or ended while held (its sandbox stopped here, as a
+// lost RUNNING write does), or a failed start, which its report's handler, the deadline
 // watchdog or the reconcile sweep contains (stopUnconfirmedProxyAt fails a STARTING run).
 func (s *Server) awaitStartReadback(ctx context.Context, run types.AgentRun, ref string, start proxyStartRec) bool {
 	if !s.cfg.StartAfterReadback {
@@ -79,6 +86,12 @@ func (s *Server) awaitStartReadback(ctx context.Context, run types.AgentRun, ref
 		case p.State == types.ProxyStartFailed:
 			return false
 		case p.State == types.ProxyStartPending:
+			if s.runLeftStarting(wctx, run.ID) {
+				// Killed or ended while held: what dispatch does when its RUNNING write loses, at once.
+				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.dispatch")
+				s.auditLostStart(ctx, run.ID, ref, nil)
+				return false
+			}
 			s.expireProxyStart(ctx, run.ID, start.gen) // a no-op before the deadline
 		default: // unconfirmed, superseded or abandoned: never enforced
 			why = "start_" + string(p.State)
@@ -92,4 +105,11 @@ func (s *Server) awaitStartReadback(ctx context.Context, run types.AgentRun, ref
 	}
 	s.abortUnconfirmedSandbox(ctx, run.ID, ref, proxyStartRec{}, why, nil)
 	return false
+}
+
+// runLeftStarting reports whether the run is gone or no longer STARTING. A read that errors otherwise is
+// not evidence, and the hold goes on.
+func (s *Server) runLeftStarting(ctx context.Context, id uuid.UUID) bool {
+	cur, err := s.cfg.Store.GetRun(ctx, id)
+	return errors.Is(err, store.ErrNotFound) || (err == nil && cur.State != types.RunStarting)
 }
