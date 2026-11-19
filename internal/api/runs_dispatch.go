@@ -715,7 +715,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The sandbox's ref, then the driver's hash of the bytes its proxy was handed: a start that must
 	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go). With
 	// WARDYN_START_AFTER_READBACK=on the run also waits here for its proxy's report (run_start_after_readback.go).
-	if !s.recordConfirmedSandbox(ctx, run, sb, start) || !s.awaitStartReadback(ctx, run, sb.Ref, start) {
+	if !s.sandboxConfirmed(ctx, run, sb, start) {
 		return
 	}
 
@@ -811,6 +811,12 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 	}
 	sc.EgressRedirects = []types.EgressRedirect{*probe}
 	return sc, redirectPublicHosts(*probe)
+}
+
+// sandboxConfirmed records the sandbox's confirmed start and, with WARDYN_START_AFTER_READBACK=on, waits for its
+// proxy's report; false means the run was failed and its sandbox stopped.
+func (s *Server) sandboxConfirmed(ctx context.Context, run types.AgentRun, sb runner.Sandbox, start proxyStartRec) bool {
+	return s.recordConfirmedSandbox(ctx, run, sb, start) && s.awaitStartReadback(ctx, run, sb.Ref, start)
 }
 
 // createRunSandbox is dispatch's create: a fresh start's reset mark (keptMachineResetting), then
