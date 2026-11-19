@@ -321,15 +321,27 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 	writeErrorReason(w, reason.Status(), string(reason), "via_org: "+detail)
 }
 
-// viaOrgEngine is the run's engine, built once from its stored config and grants, and the routes
-// the run was dispatched with. A build refused for the site's upstream proxy host is remembered for the
-// setting it read, so the run's later requests neither build it again nor audit its resolve again; a
-// rewrite of the setting is read on the next request. Any other build failure is tried again each time.
+// viaOrgEngine is the run's engine, built from its stored config and grants, and the routes
+// the run was dispatched with. The engine is kept while the run's policy generation slot stays the one it was
+// built at: every revive, on any replica, moves the slot in the write that stores its config, so a newer slot
+// retires the engine (viaOrgRun.retireStale) and the next one is built from the config as it stands now. A
+// build refused for the site's upstream proxy host is remembered for the setting it read, so the run's later
+// requests neither build it again nor audit its resolve again; a rewrite of the setting is read on the next
+// request. Any other build failure is tried again each time.
 func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
+	// Read outside run.mu, so the run's requests do not queue on it, and before the config: an advance stores its
+	// config in the same write as its slot, so a config read after this slot is at least as new as it.
+	slot, err := s.viaOrgPolicySlot(ctx, runID)
+	if err != nil {
+		return nil, nil, err
+	}
 	run.mu.Lock()
 	defer run.mu.Unlock()
-	if run.engine != nil {
+	if run.engine != nil && !viaOrgSlotNewer(slot, run.slot) {
 		return run.engine, run.routes, nil
+	}
+	if gen := run.retireStale(); gen != nil {
+		s.goBackground(func() { closeViaOrgGen(run.id, gen) })
 	}
 	setting, named := s.viaOrgUpstreamSetting(ctx)
 	if refused, ok := run.upstreamRefused[setting]; named && ok {
@@ -359,11 +371,33 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 		_ = engine.Close(ctx)
 		return nil, nil, errors.New("via_org: the run's egress closed")
 	}
-	run.engine, run.routes = &viaOrgGen{engine: engine}, routes
+	run.engine, run.routes, run.slot = &viaOrgGen{engine: engine}, routes, slot
 	run.smu.Lock()
 	run.idleSince = time.Now() // a fresh engine is not idle: it has the whole timeout to admit its stream
 	run.smu.Unlock()
 	return run.engine, routes, nil
+}
+
+// viaOrgPolicySlot reads the run's newest policy generation slot (store.NewestPolicySlot). A store without
+// generations answers the zero slot, which never moves.
+// ponytail: one primary-key read of agent_runs per admit; carry the slot on GetRun's row if via_org load shows it.
+func (s *Server) viaOrgPolicySlot(ctx context.Context, runID uuid.UUID) (store.PolicySlot, error) {
+	gs, ok := s.cfg.Store.(store.RunPolicyGenerations)
+	if !ok {
+		return store.PolicySlot{}, nil
+	}
+	st, _, err := gs.RunPolicyState(ctx, runID)
+	if err != nil {
+		return store.PolicySlot{}, fmt.Errorf("read the run's policy generation: %w", err)
+	}
+	return store.NewestPolicySlot(st), nil
+}
+
+// viaOrgSlotNewer reports whether slot a is later than b. A slot only moves forward: an advance takes the next
+// number, and an abandon marks the newest number abandoned. So a slot read before a newer engine was built is
+// not newer than that engine's, and keeps it.
+func viaOrgSlotNewer(a, b store.PolicySlot) bool {
+	return a.Generation > b.Generation || (a.Generation == b.Generation && a.Abandoned && !b.Abandoned)
 }
 
 // viaOrgEngineOptions are an engine's dependencies: the in-process client, the dial and lookup that guard the

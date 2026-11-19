@@ -62,6 +62,7 @@ type viaOrgRun struct {
 	mu     sync.Mutex // the engine build and its generation; taken before smu, never after
 	engine *viaOrgGen
 	routes []proxy.ViaOrgRoute
+	slot   store.PolicySlot // the run's policy generation slot engine was built at (viaOrgEngine)
 	// upstreamRefused holds each build refused for the site's upstream proxy host, by the setting it read.
 	upstreamRefused map[viaOrgUpstreamSetting]error
 
@@ -253,6 +254,23 @@ func (run *viaOrgRun) closeIdle(now time.Time) *viaOrgGen {
 	return gen
 }
 
+// retireStale retires the run's engine, built at an older policy generation slot, and ends its streams, as
+// releaseViaOrgEngineOf does on the replica that stored the revive; it returns the generation for the caller to
+// close, or nil when there is none. The caller holds mu, so no stream is admitted to it after this.
+func (run *viaOrgRun) retireStale() *viaOrgGen {
+	gen := run.engine
+	if gen == nil {
+		return nil
+	}
+	run.engine = nil
+	run.smu.Lock()
+	for st := range run.streams {
+		st.cancel()
+	}
+	run.smu.Unlock()
+	return gen
+}
+
 type viaOrgRunStatus int
 
 const (
@@ -320,9 +338,9 @@ func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 // releaseViaOrgEngineOf releases runID's engine on this replica and ends its open streams, as a run away is released
 // (releaseViaOrgRun's away form): the run keeps its state and byte total, and its next request builds a fresh engine
 // from the configuration as it stands then. Two callers use it: a withdrawn grant (ado_run_pat_withdraw.go), and a
-// stored egress edit (run_revive_after_claim.go), where no engine built from the pre-edit config may serve again.
-// After an edit, another replica's engine is reached only through the run's proxy, which no longer routes the edited host;
-// after a withdraw, another replica's engine keeps its copy until its own next resolve. The run is looked up under s.viaOrg's lock, which is let go before
+// stored revive, a restart or an egress edit (run_revive_after_claim.go), where no engine built from the earlier config
+// may serve again. After a revive, another replica's engine is retired at its next request, which reads the newer
+// policy generation (viaOrgEngine); after a withdraw, another replica's engine keeps its copy until its own next resolve. The run is looked up under s.viaOrg's lock, which is let go before
 // releaseViaOrgRun takes the run's own locks, as endViaOrgRunner does: releaseViaOrgRun's final form takes s.viaOrg's
 // lock under the run's smu, so holding it here would invert that order.
 func (s *Server) releaseViaOrgEngineOf(runID uuid.UUID) {
