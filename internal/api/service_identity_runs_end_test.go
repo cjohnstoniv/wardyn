@@ -5,15 +5,20 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,6 +33,18 @@ type svcEndStore struct {
 	sis                        map[string]*types.ServiceIdentity
 	// listErr, when set, is what every ListServiceIdentities answers.
 	listErr error
+	// runsErr is what ListNonTerminalRunsBy answers for a creator, when set.
+	runsErr map[string]error
+}
+
+func (s *svcEndStore) ListNonTerminalRunsBy(ctx context.Context, createdBy string) ([]types.AgentRun, error) {
+	s.mu.Lock()
+	err := s.runsErr[createdBy]
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.scimCovStore.ListNonTerminalRunsBy(ctx, createdBy)
 }
 
 func newSvcEndStore(sis ...types.ServiceIdentity) *svcEndStore {
@@ -372,5 +389,101 @@ func TestAuditDecisionReportsRunsNotEnded(t *testing.T) {
 	d := e.auditData(rows[0])
 	if d["runs_end_failed"] != true || d["change_id"] != out.ID.String() || !slices.Equal(anyStrings(d["runs_left"]), []string{left}) {
 		t.Errorf("row data = %v, want runs_end_failed, the change id and the run left", d)
+	}
+}
+
+// A sponsor's suspension that cannot read one sponsored identity's runs still ends the person's own runs; the
+// step stays pending, and the retry ends the service's run.
+func TestSCIMSuspensionEndsThePersonsRunsWhenAServiceRunListFails(t *testing.T) {
+	st := newSvcEndStore(svcEndOpsBot())
+	l := scimCovSeedLeaver(st.scimCovStore)
+	live, _, _ := svcEndRuns(st)
+	e := svcEndEnv(t, st)
+	path, body := "/scim/v2/Users/"+l.id.String(), scimCovPatch(scimCovReplace("active", "false"))
+
+	st.mu.Lock()
+	st.runsErr = map[string]error{"service:ops-bot": errSCIMCovBoom}
+	st.mu.Unlock()
+	scimCovWantRetry(t, e.scim(http.MethodPatch, path, body), "secret-dsn")
+	for name, id := range map[string]uuid.UUID{"sub": l.runSub, "email": l.runEmail} {
+		if got := e.st.runState(id); got != types.RunKilled {
+			t.Errorf("the person's run under the %s = %s with the service's run list failing, want KILLED", name, got)
+		}
+	}
+	if got := e.st.runState(live); got != types.RunRunning {
+		t.Fatalf("the service's run = %s before the retry, want RUNNING", got)
+	}
+	if n := len(e.auditRows("person.deprovision")); n != 0 {
+		t.Errorf("%d person.deprovision rows before the step finished, want none", n)
+	}
+
+	st.mu.Lock()
+	st.runsErr = nil
+	st.mu.Unlock()
+	if w := e.scim(http.MethodPatch, path, body); w.Code != http.StatusOK {
+		t.Fatalf("retried PATCH active=false = %d %s", w.Code, w.Body.String())
+	}
+	if got := e.st.runState(live); got != types.RunKilled {
+		t.Errorf("the service's run = %s after the retry, want KILLED", got)
+	}
+}
+
+// svcEndTx is the approval transaction applyServiceIdentityChange runs on: every read of the identity
+// answers si, and the suspend's UPDATE marks it suspended.
+type svcEndTx struct{ si types.ServiceIdentity }
+
+func (q *svcEndTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "suspended_at = clock_timestamp()") {
+		at := scimCovNow
+		q.si.SuspendedAt, q.si.SuspendedBy = &at, "sub-proposer"
+	}
+	return pgconn.CommandTag{}, nil
+}
+
+func (q *svcEndTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errSCIMCovBoom
+}
+
+func (q *svcEndTx) QueryRow(context.Context, string, ...any) pgx.Row { return svcEndRow{q.si} }
+
+type svcEndRow struct{ si types.ServiceIdentity }
+
+// Scan fills the eleven columns scanServiceIdentity reads, in its order.
+func (r svcEndRow) Scan(dest ...any) error {
+	si := r.si
+	vals := []any{si.Name, si.Description, si.Sponsor, si.SponsorSince, si.UserType, si.CreatedBy, si.CreatedAt,
+		si.SuspendedAt, si.SuspendedBy, si.RetiredAt, si.RetiredBy}
+	if len(dest) != len(vals) {
+		return errSCIMCovBoom
+	}
+	for i, d := range dest {
+		reflect.ValueOf(d).Elem().Set(reflect.ValueOf(vals[i]))
+	}
+	return nil
+}
+
+// An approved suspension's after-commit work ends the identity's runs, and when it cannot, the data it adds to
+// the approval's row (and so its answer) says runs_end_failed and names the run left.
+func TestApprovedServiceSuspensionCarriesRunsEndFailed(t *testing.T) {
+	st := newSvcEndStore(svcEndOpsBot())
+	live, _, _ := svcEndRuns(st)
+	e := svcEndEnv(t, st)
+	cur := types.ServiceIdentity{Name: "ops-bot", Sponsor: "sub-pat", UserType: "member", CreatedAt: scimCovNow.Add(-time.Hour)}
+	ch := types.GovernanceChange{ID: uuid.New(), TargetKind: govKindServiceIdentity, TargetKey: "ops-bot", Op: "update",
+		ProposedBy: "sub-proposer", Payload: json.RawMessage(`{"suspended":true}`), BaseHash: computeETag(serviceIdentityBaseOf(cur))}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/changes/"+ch.ID.String()+"/approve", nil)
+	r = r.WithContext(withOIDCHuman(r.Context(), "sub-approver"))
+
+	applied, err := applyServiceIdentityChange(e.srv, r, &svcEndTx{si: cur}, ch)
+	if err != nil || applied.afterCommit == nil {
+		t.Fatalf("apply = %+v, %v; want an applied change with after-commit work", applied, err)
+	}
+	st.scimCovStore.mu.Lock()
+	st.casLost = 10 // every kill loses its compare-and-swap
+	st.scimCovStore.mu.Unlock()
+	data := applied.afterCommit()
+	if data["state"] != types.ServiceIdentitySuspended || data["runs_end_failed"] != true ||
+		!slices.Equal(data["runs_left"].([]string), []string{live.String()}) {
+		t.Errorf("after-commit data = %v, want suspended with runs_end_failed and the live run", data)
 	}
 }
