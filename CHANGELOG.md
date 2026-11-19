@@ -19,6 +19,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - While the proxy cannot reach Wardyn, it no longer keeps adding a credential that has its own expiry, such as a cloud sign-in, an Azure DevOps token or a kubectl token, after that expiry. Before, it kept adding the last value it had for up to 15 minutes past the expiry. Requests that need it are refused as credential unavailable until Wardyn answers again. A stored key, which has no expiry of its own, is still added for up to 15 minutes past its 10-minute lease; set `WARDYN_PROXY_STALE_CREDENTIAL_MAX` on wardynd (for example `0` or `5m`) to shorten that. Both the proxy and wardynd need this version.
 
+### Fixed
+
+- A command sent to a run (`wardyn exec` or an SSH exec) in the first seconds after the run reads `RUNNING` now waits, up to 15 seconds, for the run's CA files (`/tmp/wardyn/ca-bundle.pem` and `mitm-ca.pem`) instead of failing its first TLS call; if they never appear the command does not run and a sentence says why. A run with no CA does not wait. Both files are now written whole and renamed into place, so a program never reads half of one.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security
