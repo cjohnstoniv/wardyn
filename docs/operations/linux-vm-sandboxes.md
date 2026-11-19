@@ -188,7 +188,7 @@
 | The VM's first lease has lapsed when it would start | Refused "runner create requires a live initial lease", as for a container. Nothing is created |
 | The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
 | The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
-| A credential the proxy injects from an expiring grant | Dropped at its expiry plus 15 minutes if it cannot be renewed. A fixed one (an API key) is held until the proxy stops at 1h5m |
+| A credential the proxy injects from an expiring grant | Dropped at its lease plus 15 minutes if it cannot be renewed, and never kept past the credential's own expiry. A fixed one (an API key) is held until the proxy stops at 1h5m |
 | The VM's audit spool fills (50,000 decisions, or about 29 MiB once the proxy is refused) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
 
 - These rules apply only on a runner that offers Linux VM sandboxes. A container run keeps the hold-then-`503` for a full spool.

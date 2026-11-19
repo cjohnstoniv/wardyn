@@ -2370,6 +2370,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
 | `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
+| `WARDYN_PROXY_STALE_CREDENTIAL_MAX` | duration | `15m` | how long past its lease the proxy adds an injected credential's last good value while wardynd does not answer; never past the credential's own expiry. `0` adds none; longer or invalid keeps `15m`. Forwarded to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
 

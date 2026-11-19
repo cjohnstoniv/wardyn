@@ -305,7 +305,8 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	s.stampCredentialUse(ctx, claims.Sub, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, tok),
+		ExpiresAt:           s.subscriptionLease(minted, tok),
+		CredentialExpiresAt: credentialExpiry(tok.ExpiresAt),
 	})
 	return true
 }

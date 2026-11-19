@@ -1034,7 +1034,7 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
 **When Vault is unavailable.** A sealed, throttled or unreachable Vault (a 429, a 5xx, a timeout; each call retried three times first) is *transient*.
 
 - The credential sink answers the proxy 503, "Wardyn couldn't reach the service that holds this run's credential" — distinct from a missing credential's 424.
-- A run already using the credential keeps injecting the last value it read, for up to 15 minutes past that value's expiry (a stored key's is ten minutes after it was read). It asks again every 30 s.
+- A run already using the credential keeps injecting the last value it read, for up to 15 minutes past that value's lease (a stored key's is ten minutes after it was read). Never past the credential's own expiry; `WARDYN_PROXY_STALE_CREDENTIAL_MAX` shortens the 15 minutes. It asks again every 30 s.
 - A 401 or 403, a value that is gone, or a binding that does not match is *definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes wardynd log in again, or re-read its token file, at most once every 30 s.)
 
 > [!WARNING]

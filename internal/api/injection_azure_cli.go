@@ -141,7 +141,8 @@ func (s *Server) resolveAzureARMInjection(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: value, JTI: minted.JTI,
 		// The token's own expiry or the grant's lease, whichever is sooner.
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
+		CredentialExpiresAt: credentialExpiry(access.ExpiresAt),
 	})
 	return true
 }
