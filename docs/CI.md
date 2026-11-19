@@ -90,7 +90,7 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   * Follow a run with `GET /runs/{id}/events`, a `text/event-stream`, rather than polling. It sends a keepalive every 15s and ends with `ended`. It carries no exit code: after `ended`, read `GET /runs/{id}` for the state and `GET /audit?run_id=<id>` for the task's code (`run.complete` `.data.exit_code`).
   * That audit read covers only runs it created (any other id answers `200` `[]`), so `run --wait` reports the task's own code and `ci-run.sh` collects `audit.json`.
   * It has no recording read, so `ci-run.sh` collects no `session.cast`: read it as the sponsor or an admin.
-* A sponsor does not need a live session; a deactivated sponsor ends the identity. When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
+* A sponsor does not need a live session; a deactivated sponsor ends the identity. When the sponsor leaves, is suspended or is replaced, the identity's tokens stop. A SCIM suspension of the sponsor also ends its live runs; a sponsor change leaves them running. Change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
 * The deployment's admin token is no substitute: under OIDC it holds no model credential, and `ci-run.sh` says so if it is handed one.
 * Do not use the Claude subscription kind for CI ([below](#model-access-for-harness-mode-running-a-real-agent)).
 

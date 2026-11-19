@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- Suspending or retiring a service identity now ends its live runs, and so does a SCIM suspension of its sponsor, the way a SCIM suspension ends the person's own runs. Before, those runs kept running until someone killed them. Each ended run has a `run.kill` audit row whose reason names the event: `service_identity_suspended`, `service_identity_retired` or `service_sponsor_inactive`.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security
