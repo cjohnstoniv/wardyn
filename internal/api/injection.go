@@ -419,6 +419,16 @@ func (s *Server) subscriptionLease(minted broker.Minted, tok subscription.Token)
 	return lease
 }
 
+// credentialExpiry is the CredentialExpiresAt the sink gives a credential with
+// an expiry of its own (unix ms; zero time, none stated, is 0). The proxy never
+// adds the value past it, even while the control plane does not answer.
+func credentialExpiry(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
 // sinkStoreUnreachable is SINK.KEK_UNREACHABLE (credential-storage design §3).
 const sinkStoreUnreachable = "Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment."
 

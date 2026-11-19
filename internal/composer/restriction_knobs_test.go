@@ -97,9 +97,8 @@ func TestApplyOverlayRestrictionKnobsNarrowOnly(t *testing.T) {
 // open with no list of its own, or with a wider one, the run is closed to the restriction's list; a closed
 // run keeps only what both lists name; a restriction naming no allowlist leaves open egress open. An IP
 // literal or a port other than 80 and 443 reaches what allow-all does not, so it is kept only where the
-// run's own list names it. A unit's
-// overlay keeps ApplyOverlay's rule, where open egress covers no entry, so there the open run is closed to
-// nothing.
+// run's own list names it. ApplyOverlay alone keeps the rule where open egress covers no entry, so there
+// the open run is closed to nothing.
 func TestApplyRestrictionOverlayOpenEgressMeetsTheAllowlist(t *testing.T) {
 	list := []string{"b.example"}
 	closing := Overlay{Ceiling: types.RestrictionSpec{AllowedDomains: &list}.Overlay()}
@@ -130,6 +129,6 @@ func TestApplyRestrictionOverlayOpenEgressMeetsTheAllowlist(t *testing.T) {
 	}
 	unit := mustApply(t, Authority{Ceiling: types.RunPolicySpec{AllowAllEgress: true}}, closing)
 	if unit.Ceiling.AllowAllEgress || len(unit.Ceiling.AllowedDomains) != 0 {
-		t.Errorf("ApplyOverlay over open egress = open %v allowed %v, want closed to nothing (a unit overlay's rule)", unit.Ceiling.AllowAllEgress, unit.Ceiling.AllowedDomains)
+		t.Errorf("ApplyOverlay over open egress = open %v allowed %v, want closed to nothing (the plain meet)", unit.Ceiling.AllowAllEgress, unit.Ceiling.AllowedDomains)
 	}
 }

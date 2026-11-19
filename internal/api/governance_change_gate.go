@@ -294,6 +294,15 @@ type govProposal struct {
 	// answer, when set, writes the 202 in place of the Location header and the pending_change body: a
 	// request answers with its own view, and its requester cannot read /governance/changes.
 	answer func(w http.ResponseWriter, saved types.GovernanceChange)
+	// warnings are advisory sentences for the proposer, carried on the 202's pending_change only (a deciders
+	// write's decidersSaveWarnings); they are not stored with the change.
+	warnings []string
+}
+
+// heldChangeAnswer is a 202's pending_change: the held change, and the proposer's warnings when there are any.
+type heldChangeAnswer struct {
+	types.GovernanceChange
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -354,7 +363,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
+	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": heldChangeAnswer{s.changeForRead(r, saved), p.warnings}})
 }
 
 // samePayload reports whether two change payloads encode the same JSON value, whatever their key

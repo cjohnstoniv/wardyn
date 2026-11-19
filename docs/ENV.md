@@ -344,6 +344,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
+| `WARDYN_START_AFTER_READBACK` | enum | `off` | `on` starts a run's agent only after its proxy first confirms its policy; the run stays `STARTING` until then and fails if it does not confirm (flag `-start-after-readback`). [Details](#wardyn_start_after_readback) |
 | `WARDYN_APPROVAL_RULES` | enum | `off` | approval rules, `off`, `dry_run` or `on`: a security admin's rule may approve a held `tool_call` or first-use `egress_domain` approval on a service identity's run. [Details](#wardyn_approval_rules) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
@@ -1762,6 +1763,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The person's sign-in browser runs as a different uid in the same sandbox, not in a sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md) says what that does and does not protect. A login reaches the agent only when the person shares that site, and after a share the agent holds those cookies within its egress.
 - Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
 
+### `WARDYN_START_AFTER_READBACK`
+
+- Start after the policy readback (flag `-start-after-readback`; [`internal/api/run_start_after_readback.go`](../internal/api/run_start_after_readback.go)). `off` (the default) starts the agent as before, while the proxy's [policy readback](operations/run-lifetime.md#policy-readback) may still be pending.
+- `on`: a run's first start stays `STARTING` until its proxy confirms the policy it loaded. No agent task, attach or `wardyn run exec` runs before then, on any substrate. The console's file list and resource reads may still run fixed commands in the sandbox.
+- A revive, a restart with current limits or a live egress edit is not held: its new proxy has the usual 60 seconds to confirm while the agent runs.
+- The run fails with its sandbox stopped when the readback fails or is not in within 60 seconds, the runner or proxy image is older than 0.10.0-rc.18, or the store keeps no readback.
+- An interactive run with a task is refused, since its agent starts as the sandbox boots.
+- The sandbox's own startup still runs before the readback: the CA install, and an interactive run's workspace preparation.
+- Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
 ### `WARDYN_APPROVAL_RULES`
 
 - Approval rules ([approval-rules.md](operations/approval-rules.md); `approvalRulesSwitch`, [`internal/api/approval_rules_approver.go`](../internal/api/approval_rules_approver.go)), read per request.
@@ -2404,6 +2415,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
 | `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
+| `WARDYN_PROXY_STALE_CREDENTIAL_MAX` | duration | `15m` | how long past its lease the proxy adds an injected credential's last good value while wardynd does not answer; never past the credential's own expiry. `0` adds none; longer or invalid keeps `15m`. Forwarded to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
 
@@ -2440,7 +2452,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A brokered repo has no `git_pat` path beside its App lane in any case: policy-write refuses the two grants for the same forge.
 - **Opting either lane's posture is visible, not inferred:** the proxy logs a one-shot `slog` WARN at boot when the App lane is OFF, and INFO when the PAT lane is ON
 - The two postures are announced in opposite directions since they start from opposite defaults.
-- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
+- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) to every proxy sidecar from the environment of whatever starts it: wardynd for runs on the server, `wardyn-runnerd` for runs on a runner's computer. Docker passes it as an `Env` entry and Kubernetes on the proxy pod; host-run proxies read their own env.
 - **This variable is WHERE-only:** a run's `push_rules` (`deny_paths`, `max_inspect_pack_mib`) is WHAT a push may touch, enforced on both brokered lanes independently of either scope here
 - Opting either lane out never opts a push out of its content rules.
 - See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).

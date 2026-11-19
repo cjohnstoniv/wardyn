@@ -817,7 +817,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   `rolsuper = false` while it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is followed to
   any depth whether or not the role `INHERIT`s.
 - Membership in `pg_write_all_data` is deliberately **not** counted: it confers `INSERT`/`UPDATE`/`DELETE`, but the
-  append-only guard is a trigger rather than a privilege and still refuses both.
+  append-only guard on `audit_events` is a trigger rather than a privilege and still refuses both.
+  - Its bookkeeping tables `audit_partition_meta` and `audit_chain_anchors` have no such trigger, so such a member can rewrite the retention policy unreported.
 - Counting it would understate the posture just as badly as missing a superuser overstates it.
 - The third is the quiet one —
   - a role granted `TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE INSERT trigger of its
@@ -2768,7 +2769,7 @@ The residuals an operator should plan for:
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
 
 - `internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space.
-- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
+- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), Azure's WireServer `168.63.129.16` (every port), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
 - No `internal_hosts`, `allowed_domains` or `egress_redirects` entry reaches it, in this run or a new one.
 - The refusal's body names the class and prescribes nothing: there is nothing in site config to change.
 - An agent resolving a name into that space is misconfigured or probing the host's metadata service.

@@ -276,7 +276,7 @@ export function ComponentEditor({
   component: Component | null;
   onClose: () => void;
   /** The saved row's id, and whether it was created by this save. */
-  onSaved: (id: string, created: boolean) => void;
+  onSaved: (id: string, created: boolean, warnings: string[]) => void;
 }) {
   const [draft, setDraft] = React.useState<ComponentDraft>(() => draftOf(component));
   const [saving, setSaving] = React.useState(false);
@@ -302,8 +302,8 @@ export function ComponentEditor({
     const id = component?.id ?? newUuid();
     try {
       // The version this editor opened: a row someone saved since is refused, not overwritten.
-      await api.put(id, { ...withStored(requestOf(draft), component, audience), ...(component && { expected_version: component.version }) });
-      onSaved(id, component === null);
+      const saved = await api.put(id, { ...withStored(requestOf(draft), component, audience), ...(component && { expected_version: component.version }) });
+      onSaved(id, component === null, saved.warnings ?? []);
     } catch (e) {
       setError(getErrorMessage(e));
     } finally {

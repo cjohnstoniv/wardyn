@@ -269,6 +269,9 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 	fmt.Fprintf(w, "pending approval: %d change(s) stored, not applied; a second approver runs `wardyn governance changes approve <id>`\n", len(res.Pending))
 	for _, ch := range res.Pending {
 		fmt.Fprintf(w, "  %s  %s %s %s  proposed by %s  expires %s\n", ch.ID, ch.Op, ch.TargetKind, ch.TargetKey, ch.ProposedBy, ch.ExpiresAt.Format(time.RFC3339))
+		for _, warning := range ch.Warnings {
+			fmt.Fprintf(w, "    warning: %s\n", warning)
+		}
 	}
 	var profiles, assignments, deciders []sdk.GovernanceDeferredWrite
 	for _, d := range res.Deferred {

@@ -215,9 +215,11 @@ export function ComponentsScreen() {
             // A save refused because the row changed is followed by a close: the next open reads the saved row.
             load();
           }}
-          onSaved={(id, created) => {
+          onSaved={(id, created, warnings) => {
             setEditing(null);
             toast.success(T.SAVED_TOAST);
+            // The save stands; a warning tells the admin what to fix (a host that serves a model).
+            for (const warning of warnings) toast.warning(warning, { duration: 15000 });
             // A new component is available to nobody: open the control that fixes that.
             if (created) setOpenId(id);
             load();

@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.25). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.26). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -626,7 +626,7 @@ is not the deployment described above.**
 ### L1 default-deny
 
 - Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata
-  `169.254.169.254` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
+  `169.254.169.254` and Azure's WireServer `168.63.129.16` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
 - A non-enforcing CNI refuses boot **unless the operator sets `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1`
   or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`; both are disclosed in
   [§5's "Operator overrides that boot past a fail-closed gate"](#operator-overrides-that-boot-past-a-fail-closed-gate)**.
@@ -643,6 +643,8 @@ is not the deployment described above.**
 - and an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4
   guard `allow_all_egress` does not reach — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions)
   for the guard and its two admin-authored exceptions
+
+By default an agent starts before its proxy confirms the policy it loaded. With `WARDYN_START_AFTER_READBACK=on`, a run's first start runs no agent task, attach or `wardyn run exec` before that confirmation, on any substrate, and a start that does not confirm fails the run. The sandbox's own startup (CA install, interactive workspace preparation) and the console's file and resource reads still run first. A revive, restart or live egress edit is not held: its new proxy keeps the 60-second window while the agent runs.
 
 ### Sandbox writing into the control plane through the brokered approvals route
 
@@ -2337,7 +2339,7 @@ These risks are **not closed by v1 Wardyn**.
 
 43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops saying otherwise.**
     - Only the private/reserved-range class (RFC1918/ULA/CGNAT) is liftable, and only through `internal_hosts`.
-    - Loopback, link-local (including the `169.254.169.254` metadata address), multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
+    - Loopback, link-local (including the `169.254.169.254` metadata address), Azure's WireServer `168.63.129.16` on every port, multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
     - The guard class now rides out of address vetting into the denial body.
     - And the never-liftable classes get their own sentence with NO site-config remedy and NO lifetime clause, because there is nothing to change and a new run would change nothing.
     - Both variants keep rule source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are final.

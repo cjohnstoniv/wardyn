@@ -382,13 +382,19 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	if s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason) {
-		// An approved role-mapping change whose revocation failed says so, as the direct write does.
+	if tokensNotRevoked, runsNotEnded := s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason); tokensNotRevoked || runsNotEnded {
+		// An approved role-mapping change whose revocation failed says so, as the direct write does; so does an
+		// approved service identity suspension that could not end every live run.
+		detail := roleTokensNotReached
+		if runsNotEnded {
+			detail = serviceRunsNotEnded
+		}
 		writeJSON(w, http.StatusOK, struct {
 			types.GovernanceChange
-			TokensRevocationFailed bool   `json:"tokens_revocation_failed"`
+			TokensRevocationFailed bool   `json:"tokens_revocation_failed,omitempty"`
+			RunsEndFailed          bool   `json:"runs_end_failed,omitempty"`
 			Detail                 string `json:"detail"`
-		}{s.changeForRead(r, out), true, roleTokensNotReached})
+		}{s.changeForRead(r, out), tokensNotRevoked, runsNotEnded, detail})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
@@ -436,9 +442,10 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 // write would have, plus governance.change.approve (and the bypass row when the admin token spent
 // one); a reject writes governance.change.reject, marked withdrawn when the proposer made it, and a
 // request kind's own reject row after it. It reports whether the applied change's after-commit work
-// failed to revoke the tokens it demoted (a role mapping's tokens_revocation_failed).
+// failed to revoke the tokens it demoted (a role mapping's tokens_revocation_failed), and whether it failed to
+// end a suspended service identity's live runs (runs_end_failed).
 func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, applied govApplied, approve, bypass bool,
-	actorType types.ActorType, principal, email, reason string) (tokensNotRevoked bool) {
+	actorType types.ActorType, principal, email, reason string) (tokensNotRevoked, runsNotEnded bool) {
 	ctx := r.Context()
 	data := map[string]any{"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy}
 	if approve {
@@ -459,6 +466,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 			tdata["actor"], tdata["approver"], tdata["unit_scope"] = out.ProposedBy, principal, s.auditUnitScope(ctx, units[0], strict)
 		}
 		tokensNotRevoked = tdata["tokens_revocation_failed"] == true
+		runsNotEnded = tdata["runs_end_failed"] == true
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.approve", out.ID.String(), "success", mustJSON(data)))
 		if bypass {
@@ -477,7 +485,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, kind.rejectAction, out.ID.String(), "success", mustJSON(s.requestRejectData(ctx, out, withdrawn))))
 		}
 	}
-	return tokensNotRevoked
+	return tokensNotRevoked, runsNotEnded
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit

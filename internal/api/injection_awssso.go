@@ -329,11 +329,12 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// ExpiresAt is the session's own expiry or the stored-key lease, whichever
 	// is sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:      minted.Injection.Host,
-		Header:    minted.Injection.Header,
-		Value:     value,
-		JTI:       minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresAt}),
+		Host:                minted.Injection.Host,
+		Header:              minted.Injection.Header,
+		Value:               value,
+		JTI:                 minted.JTI,
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresAt}),
+		CredentialExpiresAt: credentialExpiry(blob.ExpiresAt),
 	})
 	return true
 }

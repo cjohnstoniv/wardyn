@@ -459,6 +459,7 @@ func run() error {
 		EgressPortRule:       egressPortRule(*f.egressPortRule),
 		ModelUsageOff:        modelUsageOff,
 		DesktopSignins:       *f.desktopSignins == "on",
+		StartAfterReadback:   *f.startAfterReadback == "on",
 		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
 		CLIArtifactBase:      knobs.cliArtifactBase,
 		OrgCAFingerprints:    knobs.orgCAFingerprints,

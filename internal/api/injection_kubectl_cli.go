@@ -138,7 +138,8 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 	})))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: value, JTI: minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: expires}),
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: expires}),
+		CredentialExpiresAt: credentialExpiry(expires),
 	})
 	return true
 }

@@ -145,8 +145,14 @@ type GovernanceChange struct {
 	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
 	// TokensRevocationFailed is set on an approval's answer only: the change is applied, but it could
 	// not revoke every API token that may still hold the role it took away. Detail is the server's remedy.
-	TokensRevocationFailed bool   `json:"tokens_revocation_failed,omitempty"`
-	Detail                 string `json:"detail,omitempty"`
+	TokensRevocationFailed bool `json:"tokens_revocation_failed,omitempty"`
+	// RunsEndFailed is set on an approval's answer only: a service identity suspension is applied, but
+	// it could not end every live run of the identity. Detail is the server's remedy.
+	RunsEndFailed bool   `json:"runs_end_failed,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	// Warnings is set on a 202's pending_change only: advisory sentences for the proposer, such as a deciders
+	// rule under which no one, security included, can decide a host rule hold. They are not stored with the change.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // GovernanceChangeNote is what the proposer wrote on a held change: why it is wanted, and an optional

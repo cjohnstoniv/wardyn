@@ -382,11 +382,12 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
 	// sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:      minted.Injection.Host,
-		Header:    adoEntraInjectHeader,
-		Value:     value,
-		JTI:       minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
+		Host:                minted.Injection.Host,
+		Header:              adoEntraInjectHeader,
+		Value:               value,
+		JTI:                 minted.JTI,
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
+		CredentialExpiresAt: credentialExpiry(access.ExpiresAt),
 		// Informational only: the proxy's gate pins the organisation from the
 		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,

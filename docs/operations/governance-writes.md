@@ -120,6 +120,7 @@ an operator follows to turn one on and run the queue.
     - A description or suspend PATCH, a PATCH naming the current sponsor, unsuspend and retire apply directly; the user type never changes on a PATCH.
     - A create applies only while the name is free, the sponsor is bound and active and the type exists; a sponsor change only while the identity is not retired or recreated and its sponsor is the one reviewed.
     - On approval the identity's tokens are revoked as after a direct sponsor change, and `service_identity.create` or `.update` is written.
+    - A held PATCH that also suspends ends the identity's live runs on approval. When some cannot be ended, the row carries `runs_end_failed` and `runs_left`, and the answer carries `runs_end_failed` and a `detail`; a PATCH with `suspended` true ends them.
 - **Audit.**
   - `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
   - On approval the target's own row (`governance.unit.write`, `governance.membership.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.

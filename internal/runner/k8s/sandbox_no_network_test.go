@@ -251,7 +251,7 @@ func TestCreateSandbox_NoNetworkRunnerProxyIsRunnerdOnly(t *testing.T) {
 }
 
 // goldenProxyEgress is today's three-part proxy egress, written out: DNS to the cluster's DNS pods and every
-// address but the metadata one, then every address but the metadata one.
+// address but the metadata ones (169.254.169.254 and Azure WireServer), then every address but those.
 func goldenProxyEgress() []networkingv1.NetworkPolicyEgressRule {
 	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
 	p53 := intstr.FromInt32(53)
@@ -259,14 +259,14 @@ func goldenProxyEgress() []networkingv1.NetworkPolicyEgressRule {
 		{
 			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &p53}, {Protocol: &udp, Port: &p53}},
 			To: []networkingv1.NetworkPolicyPeer{
-				{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"169.254.169.254/32"}}},
+				{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"169.254.169.254/32", "168.63.129.16/32"}}},
 				{
 					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
 					PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
 				},
 			},
 		},
-		{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"169.254.169.254/32"}}}}},
+		{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"169.254.169.254/32", "168.63.129.16/32"}}}}},
 	}
 }
 

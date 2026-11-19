@@ -127,9 +127,11 @@ func (s *Server) envelopeSecurityOnly(ctx context.Context, ch types.GovernanceCh
 // envelopeExempt is unitWriteExempt's third proof, for a unit admin's update of a unit strictly inside
 // an envelope: the nearest envelope root strictly above the unit is the same before and after the
 // write (so neither the root itself nor a re-parent out of it qualifies), and the new effective walls
-// are Leq the root's with no higher member cap. Composition keeps a unit below the root within its walls,
-// on a port too: the meet reads a bare entry as 80 and 443 only, as Leq does, so a unit naming another port
-// of an entry the root names bare keeps neither. A security caller's write follows the
+// are Leq the root's with no higher member cap. That Leq is computed here, not assumed from composition:
+// under a root open to all egress, a unit that turns it off may keep a name on 80 or 443 the root's own
+// list lacks (composer.ApplyUnitOverlay), which Leq reads as outside the root. Under a closed root the meet
+// reads a bare entry as 80 and 443 only, as Leq does, so a unit naming another port of an entry the root
+// names bare keeps neither. A security caller's write follows the
 // second-human switch instead, and an envelope read error proves nothing.
 func (s *Server) envelopeExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	if res == nil || !s.isUnitAdminCaller(ctx) {

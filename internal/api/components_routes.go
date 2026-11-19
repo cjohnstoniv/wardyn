@@ -178,7 +178,31 @@ func (s *Server) auditComponent(r *http.Request, action string, c types.Componen
 // needs (componentSaveRequirements), read after the write so it reports what the
 // saver's namespace holds now.
 func (s *Server) componentSaved(r *http.Request, c types.Component) client.ComponentSaved {
-	return client.ComponentSaved{Component: c, Requirements: s.componentSaveRequirements(r, c)}
+	return client.ComponentSaved{Component: c, Requirements: s.componentSaveRequirements(r, c), Warnings: s.componentSaveWarnings(r, c)}
+}
+
+// componentSaveWarnings is what an organisation component's save still tells
+// its admin: each host that serves a model, with the run gate's own sentence
+// (the port does not count). The save stays 201 or 200, so existing saves keep
+// working, and people who attach the component are refused at run time. A
+// person's own component gets the sentence from the run gate when they use it.
+// Advisory and after the write: an unreadable site config warns of nothing.
+func (s *Server) componentSaveWarnings(r *http.Request, c types.Component) []string {
+	if c.Owner != "" {
+		return nil
+	}
+	sc, ok := s.siteConfigSnapshot(r.Context())
+	if !ok {
+		return nil
+	}
+	bounds := componentHostBounds{model: modelServingDestinations(sc), serving: s.modelServingHosts(sc)}
+	var out []string
+	for hi, h := range c.Definition.Hosts {
+		if problem := bounds.modelHostProblem(hi, h); problem != "" {
+			out = append(out, "definition."+problem+". People who attach this component are refused until you do.")
+		}
+	}
+	return out
 }
 
 // handleSaveMyComponent is POST /me/components: a new component of the caller's

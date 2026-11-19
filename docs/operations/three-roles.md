@@ -106,7 +106,7 @@ derives its role.
 
 | `RunPolicySpec` field | Unset means | Meet |
 |---|---|---|
-| `allowed_domains` | nothing allowed | each overlay entry must be covered by the base's entries; the overlay's entries are the result |
+| `allowed_domains` | nothing allowed | each overlay entry must be covered by the base's entries; the overlay's entries are the result. Under a base with `allow_all_egress`, an overlay that sets it `false` may also name any host on port 80 or 443; an IP address or another port still needs the base's own entry |
 | `denied_domains` | none | union |
 | `allow_all_egress` | false | AND (an overlay may only set it false) |
 | `first_use_approval` | `always_deny` | the stricter mode |

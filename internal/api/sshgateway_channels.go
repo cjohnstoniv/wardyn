@@ -834,8 +834,8 @@ func (p *sshPumpState) applyResize(cols, rows uint16) bool {
 // runs it by a relative path (Mutagen's agent) finds it (#3549). The cd's stdout
 // is discarded too: a relative HOME that CDPATH resolves, or HOME of "-", makes
 // cd print a directory line ahead of the command's output, which sshd's
-// chdir never does.
-const sshExecFromHome = `[ -n "${HOME:-}" ] && cd "$HOME" >/dev/null 2>&1; exec /bin/sh -c "$1"`
+// chdir never does. runner.ExecCAWait first holds the command until the run's CA files exist.
+const sshExecFromHome = runner.ExecCAWait + `[ -n "${HOME:-}" ] && cd "$HOME" >/dev/null 2>&1; exec /bin/sh -c "$1"`
 
 // sshExecArgv is the argv one exec channel's command runs as.
 func sshExecArgv(command string) []string {
