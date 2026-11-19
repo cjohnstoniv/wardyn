@@ -338,10 +338,10 @@ describe("the person drawer", () => {
   });
 
   it.each([
-    ["idp|123", "wardyn invite -- 'idp|123'"],
-    ["a$b", "wardyn invite -- 'a$b'"],
-    ["o'neil", "wardyn invite -- 'o'\\''neil'"],
-    ["-x", "wardyn invite -- '-x'"],
+    ["idp|123", "wardyn person invite -- 'idp|123'"],
+    ["a$b", "wardyn person invite -- 'a$b'"],
+    ["o'neil", "wardyn person invite -- 'o'\\''neil'"],
+    ["-x", "wardyn person invite -- '-x'"],
   ])("the invite command keeps the subject %s one shell word", (subject, command) => {
     expect(P.INVITE_CMD(subject)).toBe(command);
   });
@@ -366,7 +366,7 @@ describe("the person drawer", () => {
 
   it("tells the admin how to let the person create a token", async () => {
     const { drawer } = await openAna();
-    expect(within(drawer).getByText("wardyn invite -- 'sub-ana'")).toBeInTheDocument();
+    expect(within(drawer).getByText("wardyn person invite -- 'sub-ana'")).toBeInTheDocument();
   });
 
   // The count beside the list is the server's active count (unrevoked, unexpired), so the list is too.

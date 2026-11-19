@@ -20,7 +20,7 @@ Needed first:
 2. Start the run: `wardyn run --experience interactive --machine-kind macos_vm --window`. In the console, choose a virtual machine, then macOS, in New Run. `--macos-base <name>` picks a base other than Standard.
 3. Wait until the run is `RUNNING` and its preparation is done. With `--window` the window opens once preparation finishes. If it does not, run `wardyn window <run>`.
 4. Work in the window. Closing it leaves the run going ([Closing a window](#closing-a-window)).
-5. For a terminal, run `wardyn attach <run>`, or `wardyn ssh <run>` to use SSH tools.
+5. For a terminal, run `wardyn attach <run>`, or `wardyn run ssh <run>` to use SSH tools.
 6. Ask whether a window can open, and why the last one closed: `wardyn window <run> --status`.
 
 ## Keeping the machine
