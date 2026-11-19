@@ -164,7 +164,7 @@ export function UnitDeciders({
     try {
       const saved = await putUnitDeciders(profile.id, draft);
       toast.success(DECIDERS.SAVED);
-      for (const warning of saved.warnings ?? []) toast.warning(warning);
+      for (const warning of saved?.warnings ?? []) toast.warning(warning); // an empty body (a no-op clear) has none
       // The reload puts the stored rules back in the draft: the section stays read-only until it has landed.
       await onChanged();
     } catch (e) {
