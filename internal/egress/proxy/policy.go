@@ -30,6 +30,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -917,8 +918,8 @@ func v4CompatibleEmbeddedV4(ip net.IP) (net.IP, bool) {
 
 // isBlockedIP reports whether ip is in an unconditionally-denied range:
 // loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
-// the unspecified address, RFC1918/ULA private space and the reserved ranges in
-// internal/ipguard. Denied regardless of policy: SiteConfig.InternalHosts (the
+// Azure's WireServer metadata address 168.63.129.16, the unspecified address,
+// RFC1918/ULA private space and the reserved ranges in internal/ipguard. Denied regardless of policy: SiteConfig.InternalHosts (the
 // one override that exists) cannot reach loopback/link-local/metadata, because
 // its CIDRs must lie inside ipguard.Liftable, which never intersects them.
 // IPv4-mapped IPv6 addresses are unwrapped so "::ffff:127.0.0.1" cannot smuggle
@@ -940,6 +941,12 @@ func isBlockedIP(ip net.IP) (blockKind, string) {
 			return blockPrivate, "private/reserved " + why
 		}
 		return blockReservedOther, "private/reserved " + why
+	}
+	// A metadata endpoint in public space (Azure's WireServer): no range above holds it.
+	if addr, ok := netip.AddrFromSlice(ip); ok {
+		if i := slices.IndexFunc(ipguard.NeverLift, func(p netip.Prefix) bool { return p.Contains(addr.Unmap()) }); i >= 0 {
+			return blockLocal, "cloud metadata " + ipguard.NeverLift[i].String()
+		}
 	}
 	// NAT64-embedded IPv4 smuggling: inside a NAT64 prefix the low 32 bits ARE a
 	// real IPv4, so 64:ff9b::a9fe:a9fe reaches 169.254.169.254 while To4()==nil.

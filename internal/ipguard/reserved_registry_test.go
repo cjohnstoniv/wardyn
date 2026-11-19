@@ -102,3 +102,16 @@ func TestNeverLiftCarvesTheMetadataEndpointsOutOfLiftable(t *testing.T) {
 		}
 	}
 }
+
+// TestNeverLiftHoldsAzureWireServer: Azure's WireServer (also its host agent plugin and DNS address) is in
+// NeverLift, so the gateway predicate refuses it, while its public neighbours stay ordinary addresses.
+func TestNeverLiftHoldsAzureWireServer(t *testing.T) {
+	if !GatewayIPRefused(net.ParseIP("168.63.129.16")) || InLiftable(net.ParseIP("168.63.129.16")) {
+		t.Error("168.63.129.16 must be refused as a gateway and never liftable")
+	}
+	for _, ip := range []string{"168.63.129.15", "168.63.129.17"} {
+		if GatewayIPRefused(net.ParseIP(ip)) {
+			t.Errorf("GatewayIPRefused(%s) = true, want false: only the WireServer address is carved out", ip)
+		}
+	}
+}

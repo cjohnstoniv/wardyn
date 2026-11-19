@@ -359,7 +359,7 @@ func overlayOf(p types.GovernanceUnit) composer.Overlay {
 // re-intersected against that resolved base. leaf says the row is the profile being resolved, whose
 // warnings are the only ones a member sees.
 func (s *Server) applyStep(out *ResolvedUnit, base composer.Authority, row types.GovernanceUnit, leaf bool) (composer.Authority, error) {
-	res, warns, err := composer.ApplyOverlay(base, overlayOf(row))
+	res, warns, err := composer.ApplyUnitOverlay(base, overlayOf(row))
 	if err == nil {
 		if msg := governanceLimitsRefusal(res.Limits); msg != "" {
 			err = &composer.OverlayError{Reason: composer.ReasonOverlayUnsatisfiable, Field: "limits", Detail: msg}

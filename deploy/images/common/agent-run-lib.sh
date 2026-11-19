@@ -96,17 +96,20 @@ install_mitm_ca() {
     local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}" sys="" c
     mkdir -p "$dir" 2>/dev/null || true
     chmod 1777 "$dir" 2>/dev/null || true
-    { { [[ -z "${WARDYN_MITM_CA_PEM:-}" ]] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [[ ! -s "$corp" ]] || cat "$corp"; } > "$dir/mitm-ca.pem" \
-        && chmod 0644 "$dir/mitm-ca.pem"; } 2>/dev/null || true
+    # Each file goes to a temp file in the same directory and is renamed into place,
+    # mitm-ca.pem first and ca-bundle.pem last, so a reader never sees a partial file.
+    local tmp="$dir/.ca-tmp.$$"
+    { { [[ -z "${WARDYN_MITM_CA_PEM:-}" ]] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [[ ! -s "$corp" ]] || cat "$corp"; } > "$tmp" \
+        && chmod 0644 "$tmp" && mv -f "$tmp" "$dir/mitm-ca.pem"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
     for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
         [[ -f "$c" ]] && sys="$c" && break
     done
     if [[ -n "$sys" ]]; then
-        { cat "$sys" "$dir/mitm-ca.pem" > "$dir/ca-bundle.pem" \
-            && chmod 0644 "$dir/ca-bundle.pem"; } 2>/dev/null || true
+        { cat "$sys" "$dir/mitm-ca.pem" > "$tmp" \
+            && chmod 0644 "$tmp" && mv -f "$tmp" "$dir/ca-bundle.pem"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
     else
-        { cp "$dir/mitm-ca.pem" "$dir/ca-bundle.pem" \
-            && chmod 0644 "$dir/ca-bundle.pem"; } 2>/dev/null || true
+        { cp "$dir/mitm-ca.pem" "$tmp" \
+            && chmod 0644 "$tmp" && mv -f "$tmp" "$dir/ca-bundle.pem"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
         echo "agent-run: WARNING: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
     fi
     if command -v update-ca-certificates >/dev/null 2>&1; then

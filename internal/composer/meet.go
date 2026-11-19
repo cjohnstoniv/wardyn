@@ -88,13 +88,34 @@ func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 // to 80 and 443, so either is kept only where the policy's own list names it (openSeed, which MeetWalls
 // shares). A name added this way is an exact entry, so it also enrols proxy-side credential injection
 // (proxy.Policy.AllowedExactHost) for a credential the run holds for that host, as a name MeetWalls adds
-// already does. A unit's overlay keeps ApplyOverlay's rule, where open egress covers no entry.
+// already does. A unit's overlay is read the same way (ApplyUnitOverlay).
 func ApplyRestrictionOverlay(base Authority, ov Overlay) (Authority, []string, error) {
+	return ApplyOverlay(openBase(base, ov), ov)
+}
+
+// ApplyUnitOverlay is ApplyOverlay for a governance unit's overlay, read as ApplyRestrictionOverlay reads
+// a restriction's: an overlay that turns open egress off with an allowlist narrows a base that allows all
+// egress to that allowlist, with an IP literal or another port kept only where the base's own list names
+// it. A member of an open base may already name such a host exactly in their own run, so the seed adds no
+// reach or credential injection the base withheld; the base's denied_domains still join the result.
+func ApplyUnitOverlay(base Authority, ov Overlay) (Authority, []string, error) {
+	return ApplyOverlay(openBase(base, ov), ov)
+}
+
+// ValidateUnitOverlay is ValidateOverlay on the base ApplyUnitOverlay meets, so a unit's save and its
+// resolve read an open base the same way.
+func ValidateUnitOverlay(base Authority, ov Overlay) error {
+	return ValidateOverlay(openBase(base, ov), ov)
+}
+
+// openBase is base with ov's allowlist seeded into its own (openSeed) when base allows all egress and ov
+// turns that off with an allowlist; otherwise base unchanged.
+func openBase(base Authority, ov Overlay) Authority {
 	closes := ov.Ceiling.AllowAllEgress != nil && !*ov.Ceiling.AllowAllEgress
 	if base.Ceiling.AllowAllEgress && closes && ov.Ceiling.AllowedDomains != nil {
 		base.Ceiling.AllowedDomains = openSeed(base.Ceiling.AllowedDomains, *ov.Ceiling.AllowedDomains)
 	}
-	return ApplyOverlay(base, ov)
+	return base
 }
 
 // openSeed is own plus each entry of list that open egress reaches: a name or wildcard on a port allow-all

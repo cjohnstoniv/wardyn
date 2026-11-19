@@ -344,7 +344,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
-	gen, start, rerr := s.reviveAdvanceHeld(ctx, lockCtx, run, fate, data, actorType, actor, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI, expected, storedJSON, source, len(edits) > 0)
+	gen, start, rerr := s.reviveAdvanceHeld(ctx, lockCtx, run, fate, data, actorType, actor, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI, expected, storedJSON, source)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -636,5 +637,86 @@ func TestDecidersBoundaryLockHeldRefusedAtApproval(t *testing.T) {
 	}
 	if e.changeState(ch.ID) != types.GovernanceChangePending {
 		t.Errorf("change is %s after the refusal, want still pending", e.changeState(ch.ID))
+	}
+}
+
+// TestDecidersSaveWarnsWhenHostHoldsOutOfReach: an egress_domain rule whose max_scope is below run saves
+// with 200 and a warning, since no one, security included, can answer a host rule hold (decided for the
+// run) under it; a rule at run, or one that does not name egress_domain, saves with none.
+func TestDecidersSaveWarnsWhenHostHoldsOutOfReach(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	save := func(rule map[string]any) types.UnitDeciders {
+		t.Helper()
+		w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(rule))
+		var saved types.UnitDeciders
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil {
+			t.Fatalf("saving %v = %d %s, want 200", rule, w.Code, w.Body)
+		}
+		return saved
+	}
+	once := map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"owner", "unit_admins"}, "max_scope": "once"}
+	want := fmt.Sprintf(decidersHostHoldWarning, "once")
+	if got := save(once); len(got.Warnings) != 1 || got.Warnings[0] != want {
+		t.Errorf("a once egress_domain rule warnings = %q, want [%q]", got.Warnings, want)
+	}
+	if got := e.storedDeciders(e.a); len(got) != 1 || got[0].MaxScope != types.ScopeOnce {
+		t.Errorf("the warned rule stored %v, want it saved unchanged", got)
+	}
+	if got := save(egressOwnerRule()).Warnings; len(got) != 0 {
+		t.Errorf("a run egress_domain rule warnings = %q, want none", got)
+	}
+	mcpOnce := map[string]any{"kinds": []string{"mcp_call"}, "who": []string{"unit_admins"}, "max_scope": "once"}
+	if got := save(mcpOnce).Warnings; len(got) != 0 {
+		t.Errorf("a rule not naming egress_domain warnings = %q, want none", got)
+	}
+	// The cap binds security too, so until, a security-only rule and egress_domain beside another kind warn alike.
+	for name, tc := range map[string]struct {
+		rule  map[string]any
+		scope string
+	}{
+		"until":         {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"owner"}, "max_scope": "until"}, "until"},
+		"empty who":     {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{}, "max_scope": "once"}, "once"},
+		"beside mcp":    {map[string]any{"kinds": []string{"egress_domain", "mcp_call"}, "who": []string{"unit_admins"}, "max_scope": "once"}, "once"},
+		"empty who run": {map[string]any{"kinds": []string{"egress_domain"}, "who": []string{}, "max_scope": "run"}, ""},
+	} {
+		got := save(tc.rule).Warnings
+		if tc.scope == "" {
+			if len(got) != 0 {
+				t.Errorf("%s: warnings = %q, want none", name, got)
+			}
+			continue
+		}
+		if want := fmt.Sprintf(decidersHostHoldWarning, tc.scope); len(got) != 1 || got[0] != want {
+			t.Errorf("%s: warnings = %q, want [%q]", name, got, want)
+		}
+	}
+}
+
+// TestDecidersHeldWriteCarriesWarning: a unit admin's write is always held, so the 202's pending_change
+// carries the same warning; a held rule at run carries none.
+func TestDecidersHeldWriteCarriesWarning(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	held := func(u types.GovernanceUnit, rule map[string]any) []string {
+		t.Helper()
+		w := e.call(e.adminA, http.MethodPut, decidersPath(u), decidersBody(rule))
+		var body struct {
+			PendingChange struct {
+				TargetKind string   `json:"target_kind"`
+				Warnings   []string `json:"warnings"`
+			} `json:"pending_change"`
+		}
+		if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &body) != nil ||
+			body.PendingChange.TargetKind != types.GovernanceTargetUnitDeciders {
+			t.Fatalf("a unit admin saving %v = %d %s, want 202 with the held deciders change", rule, w.Code, w.Body)
+		}
+		return body.PendingChange.Warnings
+	}
+	once := map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"owner", "unit_admins"}, "max_scope": "once"}
+	want := fmt.Sprintf(decidersHostHoldWarning, "once")
+	if got := held(e.a1, once); len(got) != 1 || got[0] != want {
+		t.Errorf("a held once egress_domain rule warnings = %q, want [%q]", got, want)
+	}
+	if got := held(e.a2, egressOwnerRule()); len(got) != 0 {
+		t.Errorf("a held run egress_domain rule warnings = %q, want none", got)
 	}
 }

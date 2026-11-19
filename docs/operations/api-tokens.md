@@ -393,7 +393,7 @@ A service identity is automation that runs under its own name. It is not a perso
   - A missing, suspended or retired identity, a token older than the current sponsor, or a sponsor who is deactivated, purged or fully revoked after the token was minted is refused with the one `401` of an unknown token.
   - A sponsor does not need a live session: signing out leaves the service's tokens working. A deactivated sponsor ends the identity.
   - The `auth.fail` row says why: `service_identity_inactive` or `service_sponsor_inactive`.
-  - A sponsor disabled only at the identity provider is not seen. Without SCIM or a session revoke the service's tokens work until they expire, and its live runs continue either way.
+  - A sponsor disabled only at the identity provider is not seen. Without SCIM or a session revoke the service's tokens work until they expire. Without SCIM its live runs continue.
 
 | A service identity's token may reach | Why |
 |---|---|
@@ -431,10 +431,10 @@ A service identity is automation that runs under its own name. It is not a perso
 |---|---|
 | The sponsor changes | Every live token of the identity is revoked in the same transaction. |
 | The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. |
-| The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; live runs continue. |
+| The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; its live runs end with the sponsor's. |
 | The sponsor's sign-in identity is unbound | Refused `409` `identity_principal_in_use` while they sponsor an identity or hold a pending invitation. |
-| An admin suspends it | Tokens refused; live runs continue until killed. |
-| An admin retires it | Tokens revoked and its stored credentials erased (`credential.erase`); the name stays taken. |
+| An admin suspends it | Tokens refused; its live runs end. |
+| An admin retires it | Tokens revoked, its live runs ended and its stored credentials erased (`credential.erase`); the name stays taken. |
 
 - Rows a service's own request writes have actor type `service`, actor `service:<name>` and `data.sponsor` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md#service-identities)).
   - They name the service and its sponsor, not whoever holds the token.

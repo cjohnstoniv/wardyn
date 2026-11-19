@@ -363,7 +363,8 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: adoEntraInjectHeader, Value: adoRunPATValue(pat.Token),
 		JTI: pat.AuthorizationID, ExpiresAt: expires.UnixMilli(),
-		Organisation: sn.Organisation, Capabilities: adoCapabilityStrings(responseCaps),
+		CredentialExpiresAt: credentialExpiry(pat.ValidTo),
+		Organisation:        sn.Organisation, Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
 }

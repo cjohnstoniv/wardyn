@@ -47,12 +47,13 @@ func mcpCallDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope 
 }
 
 // mcpCallScopeKeys are the keys of types.MCPCallScope. encoding/json matches a key in any letter case
-// and keeps the last of a repeat, so each must appear at most once and spelled exactly so.
+// and keeps the last of a repeat, so each must appear at most once and spelled exactly so, and no other key may appear.
 var mcpCallScopeKeys = []string{"tool", "mcp_server", "mcp_host", "mcp_tool", "arguments", "extra", "call_sha256", "harness", "hold_seconds", "operation_key"}
 
-// mcpCallScopeKeysExact reports whether scope is an object whose top-level keys name each of
-// mcpCallScopeKeys at most once and in its own spelling (strings.EqualFold covers every fold
-// encoding/json applies, the Kelvin sign and the long s included).
+// mcpCallScopeKeysExact reports whether scope is an object whose top-level keys are each one of
+// mcpCallScopeKeys, named at most once and in its own spelling (strings.EqualFold covers every fold
+// encoding/json applies, the Kelvin sign and the long s included). Any other key is refused: decoding
+// drops it, so the row would store, and a person approve, a scope without the key the raise sent.
 func mcpCallScopeKeysExact(scope json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
@@ -65,13 +66,17 @@ func mcpCallScopeKeysExact(scope json.RawMessage) bool {
 		if err != nil || !isKey {
 			return false
 		}
+		known := false
 		for _, want := range mcpCallScopeKeys {
 			if strings.EqualFold(k, want) {
 				if k != want || seen[want] {
 					return false
 				}
-				seen[want] = true
+				seen[want], known = true, true
 			}
+		}
+		if !known {
+			return false
 		}
 		var skip json.RawMessage
 		if dec.Decode(&skip) != nil {
@@ -150,7 +155,7 @@ func mcpCallScopeShaped(scope json.RawMessage) (types.MCPCallScope, bool) {
 // refuseBadMCPCallScope is the raise's check of a scope with a key that folds to call_sha256,
 // mcp_server or mcp_tool (mcpCallKeyPresent), whatever its value: the control plane recomputes the key from the scope's own server, tool
 // and arguments and refuses a mismatch, so what a person is shown is what was hashed. It also
-// refuses such a scope on another kind, one with a repeated or case-variant key, a display name that
+// refuses such a scope on another kind, one with a repeated, case-variant or unknown key, a display name that
 // is not its raw tool's, and a call larger than a person can be shown, never truncated. Each refusal
 // is a 400 with an auth.fail row: only a misbehaving proxy writes one. An accepted scope comes back
 // re-marshalled from its typed form with canonical arguments and extra, and the row stores that,

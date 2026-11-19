@@ -159,8 +159,8 @@ func (e svcEnv) serviceRunRunning(t *testing.T, tok types.APIToken) (types.Agent
 }
 
 // TestServiceIdentity_RenewAndReviveFollowTheIdentity: a renewed or revived service run carries the CURRENT
-// sponsor, read from the identity's row, and once the identity is retired the run stops renewing and cannot
-// be revived.
+// sponsor, read from the identity's row, and once the identity is retired the run is ended, so it stops
+// renewing and cannot be revived.
 func TestServiceIdentity_RenewAndReviveFollowTheIdentity(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
@@ -180,8 +180,9 @@ func TestServiceIdentity_RenewAndReviveFollowTheIdentity(t *testing.T) {
 	if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/service-identities/"+svcName, e.sec, ""); w.Code != http.StatusOK {
 		t.Fatalf("retire: %d %s", w.Code, w.Body.String())
 	}
-	if w := renew(); w.Code != http.StatusForbidden || respReason(w) != "service_identity_inactive" {
-		t.Errorf("renew of a retired service's run: %d %s, want 403 service_identity_inactive", w.Code, w.Body.String())
+	// Retiring the identity ends its live runs, so the run's token is revoked with the run.
+	if w := renew(); w.Code != http.StatusUnauthorized || respReason(w) != "invalid_run_token" {
+		t.Errorf("renew of a retired service's run: %d %s, want 401 invalid_run_token", w.Code, w.Body.String())
 	}
 	if _, rerr := e.h.srv.reviveMintIdentity(context.Background(), run); rerr == nil || rerr.status != http.StatusConflict || rerr.reason != "service_identity_inactive" {
 		t.Errorf("revive of a retired service's run: %+v, want 409 service_identity_inactive", rerr)

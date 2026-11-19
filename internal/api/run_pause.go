@@ -86,6 +86,7 @@ type pauseClocks struct {
 	cursor    uuid.UUID
 	probes    map[uuid.UUID]*probeState
 	diskRoot  map[uuid.UUID]diskRootSample
+	denied    map[uuid.UUID]time.Time // the pause a refused resume already audited (firstDenial)
 }
 
 // thawRetryFloor is the first wait before an input retries a thaw that failed;
@@ -522,10 +523,14 @@ var errResumedSandboxGone = errors.New("the run's sandbox is not running")
 // sweep too for a waiting pause with no request open; clearing first could
 // leave a frozen agent nobody knows about. The re-read keeps a vanished sandbox from
 // reading as a resumed run: its pause stays until the watcher or the
-// reconciler settles the run.
+// reconciler settles the run. The owner's authority is re-checked before the
+// thaw (resumeRefusal): a refusal thaws nothing.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,
 	actorType types.ActorType, principal, reason string) error {
 	data := map[string]any{"reason": reason, "paused_reason": run.PausedReason, "paused_at": run.PausedAt}
+	if err := s.resumeRefusal(ctx, run, actorType, principal, data); err != nil {
+		return err
+	}
 	if f, ok := s.cfg.Runner.(runner.Freezer); ok && run.SandboxRef != "" {
 		tctx, cancel := context.WithTimeout(ctx, pauseRuntimeCallTimeout)
 		err := f.ThawSandbox(tctx, run.SandboxRef)
@@ -555,6 +560,7 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 	if err != nil {
 		return err
 	}
+	s.pause.dropDenial(run.ID)
 	if cleared {
 		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 			run.ID.String(), "success", mustJSON(data)))
@@ -823,6 +829,10 @@ func (s *Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
 	}
 	actorType, principal := actorFromRequest(r)
 	if err := s.thawForExec(r.Context(), run, actorType, principal, "resume"); err != nil {
+		if refused := (*errResumeRefused)(nil); errors.As(err, &refused) {
+			writeErrorReason(w, refused.ref.status, refused.ref.reason, refused.ref.msg)
+			return
+		}
 		writeErrorReason(w, http.StatusBadGateway, reasonRunResumeFailed, "resuming the run failed; try again")
 		return
 	}

@@ -206,9 +206,10 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		JTI:    minted.JTI,
 		// The stored-key lease, or the expiry the person entered when sooner:
 		// the proxy re-resolves by then, and a removed or expired token stops.
-		ExpiresAt:    s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresOn}),
-		Organisation: snapshot.Organisation,
-		Capabilities: adoCapabilityStrings(responseCaps),
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresOn}),
+		CredentialExpiresAt: credentialExpiry(blob.ExpiresOn),
+		Organisation:        snapshot.Organisation,
+		Capabilities:        adoCapabilityStrings(responseCaps),
 	})
 	return true
 }

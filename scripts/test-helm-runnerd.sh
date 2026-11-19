@@ -50,7 +50,7 @@ want='[{"from":[{"namespaceSelector":{"matchExpressions":[{"key":"kubernetes.io/
 [ "$ingress" = "$want" ] || die "runnerd ingress is not exactly proxy pods of the runs namespace on relay and sink: $ingress"
 [ "$(grep -c 'namespaceSelector: {}' <<<"$out")" = 1 ] || die "a namespaceSelector: {} peer other than DNS rendered"
 val "$out" 'select(.kind == "NetworkPolicy") | .spec.egress[] | select(.ports[0].port == 443 and .to[0].ipBlock) | .to[0].ipBlock.except | join(",")' \
-  | grep -x '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16' >/dev/null \
+  | grep -x '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,168.63.129.16/32' >/dev/null \
   || die "the default organisation egress no longer excludes the private ranges pods use"
 grep -q 'cidr: 203.0.113.0/24' <<<"$(render --set 'egress.orgCIDRs[0]=203.0.113.0/24')" || die "egress.orgCIDRs did not render"
 ok "NetworkPolicy: proxy-only ingress, DNS the only cluster-wide peer, private ranges excluded"

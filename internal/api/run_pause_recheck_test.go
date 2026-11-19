@@ -1,0 +1,317 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// resumeRecheckStore is pauseStore with the reads a resume's re-check makes: the owner's identity rows,
+// the captured profile's chain and memberships, and the capability rows.
+type resumeRecheckStore struct {
+	*pauseStore
+	profiles   []types.GovernanceUnit
+	blocked    bool
+	blockedErr error // IdentityBlocked's answer when the identity rows cannot be read
+	caps       []types.CapabilityGrant
+	enforced   map[string]bool
+}
+
+func (s *resumeRecheckStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return s.caps, nil
+}
+
+func (s *resumeRecheckStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return s.caps, nil
+}
+
+func (s *resumeRecheckStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return s.enforced, nil
+}
+
+func (s *resumeRecheckStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
+	return s.blocked, s.blockedErr
+}
+
+func (s *resumeRecheckStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	return unitChainOf(s.profiles, nil, id)
+}
+
+func (s *resumeRecheckStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return allRowsFor(s.profiles), nil
+}
+
+// newResumeRecheckFixture is newPauseFixture with its run paused idle under profile, on a
+// resumeRecheckStore.
+func newResumeRecheckFixture(t *testing.T, profile types.GovernanceUnit, blocked bool) (*pauseFixture, *resumeRecheckStore) {
+	t.Helper()
+	var rs *resumeRecheckStore
+	f := newPauseFixture(t, time.Hour, func(c *Config) {
+		rs = &resumeRecheckStore{pauseStore: c.Store.(*pauseStore), profiles: []types.GovernanceUnit{profile}, blocked: blocked}
+		c.Store = rs
+	})
+	f.srv.cfg.Broker, f.srv.cfg.Approvals = f.h.broker, newFakeApprovals()
+	paused := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
+	f.st.run.UnitID, f.st.run.Placement = &profile.ID, types.PlacementLocal
+	return f, rs
+}
+
+// TestResumeRun_RefusedForASuspendedOwner: a person's Resume of a run whose owner was suspended
+// while it was paused thaws nothing, answers 403 identity_deactivated, writes a run.resume denied
+// row, and ends the run through the kill cascade.
+func TestResumeRun_RefusedForASuspendedOwner(t *testing.T) {
+	f, _ := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, true)
+	f.st.run.UnitID = nil // the identity refuses first; no profile is read
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/resume", owner, "")
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonIdentityDeactivated {
+		t.Fatalf("resume for a suspended owner = %d %s, want 403 %s", w.Code, w.Body.String(), reasonIdentityDeactivated)
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Errorf("thaws = %d, want 0: a refused resume never thaws the agent", thaws)
+	}
+	if got := f.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED: an owner who lost access ends the run", got)
+	}
+	rows := f.rows("run.resume", "denied")
+	if len(rows) != 1 || leaseAuditData(t, rows[0])["refusal"] != reasonIdentityDeactivated {
+		t.Errorf("run.resume denied rows = %+v, want one with refusal %s", rows, reasonIdentityDeactivated)
+	}
+	killed := false
+	for _, ev := range f.audit.snapshot() {
+		killed = killed || ev.Action == "run.kill" && leaseAuditData(t, ev)["reason"] == reasonIdentityDeactivated
+	}
+	if !killed {
+		t.Error("no run.kill row with reason identity_deactivated")
+	}
+}
+
+// TestResumeRun_RefusedOutsideANarrowedCeiling: a run whose profile came to deny its placement
+// while it was paused stays paused and frozen; the refusal is the extension's placement_denied.
+func TestResumeRun_RefusedOutsideANarrowedCeiling(t *testing.T) {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "contractors",
+		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}}
+	f, rs := newResumeRecheckFixture(t, profile, false)
+
+	err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.status != http.StatusForbidden || refused.ref.reason != "placement_denied" {
+		t.Fatalf("resume outside the narrowed profile = %v, want a 403 placement_denied refusal", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Errorf("thaws = %d, want 0", thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil {
+		t.Error("the pause was cleared by a refused resume")
+	}
+	if got := f.st.State(); got != types.RunRunning {
+		t.Errorf("run state = %s, want RUNNING: a narrowed profile refuses the resume, it does not end the run", got)
+	}
+	rows := f.rows("run.resume", "denied")
+	if len(rows) != 1 || leaseAuditData(t, rows[0])["refusal"] != "placement_denied" || leaseAuditData(t, rows[0])["subject"] != pauseOwner {
+		t.Errorf("run.resume denied rows = %+v, want one naming the owner with refusal placement_denied", rows)
+	}
+}
+
+// TestResumeRun_AllowedWhileStillValid: an active owner whose profile still admits the run resumes it.
+func TestResumeRun_AllowedWhileStillValid(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+
+	if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("resume = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d, want 1", thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt != nil {
+		t.Errorf("still paused at %v", pausedAt)
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 0 {
+		t.Errorf("run.resume denied rows = %+v, want none", rows)
+	}
+}
+
+// TestResumeRun_RefusedForARevokedCapability: a deny on the run's agent written while it was paused
+// refuses the owner's own Resume with the extension's capability_agent, and the run stays paused and
+// RUNNING.
+func TestResumeRun_RefusedForARevokedCapability(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	f.st.run.UnitID = nil // the capability refuses; no profile is needed for it
+	rs.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capAgent, f.st.run.Agent, types.CapabilityDeny)}
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/resume", owner, "")
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonOwnerCapabilityAgent {
+		t.Fatalf("owner's resume after the agent's grant was revoked = %d %s, want 403 %s", w.Code, w.Body.String(), reasonOwnerCapabilityAgent)
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Errorf("thaws = %d, want 0", thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil || f.st.State() != types.RunRunning {
+		t.Errorf("paused at %v, state %s; want the run left paused and RUNNING", pausedAt, f.st.State())
+	}
+	rows := f.rows("run.resume", "denied")
+	if len(rows) != 1 || leaseAuditData(t, rows[0])["refusal"] != reasonOwnerCapabilityAgent {
+		t.Errorf("run.resume denied rows = %+v, want one with refusal %s", rows, reasonOwnerCapabilityAgent)
+	}
+}
+
+// TestResumeRun_GroupGrantedOwnerResumesWithoutTheirSession: under an enforced agent kind whose allow
+// names the owner's group, a resume that does not carry the owner's session (an approver's decision,
+// the sweep) cannot see that group, so it does not ask the capabilities: the run resumes.
+func TestResumeRun_GroupGrantedOwnerResumesWithoutTheirSession(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	rs.enforced = map[string]bool{capAgent: true}
+	rs.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectGroup, "engineering", capAgent, f.st.run.Agent, types.CapabilityAllow)}
+
+	if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("system resume of a group-granted owner's run = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d, want 1", thaws)
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 0 {
+		t.Errorf("run.resume denied rows = %+v, want none", rows)
+	}
+}
+
+// TestResumeRun_RepeatedRefusalsAuditOncePerPause: the sweep retries a refused resume every pass; the
+// pause writes one denied row, and a new pause writes its own.
+func TestResumeRun_RepeatedRefusalsAuditOncePerPause(t *testing.T) {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "contractors",
+		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}}
+	f, rs := newResumeRecheckFixture(t, profile, false)
+
+	for range 3 {
+		if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err == nil {
+			t.Fatal("resume outside the narrowed profile succeeded")
+		}
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 1 {
+		t.Fatalf("run.resume denied rows after 3 refusals of one pause = %d, want 1", len(rows))
+	}
+	later := f.st.run.PausedAt.Add(time.Minute)
+	f.st.run.PausedAt = &later
+	if err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed"); err == nil {
+		t.Fatal("resume outside the narrowed profile succeeded")
+	}
+	if rows := f.rows("run.resume", "denied"); len(rows) != 2 {
+		t.Errorf("run.resume denied rows after a new pause = %d, want 2", len(rows))
+	}
+}
+
+// TestResumeRun_RevokedSessionsDoNotEndTheRun: a revoke of the owner's sessions signs them out and
+// leaves their runs running, so a paused run of theirs resumes; an owner whose identity is blocked
+// (deactivated or suspended) still has the run ended.
+func TestResumeRun_RevokedSessionsDoNotEndTheRun(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	f.srv.cfg.SessionRevocations = &macWindowRevocations{revoked: true}
+	paused := *f.st.run.PausedAt
+	run := f.st.run
+
+	if err := f.srv.resumeRun(context.Background(), rs, run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("resume of a run whose owner's sessions were revoked = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 || f.st.State() != types.RunRunning {
+		t.Fatalf("thaws %d, state %s; want the run thawed once and RUNNING", thaws, f.st.State())
+	}
+
+	rs.blocked = true
+	run.PausedAt = &paused
+	err := f.srv.resumeRun(context.Background(), rs, run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.reason != reasonIdentityDeactivated {
+		t.Fatalf("resume for a blocked owner = %v, want an %s refusal", err, reasonIdentityDeactivated)
+	}
+	if got := f.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED for a blocked owner", got)
+	}
+}
+
+// resumeServiceStore is resumeRecheckStore with the service identity a run was created by read back as svc.
+type resumeServiceStore struct {
+	*resumeRecheckStore
+	store.ServiceIdentityStore // only GetServiceIdentity and ServiceStillSponsored are asked
+	svc                        types.ServiceIdentity
+}
+
+func (s *resumeServiceStore) GetServiceIdentity(_ context.Context, name string) (types.ServiceIdentity, error) {
+	if name != s.svc.Name {
+		return types.ServiceIdentity{}, store.ErrNotFound
+	}
+	return s.svc, nil
+}
+
+// ServiceStillSponsored answers as the real store does for a sponsorship that began before the run.
+func (s *resumeServiceStore) ServiceStillSponsored(_ context.Context, name, sponsor string, _ time.Time) (bool, error) {
+	if name != s.svc.Name {
+		return false, store.ErrNotFound
+	}
+	return s.svc.Usable() && s.svc.Sponsor == sponsor, nil
+}
+
+// TestResumeRun_ServiceRunResumesAfterSessionRevokes: a revoke of the service principal's or its
+// sponsor's sessions leaves a paused service-identity run resumable; a suspended service identity still
+// has the run ended with service_identity_inactive.
+func TestResumeRun_ServiceRunResumesAfterSessionRevokes(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	ss := &resumeServiceStore{resumeRecheckStore: rs, svc: types.ServiceIdentity{Name: "nightly", Sponsor: pauseOwner}}
+	f.srv.cfg.Store = ss
+	f.srv.cfg.SessionRevocations = &macWindowRevocations{revoked: true}
+	f.st.run.CreatedBy = types.ServicePrincipalPrefix + "nightly"
+	paused := *f.st.run.PausedAt
+	run := f.st.run
+
+	if err := f.srv.resumeRun(context.Background(), ss, run, types.ActorSystem, "wardynd", "request_closed"); err != nil {
+		t.Fatalf("resume of a service run after session revokes = %v, want nil", err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 || f.st.State() != types.RunRunning {
+		t.Fatalf("thaws %d, state %s; want the run thawed once and RUNNING", thaws, f.st.State())
+	}
+
+	suspended := time.Now().UTC()
+	ss.svc.SuspendedAt = &suspended
+	run.PausedAt = &paused
+	err := f.srv.resumeRun(context.Background(), ss, run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.reason != reasonServiceIdentityInactive {
+		t.Fatalf("resume for a suspended service identity = %v, want a %s refusal", err, reasonServiceIdentityInactive)
+	}
+	if got := f.st.State(); got != types.RunKilled {
+		t.Errorf("run state = %s, want KILLED for a suspended service identity", got)
+	}
+}
+
+// TestResumeRun_UnreadableIdentityRefusesWithoutEnding: an identity read that fails refuses the resume
+// with 503, writes no run.kill row, and leaves the run RUNNING and paused for the next resume.
+func TestResumeRun_UnreadableIdentityRefusesWithoutEnding(t *testing.T) {
+	f, rs := newResumeRecheckFixture(t, types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}, false)
+	rs.blockedErr = errors.New("identity rows unreachable")
+
+	err := f.srv.resumeRun(context.Background(), rs, f.st.run, types.ActorSystem, "wardynd", "request_closed")
+	var refused *errResumeRefused
+	if !errors.As(err, &refused) || refused.ref.status != http.StatusServiceUnavailable || refused.ref.reason != reasonOwnerUnverifiable {
+		t.Fatalf("resume with an unreadable identity = %v, want a 503 %s refusal", err, reasonOwnerUnverifiable)
+	}
+	for _, ev := range f.audit.snapshot() {
+		if ev.Action == "run.kill" {
+			t.Errorf("run.kill row written for an unreadable identity: %+v", ev)
+		}
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 || f.st.State() != types.RunRunning || f.st.run.PausedAt == nil {
+		t.Errorf("thaws %d, state %s, paused %v; want no thaw, RUNNING and still paused", thaws, f.st.State(), f.st.run.PausedAt != nil)
+	}
+}

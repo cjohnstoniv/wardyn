@@ -264,14 +264,10 @@ func TestProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
 			if peer.IPBlock.CIDR != "0.0.0.0/0" {
 				t.Errorf("proxy netpol egress rule %d ipBlock CIDR = %q, want 0.0.0.0/0", i, peer.IPBlock.CIDR)
 			}
-			found := false
-			for _, ex := range peer.IPBlock.Except {
-				if ex == cloudMetadataAddr {
-					found = true
+			for _, want := range []string{cloudMetadataAddr, azureWireServerAddr} {
+				if !slices.Contains(peer.IPBlock.Except, want) {
+					t.Errorf("proxy netpol egress rule %d ipBlock %v lacks except %s", i, peer.IPBlock, want)
 				}
-			}
-			if !found {
-				t.Errorf("proxy netpol egress rule %d ipBlock %v lacks except %s", i, peer.IPBlock, cloudMetadataAddr)
 			}
 		}
 	}
@@ -552,8 +548,8 @@ func TestProxyNetPolDNSRuleAddsClusterDNSPeer(t *testing.T) {
 		switch {
 		case peer.IPBlock != nil:
 			ipBlocks++
-			if peer.IPBlock.CIDR != "0.0.0.0/0" || len(peer.IPBlock.Except) != 1 || peer.IPBlock.Except[0] != cloudMetadataAddr {
-				t.Errorf("DNS rule ipBlock = %+v, want 0.0.0.0/0 except %s", peer.IPBlock, cloudMetadataAddr)
+			if peer.IPBlock.CIDR != "0.0.0.0/0" || !slices.Equal(peer.IPBlock.Except, []string{cloudMetadataAddr, azureWireServerAddr}) {
+				t.Errorf("DNS rule ipBlock = %+v, want 0.0.0.0/0 except %s and %s", peer.IPBlock, cloudMetadataAddr, azureWireServerAddr)
 			}
 		case isDNSRulePeer(dns[0], peer):
 			dnsPeers++

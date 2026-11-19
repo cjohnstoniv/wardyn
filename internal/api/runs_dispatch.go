@@ -713,8 +713,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer stopDispatchLease()
 
 	// The sandbox's ref, then the driver's hash of the bytes its proxy was handed: a start that must
-	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go).
-	if !s.recordConfirmedSandbox(ctx, run, sb, start) {
+	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go). With
+	// WARDYN_START_AFTER_READBACK=on the run also waits here for its proxy's report (run_start_after_readback.go).
+	if !s.sandboxConfirmed(ctx, run, sb, start) {
 		return
 	}
 
@@ -812,12 +813,21 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 	return sc, redirectPublicHosts(*probe)
 }
 
+// sandboxConfirmed records the sandbox's confirmed start and, with WARDYN_START_AFTER_READBACK=on, waits for its
+// proxy's report; false means the run was failed and its sandbox stopped.
+func (s *Server) sandboxConfirmed(ctx context.Context, run types.AgentRun, sb runner.Sandbox, start proxyStartRec) bool {
+	return s.recordConfirmedSandbox(ctx, run, sb, start) && s.awaitStartReadback(ctx, run, sb.Ref, start)
+}
+
 // createRunSandbox is dispatch's create: a fresh start's reset mark (keptMachineResetting), then
 // leaseDeliverCreate, with done (the start wait's and the create lease's ends) called once either is
 // over. false when the run was failed and no sandbox was created: the mark could not be written, the
 // delivery refused the run (the mark is taken back: its Mac was never asked), or the create failed.
 func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
 	resident []residentValue, kept keptDispatch, token string, done func()) (runnerExecution, runner.Sandbox, proxyStartRec, bool) {
+	if s.startAfterReadbackRefused(ctx, run, spec, done) {
+		return runnerExecution{}, runner.Sandbox{}, proxyStartRec{}, false
+	}
 	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
 	// create is still running is held against it (run_proxy_readback.go).
 	start, ok := s.beginDispatchProxyStart(ctx, run, token, done)

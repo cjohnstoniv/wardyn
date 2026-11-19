@@ -9,6 +9,7 @@ package api
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"time"
 
@@ -157,6 +158,11 @@ func applyServiceIdentityChange(s *Server, r *http.Request, q store.Querier, ch 
 			if s.withServiceState(r, &after) != nil {
 				after.State = after.BaseState()
 			}
-			return map[string]any{"state": after.State}
+			data := map[string]any{"state": after.State}
+			// A suspend held with the sponsor change ends the identity's live runs once it applies.
+			if req.Suspended != nil && *req.Suspended {
+				maps.Copy(data, s.approvedSuspendRunsData(r, after.Principal(), ch.ID))
+			}
+			return data
 		}}, nil
 }

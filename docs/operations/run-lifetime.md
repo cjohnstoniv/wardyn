@@ -230,6 +230,9 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - A run is frozen only when its profile sets `pause_idle_after_sec` (at least 630 seconds is used), nothing has happened for that long, its CPU reads quiet, and its substrate can freeze its confinement class (Docker `runc` today).
 - A run waiting on a decision is frozen after 15 minutes whatever the profile says.
 - The proxy keeps running and the run stays `RUNNING`. Typing into the run, attaching, opening an SSH channel or an in-sandbox UI connection thaws it, as does `POST /runs/{id}/resume`.
+- Every resume checks the owner again first. An owner deactivated or suspended since, or a suspended or retired service identity, ends the run (`identity_deactivated`, `service_identity_inactive`).
+- Authority the owner no longer holds keeps the run paused, with the reason an extension would get (such as `placement_denied`). Capabilities are checked only when the owner resumes it themselves (`capability_agent`). Start a new run under the current rules.
+- The run's token keeps renewing while paused: the proxy uses it to wait on a decision.
 - On Kubernetes the runner cannot freeze a pod in place, so the setting is inert there and an idle run is stopped by idle stop.
 - The limit is set in a governance profile's run limits; see the [profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how profiles combine.
 

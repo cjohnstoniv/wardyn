@@ -403,6 +403,9 @@ type ResolvedInjection struct {
 	Value     string `json:"value"`
 	JTI       string `json:"jti"`
 	ExpiresAt int64  `json:"expires_at,omitempty"`
+	// CredentialExpiresAt (unix ms, 0 = none stated) is the credential's own expiry, apart from the
+	// re-check lease ExpiresAt also folds in: the proxy never adds the value at or past it, last-good included.
+	CredentialExpiresAt int64 `json:"credential_expires_at,omitempty"`
 	// Organisation is the ADO org a per-person credential was dispatched for — informational only;
 	// the proxy's REST gate pins the org from its own dispatch-time config, never from a resolve.
 	Organisation string `json:"organisation,omitempty"`

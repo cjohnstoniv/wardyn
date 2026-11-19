@@ -77,11 +77,11 @@ Table `service_identities`, in migration 0157.
 | Sponsor mints | Console mint card, show-once dialog; row `service_identity.token.create` (D4, D16) | `POST /me/service-identities/{name}/tokens` |
 | Sponsor change | Live tokens revoked in the same transaction; `sponsor_since` set, so a mint committing after the revoke's snapshot still never authenticates (D7) | `PATCH /service-identities/{name}` |
 | Sponsor's full session revoke | Tokens minted before the cutoff stop at once; the sweep also marks them revoked | `revokePersonCredentials` |
-| Sponsor suspended by SCIM | State `sponsor_inactive`; tokens refused; live runs continue (D6) | `CheckSession` deactivated arm |
+| Sponsor suspended by SCIM | State `sponsor_inactive`; tokens refused; live runs end in the suspension's kill step, `run.kill` reason `service_sponsor_inactive` | `CheckSession` deactivated arm; `Server.killStep` |
 | Sponsor's identity unbind | Refused `409` `identity_principal_in_use` while the principal sponsors a non-retired identity or has a pending invitation | `handleUnbindIdentity`; `PrincipalInUseError` gains both counts |
 | Sponsor's session-only cut | No effect, as for the sponsor's own tokens | epoch `-1` |
-| Admin suspend | Tokens refused; live runs continue until killed | `PATCH /service-identities/{name}` |
-| Admin retire | Tokens revoked; the identity's stored credentials erased through `eraseLocked` for owner `service:<name>`, row `credential.erase` | `DELETE /service-identities/{name}` |
+| Admin suspend | Tokens refused; live runs end, `run.kill` reason `service_identity_suspended` | `PATCH /service-identities/{name}` |
+| Admin retire | Tokens revoked; live runs end, `run.kill` reason `service_identity_retired`; the identity's stored credentials erased through `eraseLocked` for owner `service:<name>`, row `credential.erase` | `DELETE /service-identities/{name}` |
 
 - Service tokens require an expiry: default and maximum `90d`, or the deployment cap if lower (D5).
 - Because the sponsor's identity row cannot be unbound, a SCIM suspension of an Entra-keyed sponsor always reaches the deactivated arm.

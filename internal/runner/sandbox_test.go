@@ -411,3 +411,14 @@ func TestSplitAWSCacheWipe(t *testing.T) {
 		t.Fatalf("nil = %q, %v", words, err)
 	}
 }
+
+// Kubernetes rewrites "$$" to "$" (and expands "$(VAR)") in a pod's Command, so the k8s agent's PID 1
+// command line would no longer equal AgentIdleScript and computer-folder bring-back would refuse
+// the run as unstoppable.
+func TestAgentIdleScript_HasNoKubernetesExpandedReference(t *testing.T) {
+	for _, s := range []string{"$$", "$("} {
+		if strings.Contains(AgentIdleScript, s) {
+			t.Errorf("AgentIdleScript contains %q, which Kubernetes rewrites in a pod Command", s)
+		}
+	}
+}

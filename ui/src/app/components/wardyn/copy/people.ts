@@ -68,7 +68,7 @@ export const PEOPLE_PAGE = {
   ALREADY_LISTED: (p: string) => `${p} was already listed.`,
   INVITE_LEAD: "To let them create a token, invite them with",
   // POSIX single quotes keep any subject (idp|123, a$b) one word; `--` (cobra stops flag parsing there) covers a leading dash.
-  INVITE_CMD: (p: string) => `wardyn invite -- '${p.replace(/'/g, `'\\''`)}'`,
+  INVITE_CMD: (p: string) => `wardyn person invite -- '${p.replace(/'/g, `'\\''`)}'`,
   SSH_REMOVE_CONFIRM: (p: string) => `Remove every SSH key ${p} has added? Their open SSH sessions end.`,
   CREDS: "Stored credentials",
   CREDS_ERASE: "Erase",
