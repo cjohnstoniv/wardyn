@@ -83,6 +83,16 @@ const (
 // sub-request scale the margin only needs to cover the round trip.
 const brokerRefreshMargin = 30 * time.Second
 
+// brokerOfflineBound is how long this proxy may go without renewing its run token, its one regular call
+// to the organisation, and still add a Git broker credential. It is the 30-minute offline bound a header
+// credential gets from its lease plus lastGoodGrace (inject.go). Past it brokeredToken refuses ahead of
+// its cache and of any mint, and keeps the cached token, so the next renewal serves it again without a
+// new mint, which an approval-gated grant could not repeat.
+const brokerOfflineBound = 30 * time.Minute
+
+// errBrokerOffline is brokeredToken's answer past brokerOfflineBound.
+var errBrokerOffline = errors.New("this proxy has not renewed its run token with the organisation for 30 minutes, so it adds no Git credential until it does")
+
 // gitApprovalBudget is the operator's ceiling for ONE brokered-credential
 // acquisition: the first mint call, the approval wait, and every poll inside
 // it (WARDYN_GIT_APPROVAL_TIMEOUT, default defaultGitApprovalTimeout).
@@ -333,7 +343,17 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 //
 // wireUser maps the mint's username to what the CALLING LANE actually puts on
 // the wire, so the mask registered below covers the rendering that leaves the process.
+//
+// Past brokerOfflineBound without a run-token renewal it answers errBrokerOffline, mints nothing and
+// keeps the cache.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
+	// The via_org engine runs inside the organisation and has no renewer, so its token source only ever ages;
+	// the bound is for a runner-side proxy that cannot reach the organisation.
+	if !p.engine && p.runToken.quiet(time.Now()) >= brokerOfflineBound {
+		// The refusal is what tells the renewer that someone is waiting on the organisation.
+		p.runToken.wake()
+		return "", "", errBrokerOffline
+	}
 	p.gitTokMu.Lock()
 	e, ok := p.gitTokens[grantID]
 	if !ok {
@@ -441,7 +461,7 @@ func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, user
 // gitApprovalTimeout elapses, re-minting exactly once on APPROVED. A
 // transient poll error is retried, not fatal.
 func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (token, username string, expMs int64, err error) {
-	timeout := gitApprovalBudget()
+	timeout := holdFor(ctx, gitApprovalBudget()) // under a via_org engine, what is left of this request's hold time
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(gitApprovalPollInterval)

@@ -86,3 +86,21 @@ func TestProxyNarrower_UnroutableRefIsNotOffered(t *testing.T) {
 		t.Errorf("probed %v, want no call", sub.probed)
 	}
 }
+
+// A narrow of a ref no substrate can be found for sent nothing, so it answers ErrNarrowNotSent (the edit
+// undoes its start). That includes a failed ref lookup. Catches the route error answered bare, which the
+// edit reads as uncertain and ends the run for.
+func TestProxyNarrower_NarrowOfUnroutableRefIsNotSent(t *testing.T) {
+	ctx := context.Background()
+	sub := &narrowingSubstrate{fakeSubstrate: &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}}}
+	plain := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}
+	if _, err := New(sub, plain).NarrowProxy(ctx, "wardyn-agent-unknown", []string{"a.example"}); !errors.Is(err, runner.ErrNarrowNotSent) {
+		t.Fatalf("NarrowProxy for an untracked ref: %v; want ErrNarrowNotSent", err)
+	}
+	if _, err := New(sub, plain).WithRefStore(&failingRefStore{}).NarrowProxy(ctx, "wardyn-agent-unknown", []string{"a.example"}); !errors.Is(err, runner.ErrNarrowNotSent) {
+		t.Fatalf("NarrowProxy with a failed ref lookup: %v; want ErrNarrowNotSent", err)
+	}
+	if len(sub.narrowed) != 0 {
+		t.Errorf("narrowed %v, want no call", sub.narrowed)
+	}
+}

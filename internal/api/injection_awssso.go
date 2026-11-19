@@ -702,7 +702,7 @@ func (s *Server) settleReauth(ctx context.Context, ap types.ApprovalRequest, res
 	}, ev); err != nil {
 		return err
 	}
-	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
+	s.metrics.credentialReauthResolved(s.boundNow(ctx).Sub(ap.RequestedAt)) // requested_at is the database's stamp
 	return nil
 }
 

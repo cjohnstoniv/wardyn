@@ -27,6 +27,10 @@ type AttachLease struct {
 	Epoch     int64 // moves at each takeover of the row
 	ExpiresAt time.Time
 	Live      bool // read-only: ExpiresAt was ahead of the database's clock
+	// Support: the lease is held under a support grant (migration 0293). A live helper's lease is taken by an
+	// acquirer that is not a helper (AcquireAttachLease). Acquire and Reacquire write it from the holder; a
+	// reservation is never a helper's (ReserveAttachLease sets false), and Get and Reserve's prev read it back.
+	Support bool
 }
 
 // AttachLeaseStore is the attach lease record. Optional like RunOutputStore: the api layer
@@ -57,18 +61,21 @@ type AttachLeaseStore interface {
 
 var _ AttachLeaseStore = PG{}
 
-// AcquireAttachLease — see AttachLeaseStore.
+// AcquireAttachLease — see AttachLeaseStore. The last WHERE arm is the owner's: a live lease a helper holds
+// (support) is taken by an acquirer that is not one, and once taken its support is false, so a second owner
+// tab no longer matches the arm.
 func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUID, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
+		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at, support)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, $9)
 		ON CONFLICT (run_id) DO UPDATE SET
 			holder_id = EXCLUDED.holder_id, replica = EXCLUDED.replica, principal = EXCLUDED.principal,
 			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
-			epoch = run_attach_leases.epoch + 1
+			support = EXCLUDED.support, epoch = run_attach_leases.epoch + 1
 		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = $8 OR run_attach_leases.holder_id = EXCLUDED.holder_id
-		   OR (run_attach_leases.source = 'reserved' AND run_attach_leases.principal = EXCLUDED.principal)`,
-		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from)
+		   OR (run_attach_leases.source = 'reserved' AND run_attach_leases.principal = EXCLUDED.principal)
+		   OR (run_attach_leases.support AND NOT EXCLUDED.support)`,
+		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from, l.Support)
 	if err != nil {
 		return false, fmt.Errorf("store: acquire the attach lease: %w", err)
 	}
@@ -79,14 +86,14 @@ func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUI
 // hand-over arms: no from, and no reservation taken by its taker's principal.
 func (s PG) ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
+		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at, support)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, $8)
 		ON CONFLICT (run_id) DO UPDATE SET
 			holder_id = EXCLUDED.holder_id, replica = EXCLUDED.replica, principal = EXCLUDED.principal,
 			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
-			epoch = run_attach_leases.epoch + 1
+			support = EXCLUDED.support, epoch = run_attach_leases.epoch + 1
 		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = EXCLUDED.holder_id`,
-		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String())
+		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), l.Support)
 	if err != nil {
 		return false, fmt.Errorf("store: take back the attach lease: %w", err)
 	}
@@ -133,15 +140,15 @@ func (s PG) ReserveAttachLease(ctx context.Context, runID, from uuid.UUID, taker
 	var reservation uuid.UUID
 	err := s.Pool.QueryRow(ctx, `
 		WITH old AS (
-			SELECT run_id, holder_id, replica, principal, source, since, epoch, expires_at FROM run_attach_leases
+			SELECT run_id, holder_id, replica, principal, source, since, epoch, expires_at, support FROM run_attach_leases
 			WHERE run_id = $1 AND expires_at > now() AND source <> '`+attachLeaseReserved+`' AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR holder_id = $2)
 			FOR UPDATE)
 		UPDATE run_attach_leases l SET holder_id = gen_random_uuid(), replica = $4, principal = $3, source = '`+attachLeaseReserved+`',
-			since = now(), expires_at = now() + $5::interval, epoch = l.epoch + 1
+			since = now(), expires_at = now() + $5::interval, support = false, epoch = l.epoch + 1
 		FROM old WHERE l.run_id = old.run_id
-		RETURNING old.run_id, old.holder_id, old.replica, old.principal, old.source, old.since, old.epoch, old.expires_at, l.holder_id`,
+		RETURNING old.run_id, old.holder_id, old.replica, old.principal, old.source, old.since, old.epoch, old.expires_at, old.support, l.holder_id`,
 		runID, from, taker, replica, ttl.String()).
-		Scan(&prev.RunID, &prev.HolderID, &prev.Replica, &prev.Principal, &prev.Source, &prev.Since, &prev.Epoch, &prev.ExpiresAt, &reservation)
+		Scan(&prev.RunID, &prev.HolderID, &prev.Replica, &prev.Principal, &prev.Source, &prev.Since, &prev.Epoch, &prev.ExpiresAt, &prev.Support, &reservation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachLease{}, uuid.Nil, false, nil
 	}
@@ -156,9 +163,9 @@ func (s PG) ReserveAttachLease(ctx context.Context, runID, from uuid.UUID, taker
 func (s PG) GetAttachLease(ctx context.Context, runID uuid.UUID) (AttachLease, bool, error) {
 	var l AttachLease
 	err := s.Pool.QueryRow(ctx, `
-		SELECT run_id, holder_id, replica, principal, source, since, epoch, expires_at, expires_at > now()
+		SELECT run_id, holder_id, replica, principal, source, since, epoch, expires_at, expires_at > now(), support
 		FROM run_attach_leases WHERE run_id = $1`, runID).
-		Scan(&l.RunID, &l.HolderID, &l.Replica, &l.Principal, &l.Source, &l.Since, &l.Epoch, &l.ExpiresAt, &l.Live)
+		Scan(&l.RunID, &l.HolderID, &l.Replica, &l.Principal, &l.Source, &l.Since, &l.Epoch, &l.ExpiresAt, &l.Live, &l.Support)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachLease{}, false, nil
 	}

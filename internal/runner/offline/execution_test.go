@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -74,7 +75,9 @@ func TestExecutionIntentSurvivesAmbiguousRetryAndRestart(t *testing.T) {
 	if err := restarted.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-2", generation); err == nil {
 		t.Fatal("execution handle rebound")
 	}
-	if err := restarted.AgentExited(ctx, id, id.String(), 0); err != nil {
+	code := 0
+	sub.agent = runner.Status{State: types.RunStopped, ExitCode: &code}
+	if err := restarted.observeAgent(ctx, id, restarted.state.Runs[id], &runnerwire.RunState{}); err != nil {
 		t.Fatal(err)
 	}
 	exit := restarted.state.Runs[id].Exit

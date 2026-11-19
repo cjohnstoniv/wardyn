@@ -76,5 +76,6 @@ func (p *Proxy) emitLLMAllowWithFault(r *http.Request, host string, port int, ru
 	log.Scan = scan
 	log.UpstreamFault = p.bedrockUpstreamFault(host, path, resp)
 	log.GatewayCallID = callID
+	stampGatewayRequestID(&log, r, resp)
 	p.emitDialledAllow(log, host)
 }

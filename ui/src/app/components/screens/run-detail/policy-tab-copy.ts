@@ -88,6 +88,29 @@ export const IP_LITERALS = {
   off: "This setting adds no IP-address restriction.",
 } as const;
 
+// The Host rules row and the lines Review's Network row shares with it (approved board RN: H-01, H-10 to H-33). Each rule
+// reads as one clause, the clauses of one set are joined by `otherwise`, and a host that several sets name says how they combine.
+export const HOST_RULES = {
+  label: "Host rules",
+  allow: (methods: string, where: string) => `allows ${methods} ${where}`,
+  deny: (methods: string, where: string) => `refuses ${methods} ${where}`,
+  hold: (methods: string, where: string) => `holds ${methods} ${where} for a person to decide`,
+  anyMethod: "any method",
+  within: (paths: string) => `within ${paths}`,
+  anywhere: "anywhere",
+  otherwise: "; otherwise ",
+  listJoin: ", ",
+  one: (host: string, clauses: string) => `${host}: ${clauses}. Any other request is refused.`,
+  several: (host: string, clauses: string) => `${host}: ${clauses}. The first matching rule decides, and any other request is refused.`,
+  setsNaming: (host: string, n: number, sets: string) =>
+    `${host}: ${n} rule sets name this host. ${sets} Each set refuses what it does not list. A request is refused if any set refuses it. If none refuses it, it is held for a person if any set holds it, and allowed otherwise.`,
+  setItem: (i: number, clauses: string) => `Set ${i}: ${clauses}.`,
+  moreHosts: (n: number) => `and ${n} more hosts with rules`,
+  moreOne: "and 1 more host with rules",
+  meaning: "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for this proxy; a new proxy asks again.",
+  narrows: "Host rules only narrow a host: a request must also pass the rest of the network settings.",
+} as const;
+
 // The field a change row is about, in the console's words: the middle column of a change group (T4-c, board R16).
 // The Summary's own section and row names are reused; a field this map lacks leaves its cell empty, never a wire
 // name. "Clipboard and files" is the board's word for the desktop directions.

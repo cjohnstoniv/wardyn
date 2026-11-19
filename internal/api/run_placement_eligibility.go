@@ -11,12 +11,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -276,14 +276,13 @@ func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]bo
 	return out
 }
 
-// withinAnyRoot reports whether path, cleaned, is a root or below one. Both must
-// be absolute: a relative path is never inside anything. Symlinks are the
-// runner's own device-side check at bind.
+// withinAnyRoot reports whether path is a root or below one (pathutil.Within). Both must be absolute: a relative
+// path is never inside anything, though Within alone compares two relative paths. A root of "/" holds every
+// path, as Within's does; runnerd refuses "/" as a --drive-root. Symlinks are the runner's own device-side check
+// at bind.
 func withinAnyRoot(path string, roots []string) bool {
-	path = filepath.Clean(path)
 	return filepath.IsAbs(path) && slices.ContainsFunc(roots, func(root string) bool {
-		root = filepath.Clean(root)
-		return filepath.IsAbs(root) && (path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/"))
+		return filepath.IsAbs(root) && pathutil.Within(root, path)
 	})
 }
 

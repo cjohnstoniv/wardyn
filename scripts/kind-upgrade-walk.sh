@@ -122,6 +122,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 # shellcheck source=scripts/lib/image-build.sh
 source "${ROOT}/scripts/lib/image-build.sh"
 
@@ -291,16 +293,7 @@ kubectl -n "${NS}" rollout status "deployment/${RELEASE}" --timeout=180s \
 wait_healthy "${BASE}" 60 2 || die "${BASE}/healthz did not answer on the v${FROM_VERSION} install"
 pass "v${FROM_VERSION} installed and healthy"
 
-api() {
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${WORK}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
-  else
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${WORK}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${WORK}/resp.json" "${CURL_MAX_TIME}" "$@"; }
 
 # GET /api/v1/audit with a query string; the JSON array lands in resp.json.
 audit() { api GET "/api/v1/audit?$1"; }

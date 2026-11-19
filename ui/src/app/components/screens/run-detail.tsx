@@ -89,6 +89,8 @@ import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run-flow/draft/clone-pre
 import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
 import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
 import { Cockpit } from "./run-detail/cockpit";
+import { RunSupportStrip, useRunSupport } from "./run-detail-support";
+import { SupportHelperContext, SupportHelperDoorsContext } from "../wardyn/support-helper-context";
 import { COULDNT_END, ENDING, toastRunName } from "../wardyn/copy/run-lifetime";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
@@ -116,9 +118,11 @@ function RunDetailPage({ id }: { id: string }) {
   const {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
-    load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
+    load, terminal, pending, endingEvents, held, killAgain, outcomeReady, killConfirmWaitOver,
   } = useRunDetail(id);
   const workload = useRunWorkload(run?.id);
+  // Support sessions: nothing is read or drawn unless the setup answer carries support_sessions.
+  const sup = useRunSupport(run ?? null);
 
   // "Make a policy from this run" — the honest home of "write the policy from
   // what actually happened", now that /runs/new's Record radio (which only ever
@@ -326,6 +330,9 @@ function RunDetailPage({ id }: { id: string }) {
           onValueChange={(v) => setTab(v as Tab)}
           className="flex min-h-0 flex-1 flex-col"
         >
+          {/* A support helper's terminal: the header's attachable chip and the cockpit's terminal read the same answer. */}
+          <SupportHelperContext.Provider value={sup.helperTerminal}>
+          <SupportHelperDoorsContext.Provider value={sup.helperDoors}>
           <SummaryHeader
             run={run}
             terminal={terminal}
@@ -360,6 +367,8 @@ function RunDetailPage({ id }: { id: string }) {
             onOpenTerminal={() => setTab("overview")}
             onGoAudit={() => setTab("audit")}
           />
+
+          <RunSupportStrip run={run} sup={sup} />
 
           <RunDetailCommandBar
             tabs={
@@ -404,6 +413,7 @@ function RunDetailPage({ id }: { id: string }) {
               auditGap={auditGap}
               held={held}
               outcomeReady={outcomeReady}
+              killConfirmWaitOver={killConfirmWaitOver}
               pending={pending}
               recording={recording}
               recState={recState}
@@ -478,6 +488,8 @@ function RunDetailPage({ id }: { id: string }) {
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
+          </SupportHelperDoorsContext.Provider>
+          </SupportHelperContext.Provider>
         </Tabs>
       )}
 

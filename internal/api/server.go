@@ -673,6 +673,7 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	SSHChannels          map[string]bool // WARDYN_SSH_CHANNELS: the kinds served; nil = all (sshChannelOn)
 	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
 	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
 	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
@@ -786,7 +787,7 @@ type Server struct {
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	viaOrg viaOrgState
 	fleet  fleetSnapshot
-	// revokedEndRetry and exitRetry space out the retries of the queue sweep (a run it could not end, runner_revoke.go) and of the runner exit sweep (each receipt, which it may park; runner_exits.go); eventRefusals bounds each runner's runner.event.refuse rows on this replica (runner_event_refuse.go).
+	// revokedEndRetry and exitRetry space out the queue and exit sweep retries (runner_revoke.go, runner_exits.go); eventRefusals bounds each runner's workload events on this replica and keeps, until it ends, each refusal window the store reported full, so rate_limited refusals skip the store (runner_event_refuse.go).
 	revokedEndRetry revokedEndRetry
 	exitRetry       runnerExitRetry
 	eventRefusals   runnerEventRefusals
@@ -931,6 +932,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState                 // the device routes' process state (server_devices.go)
+	supportState                     // the open support grants this replica knows, for the audit window (support_grant.go)
 	cliSignInState                   // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState                        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState                    // the run lease sweep's process state (run_lease_server.go)
@@ -973,10 +975,9 @@ type Server struct {
 	// adoSignInEnds counts each person's disconnects and erases, so a run
 	// token created while one ran revokes itself (ado_pat_console.go).
 	adoSignInEnds adoSignInEnds
-	// adoPATs replaces the sign-in configuration's own vssps client
-	// (ADOEntraConfig.patClient) for a `minted_pat` run's creates and revokes;
-	// set by tests only. adoRunPATs holds each run's current token in memory
-	// (ado_run_pat_cache.go).
+	// adoPATs replaces the sign-in configuration's own vssps client (ADOEntraConfig.patClient) for a
+	// `minted_pat` run's creates and revokes; set by tests only. adoRunPATs holds each run's current
+	// token in memory (ado_run_pat_cache.go).
 	adoPATs    adoPATClient
 	adoRunPATs adoRunPATCache
 	// bg tracks every goroutine spawned through goBackground — work detached

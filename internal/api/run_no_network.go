@@ -17,7 +17,9 @@ import (
 // all. Create, Review's preflight and the policy preview refuse it while anything they can see would
 // add a host (stepNoNetwork). Whatever only dispatch adds, the seal removes (wallPresetSealLayer); the
 // run's proxy refuses every request (proxy.Config.NoNetwork, set at dispatch and replayed at revive);
-// and every egress approval for the run is refused (wallsAdmitApproval).
+// and the approve of an egress_domain approval for the run is refused at decide (wallsAdmitApproval).
+// Other kinds are not refused there (a tool_call hold stays approvable); the run's proxy refuses the
+// forward of anything an approval admits.
 
 // noNetworkPreset reports whether p is the built-in No network preset.
 func noNetworkPreset(p *types.WallPresetOnRun) bool {

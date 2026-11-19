@@ -219,6 +219,11 @@ type ADOEntraConfig struct {
 	// RunnerResident. It is stored and listed only: no run reads it, so it has
 	// no effect in this version and the token is not put in the sandbox.
 	RunnerResidentSandbox bool `json:"runner_resident_sandbox,omitempty"`
+	// RunnerViaOrg allows this connection's minted tokens on runners via the organisation (via_org), an organisation's
+	// cluster runner included: the token stays in the organisation, whose engine runs the Azure DevOps gate for the
+	// runner's requests, where the class's delivery policy, the runner and the run allow it. Off by default; independent
+	// of RunnerResident.
+	RunnerViaOrg bool `json:"runner_via_org,omitempty"`
 }
 
 // RESTAPIEnabled: the rest_api default (unset or nil receiver) is enabled.

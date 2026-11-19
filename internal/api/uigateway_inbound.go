@@ -53,11 +53,13 @@ const (
 	// A policy, profile or grant write ends the window at once on the replica that served it
 	// (dropInboundOnWrite); another replica's cache lasts out its window.
 	inboundResolveTTL = 30 * time.Second
-	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
-	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
-	// the run's 8 relay connections are shared by all of them.
-	inboundRatePerSec = 50.0
-	inboundBurst      = 100.0
+	// inboundRunRatePerSec and inboundRunBurst bound the requests to one run's inbound apps, all callers together;
+	// inboundCallerRatePerSec and inboundCallerBurst bound one caller's requests, all runs together. Each admitted
+	// request is an audit row, and the run's 8 relay connections are shared by all of them.
+	inboundRunRatePerSec    = 50.0
+	inboundRunBurst         = 2 * inboundRunRatePerSec
+	inboundCallerRatePerSec = 50.0
+	inboundCallerBurst      = 100.0
 	// maxInboundEntries bounds each of uiInboundState's maps; past it a map is pruned wholesale, like
 	// uiReady's. The worst case is one extra token lookup, or one fresh bucket, per live caller.
 	maxInboundEntries = 1024
@@ -237,7 +239,7 @@ func (st *uiInboundState) remember(key string, sess uiSession, now time.Time, ge
 }
 
 // refill is k's bucket in *m, full and new when it has none, topped up to now.
-func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundBucket {
+func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time, rate, burst float64) *inboundBucket {
 	b := (*m)[k]
 	if b == nil {
 		if *m == nil {
@@ -245,39 +247,42 @@ func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundB
 		} else if len(*m) > maxInboundEntries {
 			clear(*m)
 		}
-		b = &inboundBucket{tokens: inboundBurst, last: now}
+		b = &inboundBucket{tokens: burst, last: now}
 		(*m)[k] = b
 	}
 	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = min(inboundBurst, b.tokens+elapsed*inboundRatePerSec)
+		b.tokens = min(burst, b.tokens+elapsed*rate)
 	}
 	b.last = now
 	return b
 }
 
 // take spends one request from runID's bucket and, unless principal is "", from principal's, recording ref
-// as the run's sandbox when it is known, and answers whether the request may go and the sandbox reference
-// the run's bucket holds. A request that either bucket refuses spends from neither, so a caller over its own
-// limit takes nothing from the run's callers.
-func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (bool, string) {
+// as the run's sandbox when it is known, and answers which bucket refused ("" when the request may go) and the
+// sandbox reference the run's bucket holds. A request either bucket refuses spends from neither, so a caller
+// over its own limit takes nothing from the run's callers. The run's bucket is checked first.
+func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (refused, sandboxRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	b := refill(&st.buckets, runID, now)
+	b := refill(&st.buckets, runID, now, inboundRunRatePerSec, inboundRunBurst)
 	if ref != "" {
 		b.ref = ref
 	}
 	var c *inboundBucket
 	if principal != "" {
-		c = refill(&st.callers, principal, now)
+		c = refill(&st.callers, principal, now, inboundCallerRatePerSec, inboundCallerBurst)
 	}
-	if b.tokens < 1 || (c != nil && c.tokens < 1) {
-		return false, b.ref
+	switch {
+	case b.tokens < 1:
+		return "run", b.ref
+	case c != nil && c.tokens < 1:
+		return "caller", b.ref
 	}
 	b.tokens--
 	if c != nil {
 		c.tokens--
 	}
-	return true, b.ref
+	return "", b.ref
 }
 
 func (st *uiInboundState) setRef(runID uuid.UUID, ref string) {
@@ -806,10 +811,10 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 	if sess.tokenID == uuid.Nil && sess.Caller == "" {
 		caller = ""
 	}
-	ok, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), sess.SandboxRef)
-	if !ok {
+	limit, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), sess.SandboxRef)
+	if limit != "" {
 		if s.authFailedAllowed() {
-			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})
+			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited, "limit": limit})
 		}
 		w.Header().Set("Retry-After", "1")
 		writeErrorReason(w, http.StatusTooManyRequests, reasonInboundRateLimited, inboundRateLimitedMsg)

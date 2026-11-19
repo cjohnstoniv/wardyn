@@ -11,13 +11,6 @@
 
 import type { RecordingLevel } from "./policy";
 
-/** @deprecated superseded by EgressRedirect — kept only so a PUT body saved
- *  before EgressRedirects existed keeps decoding (see SiteConfig.artifact_overrides). */
-export interface ArtifactOverride {
-  base_url: string;
-  token_secret_ref?: string;
-}
-
 // One outbound redirect: requests to `from` are substituted to `to` (from's
 // host dropped from egress, to's host allowed), with an optional token
 // injected proxy-side. `ecosystem` set (one of the six package-manager keys)
@@ -65,9 +58,6 @@ export interface SiteConfig {
   // NOT lift the SSRF guard or grant policy allow on its own — see
   // internal/types/site_config.go's SiteConfig.UpstreamProxyNoProxy.
   upstream_proxy_no_proxy?: string[];
-  /** @deprecated superseded by egress_redirects, which generalizes this from
-   *  package registries to any outbound URL/host. */
-  artifact_overrides?: Record<string, ArtifactOverride>;
   // The operator's outbound redirect list — see EgressRedirect.
   egress_redirects?: EgressRedirect[];
   scm_hosts?: string[];
@@ -487,6 +477,9 @@ export interface ADOEntraConfig {
   runner_resident?: boolean;
   // Also put that token into the sandbox. Requires runner_resident.
   runner_resident_sandbox?: boolean;
+  // Let a runner reach this connection's minted tokens through the server, which adds the token (via_org).
+  // Absent reads as off; it applies only with token_mode minted_pat.
+  runner_via_org?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is

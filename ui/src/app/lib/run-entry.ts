@@ -14,6 +14,7 @@
 
 import { HttpError } from "./api/core";
 import { OPERATOR_ONLY_REASON } from "../components/wardyn/copy";
+import { SUPPORT_HELPER } from "../components/wardyn/copy/support";
 
 export type RunEntryFacts = { created_by?: string; operator_owned?: boolean };
 
@@ -47,6 +48,9 @@ export function mayEnterRunOrUnknown(
 
 /** The server's refusal reason for interactive entry to a run the caller does not own. */
 export const RUN_OWNER_ONLY_REASON = "run_owner_only";
+
+/** The server's refusal reason for a caller whose support grant on this run has ended (run_owner_only stays for one who never had a grant). */
+export const SUPPORT_GRANT_ENDED_REASON = "support_grant_ended";
 
 /** The server's refusal reason when a run already has the most live terminal sessions it allows. */
 export const ATTACH_CAP_REASON = "attach_session_cap_reached";
@@ -85,6 +89,7 @@ export function runEntryRefusalLine(run: RunEntryFacts): string {
  */
 export function entryErrorMessage(e: unknown, fallback: (e: unknown) => string, run?: RunEntryFacts): string {
   if (e instanceof HttpError && e.reason === RUN_OWNER_ONLY_REASON) return RUN_OWNER_ONLY;
+  if (e instanceof HttpError && e.reason === SUPPORT_GRANT_ENDED_REASON) return SUPPORT_HELPER.ended;
   // Only a service run has a sponsor arm to refuse; for any other run a 404 is just a missing run.
   if (run && isServiceRun(run) && e instanceof HttpError && e.status === 404 && e.reason === RUN_NOT_FOUND_REASON) return SERVICE_ATTACH_LINE;
   return fallback(e);

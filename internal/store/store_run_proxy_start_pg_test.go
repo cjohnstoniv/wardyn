@@ -181,3 +181,30 @@ func TestPG_Migration0278InPlace(t *testing.T) {
 		t.Fatalf("active = %+v, %v, %v; want J-old, not in place", a, found, err)
 	}
 }
+
+// TestPG_LegacyStartNeverEnforces: a legacy start's answer settles unconfirmed even with a hash, and a matching
+// report before or after it enforces nothing. AnswerProxyStart's legacy arm comes before its hash arms.
+func TestPG_LegacyStartNeverEnforces(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, run)
+	const sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := pg.BeginProxyStart(ctx, run.ID, 1, "L0", store.ProxyStartLegacy, false); err != nil {
+		t.Fatalf("BeginProxyStart: %v", err)
+	}
+	if ch, err := pg.ReportProxyStart(ctx, run.ID, "L0", sha); err != nil || ch.Settled != "" || ch.Start.State != types.ProxyStartPending {
+		t.Fatalf("report before the answer = %+v, %v; want held pending", ch, err)
+	}
+	ch, err := pg.AnswerProxyStart(ctx, run.ID, 1, sha, time.Minute)
+	if err != nil || !ch.Active || ch.Settled != types.ProxyStartUnconfirmed {
+		t.Fatalf("answer with a hash = %+v, %v; want unconfirmed", ch, err)
+	}
+	if ch, _ := pg.ReportProxyStart(ctx, run.ID, "L0", sha); ch.Settled != "" {
+		t.Fatalf("report after the answer settled %s; want nothing", ch.Settled)
+	}
+	if p, ok, err := pg.ActiveProxyStart(ctx, run.ID); err != nil || !ok || p.State != types.ProxyStartUnconfirmed {
+		t.Fatalf("active start = %+v %v %v; want unconfirmed", p, ok, err)
+	}
+}

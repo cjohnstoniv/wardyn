@@ -341,6 +341,10 @@ A run gets what every layer allows. The run's policy record names the layer that
   - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
     developer (root on the laptop) sees each request and response in plaintext and can make any request
     the rule's pins and the policy allow while the run lives (residual #75).
+  - **Azure DevOps minted tokens [0.10.1].** A minted token is also a `via_org` class, when the connection's
+    `runner_via_org` is on and the policy sends it `via_org`. The token stays at the organisation, which serves it
+    only on hosts the run's gate covers. `/wardyn/git/` is tied to the Azure DevOps grant by the host in the
+    path, never the request's authority, and `/wardyn/gh/` to a GitHub grant.
 
 ### B8 — Untrusted build container vs. host daemon + registry
 
@@ -1796,6 +1800,7 @@ These risks are **not closed by v1 Wardyn**.
     - Every successful OIDC login re-stamps BOTH `role` and `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go) to `store.RefreshSSHKeyRoles`).
     - And `sshAuth` and `sshCurrentKey` refuse the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed reading for every pre-`0046` row).
     - Still bounded-stale, never live.
+    - One exception reaches a person's run: the helper of a live support grant is admitted on the SSH doors the owner ticked, with the same key role, cap and freshness checks and the run's governance, and the connection is re-checked on each keepalive.
     - A demoted admin's key keeps granting the override until their next login (re-stamping `role=user`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
     - A member's key never satisfies the override regardless of drift — only `role==admin` does, reachable only by holding the admin role at a stamping moment.
     - Audited distinctly (`ssh.authenticate` success carries `override:true` when the owner check failed and the role check passed; a TTL-refused attempt is an `ssh.authenticate` failure with its own reason string).
@@ -2637,7 +2642,7 @@ These risks are **not closed by v1 Wardyn**.
 60. **A stored key keeps working for a bounded time after it is revoked, rotated, or refused at the store — up to the injection TTL plus a transient-failure grace, never indefinitely.**
     <details><summary>Details</summary>
 
-    - A stored API key the proxy injects is re-resolved from the injection sink at most every ten minutes (`storedKeyTTL` in [`internal/api/injection.go`](../internal/api/injection.go)) — a MODEL-PROVIDER stored key instead re-resolves every fifteen minutes (`providerKeyRecheck` in [`internal/api/injection_provider_key.go`](../internal/api/injection_provider_key.go)) — an approval-gated grant is the exception in either case: minted once, static for the run — rather than held for the run's whole life, so a key removed, replaced or refused there stops being injected within that window.
+    - A stored API key the proxy injects is re-resolved from the injection sink at most every ten minutes (`storedKeyTTL` in [`internal/api/injection.go`](../internal/api/injection.go)) — a MODEL-PROVIDER stored key instead re-resolves every fifteen minutes (`providerKeyRecheck` in [`internal/api/injection_provider_key.go`](../internal/api/injection_provider_key.go)) — rather than held for the run's whole life, so a key removed, replaced or refused there stops being injected within that window. An approval-gated `api_key` grant is refused when a policy, ceiling, boundary, preset, template or governance overlay save adds or changes it; a launch that carries one, inline or by overlay, runs with the key left out; one saved earlier is never injected ([`persistRunGrants`](../internal/api/runs_create_grants.go)) and its mint holds no key ([`mintAPIKey`](../internal/broker/broker_mint_kinds.go)): no run can use it.
     - This is the "revocation" half of CS-4's memory/revocation/failure hygiene, not literal in-process zeroing (nothing in the secret store or the broker scrubs a plaintext buffer after use; the actual controls are the TTL above, `internal/nodump`'s no-core-dump/no-same-uid-ptrace hardening on both `wardynd` and `wardyn-proxy`, and a definitive-vs-transient failure split that drops an injected header at once on anything but a bare transient store error).
     - That split is also where the bound sits.
     - A TRANSIENT failure (the store did not answer) keeps serving the last-known-good header for a further fifteen minutes before it, too, is dropped.
@@ -3003,6 +3008,7 @@ These risks are **not closed by v1 Wardyn**.
     - An engine built from the run's stored config re-runs the proxy's checks as authoritative: allow and deny lists, `AllowsInjection` pins, `stripSandboxCredentials`, the IP guard, the git broker's repository, branch and push rules, inspection, caps and holds.
     - An idle or offline release retires that engine's generation, and a retired generation serves no stream (`admitViaOrg`).
     - **What stays open.** The developer can use the credential through any request those rules admit while the run lives, and an echoing host returns the value (§5.1a). The stream and byte limits hold per server replica and reset on restart.
+    - For Azure DevOps, the runner's operator, an organisation cluster's operators included, can make requests within the run's capabilities while the run lives; the token never leaves the server.
 
 76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
     <details><summary>Details</summary>
@@ -3263,7 +3269,7 @@ These risks are **not closed by v1 Wardyn**.
     </details>
 
 97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
-    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - The cap is 32 `runner.event.refuse` rows per runner per hour, counted in the database across every replica and restart, then one `suppressed` row.
     - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
     - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
     - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
@@ -4179,7 +4185,7 @@ The labelled series, every label, and where its values come from:
 ### The advertised SSH ProxyCommand (opt-in)
 
 - `WARDYN_SSH_PROXY_COMMAND` (Helm `ssh.proxyCommand`, unset by default) is advisory copy.
-- wardynd publishes it on `/healthz` as `ssh.proxy_command`, and each person's own `ssh` executes it on their computer when they connect ([`docs/SSH.md`](../docs/SSH.md#ssh-on-a-443-only-estate), "SSH on a 443-only estate").
+- wardynd publishes it on `/healthz` as `ssh.proxy_command`, and each person's own `ssh` executes it on their computer when they connect ([SSH on a 443-only estate](../docs/operations/ssh-443-only.md)).
 
 **The controls.**
 
@@ -4285,6 +4291,7 @@ The labelled series, every label, and where its values come from:
 **A hostile gateway response.**
 
 - A call id is generated by Wardyn, never taken from an upstream request id. Every attempt on a model gateway route carries one, as does an MCP call on a run with a route; an MCP call carries no token.
+- `gateway_request_id` is the answer's own unauthenticated claim, from a gateway or from any MCP server on a run that has a route. It is up to 128 printable characters with a letter or digit, and is dropped when it matches a sandbox header value, so an upstream that copies a sandbox header cannot hand it back as an id. A value taken from the query, path or body, or changed beyond case and punctuation, is not detected. Never trust it as proof of which call it names; join on `gateway_call_id`.
 - Responses get the forced scrub and the encoding refusal above.
 
 **A control-plane outage.**
@@ -4332,7 +4339,7 @@ The labelled series, every label, and where its values come from:
 
 - A run with a route is refused on a person's own runner, and the mint is not relayed (`relayedInternalRoutes`).
 - It goes to a remote executor only if that executor reports the setting. An older executor would drop the route and send the sandbox's own header, so the run is refused there rather than sent unsigned.
-- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` on its spooled decision rows. A control plane from before that field decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
+- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` and `gateway_request_id` on its spooled decision rows. A control plane from before those fields decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
 
 ### Known latent vulnerabilities
 
@@ -4690,7 +4697,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3's decision half ships (`tool_rules`, `wardyn-toolgate`) and is cooperative; its interception half is planned, so this row is NOT "always active" for tool-call egress until that ships |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
 | Tamper-evident audit export | AU 🟢 **[shipped]**: Postgres log + PTY replay, eBPF/Tetragon ground-truth stream (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.bypass`) | In-sandbox log tampering; audit vendor lock-in |
 | Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) 🟢 **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) 🟢 **[shipped]** for hold runs | Policy disablement before malicious action |
@@ -4757,9 +4764,9 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 - Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the aggregate outcome,
   plus a distinct `run.revoke` failure event) instead of reporting containment — NOT fully
   contained, retry the kill.
-- SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; GitHub installation tokens are
-  TTL-bound (no per-token revoke API) — residual #7.
-- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, so the run's tokens and broker credentials end on time (residual #77). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
+- SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; the kill does not revoke a GitHub
+  installation token, which lasts until it expires (residual #7). The proxy's stop hands its GitHub CLI tokens back.
+- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, and the Azure DevOps PATs Wardyn created for the run are revoked then. The runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). Wardyn's kill does not revoke a GitHub App token at GitHub, so one already minted stays valid there until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap
   *first* — same C002 invariant, a lost CAS never revokes a still-live run.
 - But the caller wins it BEFORE calling the shared `finalizeRunTail`, whose internal order is

@@ -162,6 +162,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
 		CapturedAt:   now.UTC(),
+		CapturedDBAt: s.databaseStamp(ctx, now),
 		Source:       adoEntraSourceLogin,
 	}
 	// Under the same per-owner lock a redemption takes, so a login landing

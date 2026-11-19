@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -188,7 +189,7 @@ func (st *viaOrgStream) moved(n int) bool {
 }
 
 // watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
-// while the run is away (kept, its runner offline, or two reads of it failing in a row) every stream
+// while the run is away (kept, idle-paused, its runner offline, or two reads of it failing in a row) every stream
 // is ended and the engine released, and so is an engine idle with no stream; the run's byte total is kept through all of these. The
 // state, and with it the total, is dropped only when the run ends (the bounds are per run). An engine
 // whose run's policy generation moved is retired with its streams (retireViaOrgStale), so a replica that gets no new
@@ -286,7 +287,7 @@ func (run *viaOrgRun) closeIdle(now time.Time) *viaOrgGen {
 }
 
 // retireStale retires the run's engine, built at an older policy generation slot, and ends its streams, as
-// retireViaOrgEngine does on the replica that stored the revive; it returns the generation for the caller to
+// releaseViaOrgEngineOf does on the replica that stored the revive; it returns the generation for the caller to
 // close, or nil when there is none. The caller holds mu, so no stream is admitted to it after this.
 func (run *viaOrgRun) retireStale() *viaOrgGen {
 	gen := run.engine
@@ -306,7 +307,7 @@ type viaOrgRunStatus int
 
 const (
 	viaOrgRunLive       viaOrgRunStatus = iota
-	viaOrgRunAway                       // kept, or its runner offline: nothing may stream
+	viaOrgRunAway                       // kept, idle-paused, or its runner offline: nothing may stream
 	viaOrgRunUnreadable                 // the run could not be read: away only once it fails twice in a row
 	viaOrgRunMoved                      // placed on another runner: this runner's state is dropped
 	viaOrgRunEnded                      // terminal or gone: the state and the run's byte total are dropped
@@ -324,7 +325,9 @@ func (s *Server) viaOrgRunState(run *viaOrgRun) viaOrgRunStatus {
 		return viaOrgRunEnded
 	case got.RunnerID == nil || *got.RunnerID != run.runner:
 		return viaOrgRunMoved
-	case runIsKept(got) || (s.cfg.RunnerOnline != nil && !s.cfg.RunnerOnline(run.runner)):
+	// A waiting pause is parked on a request nobody has answered yet, which may be a request this run's org engine
+	// holds open: ending its stream would leave the answer nothing to release. A run paused for any other reason is away.
+	case runIsKept(got) || (got.PausedAt != nil && got.PausedReason != types.PauseWaiting) || (s.cfg.RunnerOnline != nil && !s.cfg.RunnerOnline(run.runner)):
 		return viaOrgRunAway
 	}
 	return viaOrgRunLive
@@ -362,6 +365,23 @@ func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 		st.cancel()
 	}
 	run.smu.Unlock()
+}
+
+// releaseViaOrgEngineOf releases runID's engine on this replica and ends its open streams, as a run away is released
+// (releaseViaOrgRun's away form): the run keeps its state and byte total, and its next request builds a fresh engine
+// from the configuration as it stands then. Two callers use it: a withdrawn grant (ado_run_pat_withdraw.go), and a
+// stored revive, a restart or an egress edit (run_revive_after_claim.go), where no engine built from the earlier config
+// may serve again. After a revive, another replica's engine is retired at its next request, which reads the newer
+// policy generation (viaOrgEngine); after a withdraw, another replica's engine keeps its copy until its own next resolve. The run is looked up under s.viaOrg's lock, which is let go before
+// releaseViaOrgRun takes the run's own locks, as endViaOrgRunner does: releaseViaOrgRun's final form takes s.viaOrg's
+// lock under the run's smu, so holding it here would invert that order.
+func (s *Server) releaseViaOrgEngineOf(runID uuid.UUID) {
+	s.viaOrg.mu.Lock()
+	run := s.viaOrg.runs[runID]
+	s.viaOrg.mu.Unlock()
+	if run != nil {
+		s.releaseViaOrgRun(run, false, false)
+	}
 }
 
 // closeViaOrgGen closes a retired generation's engine once every stream admitted to it has returned

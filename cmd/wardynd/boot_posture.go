@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"net"
 	"net/url"
 	"os"
 	"slices"
@@ -19,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 )
@@ -472,10 +472,8 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateSyncFlags(f); err != nil {
 		return err
 	}
-	if f.sshMaxSessionsPerRun != nil {
-		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
-			return err
-		}
+	if err := validateSSHSessionFlags(f); err != nil {
+		return err
 	}
 	if err := validatePositiveBounds(f); err != nil {
 		return err
@@ -522,6 +520,21 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateSSHSessionFlags checks the per-run SSH session cap and channel list, each only when declared.
+func validateSSHSessionFlags(f *bootFlags) error {
+	if f.sshMaxSessionsPerRun != nil {
+		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
+			return err
+		}
+	}
+	if f.sshChannels != nil {
+		if _, err := parseSSHChannels(*f.sshChannels); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -654,7 +667,7 @@ const internalIssuerMeshOptOut = "mesh"
 // plaintextIssuerURL reports whether raw is an http:// URL on a host that is not loopback.
 func plaintextIssuerURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname())
+	return err == nil && strings.EqualFold(u.Scheme, "http") && !loopback.Host(strings.ToLower(u.Hostname()))
 }
 
 // plaintextIssuerGate is the posture the plaintext-issuer rule applies under: OIDC is configured by the
@@ -702,17 +715,6 @@ func plaintextInternalMeshWarning(issuer, internalIssuer, optOut string, posture
 	}
 	return fmt.Sprintf("wardynd: WARDYN_OIDC_INTERNAL_ISSUER %q is plain http:// and WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=%s says traffic is encrypted by a service mesh; "+
 		"wardynd cannot verify that, so a mesh that does not encrypt this hop leaves sign-in discovery, keys and the token exchange in the clear", internalIssuer, internalIssuerMeshOptOut)
-}
-
-// urlHostIsLoopback reports whether a URL's hostname is "localhost" or a
-// loopback IP literal. Deliberately no DNS lookup: an issuer named by hostname
-// is not vetted by what it resolves to today.
-func urlHostIsLoopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // uiGatewaySharesConsoleHostWarning is #1269: under secure cookies the console's

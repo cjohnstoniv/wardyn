@@ -164,17 +164,20 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
-9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks, and the proxy refuses them at once. If the list grew, it closes proxied connections; connections to its DNS listener, which forwards nothing, stay open. The answer waits for its readback.
-10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone. Any edit answers within 8 minutes, not counting a stalled database read.
-11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). Send the edit again.
+9. On Kubernetes, on wardynd's own cluster or a Kubernetes runner at 0.10.1 or later, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks, and the proxy refuses them at once. If the list grew, it closes proxied connections; connections to its DNS listener, which forwards nothing, stay open. The answer waits for its readback.
+10. wardynd gives the proxy 15 seconds to apply the edit (25 on a runner) and 60 seconds more to confirm it. Any edit answers within 8 minutes, not counting a stalled database read. If the edit may have reached the proxy but is not confirmed, the run is stopped:
+    - on wardynd's own cluster, at once;
+    - on a runner, when the runner takes the stop. While the runner is away the answer is `503 egress_edit_containment_unresolved`, and the proxy keeps its last list until the stop lands or it lapses, an hour after its last renew.
+11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). So it is when its runner is offline, has not reported what it supports since wardynd restarted, or cannot reach the run's proxy pod, and that answer names the runner. Send the edit again.
 12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
     - the run started before 0.10.0-rc.20, or its proxy image is older;
-    - the run is on a registered runner;
+    - the run is on a Docker runner that cannot replace its proxy under a generation, or on a Kubernetes runner older than 0.10.1, or its proxy pod was started by one;
     - its proxy does not hold the config Wardyn stored;
     - the edit would take away a credential lane, a `via_org` route, an MCP server or an intercepted host, which need a new proxy;
     - the run's deny list would hold more than 1,024 hosts.
 13. An edit there applies only its own hosts, not governance changes made since the run started. A remove of a host an earlier edit removed is accepted, since that host is already denied.
 14. The deny list is kept in the proxy pod's own volume, so a proxy container restart keeps it. It can be lost if that volume is wiped while the pod lives on, or if someone who can exec into the proxy pod deletes it. The proxy then restarts on the policy the run was launched with.
+    - On a runner the list is held in the proxy pod's memory, and the proxy never restarts: its exit ends the run.
 15. That proxy allows the hosts the edits denied until the next edit, which applies the whole list again and whose `run.egress.edit` row says `proxy_was_behind`, or until the run ends. A proxy restarted more than about 30 minutes into the run cannot renew its launch token, so that run ends at most 65 minutes after its last renewal.
 
 An edit whose config cannot be stored changes nothing and keeps the run's current proxy (`502 revive_proxy_kept_current`). So does one that finds the run changed after its claim, or lost its lock before the replace and undid its record. If that undo fails, recovery tries to mark the run lost and stop its proxy. One that finds the run changed before its claim gets `409 revive_run_changed`. Its claim and lost marks are fenced on its generation; later stops are not.

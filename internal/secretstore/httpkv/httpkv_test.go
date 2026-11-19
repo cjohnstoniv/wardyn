@@ -19,14 +19,6 @@ func TestTransient(t *testing.T) {
 	}
 }
 
-func TestLoopback(t *testing.T) {
-	for host, want := range map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true, "10.0.0.1": false, "vault.example": false, "LOCALHOST": false, "": false} {
-		if got := Loopback(host); got != want {
-			t.Errorf("Loopback(%q) = %v, want %v", host, got, want)
-		}
-	}
-}
-
 func TestSameHost(t *testing.T) {
 	for _, c := range []struct {
 		a, b string

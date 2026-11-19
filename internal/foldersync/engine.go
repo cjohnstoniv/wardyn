@@ -287,6 +287,9 @@ type passView struct {
 // sides are listed still saves what it finished, so the next pass resumes from
 // there, and returns its report with the error (cut).
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
+	if err := ctx.Err(); err != nil { // a pass asked for after Ctrl-C does nothing
+		return nil, err
+	}
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
 	sy.dirs = &dirNote{folder: sy.Root.Name(), rep: rep}

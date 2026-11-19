@@ -114,6 +114,27 @@ type resizeMsg struct {
 	Rows uint16 `json:"rows"`
 }
 
+// refuseLocalModeAttach writes the local-mode loopback refusal and returns true
+// when it refused; handleAttachWS runs it first, before any upgrade.
+func (s *Server) refuseLocalModeAttach(w http.ResponseWriter, r *http.Request) bool {
+	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
+	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
+	// so the socket is never opened. Two gates, same as the REST surface in
+	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
+	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
+	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
+	// require a credential, so this is local-mode-only.
+	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
+		return true
+	}
+	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+		return true
+	}
+	return false
+}
+
 // handleAttachWS is the interactive-attach WebSocket endpoint:
 //
 //	GET /api/v1/runs/{id}/attach
@@ -153,19 +174,8 @@ type resizeMsg struct {
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
-	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
-	// so the socket is never opened. Two gates, same as the REST surface in
-	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
-	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
-	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
-	// require a credential, so this is local-mode-only.
-	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
-		return
-	}
-	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+	// Local-mode loopback refusals: before the origin check and the upgrade.
+	if s.refuseLocalModeAttach(w, r) {
 		return
 	}
 
@@ -254,7 +264,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
-	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	var support uuid.UUID
+	if ta, ok := ticketActorFromContext(ctx); ok {
+		support = ta.support
+	}
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal, support) // the per-run session cap
 	if releaseSlot == nil {
 		return
 	}
@@ -336,6 +350,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		ping:       c.Ping,
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
+	if ta, ok := ticketActorFromContext(ctx); ok && ta.support != uuid.Nil {
+		holder.support, wa.fields = ta.support, supportEntryFields(ta.support)
+	}
 	wa.holder = holder
 	la := newLocalAttach(wa, local, r.URL.Query().Get("local_nonce"))
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
@@ -524,10 +541,29 @@ func parseUint16(s string) uint16 {
 // that fails the rule gets the 403 naming why; a member stamp keeps its own.
 // superAdmin is true past this block only on the admin's own run or an
 // operator-owned one, so the deny_interactive exemption cannot reach a
-// person's run.
+// person's run. A helper's ticket (one that carries a support grant) is asked of the support arm instead, and
+// never takes the exemption.
 func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	id := run.ID
 	if ta, tok := ticketActorFromContext(r.Context()); tok {
+		if ta.support != uuid.Nil {
+			// A helper's ticket (supportMayEnter, support_terminal.go): a grant that is live and ticks the terminal
+			// door, then the run's deny_interactive door with no exemption: a helper is never a super admin here.
+			// A ticket minted for one app never opens a terminal.
+			if ta.caller != "" || ta.app != "" {
+				s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+				writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				return true
+			}
+			if _, v := s.supportMayEnter(r.Context(), run, ta.principal, ta.support, supportDoorTerminal); v != supportOK {
+				if !s.refuseSupport(w, r, run, v) {
+					s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+					writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				}
+				return true
+			}
+			return s.refuseInteractiveAttach(w, r, run)
+		}
 		superAdmin := ta.role == oidc.RoleAdmin
 		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
 		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.

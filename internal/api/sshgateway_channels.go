@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -263,27 +264,6 @@ type sshSessionGate struct {
 	capAudited bool
 }
 
-// mayDispatch refuses (and replies false to) a second dispatch, and — when
-// shared is set — one a sync-only channel (admitted past the shared cap, see
-// sshOpenSlot) may not make: that one is audited once, answered with the cap
-// text and closed, which frees the sync slot it was holding.
-func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string) bool {
-	if g.started || g.s.sshDataOutRefused(g, path) {
-		_ = req.Reply(false, nil)
-		return false
-	}
-	if shared && g.slot.sync {
-		if !g.capAudited {
-			g.capAudited = true
-			g.s.sshAuditChannelRejected(g.ctx, g.runID, g.principal, "session", sshCapReasonChannels, g.s.cfg.SSHMaxSessionsPerRun)
-		}
-		_ = req.Reply(false, nil)
-		sendChannelError(g.channel, fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", g.s.cfg.SSHMaxSessionsPerRun))
-		return false
-	}
-	return true
-}
-
 // subsystemBridge validates a subsystem request and returns the bridge to run,
 // or nil after replying false. wardyn-sync moves the channel onto a sync slot.
 func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string, pass *sshSyncPass) func() {
@@ -295,11 +275,11 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 	}
 	switch m.Subsystem {
 	case "sftp":
-		if g.mayDispatch(req, true, "sftp") {
+		if g.mayDispatch(req, true, "sftp", sshKindSFTP) {
 			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
 		}
 	case sshSyncSubsystem:
-		if !g.mayDispatch(req, false, "") {
+		if !g.mayDispatch(req, false, "", sshKindSync) {
 			return nil
 		}
 		if !g.slot.toSync() {
@@ -412,7 +392,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if !gate.mayDispatch(req, true, "") {
+			if !gate.mayDispatch(req, true, "", sshKindShell) {
 				continue
 			}
 			gate.started = true
@@ -424,7 +404,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if !gate.mayDispatch(req, true, "exec") {
+			if !gate.mayDispatch(req, true, "exec", sshKindExec) {
 				continue
 			}
 			var m sshExecReqMsg
@@ -512,7 +492,11 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// recorder is built, held until finishRecording below has returned.
 	releaseSlot, refused := s.reserveAttachSlotOrSay(run, principal)
 	if refused != "" {
-		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, map[string]any{"transport": "ssh"})
+		data := map[string]any{"transport": "ssh"}
+		if entry, ok := sshSupportOf(ctx); ok { // a helper's refused shell names its grant, as its other rows do
+			maps.Copy(data, supportEntryFields(entry.grant))
+		}
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, data)
 		sendChannelError(channel, "wardyn: "+refused)
 		return
 	}
@@ -555,9 +539,11 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// clients could both read nil and the loser's exec still clamped the
 	// winner's tmux window.
 	var holder *attachHolder
+	entry, _ := sshSupportOf(ctx) // a helper's shell, so the owner's attach displaces it (support_terminal.go)
 	holder = &attachHolder{
 		sandboxRef: run.SandboxRef,
 		principal:  principal,
+		support:    entry.grant,
 		actorType:  types.ActorHuman,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceSSH,
@@ -582,7 +568,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 				}
 				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
 				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true})))
+					runID.String(), "failure", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true}))))
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
 				cancel()
 				return
@@ -627,9 +613,9 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// The first of two session.attach rows (see handleAttachWS): registered, exec
 	// not yet open.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-		runID.String(), "success", mustJSON(map[string]any{
+		runID.String(), "success", mustJSON(holder.supportFields(map[string]any{
 			"transport": "ssh", "cols": cols, "rows": rows, "state": "attaching", "read_only": readOnly,
-		})))
+		}))))
 	if readOnly {
 		// The holder object STAYS (holder.writable is the observer marker now);
 		// sshShellPump drops this client's keystrokes while canWrite is false, and
@@ -648,16 +634,16 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	attachErr := s.establishExec(pumpCtx, run, holder)
 	if attachErr != nil {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)})))
+			runID.String(), "failure", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)}))))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
 		}
 		closeReason = "attach failed"
 	} else {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "success", mustJSON(map[string]any{
+			runID.String(), "success", mustJSON(holder.supportFields(map[string]any{
 				"transport": "ssh", "state": "ready", "read_only": !holder.writable.Load(),
-			})))
+			}))))
 		_ = s.cfg.Store.TouchRun(pumpCtx, runID)
 		go s.attachKeepalive(pumpCtx, runID)
 		closeReason = s.sshShellPump(pumpCtx, runID, channel, castTee, resizeCh, holder)
@@ -672,7 +658,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// read_only is the LIVE flag (see attach.go's twin): a channel that
 	// arrived as an observer and was promoted mid-session detaches as a writer.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
-		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()})))
+		runID.String(), "success", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()}))))
 
 	if attachErr == nil {
 		sendExitStatus(channel, 0)

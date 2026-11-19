@@ -36,7 +36,7 @@ Topics in the order the [`wardynd`](#wardynd-control-plane) table lists them:
 - A `WARDYN_*` literal read in non-test Go but missing here fails the build, and so does a row here whose last Go reader was deleted.
 - Three more forward-only legs (`#202`) extend the same "undocumented fails the build" rule past Go.
 - Those legs are `pkg/` (folded into the Go walk above), the Playwright e2e backend's shell scripts, and `install.sh`, [`scripts/ci-run.sh`](../scripts/ci-run.sh) and everything under `deploy/images/**`.
-- The last leg is checked against this file **and** [docs/CI.md](CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
+- The last leg is checked against this file, [docs/CI.md](CI.md) **and** [docs/REPO-CI.md](REPO-CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
 - That closes the undocumented-name gap for those three surfaces only.
 - The rest of `scripts/` (the demo, take and verify harness, `test-report.sh`, `test-repo-guards.sh`, and a few shell-local variables in `setup.sh` and `up.sh`) still uses `WARDYN_*` names with no row here, and no leg checks them.
 - To regenerate the raw list:
@@ -55,7 +55,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The nine `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`) are also read once at boot so a bad value is refused there.
+- The ten `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`, `WARDYN_SUPPORT_SESSIONS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -320,7 +320,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
-| `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`). A VM run needs it as `http://host:3128`, the port Wardyn's proxy listens on, and refuses any other form |
+| `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`). A host name in it is mapped to the run's own proxy in every sandbox. A VM run needs it as `http://host:3128`, the port Wardyn's proxy listens on, and refuses any other form |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
 | `WARDYN_GROUNDTRUTH_TOKEN_SECRET` | string | (unset = off) | Kubernetes sensor: `<namespace>/<name>` of the Secret it mounts. wardynd, run in the cluster, patches `token` and `control-plane-ca.pem` into it, needing `patch` on that Secret only. Never with `WARDYN_GROUNDTRUTH_TOKEN_FILE`. While set, CC2/CC3 runs get a `kernel.sensor.bypass` row |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
@@ -331,6 +331,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
 | `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
+| `WARDYN_SUPPORT_SESSIONS` | bool | off | Lets a super admin ask to help inside a person's running run, and its owner accept for 15, 30 or 60 minutes. Off: a request or accept is refused with `409` `support_disabled`, and open help sessions close. [Details](#wardyn_support_sessions) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations and one MCP call's approval: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -362,6 +363,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` | int | `8` with SSO, else `WARDYN_SSH_MAX_CONNECTIONS` | authenticated SSH gateway connections one person may hold, per replica (flag `-ssh-max-connections-per-principal`). Without SSO every key is one person. See [SSH.md](SSH.md#bounds) |
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
+| `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
@@ -788,6 +790,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Deployment-wide only: no per-run request exists.
 - The wardyn-proxy pod always stays Guaranteed.
 - The Docker substrate ignores it.
+- Unset keeps the default: each request equals its limit.
+- The ratio multiplies each agent pod's limit, after the limit is settled: the policy's own value, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, then the governance ceiling's cap. Lowering the ceiling or the default lowers the request with it.
+- The request is rounded down to a whole milli-CPU or MiB, is at least 1, and is never above the limit. CPU and memory use the same ratio.
+- The sign-in sandbox is an ordinary run, so the ratio applies to its own limits (`WARDYN_HARNESS_LOGIN_CPU_MILLIS` / `_MEMORY_MIB`, default `500` / `512`) the same way.
+- The proxy sidecar's size (`WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`) is not scaled: it always counts in full against the node.
+- Worked example: limits of `2000` milli-CPU and `4096` MiB with a ratio of `0.5` give requests of `1000` and `2048`. A node with 16000 milli-CPU free fits 8 such agent pods by CPU where equal requests fit 4, before the proxy's `500` / `256` per run is counted.
+- The price is overcommit: at a ratio of `0.5`, pods that all run at their limits use twice what the scheduler counted for them, so CPU is throttled and memory pressure evicts or OOM-kills. Start near `1` and lower it only while real usage sits well below limits.
 
 ### `WARDYN_HARNESS_LOGIN_CPU_MILLIS`
 
@@ -1567,6 +1576,19 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
 - A value that is not a bool exits 2 at boot.
 
+### `WARDYN_SUPPORT_SESSIONS`
+
+- Turns on support sessions: a super admin asks to help inside someone else's running run, and that run's owner answers in the console or the CLI.
+- Off (the default): a request or an accept is refused with `409` `support_disabled`. An open help session closes at its next check, and the sweep ends open grants as `support_off`.
+- On, the owner picks the doors to open (terminal, commands, files, forward, web apps, desktop) and 15, 30 or 60 minutes. There is no extension; more time is a new request.
+- Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background, sign-in or workspace task, and not in local mode.
+- A helper enters governed. The run's profile, the channel switches and the data-out rule apply as for its owner.
+- A request left unanswered for 15 minutes lapses. The run ending, the helper signing out and the owner being revoked each end the grant.
+- Every request, answer and end is audited as `support.request`, `support.accept`, `support.decline` and `support.end`.
+- `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
+- Needs migration `0293_run_support_grants`.
+- A value that is not a bool exits 2 at boot.
+
 ### `WARDYN_MCP_LOCAL_SERVERS`
 
 - Turns on MCP servers that run inside the run's sandbox: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
@@ -1887,12 +1909,24 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Advisory copy: the daemon never runs it, people's own `ssh` does.
 - Boot refuses a value with a control character, a newline or a single quote, or over 512 bytes.
 - Unset, `/healthz` is unchanged.
-- See [SSH.md](SSH.md), "SSH on a 443-only estate".
+- See [SSH on a 443-only estate](operations/ssh-443-only.md).
 
 ### `WARDYN_SSH_MAX_SESSIONS_PER_RUN`
 
 - The per-run cap on `session` and `direct-tcpip` channels together (flag `-ssh-max-sessions-per-run`).
 - The ceiling of 64 is the gateway's connection cap. `wardyn-sync` has its own fixed cap of `2` ([SSH.md](SSH.md)).
+
+### `WARDYN_SSH_CHANNELS`
+
+- Which kinds of SSH channel the gateway serves (flag `-ssh-channels`): `shell` (a terminal), `exec` (a command), `sftp` (file transfer) and `forward` (`-L` port forwarding).
+- Unset serves all four, as before. Set, only the listed kinds are served; any other is refused with one sentence and one `ssh.channel.reject` row (reason `channel_off`).
+- `sftp` also covers `wardyn sync`, which runs the same sftp-server; `sync` is not a name to list. `exec` also covers `POST /runs/{id}/exec`, the same command over HTTP, which is refused with `409 run_exec_off` and its own sentence.
+- An empty value is the same as unset.
+- `exec` covers more than it says: while it is listed, a client can still start a shell, run `sftp-server` and relay ports through a command, so leaving out `shell`, `sftp` or `forward` alone does not stop them. Only leaving out `exec` narrows those. The console's terminal is not an SSH gateway channel and is not covered.
+- It only narrows. It adds no credential path, and the per-run `data_out` rule still applies to what it serves.
+- Boot refuses an unknown name or an empty item.
+- `/healthz` lists the served kinds as `ssh.channels`, and `wardyn run ssh`, `exec`, `forward` and `editor`, and `wardyn sync`, stop with one line before they dial when they need a kind that is off. `editor` needs all four.
+- See [SSH.md](SSH.md).
 
 ### `WARDYN_SYNC_DENY`
 
@@ -2377,7 +2411,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MODEL_USAGE` | enum | `on` | counts model tokens per call. `off` stops it: wardynd stores no count and passes `off` to its proxies. Set it on a remote or hybrid laptop runner too; wardynd drops their records meanwhile. Other values stop startup. |
 | `WARDYN_PROXY_DNS_LISTEN` | host:port | (unset) | the proxy's DNS listener, UDP and TCP. It answers every query `REFUSED` and writes a `run.dns.query` row, except `AAAA` for its own name, `wardyn-proxy`: empty answer, no row. Kubernetes and Docker set `:53`; the proxy exits if it cannot bind.
 | `WARDYN_PROXY_FIRST_RENEW_GATE` | `1` | (unset) | Set by the runner when it replaces a run's proxy, never by an operator. The proxy serves only after its first token renewal lands, and exits if that renewal fails. |
-| `WARDYN_PROXY_LIVE_DENY_DIR` | path | (unset) | Set by wardynd on a Kubernetes proxy pod, never by an operator. The proxy keeps live egress edit denies in `live-denies.json` here, applies them at every start and takes new ones on `narrow.sock`. An invalid list stops the proxy. |
+| `WARDYN_PROXY_LIVE_DENY_DIR` | path | (unset) | Set by wardynd or a runner on a Kubernetes proxy pod, never by an operator. The proxy keeps live edit denies in `live-denies.json` here, reapplies them at start and takes new ones on `narrow.sock`. An invalid list stops the proxy. |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
 | `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
@@ -2536,7 +2570,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner/docker`) |
+| `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner`, `internal/runner/docker`) |
 | `WARDYN_RUN_ID` | string | (unset) | this run's id, injected into sidecar/sandbox |
 | `WARDYN_REPO_URL` | string | (unset) | repo clone URL for the run |
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
@@ -2856,7 +2890,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Read only by the shell scripts baked into an agent/tool image.
 - Never by Go, so like the two tables above they carry no flag and are exempted from the reverse ratchet by name (`envDocShellOnly`).
-- `TestEnvDoc_OperatorScriptsVarsAreDocumented` ([`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)) is what enforces every `WARDYN_*` name under `deploy/images/**`, `install.sh` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) stays documented here or in [docs/CI.md](CI.md).
+- `TestEnvDoc_OperatorScriptsVarsAreDocumented` ([`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)) is what enforces every `WARDYN_*` name under `deploy/images/**`, `install.sh` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) stays documented here, in [docs/CI.md](CI.md) or in [docs/REPO-CI.md](REPO-CI.md).
 - Before #202 these 13 had no ratchet on them in either direction, in a curated six-file list that never walked `deploy/images/` at all.
 - Several of these are never actually `export`ed.
 - A same-shell bash array or local variable that happens to share the `WARDYN_*` prefix with real env vars in the same script family, never read by a child process.

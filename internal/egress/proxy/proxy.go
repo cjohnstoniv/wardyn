@@ -177,7 +177,7 @@ type Proxy struct {
 	// the proxy's pinned, IP-vetted transport so the control-plane host is
 	// resolved+vetted once and dialed explicitly (no transport re-resolution).
 	localClient *http.Client
-	// streamMoved is set when a tunnel or MITM stream moves a byte (activity.go).
+	// streamMoved is set when a tunnel, a MITM stream or a plain via_org request moves a byte (activity.go).
 	streamMoved atomic.Bool
 	// signin caches the sign-in credentials the control plane accepted
 	// (desktop_signin_lane.go).
@@ -504,7 +504,7 @@ func newProxy(opts Options) *Proxy {
 		if err != nil {
 			return nil, &connectStageError{err}
 		}
-		return c, nil
+		return tapHeads(ctx, c), nil
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)

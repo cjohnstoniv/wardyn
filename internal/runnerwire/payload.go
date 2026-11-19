@@ -142,6 +142,9 @@ type Caps struct {
 	// reads and sends a resident value only for a runner that says so; an older
 	// runner's run with one is refused before any value is read.
 	Resident bool `json:"resident,omitempty"`
+	// ViaOrgADO says the runner's proxy forwards Azure DevOps git (/wardyn/git/) to the organisation for a via_org
+	// grant (0.10.1 on). The organisation dispatches a via_org Azure DevOps token only to a runner that says so.
+	ViaOrgADO bool `json:"via_org_ado,omitempty"`
 	// EndsUnkept says the runner's substrate cannot keep an ended sandbox
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
@@ -158,6 +161,9 @@ type Caps struct {
 	// generation on replace_proxy, stop_proxy and end (0.10 on). Absent (an older runner), the org sends it
 	// no proxy replace and no generation.
 	ProxyFence bool `json:"proxy_fence,omitempty"`
+	// ProxyNarrow says the runner serves narrow_proxy: its substrate narrows a sandbox's proxy in place
+	// (runner.ProxyNarrower; a Kubernetes runner, 0.10.1 on). Absent, a live egress edit takes the revive path.
+	ProxyNarrow bool `json:"proxy_narrow,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.

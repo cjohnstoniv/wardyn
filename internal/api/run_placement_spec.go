@@ -43,6 +43,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	}
 	p.TrustedOutput = p.TrustedOutput || trustedOutput
 	corpus := inspectionCorpusOf(spec.ProxyConfig.Policy) // before the laptop copy drops it
+	adoGate := spec.ProxyConfig.ADOGrant                  // before a via_org laptop copy drops it
 	ref, err := s.dispatchTrustRefusal(ctx, run, p)
 	if err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
@@ -58,9 +59,10 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	}
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
-		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail
+		prefix := localRefusalPrefix(p.OwnerKind)
+		data, hint := map[string]any{"reason": ref.Reason}, prefix+ref.Detail
 		if ref.Reason != placement.ReasonPlacementComponentSelfDefine {
-			data["field"], hint = ref.Field, "This run was not launched on your own runner: "+ref.Sentence()
+			data["field"], hint = ref.Field, prefix+ref.Sentence()
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
@@ -70,14 +72,23 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	// keepRunProxyConfig ran before file-secret completion. Replace its local
 	// copy with the classified config; a failed write cannot launch a proxy.
 	// The sealed row is the organisation's: it also keeps the dispatch-time
-	// inspection corpus the laptop copy drops, for the run's via_org engine
-	// (via_org.go). Every path that rebuilds a laptop config from the row
-	// re-classifies it (refreshLocalDeploymentConfig), which drops it again.
-	if err := s.keepRunProxyConfig(ctx, run.ID, withInspectionCorpus(spec.ProxyConfig, corpus)); err != nil {
+	// inspection corpus and Azure DevOps gate the laptop copy drops, for the run's
+	// via_org engine (via_org.go). Every path that rebuilds a laptop config from
+	// the row re-classifies it (refreshLocalDeploymentConfig), which drops them again.
+	if err := s.keepRunProxyConfig(ctx, run.ID, withADOGate(withInspectionCorpus(spec.ProxyConfig, corpus), adoGate)); err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local proxy config could not be stored")
 		return false
 	}
 	return true
+}
+
+// localRefusalPrefix opens a classification refusal's hint: a person's runner is theirs ("your own"); a run
+// on any other owner's runner, an organisation's cluster runner via_org included, is not.
+func localRefusalPrefix(owner types.RunnerOwnerKind) string {
+	if owner == types.RunnerOwnerPerson {
+		return "This run was not launched on your own runner: "
+	}
+	return "This run was not launched on its runner: "
 }
 
 // localResolvedPlan is the one classification of a local run's spec, at dispatch and at revive. llm is the
@@ -458,6 +469,15 @@ func inspectionCorpusOf(pol types.RunPolicySpec) inspectionCorpus {
 // form of a laptop copy.
 func withInspectionCorpus(pc runner.ProxyConfig, c inspectionCorpus) runner.ProxyConfig {
 	pc.Policy = c.restoredOn(pc.Policy)
+	return pc
+}
+
+// withADOGate is pc with the dispatch-time Azure DevOps grant restored where the laptop copy dropped it: only a via_org
+// classification drops it, and the run's via_org engine (via_org.go) needs it. Every re-classification drops it again.
+func withADOGate(pc runner.ProxyConfig, gate *proxy.ADOGrantConfig) runner.ProxyConfig {
+	if pc.ADOGrant == nil && gate != nil {
+		pc.ADOGrant = gate
+	}
 	return pc
 }
 

@@ -4,7 +4,6 @@
 #
 # release-commit.sh --dry-run | --apply --tree DIR --from X.Y.Z --to X.Y.Z [--date YYYY-MM-DD] [--notes FILE]
 #                                      [--highlights TEXT] [--expect-tip SHA-PREFIX]
-#                    | --test-gaps --tree DIR --to X.Y.Z
 # X.Y.Z may also be X.Y.Z-rc.N (rehearsals). Commits under the caller's own git identity.
 # The X.Y.Z release commit, RELEASING.md steps 1/1a/1b in one place: rename [Unreleased] → [X.Y.Z] — DATE, put the
 # resolved release-notes paste block under it, restore a fresh [Unreleased], bump every shipped version string
@@ -20,34 +19,18 @@
 #   - ROADMAP.md Shipped row: --dry-run/--apply check for the row's Status cell (RELEASING.md step 1b).
 #     Highlights prose is a human call, so a missing row is added from --highlights TEXT and refused
 #     without it, never invented text.
-#   - `make test-gaps`: a separate --test-gaps mode, run AFTER `make release-check` (it reads the
-#     coverage profile that only a full `make ci` run produces), commits docs/TEST-GAPS.md on its own
-#     if it changed — matching the two-commit shape the 0.7.13 forward-port actually used.
 set -euo pipefail
 MODE=""; DATE=$(date +%Y-%m-%d); NOTES=""; EXPECT=""; TREE=""; FROM=""; TO=""; HIGHLIGHTS=""
 while [ $# -gt 0 ]; do case "$1" in
-  --dry-run) MODE=dry ;; --apply) MODE=apply ;; --test-gaps) MODE=testgaps ;; --date) DATE=$2; shift ;; --notes) NOTES=$2; shift ;; --expect-tip) EXPECT=$2; shift ;; --highlights) HIGHLIGHTS=$2; shift ;;
+  --dry-run) MODE=dry ;; --apply) MODE=apply ;; --date) DATE=$2; shift ;; --notes) NOTES=$2; shift ;; --expect-tip) EXPECT=$2; shift ;; --highlights) HIGHLIGHTS=$2; shift ;;
   --tree) TREE=$2; shift ;; --from) FROM=$2; shift ;; --to) TO=$2; shift ;;
   *) echo "unknown arg $1" >&2; exit 2 ;; esac; shift; done
 VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
 for v in "$FROM" "$TO"; do
   [ -z "$v" ] || [[ "$v" =~ $VERSION_RE ]] || { echo "bad version '$v': want X.Y.Z or X.Y.Z-rc.N" >&2; exit 2; }
 done
-[ -n "$MODE" ] && [ -n "$TREE" ] || { sed -n '5,8p' "$0"; exit 2; }
-if [ "$MODE" = testgaps ]; then
-  [ -n "$TO" ] || { echo "--test-gaps needs --to X.Y.Z" >&2; exit 2; }
-  cd "$TREE" || exit 2
-  [ -z "$(git status --porcelain)" ] || { echo "REFUSE: worktree not clean"; git status --short | head; exit 3; }
-  make test-gaps
-  if git diff --quiet -- docs/TEST-GAPS.md && [ -z "$(git status --porcelain -- docs/TEST-GAPS.md)" ]; then
-    echo "docs/TEST-GAPS.md unchanged — nothing to commit"; exit 0
-  fi
-  git add docs/TEST-GAPS.md
-  git commit -q -s -m "release: regenerate docs/TEST-GAPS.md for $TO"
-  git log --format='%h %an %s' -1
-  exit 0
-fi
-[ -n "$FROM" ] && [ -n "$TO" ] || { sed -n '5,8p' "$0"; exit 2; }
+[ -n "$MODE" ] && [ -n "$TREE" ] || { sed -n '5,7p' "$0"; exit 2; }
+[ -n "$FROM" ] && [ -n "$TO" ] || { sed -n '5,7p' "$0"; exit 2; }
 cd "$TREE" || exit 2
 [ -z "$(git status --porcelain)" ] || { echo "REFUSE: worktree not clean"; git status --short | head; exit 3; }
 if [ -n "$EXPECT" ]; then

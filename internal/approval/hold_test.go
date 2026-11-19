@@ -207,6 +207,15 @@ func TestHold(t *testing.T) {
 			wantHeld: false,
 		},
 		{
+			name: "a rejoin stamped before requested_at by a skewed clock leaves the hold measured from requested_at",
+			ap: types.ApprovalRequest{
+				Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+				RequestedAt: now.Add(-10 * time.Second), LastRejoinedAt: ptrTime(now.Add(-40 * time.Second)),
+				RequestedScope: mustScope(t, map[string]any{"host": "h", "mode": "wait_for_review"}),
+			},
+			wantHeld: true, wantUntil: now.Add(types.HoldWindowEgress - 10*time.Second), checkUntil: true,
+		},
+		{
 			name:     "an EXPIRED push_content is never held",
 			ap:       types.ApprovalRequest{Kind: types.ApprovalPushContent, State: types.ApprovalExpired, RequestedAt: now},
 			wantHeld: false,

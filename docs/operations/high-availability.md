@@ -19,7 +19,7 @@
 | B7 | Upgrades use `Recreate`. Every replica stops before the new ones start. | By design: an upgrade is not zero-downtime. A mixed-version window is tracked in #3467. | Plan an upgrade as downtime. If replicas of two versions do run together, finish the rollout before reviving a run: a 0.9.8 replica can undo the revive's token cut. |
 | B8 | Run event ids count per replica, so a `Last-Event-ID` does not resume a stream on another replica. | Documented in [`internal/api/run_events.go`](../../internal/api/run_events.go), and closed as a docs fix in #2793. | Do not resume a stream across replicas. |
 | B9 | On a Postgres failover, advisory locks can overlap briefly, and a credential refresh in flight can be lost. | Residual, documented. | The person signs in again: [Residual risks](../OPERATIONS.md#residual-risks). |
-| B10 | A few small states are per replica: the runner-event refusal window, the live-revive rate bound and the Azure DevOps Entra access cache. | Minor, tracked in #3661 and #3663. | Nothing to do: each is a per-replica bound or cache. |
+| B10 | Two small states are per replica: the live-revive rate bound and the Azure DevOps Entra access cache. | Minor, tracked in #3661 and #3663. | Nothing to do: each is a per-replica bound or cache. |
 | B11 | `wardyn-runnerd` is one replica, held by its state lock. | By design. Runner redundancy is a second runner in the pool. | [Organisation runners in a Kubernetes cluster](k8s-runners.md). |
 
 ## Before turning on AI gateway identity

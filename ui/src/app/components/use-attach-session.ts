@@ -29,6 +29,7 @@ import { HttpError, TIMEOUT_STATUS } from "../lib/api/core";
 import type { PolicyRef } from "../lib/api/health";
 import { sessionExpiry } from "../lib/api/session-activity";
 import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
+import { SUPPORT_HELPER } from "./wardyn/copy/support";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
@@ -81,6 +82,8 @@ const SETTLED_OPEN_MS = 15_000;
 // other close keeps the reconnect path.
 const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
+/** The close reason of a helper whose terminal the run's owner took (the server's support arm). Exactly this and no other. */
+export const OWNER_JOINED_REASON = "The run's owner joined";
 
 // The authority contract (internal/api/attach_authority.go): an open socket
 // whose sign-in stopped authorizing it (signed out, revoked, expired, or a
@@ -128,6 +131,8 @@ export interface UseAttachSessionArgs {
   /** Who created the run: a service run's sponsor arm is the one that answers a 404 run_not_found. */
   createdBy?: string;
   tokenOnlyMode: boolean;
+  /** The signed-in person helps through an accepted support grant: the end line says so, not "sign in again". */
+  supportHelper?: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   panelRef: React.RefObject<HTMLDivElement | null>;
   termRef: React.MutableRefObject<Terminal | null>;
@@ -175,6 +180,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     refusal,
     createdBy,
     tokenOnlyMode,
+    supportHelper,
     containerRef,
     panelRef,
     termRef,
@@ -211,6 +217,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
   const operatorRef = React.useRef(operator);
   const operatorResolvedRef = React.useRef(operatorResolved);
   operatorRef.current = operator;
+  // Latched: the page's poll can read the grant as ended before this socket's close arrives, and the line must still
+  // be the helper's. Never reset, so a person who was a helper here never reads "sign in again".
+  const helperRef = React.useRef(false);
+  if (supportHelper) helperRef.current = true;
   operatorResolvedRef.current = operatorResolved;
   // Signing out mid-page closes the socket and stops retries and input, but
   // keeps the terminal and what it shows: the same person signing back in
@@ -601,7 +611,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         // back, which is the only remaining action.
         const reason = ev.reason ?? "";
         if (ev.code === TAKEN_OVER_CLOSE_CODE || reason.startsWith(TAKEN_OVER_REASON_PREFIX)) {
-          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
+          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : reason === OWNER_JOINED_REASON ? OWNER_JOINED_REASON : "");
           setMode(null); // we hold nothing now; the header must not still say "driving"
           setConnState("closed");
           // #216 — was a writeln; the holder footer's displacedHint says this.
@@ -615,7 +625,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           }
           setMode(null);
           setConnState("closed");
-          term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");
+          term.writeln(`\r\n\x1b[2m${helperRef.current ? SUPPORT_HELPER.terminalEnded : "[session ended: sign in again to reconnect]"}\x1b[0m`);
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.

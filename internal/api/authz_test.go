@@ -967,6 +967,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
 	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
 
+	// Support sessions (support_grant.go): classMember, NOT classOwner — the helper is a super admin the owner
+	// rule would refuse, and each handler is its own gate (supportCaller, the run's owner, the grant's helper
+	// or a security operator); a caller who is none of them gets support_not_allowed or the foreign-run 404.
+	"POST /api/v1/runs/{id}/support":                 {class: classMember},
+	"GET /api/v1/runs/{id}/support":                  {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/accept":  {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/decline": {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/end":     {class: classMember},
+
 	// Thawing a paused run keeps its sandbox busy: a write, so not the
 	// security tier's inspect-or-stop.
 	"POST /api/v1/runs/{id}/resume": {class: classOwner, entity: entityRun, ownerTier: tierSuper},

@@ -56,6 +56,8 @@ func (s *Server) mountViaOrgRoute(r chi.Router) {
 type viaOrgDestination struct {
 	host   string
 	broker bool
+	// ado marks a header grant that carries the run's Azure DevOps token: the only grant a /wardyn/git/ route is served for.
+	ado bool
 }
 
 // handleViaOrg serves one forwarded sandbox request. internalAuth has already bound it to the run
@@ -80,7 +82,7 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest, restEsc, ok := viaOrgRest(r.URL)
-	if !ok || (dest.broker && !strings.HasPrefix(rest, "/wardyn/gh/")) || (!dest.broker && !viaOrgAuthorityIs(r.Header.Get(proxy.ViaOrgAuthorityHeader), dest.host)) {
+	if !ok || !viaOrgDestinationAdmits(dest, rest, r.Header.Get(proxy.ViaOrgAuthorityHeader)) {
 		s.denyViaOrg(w, r, claims, placement.ReasonViaOrgDestinationRefused, "the request's destination is not this grant's")
 		return
 	}
@@ -125,7 +127,7 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 	guestRelayed := live && liveRun.MachineKind.IsVM() && r.Header.Get(proxy.ViaOrgRelayedHeader) == "1"
 	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st, guestRelayed)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
-	if dest.broker {
+	if viaOrgBrokered(dest, rest) {
 		gen.engine.ServeBroker(cw, out)
 		return
 	}
@@ -177,7 +179,8 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 
 // refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
 // after the grant id is the sandbox's, so the route never relies on a gate that reads the path. A
-// terminal or kept run is refused as refuseTerminalRun refuses it, with no grace.
+// terminal or kept run is refused as refuseTerminalRun refuses it, with no grace. A paused run is refused for every
+// via_org grant (409 run_paused) until it is resumed.
 func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	switch {
@@ -193,6 +196,9 @@ func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, cl
 	case runIsKept(run):
 		s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
+	case run.PausedAt != nil:
+		s.auditInternalDenied(r, claims, authz.ReasonRunPaused, "run_state", "paused")
+		writeErrorReason(w, http.StatusConflict, string(authz.ReasonRunPaused), "run is paused")
 	default:
 		return false
 	}
@@ -217,7 +223,7 @@ func (s *Server) viaOrgGrant(w http.ResponseWriter, r *http.Request, claims *ide
 	case types.GrantAPIKey:
 		rule, err := injectionRuleFromScope(g.Spec.Scope)
 		if err == nil && rule.Host != "" {
-			return g, viaOrgDestination{host: rule.Host}, true
+			return g, viaOrgDestination{host: rule.Host, ado: isADOLaneRule(rule)}, true
 		}
 	case types.GrantGitHubToken:
 		return g, viaOrgDestination{host: githubHost, broker: true}, true
@@ -228,6 +234,34 @@ func (s *Server) viaOrgGrant(w http.ResponseWriter, r *http.Request, claims *ide
 
 // githubHost is the destination of the git broker's /wardyn/gh/ route.
 const githubHost = "github.com"
+
+// viaOrgGitHubRoute is the sandbox-facing prefix of the git broker's route.
+const viaOrgGitHubRoute = "/wardyn/gh/"
+
+// viaOrgDestinationAdmits reports whether a forwarded request belongs to the grant it names. The broker routes are
+// reserved to the grant kind they serve, because the engine's ServeBroker cannot see which grant this route
+// authorised: /wardyn/gh/ goes only with a GitHub grant, and /wardyn/git/<host>/ only with an Azure DevOps grant
+// whose own host is the path's. That host is read from the PATH, never from the forwarded authority: for an
+// origin-form request the runner reports the sandbox's own Host header as the authority. Any other request must name
+// the grant's destination as its authority.
+func viaOrgDestinationAdmits(dest viaOrgDestination, rest, authority string) bool {
+	switch {
+	case strings.HasPrefix(rest, proxy.ViaOrgADOGitPrefix):
+		host, _, ok := strings.Cut(strings.TrimPrefix(rest, proxy.ViaOrgADOGitPrefix), "/")
+		return dest.ado && ok && host != "" && viaOrgAuthorityIs(host, dest.host)
+	case strings.HasPrefix(rest, viaOrgGitHubRoute):
+		return dest.broker
+	case dest.broker:
+		return false
+	}
+	return viaOrgAuthorityIs(authority, dest.host)
+}
+
+// viaOrgBrokered reports whether a request admitted for dest is served by the engine's broker rather than as a
+// header-injected forward: the GitHub grant's, and an Azure DevOps grant's /wardyn/git/ route.
+func viaOrgBrokered(dest viaOrgDestination, rest string) bool {
+	return dest.broker || dest.ado && strings.HasPrefix(rest, proxy.ViaOrgADOGitPrefix)
+}
 
 // viaOrgAuthorityIs reports whether a forwarded authority names exactly host on the TLS port: the
 // organisation dials host:443 and nothing else.
@@ -319,10 +353,7 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	}
 	routes := cfg.ViaOrgRoutes
 	cfg.ViaOrgRoutes = nil
-	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, proxy.ViaOrgEngineOptions{
-		Client: &http.Client{Transport: viaOrgTransport{s: s, run: run}},
-		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
-	})
+	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, s.viaOrgEngineOptions(run))
 	if err != nil {
 		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
 			// The build read the setting itself, after this one: a refusal is remembered only when both
@@ -368,6 +399,21 @@ func (s *Server) viaOrgPolicySlot(ctx context.Context, runID uuid.UUID) (store.P
 func viaOrgSlotNewer(a, b store.PolicySlot) bool {
 	return a.Generation > b.Generation || (a.Generation == b.Generation && a.Abandoned && !b.Abandoned)
 }
+
+// viaOrgEngineOptions are an engine's dependencies: the in-process client, the dial and lookup that guard the
+// destination, and the per-request hold ceiling (an engine with none budgets nothing).
+func (s *Server) viaOrgEngineOptions(run *viaOrgRun) proxy.ViaOrgEngineOptions {
+	return proxy.ViaOrgEngineOptions{
+		Client: &http.Client{Transport: viaOrgTransport{s: s, run: run}},
+		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
+		HoldCeiling: viaOrgHoldCeiling,
+	}
+}
+
+// viaOrgHoldCeiling is the longest one request waits on the engine in all (first-use, push, capability, re-auth and mint
+// holds together): one minute under the idle cut (viaOrgIdleTimeout), so a held request ends with the hold's own
+// sentence rather than a reset stream.
+const viaOrgHoldCeiling = viaOrgIdleTimeout - time.Minute
 
 // viaOrgRefusalRemembered is a build's refusal answered again from the run's state, with no build.
 type viaOrgRefusalRemembered struct{ error }
@@ -421,7 +467,8 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 		}
 	}
 	var routes []proxy.ViaOrgRoute
-	var hosts []string
+	var hosts, adoHosts []string
+	gate := cfg.ADOGrant // the sealed row's Azure DevOps gate (withADOGate), narrowed below to the hosts the engine serves
 	cfg.Injection = nil
 	for _, rt := range cfg.ViaOrgRoutes {
 		g, ok := viaOrg[rt.GrantID]
@@ -432,6 +479,13 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 			rule, rerr := injectionRuleFromScope(g.Spec.Scope)
 			if rerr != nil || rule.Host != rt.Host {
 				continue
+			}
+			if isADOLaneRule(rule) {
+				// The token bounds nothing on its own: it is served only where the stored gate covers its host.
+				if !viaOrgADOGateCovers(gate, rule.Host) {
+					continue
+				}
+				adoHosts = append(adoHosts, rule.Host)
 			}
 			cfg.Injection = append(cfg.Injection, proxy.InjectionConfig{InjectionRule: rule, GrantID: g.ID})
 			hosts = append(hosts, rule.Host)
@@ -453,7 +507,8 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 		return nil, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
-	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM, cfg.AWSSigV4 = nil, nil, nil, nil, nil, nil, nil
+	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM, cfg.AWSSigV4 = nil, nil, nil, nil, nil, nil
+	cfg.ADOGrant = viaOrgADOGate(gate, adoHosts)
 	cfg.KubeAPI = nil
 	cfg.ResidentMints = nil // the runner answers these; the organisation holds none of their values
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
@@ -473,6 +528,25 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil, noHop)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	return cfg, nil
+}
+
+// viaOrgADOGateCovers reports whether the sealed row's Azure DevOps gate names host.
+func viaOrgADOGateCovers(gate *proxy.ADOGrantConfig, host string) bool {
+	return gate != nil && slices.ContainsFunc(gate.Hosts, func(h string) bool { return hostEqual(h, host) })
+}
+
+// viaOrgADOGate is the gate the engine is built with: nil when it serves no Azure DevOps token, otherwise a copy of the
+// stored gate whose hosts are the stored ones the engine's Azure DevOps injections name.
+func viaOrgADOGate(gate *proxy.ADOGrantConfig, adoHosts []string) *proxy.ADOGrantConfig {
+	if gate == nil || len(adoHosts) == 0 {
+		return nil
+	}
+	out := *gate
+	out.Capabilities = slices.Clone(gate.Capabilities)
+	out.Hosts = slices.DeleteFunc(slices.Clone(gate.Hosts), func(h string) bool {
+		return !slices.ContainsFunc(adoHosts, func(a string) bool { return hostEqual(a, h) })
+	})
+	return &out
 }
 
 // viaOrgInternalHosts narrows the org's internal-host declarations to the via_org destinations

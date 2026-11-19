@@ -194,29 +194,50 @@ import sys
 
 expected_clients, expected_dbs, prefix, host = sys.argv[1:]
 events = Path(os.environ["E2E_TEST_EVENTS"])
-clients = [json.loads(p.read_text()) for p in events.glob("client-*.json")]
-binds = [json.loads(p.read_text()) for p in events.glob("bind-*.json")]
-def check(clients, binds):
-    assert len(clients) == int(expected_clients), clients
-    assert len({c["db"] for c in clients}) == int(expected_dbs), clients
-    tokens = {c["token_hash"] for c in clients}
-    if os.environ.get("WARDYN_E2E_TOKEN"):
-        assert tokens == {hashlib.sha256(os.environ["WARDYN_E2E_TOKEN"].encode()).hexdigest()}
-    else:
-        assert len(tokens) == len(clients), "token reused across ups or lanes"
-    assert tokens == {b["token_hash"] for b in binds if not b["proxy"]}
-    assert all(c["url"].endswith(prefix + "/api/v1/runs") for c in clients), clients
-    assert len([b for b in binds if b["proxy"]]) == (len(clients) if prefix else 0)
-    assert all(addr[0] == host for b in binds for addr in b["listeners"]), binds
 
-try:
-    check(clients, binds)
-except AssertionError:
-    # Name what ran, so a red says which spec ran twice and on which database.
-    for p in sorted(events.glob("client-*.json")):
-        c = json.loads(p.read_text())
-        print(f"  {p.name}: spec={c['spec']} db={c['db']}", file=sys.stderr)
-    raise
+def load(pattern):
+    out = []
+    for p in sorted(events.glob(pattern)):
+        try:
+            out.append((p.name, json.loads(p.read_text())))
+        except ValueError as error:
+            print(f"check_events: {p.name} is not whole JSON ({error}): {p.read_text()!r}", file=sys.stderr)
+            sys.exit(1)
+    return out
+
+clients, binds = load("client-*.json"), load("bind-*.json")
+backends = [b for _, b in binds if not b["proxy"]]
+proxies = [b for _, b in binds if b["proxy"]]
+tokens = {c["token_hash"] for _, c in clients}
+dbs = {c["db"] for _, c in clients}
+want_proxies = len(clients) if prefix else 0
+problems = []
+
+def want(ok, what):
+    if not ok:
+        problems.append(what)
+
+want(len(clients) == int(expected_clients), f"{len(clients)} clients ran, want {expected_clients}")
+want(len(dbs) == int(expected_dbs), f"{len(dbs)} databases, want {expected_dbs}")
+if os.environ.get("WARDYN_E2E_TOKEN"):
+    want(tokens == {hashlib.sha256(os.environ["WARDYN_E2E_TOKEN"].encode()).hexdigest()},
+         "a client did not use the explicit WARDYN_E2E_TOKEN")
+else:
+    want(len(tokens) == len(clients), f"{len(clients)} clients used {len(tokens)} tokens: one was reused across ups or lanes")
+want(tokens == {b["token_hash"] for b in backends}, "the clients' tokens are not the backends' tokens")
+want(all(c["url"].endswith(prefix + "/api/v1/runs") for _, c in clients), f"a client's URL does not end in {prefix}/api/v1/runs")
+want(len(proxies) == want_proxies, f"{len(proxies)} base-path proxies, want {want_proxies}")
+want(all(addr[0] == host for _, b in binds for addr in b["listeners"]), f"a listener is not on {host}")
+
+if problems:
+    # Name what ran, so a red says which spec ran twice, on which database, and what every backend bound.
+    for p in problems:
+        print(f"check_events: {p}", file=sys.stderr)
+    for name, c in clients:
+        print(f"  {name}: spec={c['spec']} db={c['db']} url={c['url']} token={c['token_hash'][:12]}", file=sys.stderr)
+    for name, b in binds:
+        print(f"  {name}: proxy={b['proxy']} listeners={b['listeners']} token={b['token_hash'][:12]}", file=sys.stderr)
+    sys.exit(1)
 PY
 }
 
@@ -326,7 +347,11 @@ log "an empty, malformed or out-of-range shard refuses before any work"
 
 run_wrapper one two
 check_events 2 1 '' 127.0.0.1
-log "per-up rotation, private token handoff and effective default loopback binds"
+# A red names what it found: the wrong count, each client's spec and each backend's listeners.
+if (check_events 3 1 '' 127.0.0.1) > "${tmp}/diag.log" 2>&1; then die "check_events passed a wrong client count"; fi
+grep -q 'check_events: 2 clients ran, want 3' "${tmp}/diag.log" && grep -q 'spec=e2e/one.spec.ts' "${tmp}/diag.log" &&
+  grep -q 'listeners=' "${tmp}/diag.log" || { cat "${tmp}/diag.log"; die "a check_events red does not name its count, its specs and its listeners"; }
+log "per-up rotation, private token handoff and effective default loopback binds; a red names what it read"
 
 # A backend that fails to come up is retried once, and the retry must not reuse the ports that just
 # failed (an "address in use" refusal would repeat). The first start is refused by the readiness probe.

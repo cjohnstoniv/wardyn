@@ -121,5 +121,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// Ended runner runs' retirements, one step each; on every replica, as
 	// each step is one transaction under the run lock.
 	pass("runner retirement producer", s.produceRunnerRetirements(ctx))
+	// Support grants: lapsed, expired and run-over ones end, each end no route audited gets its one row, and
+	// this replica's audit window is re-read.
+	pass("support grant sweep", s.sweepSupportGrants(ctx))
 	return first
 }

@@ -479,6 +479,50 @@ func TestLaptopProxy_ViaOrgForwardsAndHoldsNothing(t *testing.T) {
 	}
 }
 
+// The hop to the organisation carries the sandbox request's path as the sandbox wrote it: the fake control
+// plane keeps the request (cpReq, a clone that keeps RequestURI, the request line), which holds an escape
+// the decoded path loses, so a %2F in a segment arrives as %2F and never as a path separator. The sandbox's
+// Authorization moves to its via_org header, the run token takes its place, and the gateway and routing
+// headers do not ride.
+func TestViaOrgHopCarriesTheEscapedPath(t *testing.T) {
+	for _, tc := range []struct{ name, target string }{
+		{"no escape", "/org/proj/_apis/git/repositories/app/refs?filter=heads"},
+		{"space escape", "/org/proj/_apis/git/repositories/my%20app/refs"},
+		{"slash escape", "/org/proj/_apis/git/repositories/team%2Fapp/items?path=%2Fa.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaptopFixture(t)
+			// The via_org host is a configured gateway host, with a gateway identity route, so each header strip is live.
+			f.p.llmUpstreams = map[string]llmUpstream{"anthropic": {host: "api.corp.example", port: 443, prefix: "/v1"}}
+			f.p.gatewayRoutes = []GatewayIdentityRoute{{Host: "api.corp.example", Port: 443, ProviderID: "anthropic", Audience: "aud"}}
+			req := httptest.NewRequest(http.MethodGet, "https://api.corp.example"+tc.target, nil)
+			req.Header.Set("Authorization", "Bearer sandbox-own")
+			req.Header.Set("X-Portkey-Custom-Host", "https://attacker.example")
+			req.Header.Set(gatewayIdentityHeader, "sandbox-claimed")
+			req.Header.Set(gatewayCallIDHeader, "sandbox-claimed")
+			rec := httptest.NewRecorder()
+			f.p.serveViaOrg(rec, req, f.p.viaOrgRoutes[0], "api.corp.example")
+			if rec.Code != http.StatusOK || rec.Body.String() != "from-org" || f.cpSeen != 1 {
+				t.Fatalf("status %d body %q, org saw %d, want the organisation's answer once", rec.Code, rec.Body.String(), f.cpSeen)
+			}
+			if want := ViaOrgPathPrefix + f.header.String() + tc.target; f.cpReq.RequestURI != want {
+				t.Errorf("request line %q, want %q", f.cpReq.RequestURI, want)
+			}
+			if got := f.cpReq.Header.Get("Authorization"); got != "Bearer RUNTOK" {
+				t.Errorf("Authorization = %q, want the run token", got)
+			}
+			if len(f.cpAuthz) != 1 || f.cpAuthz[0] != "Bearer sandbox-own" {
+				t.Errorf("%s = %q, want the sandbox's own Authorization", ViaOrgAuthorizationHeader, f.cpAuthz)
+			}
+			for _, h := range []string{"X-Portkey-Custom-Host", gatewayIdentityHeader, gatewayCallIDHeader} {
+				if got := f.cpReq.Header.Get(h); got != "" {
+					t.Errorf("%s = %q rode the hop, want it stripped", h, got)
+				}
+			}
+		})
+	}
+}
+
 func proxyDo(t *testing.T, proxyURL string, req *http.Request) *http.Response {
 	t.Helper()
 	pu, _ := req.URL.Parse(proxyURL)

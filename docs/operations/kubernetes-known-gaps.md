@@ -18,7 +18,7 @@
 | No per-pod PIDs limit | Not enforced | A run's `ResourceLimits.PidsLimit` is accepted but not enforced; wardynd logs a warning naming the run id each time. | Kubernetes has no per-container pids resource. Set the node-level kubelet `podPidsLimit` (or your distribution's `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb backstop. |
 | No revive or restart with current limits | Refused | `POST /runs/{id}/revive` answers 409, and `POST /admin/runs/restart` ("Restart with current limits") answers 200 with each run `ok: false`. Both carry reason `revive_unsupported` and change nothing. | The agent pod pins the proxy pod's IP, so a new proxy could not be reached. On the agent-sandbox backend with keep on, a run that can be kept is the exception: [keep and revive](kubernetes-agent-sandbox.md#keep-and-revive). |
 | Live egress edit | Partial | `PATCH /runs/{id}/egress` adds the edit's hosts to the proxy's deny list; the proxy refuses them at once. If the list grew, proxied connections close; connections to its DNS listener, which forwards nothing, stay open. The answer waits for its readback. | The agent pod pins the proxy pod's IP, so the proxy is narrowed, not replaced. An edit applies only its own hosts, not governance changes made since the run started. |
-| Live egress edit that needs a new proxy | Refused | `409 egress_edit_unsupported`, and nothing changes, for a run started before 0.10.0-rc.20, on an older proxy image, or on a registered runner. So is an edit that takes away a credential lane, `via_org` route, MCP server or intercepted host. | Start a new run with the narrower policy. [Live egress edit](run-lifetime.md#live-egress-edit) lists every case, and when the deny list can be lost. |
+| Live egress edit that needs a new proxy | Refused | `409 egress_edit_unsupported`, and nothing changes, for a run started before 0.10.0-rc.20, an older proxy image or a Kubernetes runner older than 0.10.1. So is an edit that takes away a credential lane, `via_org` route, MCP server or intercepted host. | Start a new run with the narrower policy. [Live egress edit](run-lifetime.md#live-egress-edit) lists every case, and when the deny list can be lost. |
 | Ground-truth sensor | Opt-in | `groundtruth.k8s.enabled` runs a DaemonSet that ties your Tetragon's events to runs ([`cmd/wardyn-tetragon-ingest`](../../cmd/wardyn-tetragon-ingest)). Off by default. | Wardyn ships no Tetragon and does not verify its events. Gaps: gVisor and Kata runs are invisible to host eBPF, and no live-Tetragon test exists yet. See [Ground truth on Kubernetes](kubernetes-ground-truth.md). |
 | A default-deny NetworkPolicy already in `k8s.runsNamespace` | Refused | wardynd refuses to boot, unless the canary pod ran and could not connect. | See [the egress canary](#the-egress-canary). |
 | NetworkPolicy stops being enforced after boot | Refused for new sandboxes | The canary re-runs every 10 minutes; the first check that shows egress through a deny-all policy refuses new sandboxes in that namespace. Running sandboxes keep running. | Fix the CNI; see [re-checks after boot](#re-checks-after-boot). |
@@ -59,6 +59,24 @@
 - If your DNS pods carry other labels, it matches nothing and DNS falls back to the broad rule.
 - Check with `kubectl -n kube-system get pods --show-labels`.
 
+## Killing a run
+
+- A kill deletes the run's pods and waits up to 25 seconds for them to go; the network policies and the per-run Secret stay until they have.
+- If every pod is already terminating when the wait ends and no other kill step failed, the kill answers 202 with `teardown` `confirming` instead of a failure. The run is `KILLED` and its credentials are revoked.
+- Wardyn retries the stop in the background and writes one `run.kill.confirm` row per confirm, within 60 seconds of the kill; a kill made on the same server replica while one runs adds none. A `failure` row means the stop was not confirmed; the run keeps its sandbox ref.
+- Once the pods are gone, the label sweep removes the Secret and the NetworkPolicies, the next daemon start clears the ref, and a repeat of the kill completes it at once.
+- A pod that is not terminating, or a Kubernetes API error, still answers 500 and the kill can be retried.
+- So does a kill whose pods are terminating when another kill step fails, such as a credential revoke. Its `run.kill` row is a `failure` that still carries `sandbox_stop` `confirming`, and no confirm starts.
+- On a Kubernetes runner, the kill deletes the proxy pod and waits up to 25 seconds for proof that it stopped, then does the same for the agent pod.
+- On a Kubernetes runner, the kill answers 202 with `teardown` `confirming` when both pods were deleted and only that proof is missing, or both are proven stopped and every pod left is terminating. The confirm then runs as above.
+- A kill on a Kubernetes runner still answers 500 when its two waits together outlast the kill's 30-second budget, because the runner answers too late. A slow proxy pod with an agent pod proven stopped quickly can still answer 202.
+- It also answers 500 when both pods have passed their delete bounds without that proof (`pending_delete`), on a Kubernetes API or runner error, and on an older runner.
+- A pod no later read can prove stopped answers 500 too:
+  - No record or taint releases a pod that went without that proof, or whose name now holds another pod.
+  - A changed node record needs a new record, and a reused node name a two-person node powered off record. A taint releases neither.
+  - A person's record, or an out-of-service taint on the pod's causal machine, releases a different execution, a pod the pod garbage collector marked, or a container no tier can ever bind.
+  - A pod with no causal node has no machine to taint. When its main containers never started, or a container no tier can ever bind, only a person's record releases it.
+
 ## Eviction, priority and run count
 
 - **Eviction and priority.** Sandbox pods take `k8s.sandbox.priorityClassName` and `k8s.sandbox.podAnnotations` (`WARDYN_K8S_SANDBOX_PLACEMENT`, [docs/ENV.md](../ENV.md)).
@@ -90,7 +108,7 @@ A run's `disk_mib` is the agent container's `resources.limits[ephemeral-storage]
 - The volumes are writable without `FSGroup`: the kubelet creates an `emptyDir` root-owned but `0777`.
 
 > [!NOTE]
-> **What the proof does not cover:** the kind conformance evidence is from the busybox conformance-agent image on runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and Kata. The live kind SSO walk exercises a real `agent-run` boot (the aws-sso sign-in sandbox and a real claude-code run) on the `emptyDir`-backed `/tmp` and `/home/agent/work`, on runc. It is manual and self-skipping, not CI (see [`docs/TEST-GAPS.md`](../TEST-GAPS.md)).
+> **What the proof does not cover:** the kind conformance evidence is from the busybox conformance-agent image on runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and Kata. The live kind SSO walk exercises a real `agent-run` boot (the aws-sso sign-in sandbox and a real claude-code run) on the `emptyDir`-backed `/tmp` and `/home/agent/work`, on runc. It is manual and self-skipping, not CI.
 
 ### The mechanism's remaining gap
 

@@ -100,7 +100,7 @@ func TestPushRuleEntryOfRemote(t *testing.T) {
 		{"legacy https subdomain, upper case", "azure_devops", "https://Contoso.VisualStudio.com/DefaultCollection/proj/_git/repo", "dev.azure.com", "contoso", false},
 		{"ado v3 on a non-ssh azure host", "azure_devops", "git@dev.azure.com:v3/contoso/proj/repo", "dev.azure.com", "v3", false},
 	} {
-		host, org, err := PushRuleEntryOfRemote(tc.provider, tc.remote)
+		host, org, err := PushRuleEntryOfRemoteAt(tc.provider, tc.remote, "")
 		if (err != nil) != tc.err || host != tc.host || org != tc.org {
 			t.Errorf("%s: = %q %q %v, want %q %q error=%v", tc.name, host, org, err, tc.host, tc.org, tc.err)
 		}

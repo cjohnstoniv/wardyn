@@ -1,0 +1,404 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
+)
+
+const apiKeyApprovalRefusal = "eligible_grants[0]: api_key cannot require approval"
+
+func gatedAPIKey(t *testing.T, gated bool) types.GrantSpec {
+	t.Helper()
+	return types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: gated, Scope: apiKeyScope(t, "api.example.test", "corp-key")}
+}
+
+// An api_key grant marked requires_approval is refused where a person or a file
+// authors a policy, as env_secret and file_secret are: every door that injects a
+// key drops an approval-gated grant, so no run could ever use it. The same grant
+// without the flag is accepted. A policy saved before the rule still loads: the
+// run-path validators (strict, lenient, per grant) accept the flag.
+func TestAPIKeyRequiresApprovalRefusedAtSave(t *testing.T) {
+	for _, gated := range []bool{false, true} {
+		g := gatedAPIKey(t, gated)
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{g}}
+		err := validateAuthoredPolicySpec(spec)
+		if gated && (err == nil || !strings.Contains(err.Error(), apiKeyApprovalRefusal)) {
+			t.Errorf("authored requires_approval=true: err = %v, want the api_key approval refusal", err)
+		}
+		if !gated && err != nil {
+			t.Errorf("authored requires_approval=false: err = %v, want accepted", err)
+		}
+		for name, err := range map[string]error{
+			"validatePolicySpec":        validatePolicySpec(spec),
+			"validatePolicySpecLenient": validatePolicySpecLenient(spec),
+			"validateEligibleGrantMode": validateEligibleGrantMode(0, g, true),
+		} {
+			if err != nil {
+				t.Errorf("requires_approval=%v, %s: err = %v, want accepted (a saved policy keeps loading)", gated, name, err)
+			}
+		}
+	}
+}
+
+// A grant an earlier write already held is left alone by a write that does not
+// change it, and refused once the write adds or changes it.
+func TestAPIKeyApprovalHeldGrantLeftAloneUntilChanged(t *testing.T) {
+	held := gatedAPIKey(t, true)
+	restated := held
+	restated.Scope = json.RawMessage(`{ "host": "api.example.test", "header": "Authorization", "secret_name": "corp-key" }`)
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{restated}, []types.GrantSpec{held}); err != nil {
+		t.Errorf("unchanged grant (scope spelled differently): err = %v, want accepted", err)
+	}
+	reordered := held
+	reordered.Scope = json.RawMessage(`{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}`)
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{reordered}, []types.GrantSpec{held}); err != nil {
+		t.Errorf("unchanged grant (scope keys in another order): err = %v, want accepted", err)
+	}
+	changed := held
+	changed.TTLSeconds = 60
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{changed}, []types.GrantSpec{held}); err == nil {
+		t.Error("changed grant: want the refusal, got nil")
+	}
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{held}, nil); err == nil {
+		t.Error("added grant: want the refusal, got nil")
+	}
+}
+
+// A launch never refuses a gated api_key grant. A default policy and a member's
+// ceiling saved before the rule hold one; a policy_overlay that adds or changes
+// the grant still launches, and the key is left out of the run (the grant is
+// never on the proxy's list: TestPersistRunGrantsLeavesApprovalGatedKeyOffTheProxy).
+func TestPolicyOverlayGatedAPIKeyLaunches(t *testing.T) {
+	srv, st := ovOverlayFixture(t)
+	st.capStore.enf = nil                              // as TestPolicyIDWithOverridesParity: no capability enforcement on the grant
+	legacy := &srv.cfg.DefaultPolicy.EligibleGrants[0] // shared with the member's ceiling
+	legacy.RequiresApproval = true
+	body := ovOverlayBody(`{"eligible_grants":[{"kind":"api_key","requires_approval":true,"ttl_seconds":60,` +
+		`"scope":{"host":"api.anthropic.com","secret_name":"` + govCorpSecret + `"}}]}`)
+	_, created, _ := ovDoorSpecs(t, srv, body)
+	gated := 0
+	for _, g := range created.EligibleGrants {
+		if g.Kind == types.GrantAPIKey && g.RequiresApproval {
+			gated++
+		}
+	}
+	if gated != 1 {
+		t.Errorf("created grants %+v, want exactly one api_key with approval on", created.EligibleGrants)
+	}
+}
+
+// A ceiling saved before the rule may hold a gated api_key grant. The clamp
+// forces approval on a member's grant under it, and the run still launches: the
+// key is left out of the run (TestPersistRunGrantsLeavesApprovalGatedKeyOffTheProxy).
+func TestAPIKeyClampedToApprovalStillValidates(t *testing.T) {
+	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gatedAPIKey(t, true)}}
+	proposed := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gatedAPIKey(t, false)}}
+	clamped, _ := composer.Clamp(proposed, ceiling, types.GovernanceLimits{})
+	if len(clamped.EligibleGrants) != 1 || !clamped.EligibleGrants[0].RequiresApproval {
+		t.Fatalf("clamp = %+v, want the one api_key grant forced to require approval", clamped.EligibleGrants)
+	}
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: clamped.EligibleGrants}
+	if err := validatePolicySpec(spec); err != nil {
+		t.Errorf("validatePolicySpec(clamped) = %v, want accepted", err)
+	}
+}
+
+// The default policy file is read at boot: a gated api_key grant in it loads, and
+// one warning names the grant, so an upgrade never stops the daemon.
+func TestLoadPolicySpecGatedAPIKeyLoadsWithWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	content := `{"min_confinement_class":"CC2","eligible_grants":[` +
+		`{"kind":"api_key","requires_approval":true,"scope":{"host":"api.example.test","secret_name":"corp-key"}}]}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	spec, err := LoadPolicySpec(path)
+	if err != nil {
+		t.Fatalf("LoadPolicySpec: %v", err)
+	}
+	if len(spec.EligibleGrants) != 1 || !spec.EligibleGrants[0].RequiresApproval {
+		t.Errorf("eligible grants = %+v, want the gated api_key grant kept", spec.EligibleGrants)
+	}
+	out := logs.String()
+	if strings.Count(out, "an api_key grant in the policy file requires approval") != 1 || !strings.Contains(out, "eligible_grants[0]") ||
+		!strings.Contains(out, "never injected") || !strings.Contains(out, "level=WARN") {
+		t.Errorf("log = %q, want one WARN naming eligible_grants[0] and that the key is never injected", out)
+	}
+}
+
+// A governance overlay write over a base that holds a gated api_key grant (a
+// deployment default saved before the rule) leaves the grant alone, even with
+// its scope keys in another order, and refuses an overlay that changes it.
+func TestCheckOverlayGatedAPIKeyFromTheBase(t *testing.T) {
+	srv, _, _ := govEscapeFixture(t, &capStore{})
+	srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey, RequiresApproval: true, TTLSeconds: 300,
+		Scope: apiKeyScope(t, "api.example.test", "corp-key")}}
+	overlay := func(g types.GrantSpec) *unitWriteError {
+		p := types.GovernanceUnit{Name: "p", Overlay: &types.CeilingOverlay{EligibleGrants: &[]types.GrantSpec{g}}}
+		return srv.checkOverlay(p, []types.GovernanceUnit{p}, nil)
+	}
+	unchanged := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, TTLSeconds: 300,
+		Scope: json.RawMessage(`{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}`)}
+	if ref := overlay(unchanged); ref != nil {
+		t.Errorf("unchanged grant, keys reordered: %v, want accepted", ref)
+	}
+	changed := unchanged
+	changed.TTLSeconds = 60
+	if ref := overlay(changed); ref == nil || !strings.Contains(ref.Error(), "api_key cannot require approval") {
+		t.Errorf("changed grant: %v, want the api_key approval refusal", ref)
+	}
+}
+
+// A preset save refuses a gated api_key grant in its inline_policy or its
+// policy_overlay, and leaves alone one the stored preset already carries.
+func TestPresetSaveGatedAPIKey(t *testing.T) {
+	f := newMemPresetFixture(t)
+	grant := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, Scope: apiKeyScope(t, "api.example.test", "corp-key")}
+	inline := client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code",
+		InlinePolicy: &types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{grant}}}}
+	overlay := client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code",
+		PolicyOverlay: json.RawMessage(`{"eligible_grants":[{"kind":"api_key","requires_approval":true,` +
+			`"scope":{"host":"api.example.test","secret_name":"corp-key"}}]}`)}}
+	for name, req := range map[string]client.PresetRequest{"inline_policy": inline, "policy_overlay": overlay} {
+		w := f.put(t, "new-"+name[:6], req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "api_key cannot require approval") {
+			t.Errorf("%s: code = %d, want 400 naming the refusal; body=%s", name, w.Code, w.Body.String())
+		}
+	}
+	raw, err := json.Marshal(inline.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store.rows = map[string]types.LaunchPreset{"ops": {Name: "ops", Version: 1, Request: raw}}
+	if w := f.put(t, "ops", inline); w.Code != http.StatusOK {
+		t.Errorf("a save that leaves the stored gated grant alone: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A template save refuses a gated api_key grant in its inline_policy when the
+// save adds or changes it, and leaves alone one the revision it replaces held.
+func TestTemplateSaveGatedAPIKey(t *testing.T) {
+	owner := testTemplateOwner("person", "alice", "")
+	grant := types.GrantSpec{Kind: types.GrantAPIKey, RequiresApproval: true, Scope: apiKeyScope(t, "api.example.test", "corp-key")}
+	doc := structDoc(t, `{"inline_policy":{"eligible_grants":[{"kind":"api_key","requires_approval":true,`+
+		`"scope":{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}}]}}`)
+	save := func(held []types.GrantSpec) []client.TemplateDiagnostic {
+		_, diags := templateForSave(client.TemplateSaveRequest{Name: "t", Document: doc}, owner, types.TemplateKindTemplate, held)
+		return diags
+	}
+	if diags := save(nil); len(diags) == 0 || !strings.Contains(diags[0].Message, "api_key cannot require approval") {
+		t.Errorf("a new gated api_key: diagnostics %v, want the refusal", diags)
+	}
+	if diags := save([]types.GrantSpec{grant}); len(diags) != 0 {
+		t.Errorf("the stored revision held it (scope keys reordered): diagnostics %v, want accepted", diagReasons(diags))
+	}
+}
+
+const apiKeyApprovalMsg = "api_key cannot require approval"
+
+// gatedGrantJSON is a gated api_key grant as a request spells it, its scope keys in an order the
+// stored one is not in.
+const gatedGrantJSON = `{"kind":"api_key","requires_approval":true,"ttl_seconds":%d,` +
+	`"scope":{"secret_name":"corp-key","host":"api.example.test","header":"Authorization"}}`
+
+// A policy saved before the rule keeps its gated api_key grant, and an update that leaves the grant
+// unchanged saves; one that adds or changes a gated grant is refused. A create holds nothing.
+func TestPolicyUpdateGatedAPIKeyHeldGrant(t *testing.T) {
+	h := newHarness(t)
+	ms := &memPolicyStore{rows: map[uuid.UUID]types.RunPolicy{}}
+	srv := New(baseTestConfig(h, ms))
+	id, seen := uuid.New(), time.Now().UTC()
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	ms.rows[id] = types.RunPolicy{ID: id, Name: "legacy", UpdatedAt: seen,
+		Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{legacy}}}
+	spec := func(ttl int) string {
+		return `{"min_confinement_class":"CC2","eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}`
+	}
+	path := "/api/v1/policies/" + id.String()
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut("legacy", seen, spec(300))); w.Code != http.StatusOK {
+		t.Errorf("update leaving the gated grant unchanged = %d %s, want 200", w.Code, w.Body.String())
+	}
+	seen = ms.rows[id].UpdatedAt
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut("legacy", seen, spec(60))); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("update changing the gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{"name":"fresh","spec":`+spec(300)+`}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("create with a gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
+
+// A standalone profile ceiling saved before the rule keeps its gated api_key grant: a write that
+// leaves it unchanged is not refused for it (scope keys in another order included); a changed one is.
+func TestStandaloneCeilingGatedAPIKeyHeldGrant(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	s.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{legacy}
+	stored := govCovStandalone(govCovTop, "top", "pypi.org")
+	stored.Ceiling.EligibleGrants = []types.GrantSpec{legacy}
+	body := func(ttl int) string {
+		return `{"name":"top","ceiling":{"min_confinement_class":"CC2","allowed_domains":["pypi.org"],"eligible_grants":[` +
+			strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+	}
+	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(300)); err != nil {
+		t.Errorf("unchanged gated grant: %v, want accepted", err)
+	}
+	if err := govCovBuildErr(t, s, []types.GovernanceUnit{stored}, govCovTop, body(60)); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: %v, want the approval refusal", err)
+	}
+	if err := govCovBuildErr(t, s, nil, govCovTop, body(300)); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("a create with a gated grant: %v, want the approval refusal", err)
+	}
+}
+
+// A boundary saved before the rule keeps its gated api_key grant: a PUT that leaves it unchanged
+// is not refused for it; one that changes it, or a boundary that held none, is.
+func TestBoundaryPutGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	put := func(stored []types.GrantSpec, ttl int) *httptest.ResponseRecorder {
+		var spec types.BoundarySpec
+		if stored != nil {
+			spec.EligibleGrants = &stored
+		}
+		srv := &Server{cfg: Config{Store: hardBoundary(spec), Now: time.Now}}
+		w := httptest.NewRecorder()
+		srv.handlePutBoundary(w, httptest.NewRequest(http.MethodPut, "/api/v1/governance/boundary", strings.NewReader(gatedBoundaryBody(ttl))))
+		return w
+	}
+	if w := put([]types.GrantSpec{legacy}, 300); w.Code != http.StatusOK {
+		t.Errorf("unchanged gated grant = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if w := put([]types.GrantSpec{legacy}, 60); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+	if w := put(nil, 300); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("boundary that held none = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
+
+// errPastValidation is what pastValidationStore panics with when a handler gets as far as listing
+// the governance units, which the boundary dry run does only after its validation passed.
+var errPastValidation = errors.New("past validation")
+
+type pastValidationStore struct{ sealBoundaryStore }
+
+func (pastValidationStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
+	panic(errPastValidation)
+}
+
+// servePastValidation runs serve and reports whether it reached pastValidationStore. Any other panic
+// is re-raised.
+func servePastValidation(serve func()) (reached bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != any(errPastValidation) {
+				panic(r)
+			}
+			reached = true
+		}
+	}()
+	serve()
+	return false
+}
+
+func gatedBoundaryBody(ttl int) string {
+	return `{"mode":"hard_limits","spec":{"eligible_grants":[` + strings.Replace(gatedGrantJSON, "%d", fmt.Sprint(ttl), 1) + `]}}`
+}
+
+// The boundary dry run judges the proposed boundary against the grants the stored one holds, as the
+// save does: an unchanged gated grant is not refused, a changed one is.
+func TestBoundaryDryRunGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	srv := &Server{cfg: Config{Store: pastValidationStore{hardBoundary(types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}})}, Now: time.Now}}
+	run := func(ttl int) (*httptest.ResponseRecorder, bool) {
+		w := httptest.NewRecorder()
+		reached := servePastValidation(func() {
+			srv.handleBoundaryDryRun(w, httptest.NewRequest(http.MethodPost, "/api/v1/governance/boundary/dry-run", strings.NewReader(gatedBoundaryBody(ttl))))
+		})
+		return w, reached
+	}
+	if w, reached := run(300); !reached || w.Body.Len() != 0 {
+		t.Errorf("unchanged gated grant: reached = %v, body %q, want it past validation with nothing written", reached, w.Body.String())
+	}
+	if w, reached := run(60); reached || w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: reached = %v, %d %s, want 400 naming the refusal", reached, w.Code, w.Body.String())
+	}
+}
+
+// A held boundary replacement is judged against the stored boundary's grants (unchanged: not refused,
+// changed: refused), and a boundary that moved since the review is stale before it is invalid.
+func TestBoundaryReplayGatedAPIKeyHeldGrant(t *testing.T) {
+	legacy := gatedAPIKey(t, true)
+	legacy.TTLSeconds = 300
+	cur := types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{EligibleGrants: &[]types.GrantSpec{legacy}}}
+	hash := computeETag(boundaryState(cur))
+	replay := func(ttl int, baseHash string) error {
+		var held types.BoundaryWrite
+		if err := json.Unmarshal([]byte(gatedBoundaryBody(ttl)), &held); err != nil {
+			t.Fatal(err)
+		}
+		return boundaryReplayRefusal(&held, cur, baseHash)
+	}
+	if err := replay(300, hash); err != nil {
+		t.Errorf("unchanged gated grant: %v, want accepted", err)
+	}
+	if err := replay(60, hash); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("changed gated grant: %v, want the approval refusal", err)
+	}
+	if err := replay(60, "moved"); !errors.Is(err, store.ErrGovernanceChangeStale) {
+		t.Errorf("a boundary that moved: %v, want stale before invalid", err)
+	}
+}
+
+// A composed profile saved before the rule may overlay a gated api_key its base holds ungated. A
+// write that sends no overlay (a rename) judges the stored overlay again, and is not refused for the
+// approval rule; an overlay that newly gates the grant is.
+func TestComposedOverlayGatedAPIKeyStoredRow(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	ungated := gatedAPIKey(t, false)
+	s.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{ungated}
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.EligibleGrants = []types.GrantSpec{ungated}
+	gated := ungated
+	gated.RequiresApproval = true
+	stored := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
+	stored.Overlay.EligibleGrants = &[]types.GrantSpec{gated}
+	all := []types.GovernanceUnit{base, stored}
+
+	if err := govCovBuildErr(t, s, all, govCovPID, `{"name":"renamed"}`); err != nil {
+		t.Errorf("rename of a stored gating overlay: %v, want accepted", err)
+	}
+	plain := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
+	plain.Overlay.EligibleGrants = &[]types.GrantSpec{ungated}
+	if _, _, err := s.checkGraphWrite(stored, []types.GovernanceUnit{base, plain}, maxUnitDepthDefault); err == nil || !strings.Contains(err.Error(), apiKeyApprovalMsg) {
+		t.Errorf("an overlay that newly gates the grant: %v, want the approval refusal", err)
+	}
+}

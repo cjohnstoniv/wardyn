@@ -338,13 +338,16 @@ func detachedWindows(t *testing.T, files []string) (map[string][]string, map[str
 // budget, a start recorded by then is waited out by the edit's deadline, and every window after a claim or an
 // in-place write made by then closes by the hard end, so the tails made in them stop there (editCtx). The stated
 // answer covers the calls past the hard end that ignore a done ctx. A window added, moved or rebound turns this red.
+// narrowDeliverBound is deliver's bound as written; the chains count the longer of its two, a runner's.
+const narrowDeliverBound = "narrowBound(ne.run, narrowDeliverTimeout, narrowRunnerDeliverTimeout)"
+
 func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 	got, funcs := detachedWindows(t, editPathFiles)
 	want := map[string][]string{
 		// The edit's own: the wait, its stops and the fate read, each ending by the hard end.
 		"run_egress_edit.go:editDetached": {"db.WithoutCancelUnlessLost"},
-		// In place, after the write, a request call.
-		"run_egress_narrow.go:deliver": {"narrowDeliverTimeout", "killCascadeTimeout"},
+		// In place, after the write, a request call; its bound is a runner's on a run on a runner (narrowBound).
+		"run_egress_narrow.go:deliver": {narrowDeliverBound, "killCascadeTimeout"},
 		"run_egress_narrow.go:undo":    {"killCascadeTimeout"},
 		// The revive's claimed window, opened only after the claim (below), and its compensation.
 		"run_revive.go:reviveRunProxy":                        {"reviveClaimedTimeout"},
@@ -399,7 +402,7 @@ func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 	}
 
 	value := map[string]time.Duration{"killCascadeTimeout": killCascadeTimeout, "reviveClaimedTimeout": reviveClaimedTimeout,
-		"heldStoreCallBound": heldStoreCallBound, "narrowDeliverTimeout": narrowDeliverTimeout}
+		"heldStoreCallBound": heldStoreCallBound, narrowDeliverBound: max(narrowDeliverTimeout, narrowRunnerDeliverTimeout)}
 	win := func(key string, i int) time.Duration {
 		if i < len(got[key]) {
 			if d, ok := value[got[key][i]]; ok {
@@ -421,7 +424,9 @@ func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 	// (cmd/wardynd fanoutRecorder): past the hard end that is the proxy stop's failure row and the sandbox stop's.
 	sinkLookup := sourceSeconds(t, "audit/sinks/correlation.go", "correlationLookupBudget")
 
-	if before := narrowRouteTimeout + leaseWait + lock + reviveRunnerTimeout; before > egressEditCallBudget {
+	// The longest chain is a runner run's: its routing probe has the runner bound (narrowBound) and its revive waits
+	// leaseWait for the owner's slot (lockRevive). A hosted run's probe is shorter and takes no slot.
+	if before := max(narrowRouteTimeout, narrowRunnerRouteTimeout) + leaseWait + lock + reviveRunnerTimeout; before > egressEditCallBudget {
 		t.Errorf("a revive's own windows take %v before its claim, past the edit's call budget %v", before, egressEditCallBudget)
 	}
 	claimed := win("run_revive.go:reviveRunProxy", 0)

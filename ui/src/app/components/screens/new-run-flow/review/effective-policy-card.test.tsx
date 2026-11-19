@@ -239,3 +239,66 @@ describe("Effective policy card", () => {
     expect((await screen.findByText(cardCount as string)).textContent).toBe(cardCount);
   });
 });
+
+describe("Effective policy card: the Network row's notes", () => {
+  // The board's text, written out here rather than read from the copy file.
+  const IP_NOTE = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
+  const NARROWS = "Host rules only narrow a host: a request must also pass the rest of the network settings.";
+  const ONE_LINE = "api.example.com: allows GET within /public. Any other request is refused.";
+  const set = (n: number) => [{ rules: Array.from({ length: n }, (_, i) => ({ host: `h${i + 1}.example.com`, effect: "allow", methods: ["GET"], paths: ["/public"] })) }];
+  const previewOf = (spec: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    ({ spec: { allowed_domains: ["a.example.com", "b.example.com"], ...spec }, source: { name: "Team default" }, ...extra }) as unknown as PolicyPreviewResult;
+  const notes = (p: PolicyPreviewResult) => {
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={p} />);
+    const network = document.querySelector('[data-policy-row="network"]') as HTMLElement;
+    return Array.from(network.querySelectorAll("small")).map((n) => n.textContent);
+  };
+  const SOURCE = `${NR_REVIEW.PROV_SOURCE_POLICY} · Team default`;
+
+  it("allow-all egress with IP addresses refused adds the IP note under the source", () => {
+    expect(notes(previewOf({ allow_all_egress: true, refuse_ip_literals: true }))).toEqual([SOURCE, IP_NOTE]);
+    expect(screen.getByText(NR_REVIEW.POLICY_HOSTS_OPEN(2))).toBeInTheDocument();
+  });
+
+  it("reads open egress from the server's access facts when the preview does not say it", () => {
+    const access = { ...SCENARIO_ACCESS.member, unlisted: { ...SCENARIO_ACCESS.member.unlisted, allow_all: true } };
+    const pre = { ...SCENARIO_PREFLIGHT.member, access } as ReviewPreflight;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={previewOf({ refuse_ip_literals: true })} />);
+    const network = document.querySelector('[data-policy-row="network"]') as HTMLElement;
+    expect(Array.from(network.querySelectorAll("small")).map((n) => n.textContent)).toEqual([SOURCE, IP_NOTE]);
+  });
+
+  it.each([
+    ["refused but egress is not open", { refuse_ip_literals: true }],
+    ["open but not refused", { allow_all_egress: true, refuse_ip_literals: false }],
+    ["open and the field absent", { allow_all_egress: true }],
+  ])("adds no note when IP addresses are %s", (_name, spec) => {
+    expect(notes(previewOf(spec))).toEqual([SOURCE]);
+  });
+
+  it("host rules add one line per host and then the narrowing note last; the Network value is unchanged", () => {
+    expect(notes(previewOf({ host_rules: [{ rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/public"] }] }] }))).toEqual([SOURCE, ONE_LINE, NARROWS]);
+    expect(screen.getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
+  });
+
+  it("the IP note comes first, then the host lines, then the narrowing note", () => {
+    const spec = { allow_all_egress: true, refuse_ip_literals: true, host_rules: [{ rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/public"] }] }] };
+    expect(notes(previewOf(spec))).toEqual([SOURCE, IP_NOTE, ONE_LINE, NARROWS]);
+  });
+
+  it("caps at eight host lines, counts the rest, and keeps the narrowing note last", () => {
+    const out = notes(previewOf({ host_rules: set(9) }));
+    expect(out).toHaveLength(1 + 8 + 1 + 1);
+    expect(out.slice(-2)).toEqual(["and 1 more host with rules", NARROWS]);
+    cleanup();
+    expect(notes(previewOf({ host_rules: set(8) })).slice(-2)).toEqual([expect.stringContaining("h8.example.com"), NARROWS]);
+  });
+
+  it("a redacted preview still shows its host rules", () => {
+    expect(notes(previewOf({ host_rules: set(1) }, { redacted: true }))).toEqual([SOURCE, "h1.example.com: allows GET within /public. Any other request is refused.", NARROWS]);
+  });
+
+  it("no host rules and no sets: no notes", () => {
+    expect(notes(previewOf({ host_rules: [] }))).toEqual([SOURCE]);
+  });
+});

@@ -42,7 +42,7 @@ func TestReleasingDocNamesEveryCIJob(t *testing.T) {
 
 	for _, tc := range []struct{ name, path, start, end, pattern string }{
 		{"RELEASING", "RELEASING.md", "ci.yml` job list:", " — ", "`([a-z][a-z0-9-]*)`"},
-		{"docs_CI", "docs/CI.md", "| Check | Runs | Median | Max | Timeout |", "\n\n", "(?m)^\\| `([^`]+)`[^|]*\\|"},
+		{"docs_REPO_CI", "docs/REPO-CI.md", "| Check | Runs | Median | Max | Timeout |", "\n\n", "(?m)^\\| `([^`]+)`[^|]*\\|"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc, err := os.ReadFile(filepath.Join(root, tc.path))

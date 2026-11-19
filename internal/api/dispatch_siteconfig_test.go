@@ -69,47 +69,6 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	assertProxyArtifactScmBedrockComposition(t, spec)
 }
 
-// TestDispatch_SiteConfigComposition_LegacyArtifactOverridesFold is the
-// dispatch-level half of the fold-compat golden the Wave A gate requires: the
-// SAME composition as TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock,
-// seeded via a PUT /site-config body in the DEPRECATED artifact_overrides shape
-// instead of EgressRedirects directly — proving the request-decode fold
-// (foldLegacyArtifactOverrides, site_config.go) produces a BYTE-IDENTICAL
-// dispatched SandboxSpec to the current canonical shape, not just an
-// isolated-unit match.
-func TestDispatch_SiteConfigComposition_LegacyArtifactOverridesFold(t *testing.T) {
-	fr := &fakeRunner{}
-	srv, _ := pgHarnessWithRunner(t, fr)
-
-	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
-		"corp-proxy-url":        []byte("http://proxy.corp:3128"),
-		"npm-artifactory-token": []byte("s3cr3t-npm-token"),
-	}}
-	// The provider block is stored first: the PUT below omits it, and the
-	// site-config door carries a stored block forward.
-	if _, err := srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{
-		ModelProviders: seedBedrockSSOProvider(t, srv, nil),
-	}); err != nil {
-		t.Fatalf("seed model provider: %v", err)
-	}
-
-	legacyBody := `{
-		"upstream_proxy_secret_ref": "corp-proxy-url",
-		"artifact_overrides": {"npm": {"base_url": "https://artifactory.corp/npm", "token_secret_ref": "npm-artifactory-token"}},
-		"scm_hosts": ["ghes.corp.example"]
-	}`
-	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, legacyBody)
-	if w.Code != http.StatusOK {
-		t.Fatalf("seed legacy site config: code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	t.Cleanup(func() {
-		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
-	})
-
-	spec := dispatchAndCaptureSpec(t, srv, fr)
-	assertProxyArtifactScmBedrockComposition(t, spec)
-}
-
 // dispatchAndCaptureSpec drives POST /api/v1/runs with the shared inline policy
 // both site-config composition tests need (registry.npmjs.org present in the
 // STARTING egress allowlist, so the substitution assertion below is real —

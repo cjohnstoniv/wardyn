@@ -32,13 +32,14 @@ func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g 
 		return types.CredentialGrant{}, err
 	}
 	if ref == nil && residentADOOrigin(origin) {
-		if r, err := s.residentADOAdmits(ctx, run, origin); err != nil || r != nil {
+		delivery, r, err := s.localADODelivery(ctx, run, origin)
+		if err != nil || r != nil {
 			if r == nil {
 				r = &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "dispatch grant", Detail: "the delivery policy or the runner's posture could not be read"}
 			}
 			return types.CredentialGrant{}, r
 		}
-		g.Delivery = types.GrantDeliveryResident
+		g.Delivery = delivery
 		return s.cfg.Store.CreateGrant(ctx, g)
 	}
 	if ref != nil || origin.Class != placement.ClassOwn || !origin.Stored || !origin.OwnNamespace {
@@ -51,7 +52,7 @@ func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g 
 
 // residentADOOrigin reports whether origin is an Azure DevOps token the
 // organisation mints per run (localADOGrantOrigin), the one dispatch grant that
-// may be recorded runner_resident.
+// may be recorded runner_resident or via_org.
 func residentADOOrigin(origin placement.CredentialOrigin) bool {
 	return origin.Class == placement.ClassBrokered && origin.Delivery == placement.ClassADOMintedPAT
 }
@@ -66,6 +67,17 @@ func residentADOOrigin(origin placement.CredentialOrigin) bool {
 // no value is handed to the runner. err is a read that failed: nothing was
 // judged.
 func (s *Server) residentADOAdmits(ctx context.Context, run types.AgentRun, origin placement.CredentialOrigin) (*placement.Refusal, error) {
+	p, err := s.localADOPlan(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	return placement.ResidentAdmits(origin, p, "ProxyConfig.Injection"), nil
+}
+
+// localADOPlan is the facts an Azure DevOps token's delivery is judged on, read once: the site configuration's
+// delivery policy and the bound runner's trust class, owner kind and posture. The plan carries no spec: only the
+// delivery gates read it; a check on the dispatched spec (mixedADODelivery) runs in the dispatch classification.
+func (s *Server) localADOPlan(ctx context.Context, run types.AgentRun) (placement.LocalPlan, error) {
 	var p placement.LocalPlan
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err == nil && run.RunnerID == nil {
@@ -74,10 +86,21 @@ func (s *Server) residentADOAdmits(ctx context.Context, run types.AgentRun, orig
 	if err == nil {
 		err = s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 	}
+	return p, err
+}
+
+// localADODelivery judges an Azure DevOps minted token's delivery to run's runner from ONE read of the site
+// configuration and the runner: the mode the delivery policy sets for the runner's trust class, then that mode's
+// gate. The recorded mode is the one judged, so a grant is never recorded under a mode its gate did not admit.
+func (s *Server) localADODelivery(ctx context.Context, run types.AgentRun, origin placement.CredentialOrigin) (types.GrantDelivery, *placement.Refusal, error) {
+	p, err := s.localADOPlan(ctx, run)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	return placement.ResidentAdmits(origin, p, "ProxyConfig.Injection"), nil
+	if p.Delivery.ForTrust(placement.ClassADOMintedPAT, p.Trust).Mode == placement.ModeViaOrg {
+		return types.GrantDeliveryViaOrg, placement.ViaOrgADOAdmits(origin, p, "ProxyConfig.Injection"), nil
+	}
+	return types.GrantDeliveryResident, placement.ResidentAdmits(origin, p, "ProxyConfig.Injection"), nil
 }
 
 // localCapturedGrantOrigin inspects the raw snapshot rather than permitting
@@ -125,7 +148,7 @@ func (s *Server) localCapturedGrantOrigin(ctx context.Context, owner string, g t
 // PAT proven in their namespace. A minted_pat token is the organisation's,
 // minted per run from the owner's captured sign-in: brokered ado_minted_pat,
 // opted in only while its connection, as configured now, still is
-// (ADOEntraConfig.RunnerResident) and still mints. A bearer token, or any other
+// (ADOEntraConfig.RunnerResident or RunnerViaOrg) and still mints. A bearer token, or any other
 // mode, has no local delivery and refuses.
 func (s *Server) localADOGrantOrigin(ctx context.Context, owner string, raw json.RawMessage) (placement.CredentialOrigin, bool, error) {
 	var sn adoEntraScopeSnapshot
@@ -142,8 +165,9 @@ func (s *Server) localADOGrantOrigin(ctx context.Context, owner string, raw json
 			return placement.CredentialOrigin{}, true, err
 		}
 		row, _ := gitProviderRowByID(sc, sn.ProviderRowID)
-		optIn := row.Entra != nil && !row.Disabled && row.Entra.RunnerResident && cmpTokenMode(row.Entra.TokenMode) == types.ADOTokenModeMintedPAT
-		return placement.CredentialOrigin{GrantKind: types.GrantAPIKey, Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: optIn}, true, nil
+		minted := row.Entra != nil && !row.Disabled && cmpTokenMode(row.Entra.TokenMode) == types.ADOTokenModeMintedPAT
+		optIn, viaOrg := minted && row.Entra.RunnerResident, minted && row.Entra.RunnerViaOrg
+		return placement.CredentialOrigin{GrantKind: types.GrantAPIKey, Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: optIn, ViaOrgOptIn: viaOrg}, true, nil
 	case types.ADOTokenModeOwnPAT:
 		origin, err := s.localADOOrigin(ctx, owner, adoEntraRun{rowID: sn.ProviderRowID, owner: sn.OwnerSubject, tokenMode: types.ADOTokenModeOwnPAT})
 		if err != nil {

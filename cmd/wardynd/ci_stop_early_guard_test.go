@@ -69,7 +69,7 @@ func ciNeeds(t *testing.T, n yaml.Node) []string {
 }
 
 // TestCIStopEarlyJobsFireOnlyOnCheapDeterministicGates pins the jobs that cancel
-// a red pull request run (docs/CI.md, "Stop a red run early"). Each one needs
+// a red pull request run (docs/REPO-CI.md, "Stop a red run early"). Each one needs
 // exactly one cheap deterministic gate, so none can fire on a flake-prone job
 // (`ui-e2e`, `test-pg-shard`, a test leg) or wait for the slowest gate; it fires
 // only on that gate's `failure`, only on a same-repository, non-Dependabot pull

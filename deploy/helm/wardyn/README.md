@@ -835,7 +835,7 @@ extraObjects:
 - `-verify_hostname %h` is what checks the certificate names the host (`-servername` only sends SNI); add `-CAfile <path>` when the listener's certificate is not publicly trusted.
 - Port 443 is written out because `%p` is the advertised SSH port.
 - Host keys are unaffected, audit source IPs become the gateway's, and the browser terminal and `wardyn attach` need none of this.
-- The full recipe, with the reasons, is in [docs/SSH.md, "SSH on a 443-only estate"](../../../docs/SSH.md#ssh-on-a-443-only-estate).
+- The full recipe, with the reasons, is in [SSH on a 443-only estate](../../../docs/operations/ssh-443-only.md).
 
 ## Scraping `/metrics` through the NetworkPolicy
 

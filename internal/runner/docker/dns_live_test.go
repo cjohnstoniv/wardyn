@@ -86,8 +86,15 @@ func TestL0_DNSQueryIsRecorded(t *testing.T) {
 	waitForLog(ctx, t, proxyContainerName(runID), "listening")
 
 	const probe = "wardyn-l0-dns-audit-probe.example.com"
-	proxyIP := strings.TrimSpace(execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "awk '$2==\"wardyn-proxy\"{print $1}' /etc/hosts"}))
-	out := execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "cat /etc/resolv.conf; echo ---; nslookup -type=a " + probe + " 2>&1; echo RC=$?"})
+	assertResolverIsTheProxy(ctx, t, d, sb.Ref, runID, probe)
+}
+
+// assertResolverIsTheProxy: ref's /etc/resolv.conf is exactly its run proxy, a lookup of probe there fails, and the
+// proxy of runID records it as a refused DNS row.
+func assertResolverIsTheProxy(ctx context.Context, t *testing.T, d *Driver, ref string, runID uuid.UUID, probe string) {
+	t.Helper()
+	proxyIP := strings.TrimSpace(execInSandbox(ctx, t, d, ref, []string{"sh", "-c", "awk '$2==\"wardyn-proxy\"{print $1}' /etc/hosts"}))
+	out := execInSandbox(ctx, t, d, ref, []string{"sh", "-c", "cat /etc/resolv.conf; echo ---; nslookup -type=a " + probe + " 2>&1; echo RC=$?"})
 	t.Logf("resolver probe:\n%s", out)
 	resolv, lookup, ok := strings.Cut(out, "---\n")
 	if !ok || proxyIP == "" {
@@ -111,4 +118,48 @@ func TestL0_DNSQueryIsRecorded(t *testing.T) {
 		}
 	}
 	t.Fatalf("no DNS row %+v in the proxy's decision log; rows seen: %+v", want, rows)
+}
+
+// TestL0_DNSResolverAfterAKeptRevive: a kept run's agent, started again behind a new proxy in a revive's order
+// (EndSandbox, ReplaceProxy, StartSandbox), still has only its run proxy as its nameserver, and the new proxy records
+// a lookup. The replacement proxy serves only after a renewal, so the control plane is liveRenewingControlPlane's.
+func TestL0_DNSResolverAfterAKeptRevive(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
+		t.Skip("set WARDYN_TEST_DOCKER=1 to run the docker L0 network tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+	d, err := New(Config{ProxyImage: liveProxyImage})
+	if err != nil {
+		t.Fatalf("docker.New: %v", err)
+	}
+	ensureNetwork(t, d, d.cfg.InternalNetwork)
+	cpURL, cpCA := liveRenewingControlPlane(ctx, t, d)
+	runID := uuid.New()
+	spec := runner.SandboxSpec{
+		RunID:            runID,
+		Image:            "busybox:latest",
+		ConfinementClass: types.CC1,
+		ProxyConfig:      runner.ProxyConfig{RunToken: "dns-revive-test", ControlPlaneURL: cpURL, ControlPlaneCAPEM: cpCA, Policy: types.RunPolicySpec{AllowedDomains: []string{"example.com"}}},
+		Resources:        runner.Resources{CPUMillis: 500, MemoryMiB: 128},
+	}
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = d.KillSandbox(context.Background(), sb.Ref) })
+	if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	cfg, err := runner.BuildProxyConfig(runID, spec.ProxyConfig, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ReplaceProxy(ctx, sb.Ref, cfg); err != nil {
+		t.Fatalf("ReplaceProxy: %v", err)
+	}
+	if err := d.StartSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("StartSandbox: %v", err)
+	}
+	assertResolverIsTheProxy(ctx, t, d, sb.Ref, runID, "wardyn-l0-dns-revive-probe.example.com")
 }

@@ -331,6 +331,10 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   # being true, the same shape as the three floors above.
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
+    # The same job is where the egress-path pair and the runner corporate-CA case really run: the job builds the
+    # proxy and agent images, and its daemon is on the runner. l0-docker names the pair too, but only `make` runs
+    # that suite, so without these a skip here read as a pass.
+    REQUIRE_ALL="$REQUIRE_ALL TestL0_ProxyIsSoleEgressPath TestL0_HostAddressUnreachable TestRunnerTrustedCADocker"
   fi
   # The gateway recipes run the real LiteLLM, Portkey and Presidio images, which only the hosted job may
   # pull, so the test self-skips anywhere else; named here only where it can run, a rename or a skip goes red.
@@ -346,7 +350,7 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce'
+    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce TestL0_DNSResolverAfterAKeptRevive'
   fi
   # The four Linux VM cases: three docs/RUNTIME-CONTRACT.md cites, and the guest proof that docs/POLICIES.md's VM
   # host rules judge plain HTTP. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE are set; ci.yml's vm job, the suite's

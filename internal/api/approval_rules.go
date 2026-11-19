@@ -423,7 +423,7 @@ func (s *Server) approvalRuleDryRun(ctx context.Context, rule types.ApprovalRule
 	if !ok {
 		return report, nil
 	}
-	cutoff := s.cfg.Now().Add(-approvalRuleHistory)
+	cutoff := s.boundNow(ctx).Add(-approvalRuleHistory) // requested_at is the database's stamp
 	for scanned := 0; ; {
 		page, err := pager.ListApprovalsPage(ctx, "", store.Page{Limit: 200, Offset: scanned})
 		if err != nil {

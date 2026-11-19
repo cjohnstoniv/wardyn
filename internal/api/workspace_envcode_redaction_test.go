@@ -20,11 +20,12 @@ const envcodeCorpRegistry = "https://nexus.corp.internal/repository/npm"
 // envcodeRedirectStore is the topology fixture with the field the EMITTER
 // actually reads.
 //
-// It matters that this is a separate double. r3TopologyStore's site-config sets
-// ArtifactOverrides, and artifactBaseURLs (the artifactBaseURLs function in artifact_redirect.go) reads
-// EgressRedirects — so on that fixture the artifact bases are always nil and the
-// artifact-base leak cannot occur, whatever the route does. A pin written against
-// it would be green for a reason that has nothing to do with the property.
+// It matters that this is a separate double. artifactBaseURLs (the
+// artifactBaseURLs function in artifact_redirect.go) reads EgressRedirects, and
+// r3TopologyStore's site-config carries a different registry than
+// envcodeCorpRegistry — so a pin written against that fixture could not tell the
+// route's own artifact base from the fixture's, and would be green for a reason
+// that has nothing to do with the property.
 type envcodeRedirectStore struct{ *r3TopologyStore }
 
 func (envcodeRedirectStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {

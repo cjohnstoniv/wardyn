@@ -87,6 +87,10 @@ type attachHolder struct {
 	// nil otherwise: a promotion is written long after the attach, on the
 	// daemon's context, so the holder carries it to session.promote (#1234).
 	via *types.DelegationVia
+	// support is the support grant this holder's ticket was minted under (uuid.Nil for everyone else). A
+	// support holder never keeps the writer seat against the run's owner (evictSupportWriter), and waits
+	// behind every non-support observer (nextObserver).
+	support uuid.UUID
 
 	// displace ends this holder's session with a reason the DISPLACED CLIENT can
 	// read, and is deliberately a closure rather than the bare context.CancelFunc
@@ -446,18 +450,28 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 		ra = &runAttach{}
 		reg.attaches[runID] = ra
 	}
-	if ra.writer == nil {
+	// A support holder takes a free seat only when no non-support client waits for it.
+	var supportWriter *attachHolder
+	if ra.writer == nil && (h.support == uuid.Nil || !hasOwnObserver(ra)) {
 		ra.writer = h
 		h.writable.Store(true)
 	} else {
 		ra.observers = append(ra.observers, h)
 		readOnly = true
+		if h.support == uuid.Nil && ra.writer != nil && ra.writer.support != uuid.Nil {
+			supportWriter = ra.writer
+		}
 	}
 	reg.mu.Unlock()
 	// The slot here is the writer's only with the lease: another replica's holder may have it.
 	if h.lease != nil && !readOnly && !s.acquireAttachLease(runID, h, uuid.Nil) {
 		s.demoteWriter(runID, h)
 		readOnly = true
+	}
+	if supportWriter != nil {
+		// The owner always wins the seat (support_terminal.go): the helper's session is displaced, h promoted.
+		s.evictSupportWriter(runID, h, supportWriter)
+		readOnly = !h.writable.Load()
 	}
 
 	return readOnly, func() (announce func()) {
@@ -476,8 +490,9 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 			// the pump's ping probe notices — up to about twice
 			// attachPingInterval. Named, not fixed: the registry cannot tell a
 			// silent peer from an idle one, and the probe already exists.
-			if len(ra.observers) > 0 {
-				promoted, ra.observers = ra.observers[0], ra.observers[1:]
+			if i := nextObserver(ra); i >= 0 {
+				promoted = ra.observers[i]
+				ra.observers = slices.Delete(ra.observers, i, i+1)
 				ra.writer = promoted
 				promoted.promote()
 			}
@@ -533,11 +548,11 @@ func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder
 			ctx = audit.WithDelegation(ctx, *promoted.via)
 		}
 		s.recordStreamAudit(ctx, promoted.sandboxRef, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
-			runID.String(), "success", mustJSON(map[string]any{
+			runID.String(), "success", mustJSON(promoted.supportFields(map[string]any{
 				"principal":       promoted.principal,
 				"source":          promoted.source,
 				"previous_holder": previous,
-			})))
+			}))))
 		if promoted.notify != nil {
 			promoted.notify(false, promoted)
 		}

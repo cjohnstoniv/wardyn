@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -93,10 +94,10 @@ func desktopFileNameParam(r *http.Request) (string, bool) {
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
 // desktop declared or a Linux VM's built-in one. It mirrors handleAttachTicket's entry rule
-// (mayEnterRun) without the sponsor arm, and it is the desktop door: a background-only run has no
-// desktop to move files to, and deny_ui_apps and deny_interactive close it as they close the desktop
-// itself (uiEnterDesktop). It never thaws a paused run: only a transfer the rules allow does, just
-// before its exec.
+// (mayEnterRun) without the sponsor arm, plus a support helper whose grant ticks the files door, and it is
+// the desktop door: a background-only run has no desktop to move files to, and deny_ui_apps and
+// deny_interactive close it as they close the desktop itself (uiEnterDesktop). It never thaws a paused
+// run: only a transfer the rules allow does, just before its exec.
 func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.AgentRun, types.DesktopControls, bool) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -107,15 +108,32 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		return run, types.DesktopControls{}, false
 	}
 	superAdmin := s.isOperator(r.Context())
-	if !mayEnterRun(run, principalFromRequest(r), superAdmin) {
-		if superAdmin {
-			s.refuseRunOwnerOnly(w, r, run)
-		} else {
-			s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
+	viaSupport := false
+	if principal := principalFromRequest(r); !mayEnterRun(run, principal, superAdmin) {
+		// A super admin who holds a live support grant ticking the files door enters governed (support_entry.go);
+		// supportNone, which is every caller without one, and a switch that is off keep the owner rule's refusal.
+		if superAdmin && s.supportCaller(r.Context()) {
+			_, v := s.supportMayEnter(r.Context(), run, principal, uuid.Nil, supportDoorFiles)
+			if v == supportOff {
+				v = supportNone
+			}
+			if v != supportNone && v != supportOK && s.refuseSupport(w, r, run, v) {
+				return run, types.DesktopControls{}, false
+			}
+			viaSupport = v == supportOK
 		}
-		return run, types.DesktopControls{}, false
+		if !viaSupport {
+			if superAdmin {
+				s.refuseRunOwnerOnly(w, r, run)
+			} else {
+				s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
+			}
+			return run, types.DesktopControls{}, false
+		}
 	}
-	if (!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run)) {
+	// A super admin reaches the exemption only on their own run or an operator-owned one, never through a support
+	// grant: the helper's request is a super admin's by role, and a helped run is a person's.
+	if (!superAdmin || viaSupport || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run)) {
 		return run, types.DesktopControls{}, false
 	}
 	if s.refuseBackgroundOnly(w, r, run, "desktop") {

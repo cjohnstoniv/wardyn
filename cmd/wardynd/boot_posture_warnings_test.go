@@ -24,6 +24,7 @@ func TestBootPosturePlaintextIssuerRefusal(t *testing.T) {
 		{name: "https issuer boots", issuer: "https://login.example.com/v2.0", posture: tlsServed},
 		{name: "loopback http public issuer boots", issuer: "http://localhost:5556", posture: tlsServed},
 		{name: "loopback ip boots", issuer: "http://127.0.0.1:5556", internal: "http://[::1]:5556", posture: tlsServed},
+		{name: "upper-case loopback name boots", issuer: "http://LOCALHOST:5556", posture: tlsServed},
 		{name: "no issuer boots", posture: tlsServed},
 		{name: "compose demo internal dex boots", issuer: "http://localhost:5556", internal: "http://dex:5556"},
 		{name: "oidc off: compose default internal issuer boots", internal: "http://dex:5556", posture: tlsServed},

@@ -109,6 +109,7 @@ func TestSyncCommand_RefusesPlainHTTPToANonLoopbackServer(t *testing.T) {
 		"http://localhost:8080":          false,
 		"http://127.0.0.1:8080":          false,
 		"http://[::1]:8080":              false,
+		"http://LOCALHOST:8080":          true,
 		"https://wardyn.example.com":     false,
 	} {
 		err := refusePlainHTTPGateway("sync", url)

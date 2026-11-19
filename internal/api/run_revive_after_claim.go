@@ -39,7 +39,7 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 	case gen > 0:
 		// The revive's config is stored, a restart's re-applied walls as much as an edit's: no engine built from the
 		// earlier one serves again here. Another replica's engine is retired at its next request (viaOrgEngine).
-		s.retireViaOrgEngine(run.ID)
+		s.releaseViaOrgEngineOf(run.ID)
 	}
 	// A hold lost since the claim is a lock another replica may now hold, under which a newer revive may
 	// have replaced the proxy: a replace from here would remove that proxy. The old (or newer) proxy is left

@@ -446,6 +446,12 @@ var ErrRunnerOffline = errors.New("runner: the runner is offline")
 // applies when the runner reconnects.
 var ErrPendingOnRunner = errors.New("runner: the action is queued on the offline runner")
 
+// ErrTeardownConfirming is the answer for a sandbox kill whose wait ran out while every remaining pod
+// was already terminating. It is not a failure: nothing after the pods' wait has run (the network
+// policies and the secret are still in place), and a retry of the kill completes the teardown once
+// the pods are gone.
+var ErrTeardownConfirming = errors.New("runner: the sandbox is stopping; its stop is not yet confirmed")
+
 // ErrExecNeverStarted: a Runner's Wait returns this when it can prove the
 // agent exec will NEVER reach a terminal state (e.g. ImagePullBackOff) —
 // distinct from every other Wait error ("might still be running, retry").

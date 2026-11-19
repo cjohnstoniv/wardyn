@@ -250,7 +250,11 @@ export interface RunEnding {
    * run.kill row decides — success is `confirmed`, a success whose sandbox stop
    * was queued for an offline runner (`data.sandbox_stop` "queued") is `queued`,
    * any other outcome is `partial` (a teardown step failed), and no row at all
-   * is `unknown`.
+   * is `unknown`. A success whose stop was still being confirmed
+   * (`"confirming"`) waits for the run.kill.confirm row: success is
+   * `confirmed`, failure is `partial`, none yet is `confirming`, and none once
+   * the page's wait is over is `unconfirmed`. Any other `sandbox_stop` value is
+   * `unconfirmed`.
    */
-  evidence?: "confirmed" | "queued" | "partial" | "unknown";
+  evidence?: "confirmed" | "queued" | "confirming" | "unconfirmed" | "partial" | "unknown";
 }

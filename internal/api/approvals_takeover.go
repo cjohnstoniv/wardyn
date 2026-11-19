@@ -256,7 +256,7 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 	if prev != "" {
 		data["from"] = prev
 	} else {
-		data["after_ms"] = s.cfg.Now().Sub(got.RequestedAt).Milliseconds()
+		data["after_ms"] = s.boundNow(r.Context()).Sub(got.RequestedAt).Milliseconds() // requested_at is the database's stamp
 		// The first take over answers the request: counted, and a run paused waiting on it thawed.
 		s.approvalResolved(r.Context(), true, got.RunID)
 	}

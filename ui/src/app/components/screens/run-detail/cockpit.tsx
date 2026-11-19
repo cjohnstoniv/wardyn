@@ -23,6 +23,7 @@ import {
   useSecurityOperator,
 } from "../../wardyn/operator-context";
 import { type ConsoleView } from "../../wardyn/console-view";
+import { useSupportHelperDoors } from "../../wardyn/support-helper-context";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
@@ -53,6 +54,7 @@ export function Cockpit({
   auditGap,
   held,
   outcomeReady,
+  killConfirmWaitOver,
   pending,
   recording,
   recState,
@@ -75,6 +77,8 @@ export function Cockpit({
   held: HeldCredentials | undefined;
   /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
   outcomeReady: boolean;
+  /** The page's kill wait ran out with a sandbox stop still unconfirmed: the outcome block says so. */
+  killConfirmWaitOver?: boolean;
   /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
    *  held count every widget reads; the decision surface itself is
    *  LiveApprovals' own poll. */
@@ -104,6 +108,8 @@ export function Cockpit({
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
   const operatorResolved = useOperatorResolved();
+  // The doors of the open grant this viewer helps through (null for anyone else): the Desktop and Attach tiles draw for it.
+  const helperDoors = useSupportHelperDoors();
   // "blocked until an admin decides": see viewerBlockedOnDecision for what it leaves out (re-auth, an owned ADO escalation).
   const isRunOwner = run.created_by === principal;
   const viewerBlocked = viewerBlockedOnDecision(pending, securityOperator, isRunOwner);
@@ -129,7 +135,9 @@ export function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      {outcomeReady && <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />}
+      {outcomeReady && (
+        <RunFailureBlock run={run} audit={audit} held={held} killConfirmWaitOver={killConfirmWaitOver} onGoAudit={onGoAudit} />
+      )}
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -181,6 +189,7 @@ export function Cockpit({
     finished: terminal,
     principal,
     operator, operatorResolved, view, // ssh widget: owner-or-admin AND the user view (M-7).
+    helperDoors,
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

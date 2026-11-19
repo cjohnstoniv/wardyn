@@ -50,13 +50,6 @@ type SiteConfig struct {
 	// policy allow. "*" is REFUSED at write time; empty (default) is
 	// unchanged behavior.
 	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
-	// ArtifactOverrides maps an ecosystem ("npm"|"pip"|"cargo"|"maven"|"go"|
-	// "nuget") to its corporate artifact-registry redirect.
-	//
-	// Deprecated: superseded by EgressRedirects; kept only so a
-	// pre-EgressRedirects document still decodes. handlePutSiteConfig and
-	// migration 0030 each fold a set value into EgressRedirects once.
-	ArtifactOverrides map[string]ArtifactOverride `json:"artifact_overrides,omitempty"`
 	// EgressRedirects is the operator's outbound redirect list: FROM a
 	// public/upstream URL or host TO a corporate-internal replacement.
 	// Ecosystem set gets the full behavior (config file + substitution +
@@ -303,22 +296,10 @@ type InternalHost struct {
 	Baseline bool `json:"baseline,omitempty"`
 }
 
-// ArtifactOverride is one ecosystem's corporate artifact-registry redirect:
-// the base URL to emit into that ecosystem's config (.npmrc/pip.conf/cargo
-// config/settings.xml/GOPROXY/nuget.config) plus an optional secret ref for
-// a token injected proxy-side (the sandbox never holds the value).
-//
-// Deprecated: superseded by EgressRedirect. See SiteConfig.ArtifactOverrides
-// for why the type is kept.
-type ArtifactOverride struct {
-	BaseURL        string `json:"base_url"`
-	TokenSecretRef string `json:"token_secret_ref,omitempty"`
-}
-
 // EgressRedirect is one outbound redirect: requests to From are substituted
 // to To (From's host dropped from egress, To's host allowed), with an
-// optional token injected proxy-side for To's host. From/To share
-// ArtifactOverride.BaseURL's validation discipline — keep any future change
+// optional token injected proxy-side for To's host. From/To share one
+// validation discipline — keep any future change
 // there in sync, since workspacescan.EmitArtifactConfig relies on it for raw
 // string interpolation into .npmrc/settings.xml/etc.
 type EgressRedirect struct {
@@ -326,7 +307,7 @@ type EgressRedirect struct {
 	From string `json:"from"`
 	// To is the corporate-internal URL or host every matching run's egress
 	// substitutes to; for an Ecosystem row it's also emitted into that
-	// ecosystem's config file (the old ArtifactOverride.BaseURL).
+	// ecosystem's config file.
 	To string `json:"to"`
 	// TokenSecretRef optionally names a secret injected proxy-side as a
 	// Bearer token for To's host (the sandbox never holds it). Mutually

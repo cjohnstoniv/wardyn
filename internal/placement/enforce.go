@@ -6,6 +6,7 @@ package placement
 import (
 	"fmt"
 	"maps"
+	"net"
 	"reflect"
 	"slices"
 	"strconv"
@@ -69,6 +70,13 @@ var strippers = map[string]stripper{
 				!slices.ContainsFunc(s.ProxyConfig.ViaOrgRoutes, func(r proxy.ViaOrgRoute) bool { return h == r.Host })
 		})
 	},
+	// A via_org Azure DevOps grant's gate runs in the organisation's engine: the laptop copy keeps none, so its proxy
+	// forwards /wardyn/git/ for the grant's hosts instead of serving it. Dispatch keeps it in the sealed row only.
+	"ProxyConfig.ADOGrant": func(p LocalPlan, s *runner.SandboxSpec) {
+		if viaOrgPath(p, "ProxyConfig.ADOGrant") {
+			s.ProxyConfig.ADOGrant = nil
+		}
+	},
 	// Every grant left in the policy was proven own and OwnerOnly, or via_org,
 	// by the credential classification that ran first. A via_org grant leaves
 	// the policy and keeps only its grant id and host (stripViaOrg).
@@ -88,10 +96,11 @@ var strippers = map[string]stripper{
 // stripViaOrg reduces every via_org grant of the laptop copy (design §7.3): the
 // policy drops the grant, an injection becomes a ViaOrgRoutes entry naming its
 // grant and host (the rule and its secret name stay at the organisation) and
-// its host joins MITMHosts, since the runner's proxy must terminate that TLS to
-// forward the plaintext. A GitHub grant keeps its repository allowlist (no
-// credential) and gains a github.com route for /wardyn/gh/. It runs on the
-// Policy field, ahead of MITMHosts, so that stripper sees the routes.
+// its host is also kept in MITMHosts (viaOrgMITMHosts); the runner's proxy
+// serves the route from ViaOrgRoutes (serveViaOrg), not from that entry, so a
+// revive that prunes it changes nothing. A GitHub grant keeps its repository
+// allowlist (no credential) and gains a github.com route for /wardyn/gh/. It
+// runs on the Policy field, ahead of MITMHosts, so that stripper sees the routes.
 func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	pc := &s.ProxyConfig
 	pc.Policy.EligibleGrants = deleteIndexed(pc.Policy.EligibleGrants, func(i int) bool {
@@ -105,9 +114,7 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	for i, in := range pc.Injection {
 		if routed(i) {
 			routes = append(routes, proxy.ViaOrgRoute{GrantID: in.GrantID, Host: in.Rule.Host})
-			if !slices.Contains(pc.MITMHosts, in.Rule.Host) {
-				pc.MITMHosts = append(slices.Clip(pc.MITMHosts), in.Rule.Host)
-			}
+			pc.MITMHosts = viaOrgMITMHosts(pc.MITMHosts, in)
 		}
 	}
 	pc.Injection = deleteIndexed(pc.Injection, routed)
@@ -125,6 +132,27 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 	})
 	pc.ViaOrgRoutes = slices.Compact(routes)
 }
+
+// viaOrgMITMHosts is hosts with the interception entry kept for a via_org injection's destination (the runner's proxy
+// serves the route from ViaOrgRoutes, not from this entry). An Azure DevOps
+// credential's host keeps the entry production wrote for it (host:443, which scopes it to the TLS port): a bare
+// entry would mean any port, so it adds none beside one and writes the :443 spelling when it finds none.
+func viaOrgMITMHosts(hosts []string, in runner.InjectionGrant) []string {
+	host := in.Rule.Host
+	if in.Rule.SecretName != types.ADOEntraAccessTokenSecret {
+		if slices.Contains(hosts, host) {
+			return hosts
+		}
+		return append(slices.Clip(hosts), host)
+	}
+	if slices.ContainsFunc(hosts, func(h string) bool { return hostrules.HostOf(h) == host }) {
+		return hosts
+	}
+	return append(slices.Clip(hosts), net.JoinHostPort(host, adoMITMPort))
+}
+
+// adoMITMPort is the one port an Azure DevOps host is intercepted on (the dispatch lane's adoEntraHostPort).
+const adoMITMPort = "443"
 
 // residentFillPath reports whether the admitted injection at path is a
 // runner_resident class's placeholder fill (RuleResidentViaOrg), which is
@@ -257,6 +285,10 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	// that needs it is refused rather than left to dial the vendor host.
 	// The one exception is a laptop local model's own entry (laptopLocalModel).
 	"ProxyConfig.LLMUpstreams": func(p LocalPlan) *Refusal {
+		// The GatewayIdentity gate refuses this run later in the walk and names the server or provider; deferring lets that refusal answer.
+		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
+			return nil
+		}
 		for _, u := range p.Spec.ProxyConfig.LLMUpstreams {
 			if !laptopLocalModel(p, u) {
 				return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
@@ -268,6 +300,7 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	// through a mint no runner relays, so a run that needs it is refused. Create,
 	// Review and dispatch all ask this gate, so the refusal names the route's
 	// server or provider rather than the field (Refusal.Sentence).
+	// Gates earlier in the walk defer to it while it has routes, so it must stay unconditional.
 	"ProxyConfig.GatewayIdentity": func(p LocalPlan) *Refusal {
 		if routes := p.Spec.ProxyConfig.GatewayIdentity; len(routes) > 0 {
 			r := refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", gatewayIdentityDetail(routes))
@@ -278,6 +311,10 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	},
 	// The headers set on a provider's gateway belong with the gateway's address, which is never sent.
 	"ProxyConfig.LLMHeaders": func(p LocalPlan) *Refusal {
+		// The GatewayIdentity gate refuses this run later in the walk and names the server or provider; deferring lets that refusal answer.
+		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
+			return nil
+		}
 		if len(p.Spec.ProxyConfig.LLMHeaders) > 0 {
 			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMHeaders", "credential variant has no permitted local rule")
 		}

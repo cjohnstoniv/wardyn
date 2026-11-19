@@ -258,6 +258,9 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 	if d.GatewayCallID != "" {
 		data["gateway_call_id"] = d.GatewayCallID
 	}
+	if d.GatewayRequestID != "" {
+		data["gateway_request_id"] = d.GatewayRequestID
+	}
 	d.Refusal.AuditFields(data)
 	b, err := json.Marshal(data)
 	if err != nil {

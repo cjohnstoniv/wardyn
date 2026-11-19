@@ -259,14 +259,11 @@ func (s *Server) routes() chi.Router {
 			// (through THIS authenticated group) and presents the returned
 			// 30s ticket as ?ticket= on the attach WS below.
 			//
-			// The run's OWNER rather than operator-only: the ticket mints a live
-			// interactive PTY (or UI session) inside a RUNNING sandbox — injected
-			// keystrokes and whatever the agent's injected credentials left on
-			// screen — which is strictly more than "launch a run", and a member may
-			// hold one for a run THEY created (handleAttachTicket's getRunAuthorized
-			// gate; a foreign run 404s, no existence oracle). A super admin gets one
-			// only for a run with no personal owner (mayEnterRun); on a person's run
-			// they get 403 run_owner_only (#1476).
+			// The run's OWNER rather than operator-only: the ticket mints a live interactive PTY (or UI
+			// session) inside a RUNNING sandbox — keystrokes, and whatever the agent's injected credentials left
+			// on screen — which is strictly more than "launch a run", and a member may hold one for a run THEY
+			// created (a foreign run 404s, no existence oracle). A super admin gets one only for a run with no
+			// personal owner (mayEnterRun); on a person's run they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 			// The three lines above are each issue #658's pre-0.8 alias; their 0.8 names (mounted alongside,
 			// same handlers, kept one minor — docs/sdk.md "Renamed in 0.8") are factored out of this
@@ -274,6 +271,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRenamedRunRoutes(r)
 			s.mountInboundTicketRoutes(r)   // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
 			s.mountBackgroundWatchRoutes(r) // the ticket to watch a background macOS run's desktop, view only (run_background_watch.go)
+			s.mountSupportRoutes(r)         // an admin's request to help in a run, and its owner's answer (support_grant.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
@@ -516,7 +514,7 @@ func (s *Server) routes() chi.Router {
 			// integration credential refs included" — and the GET returns that
 			// same whole document, refs included. UpstreamProxySecretRef and
 			// every integrations[].secrets[].secret_name are credential REFS;
-			// UpstreamProxyURL, ScmHosts, ArtifactOverrides and EgressRedirects
+			// UpstreamProxyURL, ScmHosts and EgressRedirects
 			// are the operator's internal topology.
 			//
 			// The console degrades rather than breaks: both callers already

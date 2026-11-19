@@ -41,6 +41,7 @@ const (
 	auditStepCollectExec        = "Collect exec result"
 	auditStepContainEndedRun    = "Cut ended run's agent"
 	auditStepCreateSandbox      = "Create sandbox"
+	auditStepDataOut            = "Store data_out rule"
 	auditStepDeleteExpired      = "Delete expired credential"
 	auditStepDispatchCeiling    = "Resolve dispatch ceiling"
 	auditStepExecOpen           = "Open exec"
