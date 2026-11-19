@@ -1167,6 +1167,15 @@ type readbackDispatchStore struct {
 	*memProxyStarts
 }
 
+// SetSandboxRef keeps the created sandbox's ref on the run, as the real store does, so a containment
+// that reads the run (the report's handler, the deadline) stops that sandbox.
+func (s *readbackDispatchStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref string) error {
+	s.dispatchTestStore.mu.Lock()
+	defer s.dispatchTestStore.mu.Unlock()
+	s.dispatchTestStore.run.SandboxRef = ref
+	return nil
+}
+
 // readbackCreateRunner is fakeRunner whose create blocks until release, after its proxy would have
 // started, and answers hash and addr.
 type readbackCreateRunner struct {
