@@ -362,6 +362,31 @@ func TestComposeChainUnitClosesAnOpenBase(t *testing.T) {
 	}
 }
 
+// TestCheckOverlayUnitClosesAnOpenBase: the save door reads the same open base the resolve does, so the
+// unit's own host is accepted and an IP literal the base does not name is refused.
+func TestCheckOverlayUnitClosesAnOpenBase(t *testing.T) {
+	srv := &Server{cfg: Config{DefaultPolicy: govDeployment()}}
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "open", Ceiling: types.RunPolicySpec{
+		AllowAllEgress: true, AllowedDomains: []string{"api.anthropic.com", "pypi.org"}, MinConfinementClass: types.CC2}}
+	for _, tc := range []struct {
+		entry   string
+		refused bool
+	}{
+		{"build.corp.example", false},
+		{"10.0.0.5", true},
+	} {
+		leaf := types.GovernanceUnit{ID: uuid.New(), Name: "locked", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
+			AllowAllEgress: new(false), AllowedDomains: &[]string{tc.entry}}}
+		werr := srv.checkOverlay(leaf, []types.GovernanceUnit{leaf, base})
+		if !tc.refused && werr != nil {
+			t.Errorf("%s: refused %v, want accepted", tc.entry, werr)
+		}
+		if tc.refused && (werr == nil || werr.status != http.StatusBadRequest || werr.reason != reasonGovernanceOverlayInvalid) {
+			t.Errorf("%s: got %v, want 400 %s", tc.entry, werr, reasonGovernanceOverlayInvalid)
+		}
+	}
+}
+
 // TestResolverWarningsNameTheLeafOnly: a warning the resolver emits for a chain step reaches a
 // member's 201, so it names the leaf profile and never a base's name, id or overlay.
 func TestResolverWarningsNameTheLeafOnly(t *testing.T) {
