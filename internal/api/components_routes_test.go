@@ -280,6 +280,33 @@ func TestComponents_OrgCreateIsRestrictedAndNamesAreAudited(t *testing.T) {
 	}
 }
 
+// TestComponents_OrgSaveWarnsOnAModelHost: an organisation component whose host
+// serves a model still saves (201, then 200), and the answer carries the run
+// gate's sentence with the port line; a normal host carries no warning.
+func TestComponents_OrgSaveWarnsOnAModelHost(t *testing.T) {
+	srv, _, _ := componentsServer(t)
+	admin := ssoSession(t, "sub-admin", "adm@corp.example", oidc.RoleAdmin)
+	save := func(id uuid.UUID, wantCode int, name, host string) client.ComponentSaved {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+id.String(), admin, saveComponentBody(name, `{"hosts":["`+host+`"]}`))
+		if w.Code != wantCode {
+			t.Fatalf("PUT %s = %d: %s", host, w.Code, w.Body.String())
+		}
+		return decodeSaved(t, w)
+	}
+	want := `definition.hosts[0]: "api.openai.com:8443" serves a model on this deployment, and a component may not reach a model's host; the port does not count, so give this component a host name no model uses. People who attach this component are refused until you do.`
+	id := uuid.New()
+	if got := save(id, http.StatusCreated, "Model Host", "api.openai.com:8443").Warnings; len(got) != 1 || got[0] != want {
+		t.Errorf("create warnings = %q, want [%q]", got, want)
+	}
+	if got := save(id, http.StatusOK, "Model Host", "api.openai.com:8443").Warnings; len(got) != 1 || got[0] != want {
+		t.Errorf("update warnings = %q, want [%q]", got, want)
+	}
+	if got := save(uuid.New(), http.StatusCreated, "Plain Host", "api.example.com").Warnings; len(got) != 0 {
+		t.Errorf("a normal host warnings = %q, want none", got)
+	}
+}
+
 // TestComponents_OrgSharedSecretMustBeInTheOperatorNamespace: a shared secret an
 // admin names must already be the operator's.
 func TestComponents_OrgSharedSecretMustBeInTheOperatorNamespace(t *testing.T) {

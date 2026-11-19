@@ -185,6 +185,8 @@ export interface ComponentRequirement {
 /** A component save's answer: the stored row plus what it still needs (empty when nothing). */
 export interface ComponentSaved extends Component {
   requirements: ComponentRequirement[];
+  // Advisory, present only when there is something to say; never refuses a save.
+  warnings?: string[];
 }
 
 /** One secret of an org component as a granted person sees it: how it is delivered and whose it is, never its name. */

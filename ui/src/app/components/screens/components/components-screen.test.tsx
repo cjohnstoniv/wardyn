@@ -12,7 +12,10 @@ import { MemoryRouter } from "react-router-dom";
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
-vi.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) } }));
+const toastWarning = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a), warning: (...a: unknown[]) => toastWarning(...a) },
+}));
 
 const listMock = vi.fn();
 const putMock = vi.fn();
@@ -88,6 +91,7 @@ function renderScreen() {
 beforeEach(() => {
   toastSuccess.mockClear();
   toastError.mockClear();
+  toastWarning.mockClear();
   listMock.mockReset().mockResolvedValue([comp()]);
   putMock.mockReset();
   removeMock.mockReset();
@@ -194,6 +198,26 @@ describe("editor", () => {
     expect(await screen.findByTestId("availability-nobody")).toHaveTextContent(NOBODY_YET);
     expect(toastSuccess).toHaveBeenCalledWith("Component saved.");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a save that answers a warning still saves, then shows the warning", async () => {
+    const warning = 'definition.hosts[0]: "api.openai.com" serves a model on this deployment; the port does not count.';
+    putMock.mockResolvedValue({ ...comp({ name: "Payments v2" }), requirements: [], warnings: [warning] });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(warning, expect.anything()));
+    expect(toastSuccess).toHaveBeenCalledWith("Component saved.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a save with no warning shows none", async () => {
+    putMock.mockResolvedValue({ ...comp({ name: "Payments v2" }), requirements: [] });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Component saved."));
+    expect(toastWarning).not.toHaveBeenCalled();
   });
 
   it("Save waits for a name", async () => {

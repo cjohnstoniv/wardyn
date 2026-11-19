@@ -4,6 +4,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 
@@ -131,6 +132,18 @@ func parseDestinations(entries []string) []types.Destination {
 // (dropLegacyModelInjections).
 func (b componentHostBounds) servesModel(d types.Destination) bool {
 	return !d.Wildcard && b.serving(d.Host) || slices.ContainsFunc(b.model, d.OverlapsAtAnyPort)
+}
+
+// modelHostProblem is the sentence for host h (entry hi of a component's
+// hosts) when it serves a model on this deployment, and "" when it does not.
+// The run gate refuses with it and an organisation component's save warns with
+// it, so the port line reaches the admin who can act on it.
+func (b componentHostBounds) modelHostProblem(hi int, h string) string {
+	d, err := types.ParseDestination(h)
+	if err != nil || !b.servesModel(d) {
+		return ""
+	}
+	return fmt.Sprintf("hosts[%d]: %q serves a model on this deployment, and a component may not reach a model's host; the port does not count, so give this component a host name no model uses", hi, h)
 }
 
 // denied reports whether a deny list walls d off. ceilingDenies is the

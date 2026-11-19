@@ -274,9 +274,8 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	// check: a spelling variant of a model host is refused for what it
 	// reaches, not for how it is spelled.
 	for hi, h := range def.Hosts {
-		if d, err := types.ParseDestination(h); err == nil && adm.bounds.servesModel(d) {
-			return attachedComponent{}, componentRefused(c, i, reasonComponentHostServesModel,
-				fmt.Sprintf("hosts[%d]: %q serves a model on this deployment, and a component may not reach a model's host; the port does not count, so give this component a host name no model uses", hi, h),
+		if problem := adm.bounds.modelHostProblem(hi, h); problem != "" {
+			return attachedComponent{}, componentRefused(c, i, reasonComponentHostServesModel, problem,
 				"reaches a host that serves a model, which a component may not.")
 		}
 	}

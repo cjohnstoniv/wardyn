@@ -32,7 +32,7 @@ docs/adoption/README.md=244 share=35 # -5, measured: ssh_key status cell
 # docs/operations/ai-gateway.md 3201 adds 340 over 2861, measured: who inspects a gateway route's prompts (the check table, the route match, the run's own secret values, the audit rows, the Bedrock refusal and the sealed-route note).
 # docs/operations/ai-gateway.md 3268 on id-6: +198 (rc.14, measured 3268: the When a run's gateway access ends section: the bound, the event table, what a cut leaves running); earlier: the CI status line and the scan review log cut (-131)
 # docs/operations/ai-gateway.md 3833 adds 21 over 3812, measured (usage-store-api): the sentence that a run's token counts come from the answers the gateway logged, compared by call id
-docs/operations/ai-gateway.md=5033 share=35 # 5033 measured (+14: the refusal ignores the port; earlier: 5019, +5: the sandbox reads gateway_component_cut); earlier: 5014 measured (+55: the corrections from the release review)
+docs/operations/ai-gateway.md=5054 share=35 # 5054 measured (+21: an organisation component save warns on a model host; earlier: 5033, +14: the refusal ignores the port; earlier: 5019, +5: the sandbox reads gateway_component_cut); earlier: 5014 measured (+55: the corrections from the release review)
 
 # model-gateways.md 1090 adds 26, measured: corrects the gateway presets and the nightly status to match the code
 docs/operations/model-gateways.md=1103 share=35 # 1103 measured (+13: a link to the glossary); earlier: 1064 measured (+111: the Codex CLI on a Responses-style endpoint section); earlier: 953 measured (+14: pinned-versions wording, the two added Presidio low-severity groups); earlier: 939 measured (new page: LiteLLM, Portkey, OpenRouter and Presidio recipes)
