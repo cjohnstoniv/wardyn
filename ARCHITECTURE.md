@@ -327,7 +327,7 @@ The layers of the code, and the interface each extension implements, are mapped 
      - because the network has no route off the host, an agent that ignores the proxy env vars (the documented env-var
        bypass class) reaches nothing.
    - Loopback, link-local/metadata
-     (169.254.169.254) and other reserved addresses are unconditionally blocked.
+     (169.254.169.254, and Azure's WireServer 168.63.129.16) and other reserved addresses are unconditionally blocked.
    - Private RFC1918/ULA/CGNAT addresses are blocked unless an admin declared the hostname under `internal_hosts`.
 4. **Per-run identity with full attribution.**
    - The minted run identity token
@@ -492,7 +492,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 
 ### L1 default-deny: mechanism
 
-- **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it
+- **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254` and `168.63.129.16`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it
   - (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the logged, opt-in downgrade — see [ROADMAP.md](ROADMAP.md)).
 - **docker [planned]**: nftables, not built (the driver's capabilities report `NetworkPolicy: false`, [`internal/runner/docker/hardening.go`](internal/runner/docker/hardening.go)); Cilium `toFQDNs` also planned, either target
 

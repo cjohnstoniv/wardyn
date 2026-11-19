@@ -100,10 +100,13 @@ var Liftable = []netip.Prefix{
 
 // NeverLift carves the cloud instance-metadata endpoints out of Liftable: they sit inside the ULA and
 // CGNAT ranges an operator may lift, but lifting one would hand a sandbox the host's cloud credentials.
+// Azure's WireServer is public address space, outside Liftable and every range above, so the egress guard
+// denies NeverLift outright too (on every port, its host agent plugin port 32526 included).
 var NeverLift = []netip.Prefix{
 	netip.MustParsePrefix("fd00:ec2::/64"),      // AWS IMDS / ECS / DNS IPv6 endpoints
 	netip.MustParsePrefix("fd20:ce::254/128"),   // Google Compute Engine metadata server, IPv6
 	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
+	netip.MustParsePrefix("168.63.129.16/32"),   // Azure WireServer and host agent plugin (also Azure DNS)
 }
 
 // InLiftable reports whether ip falls inside the Liftable set and outside NeverLift.

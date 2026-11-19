@@ -622,7 +622,7 @@ is not the deployment described above.**
 ### L1 default-deny
 
 - Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata
-  `169.254.169.254` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
+  `169.254.169.254` and Azure's WireServer `168.63.129.16` excluded); the boot canary proves an empty-egress deny-all on one node, not these rule shapes.
 - A non-enforcing CNI refuses boot **unless the operator sets `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1`
   or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`; both are disclosed in
   [§5's "Operator overrides that boot past a fail-closed gate"](#operator-overrides-that-boot-past-a-fail-closed-gate)**.
@@ -2334,7 +2334,7 @@ These risks are **not closed by v1 Wardyn**.
 
 43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops saying otherwise.**
     - Only the private/reserved-range class (RFC1918/ULA/CGNAT) is liftable, and only through `internal_hosts`.
-    - Loopback, link-local (including the `169.254.169.254` metadata address), multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
+    - Loopback, link-local (including the `169.254.169.254` metadata address), Azure's WireServer `168.63.129.16` on every port, multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
     - The guard class now rides out of address vetting into the denial body.
     - And the never-liftable classes get their own sentence with NO site-config remedy and NO lifetime clause, because there is nothing to change and a new run would change nothing.
     - Both variants keep rule source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are final.
