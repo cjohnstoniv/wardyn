@@ -1271,6 +1271,7 @@ func TestNarrowEdit_RunnerNotReachedAtProbeNamesIt(t *testing.T) {
 func TestNarrowEdit_RunnerUncertainEndsTheRun(t *testing.T) {
 	f := newRunnerNarrowFixture(t, runnerNarrows)
 	f.nr.narrowErr = fmt.Errorf("%w: the link dropped after the send", runner.ErrNarrowUncertain)
+	before := f.lr.proxyStopCount() + f.rn.stopCount() + f.rn.endCount() // the fixture's lapsed-token sweep already cut once
 	w := f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusServiceUnavailable, "")
 	if r := errorReason(w); r != reasonEgressEditUnconfirmed && r != reasonEgressEditContainmentUnresolved {
 		t.Errorf("reason = %s", r)
@@ -1281,7 +1282,7 @@ func TestNarrowEdit_RunnerUncertainEndsTheRun(t *testing.T) {
 	if g := f.gens(); len(g) != 2 || g[1].Abandoned {
 		t.Errorf("generations = %+v, want the edit's still current", g)
 	}
-	if n := f.lr.proxyStopCount() + f.rn.stopCount() + f.rn.endCount(); n == 0 {
+	if n := f.lr.proxyStopCount() + f.rn.stopCount() + f.rn.endCount() - before; n == 0 {
 		t.Error("no proxy stop, sandbox stop or end was issued for the uncertain edit")
 	}
 }
