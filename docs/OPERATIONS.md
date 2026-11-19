@@ -817,7 +817,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   `rolsuper = false` while it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is followed to
   any depth whether or not the role `INHERIT`s.
 - Membership in `pg_write_all_data` is deliberately **not** counted: it confers `INSERT`/`UPDATE`/`DELETE`, but the
-  append-only guard is a trigger rather than a privilege and still refuses both.
+  append-only guard on `audit_events` is a trigger rather than a privilege and still refuses both.
+  - Its bookkeeping tables `audit_partition_meta` and `audit_chain_anchors` have no such trigger, so such a member can rewrite the retention policy unreported.
 - Counting it would understate the posture just as badly as missing a superuser overstates it.
 - The third is the quiet one —
   - a role granted `TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE INSERT trigger of its
