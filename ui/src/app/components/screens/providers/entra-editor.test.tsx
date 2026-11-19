@@ -200,7 +200,7 @@ describe("EntraEditor", () => {
 
   it("lets a row hold its minted tokens on a runner, and in the sandbox only once it may hold them", async () => {
     let latest: GitProvider | undefined;
-    render(<Harness initial={entraRow()} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={entraRow({ token_mode: "minted_pat" })} onLatest={(r) => (latest = r)} />);
     expect(screen.getByRole("switch", { name: E.RUNNER_TOGGLE })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE })).toBeDisabled();
     await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
@@ -216,7 +216,7 @@ describe("EntraEditor", () => {
 
   it("turning the runner and sandbox switches on and off again leaves the row as it was", async () => {
     let latest: GitProvider | undefined;
-    const row = entraRow();
+    const row = entraRow({ token_mode: "minted_pat" });
     render(<Harness initial={row} onLatest={(r) => (latest = r)} />);
     await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
     await userEvent.click(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE }));
@@ -227,16 +227,26 @@ describe("EntraEditor", () => {
     expect(JSON.stringify(latest?.entra)).toBe(JSON.stringify(row.entra));
   });
 
-  it("offers neither runner switch on a row whose tokens the person pastes in", () => {
-    render(<Harness initial={entraRow({ token_mode: "own_pat" })} />);
+  it.each(["own_pat", "bearer"] as const)("offers no runner switch on a %s row: the server ignores them there", (token_mode) => {
+    render(<Harness initial={entraRow({ token_mode })} />);
     expect(screen.queryByRole("switch", { name: E.RUNNER_TOGGLE })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: E.SANDBOX_TOGGLE })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: E.VIA_ORG_TOGGLE })).not.toBeInTheDocument();
   });
 
+  it("switching a minted row to the sign-in mode drops its runner settings", async () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ token_mode: "minted_pat", runner_resident: true, runner_resident_sandbox: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
+    await userEvent.click(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER }));
+    expect(latest?.entra?.token_mode).toBeUndefined();
+    expect(latest?.entra?.runner_resident).toBeUndefined();
+    expect(latest?.entra?.runner_resident_sandbox).toBeUndefined();
+    expect(latest?.entra?.runner_via_org).toBeUndefined();
+  });
+
   it("switching a row to the person's own token drops its runner settings", async () => {
     let latest: GitProvider | undefined;
-    render(<Harness initial={entraRow({ runner_resident: true, runner_resident_sandbox: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={entraRow({ token_mode: "minted_pat", runner_resident: true, runner_resident_sandbox: true, runner_via_org: true })} onLatest={(r) => (latest = r)} />);
     await userEvent.click(screen.getByRole("radio", { name: ADO_PAT.MODE_OWN }));
     expect(latest?.entra?.runner_via_org).toBeUndefined();
     expect(latest?.entra?.token_mode).toBe("own_pat");
@@ -268,7 +278,7 @@ describe("EntraEditor", () => {
 
   it("offers the via-the-server switch only on a minted row: the server ignores it on the sign-in mode", () => {
     const { unmount } = render(<Harness initial={entraRow({ token_mode: "bearer" })} />);
-    expect(screen.getByRole("switch", { name: E.RUNNER_TOGGLE })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: E.RUNNER_TOGGLE })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: E.VIA_ORG_TOGGLE })).not.toBeInTheDocument();
     unmount();
     render(<Harness initial={entraRow({ token_mode: "minted_pat" })} />);

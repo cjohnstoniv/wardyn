@@ -51,7 +51,7 @@ const (
 
 	hostCallHeldPrefix   = "Wardyn did not send this request: "
 	hostCallWaitingText  = hostCallHeldPrefix + "a host rule holds %s %s on %s until a person decides (approval %s). Send it again once it is approved."
-	hostCallDeclinedText = hostCallHeldPrefix + "a person declined %s %s on %s, so it is refused for the rest of the run."
+	hostCallDeclinedText = hostCallHeldPrefix + "a person declined %s %s on %s, so this proxy refuses it for the rest of the run."
 	hostCallClosedText   = hostCallHeldPrefix + "its approval closed without a decision. Send it again to ask again."
 	hostCallNoAskText    = hostCallHeldPrefix + "Wardyn could not ask a person about it. Send it again to ask again."
 	hostCallRefusedText  = hostCallHeldPrefix + "the control plane refused the request for a person's approval (%d)."
