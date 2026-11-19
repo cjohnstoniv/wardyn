@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +112,40 @@ func TestSynthesizeProfile_ConfinedVerifyRunDoesNotMislabelDenials(t *testing.T)
 	}
 	if !found {
 		t.Errorf("domains = %v, the deny must still be captured on the per-host observation", resp.Observations.Domains)
+	}
+}
+
+// Each synthesis holds the run's audit trail in memory, so only maxProfileSyntheses run at once on a
+// replica: the next is refused with 429 (and Retry-After), and a refused or finished call gives its
+// slot back.
+func TestSynthesizeProfile_BoundsConcurrentSyntheses(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	fake := &recordStore{
+		run:    types.AgentRun{ID: runID, Agent: "claude-code", Repo: "org/repo", State: types.RunCompleted, ConfinementClass: types.CC2},
+		events: []types.AuditEvent{egressAllowEvent(runID, "registry.npmjs.org")},
+	}
+	cfg := baseTestConfig(h, fake)
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
+	srv := New(cfg)
+	call := func() *httptest.ResponseRecorder {
+		return do(t, srv, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile", adminToken, "")
+	}
+
+	srv.profileSynth.Store(maxProfileSyntheses) // two syntheses already running
+	w := call()
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), reasonProfileSynthesisBusy) || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("a third synthesis = %d %s (Retry-After %q), want 429 %s", w.Code, w.Body.String(), w.Header().Get("Retry-After"), reasonProfileSynthesisBusy)
+	}
+	if n := srv.profileSynth.Load(); n != maxProfileSyntheses {
+		t.Fatalf("a refused call changed the running count to %d, want %d", n, maxProfileSyntheses)
+	}
+
+	srv.profileSynth.Store(maxProfileSyntheses - 1) // one running: room for this one
+	if w := call(); w.Code != http.StatusOK {
+		t.Fatalf("a second synthesis = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if n := srv.profileSynth.Load(); n != maxProfileSyntheses-1 {
+		t.Fatalf("a finished call left the running count at %d, want %d", n, maxProfileSyntheses-1)
 	}
 }

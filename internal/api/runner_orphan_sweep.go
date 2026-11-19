@@ -28,7 +28,10 @@ var readySweepRetries = []time.Duration{10 * time.Second, 30 * time.Second, 90 *
 // or has no row at all, is an orphan. A non-terminal run without a ref may be a create still in
 // flight on this runner across a reconnect, which only the cadence sweep's age gate may judge. The
 // runs are read only after the runner lists its candidates, so any run whose objects it listed was
-// already inserted: "no row" is a leak, never a run created after the read.
+// already inserted: "no row" is a leak, never a run created after the read. A terminal run gets the
+// cadence sweep's own verdict (terminalSandboxOrphan): a sandbox kept for its computer folder's copy
+// back, or whose run's lock is held, is left, and each pass runs under that sweep's bound,
+// orphanSweepBound.
 //
 // A pass that errs is tried again after each of waits, while ctx lives and sameSession holds. A retry
 // only repeats the call: a held candidate meets the runner's own proof-of-stop hold on every pass and
@@ -52,6 +55,11 @@ func (s *Server) sweepRunnerOrphansOnReady(ctx context.Context, runnerID uuid.UU
 // sweepRunnerOrphansOnce is one pass of the READY sweep. It reports whether the pass failed, the
 // sweep call or a run read, and so is worth another.
 func (s *Server) sweepRunnerOrphansOnce(ctx context.Context, runnerID uuid.UUID, sub SandboxOrphanSweeper, attempt int) bool {
+	// The sweep call, the run-op lock waits and the cuts share one bound, as the cadence sweep's do; the run
+	// reads and the log lines run on ctx.
+	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
+	defer cancel()
+	sweepEnd, _ := sctx.Deadline()
 	var loadErr error
 	isOrphan := func(runID uuid.UUID) bool {
 		run, err := s.cfg.Store.GetRun(ctx, runID)
@@ -62,9 +70,9 @@ func (s *Server) sweepRunnerOrphansOnce(ctx context.Context, runnerID uuid.UUID,
 			loadErr = err
 			return false
 		}
-		return isTerminalRunState(run.State)
+		return isTerminalRunState(run.State) && s.terminalSandboxOrphan(sctx, run, sweepEnd)
 	}
-	swept, err := sub.SweepOrphanedSandboxes(ctx, 0, isOrphan)
+	swept, err := sub.SweepOrphanedSandboxes(sctx, 0, isOrphan)
 	attrs := []any{slog.String("runner_id", runnerID.String()), slog.Int("attempt", attempt), slog.Int("swept", swept)}
 	if err == nil && loadErr == nil {
 		slog.InfoContext(ctx, "wardynd: runner orphan sweep on reconnect", attrs...)

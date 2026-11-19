@@ -62,3 +62,22 @@ describe("ComponentEditor unsaved guard", () => {
     expect(unsavedSnapshot()).toBeNull();
   });
 });
+
+// jsdom does no layout, so this pins the classes that keep the editor inside a phone-width dialog; the e2e check in
+// form-action-bars.spec.ts measures the fit.
+describe("ComponentEditor at phone width", () => {
+  it("the Secrets fieldset may shrink below its content and the secret row's switches stack while they do not fit", () => {
+    renderEditor(EXISTING);
+    const secrets = screen.getByText(T.SECRETS_LABEL, { selector: "legend" }).closest("fieldset")!;
+    // A fieldset's default min-inline-size is min-content, so a no-wrap switch row would widen it past the dialog.
+    expect(secrets).toHaveClass("min-w-0");
+    const row = screen.getByTestId("component-secret-row");
+    const tracks = new Set([...row.querySelectorAll("button[aria-pressed]")].map((b) => b.parentElement!));
+    expect(tracks.size).toBe(2);
+    // Below 400px by viewport, and up to ~460px by the field's own width (the switch scrolled inside its track there).
+    for (const t of tracks) {
+      expect(t).toHaveClass("max-[399px]:flex-col", "@max-[22rem]:flex-col");
+      expect(t.parentElement).toHaveClass("@container");
+    }
+  });
+});

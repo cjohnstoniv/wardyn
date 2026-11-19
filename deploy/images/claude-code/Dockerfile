@@ -35,7 +35,7 @@
 # An ordinary and a release build leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS builder
 
 WORKDIR /build
 
@@ -207,7 +207,7 @@ ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CLAUDE_INSTALL=npm
-ARG CLAUDE_CODE_VERSION=2.1.231
+ARG CLAUDE_CODE_VERSION=2.1.312
 ARG CLAUDE_MANIFEST_SHA256=
 ARG TARGETARCH
 # The node base's bundled npm has shipped a vendored node-tar carrying
@@ -250,17 +250,17 @@ RUN set -eu; \
             ver="$CLAUDE_CODE_VERSION"; \
             case "$ver" in stable|latest) echo "native download requires an exact CLAUDE_CODE_VERSION and CLAUDE_MANIFEST_SHA256; stage a binary or use npm for channels" >&2; exit 1;; esac; \
             manifest_sum="$CLAUDE_MANIFEST_SHA256"; \
-            if [ -z "$manifest_sum" ] && [ "$ver" = "2.1.231" ]; then \
-                manifest_sum=670096acfde2def2e5b71178908e40983bf6e3cb6155300ee4a669a5768d3e43; \
+            if [ -z "$manifest_sum" ] && [ "$ver" = "2.1.312" ]; then \
+                manifest_sum=f9bc2d099665e498cbc4123f81f2220852c3a75ee118c0081ef83f42f165aec9; \
             fi; \
             [ -n "$manifest_sum" ] || { echo "native download of $ver requires CLAUDE_MANIFEST_SHA256" >&2; exit 1; }; \
             printf '%s' "$manifest_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-            curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+            curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
             echo "$manifest_sum  /tmp/claude-manifest.json" | sha256sum --strict -c -; \
             sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
             [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
             printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-            curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+            curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
             echo "$sum  /usr/local/bin/claude" | sha256sum --strict -c -; \
             chmod 0755 /usr/local/bin/claude; \
             rm -f /tmp/claude-manifest.json; \
@@ -308,7 +308,7 @@ RUN set -eu; \
         *) echo "unsupported arch '$arch' for gh" >&2; exit 1;; \
     esac; \
     printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
+    curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
     echo "$sum  /tmp/gh.deb" | sha256sum --strict -c -; \
     dpkg -i /tmp/gh.deb; \
     rm -f /tmp/gh.deb

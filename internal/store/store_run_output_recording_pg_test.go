@@ -227,7 +227,7 @@ func TestPG_RecordingOutputStalePendingAgeBelowAMillisecond(t *testing.T) {
 		VALUES ($1, 'stdout', now() - interval '1 hour'), ($2, 'stdout', now() + interval '1 hour')`, stale, claimedLater); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := pg.ListStalePendingRunOutputs(t.Context(), 500*time.Microsecond, 10)
+	ids, _, err := pg.ListStalePendingRunOutputs(t.Context(), 500*time.Microsecond, nil, 10)
 	if err != nil || len(ids) != 1 || ids[0] != stale {
 		t.Fatalf("stale pending at a 500-microsecond age = %v, %v; want only the row claimed an hour ago", ids, err)
 	}

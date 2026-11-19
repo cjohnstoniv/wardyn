@@ -349,8 +349,8 @@ test.beforeAll(async () => {
     }
   }
 
-  // (3) THE eBPF SENSOR HAS TO BE ALIVE. "unavailable" means no sensor has ever
-  // beaten on this stack — B4's three observation groups would read "None
+  // (3) THE eBPF SENSOR HAS TO BE ALIVE. "unavailable" means no sensor beat is
+  // on record on this stack — B4's three observation groups would read "None
   // observed." and the render site cannot tell that apart from "the task did
   // nothing", which is precisely the honesty gap this video must not walk into.
   // A freshly-booted stack takes a moment to publish its first heartbeat, hence

@@ -51,26 +51,28 @@ func grantSnapshotCaps(t *testing.T, st *adoTestStore) [][]adoscope.Capability {
 }
 
 // The policy's choice replaces the row's default_profile — in the REST gate and
-// in every grant snapshot the resolver reads — and can narrow below it.
+// in every grant snapshot the resolver reads — and can narrow below it. A new
+// run records pr as its three parts, which grant exactly what pr does.
 func TestADOEntraLane_PolicyCapabilitiesReplaceDefaultProfile(t *testing.T) {
-	for name, want := range map[string][]adoscope.Capability{
-		"narrower than the default": {adoscope.CapCodeRead},
-		"wider than the default":    {adoscope.CapCodeRead, adoscope.CapPR},
+	for name, tc := range map[string]struct{ pick, want []adoscope.Capability }{
+		"narrower than the default": {pick: []adoscope.Capability{adoscope.CapCodeRead}, want: []adoscope.Capability{adoscope.CapCodeRead}},
+		"wider than the default": {pick: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR},
+			want: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPRCreate, adoscope.CapPRVote, adoscope.CapPRComplete}},
 	} {
-		lane, ok, st, _ := adoLaneWithPolicy(t, want)
+		lane, ok, st, _ := adoLaneWithPolicy(t, tc.pick)
 		if !ok || lane.gate == nil {
 			t.Fatalf("%s: dispatch refused a choice inside the ceiling", name)
 		}
-		if !slices.Equal(lane.gate.Capabilities, want) {
-			t.Errorf("%s: gate capabilities = %v, want the policy's %v", name, lane.gate.Capabilities, want)
+		if !slices.Equal(lane.gate.Capabilities, tc.want) {
+			t.Errorf("%s: gate capabilities = %v, want the policy's %v", name, lane.gate.Capabilities, tc.want)
 		}
 		snaps := grantSnapshotCaps(t, st)
 		if len(snaps) == 0 {
 			t.Fatalf("%s: no grant authored", name)
 		}
 		for i, got := range snaps {
-			if !slices.Equal(got, want) {
-				t.Errorf("%s: grant[%d] snapshot capabilities = %v, want %v", name, i, got, want)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("%s: grant[%d] snapshot capabilities = %v, want %v", name, i, got, tc.want)
 			}
 		}
 	}

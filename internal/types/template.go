@@ -79,9 +79,10 @@ func (o TemplateOwner) Valid() bool {
 }
 
 // TemplateGroupAdmin is a bounded template-management grant: Person may
-// publish and edit templates for Group, and nothing else. An organisation
-// administrator writes and revokes it through an audited route. It is not a
-// general administrator role, and it is not implied by group membership.
+// publish and edit templates and wall presets for Group, and nothing else. An
+// organisation administrator writes and revokes it through an audited route.
+// It is not a general administrator role, and it is not implied by group
+// membership.
 type TemplateGroupAdmin struct {
 	Group     string `json:"group_id"`
 	Person    string `json:"person"`
@@ -269,6 +270,7 @@ var TemplateRoutes = []TemplateRoute{
 	{Route: "PUT /api/v1/templates/{id}", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
 	{Route: "DELETE /api/v1/templates/{id}", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
 	{Route: "POST /api/v1/templates/{id}/copy", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierOrgAdmin, Group: TemplateTierGroupAdmin},
+	{Route: "POST /api/v1/templates/{id}/policy-check", RouterClass: "member", Person: TemplateTierOwner, Org: TemplateTierMember, Group: TemplateTierGroupMember},
 	{Route: "POST /api/v1/templates/import", RouterClass: "member"},
 	{Route: "GET /api/v1/admin/template-group-admins", RouterClass: "admin"},
 	{Route: "PUT /api/v1/admin/template-group-admins", RouterClass: "admin"},

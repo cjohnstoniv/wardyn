@@ -4,14 +4,19 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -224,6 +229,242 @@ func TestVMDesktopRecording_FollowsTheRecordingKnob(t *testing.T) {
 			if rows := h.audit.auditRows("desktop.recording.write", "success"); len(rows) != 0 {
 				t.Errorf("%s: the VM desktop was recorded: %v", tc.name, rows)
 			}
+		})
+	}
+}
+
+// macOSDesktopRun is vmDesktopRun on a macOS VM run at level.
+func macOSDesktopRun(t *testing.T, level types.RecordingLevel) (h *uiHarness, dr *desktopFakeRunner, send chan []byte) {
+	t.Helper()
+	h, dr, send, _ = vmDesktopRun(t)
+	h.run.Agent, h.run.MachineKind, h.run.RecordingLevel = "claude-code", types.MachineMacOSVM, level
+	h.store.putRun(h.run)
+	return h, dr, send
+}
+
+// TestMacOSVMDesktopRecording_YieldsACastWithThePauseGap: a macOS VM's desktop is recorded at Screen and
+// actions through the recorder a Linux VM's uses: one desktop- cast under the run's cast key, a pause
+// keeping none of what the display sends while it is open, and the same pause and resume rows.
+func TestMacOSVMDesktopRecording_YieldsACastWithThePauseGap(t *testing.T) {
+	h, dr, send := macOSDesktopRun(t, types.RecordingScreenActions)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, dr)
+	if !h.srv.PauseDesktopRecording(ctx, h.run, desktopPauseSignin, desktopPauseSignin) {
+		t.Fatal("pause refused")
+	}
+	send <- vmFBU // sent while paused: the viewer sees it, the recording does not
+	v.read(len(vmFBU))
+	if !h.srv.ResumeDesktopRecording(ctx, h.run, desktopPauseSignin) {
+		t.Fatal("resume refused")
+	}
+	send <- []byte("\x02\x02") // two Bells
+	v.read(2)
+	endVMDesktop(t, h, v, send)
+
+	write, pb, kept := storedVMRecording(t, h)
+	session, _ := write["session"].(string)
+	if write["format"] != "novnc-playback" || !strings.HasPrefix(session, desktopRecordingSuffix) ||
+		write["key"] != recording.CastKey(h.run.ID.String(), session) || pb.Format != "novnc-playback" {
+		t.Errorf("write row = %v, playback %s: want a desktop cast under the run's cast key", write, pb.Format)
+	}
+	if want := vmHandshake() + "\x02\x02"; kept != want || pb.StoppedMS != 0 {
+		t.Errorf("recorded frames = %q (stopped at %d ms), want the handshake and the Bells after the resume %q", kept, pb.StoppedMS, want)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin || pb.Gaps[0].EndMS == 0 {
+		t.Errorf("playback gaps = %+v, want one closed %q gap", pb.Gaps, desktopPauseSignin)
+	}
+	if pause, resume := h.audit.auditRows("desktop.recording.pause", "success"), h.audit.auditRows("desktop.recording.resume", "success"); len(pause) != 1 || len(resume) != 1 {
+		t.Errorf("pause rows %d, resume rows %d, want 1 each", len(pause), len(resume))
+	}
+}
+
+// TestMacOSVMDesktopRecording_FollowsTheLevel: a macOS VM's desktop is kept at Screen and actions only,
+// and not on a run that records nothing, as for every machine kind.
+func TestMacOSVMDesktopRecording_FollowsTheLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		level types.RecordingLevel
+		note  types.RunNotRecorded
+		want  int
+	}{
+		{"screen and actions", types.RecordingScreenActions, "", 1},
+		{"screen and actions, runner declined", types.RecordingScreenActions, types.NotRecordedRunnerDeclined, 1},
+		{"terminal", types.RecordingTerminal, "", 0},
+		{"policy off", types.RecordingOff, types.NotRecordedPolicyOff, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, dr, send := macOSDesktopRun(t, tc.level)
+			h.run.NotRecorded = tc.note
+			h.store.putRun(h.run)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := openVMDesktop(t, ctx, h, dr)
+			send <- []byte("\x02\x02")
+			v.read(2)
+			endVMDesktop(t, h, v, send)
+			if tc.want == 1 {
+				storedVMRecording(t, h)
+			}
+			if rows := h.audit.auditRows("desktop.recording.write", "success"); len(rows) != tc.want {
+				t.Errorf("desktop.recording.write rows = %d, want %d", len(rows), tc.want)
+			}
+		})
+	}
+}
+
+// rfbPixelFormat8 is a SetPixelFormat of 8 bits per pixel, a format a recorded desktop's recorder cannot frame;
+// rfbPixelsAsked is a FramebufferUpdateRequest, which asks for pixels in the format in force: with no
+// SetPixelFormat, ServerInit's (rfbServerInit: red, green and blue at 16, 8 and 0, not the playback order).
+var (
+	rfbPixelFormat8 = []byte{0, 0, 0, 0, 8, 8, 0, 1, 0, 7, 0, 7, 0, 3, 5, 2, 0, 0, 0, 0}
+	rfbPixelsAsked  = []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
+)
+
+// refusedCase is a viewer's message on a desktop, binary unless text, and, when the desktop is recorded and the
+// relay refuses the message, the reason the refusal's stop mark gives: the refused format, or what else the relay
+// refused.
+type refusedCase struct {
+	recorded bool
+	msg      []byte
+	reason   string
+	text     bool
+}
+
+var refusedCases = map[string]refusedCase{
+	"recorded, SetPixelFormat": {true, rfbPixelFormat8, desktopStopPixels +
+		"8 bits per pixel, depth 8, little-endian true colour, maxima of 7, 7 and 3 and shifts of 5, 2 and 0 for red, green and blue", false},
+	"recorded, ServerInit": {true, rfbPixelsAsked, desktopStopPixels +
+		"32 bits per pixel, depth 24, little-endian true colour, maxima of 255, 255 and 255 and shifts of 16, 8 and 0 for red, green and blue", false},
+	"recorded, a message it cannot follow": {true, []byte{7}, "Wardyn refused a message from the browser that it cannot follow", false},
+	"recorded, a text message":             {true, []byte("text"), "Wardyn refused a WebSocket frame from the browser that it cannot read", true},
+	"unrecorded":                           {false, rfbPixelFormat8, "", false},
+}
+
+// stoppedWhereRefused checks a recording its relay ended at a refusal: the write row carries stopped_ms, as
+// every early stop's does, and the recording's last record is the stop mark, with reason.
+func stoppedWhereRefused(t *testing.T, write map[string]any, pb recording.RFBPlayback, reason string) {
+	t.Helper()
+	if ms, _ := write["stopped_ms"].(float64); ms <= 0 || int64(ms) != pb.StoppedMS {
+		t.Fatalf("write row stopped_ms = %v, recording stopped at %d ms: want the same stop mark in both", write["stopped_ms"], pb.StoppedMS)
+	}
+	if pb.StopReason != reason {
+		t.Fatalf("stop reason = %q, want %q", pb.StopReason, reason)
+	}
+	for _, f := range pb.Frames {
+		ms, _, _ := strings.Cut(strings.TrimPrefix(f, "{"), "{")
+		if at, err := strconv.ParseInt(ms, 10, 64); err != nil || at > pb.StoppedMS {
+			t.Fatalf("frame %q comes after the stop mark at %d ms", f, pb.StoppedMS)
+		}
+	}
+}
+
+// TestVMDesktopRecording_ARefusalEndsWithAStopMark: on a recorded VM desktop the relay's filter is
+// told the display is recorded, so a SetPixelFormat the recorder cannot frame, or a request for pixels in
+// the display's own format when that is not the replay's, closes the viewer's socket and never reaches the
+// display, and the stored recording ends with a stop mark naming the format; so does a message the relay
+// cannot follow at all, or a text message, which the door hands the filter rather than refusing it itself, with
+// what it refused. Unrecorded, the same SetPixelFormat reaches the display.
+func TestVMDesktopRecording_ARefusalEndsWithAStopMark(t *testing.T) {
+	for name, tc := range refusedCases {
+		t.Run(name, func(t *testing.T) {
+			h, dr, send, got := vmDesktopRun(t)
+			if !tc.recorded {
+				h.run.RecordingLevel = ""
+				h.store.putRun(h.run)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := openVMDesktop(t, ctx, h, dr)
+			if tc.text {
+				if err := v.ws.Write(ctx, websocket.MessageText, tc.msg); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				v.write(tc.msg)
+			}
+			if !tc.recorded {
+				var reached []byte
+				for len(reached) < len(tc.msg) {
+					select {
+					case b := <-got:
+						reached = append(reached, b...)
+					case <-ctx.Done():
+						t.Fatalf("the VM got %x of the viewer's %x", reached, tc.msg)
+					}
+				}
+				if !bytes.Equal(reached, tc.msg) {
+					t.Fatalf("the VM got %x, want the viewer's %x", reached, tc.msg)
+				}
+				endVMDesktop(t, h, v, send)
+				return
+			}
+			rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
+			_, _, err := v.ws.Read(rctx)
+			open := rctx.Err() != nil
+			rcancel()
+			if err == nil || open {
+				t.Fatalf("the viewer's socket stayed open after %x on a recorded desktop: %v", tc.msg, err)
+			}
+			endVMDesktop(t, h, v, send)
+			select {
+			case b := <-got:
+				t.Fatalf("the VM read %x: the refused message reached it", b)
+			default:
+			}
+			write, pb, _ := storedVMRecording(t, h)
+			stoppedWhereRefused(t, write, pb, tc.reason)
+		})
+	}
+}
+
+// TestDesktopAppRecording_ARefusalEndsWithAStopMark is the same for a container's noVNC app, whose
+// filter goes on in uiFilterUpgrade: recorded, each message closes the browser's socket, never reaches the
+// desktop and ends the recording with its stop mark; unrecorded, the SetPixelFormat reaches the desktop.
+func TestDesktopAppRecording_ARefusalEndsWithAStopMark(t *testing.T) {
+	for name, tc := range refusedCases {
+		t.Run(name, func(t *testing.T) {
+			offered, pasted := make(chan string, 1), make(chan []byte, 1)
+			h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+			if tc.recorded {
+				h.run.RecordingLevel = types.RecordingScreenActions
+				h.store.putRun(h.run)
+				h.srv.cfg.RecordingStore = fsRecordingStore(t)
+			}
+			ds := openDesktop(t, h, desktopApp)
+			<-offered
+			if next, err := readWSFrame(ds.br); err != nil || !bytes.Equal(next, []byte{2}) {
+				t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+			}
+			f := wsFrame(tc.msg, true)
+			if tc.text {
+				f[0] = 0x81
+			}
+			if _, err := ds.conn.Write(f); err != nil {
+				t.Fatalf("%x write: %v", tc.msg, err)
+			}
+			if !tc.recorded {
+				select {
+				case b := <-pasted:
+					if !bytes.Equal(b, tc.msg) {
+						t.Fatalf("the desktop got %x, want the browser's %x", b, tc.msg)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("an unrecorded desktop's %x never reached it", tc.msg)
+				}
+				return
+			}
+			var ne net.Error
+			if _, err := readWSFrame(ds.br); err == nil || errors.As(err, &ne) && ne.Timeout() {
+				t.Fatalf("the browser's socket stayed open after %x on a recorded desktop: %v", tc.msg, err)
+			}
+			write, pb, _ := storedVMRecording(t, h) // the relay closed and stored its recording
+			select {
+			case b := <-pasted:
+				t.Fatalf("the desktop read %x: the refused message reached it", b)
+			default:
+			}
+			stoppedWhereRefused(t, write, pb, tc.reason)
 		})
 	}
 }

@@ -163,12 +163,11 @@ func startADOLaneSidecar(t *testing.T, runID uuid.UUID, lane adoEntraLane, polic
 	caCert, caKey, cpURL, corp, upstreamCAPEM string,
 ) string {
 	t.Helper()
-	port := freeLoopbackPort(t)
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cpURL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: caCert, MITMCAKeyPEM: caKey, MITMHosts: lane.mitmHosts,
 		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCAPEM,
-	}, port)
+	}, 0)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
 	}
@@ -176,18 +175,12 @@ func startADOLaneSidecar(t *testing.T, runID uuid.UUID, lane adoEntraLane, polic
 	if err != nil {
 		t.Fatalf("LoadConfigBytes: %v", err)
 	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Listen = "127.0.0.1:0"
 	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
 	if err != nil {
 		t.Fatalf("sidecar boot: %v", err)
 	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(sctx)
-	})
-	return cfg.Listen
+	return serveTestSidecar(t, psrv)
 }
 
 // adoPlainLaneCases are absolute-form `https://` requests written straight to
@@ -269,14 +262,28 @@ func countingUpstream(t *testing.T, fakeURL string) (string, *atomic.Int64) {
 	return srv.URL, &n
 }
 
-func freeLoopbackPort(t *testing.T) int {
+// serveTestSidecar serves psrv, built from a config that listens on 127.0.0.1:0, until the test ends, and
+// returns the address it bound. The kernel picks the port at the bind, so no other process can hold it
+// first, as it could a port picked, freed and handed on.
+func serveTestSidecar(t *testing.T, psrv *proxy.Server) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+	listening := make(chan struct{})
+	psrv.OnListening(func() { close(listening) })
+	served := make(chan error, 1)
+	go func() { served <- psrv.ListenAndServe() }()
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = psrv.Shutdown(sctx)
+	})
+	select {
+	case <-listening:
+	case err := <-served:
+		t.Fatalf("the sidecar stopped before it listened: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sidecar never listened")
 	}
-	defer func() { _ = ln.Close() }()
-	return ln.Addr().(*net.TCPAddr).Port
+	return psrv.BoundAddr().String()
 }
 
 type testUpstreamCA struct {

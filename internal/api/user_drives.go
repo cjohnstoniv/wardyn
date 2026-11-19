@@ -131,6 +131,13 @@ type userDrivesResponse struct {
 	HostRootsConfigured bool                      `json:"host_roots_configured"`
 	RunnerTarget        string                    `json:"runner_target"`
 	Disabled            bool                      `json:"disabled"`
+	// TeamDrives is the deployment's storage.user_drive.team_drives switch, so
+	// every reader of this answer can tell a team drive that shares one folder
+	// from one that resolves per person. Always present: a client that cannot
+	// find it knows the read failed, not that the switch is off. The security
+	// admin's view carries it too; site config and /workspace-providers stay
+	// operator-only.
+	TeamDrives bool `json:"team_drives"`
 	// GrantTotal is how many allocations EXIST, against the len(Grants) this
 	// page carries. It costs nothing: every grant's drive_id is an FK to a
 	// drive, so the per-drive counts already in Drives sum to it, and that read
@@ -224,6 +231,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
+		TeamDrives:          provider.TeamDrives,
 		GrantTotal:          total,
 	}
 	// "Never the host" is the line between the two admin tiers: anyone but a

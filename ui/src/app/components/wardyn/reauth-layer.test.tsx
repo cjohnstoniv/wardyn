@@ -13,7 +13,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import * as React from "react";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ReauthLayer } from "./reauth-layer";
 import { OperatorProvider } from "./operator-context";
@@ -39,13 +40,21 @@ const meResponse = {
   role: "user",
   email: "",
 };
-// What GET /me answers next: a body, or a status with none (a 5xx reads as unreachable).
-let answer: { body?: object; status: number } = { body: meResponse, status: 200 };
-vi.mock("../../lib/api/core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../lib/api/core")>()),
-  wfetch: vi.fn(() => Promise.resolve(new Response(JSON.stringify(answer.body ?? {}), { status: answer.status }))),
-  setToken: vi.fn(),
-}));
+// What GET /me answers next: a body (`raw` for one that is not JSON), or a status with none; status 0 is no answer
+// at all (wfetch's deadline).
+let answer: { body?: object; raw?: string; status: number } = { body: meResponse, status: 200 };
+vi.mock("../../lib/api/core", async (importOriginal) => {
+  const core = await importOriginal<typeof import("../../lib/api/core")>();
+  return {
+    ...core,
+    wfetch: vi.fn(() =>
+      answer.status === core.TIMEOUT_STATUS
+        ? Promise.reject(new core.HttpError(core.TIMEOUT_STATUS, "Could not reach the control plane."))
+        : Promise.resolve(new Response(answer.raw ?? JSON.stringify(answer.body ?? {}), { status: answer.status })),
+    ),
+    setToken: vi.fn(),
+  };
+});
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 
 function renderDialog(reauthOverrides: Partial<Reauth> = {}) {
@@ -132,6 +141,17 @@ describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
 
     await waitFor(() => expect(reloadAs).toHaveBeenCalled());
   });
+
+  it("a token check Wardyn answered with a 5xx says the check failed, never that Wardyn isn't answering", async () => {
+    const user = userEvent.setup();
+    answer = { status: 503 };
+    renderDialog();
+    setField(screen.getByLabelText(TOKEN_LABEL), "a-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(REAUTH_DIALOG.CHECK_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.UNREACHABLE)).toBeNull();
+    answer = { body: meResponse, status: 200 };
+  });
 });
 
 // The expiry banner's "Sign in again", renewing in place. The session is still
@@ -161,7 +181,25 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     return popup;
   }
 
-  function Renewing({ from, onResumed, reloadAs }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void }) {
+  // The page under the dialog: its h1 names the route, so a test can see which page took focus.
+  // `lateRunsHeading` holds the Runs heading back until "reveal heading" is pressed, as a lazy chunk would.
+  function PageHeading({ lateRunsHeading }: { lateRunsHeading?: boolean }) {
+    const { pathname } = useLocation();
+    const navigate = useNavigate();
+    const [revealed, setRevealed] = React.useState(!lateRunsHeading);
+    // MemoryRouter never moves window.location; BrowserRouter does (before the page draws), and the heading watch reads it.
+    React.useLayoutEffect(() => window.history.replaceState(null, "", pathname), [pathname]);
+    return (
+      <>
+        {pathname === "/runs" ? revealed && <h1 key="runs">Runs</h1> : pathname === "/elsewhere" ? <h1 key="elsewhere">Elsewhere</h1> : <h1 key="settings">Settings</h1>}
+        <button type="button" onClick={() => setRevealed(true)}>reveal heading</button>
+        <button type="button" onClick={() => void navigate("/elsewhere")}>go elsewhere</button>
+        <button type="button">other control</button>
+      </>
+    );
+  }
+
+  function Renewing({ from, onResumed, reloadAs, withHeading, lateRunsHeading }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void; withHeading?: boolean; lateRunsHeading?: boolean }) {
     const { reauth, lapse } = useReauthController(reloadAs);
     return (
       <ReauthContext.Provider value={reauth}>
@@ -175,13 +213,16 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
         <output data-testid="signed-out">{String(reauth.signedOut)}</output>
         {/* The shell's own rule (app-shell.tsx): a watched sign-in keeps the layer. */}
         {(reauth.phase !== "none" || reauth.watch) && <ReauthLayer onResumed={onResumed} />}
-        <main id="main-content" tabIndex={-1} />
+        {withHeading && <button type="button">outside control</button>}
+        <main id="main-content" tabIndex={-1}>
+          {withHeading && <PageHeading lateRunsHeading={lateRunsHeading} />}
+        </main>
       </ReauthContext.Provider>
     );
   }
 
   /** Alice, an admin on /admin/settings, has clicked the banner's button. */
-  function startRenewal(over: Partial<Renewal> = {}) {
+  function startRenewal(over: Partial<Renewal> = {}, withHeading = false, lateRunsHeading = false) {
     const popup = signInWindow();
     const onResumed = vi.fn();
     const reloadAs = vi.fn();
@@ -197,7 +238,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     render(
       <MemoryRouter initialEntries={["/admin/settings"]}>
         <OperatorProvider operator operatorResolved principal="alice">
-          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} />
+          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} withHeading={withHeading} lateRunsHeading={lateRunsHeading} />
         </OperatorProvider>
       </MemoryRouter>,
     );
@@ -252,6 +293,64 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
     expect(onResumed).toHaveBeenCalledWith(narrowed);
     expect(reloadAs).not.toHaveBeenCalled();
+  });
+
+  // goToRuns replaces the page, the dialog's return target goes with it, and the shell does not move focus for a
+  // replace: without help focus is left on the body and nothing says the person is now on Runs.
+  it("T2b: Go to Runs ends with focus on the Runs heading, not on the body", async () => {
+    answer = { body: alice({ role: "user", operator: false, security_operator: false }), status: 200 };
+    startRenewal({}, true);
+    await poll();
+    expect(screen.getByRole("heading", { name: "Settings", hidden: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const runs = screen.getByRole("heading", { name: "Runs" });
+    expect(runs).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  // The Runs heading can arrive seconds later (a lazy chunk). What the person did meanwhile outranks it.
+  async function goToRunsWithLateHeading() {
+    answer = { body: alice({ role: "user", operator: false, security_operator: false }), status: 200 };
+    startRenewal({}, true, true);
+    await poll();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByRole("heading", { name: "Runs" })).toBeNull();
+  }
+  const reveal = () => act(() => void fireEvent.click(screen.getByRole("button", { name: "reveal heading" })));
+
+  it("T2c: a key pressed and focus moved before the Runs heading arrives keep that focus", async () => {
+    await goToRunsWithLateHeading();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    screen.getByRole("button", { name: "outside control" }).focus();
+    await reveal();
+    expect(screen.getByRole("heading", { name: "Runs" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "outside control" })).toHaveFocus();
+  });
+
+  it("T2c2: focus the page placed inside itself before its heading arrives is kept", async () => {
+    await goToRunsWithLateHeading();
+    screen.getByRole("button", { name: "other control" }).focus();
+    await reveal();
+    expect(screen.getByRole("button", { name: "other control" })).toHaveFocus();
+  });
+
+  it("T2d: navigating elsewhere before the Runs heading arrives, the late Runs heading takes no focus", async () => {
+    await goToRunsWithLateHeading();
+    await act(async () => {
+      screen.getByRole("button", { name: "go elsewhere" }).click();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByRole("heading", { name: "Elsewhere" })).toBeInTheDocument();
+    // Runs is no longer the page; its heading cannot arrive, and nothing is pulled to it.
+    expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: "Elsewhere" }));
+  });
+
+  it("T2e: a Runs heading that arrives late with the person idle still takes focus", async () => {
+    await goToRunsWithLateHeading();
+    await reveal();
+    expect(screen.getByRole("heading", { name: "Runs" })).toHaveFocus();
   });
 
   it("T3: the same person, expiry unchanged, keeps waiting until the window closes", async () => {
@@ -420,7 +519,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     expect(document.getElementById("main-content")).toHaveFocus();
   });
 
-  it("a refused window offers the sign-in in a new tab; an outage reads as one and waiting resumes after it", async () => {
+  it("a refused window offers the sign-in in a new tab; a failed check says so and waiting resumes after it", async () => {
     answer = { status: 503 };
     startRenewal({ popup: null });
     expect(screen.getByText(REAUTH_DIALOG.POPUP_BLOCKED)).toBeInTheDocument();
@@ -430,11 +529,28 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
 
     fireEvent.click(link);
     await poll();
-    expect(screen.getByText(REAUTH_DIALOG.UNREACHABLE)).toBeInTheDocument();
+    expect(screen.getByText(REAUTH_DIALOG.CHECK_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.UNREACHABLE)).toBeNull();
     answer = { body: alice(), status: 200 };
     await poll();
     expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeInTheDocument();
+  });
+
+  // Only no answer at all says Wardyn isn't answering; an answer says the check failed, in its own words if it has them.
+  it.each([
+    ["no answer", { status: 0 }, REAUTH_DIALOG.UNREACHABLE],
+    ["a 403", { status: 403 }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 404", { status: 404 }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 2xx body that does not parse", { status: 200, raw: "<html>" }, REAUTH_DIALOG.CHECK_FAILED_FINAL],
+    ["a 500 that names only its handler", { status: 500, body: { error: "read session", reason: "internal_error" } }, REAUTH_DIALOG.CHECK_FAILED],
+    ["a 503 that names its cause", { status: 503, body: { error: "The session store is restarting." } }, "The session store is restarting."],
+  ])("%s while waiting on the sign-in window", async (_name, failure, sentence) => {
+    answer = failure;
+    startRenewal({ popup: null });
+    fireEvent.click(screen.getByRole("link", { name: REAUTH_DIALOG.POPUP_FALLBACK }));
+    await poll();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
   });
 
   // A sign-in this flow started can still complete after the page stops

@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 
@@ -204,35 +205,36 @@ func driveRequestBytes(drive *types.DriveMount) int64 { return int64(drive.SizeM
 // second run reuses the first's claim rather than racing one into the namespace (AlreadyExists is a
 // LOST race, not a success — see reuseRaceWinnerClaim); k8s_pvc_static (share) is Get-only, since a
 // missing admin-provisioned claim must be a refusal, never a silently-created empty volume. RBAC
-// needed is exactly `persistentvolumeclaims: [get, create]` — reclaim is an operator command, not a
-// verb wardynd holds. Takes the clientset/namespace rather than *Driver so tests can call it without the boot-time egress canary.
-func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string, drive *types.DriveMount) error {
+// needed is exactly `persistentvolumeclaims: [get, create]` (reclaim's delete is a separate opt-in).
+// Takes the clientset/namespace rather than *Driver so tests can call it without the boot-time egress
+// canary. Returns the UID of the claim it judged, which recheckDriveClaims holds the pod to.
+func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string, drive *types.DriveMount) (k8stypes.UID, error) {
 	switch drive.Backend {
 	case types.DriveBackendK8sPVC, types.DriveBackendK8sPVCStatic:
 	default:
 		// A Docker-backed drive reaching this driver is a control-plane bug — refuse loudly rather than mount nothing.
-		return fmt.Errorf("k8s: drive %q is a %q drive, which this substrate cannot mount: %w",
+		return "", fmt.Errorf("k8s: drive %q is a %q drive, which this substrate cannot mount: %w",
 			drive.ObjectName, drive.Backend, errDriveBackendUnsupported)
 	}
 	if err := validateDriveMount(drive); err != nil { // an illegal name is this driver's refusal to make, not the apiserver's
-		return err
+		return "", err
 	}
 
 	existing, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		return reuseDriveClaim(existing, drive)
+		return existing.UID, reuseDriveClaim(existing, drive)
 	case apierrors.IsForbidden(err):
 		// The DEFAULT deployment's failure: drives.enabled is off out of the box, so the Role
 		// carries no persistentvolumeclaims rule.
-		return refuseForbiddenDriveClaim("get", ns, drive, err)
+		return "", refuseForbiddenDriveClaim("get", ns, drive, err)
 	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
+		return "", fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
 	case drive.Backend == types.DriveBackendK8sPVCStatic:
 		slog.Warn("wardynd: k8s substrate: a share drive's claim is not provisioned", // claim/namespace go to the operator, not the member's failure hint
 			slog.String("claim", drive.ObjectName), slog.String("namespace", ns),
 			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName))
-		return errDriveClaimNotProvisioned
+		return "", errDriveClaimNotProvisioned
 	}
 
 	// ObjectName and HomeName are used raw, and validateDriveMount above is what makes that safe.
@@ -259,17 +261,17 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 		pvc.Spec.StorageClassName = &drive.StorageClass
 	}
 
-	if _, cerr := client.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); cerr != nil {
-		switch {
-		case apierrors.IsAlreadyExists(cerr):
-			return reuseRaceWinnerClaim(ctx, client, ns, drive)
-		case apierrors.IsForbidden(cerr):
-			return refuseForbiddenDriveClaim("create", ns, drive, cerr)
-		default:
-			return fmt.Errorf("k8s: drive: create claim %q: %w", drive.ObjectName, cerr)
-		}
+	created, cerr := client.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
+	switch {
+	case cerr == nil:
+		return created.UID, nil
+	case apierrors.IsAlreadyExists(cerr):
+		return reuseRaceWinnerClaim(ctx, client, ns, drive)
+	case apierrors.IsForbidden(cerr):
+		return "", refuseForbiddenDriveClaim("create", ns, drive, cerr)
+	default:
+		return "", fmt.Errorf("k8s: drive: create claim %q: %w", drive.ObjectName, cerr)
 	}
-	return nil
 }
 
 // reuseRaceWinnerClaim decides whether the claim that WON a Get→Create race may back this run — the
@@ -282,20 +284,54 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 // agent, the exact cross-mount reuseDriveClaim exists to refuse; the same window also swallows a
 // Terminating claim. So the loser re-reads what it lost to and hands it to reuseDriveClaim as though
 // its own Get had found it; it does NOT retry the Create (this driver holds only `get`/`create`).
-func reuseRaceWinnerClaim(ctx context.Context, client kubernetes.Interface, ns string, drive *types.DriveMount) error {
+func reuseRaceWinnerClaim(ctx context.Context, client kubernetes.Interface, ns string, drive *types.DriveMount) (k8stypes.UID, error) {
 	winner, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		return reuseDriveClaim(winner, drive)
+		return winner.UID, reuseDriveClaim(winner, drive)
 	case apierrors.IsNotFound(err):
 		// Present for the Create, gone for the read: a reclaim landing mid-dispatch — refused rather than re-created.
-		return fmt.Errorf("k8s: drive: claim %q existed when this run tried to create it and was gone a moment later: %w",
+		return "", fmt.Errorf("k8s: drive: claim %q existed when this run tried to create it and was gone a moment later: %w",
 			drive.ObjectName, errDriveClaimVanished)
 	case apierrors.IsForbidden(err):
-		return refuseForbiddenDriveClaim("get", ns, drive, err)
+		return "", refuseForbiddenDriveClaim("get", ns, drive, err)
 	default:
-		return fmt.Errorf("k8s: drive: re-read claim %q after losing the race to create it: %w", drive.ObjectName, err)
+		return "", fmt.Errorf("k8s: drive: re-read claim %q after losing the race to create it: %w", drive.ObjectName, err)
 	}
+}
+
+// recheckDriveClaims holds the run to the claims ensureDrivePVC judged: each drive's claim must still
+// carry the UID judged then and not be Terminating, or the run is refused.
+//
+// SECURITY: the pod mounts a claim by NAME, and nothing in a pod spec can name a UID, so a claim
+// reclaimed and made again under that name (another person's, when two drives fold to one name, or
+// when a home_override moves to a second person) would otherwise be what the kubelet mounts. A UID is
+// never reused, so the same UID before the agent pod exists and again once its container runs means
+// the kubelet resolved the name to the judged claim. CreateSandbox asks at both points: before, so a
+// claim replaced during the proxy's start is refused before any pod could mount it; after, as the
+// proof. A claim deleted after that is held by the pvc-protection finalizer for as long as the pod
+// runs. The member reads the frozen sentences only; the UIDs go to the operator's log line.
+func recheckDriveClaims(ctx context.Context, client kubernetes.Interface, ns string, drives []types.DriveMount, judged []k8stypes.UID) error {
+	for i := range drives {
+		drive := &drives[i]
+		claim, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			return fmt.Errorf("k8s: drive: claim %q was deleted while this run was starting: %w", drive.ObjectName, errDriveClaimVanished)
+		case apierrors.IsForbidden(err):
+			return refuseForbiddenDriveClaim("get", ns, drive, err)
+		case err != nil:
+			return fmt.Errorf("k8s: drive: re-read claim %q before handing this run its drive: %w", drive.ObjectName, err)
+		case claim.UID != judged[i]:
+			slog.Warn("wardynd: k8s substrate: a drive's claim was replaced while its run was starting; the run is refused",
+				slog.String("claim", drive.ObjectName), slog.String("namespace", ns),
+				slog.String("judged_uid", string(judged[i])), slog.String("uid", string(claim.UID)))
+			return fmt.Errorf("k8s: drive: claim %q was replaced while this run was starting: %w", drive.ObjectName, errDriveClaimVanished)
+		case claim.DeletionTimestamp != nil:
+			return fmt.Errorf("k8s: drive: claim %q began deleting while this run was starting: %w", drive.ObjectName, errDriveClaimTerminating)
+		}
+	}
+	return nil
 }
 
 // refuseForbiddenDriveClaim is the ONE place a 403 on a drive claim becomes an error, splitting the

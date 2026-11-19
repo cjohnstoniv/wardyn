@@ -156,7 +156,7 @@ func (m *memRunOutputs) DeleteRunOutputsOlderThan(_ context.Context, age time.Du
 	return n, nil
 }
 
-func (m *memRunOutputs) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error) {
+func (m *memRunOutputs) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, _ *store.SweepCursor, limit int) ([]uuid.UUID, *store.SweepCursor, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []uuid.UUID
@@ -168,7 +168,7 @@ func (m *memRunOutputs) ListStalePendingRunOutputs(ctx context.Context, age time
 			out = append(out, id)
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 func (m *memRunOutputs) row(id uuid.UUID) (store.RunOutput, bool) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -96,6 +97,39 @@ func TestLocalEligibilityApprovalGrantAndUnknownKind(t *testing.T) {
 	p.Origins[path] = CredentialOrigin{Class: ClassOwn, Stored: true, OwnNamespace: true, OwnerOnly: true, GrantKind: "future_key"}
 	if _, r := LocalEligibility(p); r == nil {
 		t.Fatal("unknown grant kind admitted")
+	}
+}
+
+// A run carrying signed identity for a gateway is refused on a local placement: the mint is the
+// organisation's, and no runner relays it.
+func TestLocalEligibilityRefusesAGatewayIdentityRoute(t *testing.T) {
+	p := LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{GatewayIdentity: []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.GatewayIdentity" {
+		t.Fatalf("refusal %v, want placement_credential on ProxyConfig.GatewayIdentity", r)
+	}
+	// A person reads every route's MCP server or provider by name, in one sentence, and never the field.
+	mcp := func(key string) proxy.GatewayIdentityRoute {
+		return proxy.GatewayIdentityRoute{Host: key + ".corp.example", Port: 443, MCPKey: key, Audience: key}
+	}
+	provider := proxy.GatewayIdentityRoute{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}
+	const tail = " your organisation's run identity, so "
+	for _, tc := range []struct {
+		routes []proxy.GatewayIdentityRoute
+		want   string
+	}{
+		{[]proxy.GatewayIdentityRoute{provider}, `The model provider "p" sends` + tail + "it runs only on your organisation's remote-hosted runners. Remove it from this run, or run this on a remote-hosted runner."},
+		{[]proxy.GatewayIdentityRoute{mcp("tools")}, `The MCP server "tools" sends` + tail + "it runs only on your organisation's remote-hosted runners. Remove it from this run, or run this on a remote-hosted runner."},
+		{[]proxy.GatewayIdentityRoute{mcp("a"), mcp("b")}, `The MCP servers "a" and "b" send` + tail + "they run only on your organisation's remote-hosted runners. Remove them from this run, or run this on a remote-hosted runner."},
+		{[]proxy.GatewayIdentityRoute{provider, mcp("a"), mcp("b"), mcp("c")}, `The MCP servers "a", "b" and "c" and the model provider "p" send` + tail + "they run only on your organisation's remote-hosted runners. Remove them from this run, or run this on a remote-hosted runner."},
+	} {
+		p.Spec.ProxyConfig.GatewayIdentity = tc.routes
+		if _, r := LocalEligibility(p); r == nil || r.Sentence() != tc.want || r.Field != "ProxyConfig.GatewayIdentity" {
+			t.Errorf("refusal %v, want the sentence %q", r, tc.want)
+		}
+	}
+	p.Spec.ProxyConfig.GatewayIdentity = nil
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("a plan with no route was refused: %v", r)
 	}
 }
 

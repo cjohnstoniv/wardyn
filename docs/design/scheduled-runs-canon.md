@@ -1,6 +1,6 @@
 # Scheduled runs: Runs list and run page strings
 
-The owner-approved FEAT-2 boards F2SCHED-2 and F2SCHED-3 (approved 2026-10-20, issue #1986). Each row is the board's "Copy not on today's console", byte for byte. `ui/src/app/components/wardyn/copy/scheduled-runs.ts` holds them; `ui/src/app/lib/scheduled-runs-copy.test.ts` keeps this file and that one equal. The start-time picker, the Review row and the Launch line are `new-run-canon.md`'s (`START_*`, `STARTS`, `TIMING_STARTS`).
+Each row is the console string for a scheduled run, byte for byte. `ui/src/app/components/wardyn/copy/scheduled-runs.ts` holds them; `ui/src/app/lib/scheduled-runs-copy.test.ts` keeps this file and that one equal. The start-time picker, the Review row and the Launch line are `new-run-canon.md`'s (`START_*`, `STARTS`, `TIMING_STARTS`).
 
 `{when}` is the start in the zone it was given in, with that zone's name: "Wed 21 Oct, 02:00 (UTC)". `{wait}` is today's short relative style without its "in": "12h". `{deadline}` is the queue's own deadline in the same form.
 

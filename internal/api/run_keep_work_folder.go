@@ -196,10 +196,14 @@ func (s *Server) keepWorkFolder(r *http.Request, k *keptWorkFolder, run types.Ag
 
 // auditKeptDrive is the drive.member.create row of a kept work folder.
 func (s *Server) auditKeptDrive(r *http.Request, k *keptWorkFolder, run types.AgentRun, saved types.UserDrive) {
+	target := runner.ScratchWorkPath
+	if run.MachineKind.IsMacOSVM() {
+		target = runner.MacGuestPath(target)
+	}
 	data := map[string]any{
 		"backend": saved.Backend, "drive": saved.Name, "drive_id": saved.ID, "limit": k.limit,
 		"size_mib": saved.SizeMiB, "storage_class": saved.StorageClass,
-		"from_run": run.ID, "target": runner.ScratchWorkPath, "enforcement": types.EnforcementFor(saved.Backend),
+		"from_run": run.ID, "target": target, "enforcement": types.EnforcementFor(saved.Backend),
 	}
 	if ms, ok := s.cfg.Store.(store.MemberDriveStore); ok {
 		if all, lerr := ms.ListMemberDrivesOf(r.Context(), k.owner); lerr == nil {

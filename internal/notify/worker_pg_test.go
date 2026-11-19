@@ -401,9 +401,8 @@ func TestWorker_ARedirectIsNotFollowedAndNoURLIsStored(t *testing.T) {
 // TestWorker_TransportErrorsAreClassesNeverURLs: a refused connection is stored as "dial" and a
 // handler that outlives the timeout as "timeout"; neither carries the URL.
 func TestWorker_TransportErrorsAreClassesNeverURLs(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	dead := srv.URL + "/SECRETDIALPATH"
-	srv.Close() // nothing listens any more
+	// Nothing listens at port 1; a closed test server's port could be taken by another process.
+	dead := "http://127.0.0.1:1/SECRETDIALPATH"
 	h := newHarness(t, chanJSON(dead, ""))
 	a := h.raise(t, h.run(t), `{"host":"x.example"}`, "")
 	if _, err := h.worker(nil, nil).Tick(context.Background()); err != nil {

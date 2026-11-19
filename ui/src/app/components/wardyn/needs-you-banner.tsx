@@ -10,15 +10,18 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
+import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
+import { isAlreadyDecided } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { getErrorMessage, shortTime } from "../../lib/format";
-import { mayEnterRunOrUnknown } from "../../lib/run-entry";
+import { isBackgroundRun, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { enterUIApp } from "../screens/run-detail-ssh";
+import { DESKTOP_APP, enterUIApp, openEnterTab } from "../screens/run-detail-ssh";
 import { HARNESS_LOGIN_TASK } from "../screens/run-detail/sign-in-run";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
+import { RUN_SSH } from "./copy";
 import { NEEDS_YOU, askedAgo, heldClock, type TakeoverSurface } from "./copy/needs-you";
 import { toast } from "sonner";
 
@@ -29,10 +32,22 @@ export function activeTakeover(approvals: ApprovalRequest[]): ApprovalRequest | 
     .sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at))[0];
 }
 
-/** Where a takeover of run puts the person, as the run page can tell: its declared desktop, else its terminal. */
-export function surfaceOf(run: RunDetail): TakeoverSurface {
-  return (run.ui_apps ?? []).some((a) => a.name === "novnc") ? "desktop" : "terminal";
+/** A macOS VM run whose desktop the browser can only watch (the server's macOSDesktopViewOnly, off the runner's caps). */
+function macDesktopViewOnly(run: RunDetail): boolean {
+  return isMacOSVM(run) && run.macos?.desktop !== "control";
 }
+
+/**
+ * Where a takeover of run puts the person, as the run page can tell (the server's takeoverSurface is the
+ * decider): its declared desktop, or a VM run's built-in desktop unless that is view only, else its terminal.
+ */
+export function surfaceOf(run: RunDetail): TakeoverSurface {
+  if ((run.ui_apps ?? []).some((a) => a.name === "novnc")) return "desktop";
+  return isVMKind(run.machine_kind) && !macDesktopViewOnly(run) ? "desktop" : "terminal";
+}
+
+/** The takeover answers (take over, hand back) carry the server's surface; the approval list does not. */
+type ApprovalWithSurface = ApprovalRequest & { surface?: TakeoverSurface };
 
 const snoozeKey = (id: string) => `wardyn.needs-you.snooze.${id}`;
 
@@ -70,8 +85,15 @@ export function NeedsYouBanner({
   const resolved = useOperatorResolved();
   const ap = activeTakeover(approvals);
   const apId = ap?.id;
-  const [busy, setBusy] = React.useState<"take" | "back" | "decline" | null>(null);
-  const [done, setDone] = React.useState(false);
+  const [busy, setBusy] = React.useState<"take" | "open" | "back" | "decline" | null>(null);
+  // The request this page handed back. Its banner stands until dismissed or until another request is active.
+  const [doneId, setDoneId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (apId && doneId && apId !== doneId) setDoneId(null);
+  }, [apId, doneId]);
+  // The surface the server answered for this approval's takeover, once it has: it knows the gateway, the macOS sign-ins and an
+  // attended Mac window, which surfaceOf cannot see.
+  const [served, setServed] = React.useState<{ id: string; surface: TakeoverSurface } | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
   const [snoozedUntil, setSnoozedUntil] = React.useState(0);
   React.useEffect(() => setSnoozedUntil(apId ? readSnooze(apId) : 0), [apId]);
@@ -86,7 +108,7 @@ export function NeedsYouBanner({
   // to Off (it records no session), or a harness login run (never recorded), means the takeover is not recorded.
   const recorded = run.not_recorded !== "org_off" && run.not_recorded !== "policy_off" && run.task !== HARNESS_LOGIN_TASK;
 
-  if (done) {
+  if (doneId && (!ap || ap.id === doneId)) {
     return (
       <section data-testid="needs-you-done" className="mx-4 mt-3 rounded-lg border border-success/40 bg-success-subtle px-4 py-3 text-sm">
         <p className="font-semibold text-foreground">{NEEDS_YOU.done.title}</p>
@@ -95,7 +117,7 @@ export function NeedsYouBanner({
           <Button size="sm" variant="outline" onClick={onGoAudit}>
             {NEEDS_YOU.done.audit}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDone(false)}>
+          <Button size="sm" variant="ghost" onClick={() => setDoneId(null)}>
             {NEEDS_YOU.done.dismiss}
           </Button>
         </div>
@@ -105,31 +127,71 @@ export function NeedsYouBanner({
   if (!ap) return null;
 
   const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A background run has no console to enter: the server refuses its attach ticket, so no Take over is offered.
+  const mayTake = mayEnter && !isBackgroundRun(run);
   const reason = String(ap.requested_scope.reason ?? "");
-  const surface = surfaceOf(run);
+  // The server's answer wins; the run page's guess stands only until there is one.
+  const surface = (ap as ApprovalWithSurface).surface ?? (served?.id === ap.id ? served.surface : undefined) ?? surfaceOf(run);
 
-  const takeOver = async () => {
-    setBusy("take");
+  // Sends the takeover's desktop into tab, the one the click opened. Control is already held here, so a failure
+  // says the desktop did not open, and the strip keeps Open the desktop and Hand back.
+  const openDesktop = async (tab: Window | null) => {
     try {
-      const got = await approvalsApi.takeOver(ap.id);
-      if (got.surface === "desktop") {
-        const h = await healthApi.health();
-        await enterUIApp(run.id, "novnc", h.ui_sandbox ?? null);
-      } else {
-        onOpenTerminal();
-      }
-      onChanged();
+      const h = await healthApi.health();
+      const declared = (run.ui_apps ?? []).some((a) => a.name === "novnc");
+      await enterUIApp(run.id, declared ? "novnc" : DESKTOP_APP.name, h.ui_sandbox ?? null, tab ? { tab } : {});
     } catch (err) {
-      toast.error(NEEDS_YOU.failed.takeOver, { description: getErrorMessage(err) });
-    } finally {
-      setBusy(null);
+      tab?.close();
+      toast.error(NEEDS_YOU.failed.openDesktop, { description: getErrorMessage(err) });
     }
+  };
+  const reopenDesktop = async () => {
+    const tab = openEnterTab();
+    if (!tab) {
+      toast.error(NEEDS_YOU.failed.openDesktop, { description: RUN_SSH.POPUP_BLOCKED });
+      return;
+    }
+    setBusy("open");
+    await openDesktop(tab);
+    setBusy(null);
+  };
+  const takeOver = async () => {
+    // A desktop opens in a new tab, and the browser only allows that inside the click, so the tab opens here, before the
+    // takeover and health requests, and is closed again if the takeover ends up on the terminal or fails.
+    let tab: Window | null = null;
+    if (surface === "desktop") {
+      tab = openEnterTab();
+      if (!tab) {
+        toast.error(NEEDS_YOU.failed.takeOver, { description: RUN_SSH.POPUP_BLOCKED });
+        return;
+      }
+    }
+    setBusy("take");
+    let got: Awaited<ReturnType<typeof approvalsApi.takeOver>>;
+    try {
+      got = await approvalsApi.takeOver(ap.id);
+    } catch (err) {
+      tab?.close();
+      toast.error(NEEDS_YOU.failed.takeOver, { description: getErrorMessage(err) });
+      setBusy(null);
+      return;
+    }
+    // The takeover is held: the page reads it again before the desktop opens.
+    setServed({ id: ap.id, surface: got.surface });
+    onChanged();
+    if (got.surface === "desktop") {
+      await openDesktop(tab);
+    } else {
+      tab?.close();
+      onOpenTerminal();
+    }
+    setBusy(null);
   };
   const handBack = async () => {
     setBusy("back");
     try {
       await approvalsApi.handBack(ap.id);
-      setDone(true);
+      setDoneId(ap.id);
       onChanged();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.handBack, { description: getErrorMessage(err) });
@@ -144,6 +206,8 @@ export function NeedsYouBanner({
       onChanged();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+      // Someone else decided it first: the banner is stale, so its data is read again at once.
+      if (isAlreadyDecided(err)) onChanged();
     } finally {
       setBusy(null);
     }
@@ -166,7 +230,12 @@ export function NeedsYouBanner({
           </span>
         )}
         <span data-testid="needs-you-clock" className="font-mono text-muted-foreground">{heldClock(now - since)}</span>
-        <Button size="sm" className="ml-auto" disabled={busy !== null} onClick={() => void handBack()}>
+        {surface === "desktop" && (
+          <Button size="sm" variant="outline" className="ml-auto" disabled={busy !== null} onClick={() => void reopenDesktop()}>
+            {NEEDS_YOU.strip.openDesktop}
+          </Button>
+        )}
+        <Button size="sm" className={surface === "desktop" ? undefined : "ml-auto"} disabled={busy !== null} onClick={() => void handBack()}>
           {busy === "back" ? NEEDS_YOU.strip.handingBack : NEEDS_YOU.strip.handBack}
         </Button>
       </section>
@@ -175,9 +244,11 @@ export function NeedsYouBanner({
 
   const actions = mayEnter && (
     <div className="flex shrink-0 items-center gap-2">
-      <Button size="sm" disabled={busy !== null} onClick={() => void takeOver()}>
-        {NEEDS_YOU.banner.takeOver}
-      </Button>
+      {mayTake && (
+        <Button size="sm" disabled={busy !== null} onClick={() => void takeOver()}>
+          {NEEDS_YOU.banner.takeOver}
+        </Button>
+      )}
       {ap.state === "PENDING" && (
         <>
           <DropdownMenu>
@@ -215,10 +286,19 @@ export function NeedsYouBanner({
   if (snoozedUntil > now) {
     return (
       <section data-testid="needs-you-snoozed" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-warning/30 px-4 py-1.5 text-sm">
-        <span className="text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
-        {mayEnter && (
-          <Button size="sm" variant="outline" className="ml-auto" disabled={busy !== null} onClick={() => void takeOver()}>
+        <span className="shrink-0 text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
+        {/* The agent's reason stays in view, on one line. */}
+        <span data-testid="needs-you-snoozed-reason" title={reason} className="min-w-0 flex-1 truncate text-foreground">
+          {reason}
+        </span>
+        {mayTake && (
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void takeOver()}>
             {NEEDS_YOU.banner.takeOver}
+          </Button>
+        )}
+        {mayEnter && (
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void decline()}>
+            {NEEDS_YOU.banner.decline}
           </Button>
         )}
       </section>
@@ -238,6 +318,11 @@ export function NeedsYouBanner({
         <p className="mt-1 text-muted-foreground">
           {mayEnter ? NEEDS_YOU.banner.asked(askedAgo(now - Date.parse(ap.requested_at)), surface) : NEEDS_YOU.readOnly(run.created_by)}
         </p>
+        {mayTake && macDesktopViewOnly(run) && (
+          <p data-testid="needs-you-mac-view-only" className="mt-1 text-muted-foreground">
+            {NEEDS_YOU.banner.macViewOnly}
+          </p>
+        )}
       </div>
       {actions}
     </section>

@@ -486,27 +486,28 @@ func TestMacOSCapsFallbackLeavesReplayFailing(t *testing.T) {
 func TestMacOSCapsFallbackNeedsLastCaps(t *testing.T) {
 	var dirty atomic.Bool
 	var last atomic.Pointer[runnerwire.Caps]
+	var mu sync.Mutex
 	acked := 0
 	send := func(context.Context, *runnerwire.Peer, bool, bool) error { return fmt.Errorf("%w: down", errHostCaps) }
 	ack := func(context.Context, *runnerwire.Peer, runnerwire.Caps) error { acked++; return nil }
 	cur := func() *runnerwire.MacVMCaps { return &runnerwire.MacVMCaps{Max: 1} }
-	resendMacOSCaps(t.Context(), nil, &dirty, &last, send, ack, cur)
+	resendMacOSCaps(t.Context(), nil, &dirty, &last, &mu, send, ack, cur)
 	if !dirty.Load() || acked != 0 {
 		t.Fatalf("no session: dirty %v, acked %d", dirty.Load(), acked)
 	}
 	peer := new(runnerwire.Peer)
-	resendMacOSCaps(t.Context(), peer, &dirty, &last, send, ack, cur)
+	resendMacOSCaps(t.Context(), peer, &dirty, &last, &mu, send, ack, cur)
 	if acked != 0 {
 		t.Fatalf("sent %d caps with none acked before", acked)
 	}
 	last.Store(&runnerwire.Caps{Arch: "arm64"})
-	resendMacOSCaps(t.Context(), peer, &dirty, &last, send, ack, cur)
+	resendMacOSCaps(t.Context(), peer, &dirty, &last, &mu, send, ack, cur)
 	if acked != 1 {
 		t.Fatalf("acked %d, want 1", acked)
 	}
 	// Another send error is no reason to fall back.
 	send = func(context.Context, *runnerwire.Peer, bool, bool) error { return errors.New("link down") }
-	resendMacOSCaps(t.Context(), peer, &dirty, &last, send, ack, cur)
+	resendMacOSCaps(t.Context(), peer, &dirty, &last, &mu, send, ack, cur)
 	if acked != 1 {
 		t.Fatalf("fell back on a link error: acked %d", acked)
 	}

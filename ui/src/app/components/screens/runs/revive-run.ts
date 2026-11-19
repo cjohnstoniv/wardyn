@@ -12,10 +12,17 @@ import { waitEnded } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { REVIVE_RESULT_UNKNOWN, revivePolicy } from "../../wardyn/copy/run-lifetime";
 
-/** False only when the revive definitely failed; a wait that ended may have changed the run, so it reads true. */
-export async function reviveWithToasts(runId: string, failure: string): Promise<boolean> {
+/** False only when the revive definitely failed; a wait that ended may have changed the run, so it reads true.
+ *  `person`, when given: the person the caller's earlier write began under (runs.reviveRun).
+ *  onFailure, when given, takes the failure line in place of the toast: a caller with a place to keep it on screen. */
+export async function reviveWithToasts(
+  runId: string,
+  failure: string,
+  person?: string,
+  onFailure?: (line: string) => void,
+): Promise<boolean> {
   try {
-    const res = await runsApi.reviveRun(runId);
+    const res = await runsApi.reviveRun(runId, person);
     if (res.denied_added.length > 0) toast.info(revivePolicy(res.denied_added.length));
     return true;
   } catch (err) {
@@ -23,7 +30,8 @@ export async function reviveWithToasts(runId: string, failure: string): Promise<
       toast.info(REVIVE_RESULT_UNKNOWN);
       return true;
     }
-    toast.error(failure, { description: getErrorMessage(err) });
+    if (onFailure) onFailure(`${failure}: ${getErrorMessage(err)}`);
+    else toast.error(failure, { description: getErrorMessage(err) });
     return false;
   }
 }

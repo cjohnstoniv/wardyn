@@ -377,6 +377,11 @@
 
 /* thin, console-style scrollbars */
 @layer utilities {
+  /* Firefox only: Chromium ignores ::-webkit-scrollbar once either standard property is set, which would swap the
+     pill below for its own thumb. */
+  @supports not selector(::-webkit-scrollbar) {
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  }
   .scroll-thin::-webkit-scrollbar { width: 10px; height: 10px; }
   .scroll-thin::-webkit-scrollbar-thumb {
     background: var(--border-strong);
@@ -385,6 +390,33 @@
     background-clip: padding-box;
   }
   .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+  /* #3940: a widget tile that holds more than it shows says so. Its body (the card's last child, the node
+     widget-slot.tsx makes the scroller) always carries a visible thin scrollbar, with its space held whether or not it
+     shows, and a tint at any edge that has more. CSS only, so overflow appearing moves nothing. The thumb is
+     --muted-foreground, not .scroll-thin's --border-strong, which is 1.8:1 against --card; the tint is --info at 24%,
+     about 1.5:1 at its strongest, so the thumb is the cue that must reach 3:1 (widget-slot.test.tsx pins it). The two
+     'local' layers per edge are --card covers that scroll with the content and hide the tint once that end is reached. */
+  .tile-scroll > section:only-child > :last-child {
+    scrollbar-gutter: stable;
+    background:
+      linear-gradient(var(--card) 30%, transparent) top / 100% 2rem no-repeat local,
+      linear-gradient(transparent, var(--card) 70%) bottom / 100% 2rem no-repeat local,
+      linear-gradient(to right, var(--card) 30%, transparent) left / 2rem 100% no-repeat local,
+      linear-gradient(to left, var(--card) 30%, transparent) right / 2rem 100% no-repeat local,
+      linear-gradient(color-mix(in srgb, var(--info) 24%, transparent), transparent) top / 100% 0.75rem no-repeat scroll,
+      linear-gradient(transparent, color-mix(in srgb, var(--info) 24%, transparent)) bottom / 100% 0.75rem no-repeat scroll,
+      linear-gradient(to right, color-mix(in srgb, var(--info) 24%, transparent), transparent) left / 0.75rem 100% no-repeat scroll,
+      linear-gradient(to left, color-mix(in srgb, var(--info) 24%, transparent), transparent) right / 0.75rem 100% no-repeat scroll;
+  }
+  .tile-scroll > section:only-child > :last-child::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tile-scroll > section:only-child > :last-child::-webkit-scrollbar-thumb {
+    background: var(--muted-foreground);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .tile-scroll > section:only-child > :last-child::-webkit-scrollbar-track { background: transparent; }
 
   /* unavailable option: a faint hatch under a visible reason line (CONSOLE-RULES §9).
      The 50% border blend is what keeps --muted-foreground at AA over it. */

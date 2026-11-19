@@ -9,8 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { whenText } from "../../../../../lib/schedule";
+import { SCHEDULE_REFUSAL } from "../../../../../lib/schedule-refusals";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
+import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { initialDraft, type NewRunDraft } from "../../draft/run-intent";
@@ -49,12 +51,34 @@ describe("Review: Run and timing", () => {
     expect(screen.getByText(NR_REVIEW.TIMING_CHOOSE)).toBeInTheDocument();
   });
 
-  it("keeps Autonomous · Run now with no start, and when the switch is off or absent", () => {
-    show(autonomous());
-    expect(screen.getByText(NR_REVIEW.TIMING_NOW)).toBeInTheDocument();
+  it("keeps Autonomous · Run now with no start, whatever the switch says", () => {
+    for (const status of [ON, {} as SetupStatus, null]) {
+      show(autonomous(), status);
+      expect(screen.getByText(NR_REVIEW.TIMING_NOW)).toBeInTheDocument();
+      expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("marks a held start as needing attention, never with the check, while the switch is off or not known", () => {
+    for (const status of [{} as SetupStatus, null]) {
+      show(autonomous({ date: tomorrow(), time: "02:00", zone: "UTC" }), status);
+      expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
+      cleanup();
+    }
+    show(autonomous({ date: tomorrow(), time: "02:00", zone: "UTC" }));
+    expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).not.toBeInTheDocument();
+  });
+
+  it("says a Later start the switch does not keep as held, in the Name dialog's words, never as Run now", () => {
+    const held = autonomous({ date: tomorrow(), time: "02:00", zone: "UTC" });
+    show(held, {} as SetupStatus);
+    expect(screen.getByText(NR_SHARED.JOIN(NR_RUN.MODE_AUTONOMOUS, SCHEDULE_REFUSAL.OFF()))).toBeInTheDocument();
+    expect(screen.queryByText(NR_REVIEW.TIMING_NOW)).not.toBeInTheDocument();
     cleanup();
-    show(autonomous({ date: tomorrow(), time: "02:00", zone: "UTC" }), null);
-    expect(screen.getByText(NR_REVIEW.TIMING_NOW)).toBeInTheDocument();
+    show(held, null);
+    expect(screen.getByText(NR_SHARED.JOIN(NR_RUN.MODE_AUTONOMOUS, NR_RUN.START_HELD_UNKNOWN))).toBeInTheDocument();
+    expect(screen.queryByText(NR_REVIEW.TIMING_NOW)).not.toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.TIMING_CHECKED, { exact: false })).not.toBeInTheDocument();
   });
 });

@@ -119,6 +119,10 @@ const (
 	// refuses over the ceiling rather than grinding, like gitpack's own tree
 	// walk.
 	maxGlobOps = 8 << 20
+	// maxPatternSegments bounds one compiled pattern's segments, far above any
+	// real one: validation caps an entry at 256 bytes and a request body at
+	// 1 MiB. It tells code scanning the matcher's allocations cannot overflow.
+	maxPatternSegments = 1 << 20
 )
 
 // errGlobBudget is the too-much-work refusal, reported like a pack over one
@@ -148,6 +152,9 @@ type pushRuleSet struct {
 	// denyNewExec refuses a push that adds an executable file or makes one
 	// executable.
 	denyNewExec bool
+	// denyAll refuses every push before its body is read: content, ref
+	// updates and deletes alike.
+	denyAll bool
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
@@ -168,6 +175,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	}
 	rs.maxFileBytes = int64(s.MaxFileSizeMiB) << 20
 	rs.denyNewExec = s.DenyNewExecutables
+	rs.denyAll = s.DenyAll
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)
 	return rs
@@ -201,30 +209,37 @@ func (rs *pushRuleSet) compile(pats []string) [][]string {
 func match(pats [][]string, changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
-		var segs []string // the root is zero segments, not one empty one
-		if c.Path != "" {
-			segs = strings.Split(c.Path, "/")
-		}
-		opaque := c.Opaque()
-		for _, pat := range pats {
-			ok, err := matchSegments(pat, segs, &budget)
-			if err == nil && !ok && opaque {
-				ok, err = matchesBeneath(pat, segs, &budget)
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			if ok {
-				if c.Carried() {
-					hits = append(hits, shownPath(c))
-				} else {
-					unknown = append(unknown, c)
-				}
-				break
-			}
+		ok, err := claims(pats, c, &budget)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		case !ok:
+		case c.Carried():
+			hits = append(hits, shownPath(c))
+		default:
+			unknown = append(unknown, c)
 		}
 	}
 	return hits, unknown, nil
+}
+
+// claims reports whether one of pats claims c, as match reads a pattern.
+func claims(pats [][]string, c gitpack.Change, budget *int) (bool, error) {
+	var segs []string // the root is zero segments, not one empty one
+	if c.Path != "" {
+		segs = strings.Split(c.Path, "/")
+	}
+	opaque := c.Opaque()
+	for _, pat := range pats {
+		ok, err := matchSegments(pat, segs, budget)
+		if err == nil && !ok && opaque {
+			ok, err = matchesBeneath(pat, segs, budget)
+		}
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }
 
 // sampleOf is the capped slice of paths the structured log carries.
@@ -251,6 +266,9 @@ func shownPath(c gitpack.Change) string {
 // A remaining segment is assumed to match — the conservative answer for a
 // deny rule.
 func matchesBeneath(pat, name []string, budget *int) (bool, error) {
+	if len(pat) > maxPatternSegments {
+		return false, errGlobBudget // refused like an over-budget push, never read as a pass
+	}
 	at := make([]bool, len(pat)+1)
 	at[0] = true
 	spreadStars(pat, at)
@@ -393,6 +411,10 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	if rules == nil {
 		return body, noRelease, true
 	}
+	if rules.denyAll {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPushDenyAll, http.StatusForbidden, pushDenyAllRefusal)
+		return nil, noRelease, false
+	}
 	buf, review, release, ok := p.inspectPush(w, r, rules, body, subject, deny, forge)
 	if !ok {
 		return nil, noRelease, false
@@ -467,8 +489,11 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	res, err := gitpack.Inspect(buf)
 	if errors.Is(err, gitpack.ErrTooLarge) {
 		remedy := "push fewer commits at a time"
-		if errors.Is(err, gitpack.ErrTooDeep) {
+		switch {
+		case errors.Is(err, gitpack.ErrTooDeep):
 			remedy = "push a tree with fewer levels of nested directories"
+		case errors.Is(err, gitpack.ErrTooManyParents):
+			remedy = "merge fewer branches in one commit"
 		}
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+"\n"+remedy)
@@ -489,7 +514,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		fcancel()
 		if forge != nil && forge.reads > 0 {
 			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+				Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		}
 		if why != "" {
 			p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -507,6 +532,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\npush from a complete clone (git fetch --unshallow) so the pack carries"+
 				" every object it deltifies against")
+		return nil, pushReview{}, noRelease, false
+	}
+	if ref := namedTwice(res.Commands); ref != "" {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: it names "+ref+" more than once"+
+				"\nsend one update for each ref")
 		return nil, pushReview{}, noRelease, false
 	}
 	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject)
@@ -542,15 +573,30 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
-	review.unresolved = review.why != "" && review.why != whyChanged
+	review.unresolved = review.why != "" && review.why != whyChanged && review.why != whyTipChanged && review.why != whyBranchDeleted
 	// The buffer outlives the slot, forwarded or held from here, and stays charged.
 	kept = true
 	return buf, review, release, true
 }
 
+// namedTwice is the first ref a push names in two commands, or "". git sends
+// one command for each ref; two would let a delete hide the tip a create
+// beside it replaces.
+func namedTwice(cmds []gitpack.Command) string {
+	seen := map[string]bool{}
+	for _, c := range cmds {
+		if seen[c.Ref] {
+			return c.Ref
+		}
+		seen[c.Ref] = true
+	}
+	return ""
+}
+
 // matchedPaths is the verdict of one pattern list on one inspected push:
-// every path it claims, and why when the forge was asked (a push the pack
-// alone passes is never asked).
+// every path it claims, and why when the forge was asked. A push the pack
+// alone passes is still asked what the tip of each branch it updates holds
+// (tipChanges).
 func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
 	subject slog.Attr) (paths []string, why string, err error) {
 	if len(pats) == 0 {
@@ -559,8 +605,28 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 	paths, left, why, err := p.claimedEntries(r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
 		return match(pats, cs)
 	}, (*forgeRepo).heldAtAny, res, forge, subject)
+	// Also when the first comparison found something: a held push must name
+	// every path. The first comparison's reason for what it left stands unless
+	// this one could not finish, which leaves the push unresolved.
+	if err == nil && (why == "" || why == whyChanged) {
+		more, tipWhy, err := p.tipChanges(r, pats, res, forge)
+		if err != nil {
+			return nil, "", err
+		}
+		first := len(left) > 0
+		if left = append(left, more...); len(more) > 0 && (!first || tipWhy != whyTipChanged) {
+			why = tipWhy
+		}
+	}
+	named := make(map[string]bool, len(paths))
+	for _, pth := range paths {
+		named[pth] = true
+	}
 	for _, c := range left {
-		paths = append(paths, shownPath(c))
+		if s := shownPath(c); !named[s] {
+			named[s] = true
+			paths = append(paths, s)
+		}
 	}
 	return paths, why, err
 }
@@ -585,14 +651,18 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 		if hits, unknown, err = claim(res.Changes); err != nil {
 			return nil, nil, "", err
 		}
+		// A forge that can be read is asked even when the pack also carries a
+		// match: a held push names every path.
 		left = nil
-		if len(hits) == 0 && len(unknown) > 0 {
-			left, why = forge.unchanged(ctx, unknown, res, clear)
+		if len(unknown) > 0 && (len(hits) == 0 || forge != nil) {
+			if left, why = forge.unchanged(ctx, unknown, res, clear); len(left) == 0 {
+				why = ""
+			}
 		}
 	}
 	if forge != nil && forge.reads > 0 {
 		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+			Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,
@@ -757,7 +827,7 @@ func (p *Proxy) refusePush(w http.ResponseWriter, r *http.Request, subject slog.
 // capped, why the forge did not clear them when it was asked, and what to do.
 func deniedPathsBody(paths []string, why string) string {
 	return pathsBody("wardyn: this push is refused by the run's push content rules", paths, "denied", why,
-		"remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
+		cmp.Or(tipRemedy(why), "remove these paths from the push, or ask an operator to widen push_rules.deny_paths"))
 }
 
 // pathsBody is the shape every path-naming push refusal shares: a headline, at
@@ -787,6 +857,13 @@ func pathsBody(headline string, paths []string, noun, why, remedy string) string
 // remote could not be derived: the push rules cannot be looked up, which is a
 // refusal and never "no rules".
 const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
+
+// ruleSourceGitPushDenyAll marks a push refused because the run's push_rules
+// set deny_all: every push to every remote is refused, whatever it carries.
+const ruleSourceGitPushDenyAll = "brokered:git:push-deny-all"
+
+// pushDenyAllRefusal is what git shows for a push deny_all refused.
+const pushDenyAllRefusal = "wardyn: every push is refused for this run"
 
 // rulesForRemote is the content rules of the SCM entry that owns the remote at
 // host and path. With no PushRuleSets the run is on the older run-wide regime

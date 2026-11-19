@@ -16,6 +16,8 @@ export const NR_FILES = {
   SIZE_LABEL: "Size",
   /** `size` carries its unit: "4 GiB" or "1000 MiB". */
   UP_TO: (size: string | number) => `Up to ${size} in this pool`,
+  /** A stored size over the cap, as a template, a run again or a pool change leaves it: the run gets the cap (A3.3). */
+  OVER_CAP: (size: string | number, cap: string | number) => `${size} is over the ${cap} cap. The run gets ${cap}.`,
   CLAMP_POOL: (size: string | number, pool: string | number) => `Clamped to ${size} by the ${pool} pool.`,
   /** pending W-11: the recommended text until the owner answers. */
   CLAMP_PROFILE: (size: string | number, profile: string | number) => `Clamped to ${size} by ${profile}.`,
@@ -242,4 +244,10 @@ export const NR_FILES = {
   SUBFOLDER_ERROR: (name: string | number) => `Use a folder inside ${name}.`,
   LIST_COMMA: (a: string | number, b: string | number) => `${a}, ${b}`,
   LIST_AND: (a: string | number, b: string | number) => `${a} and ${b}`,
+} as const;
+
+// Not in the canon doc (new-run-copy.test.ts holds NR_FILES to it): the note when the computer-folders setting could not be read.
+export const NR_FILES_LOOKUP = {
+  COMPUTER_UNCHECKED: "Couldn't check whether your organisation allows folders from personal computers. You can still choose it. Wardyn checks again when the run starts.",
+  RETRY: "Try again",
 } as const;

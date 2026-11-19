@@ -130,7 +130,7 @@ func adoEntraSource(st siteConfigReader, login adoEntraLogin) api.ADOEntraSource
 		}
 		scopes := adoscope.MintScopes()
 		if mode != types.ADOTokenModeMintedPAT {
-			if scopes, err = adoscope.ScopesFor(row.Entra.CapabilityCeiling); err != nil {
+			if scopes, err = adoscope.ScopesFor(row.Entra.Ceiling()); err != nil {
 				return api.ADOEntraConfig{}, false, fmt.Errorf("azure devops provider row %q: %w", row.ID, err)
 			}
 		}

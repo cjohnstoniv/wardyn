@@ -151,7 +151,7 @@ owner answers §9. Rows marked (PR #919) are in that open PR's `availability-cop
 | `AVAILABILITY.ADMINS_ONLY` | UT-A (reverse view) | Admins only |
 | `AVAILABILITY.ADD_PLACEHOLDER` | UT-A | Add a type, group or person… |
 | `AVAILABILITY.CHIP_TYPE(name)` · `CHIP_GROUP(name)` · `CHIP_USER(email)` | UT-A | {name} · {name} (group) · {email} |
-| `AVAILABILITY.IMAGE_HINT` | UT-A | Images are off for everyone until you list someone here. |
+| `AVAILABILITY.IMAGE_HINT` | UT-A | Only admins can launch this image unless someone is listed here or a registry prefix on Permissions covers it. |
 | `AVAILABILITY.PROVIDER_ONLY_HINT` (pattern, not drawn) | UT-A | Only these — people not listed can't add or run repositories from this organisation. Runs already going aren't affected. |
 | `AVAILABILITY.PROVIDER_NOTE` (pattern, not drawn) | UT-A | Security admins can change this list from the type editor too. The organisation itself is edited only by super admins. |
 | `USER_TYPES.GETS_TITLE(type)` | UT-A | {type} · What this type gets |

@@ -55,6 +55,10 @@ const (
 	scimResumeIdle = 10 * time.Minute
 
 	scimSweeperSlot = "sweeper"
+
+	// purgeLeftTokenRow prefixes an erase step's ledger key for one Azure DevOps token row its erase left
+	// (the row's id follows); person.deprovision's live_left counts the distinct keys.
+	purgeLeftTokenRow = "live_left_row:"
 )
 
 // scimPurgeScopes is the erasure a purge asks for (Q-SCIM5): the person's credentials, the masking
@@ -210,7 +214,8 @@ func (s *Server) purgeStep(ctx context.Context, st scimStore, id uuid.UUID, jobs
 // not configured on this server holds nothing of the person's, so it is skipped rather than failing
 // the purge; a configured scope that fails keeps the step pending.
 func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[string]int, error) {
-	orch := s.erasureOrchestrator(nil, nil)
+	var left []string
+	orch := s.erasureOrchestratorLeaving(nil, nil, &left)
 	scopes := slices.DeleteFunc(slices.Clone(scimPurgeScopes), func(sc erasure.Scope) bool { return orch.Steps[sc] == nil })
 	detail := map[string]int{}
 	if len(scopes) == 0 {
@@ -219,6 +224,15 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 	rep, err := orch.Orchestrate(ctx, principal, scopes)
 	if m, ok := rep.Details[erasure.Credentials].(map[string]any); ok {
 		detail["credentials_erased"], _ = m["count"].(int)
+		if m["tokens_revocation_failed"] == true {
+			detail["tokens_revocation_failed"] = 1
+		}
+	}
+	// The person's Azure DevOps token rows the erase left because those tokens may still work, one key
+	// per row: the erase steps of a principal and of an entra form it proved both reach a row under
+	// that form, and auditPurge counts it once.
+	for _, id := range left {
+		detail[purgeLeftTokenRow+id] = 1
 	}
 	if m, ok := rep.Details[erasure.MaskCopies].(map[string]any); ok {
 		detail["masks_fenced"], _ = m["runs_fenced"].(int)
@@ -456,6 +470,33 @@ func (s *Server) personMemberDriveIDs(ctx context.Context, subjects []string) ([
 	return ids, nil
 }
 
+// personKeptMachineIDs is the ids of the kept machines any of subjects keeps, sorted. The runner
+// revocation erases them on the Mac, and the organisation closes their rows (machine.delete, by
+// revoked_runner); the ones still recorded when the purge finishes are listed beside the drives.
+func (s *Server) personKeptMachineIDs(ctx context.Context, subjects []string) ([]string, error) {
+	ks, ok := s.cfg.Store.(store.KeptMachineStore)
+	if !ok {
+		return nil, nil
+	}
+	ids := []string{}
+	for _, sub := range subjects {
+		if sub = types.CanonicalUserSubject(sub); sub == "" {
+			continue
+		}
+		ms, err := ks.ListKeptMachinesOf(ctx, sub)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range ms {
+			if id := m.ID.String(); !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
 // memberDrivesOf is the member drives in drives whose owner is any of subjects, tombstoned ones included.
 func memberDrivesOf(drives []types.UserDriveListItem, subjects []string) []types.UserDriveListItem {
 	return slices.DeleteFunc(slices.Clone(drives), func(d types.UserDriveListItem) bool {
@@ -479,6 +520,12 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 			counts[k] += v
 		}
 	}
+	liveLeft := 0 // distinct token rows: two erase steps can name one
+	for k := range counts {
+		if strings.HasPrefix(k, purgeLeftTokenRow) {
+			liveLeft++
+		}
+	}
 	drives, err := s.personDrives(ctx, forms.targets)
 	if err != nil {
 		return err
@@ -491,20 +538,30 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	if err != nil {
 		return err
 	}
+	keptIDs, err := s.personKeptMachineIDs(ctx, forms.targets)
+	if err != nil {
+		return err
+	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
 		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
-		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"],
+		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"], "live_left": liveLeft,
 		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {
 		data["member_drive_ids"] = memberIDs
 	}
+	if len(keptIDs) > 0 {
+		data["kept_machine_ids"] = keptIDs
+	}
 	if ne, ok := notErasedDetail(forms.notErased); ok {
 		data["not_erased"] = ne
+	}
+	if counts["tokens_revocation_failed"] > 0 {
+		data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {
@@ -578,7 +635,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 		if p.Purged {
 			errs = append(errs, s.finishPurge(ctx, st, p.ID, scimSweeperSlot))
 		} else {
-			errs = append(errs, s.suspendIdentity(ctx, st, p.ID, scimSweeperSlot))
+			errs = append(errs, s.resumeSuspension(ctx, st, p))
 		}
 	}
 	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A

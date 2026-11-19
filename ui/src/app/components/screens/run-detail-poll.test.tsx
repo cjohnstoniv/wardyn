@@ -23,6 +23,7 @@ vi.mock("../../lib/api/runs", () => ({
     killRun: (...a: unknown[]) => killRunMock(...a),
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
     takeoverAttach: vi.fn(),
   },
@@ -49,6 +50,7 @@ vi.mock("../../lib/api/recordings", () => ({
 vi.mock("../../lib/api/health", () => ({
   health: { health: vi.fn().mockResolvedValue({}) },
 }));
+import { toast } from "sonner";
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 import { RunDetailScreen } from "./run-detail";
@@ -183,7 +185,7 @@ describe("RunDetailScreen — a failing side fetch is not an outage", () => {
     // The run rendered, so the page must say what the run says.
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
     // ...and the one control that ends a runaway run is still reachable.
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /End run/ })).toBeInTheDocument();
     expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
   });
 
@@ -236,7 +238,7 @@ describe("RunDetailScreen — a background poll blip keeps the last-good cockpit
 
     expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /End run/ })).toBeInTheDocument();
   });
 });
 
@@ -282,12 +284,14 @@ describe("RunDetailScreen — a route change drops everything run A was doing", 
       expect(screen.queryAllByText("Distinct task A")).toHaveLength(0);
       expect(screen.queryAllByText("Distinct task B").length).toBeGreaterThan(0);
 
-      await user.click(screen.getByRole("button", { name: /^Kill/ }));
+      await user.click(screen.getByRole("button", { name: /^End run/ }));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog).toHaveAccessibleName('Kill "Distinct task B"?');
-      await user.click(within(dialog).getByRole("button", { name: "Kill run" }));
+      expect(dialog).toHaveAccessibleName("End Distinct task B?");
+      await user.click(within(dialog).getByRole("button", { name: "End run" }));
       expect(killRunMock).toHaveBeenCalledTimes(1);
       expect(killRunMock).toHaveBeenCalledWith("run-b");
+      // UXR-15: the toast names the run, never its id.
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Ending Distinct task B"));
     });
   }
 
@@ -389,8 +393,8 @@ describe("RunDetailScreen — a long trail's oldest page is read once per run", 
   it("polls the newest page again but not the oldest", async () => {
     const oldest = Array.from({ length: 1000 }, (_, i) => row(i));
     listAuditMock.mockReset();
-    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string }) => {
-      if (o?.actionPrefix) return [];
+    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string; action?: string }) => {
+      if (o?.actionPrefix || o?.action) return [];
       return o?.newest ? [row(5000)] : oldest;
     });
     renderRun({ ...RUN, state: "RUNNING" });
@@ -404,5 +408,81 @@ describe("RunDetailScreen — a long trail's oldest page is read once per run", 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(newestReads()).toBeGreaterThan(newestBefore);
     expect(oldestReads()).toBe(1);
+  });
+});
+
+// A finished run whose computer folder is still settling keeps refreshing: the copy back of kept changes and the
+// sandbox stop after it both change on the server with nothing to press on this page.
+describe("RunDetailScreen — a terminal run's computer folder settles without a reload", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const FOLDER = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both", state: "synced" };
+  const ended = (folder?: Record<string, unknown>) => ({ ...RUN, state: "COMPLETED", ...(folder && { computer_folder: { ...FOLDER, ...folder } }) });
+  const KEPT = ended({ fate: "retained", sandbox_copy: "kept" });
+  // act, so the page has taken each answer in before the next reading of the clock.
+  const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const polled = async (ms: number) => {
+    const before = getRunMock.mock.calls.length;
+    await wait(ms);
+    return getRunMock.mock.calls.length - before;
+  };
+
+  it("polls while the changes are kept, then given up, and stops once the sandbox copy is deleted", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    expect(await polled(4100)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "given_up", sandbox_copy: "kept" }));
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "given_up", sandbox_copy: "deleted" }));
+    await wait(4100);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("once the changes are copied back, polls through the sandbox's stop and stops at the confirmed deletion", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    getRunMock.mockResolvedValue(ended({ fate: "complete", sandbox_copy: "kept" }));
+    await wait(4100);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "complete", sandbox_copy: "deleted" }));
+    await wait(4100);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("a stop that is never confirmed is waited for two minutes, not for ever", async () => {
+    renderRun(ended({ fate: "complete", sandbox_copy: "kept" }));
+    await screen.findAllByText(RUN.task);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    await wait(124_000);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("an answer that lost the fate of kept changes keeps polling, for two minutes at most, and a later fate is taken", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    getRunMock.mockResolvedValue(ended({}));
+    await wait(4100);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(KEPT);
+    await wait(4100);
+    getRunMock.mockResolvedValue(ended({}));
+    await wait(4100);
+    await wait(116_000);
+    expect(await polled(4100)).toBeGreaterThan(0);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it.each([
+    ["no computer folder", undefined],
+    ["a folder whose server reports no fate", {}],
+  ])("does not poll a finished run with %s", async (_name, folder) => {
+    renderRun(ended(folder));
+    await screen.findAllByText(RUN.task);
+    expect(await polled(20_000)).toBe(0);
   });
 });

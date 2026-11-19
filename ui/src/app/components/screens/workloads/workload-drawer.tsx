@@ -140,9 +140,12 @@ export function WorkloadDrawer({
   const restart = async () => {
     setBusy(true);
     try {
-      const res = await workloads.restart(w.name, owner);
-      if (res.launch.state === "refused") toast.error(refusalSentence(res.launch.reason ?? "", res.launch.message));
-      else toast.success(W.RESTARTED(w.name));
+      const { launch } = await workloads.restart(w.name, owner);
+      if (launch.state === "launched") toast.success(W.RESTARTED(w.name));
+      else if (launch.state === "refused") toast.error(refusalSentence(launch.reason ?? "", launch.message));
+      // No run started: a person's workload restarted by someone else starts at the owner's next apply, and the
+      // server's sentence says so.
+      else toast(launch.message || W.RESTART_NOT_STARTED(w.name));
       onChanged();
     } catch (e) {
       toast.error(getErrorMessage(e));
@@ -157,9 +160,11 @@ export function WorkloadDrawer({
       <Sheet open onOpenChange={(o) => !o && onClose()}>
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle className="flex items-center gap-2.5 pr-8">
-              <span className="font-mono text-base">{w.name}</span>
-              <WorkloadBadge workload={w} />
+            <SheetTitle className="flex items-center gap-2.5">
+              <span className="min-w-0 font-mono text-base [overflow-wrap:anywhere]">{w.name}</span>
+              <span className="shrink-0">
+                <WorkloadBadge workload={w} />
+              </span>
             </SheetTitle>
             <SheetDescription className="sr-only">{W.TITLE}</SheetDescription>
           </SheetHeader>

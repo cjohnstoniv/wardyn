@@ -52,7 +52,13 @@ func (s *Server) projectRecordingMeta(r *http.Request, runs []types.AgentRun) {
 // fillRecordingMeta is projectRecordingMeta without the opt-in: a single run's
 // own read pays one run's metadata lookup (StatJoined: each stored part plus
 // the first missing one), not one per run on the board, so it always projects.
+// Every run it touches leaves with has_recording set (false unless a recording
+// is found); a run it never touches leaves with the key absent.
 func (s *Server) fillRecordingMeta(ctx context.Context, runs []types.AgentRun) {
+	for i := range runs {
+		none := false
+		runs[i].HasRecording = &none
+	}
 	if s.cfg.RecordingStore == nil {
 		return
 	}
@@ -65,7 +71,8 @@ func (s *Server) fillRecordingMeta(ctx context.Context, runs []types.AgentRun) {
 			// is still correct, and the console degrades to "no recording".
 			continue
 		}
-		runs[i].HasRecording = true
+		found := true
+		runs[i].HasRecording = &found
 		runs[i].RecordingBytes = size
 		if d, ok := recording.LastOutputElapsed(tail); ok {
 			runs[i].RecordingDurationSec = d

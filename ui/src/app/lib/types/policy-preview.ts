@@ -5,7 +5,7 @@
 
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageAdmissionFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
@@ -55,6 +55,22 @@ export interface ProvenanceEntry {
   effect: "added" | "clamped" | "narrowed" | "removed" | (string & {});
 }
 
+/**
+ * What a member of the caller's type would be held to, for a caller whose own runs stand
+ * outside governance (pkg/client's UngovernedNotice). At most one of no_person, no_unit and
+ * unavailable is set; with none set, unit names the unit and limits its headline limits.
+ */
+export interface UngovernedNotice {
+  no_person?: boolean;
+  no_unit?: boolean;
+  unavailable?: boolean;
+  unit?: string;
+  /** At most three short phrases, in a fixed order. */
+  limits?: string[];
+  /** The unit sets further limits than `limits` lists. */
+  more?: boolean;
+}
+
 /** Authorized, provisional read output. Never use it as the authored draft. */
 export interface PolicyPreviewResult {
   spec: RunPolicySpec;
@@ -67,6 +83,13 @@ export interface PolicyPreviewResult {
   // The run-level reason the per-person Azure DevOps credential would not be
   // given to this run's sandbox; absent when no structural decline was reported.
   ado_lane_declined?: string;
+  // The draft refuses every push and carries an environment or file secret of its own, so a push token added as a
+  // secret could still reach a code host Wardyn does not recognize. Set by the forge guard.
+  push_deny_all_secrets?: boolean;
+  // The install's git token broker is off and the run's capability list leaves out code_write, so a git token in
+  // the sandbox can still push. Set from the decision behind the run's unstoppable-push warning, which the preview
+  // does not send as a warning.
+  pushes_unstoppable?: boolean;
   // Absent for a draft with no component and no GitHub or Azure DevOps repository.
   components?: ComponentFact[];
   // Why each entry is in `spec`, from the same fold as the launch. The server always
@@ -83,9 +106,14 @@ export interface PolicyPreviewResult {
   // The image the run would start from and its source (absent until the image
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
+  // "checked at launch" when launch checks the image's signatures; absent when it checks nothing.
+  image_admission?: ImageAdmissionFact;
   allowed_images?: AllowedImage[];
   // The preflight's harness_set fact, with the same meaning.
   harness_set?: HarnessSetFact;
+  // The preflight's allowed_models and allowed_models_unit, with the same meaning.
+  allowed_models?: string[];
+  allowed_models_unit?: string;
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
@@ -97,4 +125,6 @@ export interface PolicyPreviewResult {
   // uses it at, the one holding the starting folder marked. The server always
   // sends the array; optional here so an older server still types.
   attachments?: RunAttachment[];
+  // Present only when the caller's own runs stand outside governance; absent otherwise.
+  ungoverned?: UngovernedNotice;
 }

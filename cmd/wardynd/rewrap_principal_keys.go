@@ -107,14 +107,16 @@ func sealToPrincipalKeys(ctx context.Context, ps *secretstorepg.Store, rec audit
 }
 
 // emitRewrapPrincipalKeysAudit writes the secret.rewrap event of this mode:
-// `mode` principal_keys, `secrets` the rows moved (what was committed, on an
-// abort), and on success `remaining`, the person-owned v1 rows left. It carries
-// no secret names, like the -rewrap event.
+// `mode` principal_keys, `secrets` the rows moved (on a failure, the rows
+// committed before it; reason unknown when the failing row's own commit
+// returned an error, so that row may have moved too), and on success
+// `remaining`, the person-owned v1 rows left. It carries no secret names, like
+// the -rewrap event.
 func emitRewrapPrincipalKeysAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.SealToPrincipalKeysResult, failure error) {
 	fields := map[string]any{"mode": "principal_keys", "secrets": res.Moved}
 	outcome := "success"
 	if failure != nil {
-		outcome, fields["reason"] = "failure", "aborted"
+		outcome, fields["reason"] = "failure", failureReason(failure)
 	} else {
 		fields["remaining"] = res.Remaining
 	}

@@ -88,6 +88,20 @@ cmd_doctor() {
       true/true/true) report ok "resource caps look enforceable (memory + pids + cpu; cgroup v$(docker info --format '{{.CgroupVersion}}' 2>/dev/null || echo '?'))." ;;
       *) report warn "docker info hints some resource limits may not enforce (memory/pids/cpu = ${_caps}). If a real run is refused (daemon discarded a limit), delegate the cgroup v2 controllers (systemd: Delegate=yes; rootless: enable cgroup v2 delegation) or set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1. On Podman this is often a false alarm (compat API under-reports; caps still bind)." ;;
     esac
+
+    # A run's network has no address on the Docker host only on Docker Engine 28.0.0+ (gateway mode
+    # "isolated"); an older engine refuses every run unless WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1.
+    _engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?')
+    case "${_engine%%.*}" in
+      '' | *[!0-9]*) report warn "could not read the Docker Engine version (${_engine}); Docker runs need Docker Engine 28.0.0 or later." ;;
+      *)
+        if [ "${_engine%%.*}" -ge 28 ]; then
+          report ok "Docker Engine ${_engine}: run networks get no address on the Docker host."
+        else
+          report warn "Docker Engine ${_engine} is older than 28.0.0: every Docker run is refused, unless WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1 is set, when the run's agent can reach services on the Docker host. Upgrade Docker Engine."
+        fi
+        ;;
+    esac
   fi
 
   _port="${WARDYN_UP_PORT:-8080}"

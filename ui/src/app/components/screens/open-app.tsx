@@ -10,7 +10,7 @@
 import * as React from "react";
 import { useParams } from "react-router-dom";
 import { CircleX, Loader2 } from "lucide-react";
-import { HttpError } from "../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { runs } from "../../lib/api/runs";
 import { getErrorMessage } from "../../lib/format";
@@ -37,28 +37,51 @@ function refusalText(e: unknown): string {
 export function OpenAppScreen() {
   const { run = "", app = "" } = useParams();
   const [phase, setPhase] = React.useState<Phase>({ kind: "opening" });
-  // A ticket is single-use: a second run of the effect (StrictMode) must not mint another.
-  const started = React.useRef("");
+  // A ticket is single-use: a second run of the effect for the same route (StrictMode) resumes the attempt already
+  // in flight instead of minting another. live is the attempt this page still shows; an attempt for a route the
+  // person has left is stale, so it never takes this tab anywhere and its error never replaces the current page.
+  const started = React.useRef({ key: "", id: 0 });
+  const live = React.useRef(0);
 
   React.useEffect(() => {
     const key = `${run}/${app}`;
-    if (started.current === key) return;
-    started.current = key;
-    setPhase({ kind: "opening" });
-    void (async () => {
-      try {
-        const h = await health.health();
-        if (h.status !== "ok") throw new Error(STATES.ERROR_DEFAULT);
-        if (!h.ui_sandbox?.enabled) {
-          setPhase({ kind: "refused", text: T.GATEWAY_OFF });
-          return;
+    const fresh = started.current.key !== key;
+    if (fresh) started.current = { key, id: started.current.id + 1 };
+    const id = started.current.id;
+    live.current = id;
+    if (fresh) {
+      const stale = () => live.current !== id;
+      setPhase({ kind: "opening" });
+      // The ticket follows the health read: it is minted for the person who opened the page, not whoever signs in.
+      const person = getExpectedPrincipal();
+      void (async () => {
+        try {
+          const h = await health.health();
+          if (stale()) return;
+          if (h.status !== "ok") {
+            // No answer keeps the default sentence; a 2xx body that does not parse says so; any other answer says
+            // the app couldn't open.
+            const failed = h.failedStatus ?? 0;
+            const couldnt = failed >= 500 ? `${T.OPEN_FAILED} ${STATES.TRY_AGAIN}` : T.OPEN_FAILED;
+            const text = failed === 0 ? STATES.ERROR_DEFAULT : failed < 300 ? STATES.ANSWER_UNREADABLE : couldnt;
+            setPhase({ kind: "refused", text });
+            return;
+          }
+          if (!h.ui_sandbox?.enabled) {
+            setPhase({ kind: "refused", text: T.GATEWAY_OFF });
+            return;
+          }
+          const ticket = await runs.appTicket(run, app, person);
+          if (stale()) return;
+          await enterUIApp(run, app, h.ui_sandbox, { ticket, target: "_self", stale });
+        } catch (e) {
+          if (!stale()) setPhase({ kind: "refused", text: refusalText(e) });
         }
-        const ticket = await runs.appTicket(run, app);
-        await enterUIApp(run, app, h.ui_sandbox, { ticket, target: "_self" });
-      } catch (e) {
-        setPhase({ kind: "refused", text: refusalText(e) });
-      }
-    })();
+      })();
+    }
+    return () => {
+      live.current = 0;
+    };
   }, [run, app]);
 
   return (

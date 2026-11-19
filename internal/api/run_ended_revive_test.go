@@ -357,24 +357,33 @@ func TestEndedRun_BulkRestartRefuses(t *testing.T) {
 }
 
 // TestEndedRun_ExtendAndExpiryRacePreservesWinner: the extension's write is
-// conditional on the ended mark it decided on (store.EndedKept), so whatever
-// lands between the decision and the write wins: the sweep tearing the run
-// down as its grace runs out, or a kill. The write's own grace cutoff is
-// pinned against Postgres (TestPG_EndedRunExtensionHonorsTheKeptMark).
+// conditional on the ended mark it decided on (store.EndedKept), so a kill
+// that lands between the decision and the write wins. The write holds the
+// run's lock (handleSetRunEndAndWait), so a sweep that comes due during it
+// publishes nothing (stopKeptRun) and the extension lands; the first pass
+// after it tears the run down, because the files grace stays counted from the
+// end mark (keptUntil), which an extension does not move. The write's own
+// grace cutoff is pinned against Postgres
+// (TestPG_EndedRunExtensionHonorsTheKeptMark).
 func TestEndedRun_ExtendAndExpiryRacePreservesWinner(t *testing.T) {
 	for name, tc := range map[string]struct {
-		during    func(t *testing.T, f *reviveFixture)
+		during func(t *testing.T, f *reviveFixture)
+		// extended: the write lands, and the next sweep ends the run.
+		extended  bool
 		wantState types.RunState
 	}{
-		"the sweep tears the run down": {func(t *testing.T, f *reviveFixture) {
+		"the sweep finds the write's lock held": {func(t *testing.T, f *reviveFixture) {
 			f.now = f.endedAt().Add(f.srv.cfg.EndedRunGrace)
 			f.sweep(t)
-		}, types.RunStopped},
+			if f.st.State() != types.RunRunning {
+				t.Errorf("state = %s while the write held the run's lock, want RUNNING: nothing published", f.st.State())
+			}
+		}, true, types.RunStopped},
 		"the run is killed": {func(t *testing.T, f *reviveFixture) {
 			if w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/kill", adminToken, ""); w.Code >= 300 {
 				t.Fatalf("kill = %d %s", w.Code, w.Body.String())
 			}
-		}, types.RunKilled},
+		}, false, types.RunKilled},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, _ := newEndedFixture(t)
@@ -383,17 +392,28 @@ func TestEndedRun_ExtendAndExpiryRacePreservesWinner(t *testing.T) {
 				f.st.beforeSetEnd = nil
 				tc.during(t, f)
 			}
-			if code, body := f.extendAs(t, true, f.now.Add(24*time.Hour)); code != http.StatusConflict {
-				t.Fatalf("extend = %d %s, want 409", code, body)
+			want := http.StatusConflict
+			if tc.extended {
+				want = http.StatusOK
 			}
-			if end := f.storedEnd(); end == nil || !end.Equal(*f.run.EndsAt) {
-				t.Errorf("stored end = %v, want the ended end untouched", end)
+			if code, body := f.extendAs(t, true, f.now.Add(24*time.Hour)); code != want {
+				t.Fatalf("extend = %d %s, want %d", code, body, want)
 			}
-			if ev := f.audit.eventsFor(f.run.ID, "run.end.set"); len(ev) != 0 {
-				t.Errorf("run.end.set events = %+v, want none", ev)
+			if tc.extended {
+				if ev := f.audit.eventsFor(f.run.ID, "run.end.set"); len(ev) != 1 || ev[0].Outcome != "success" {
+					t.Errorf("run.end.set events = %+v, want one success", ev)
+				}
+				f.sweep(t)
+			} else {
+				if end := f.storedEnd(); end == nil || !end.Equal(*f.run.EndsAt) {
+					t.Errorf("stored end = %v, want the ended end untouched", end)
+				}
+				if ev := f.audit.eventsFor(f.run.ID, "run.end.set"); len(ev) != 0 {
+					t.Errorf("run.end.set events = %+v, want none", ev)
+				}
 			}
 			if f.st.State() != tc.wantState {
-				t.Errorf("state = %s, want %s kept", f.st.State(), tc.wantState)
+				t.Errorf("state = %s, want %s", f.st.State(), tc.wantState)
 			}
 		})
 	}
@@ -402,27 +422,32 @@ func TestEndedRun_ExtendAndExpiryRacePreservesWinner(t *testing.T) {
 // TestEndedRun_ReviveClaimRacesExpiryAndKill: what lands while a revive
 // prepares its proxy image, after its admission and before its claim, wins.
 // The claim is conditional on the ended mark, the grace and the end as of the
-// claim itself, not as of the admission.
+// claim itself, not as of the admission. The revive holds the run's lock from
+// before the image pull (lockRevive), so a sweep that comes due then publishes
+// nothing (stopKeptRun); the revive is refused at its claim (reviveExpiryDue),
+// and the first pass after it tears the run down.
 func TestEndedRun_ReviveClaimRacesExpiryAndKill(t *testing.T) {
 	for name, tc := range map[string]struct {
 		during    func(t *testing.T, f *reviveFixture)
 		wantState types.RunState
+		// sweptAfter: a sweep once the revive has let go of the run's lock ends it.
+		sweptAfter bool
 	}{
-		"the sweep tears the run down": {func(t *testing.T, f *reviveFixture) {
+		"the sweep finds the revive's lock held": {func(t *testing.T, f *reviveFixture) {
 			f.now = f.endedAt().Add(f.srv.cfg.EndedRunGrace)
 			f.sweep(t)
-		}, types.RunStopped},
+		}, types.RunRunning, true},
 		"the grace runs out unswept": {func(_ *testing.T, f *reviveFixture) {
 			f.now = f.endedAt().Add(f.srv.cfg.EndedRunGrace)
-		}, types.RunRunning},
+		}, types.RunRunning, false},
 		"the extended end passes unswept": {func(_ *testing.T, f *reviveFixture) {
 			f.now = f.storedEnd().Add(time.Second)
-		}, types.RunRunning},
+		}, types.RunRunning, false},
 		"the run is killed": {func(t *testing.T, f *reviveFixture) {
 			if w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/kill", adminToken, ""); w.Code >= 300 {
 				t.Fatalf("kill = %d %s", w.Code, w.Body.String())
 			}
-		}, types.RunKilled},
+		}, types.RunKilled, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, sr := newEndedFixture(t)
@@ -446,6 +471,12 @@ func TestEndedRun_ReviveClaimRacesExpiryAndKill(t *testing.T) {
 			if tc.wantState == types.RunRunning {
 				if lostAt, reason := f.st.lost(); lostAt == nil || !lostAt.Equal(f.endedAt()) || reason != types.LostEnded {
 					t.Errorf("lost %v %q; want still ended at %v", lostAt, reason, f.endedAt())
+				}
+			}
+			if tc.sweptAfter {
+				f.sweep(t)
+				if f.st.State() != types.RunStopped {
+					t.Errorf("state after the next sweep = %s, want STOPPED", f.st.State())
 				}
 			}
 		})

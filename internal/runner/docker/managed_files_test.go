@@ -146,13 +146,13 @@ func TestCreateSandbox_DeliversManagedFilesBeforeStart(t *testing.T) {
 
 	agent := agentContainerName(spec.RunID)
 	var copies []fakeCopy
-	for _, c := range f.copies {
+	for _, c := range f.managedCopies() {
 		if c.id == agent {
 			copies = append(copies, c)
 		}
 	}
 	if len(copies) != 1 {
-		t.Fatalf("got %d CopyToContainer calls for the agent, want exactly 1 (copies: %+v)", len(copies), f.copies)
+		t.Fatalf("got %d CopyToContainer calls for the agent, want exactly 1 (copies: %+v)", len(copies), f.managedCopies())
 	}
 	cp := copies[0]
 	if cp.afterStart {
@@ -185,8 +185,8 @@ func TestCreateSandbox_NoManagedFilesNoCopy(t *testing.T) {
 	if _, err := d.CreateSandbox(context.Background(), testSpec()); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if len(f.copies) != 0 {
-		t.Errorf("a spec with no managed files produced %d CopyToContainer calls: %+v", len(f.copies), f.copies)
+	if len(f.managedCopies()) != 0 {
+		t.Errorf("a spec with no managed files produced %d CopyToContainer calls: %+v", len(f.managedCopies()), f.managedCopies())
 	}
 }
 
@@ -273,8 +273,8 @@ func TestCreateSandbox_RefusesAManagedFileDirectoryThatAlreadyExists(t *testing.
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("refusal = %v, want it to say the directory already exists", err)
 	}
-	if len(f.copies) != 0 {
-		t.Errorf("the refusal still copied %d archives into the container", len(f.copies))
+	if len(f.managedCopies()) != 0 {
+		t.Errorf("the refusal still copied %d archives into the container", len(f.managedCopies()))
 	}
 	if slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
 		t.Error("the agent was STARTED after its managed files were refused")
@@ -319,16 +319,16 @@ func TestExecLessPath_DeliversManagedFilesBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if len(f.copies) != 0 {
-		t.Fatalf("the exec-less path has no container until Exec; %d copies happened at create", len(f.copies))
+	if len(f.managedCopies()) != 0 {
+		t.Fatalf("the exec-less path has no container until Exec; %d copies happened at create", len(f.managedCopies()))
 	}
 	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	if len(f.copies) != 1 {
-		t.Fatalf("got %d CopyToContainer calls, want 1 (the deferred create must deliver too)", len(f.copies))
+	if len(f.managedCopies()) != 1 {
+		t.Fatalf("got %d CopyToContainer calls, want 1 (the deferred create must deliver too)", len(f.managedCopies()))
 	}
-	if f.copies[0].afterStart {
+	if f.managedCopies()[0].afterStart {
 		t.Error("the exec-less path copied managed files AFTER start; its main process IS the agent workload, so there is no later window at all")
 	}
 }
@@ -396,16 +396,16 @@ func TestCreateSandbox_ManagedFilesNeedANonRootUserAndARootOwnedEtc(t *testing.T
 			_, err := d.CreateSandbox(context.Background(), spec)
 			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
 			if tc.want == "" {
-				if err != nil || len(f.copies) != 1 || !started {
-					t.Fatalf("USER %q: err = %v, %d copies, started = %v; want the files delivered and the agent started", tc.user, err, len(f.copies), started)
+				if err != nil || len(f.managedCopies()) != 1 || !started {
+					t.Fatalf("USER %q: err = %v, %d copies, started = %v; want the files delivered and the agent started", tc.user, err, len(f.managedCopies()), started)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("USER %q: err = %v, want a refusal containing %q", tc.user, err, tc.want)
 			}
-			if len(f.copies) != 0 || started {
-				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			if len(f.managedCopies()) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.managedCopies()), started)
 			}
 		})
 	}
@@ -465,10 +465,10 @@ func TestCreateSandbox_DeliversASecretOwnedByTheImageUser(t *testing.T) {
 			if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
 				t.Fatalf("CreateSandbox: %v", err)
 			}
-			if len(f.copies) != 1 {
-				t.Fatalf("got %d copies, want 1", len(f.copies))
+			if len(f.managedCopies()) != 1 {
+				t.Fatalf("got %d copies, want 1", len(f.managedCopies()))
 			}
-			cp := f.copies[0]
+			cp := f.managedCopies()[0]
 			if cp.afterStart || cp.copyUIDGID || cp.dest != "/" {
 				t.Fatalf("copy = afterStart %v copyUIDGID %v dest %q; want before start, no daemon chown, at /", cp.afterStart, cp.copyUIDGID, cp.dest)
 			}
@@ -522,8 +522,8 @@ func TestCreateSandbox_ASecretLandsOnlyInTheFixedDirectory(t *testing.T) {
 			_, err := d.CreateSandbox(context.Background(), spec)
 			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
 			if tc.want == "" {
-				if err != nil || len(f.copies) != 1 || !started {
-					t.Fatalf("err = %v, %d copies, started = %v; want the secret delivered and the agent started", err, len(f.copies), started)
+				if err != nil || len(f.managedCopies()) != 1 || !started {
+					t.Fatalf("err = %v, %d copies, started = %v; want the secret delivered and the agent started", err, len(f.managedCopies()), started)
 				}
 				return
 			}
@@ -533,8 +533,8 @@ func TestCreateSandbox_ASecretLandsOnlyInTheFixedDirectory(t *testing.T) {
 			if strings.Contains(err.Error(), "file-secret-value") {
 				t.Errorf("the refusal carries the secret's value: %v", err)
 			}
-			if len(f.copies) != 0 || started {
-				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			if len(f.managedCopies()) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.managedCopies()), started)
 			}
 		})
 	}
@@ -552,8 +552,8 @@ func TestCreateSandbox_ASecretNeedsANonRootUser(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "USER is a non-root user") {
 			t.Fatalf("USER %q: err = %v, want the non-root refusal", user, err)
 		}
-		if len(f.copies) != 0 {
-			t.Errorf("USER %q: the refusal still copied %d archives", user, len(f.copies))
+		if len(f.managedCopies()) != 0 {
+			t.Errorf("USER %q: the refusal still copied %d archives", user, len(f.managedCopies()))
 		}
 	}
 }
@@ -573,8 +573,8 @@ func TestCreateSandbox_RefusesAMisplacedSecretBeforeCreatingAnything(t *testing.
 		if _, err := d.CreateSandbox(context.Background(), spec); err == nil {
 			t.Fatalf("CreateSandbox accepted an agent-owned file at %s", f.Path)
 		}
-		if len(fd.networks) != 0 || len(fd.containers) != 0 || len(fd.copies) != 0 {
-			t.Errorf("%s: the refusal created objects on the daemon: %d networks, %d containers, %d copies", f.Path, len(fd.networks), len(fd.containers), len(fd.copies))
+		if len(fd.networks) != 0 || len(fd.containers) != 0 || len(fd.managedCopies()) != 0 {
+			t.Errorf("%s: the refusal created objects on the daemon: %d networks, %d containers, %d copies", f.Path, len(fd.networks), len(fd.containers), len(fd.managedCopies()))
 		}
 	}
 }
@@ -613,16 +613,16 @@ func TestCreateSandbox_ASecretIsNeverDeliveredOntoAVolume(t *testing.T) {
 			_, err := d.CreateSandbox(context.Background(), spec)
 			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
 			if tc.want == "" {
-				if err != nil || len(f.copies) != 1 || !started {
-					t.Fatalf("err = %v, %d copies, started = %v; want delivered", err, len(f.copies), started)
+				if err != nil || len(f.managedCopies()) != 1 || !started {
+					t.Fatalf("err = %v, %d copies, started = %v; want delivered", err, len(f.managedCopies()), started)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want a refusal containing %q", err, tc.want)
 			}
-			if len(f.copies) != 0 || started {
-				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			if len(f.managedCopies()) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.managedCopies()), started)
 			}
 		})
 	}

@@ -184,13 +184,14 @@ func (s *sshAgents) sshOnlyTo(endpoint string) bool {
 	return true
 }
 
-// isSSHKeyMintAnswer reports whether a control-plane mint answer carries an
-// ssh_key: the raw mint relay never hands one to the sandbox.
-func isSSHKeyMintAnswer(body []byte) bool {
+// mintAnswerWithheld reports whether the raw mint relay keeps a control-plane
+// mint answer from the sandbox: an ssh_key, or an answer that does not decode
+// as a mint of a named kind (it could be one cut short).
+func mintAnswerWithheld(body []byte) bool {
 	var m struct {
 		Kind types.GrantKind `json:"kind"`
 	}
-	return json.Unmarshal(body, &m) == nil && m.Kind == types.GrantSSHKey
+	return json.Unmarshal(body, &m) != nil || m.Kind == "" || m.Kind == types.GrantSSHKey
 }
 
 // handleSSHAgent serves POST <route><grant id> (one agent frame) and
@@ -226,7 +227,7 @@ func (p *Proxy) handleSSHAgent(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errSSHAgentClosed) {
 			status = http.StatusForbidden
 		}
-		http.Error(w, "wardyn: ssh agent: "+err.Error(), status)
+		p.httpError(w, "wardyn: ssh agent", err, status)
 		return
 	}
 	if knownHosts {
@@ -331,7 +332,7 @@ func (p *Proxy) sshKeyMaterial(ctx context.Context, id uuid.UUID) (ResidentMint,
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	if resp.StatusCode != http.StatusOK {
-		return ResidentMint{}, fmt.Errorf("mint status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return ResidentMint{}, fmt.Errorf("mint status %d", resp.StatusCode)
 	}
 	var mr struct {
 		Kind       types.GrantKind `json:"kind"`

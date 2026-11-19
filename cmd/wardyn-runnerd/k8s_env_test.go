@@ -4,6 +4,9 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +169,23 @@ func TestDriveRootOnlyOnDocker(t *testing.T) {
 		if err := checkSubstrateFlags(sub, changed); err == nil {
 			t.Errorf("--substrate %s took --drive-root", sub)
 		}
+	}
+}
+
+// The org-session transport trusts the system roots plus the bundle, on TLS 1.2 or later.
+func TestOrgHTTPClientRoots(t *testing.T) {
+	ca := testCAPEM(t, "org-ca")
+	want, err := x509.SystemCertPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.AppendCertsFromPEM([]byte(ca))
+	c, err := orgHTTPClient(ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := c.Transport.(*http.Transport).TLSClientConfig
+	if !tc.RootCAs.Equal(want) || tc.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("org transport TLS = %+v; want the system roots plus the bundle and TLS 1.2", tc)
 	}
 }

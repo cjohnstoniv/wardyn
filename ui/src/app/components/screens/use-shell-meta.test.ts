@@ -4,11 +4,11 @@
  */
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { health, type Me } from "../../lib/api/health";
 import { getAuthGeneration, notifyAuthChange } from "../../lib/api/core";
 import { noteSessionExpiry } from "../../lib/api/session-activity";
-import { useMeta } from "./use-shell-meta";
+import { POSTURE_POLL_MS, useMeta } from "./use-shell-meta";
 
 const me = { principal: "alice", operator: false, security_operator: false, role: "user" } as Me;
 function deferred() {
@@ -96,4 +96,86 @@ it("a /me body never moves the deadline back past an expiry a header already nam
   const { result } = renderHook(useMeta);
   await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
   expect(result.current[0].sessionExpiresAt?.getTime()).toBe(named.getTime());
+});
+
+type Health = Awaited<ReturnType<typeof health.health>>;
+// A check time as /healthz sends it (RFC 3339, UTC), minutes past a fixed past hour: display data only.
+const checkedAt = (minute: number) => new Date(Date.UTC(2020, 0, 1, 1, minute)).toISOString();
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// The canary re-checks the cluster while a console stays open: the posture follows the health poll,
+// verdict and check time from the same answer, both ways and on a new check of the same verdict.
+it("follows the confinement posture through the health poll, verdict and check time together", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const answer = (network_policy: Health["network_policy"], network_policy_checked_at: string): Health =>
+    ({ status: "ok", runner: "k8s", network_policy, network_policy_checked_at }) as Health;
+  vi.mocked(health.health).mockResolvedValue(answer("enforced", checkedAt(0)));
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].networkPolicy).toBe("enforced"));
+  expect(result.current[0].networkPolicyCheckedAt).toBe(checkedAt(0));
+
+  const steps: [Health, string, string][] = [
+    [answer("refused", checkedAt(10)), "refused", checkedAt(10)],
+    [answer("enforced", checkedAt(20)), "enforced", checkedAt(20)],
+    [answer("enforced", checkedAt(30)), "enforced", checkedAt(30)],
+    // An outage answers {}: the last posture stays, the unreachable banner says why.
+    [{} as Health, "enforced", checkedAt(30)],
+  ];
+  for (const [h, verdict, at] of steps) {
+    vi.mocked(health.health).mockResolvedValue(h);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+    });
+    expect(result.current[0].networkPolicy).toBe(verdict);
+    expect(result.current[0].networkPolicyCheckedAt).toBe(at);
+  }
+});
+
+// A failed health read (health() answers {}) is no posture: the first one leaves the poll to learn the
+// runner, verdict and time together, and a later one, a retry's included, keeps the last.
+it("learns the posture after a failed first read and keeps it through a retry's outage", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const refused = { status: "ok", runner: "k8s", network_policy: "refused", network_policy_checked_at: checkedAt(10) } as Health;
+  vi.mocked(health.health).mockResolvedValue({} as Health);
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].resolved).toBe(true));
+  expect(result.current[0].runner).toBe("");
+
+  vi.mocked(health.health).mockResolvedValue(refused);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({} as Health);
+  const revision = result.current[0].identityRevision;
+  act(() => result.current[1]()); // the identity retry re-reads /healthz too
+  await waitFor(() => expect(result.current[0].identityRevision).toBe(revision + 1));
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({ ...refused, network_policy: "enforced", network_policy_checked_at: checkedAt(20) });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "enforced", networkPolicyCheckedAt: checkedAt(20) });
+});
+
+// The verdict's source rides the same answer: a Docker control plane carries a connected Kubernetes
+// runner's verdict with network_policy_source "runner", and a later answer without it clears it.
+it("carries the verdict's source with the posture", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const fromRunner = { status: "ok", runner: "docker", network_policy: "refused", network_policy_checked_at: checkedAt(10), network_policy_source: "runner" } as Health;
+  vi.mocked(health.health).mockResolvedValue(fromRunner);
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].networkPolicySource).toBe("runner"));
+  expect(result.current[0]).toMatchObject({ runner: "docker", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({ status: "ok", runner: "docker" } as Health);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ networkPolicy: "", networkPolicySource: "" });
 });

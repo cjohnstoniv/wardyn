@@ -1,0 +1,9 @@
+: Source: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create (stream_options.include_usage)
+: Read 2026-11-07. Without stream_options.include_usage no chunk carries usage; the doc says only the opt-in adds
+: the final usage chunk. Chunk shape as in openai_chat_stream_usage.sse.
+data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

@@ -4,17 +4,23 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -33,13 +39,43 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Capped generously (maxJSONBody, 1 MiB): a decision log is a host/port/path
 	// plus an optional scan summary, so nothing legitimate comes near it, and a
 	// too-tight cap here would DROP an egress audit record behind a 413.
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&dl); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInternalDecisionLogInvalid, "invalid decision log")
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &dl, false); err != nil {
+		s.refuseDecisionLog(w, r, claims.RunID)
 		return
 	}
 	normalizeN1Decision(&dl)
 
 	runID := claims.RunID
+	// Relayed is not serialised: a via_org engine's post marks a relayed row with DecisionRelayedHeader.
+	// Only the engine's in-process call for a VM run is trusted with it; anyone else's copy is dropped.
+	relayedMark := r.Header.Get(proxy.DecisionRelayedHeader) == "1"
+	r.Header.Del(proxy.DecisionRelayedHeader)
+	if relayedMark && viaOrgCall(r.Context()) {
+		if run, ok := liveRunFromContext(r.Context()); ok && run.MachineKind.IsVM() {
+			dl.Request.Relayed = true
+		}
+	}
+
+	// A model call's token counts (rule source llm:usage) are a count and not an egress decision: they are
+	// stored as usage and write no egress row, so a metered call is one decision row plus one usage row.
+	// Nor are they agent activity, so they do not touch the idle clock.
+	if dl.Usage != nil {
+		s.ingestModelUsage(w, r, runID, dl.Usage)
+		return
+	}
+
+	// A DNS query the run's sandbox asked (internal/egress/proxy/dns_audit.go) is its own row, not an
+	// egress decision, and not agent activity: a run that only asks names idles out.
+	if dl.DNS != nil {
+		fields := map[string]any{}
+		dl.DNS.AuditFields(fields)
+		data, _ := json.Marshal(fields)
+		ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, egress.DNSQueryAction, dl.DNS.Name, dl.DNS.AuditOutcome(), data)
+		ev.SourceIP = r.RemoteAddr
+		s.recordAudit(r.Context(), ev)
+		writeJSON(w, http.StatusAccepted, nil)
+		return
+	}
 
 	// An egress decision means the agent actually did something, so it resets the
 	// idle clock the reaper reads (agent_runs.updated_at) — the seam
@@ -50,11 +86,16 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Debounced: a chatty agent can emit many decisions a second, and each touch
 	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
 	// so one touch per touchDebounce per run loses nothing.
-	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
+	// An allowed request is activity, a refused one is not (egress.CountsAsActivity): a run that is only
+	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
+	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
+	// decisions are kept on its trail and, as on the runner spool, are not activity.
+	kind, isOver := s.decisionRunOver(r.Context())
+	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if agentActivityDecision(dl.RuleSource) {
+	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -88,6 +129,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// The allow of an opaque CONNECT to a model host; counted by RunOpaqueTunnels.
+	if dl.ModelTunnel {
+		fields["model_tunnel"] = true
+	}
 	// A desktop VM's relay flow id, and the port rule's dry-run mark.
 	if dl.Flow != "" {
 		fields["flow"] = dl.Flow
@@ -95,12 +140,18 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
 	}
+	// The id the gateway's access log shares with this row; absent on a run with no gateway route.
+	if dl.GatewayCallID != "" {
+		fields["gateway_call_id"] = dl.GatewayCallID
+	}
 	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
 	dl.Refusal.AuditFields(fields)
 	if dl.MatchedRule != "" {
 		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
 	}
-	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go). A run that is over takes
+	// its hint on a write that leaves updated_at, which the terminal tail grace is counted from, so a post
+	// kept inside the grace cannot open it again.
 	if dl.UpstreamFault != "" {
 		fields["upstream_fault"] = dl.UpstreamFault
 		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
@@ -110,7 +161,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(r.Context(), ev)
+	kept := s.recordAuditDurably(r.Context(), ev)
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. Some rows arrive here as
 	// egress.Deny without being a denial by policy; isPolicyDeny (metrics.go)
@@ -130,8 +181,27 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Scan != nil {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 	}
+	answerDecisionPost(w, kept)
+}
 
-	writeJSON(w, http.StatusAccepted, nil)
+// decisionRunOver is the liveness gate's run's machine kind, and a check of whether that run is over, read on the
+// database's clock (runIsOverNow) the first time it is asked and not again, so a chatty agent's posts add no read and
+// a decision that needs no touch or stamp reads none. A clock that cannot be read counts as over: neither write is
+// made, and the next due decision reads it again. Without a run from the gate nothing is over.
+func (s *Server) decisionRunOver(ctx context.Context) (types.MachineKind, func() bool) {
+	run, live := liveRunFromContext(ctx)
+	var kind types.MachineKind
+	if live {
+		kind = run.MachineKind
+	}
+	read, over := false, false
+	return kind, func() bool {
+		if live && !read {
+			o, err := s.runIsOverNow(ctx, run)
+			read, over = true, o || err != nil
+		}
+		return over
+	}
 }
 
 // recordLLMScanAudit shares the content-free payload and finding cap with
@@ -194,21 +264,27 @@ const (
 //     rejected (the sensor cannot forge an egress./credential./identity. event).
 //   - run_id NULL is allowed (unmapped events + heartbeat + blind events).
 func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request) {
+	// arrived is when the batch reached this server. An exec's raw arguments
+	// in it are split only against a corpus read after this moment.
+	arrived := time.Now()
 	var batch groundtruthBatch
 	// Byte ceiling under maxBatch below: 1000 kernel events legitimately exceed
 	// maxJSONBody, so this stream gets its own larger cap rather than 413ing a
 	// full sensor batch.
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes)).Decode(&batch); err != nil {
+	// The events are counted before any is decoded, so an oversized batch costs its bytes only.
+	const maxBatch = 1000
+	err := types.DecodeOneJSONRows(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes), &batch, false, "events", maxBatch)
+	var tooMany *types.TooManyJSONRowsError
+	if errors.As(err, &tooMany) {
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonGroundtruthBatchTooLarge, "batch too large")
+		return
+	}
+	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonGroundtruthBatchInvalid, "invalid ground-truth batch")
 		return
 	}
 	if len(batch.Events) == 0 {
 		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": 0})
-		return
-	}
-	const maxBatch = 1000
-	if len(batch.Events) > maxBatch {
-		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonGroundtruthBatchTooLarge, "batch too large")
 		return
 	}
 
@@ -223,6 +299,39 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// committed, so good events are never half-dropped behind a 4xx. Validation is
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
+	var ownNamespaces []string // the control plane's own runs namespace, resolved on the first Kubernetes event
+	// corpusFresh reports whether this server has read every masking value any
+	// server committed before the batch arrived. It is asked once, by the first
+	// exec that carries raw arguments: a value another replica registered a
+	// moment ago is not in this one's cache until it reads it.
+	var fresh *bool
+	corpusFresh := func() bool {
+		if fresh == nil {
+			ok := s.cfg.MaskRegistry.Fresh(arrived)
+			fresh = &ok
+		}
+		return *fresh
+	}
+	// runCovered reports whether this server holds run's complete masking
+	// manifest, asked once per run in the batch. The values a run was started
+	// with are committed to its manifest, not to the shared registry, so a
+	// server that did not dispatch the run holds them only once Covered has
+	// loaded them. With no manifests kept, or no run, there is nothing to prove.
+	covered := map[uuid.UUID]bool{}
+	runCovered := func(run uuid.UUID) bool {
+		m := s.cfg.MaskManifests
+		if m == nil || run == uuid.Nil {
+			return true
+		}
+		ok, asked := covered[run]
+		if !asked {
+			ctx, cancel := context.WithTimeout(r.Context(), maskCheckTimeout)
+			ok = m.Covered(ctx, run)
+			cancel()
+			covered[run] = ok
+		}
+		return ok
+	}
 	for i := range batch.Events {
 		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
@@ -242,15 +351,47 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// that event's attribution instead of every co-batched event (and any
 		// heartbeat) behind it. Only a genuine store failure stays a hard
 		// error (fail closed).
+		//
+		// maskRun is the run whose secrets the event is masked with: the run it
+		// names, once that run is found, even when the event then loses it, so
+		// a late event's secrets stay hidden on its unmapped row. An event
+		// naming no run masks with the process-wide values only, as any
+		// run-less row does; an unknown id never reaches the registry.
+		maskRun := uuid.Nil
 		if ev.RunID != nil {
-			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
-				if !errors.Is(err, store.ErrNotFound) {
-					writeServerError(w, r, "validate run_id", err)
-					return
-				}
+			run, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID)
+			switch {
+			case errors.Is(err, store.ErrNotFound):
 				ev.RunID = nil
 				ev.Data = downgradeToUnmapped(ev.Data, "run_id_not_found")
+			case err != nil:
+				writeServerError(w, r, "validate run_id", err)
+				return
+			default:
+				maskRun = *ev.RunID
+				// A Kubernetes event (data.pod set) is held to where and when the
+				// run's pod could exist. Downgrades, never rejects, as above.
+				if pod := groundtruthEventPod(ev.Data); pod != "" {
+					if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
+						ownNamespaces = groundtruthRunsNamespaces()
+					}
+					reason, err := s.groundtruthPodRefusal(r.Context(), run, pod, ownNamespaces)
+					if err != nil {
+						writeServerError(w, r, "read the database's clock", err)
+						return
+					}
+					if reason != "" {
+						ev.RunID = nil
+						ev.Data = downgradeToUnmapped(ev.Data, reason)
+					}
+				}
 			}
+		}
+		// A heartbeat carries counts and a node name, never a run's data. It
+		// stays as the sensor sent it for the health write in phase 2; the
+		// masking recorder masks its row.
+		if ev.Action != groundtruth.ActionSensorHeartbeat {
+			s.maskGroundtruthEvent(ev, maskRun, func() bool { return corpusFresh() && runCovered(maskRun) })
 		}
 	}
 
@@ -278,6 +419,16 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// the sensor dies. The sensor sends zero Time on the normal path, so
 		// clamping to our own clock costs nothing and keeps honest degradation.
 		ev.Time = s.cfg.Now().UTC()
+		// Each node sensor's latest beat, for /healthz's per-node health. A
+		// failed write is logged, not retried: the audit row below is the
+		// record, and a node whose row stops moving reads as degraded, which
+		// is the honest direction. Failing the batch instead would stop every
+		// kernel event on, say, a split-role install missing the table grant.
+		if ev.Action == groundtruth.ActionSensorHeartbeat {
+			if err := s.upsertGroundtruthSensor(r.Context(), ev); err != nil {
+				_ = loggedMsg(r.Context(), "record ground-truth sensor health", err)
+			}
+		}
 		if err := s.recordGroundtruthAudit(r.Context(), ev); err != nil {
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
@@ -288,6 +439,136 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		accepted++
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
+}
+
+// groundtruthLateEvents is how long after a run ends its pod's kernel events
+// are still taken: the same retention the Docker correlator keeps an ended
+// container's mapping for (cmd/wardyn-tetragon-ingest, correlator.go).
+const groundtruthLateEvents = 15 * time.Minute
+
+// groundtruthEventPod is a kernel event's data.pod ("namespace/name"), set
+// only by a sensor on Kubernetes.
+func groundtruthEventPod(data json.RawMessage) string {
+	var d struct {
+		Pod string `json:"pod"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.Pod
+}
+
+// groundtruthPodRefusal is why a Kubernetes kernel event must lose its run,
+// or "" when it keeps it:
+//
+//	namespace_not_runs — the pod is not in a namespace the run's cluster
+//	                     places runs in, so it is not a run's pod whatever
+//	                     its name says (see groundtruthRunNamespaces);
+//	run_ended          — the run's pod has been gone for more than
+//	                     groundtruthLateEvents on the database's clock,
+//	                     which stamps those times, so a pod re-created under
+//	                     the same name after teardown cannot write into it.
+//	                     Gone from the terminal transition (EndedAt, which
+//	                     later writes to the run do not move; UpdatedAt only
+//	                     on a row without it), or from when its lease ended
+//	                     (LostAt with LostReason ended): such a run stays
+//	                     RUNNING until the ended-run grace, without a pod.
+//
+// ownNamespaces is the control plane's own runs namespace, used for a run on
+// the in-process driver. An error is the database's clock not answering: the
+// caller refuses the batch, as it does a run it cannot read.
+func (s *Server) groundtruthPodRefusal(ctx context.Context, run types.AgentRun, pod string, ownNamespaces []string) (string, error) {
+	ns, _, ok := strings.Cut(pod, "/")
+	if namespaces, known := s.groundtruthRunNamespaces(run, ownNamespaces); known && (!ok || ns == "" || !slices.Contains(namespaces, ns)) {
+		return "namespace_not_runs", nil
+	}
+	var gone *time.Time
+	switch {
+	case run.State.IsTerminal() && run.EndedAt != nil:
+		gone = run.EndedAt
+	case run.State.IsTerminal():
+		gone = &run.UpdatedAt
+	case run.LostReason == types.LostEnded && run.LostAt != nil:
+		gone = run.LostAt
+	}
+	if gone == nil {
+		return "", nil
+	}
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return "", err
+	}
+	if now.Sub(*gone) > groundtruthLateEvents {
+		return "run_ended", nil
+	}
+	return "", nil
+}
+
+// groundtruthRunNamespaces is the namespaces run's pod may be in, and whether
+// the control plane knows them. A run on the in-process driver is in the
+// control plane's own cluster: ownNamespaces. A run on a self-hosted runner is
+// in that runner's cluster: the namespaces the runner advertised with its
+// capabilities (TargetFacts.RunsNamespaces). Unknown, so not checked, when
+// that runner is offline or advertises none (an older runner), and for a run
+// on a remote-hosted runner, whose cluster this control plane has no source
+// for. An unknown answer keeps the event's run, as before the check existed:
+// the sensor token cannot name the cluster it runs in, so refusing would
+// downgrade every event from a cluster the control plane cannot see into.
+func (s *Server) groundtruthRunNamespaces(run types.AgentRun, ownNamespaces []string) ([]string, bool) {
+	switch {
+	case run.RunnerID != nil:
+		facts, ok := s.runnerFacts(*run.RunnerID)
+		if !ok || len(facts.RunsNamespaces) == 0 {
+			return nil, false
+		}
+		return facts.RunsNamespaces, true
+	case run.RunnerPoolExecutor != "":
+		return nil, false
+	default:
+		return ownNamespaces, true
+	}
+}
+
+// groundtruthServiceAccountNamespace is where the kubelet projects a pod's
+// own namespace.
+const groundtruthServiceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// groundtruthRunsNamespaces is the namespace the in-process Kubernetes driver
+// places run pods in, resolved as that driver resolves it (its config.go is
+// built only under the k8s tag): WARDYN_K8S_NAMESPACE, else this pod's own
+// namespace, else "default".
+func groundtruthRunsNamespaces() []string {
+	if ns := strings.TrimSpace(os.Getenv("WARDYN_K8S_NAMESPACE")); ns != "" {
+		return []string{ns}
+	}
+	if b, err := os.ReadFile(groundtruthServiceAccountNamespace); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return []string{ns}
+		}
+	}
+	return []string{"default"}
+}
+
+// groundtruthNodeMax is a DNS name's length limit: a longer node name is no node's, and keys no row.
+const groundtruthNodeMax = 253
+
+// upsertGroundtruthSensor writes a heartbeat's node row: its data.node (""
+// for the Compose sensor), the server-forced time, and the beat's counts. A
+// store without per-node rows writes nothing.
+func (s *Server) upsertGroundtruthSensor(ctx context.Context, ev types.AuditEvent) error {
+	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)
+	if !ok {
+		return nil
+	}
+	var hb struct {
+		Node string `json:"node"`
+		groundtruthBeat
+	}
+	_ = json.Unmarshal(ev.Data, &hb)
+	if len(hb.Node) > groundtruthNodeMax {
+		return errors.New("sensor node name is over the 253-byte limit")
+	}
+	return gs.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: hb.Node, LastBeat: ev.Time,
+		ObservedTotal: hb.ObservedTotal, DroppedTotal: hb.DroppedTotal, DroppedUnmapped: hb.DroppedUnmapped,
+		ObservedByKind: hb.ObservedByKind})
 }
 
 // downgradeToUnmapped marks a kernel event's data unmapped with reason,
@@ -306,6 +587,28 @@ func downgradeToUnmapped(data json.RawMessage, reason string) json.RawMessage {
 		return data
 	}
 	return out
+}
+
+// maskGroundtruthEvent masks ev's data and target with maskRun's secrets
+// (uuid.Nil: the process-wide values only) and finishes its argv: an exec's raw
+// arguments are masked whole before they are split (groundtruth.MaskData). The
+// split is the one step no later masking can repair, so it waits on vouched: a
+// read of every value committed to the shared registry before the batch
+// arrived, and the named run's complete manifest held here. When either fails
+// the arguments are stored as the placeholder, as a chunk that cannot be
+// vouched for is. The masking recorder masks the row again with the run it is
+// recorded under; this pass is what keeps the named run's masking on an event
+// that lost it.
+func (s *Server) maskGroundtruthEvent(ev *types.AuditEvent, maskRun uuid.UUID, vouched func() bool) {
+	// Looked up on each use: the reads behind vouched may have just added values.
+	mask := func(b []byte) []byte { return s.cfg.MaskRegistry.JSONVariantMasker(maskRun).Mask(b) }
+	ev.Data = groundtruth.MaskData(ev.Data, mask, func(args []byte) []byte {
+		if !vouched() {
+			return secretmask.Placeholder()
+		}
+		return mask(args)
+	})
+	ev.Target = string(mask([]byte(ev.Target)))
 }
 
 // recordGroundtruthAudit records a ground-truth event and RETURNS the Recorder
@@ -367,11 +670,44 @@ type internalApprovalRequest struct {
 	// stamps that row (approval.Rejoin) instead of creating or deduplicating one. A previous-release
 	// sidecar sends none.
 	RejoinID *uuid.UUID `json:"rejoin_id"`
+	// AcceptsOnce says the raising proxy spends a "once" answer to a host rule hold on the one held request;
+	// the row's scope then carries accepts_once (hostCallAcceptingOnce). It sits outside requested_scope, whose
+	// keys a previous-release control plane checks exactly, because that one ignores an unknown key here. A
+	// previous-release proxy sends none. Refused on any other raise.
+	AcceptsOnce bool `json:"accepts_once"`
 }
 
 // approvalRejoiner is the optional ApprovalService method behind a raise's rejoin_id.
 type approvalRejoiner interface {
 	Rejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
+}
+
+// decodeInternalApprovalRaise reads and checks a raise body. On false it has already answered: a bad call scope
+// with its own reason, anything else with 400 internal_approval_request_invalid.
+func (s *Server) decodeInternalApprovalRaise(w http.ResponseWriter, r *http.Request) (internalApprovalRequest, bool) {
+	var body internalApprovalRequest
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(raw)).Decode(&body) // the first value
+	}
+	if err == nil {
+		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
+		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
+			return body, false
+		}
+		// After the call scope's own readers, which answer a bad call scope with their own reason and
+		// auth.fail row, also when text follows it: then one value, with no key written twice.
+		err = types.DecodeOneJSON(bytes.NewReader(raw), new(internalApprovalRequest), false)
+	}
+	stamped := true // accepts_once is refused on any raise but a host rule hold's
+	if err == nil && body.AcceptsOnce {
+		body.RequestedScope, stamped = hostCallAcceptingOnce(body.RequestedScope)
+	}
+	if err != nil || !stamped || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
+		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+		return body, false
+	}
+	return body, true
 }
 
 // handleInternalRequestApproval raises (or dedups to an existing) approval on
@@ -383,10 +719,8 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
-	var body internalApprovalRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body); err != nil ||
-		len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
-		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+	body, ok := s.decodeInternalApprovalRaise(w, r)
+	if !ok {
 		return
 	}
 	switch body.Kind {
@@ -457,14 +791,16 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
 	// error: an unbounded raise path is the thing being bounded, so "we could not
-	// tell how many this run has" must not read as "allow another one".
+	// tell how many this run has" must not read as "allow another one". The raise
+	// counts again under the run's cap lock in its own transaction, so two raises
+	// that both read the last free slot cannot both land.
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
 	if cerr != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalApprovalCountUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
 		return
 	}
 	if n >= maxApprovalsPerRun {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached, "this run has raised too many approvals; no more will be accepted")
+		writeCapReached(w, store.ErrApprovalRunCap)
 		return
 	}
 
@@ -474,7 +810,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		Kind:           body.Kind,
 		RequestedScope: body.RequestedScope,
 	}
-	created, err := s.cfg.Approvals.Request(r.Context(), req)
+	created, err := s.cfg.Approvals.Request(store.WithAdmissionCap(r.Context(), maxApprovalsPerRun), req)
 	if err != nil {
 		writeServerError(w, r, "request approval", err)
 		return
@@ -548,8 +884,9 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 }
 
 // sandboxApproval is the approval as the sandbox reads it: only what the sidecar and
-// wardyn-toolgate consume. The stored row also names the deciding human and the note they typed,
-// which an untrusted process must not read.
+// wardyn-toolgate consume. The stored row also names the deciding human, the note they typed and
+// a takeover's holder, which an untrusted process must not read. HandedBackAt is when a takeover was
+// handed back: `wardyn needs-you` returns on it.
 type sandboxApproval struct {
 	ID                uuid.UUID           `json:"id"`
 	Kind              types.ApprovalKind  `json:"kind"`
@@ -559,11 +896,13 @@ type sandboxApproval struct {
 	ExpiresAt         *time.Time          `json:"expires_at,omitempty"`
 	Held              bool                `json:"held,omitempty"`
 	HeldUntil         *time.Time          `json:"held_until,omitempty"`
+	HandedBackAt      *time.Time          `json:"handed_back_at,omitempty"`
 }
 
 func sandboxApprovalView(ap types.ApprovalRequest) sandboxApproval {
 	return sandboxApproval{ID: ap.ID, Kind: ap.Kind, State: ap.State, DecisionScope: ap.DecisionScope,
-		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil}
+		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil,
+		HandedBackAt: ap.HandedBackAt}
 }
 
 // handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
@@ -606,7 +945,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}
-	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil {
+	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil && !errors.Is(err, types.ErrApprovalAlreadyDecided) {
 		writeServerError(w, r, "expire approval", err)
 		return
 	}

@@ -15,8 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_FailClosedStopUsesTheMarkItWrote is M4's pin (Opus review of #1080,
-// F04 follow-up): loseRun and endRun set run.LostAt/run.LostReason from the
+// TestPG_FailClosedStopUsesTheMarkItWrote is the pin for PR #1080: loseRun and endRun set run.LostAt/run.LostReason from the
 // SAME now they just wrote via MarkRunLost/MarkRunEnded, so stopKeptRun's
 // StopKeptRunIf compare matches the row it just marked. Reading the clock
 // AGAIN between the mark write and that compare — `again := s.cfg.Now()` in

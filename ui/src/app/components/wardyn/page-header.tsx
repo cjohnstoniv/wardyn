@@ -37,7 +37,7 @@ export function PageHeader({
     <div className="mb-5 flex flex-wrap items-start justify-between gap-4 sm:flex-nowrap">
       <div className="contents sm:block sm:space-y-1">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Heading className={`${size} text-foreground`}>{title}</Heading>
+          <Heading tabIndex={-1} className={`${size} text-foreground outline-none`}>{title}</Heading>
           {titleBadge}
         </div>
         {description && (

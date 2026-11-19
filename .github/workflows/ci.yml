@@ -144,7 +144,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/foldersync/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -256,7 +256,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # 55, was 40: unit ran out at 40 on a 0.10.0-rc.21 train run; set from the prebuild's measured time after.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -264,12 +265,15 @@ jobs:
           - suite: unit
             target: test-report
             tags: ''
+            build: -race -covermode=atomic -coverpkg=./...
           - suite: docker
             target: test-report-docker
             tags: docker
+            build: -race -tags docker -covermode=atomic -coverpkg=./...
           - suite: k8s
             target: test-report-k8s
             tags: docker,k8s
+            build: -race -tags docker,k8s -covermode=atomic -coverpkg=./...
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -320,11 +324,37 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
+      # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
+      # extra swap lets that peak page out instead of the runner being shut down. No `if:`: the docs- or
+      # console-only step below compiles internal/api's tests too.
+      - name: Add swap for the coverage compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # internal/api's test compile is the job's memory peak (scripts/ci-api-prebuild.sh has the figures). It is
+      # compiled here first with two workers, and measured, so the step below finds it in the build cache.
+      - name: Prebuild internal/api's tests with two workers
+        if: needs.changes.outputs.backend != 'false'
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest
@@ -334,6 +364,10 @@ jobs:
         if: needs.changes.outputs.backend == 'false'
         env:
           TAGS: ${{ matrix.tags }}
+          # internal/api is a guard package, and this leg has no prebuild: the same soft heap limit as the prebuilds,
+          # and internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures).
+          GOMEMLIMIT: "10GiB"
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           set -euo pipefail
           rc=0
@@ -428,26 +462,59 @@ jobs:
           restore-keys: |
             go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-lint-${{ runner.os }}-
+      # The internal/api test compile and staticcheck's whole-tree pass take about all
+      # of the hosted runner's memory; without extra swap the runner is shut down mid-step
+      # (exit 143, or no log and a timeout 5 min past the limit). Same step as the go legs.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 2
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
       # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
       # package runs even after one fails, so a push shows all the red guards.
+      # Four green runs on 2026-11-13 took 9-10 min for the whole list. A package
+      # gets 8 min, so a stuck one fails by name with a goroutine dump, and the
+      # step 20, so an overrun fails here with its log instead of the job being
+      # cancelled at its limit with none.
       - name: Whole-tree guard tests (every Go test that reads the repository)
+        timeout-minutes: 20
+        env:
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
         run: |
           set -euo pipefail
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
           out="$(python3 -I scripts/lib/candidate-tests.py guards)"
           [ -n "$out" ] || { echo "::error::no whole-tree guard test found; the discovery pattern regressed"; exit 1; }
           rc=0
           while IFS=$'\t' read -r dir names; do
             echo "::group::./$dir"
-            WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./$dir" || rc=1
+            WARDYN_TEST_PG='' go test -count=1 -timeout 8m -run "^(${names})\$" "./$dir" || rc=1
             echo "::endgroup::"
           done <<<"$out"
           exit "$rc"
       # `make lint` also runs the console's ESLint (ui/eslint.config.js), so this
       # job sets up pnpm and node.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -522,6 +589,12 @@ jobs:
           GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn-runnerd/
           # The macOS VM admission ledger is unix-only; its constraints must still leave the package vettable here (#3622).
           GOOS=windows GOARCH=amd64 go vet ./internal/macvm/admission/
+          # The runner's tests must compile on Windows too, so a unix-only test needs its own build tag.
+          GOOS=windows GOARCH=amd64 go vet ./internal/runner/
+      # The release ships a macOS wardyn; a Linux-only symbol in a file tagged only !windows breaks its tests there.
+      - name: Vet wardyn for macOS
+        if: needs.changes.outputs.backend != 'false'
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./cmd/wardyn/
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -608,7 +681,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -656,10 +729,12 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    # 30, was 20: ui ran out at 20 on two 0.10.0-rc.21 train runs with make ui-test still passing files,
+    # against 12-17 m on the other runs.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -813,7 +888,7 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -939,7 +1014,7 @@ jobs:
           [ -z "$running" ] || docker start $running >/dev/null
           docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - name: helm lint + template (must render load-bearing objects)
@@ -1001,12 +1076,16 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         if: needs.changes.outputs.backend != 'false'
         with:
           version: latest
@@ -1044,7 +1123,9 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: ./.github/actions/kind-binary
+        if: needs.changes.outputs.backend != 'false'
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-test
@@ -1248,15 +1329,20 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-26.04
-    # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
-    # gained its second fill target AND a margin for the rest of the suite
-    # (TestEphemeralCaseBudgetFitsTheMakefileTimeout), and a job timeout at or below it
-    # would kill the suite mid-verdict instead of letting go test report which case ran
-    # long. The extra 10m is the image builds and the kind/Calico bring-up in front of it.
-    timeout-minutes: 35
+    # 40: the suite step's own go test `-timeout` is CONFORMANCE_K8S_TIMEOUT's 30m default (the Makefile; held by
+    # TestEphemeralCaseBudgetFitsTheMakefileTimeout to the ephemeral-disk case's worst case and a margin for the rest
+    # of the suite), and the job must outlast it by the steps around it: freeing disk, restoring the caches, building
+    # the proxy and agent images, the kind cluster, loading the images, Calico and the run namespace before the suite,
+    # and the report upload after it. A job timeout at or below the suite's would kill the suite mid-verdict instead of
+    # letting go test report which case ran long.
+    timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1311,9 +1397,10 @@ jobs:
       # docker-style opt-out) — a bare busybox took the never-records path
       # and the gate never proved recording works. See the Makefile target's
       # own doc and deploy/kind/Dockerfile.conformance-agent.
-      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+      - name: Build the conformance agent image (busybox:1.38 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: ./.github/actions/kind-binary
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
@@ -1366,6 +1453,347 @@ jobs:
             ~/.cache/golangci-lint
           key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # ── conformance-k8s-agent-sandbox: the experimental agent-sandbox backend on kind ──
+  # The same suite as conformance-k8s (same kind, Calico and PSS-restricted namespace), with
+  # WARDYN_TEST_K8S_AGENT_SANDBOX=1: an agents.x-k8s.io Sandbox makes each run's agent pod, held by
+  # Wardyn's scheduling gate until the read-back passes. On top of the suite it runs the backend's own
+  # cases (agentsandbox_k8s_test.go), including every admission decision of the chart's two
+  # ValidatingAdmissionPolicies against this real API server.
+  #
+  # Third party, CI only: agent-sandbox v1.0.9's sandbox.yaml, checked against its published sha256,
+  # with the controller image replaced by its index digest and scanned by trivy before it runs. Pulled
+  # anonymously; there is no registry login in this job.
+  #
+  # Identities. The policies name two requesters: the controller's ServiceAccount (the upstream
+  # manifest's, the chart default) and wardynd's (system:serviceaccount:<release namespace>:<SA>). The
+  # suite authenticates as a real ServiceAccount token for wardyn/wardynd, the identity the policies
+  # are rendered with, so the gate removal is judged exactly as it is in a cluster. That account is
+  # bound to cluster-admin, as conformance-k8s's kind account is: the chart's Role is checked verb by
+  # verb with `kubectl auth can-i --as`, not by running the suite under it. The cases reach the other
+  # identities by impersonation.
+  #
+  # Train pull requests and pushes to main only: one more runner for up to 45 minutes, on the runs
+  # that merge a wave. Not a required check and not in `gates` (the backend is experimental), but a
+  # red here is the run's red: the train pull request shows it as its own check, and the run's
+  # conclusion is failure, which green-by-tree.sh refuses as release evidence for that tree.
+  conformance-k8s-agent-sandbox:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
+    runs-on: ubuntu-26.04
+    # Sized from two hosted runs on 2026-11-12 and 2026-11-13, which ran the first seven cases: the suite step took
+    # 715 s and 658 s, and everything else in the job took 379 s and 328 s. The seven keep and warm pool cases have
+    # not run hosted, so they are bounded by their wait limits (the worst case of each, test/conformance, in
+    # seconds): proxy through the Service 420, endpoint slice elsewhere 660, live proxy replace 750, API sequence
+    # 1325, Service admission 120, placeholder holds nothing 240, placeholder claimed and refilled 615; 4130 in
+    # all (the live replace and the API sequence each count the 180 s of the control plane pod their proxy config
+    # starts). With the 1.25 margin, (379 + 715 + 4130) x 1.25 = 6530 s, so 109 minutes. The Makefile's 30m go test
+    # -timeout is lower than 715 s plus those 4130 s, so this job's suite step passes a longer one:
+    # (715 + 4130) x 1.25 = 6056 s, so CONFORMANCE_K8S_TIMEOUT=101m.
+    # TestAgentSandboxCaseBudgetsFitTheJobTimeout adds the cases' limits up against it and
+    # against this bound. Typical time: about 6 minutes of setup and about 12 minutes for the seven measured
+    # cases; the seven new cases' typical time is not measured yet (the first hosted run measures it). The bound
+    # only bites on a hang.
+    timeout-minutes: 109
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      AGENT_SANDBOX_CONTROLLER_IMAGE: registry.k8s.io/agent-sandbox/agent-sandbox-controller@sha256:ef1a1a3076afc996e711c44b388fbb7ffb7cd6858953d7e685166b299d77bd38
+      # Chart values the policies and the Role are rendered with (the minimum the chart renders k8s with).
+      WARDYN_CHART_VALUES: >-
+        --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
+        --set serviceAccount.automount=true --set k8s.enabled=true --set k8s.proxyImage=wardyn/wardyn-proxy:kind-test
+        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # conformance-k8s's build cache compiles the same packages; this job only reads it.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-k8s-${{ runner.os }}-
+      - name: Drop cached test results
+        run: go clean -testcache
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        id: buildx
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+          use: false
+      - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:kind-test
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+      - name: Build the conformance agent image (busybox:1.38 + wardyn-rec)
+        run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
+        with:
+          version: latest
+      # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
+      # backend was tested on v1.30, and kind-action's default node image is newer. The version is
+      # printed after the Calico rollout so the log shows what ran.
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+          cluster_name: wardyn-conformance-k8s
+          config: deploy/kind/conformance-kind-config.yaml
+          wait: 90s
+      - name: Load images into kind (no registry pull)
+        run: |
+          kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
+          kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
+      - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+          kubectl version
+          server=$(kubectl version -o json | jq -r .serverVersion.gitVersion)
+          [ "$server" = v1.30.0 ] || { echo "::error::the cluster runs $server, not the v1.30.0 the docs name"; exit 1; }
+      - name: Label a PSS-restricted namespace for runs
+        run: |
+          kubectl create namespace wardyn-conformance
+          kubectl label namespace wardyn-conformance \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=v1.30
+      - name: Repoint KUBECONFIG at the node's internal IP (see conformance-k8s)
+        run: |
+          NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-conformance-k8s --internal \
+            | sed "s/wardyn-conformance-k8s-control-plane:6443/${NODE_IP}:6443/" \
+            > "$RUNNER_TEMP/kubeconfig-internal.yaml"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
+      # sha256 published with the v1.0.9 release. The manifest names the controller by tag, so the one
+      # image line is replaced with the index digest, and no image may be left that is not by digest.
+      - name: Fetch agent-sandbox v1.0.9 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
+          sha256: 3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2
+          path: ${{ runner.temp }}/agent-sandbox.yaml
+      - name: Pin the agent-sandbox controller by digest
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/agent-sandbox.yaml"
+          tagged='registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.9'
+          [ "$(grep -cF "image: $tagged" "$f")" = 1 ] || { echo "::error::expected exactly one '$tagged' image line in sandbox.yaml"; exit 1; }
+          sed -i "s|image: $tagged\$|image: $AGENT_SANDBOX_CONTROLLER_IMAGE|" "$f"
+          images=$(grep -E '^[[:space:]]*(- )?image:[[:space:]]*[^[:space:]]' "$f")
+          echo "$images"
+          if grep -v '@sha256:[0-9a-f]\{64\}$' <<<"$images"; then echo "::error::an image above is not pinned by digest"; exit 1; fi
+          grep -qF "image: $AGENT_SANDBOX_CONTROLLER_IMAGE" "$f"
+      # The repo's trivy pattern (see the trivy-wardynd job): the pinned binary, the shared DB cache,
+      # then the default and the strict CRITICAL scans, here on the controller's digest.
+      - name: Trivy DB cache key date
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore trivy DB cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            cache-trivy-
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
+      - name: Install trivy 0.70.0 (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$dir"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
+      - name: Trivy scan of the agent-sandbox controller digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.AGENT_SANDBOX_CONTROLLER_IMAGE }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
+      - name: Trivy strict scan of the agent-sandbox controller digest (CRITICAL, fixed or not)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.AGENT_SANDBOX_CONTROLLER_IMAGE }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
+      - name: Install agent-sandbox and wait for its controller
+        run: |
+          set -euo pipefail
+          kubectl apply -f "$RUNNER_TEMP/agent-sandbox.yaml"
+          kubectl -n agent-sandbox-system rollout status deployment/agent-sandbox-controller --timeout=180s
+          got=$(kubectl -n agent-sandbox-system get deployment agent-sandbox-controller -o jsonpath='{.spec.template.spec.containers[0].image}')
+          [ "$got" = "$AGENT_SANDBOX_CONTROLLER_IMAGE" ] || { echo "::error::controller runs $got"; exit 1; }
+      # The chart's own render, with wardynd's ServiceAccount named wardyn/wardynd: the ungate policy
+      # admits a gate removal only from that requester, and the suite authenticates as it (next step).
+      # A policy whose CEL does not type-check reports it in status.typeChecking; that fails here.
+      - name: Install the chart's agent-sandbox admission policies (wardynd = wardyn/wardynd)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
+          helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=wardynd \
+            --show-only templates/agent-sandbox-policy.yaml \
+            --show-only templates/agent-sandbox-keep-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          grep -F "system:serviceaccount:wardyn:wardynd" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          grep -F "system:serviceaccount:agent-sandbox-system:agent-sandbox-controller" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          kubectl apply -f "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          for p in $(kubectl get -f "$RUNNER_TEMP/agent-sandbox-policy.yaml" -o jsonpath='{range .items[?(@.kind=="ValidatingAdmissionPolicy")]}{.metadata.name}{" "}{end}'); do
+            for _ in $(seq 30); do
+              [ "$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.observedGeneration}')" = 1 ] && break
+              sleep 1
+            done
+            gen=$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.observedGeneration}')
+            warn=$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.typeChecking.expressionWarnings}')
+            echo "$p: observedGeneration=$gen typeChecking warnings=[$warn]"
+            if [ "$gen" != 1 ] || [ -n "$warn" ]; then echo "::error::policy $p is not type-checked clean"; exit 1; fi
+          done
+      - name: Authenticate the suite as wardyn/wardynd (a ServiceAccount token)
+        run: |
+          set -euo pipefail
+          kubectl create namespace wardyn
+          kubectl -n wardyn create serviceaccount wardynd
+          kubectl create clusterrolebinding wardyn-conformance-wardynd --clusterrole=cluster-admin --serviceaccount=wardyn:wardynd
+          token=$(kubectl -n wardyn create token wardynd --duration=2h)
+          echo "::add-mask::$token"
+          kc="$RUNNER_TEMP/kubeconfig-wardynd.yaml"
+          cp "$KUBECONFIG" "$kc"
+          kubectl --kubeconfig "$kc" config set-credentials wardynd --token="$token" >/dev/null
+          kubectl --kubeconfig "$kc" config set-context --current --user=wardynd >/dev/null
+          who=$(kubectl --kubeconfig "$kc" auth whoami -o jsonpath='{.status.userInfo.username}')
+          [ "$who" = system:serviceaccount:wardyn:wardynd ] || { echo "::error::the suite would run as $who"; exit 1; }
+          echo "suite identity: $who"
+      # Every verb of every rule in the Role the chart renders with the backend on, asked as a
+      # ServiceAccount that holds only that Role; then the verbs it must not hold.
+      - name: kubectl auth can-i for each verb in the rendered Role
+        run: |
+          set -euo pipefail
+          sa=wardynd-rbac-check
+          as=system:serviceaccount:wardyn:$sa
+          ns=wardyn-conformance
+          # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
+          helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=$sa \
+            --show-only templates/rbac.yaml > "$RUNNER_TEMP/rbac.yaml"
+          kubectl apply -f "$RUNNER_TEMP/rbac.yaml"
+          rules=$(kubectl get -f "$RUNNER_TEMP/rbac.yaml" -o json \
+            | jq -r '.items[] | select(.kind == "Role") | .rules[] | .apiGroups[] as $g | .resources[] as $r | .verbs[] as $v | "\(if $g == "" then "core" else $g end) \($r) \($v)"')
+          ask() { # <group> <resource[/sub]> <verb> -> yes|no
+            local g=$1 res=${2%%/*} sub=""
+            [[ $2 == */* ]] && sub=${2#*/}
+            [ "$g" = core ] && g=""
+            if [ -z "$g" ] || kubectl api-resources --api-group="$g" -o name | grep -qxF "$res.$g"; then
+              kubectl auth can-i "$3" "$res${g:+.$g}" ${sub:+--subresource "$sub"} -n "$ns" --as "$as" 2>/dev/null || true
+            else
+              # A group this cluster does not serve (metrics.k8s.io: kind has no metrics-server). kubectl
+              # resolves a resource through discovery, so it cannot name one; the same question goes as
+              # a SubjectAccessReview with the identity's own groups.
+              printf '{"apiVersion":"authorization.k8s.io/v1","kind":"SubjectAccessReview","spec":{"user":"%s","groups":["system:serviceaccounts","system:serviceaccounts:wardyn","system:authenticated"],"resourceAttributes":{"namespace":"%s","group":"%s","resource":"%s","subresource":"%s","verb":"%s"}}}' \
+                "$as" "$ns" "$g" "$res" "$sub" "$3" \
+                | kubectl create -f - -o jsonpath='{.status.allowed}' | sed 's/^true$/yes/; s/^false$/no/'
+            fi
+          }
+          fail=0 n=0
+          while read -r g r v; do
+            n=$((n + 1))
+            got=$(ask "$g" "$r" "$v")
+            echo "can-i $v $r ($g): $got"
+            [ "$got" = yes ] || fail=1
+          done <<<"$rules"
+          grep -qx 'core pods patch' <<<"$rules" || { echo "::error::the rendered Role has no pods patch"; fail=1; }
+          grep -qx 'agents.x-k8s.io sandboxes create' <<<"$rules" || { echo "::error::the rendered Role has no sandboxes create"; fail=1; }
+          for q in "agents.x-k8s.io sandboxes update" "agents.x-k8s.io sandboxes patch" "agents.x-k8s.io sandboxes watch" \
+                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update" \
+                   "core services list" "core services watch"; do
+            read -r g r v <<<"$q"
+            got=$(ask "$g" "$r" "$v")
+            echo "must not hold: can-i $v $r ($g): $got"
+            [ "$got" = no ] || fail=1
+          done
+          echo "$n rendered verbs asked"
+          [ "$n" -gt 0 ] && [ "$fail" = 0 ]
+      - name: Run k8s conformance with the agent-sandbox backend (make target)
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig-wardynd.yaml
+          WARDYN_TEST_K8S: "1"
+          WARDYN_TEST_K8S_AGENT_SANDBOX: "1"
+          WARDYN_K8S_NAMESPACE: wardyn-conformance
+          WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
+          WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
+        run: make test-conformance-k8s CONFORMANCE_K8S_TIMEOUT=101m
+      # A typo in the switch would skip every backend case and pass the suite on plain pods.
+      - name: The agent-sandbox cases ran and passed (a skip fails here)
+        run: |
+          set -euo pipefail
+          out=test/reports/go/conformance-k8s/test-output.json
+          fail=0
+          for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
+                   TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
+                   TestAgentSandboxStagedSecretStarts \
+                   TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence \
+                   TestWarmPoolPlaceholderHoldsNothing TestWarmPoolPlaceholderClaimedAndRefilled \
+                   TestAgentSandboxKeepAdmissionBoundsServices; do
+            if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
+              echo "passed: $t"
+            else
+              echo "::error::$t did not pass (skipped, renamed or absent)"; fail=1
+            fi
+          done
+          exit "$fail"
+      - name: Controller log and runs-namespace events (on failure)
+        if: failure()
+        run: |
+          kubectl -n agent-sandbox-system logs deployment/agent-sandbox-controller --tail=300 || true
+          kubectl -n wardyn-conformance get events --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl -n wardyn-conformance get sandboxes.agents.x-k8s.io,pods -o wide || true
+      - name: Upload conformance-k8s-agent-sandbox test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: conformance-k8s-agent-sandbox-test-reports
+          path: test/reports/go/conformance-k8s/**
+
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
     runs-on: ubuntu-26.04
@@ -1388,6 +1816,10 @@ jobs:
       # test-desktop-profile.sh) — was genuinely absent from every workflow;
       # this job is the natural home, already daemon-free and already named
       # for exactly this kind of static/config check.
+      # node: test-check-managed-settings-drift.sh drives the probe's WebFetch stand-in offline.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
       - name: Shell regression tests (scripts/test-*.sh)
         run: make test-scripts
 
@@ -1483,11 +1915,15 @@ jobs:
     runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
-    # key-service leg.
-    timeout-minutes: 55
+    # key-service leg. 70, was 55: the step ran out at 55 on a 0.10.0-rc.21 train run, against 11 m on the one before.
+    timeout-minutes: 70
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1557,10 +1993,37 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # See go-lint: the internal/api compile in internal-hosts-docker.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # See the go job: internal/api's test compile, prebuilt and measured. One worker here, because the
+      # images built above are already in docker: no second compile or link runs beside the api one.
+      - name: Prebuild internal/api's tests with one worker
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 1 -tags docker
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-conformance-docker
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-docker test reports
         if: always()
@@ -1586,7 +2049,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
+  # A required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
@@ -1597,6 +2060,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1618,14 +2085,23 @@ jobs:
           docker build -q -f deploy/images/vm-linux/Dockerfile -t wardyn/vm-linux:ci .
           docker build -q -f deploy/compose/Dockerfile.proxy -t wardyn/proxy:ci .
       # A hosted runner's CPU does not offer every feature of the default model (Haswell-v4 needs
-      # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run.
+      # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run. Through
+      # scripts/test-report.sh, whose conformance-vm floor goes red if a case the runtime contract cites
+      # skips or is renamed.
       - name: Linux VM conformance
         env:
           WARDYN_TEST_VM_QEMU_IMAGE: wardyn/vm-qemu:ci
           WARDYN_TEST_VM_GUEST_IMAGE: wardyn/vm-linux:ci
           WARDYN_TEST_VM_PROXY_IMAGE: wardyn/proxy:ci
           WARDYN_TEST_VM_CPU_MODEL: Nehalem-v1
-        run: grep -m1 'model name' /proc/cpuinfo && go test -tags 'docker vm' -count=1 -v -timeout 20m ./test/conformance/vm/
+          WARDYN_TEST_REPORT_COVER: "0"
+        run: grep -m1 'model name' /proc/cpuinfo && scripts/test-report.sh conformance-vm -tags 'docker vm' -count=1 -timeout 20m ./test/conformance/vm/
+      - name: Upload conformance-vm test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: conformance-vm-test-reports
+          path: test/reports/go/conformance-vm/**
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
@@ -1741,7 +2217,10 @@ jobs:
   #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
   #   - the darwin runnerd build
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
+  #   - the folder sync's copy pins on an exFAT disk image, a filesystem without hard links
+  #   - the member-scan letter-case pin, on the runner's volume, which ignores letter case
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
   macos:
@@ -1785,6 +2264,16 @@ jobs:
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
           go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The folder sync's one-step swap and move-aside on APFS: -v and the grep prove the pins ran, not just compiled.
+          go test -count=1 -timeout 5m -v -run '^TestPass_ALaptop' ./internal/foldersync/ | tee "$RUNNER_TEMP/foldersync.out"
+          test "$(grep -c -- '^--- PASS: TestPass_ALaptop' "$RUNNER_TEMP/foldersync.out")" = 4
+          # The member-scan pin's letter-case branch runs only on a volume that ignores case: prove this one does,
+          # then that the pin ran and passed.
+          probe="$(mktemp -d)"; touch "$probe/case"
+          test -e "$probe/CASE" || { echo "::error::$TMPDIR is case-sensitive, so the member-scan letter-case branch would not run"; exit 1; }
+          rm -rf "$probe"
+          go test -count=1 -timeout 5m -v -run '^TestOpenScanSource_AnotherNameOfAMemberRootHoldsTheFolder$' ./internal/runner/ | tee "$RUNNER_TEMP/member-scan.out"
+          grep -q -- '^--- PASS: TestOpenScanSource_AnotherNameOfAMemberRootHoldsTheFolder ' "$RUNNER_TEMP/member-scan.out"
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
@@ -1794,12 +2283,69 @@ jobs:
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
           # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
           grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
+          # The sign-in hold's macOS pieces as root: the console owner, the IOPlatformUUID read, auto-login
+          # written to and read back from the loginwindow file, and the carry's copy as another account. They
+          # restore what they change; a skip here is a failure. No guest boots: order and the pane are unproven.
+          go test -c -o "$RUNNER_TEMP/guestagent.test" ./internal/vm/guestagent/
+          sudo env TMPDIR="$TMPDIR" WARDYN_LOGINWINDOW_PIN=1 "$RUNNER_TEMP/guestagent.test" -test.count=1 -test.v -test.run '^TestDarwinLoginHold' | tee "$RUNNER_TEMP/loginhold-root.out"
+          for t in ConsoleOwner IoregUUID AutoLoginWriteAndReadBack CarryCopiesAsAnotherAccount; do
+            grep -q -- "^--- PASS: TestDarwinLoginHold$t " "$RUNNER_TEMP/loginhold-root.out"
+          done
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           export TMPDIR=/private/tmp
           go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      # The folder sync's copy into a laptop name, where hard links are refused, on a real exFAT volume: the pins
+      # in Tests run on APFS with links made to fail, and exFAT may number a file by its directory entry, which
+      # the copy's same-file checks rely on. hdiutil ships with macOS. The test binary is built on the runner's
+      # disk; only the tests' temp dirs (TMPDIR, and GOTMPDIR, which t.TempDir reads first) are on the image.
+      - name: Attach an exFAT disk image
+        id: exfat
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          img="$RUNNER_TEMP/exfat.dmg"
+          mnt="$RUNNER_TEMP/exfat"
+          hdiutil create -size 64m -fs ExFAT -volname WEXFAT "$img"
+          mkdir "$mnt"
+          hdiutil attach -nobrowse -noautoopen -mountpoint "$mnt" "$img"
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          # The pins' premise: this volume refuses a hard link.
+          : >"$mnt/link-probe"
+          if ln "$mnt/link-probe" "$mnt/link-probe-2"; then echo "::error::the exFAT volume made a hard link"; exit 1; fi
+          rm -f "$mnt/link-probe"
+      - name: Folder sync copy pins on the exFAT image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mnt="$RUNNER_TEMP/exfat"
+          # Still the exFAT volume: a plain directory at this path would run the pins on APFS, and they would pass.
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          pins='TestInstall_AFailedCopyOrLinkRefusesThePush|TestPass_AFailedCopyNeverRemovesAnEditorsSave'
+          pins+='|TestPass_ACopyNeverStampsOrClaimsAnEditorsSave|TestPass_ASecondSaveIsNeverTakenForTheFailedCopy'
+          pins+='|TestPass_APutBackNamesALaterSaveItsFailedCopyMovedAside|TestPass_APartialCopyThatCannotBeMovedAsideIsNamed'
+          pins+='|TestPass_APutBackCopyWhoseNameIsGoneKeepsTheSave|TestPass_ALaptopSaveAfterAPullDeletesLookIsKept'
+          pins+='|TestPass_ALaptopFileMadeDuringAPullDeletesMoveBackIsKept'
+          pins+='|TestPass_APutBackWhoseFileIDChangesLeavesNoDuplicate|TestPass_APutBackOfAnEmptySaveWhoseFileIDChangesLeavesNoDuplicate'
+          pins+='|TestPass_ACopyWhoseFileIDChangesNeverTakesAnEditorsSave|TestPass_AFailedCopyWhoseFileIDChangesLeavesNoUnnamedPartial'
+          pins+='|TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved|TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy'
+          pins+='|TestPass_AFailedCopyRewrittenInPlaceToItsLengthIsKept|TestCopyFileIDs_HowThisVolumeNumbersFiles'
+          pins+='|TestPass_AFailedCopyBeforeItsSyncLeavesNoUnnamedPartial'
+          go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
+          (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
+            -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
+          # -v and the count prove all eighteen ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 18
+          # The volume's file numbers, as notices on the run: what the copy proofs rest on there.
+          grep -F 'file ids:' "$RUNNER_TEMP/foldersync-exfat.out" | sed 's/^.*file ids: /::notice title=exFAT file ids::/'
+      - name: Detach the exFAT disk image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 2
+        run: hdiutil detach -force "$RUNNER_TEMP/exfat"
       - name: Build the darwin runnerd
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
@@ -1845,6 +2391,56 @@ jobs:
           codesign --verify --strict "$agent"
           grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # What a tools update pushes: a fresh agent build (the linker's ad hoc signature) signed by Wardyn's own
+      # signer with a throwaway self-signed cert this Mac does not trust, then checked by this Mac's codesign.
+      # TestSignProof makes the identity, writes the signed copy and the requirement it must read back, and runs
+      # the whole host signer, which must pick Wardyn's signer. Not a required check: read it on the train head.
+      - name: Sign the guest agent with Wardyn's signer and check it with codesign
+        id: wardynsign
+        if: ${{ !cancelled() }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$WARDYN_SIGN_PROOF_AGENT" ./cmd/wardyn-guest-agent
+          go test -count=1 -v -run '^TestSignProof$' ./internal/macvm/ | tee "$RUNNER_TEMP/sign-proof.out"
+          grep -q -- '^--- PASS: TestSignProof ' "$RUNNER_TEMP/sign-proof.out"
+          signed="$WARDYN_SIGN_PROOF_DIR/wardyn/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed"
+          dr="$(codesign -d -r- "$signed" 2>&1 | sed -n 's/^designated => //p')"
+          echo "designated => $dr"
+          [ "$dr" = "$(cat "$WARDYN_SIGN_PROOF_DIR/requirement.txt")" ]
+          info="$(codesign -dvvv "$signed" 2>&1)"
+          echo "$info"
+          grep -q 'Hash type=sha256 size=32' <<<"$info"
+          grep -q 'flags=0x0(none)' <<<"$info"
+          if grep -Eq 'adhoc|linker-signed' <<<"$info"; then echo "::error::the signed agent reads ad hoc or linker-signed"; exit 1; fi
+          # It starts: macOS kills a binary whose signature it refuses before flag parsing. Not a gate (exit 2 is -h's).
+          rc=0
+          "$signed" -h >/dev/null 2>&1 || rc=$?
+          echo "signed agent -h exit status: $rc"
+          if [ "$rc" -ge 128 ]; then echo "::warning::the signed agent was killed at start (exit $rc)"; fi
+      # The codesign fallback for real: a temporary keychain on the search list and the requirement as -r= text.
+      # It settles whether codesign signs with a self-signed identity this Mac does not trust. Either answer is a
+      # result, so it does not fail the job; the log says which.
+      - name: Sign the guest agent with the codesign fallback (result only)
+        if: ${{ !cancelled() && steps.wardynsign.outcome == 'success' }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -count=1 -v -run '^TestSignProofCodesignFallback$' ./internal/macvm/ || rc=$?
+          echo "codesign fallback exit status: $rc"
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::the codesign fallback did not sign with an untrusted self-signed identity on this Mac"
+            exit 0
+          fi
+          signed="$WARDYN_SIGN_PROOF_DIR/codesign/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed" || echo "::warning::codesign --verify --strict refused the fallback's copy"
+          codesign -d -r- "$signed" 2>&1 || true
       # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
       - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
@@ -2015,10 +2611,12 @@ jobs:
             suite: pg-api-1
             run: make test-report-pg-api PG_PART=1/2 PG_REPORT=pg-api-1
             superuser: "1"
+            prebuild: plain
           - shard: api-2
             suite: pg-api-2
             run: make test-report-pg-api PG_PART=2/2 PG_REPORT=pg-api-2
             superuser: "1"
+            prebuild: plain
           - shard: store
             suite: pg-store
             run: make test-report-pg-store PG_REPORT=pg-store
@@ -2034,6 +2632,7 @@ jobs:
             suite: ''
             run: make test-race-pg
             superuser: ''
+            prebuild: race
     services:
       postgres:
         image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
@@ -2078,6 +2677,15 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
+      # See go-lint: the internal/api test compile.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -2085,6 +2693,18 @@ jobs:
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
       # consult the marker. The race shard does not set it, as before.
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        if: matrix.prebuild != ''
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 2 ${{ matrix.prebuild == 'race' && '-race' || '' }}
       - name: Postgres-gated suite (${{ matrix.shard }})
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
@@ -2093,7 +2713,13 @@ jobs:
           # No gate reads a PG shard's coverage (the floor and cover-union take unit,
           # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
           WARDYN_TEST_REPORT_COVER: '0'
-        run: ${{ matrix.run }}
+          # The same GOFLAGS as the prebuild above, so the api and race shards reuse its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
         if: always() && matrix.suite != ''
@@ -2267,14 +2893,17 @@ jobs:
             cache-trivy-
       # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
       # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -2507,7 +3136,7 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh notices
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2531,8 +3160,9 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
-    timeout-minutes: 25
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
+    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -2577,8 +3207,23 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+      # See go-lint: staticcheck's whole-tree pass.
+      - name: Add swap for the memory peak
+        if: matrix.gate == 'staticcheck'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # vmstat as in the go job: staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
-        run: make ${{ matrix.gate }}
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

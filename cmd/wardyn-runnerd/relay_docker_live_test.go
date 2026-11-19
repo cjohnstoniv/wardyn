@@ -145,12 +145,7 @@ func TestRelayOnThisEngine(t *testing.T) {
 	})
 
 	t.Run("a closed port exits 1", func(t *testing.T) {
-		probeLn, err := net.Listen("tcp", net.JoinHostPort(bind, "0"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		closed := uint16(probeLn.Addr().(*net.TCPAddr).Port)
-		_ = probeLn.Close()
+		closed := uint16(1) // nothing listens there; a freed port could be taken by another process
 		if code := probe(t, "host-gateway", closed); code != 1 {
 			t.Fatalf("canary to closed host-gateway:%d exited %d, want 1", closed, code)
 		}

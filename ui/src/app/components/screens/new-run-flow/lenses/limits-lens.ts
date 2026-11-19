@@ -37,6 +37,12 @@ export const minimumFill = (intent: RunIntent, min: MacOSMinimum): NonNullable<G
   ...((intent.resources?.memory_mib ?? 0) < min.memoryMib && { memory_mib: min.memoryMib }),
 });
 
+/** On a draft already on macOS, a new minimum (another pool's) raises the figures under it: the fill now names those figures at their new numbers and keeps every other recorded one. */
+export const refillMinimum = (intent: RunIntent, fill: GuidedFacts["macosFill"], min: MacOSMinimum): GuidedFacts["macosFill"] => {
+  const raised = minimumFill(intent, min);
+  return Object.keys(raised).length ? { ...fill, ...raised } : fill;
+};
+
 /** The fill without one figure: a figure the person sets is theirs, even when they set it back to the number filled in. */
 export function disownFill(fill: GuidedFacts["macosFill"], key: "cpu_millis" | "memory_mib"): GuidedFacts["macosFill"] {
   if (fill?.[key] === undefined) return fill;

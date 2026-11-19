@@ -243,12 +243,20 @@ func (c *ADOEntraConfig) PATDays() int {
 }
 
 // Profile is the capabilities a run gets when it asks for nothing:
-// DefaultProfile, or adoscope.ProfileDefault when that is empty.
+// DefaultProfile, or adoscope.ProfileDefault when that is empty, with pr expanded to its parts.
 func (c *ADOEntraConfig) Profile() []adoscope.Capability {
 	if c == nil || len(c.DefaultProfile) == 0 {
-		return adoscope.ProfileDefault()
+		return adoscope.ExpandPR(adoscope.ProfileDefault())
 	}
-	return slices.Clone(c.DefaultProfile)
+	return adoscope.ExpandPR(c.DefaultProfile)
+}
+
+// Ceiling is CapabilityCeiling with pr expanded to its parts: the form every run-bound comparison reads.
+func (c *ADOEntraConfig) Ceiling() []adoscope.Capability {
+	if c == nil {
+		return nil
+	}
+	return adoscope.ExpandPR(c.CapabilityCeiling)
 }
 
 // GitProvider is one git-provider row: a kind, the base URLs it admits, and

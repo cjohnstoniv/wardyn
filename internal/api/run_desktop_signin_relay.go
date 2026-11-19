@@ -68,12 +68,15 @@ func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess
 		release()
 		return nil, uiFail(ctx, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 	}
-	execSess, err := se.ExecStreamAs(ctx, run.SandboxRef, runner.SigninPersonUser, runner.ExecSpec{
-		Argv: []string{"socat", "-", "UNIX-CONNECT:" + desktopSigninSocket},
-	})
+	// The relay starts under the run's start lock, on the run as it stands there (startFresh).
+	execSess, err := startFresh(s, ctx, run.ID, uiLiveRunWords, execStartBudget, func(ctx context.Context, run types.AgentRun) (*runner.ExecSession, error) {
+		return se.ExecStreamAs(ctx, run.SandboxRef, runner.SigninPersonUser, runner.ExecSpec{
+			Argv: []string{"socat", "-", "UNIX-CONNECT:" + desktopSigninSocket},
+		})
+	}, closeExecSession)
 	if err != nil {
 		release()
-		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayExecFailed, uiExecFailMsg(ctx, "start sign-in display relay", err))
+		return nil, uiExecFailure(ctx, reasonUIGatewayExecFailed, "start sign-in display relay", err)
 	}
 	keepCtx, stopKeepalive := context.WithCancel(context.WithoutCancel(ctx))
 	go s.attachKeepalive(keepCtx, sess.Run)

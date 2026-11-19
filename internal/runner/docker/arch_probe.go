@@ -70,7 +70,7 @@ func (d *Driver) probeExecFormat(ctx context.Context, ref, runtime string) archV
 	remove := func(id string) {
 		rctx, rcancel := context.WithTimeout(context.Background(), archProbeClean)
 		defer rcancel()
-		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}
 	info, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {

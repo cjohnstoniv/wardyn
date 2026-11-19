@@ -17,9 +17,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
-	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -54,15 +54,64 @@ func (g *editGuest) MovePointer(_ context.Context, _ []byte, x, y int) error {
 	return nil
 }
 
-// textFirstBoot is the fake first boot, keeping the window text the edit gives it.
-type textFirstBoot struct {
-	*macvmtest.FirstBoot
-	text *macvm.ScreenText
+// windowGuest is the fake guest of the edit's window boot, one per boot, over the edit's guest: its VM stops
+// when asked (RequestStop), as a guest that shuts down does, unless ignore is set.
+type windowGuest struct {
+	*editGuest
+	ignore bool
+	mu     sync.Mutex
+	stops  int
+	done   chan struct{}
 }
 
-func (b textFirstBoot) WithScreen(text macvm.ScreenText) macvm.FirstBooter {
-	*b.text = text
-	return b.FirstBoot
+func (g *windowGuest) ViewHandle() (unsafe.Pointer, error) { return unsafe.Pointer(&vmByte), nil }
+
+func (g *windowGuest) RequestStop() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stops++
+	if g.stops == 1 && !g.ignore {
+		close(g.done)
+	}
+	return nil
+}
+
+func (g *windowGuest) Done() <-chan struct{} { return g.done }
+
+func (g *windowGuest) State() macvm.MachineState {
+	select {
+	case <-g.done:
+		return macvm.StateStopped
+	default:
+		return macvm.StateRunning
+	}
+}
+
+func (g *windowGuest) stopsAsked() int { g.mu.Lock(); defer g.mu.Unlock(); return g.stops }
+
+// end stops the VM without the guest being asked, as a stop through the boot's ctl.sock does.
+func (g *windowGuest) end() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stops == 0 {
+		g.stops = -1
+		close(g.done)
+	}
+}
+
+// editScreen is the fake edit window: it records each window's text and VM and, once the window is up, does
+// what the person does: reads the code from the file the window names, then clicks the close button.
+type editScreen struct {
+	*fakeScreen
+	onOpen func(text macvm.WindowText)
+}
+
+func (s *editScreen) Open(vm unsafe.Pointer, text macvm.WindowText) (macvm.Window, error) {
+	w, err := s.fakeScreen.Open(vm, text)
+	if err == nil && s.onOpen != nil {
+		go s.onOpen(text)
+	}
+	return w, err
 }
 
 // editFix is a prepared base (its desktop observe, so a swap shows) and an edit of it whose window's guest
@@ -73,10 +122,15 @@ type editFix struct {
 	opts     macvm.EditOptions
 	out      bytes.Buffer
 	boots    int
-	fbBoots  int // the first boots before the edit's (prepare's)
 	codeSeen macvm.SetupCodeRecord
 	base     string
-	screen   macvm.ScreenText
+	scr      *editScreen
+	windows  []*windowGuest      // the window boots' guests
+	specs    []macvm.MachineSpec // and what they booted
+	nics     []*os.File          // on which NIC
+	ignore   bool                // the window boots' guests ignore the close
+	stopErr  error               // what the window boots' stop answers
+	stops    int                 // and how often it was called
 	log      bytes.Buffer
 	sealed   string // the admin password the base kept at prepare
 	desktop  string // the desktop mode the base has before the edit
@@ -95,38 +149,27 @@ func newEdit(t *testing.T) *editFix {
 	e.writeManifest(t, m)
 	e.g = &editGuest{guest: newGuest(), control: true, posture: guestagent.ToolsPosture{Accounts: []guestagent.GuestAccount{
 		{Name: "root", UID: 0}, {Name: "nobody", UID: -2}, {Name: "_spotlight", UID: 89}, {Name: "wardyn-admin", UID: 501}, {Name: "agent", UID: 502}}}}
+	e.scr = &editScreen{fakeScreen: &fakeScreen{}, onOpen: func(text macvm.WindowText) {
+		b, _ := os.ReadFile(text.CodeFile)
+		_ = json.Unmarshal(b, &e.codeSeen)
+		if text.AskStop != nil {
+			text.AskStop()
+		}
+	}}
 	e.opts = macvm.EditOptions{
-		Engine: f.eng, Layout: f.opts.Layout, FirstBoot: textFirstBoot{f.fb, &e.screen}, PrepNet: f.opts.PrepNet, CPUs: 4, MemoryMiB: 8192, Out: &e.out,
+		Engine: f.eng, Layout: f.opts.Layout, PrepNet: f.opts.PrepNet, Screen: e.scr, CPUs: 4, MemoryMiB: 8192, Out: &e.out,
 		Log: slog.New(slog.NewJSONHandler(&e.log, nil)),
 		Guest: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
 			e.boots++
 			return e.g, func(context.Context) error { return nil }, nil
 		},
+		WindowBoot: func(_ context.Context, spec macvm.MachineSpec, nic *os.File) (macvm.ToolsGuest, func(context.Context) error, error) {
+			w := &windowGuest{editGuest: e.g, ignore: e.ignore, done: make(chan struct{})}
+			e.windows, e.specs, e.nics = append(e.windows, w), append(e.specs, spec), append(e.nics, nic)
+			return w, func(context.Context) error { e.stops++; return e.stopErr }, nil
+		},
 		Now: func() time.Time { return time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC) },
 	}
-	e.fbBoots = f.fb.Boots()
-	opened0, _ := f.fb.Windows()
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	wait := func(more func() bool) bool {
-		for more() {
-			select {
-			case <-stop:
-				return false
-			case <-time.After(time.Millisecond):
-			}
-		}
-		return true
-	}
-	go func() {
-		noWindow := func() bool { opened, _ := f.fb.Windows(); return opened == opened0 }
-		if !wait(func() bool { return f.fb.Boots() == e.fbBoots }) || !wait(noWindow) {
-			return
-		}
-		b, _ := os.ReadFile(f.opts.Layout.SetupCode())
-		_ = json.Unmarshal(b, &e.codeSeen)
-		f.fb.Shutdown(nil)
-	}()
 	return e
 }
 
@@ -183,19 +226,23 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	if _, err := macvm.ReadToolsRecord(e.base); err != nil {
 		t.Errorf("the edited base lost its tools record: %v", err)
 	}
-	if e.boots != 2 || e.f.fb.Boots()-e.fbBoots != 1 {
-		t.Fatalf("boots: %d headless, %d windowed", e.boots, e.f.fb.Boots()-e.fbBoots)
+	if e.boots != 2 || len(e.windows) != 1 {
+		t.Fatalf("boots: %d headless, %d windowed", e.boots, len(e.windows))
 	}
-	if a := e.f.fb.Last(); a.Username != "" || a.Password != "" || !strings.HasSuffix(a.Disk, ".update/"+macvm.DiskFile) {
-		t.Errorf("the window booted %+v, want the staging copy, plain", a)
+	if d := e.specs[0].DiskPath; !strings.HasSuffix(d, ".update/"+macvm.DiskFile) {
+		t.Errorf("the window booted %s, want the staging copy", d)
 	}
 	if len(e.g.codes) != 2 || e.g.codes[0] == e.g.codes[1] || e.codeSeen.Code != e.g.codes[0] || e.codeSeen.Account != "wardyn-admin" {
 		t.Fatalf("codes %q, the file held %+v", e.g.codes, e.codeSeen)
 	}
 	want := []string{
-		"Editing this Mac's macOS base. Runs keep using the current base until the edited one passes its checks.",
-		"Sign in as wardyn-admin with the one-time code in " + e.f.opts.Layout.SetupCode() + ".",
+		"This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks.",
+		"Starting the copy in a window. This takes about 2 minutes.",
+		"The VM signs in as agent by itself. The one-time code is wardyn-admin's password, for its password prompts: click Type code in the window to type it, or Show code to read it.",
 		"The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test.",
+		"Read from the edited base in this boot:",
+		"  Full Disk Access            could not be read",
+		"  desktop                     control",
 		"The edited base is ready, and runs now use it. Desktop: control.",
 	}
 	if !slices.Equal(e.lines(), want) {
@@ -227,32 +274,81 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	if _, err := os.Stat(e.f.opts.Layout.SetupCode()); !os.IsNotExist(err) {
 		t.Error("the code file outlived the edit")
 	}
-	if opened, closed := e.f.fb.Windows(); opened != closed || opened == 0 {
-		t.Errorf("windows opened %d closed %d", opened, closed)
+	if e.scr.opens() != 1 || e.scr.win(0).closes() != 1 {
+		t.Errorf("windows opened %d, the first closed %d times", e.scr.opens(), e.scr.win(0).closes())
 	}
-	wantText := macvm.ScreenText{
+	wantText := macvm.WindowText{
 		Title: "Wardyn: edit this macOS VM base",
-		Steps: "Sign in as wardyn-admin with the one-time code. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window: the VM shuts down (if macOS asks, click Shut Down). Wardyn checks the base before runs use it.\n" +
+			"Paste from this Mac does not reach the VM, so type commands by hand. Type code types only the one-time code.\n" +
+			"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
+			"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
+			"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (/usr/local/libexec/wardyn-guest-agent) from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
+			"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks; in macOS's dialog, enter wardyn-admin and the code.\n" +
 			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 			"Leave Remote Login off and add no accounts: the check refuses a base with either.",
-		Closable: true,
 		CodeFile: e.f.opts.Layout.SetupCode(),
 	}
-	if e.screen != wantText {
-		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", e.screen, wantText)
+	if got := e.scr.texts[0]; got.Title != wantText.Title || got.Strip != wantText.Strip || got.CodeFile != wantText.CodeFile {
+		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", got, wantText)
 	}
 }
 
-// A first booter that cannot take the edit's window text opens no window with setup's text instead.
-func TestEditBaseNeedsTheEditWindowText(t *testing.T) {
-	e := newEdit(t)
-	opened0, _ := e.f.fb.Windows()
-	e.opts.FirstBoot = e.f.fb
-	if _, err := macvm.EditBase(context.Background(), e.opts); err == nil || !strings.Contains(err.Error(), "cannot open one") {
-		t.Fatalf("err %v", err)
+// Every window that takes keys says paste from this Mac does not pass in, and the edit window says Type
+// code types only the code. Catches the note dropped from one of the three windows.
+func TestWindowStripsSayPasteDoesNotPassIn(t *testing.T) {
+	for name, strip := range map[string]string{"run window": macvm.WindowStrip, "kept window": macvm.KeptWindowStrip} {
+		if !strings.Contains(strip, "paste from this Mac does not") {
+			t.Errorf("the %s strip does not say paste does not pass in: %q", name, strip)
+		}
 	}
-	if opened, _ := e.f.fb.Windows(); opened != opened0 {
-		t.Error("a window opened")
+	e := newEdit(t)
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.scr.texts) != 1 {
+		t.Fatalf("the edit opened %d windows", len(e.scr.texts))
+	}
+	for _, want := range []string{"Paste from this Mac does not reach the VM", "Type code types only the one-time code"} {
+		if !strings.Contains(e.scr.texts[0].Strip, want) {
+			t.Errorf("the edit window's strip does not say %q", want)
+		}
+	}
+}
+
+// The command's code line names the window's Type code and Show code buttons and no file: the setup-code
+// file's path is neither printed nor named, though the window still reads the file.
+func TestEditCodeLineNamesNoFile(t *testing.T) {
+	e := newEdit(t)
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	for _, l := range e.lines() {
+		if strings.Contains(l, "one-time code") {
+			code = l
+		}
+	}
+	if !strings.Contains(code, "Type code") || !strings.Contains(code, "Show code") {
+		t.Errorf("the code line %q does not name the buttons", code)
+	}
+	for _, bad := range []string{e.f.opts.Layout.SetupCode(), "setup-code", "read it in"} {
+		if strings.Contains(e.out.String(), bad) {
+			t.Errorf("the output names %q:\n%s", bad, e.out.String())
+		}
+	}
+}
+
+// An edit with no window of its own (Screen nil: the Mac's, which this test process does not serve, or none
+// in a build without one) is refused before anything boots or prints.
+func TestEditBaseWithoutAWindowStartsNothing(t *testing.T) {
+	e := newEdit(t)
+	e.opts.Screen = nil
+	if _, err := macvm.EditBase(context.Background(), e.opts); err == nil {
+		t.Fatal("an edit with no window started")
+	}
+	if e.boots != 0 || len(e.windows) != 0 || e.out.Len() != 0 {
+		t.Fatalf("a refused edit booted (%d, %d) or printed %q", e.boots, len(e.windows), e.out.String())
 	}
 	e.oldBaseKept(t)
 }
@@ -371,7 +467,8 @@ func TestEditBaseKeepsTheBasesDesktopMode(t *testing.T) {
 			if rec, ok := macvm.ReadEditRecord(e.base, got); !ok || rec.Recheck != macvm.EditRecheckPassed {
 				t.Errorf("record %+v %v", rec, ok)
 			}
-			if ready := "The edited base is ready, and runs now use it. Desktop: " + tc.want + "."; !slices.Contains(e.lines(), ready) {
+			words := map[string]string{macvm.DesktopObserve: "view only", macvm.DesktopControl: "control"}[tc.want]
+			if ready := "The edited base is ready, and runs now use it. Desktop: " + words + "."; !slices.Contains(e.lines(), ready) {
 				t.Errorf("lines:\n%s", e.out.String())
 			}
 		})
@@ -403,12 +500,11 @@ func TestEditBaseFailedSwapKeepsOldBase(t *testing.T) {
 func TestEditBaseRefusedOldPasswordOpensNoWindow(t *testing.T) {
 	e := newEdit(t)
 	e.g.refuse = true
-	opened0, _ := e.f.fb.Windows()
 	_, err := macvm.EditBase(context.Background(), e.opts)
 	if want := "macvm: the setup admin's one-time code: the guest did not take it"; err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
-	if opened, _ := e.f.fb.Windows(); opened != opened0 {
+	if e.scr.opens() != 0 || len(e.windows) != 0 {
 		t.Error("a window opened")
 	}
 	e.oldBaseKept(t)
@@ -467,12 +563,12 @@ func TestEditBaseRefusals(t *testing.T) {
 		err.Error() != "This Mac has no ready macOS base to edit. Run `wardyn-runnerd macos-vm prepare` first." {
 		t.Fatalf("no base: %v", err)
 	}
-	e.f.fb.NoScreen = macvm.ErrNoDesktopSession
+	e.scr.setReady(macvm.ErrNoDesktopSession)
 	const noDesktop = "edit-base needs this Mac's desktop: run it in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo."
 	if _, err := macvm.EditBase(context.Background(), e.opts); !errors.Is(err, macvm.ErrEditNoDesktop) || err.Error() != noDesktop {
 		t.Fatalf("no desktop: %v", err)
 	}
-	e.f.fb.NoScreen = nil
+	e.scr.setReady(nil)
 	restore := macvm.SetGeteuid(0)
 	_, err = macvm.EditBase(context.Background(), e.opts)
 	restore()
@@ -486,8 +582,8 @@ func TestEditBaseRefusals(t *testing.T) {
 		err.Error() != "This macOS base was prepared before Wardyn kept its admin password, so edit-base cannot open it. Run `wardyn-runnerd macos-vm prepare --new-image`, then edit-base again." {
 		t.Fatalf("no admin password: %v", err)
 	}
-	if e.boots != 0 || e.f.fb.Boots() != e.fbBoots || e.out.Len() != 0 {
-		t.Fatalf("a refused edit booted (%d, %d) or printed %q", e.boots, e.f.fb.Boots()-e.fbBoots, e.out.String())
+	if e.boots != 0 || len(e.windows) != 0 || e.out.Len() != 0 {
+		t.Fatalf("a refused edit booted (%d, %d) or printed %q", e.boots, len(e.windows), e.out.String())
 	}
 	if macvm.ErrEditSlots.Error() != "Editing uses one of this Mac's 2 macOS VM slots, and both are in use. Try again when a run ends." {
 		t.Error("slots refusal")

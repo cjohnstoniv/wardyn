@@ -759,9 +759,10 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// is how an admin takes a role AWAY. Same revoke, same scoping — and the
 	// candidate set is the real post-delete row set, so a value the CHART still
 	// grants (or a second console row still names) is not a demotion and
-	// revokes nothing. The response is 204 with no body, so both numbers ride
-	// the audit row and the WARN line rather than the wire — a body here would
-	// change this route's status shape for every existing client.
+	// revokes nothing. Both numbers ride the audit row and the WARN line. The
+	// response is 204 with no body, except when the revocation failed: then it
+	// is 200 with tokens_revocation_failed and the upsert's detail, so the admin
+	// who took the role away learns that a token may still hold it.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
 	revokedDeleted, revokeErr := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
 	data := map[string]any{
@@ -776,18 +777,29 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindRoleMapping, id.String(), "success", nil)
 	}
+	if revokeErr != nil {
+		writeJSON(w, http.StatusOK, struct {
+			TokensRevocationFailed bool   `json:"tokens_revocation_failed"`
+			Detail                 string `json:"detail"`
+		}{true, roleTokensNotReached})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// roleTokensNotReachedDetail is the upsert response's statement that a
-// role-mapping change was saved but did not reach every outstanding API token
-// ("" when it did). The delete answers 204 with no body, so on that route only
-// the audit row and the WARN line carry the signal. The remedy names the door that exists: POST /sessions/revoke.
+// roleTokensNotReached is the statement that a role-mapping change was saved
+// but did not reach every outstanding API token: the upsert's detail, the
+// delete's 200 and an approved held change's answer. The remedy names the
+// door that exists: POST /sessions/revoke.
+const roleTokensNotReached = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role. Revoke them with POST /sessions/revoke."
+
+// roleTokensNotReachedDetail is roleTokensNotReached when revokeErr is set,
+// and "" when the change reached every token.
 func roleTokensNotReachedDetail(revokeErr error) string {
 	if revokeErr == nil {
 		return ""
 	}
-	return "The change is saved, but Wardyn could not revoke every API token that may still hold the old role. Revoke them with POST /sessions/revoke."
+	return roleTokensNotReached
 }
 
 // POST /access/preview

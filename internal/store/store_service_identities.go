@@ -127,7 +127,7 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 	if err != nil {
 		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	out, err := CreateServiceIdentityQ(ctx, tx, si)
 	if err != nil {
 		return types.ServiceIdentity{}, err
@@ -237,7 +237,7 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 	if err != nil {
 		return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	out, err := UpdateServiceIdentityQ(ctx, tx, name, ch)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
@@ -300,7 +300,7 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string) (Service
 	if err != nil {
 		return ServiceIdentityChanged{}, fmt.Errorf("store: retire service identity: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	before, err := lockServiceIdentity(ctx, tx, name)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
@@ -329,7 +329,7 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLiv
 	if err != nil {
 		return types.APIToken{}, fmt.Errorf("store: create service token: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// FOR UPDATE: two mints, and a sponsor change or retire, queue on the row. A change waits for the
 	// insert and then revokes the token; a mint after a change re-reads the new sponsor and refuses; and
 	// the live count below is exact for the mint that holds the lock.

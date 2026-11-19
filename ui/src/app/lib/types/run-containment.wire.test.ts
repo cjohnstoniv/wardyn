@@ -52,6 +52,7 @@ describe("run containment wire", () => {
     ["internal/types/run_containment.go", "RunContainmentPending"],
     ["internal/types/run_containment.go", "RunNodeRecord"],
     ["internal/types/run_containment.go", "RunNodeRecordRequest"],
+    ["internal/types/run_containment.go", "RunTeardownHold"],
     ["internal/runner/runner.go", "NodeTuple"],
     ["internal/runner/runner.go", "NodeTuplePod"],
     ["internal/runner/runner.go", "NodeSample"],
@@ -70,6 +71,12 @@ describe("run containment wire", () => {
     const go = [...goTypes.matchAll(re as RegExp)].map((m) => m[1]);
     expect(go.length).toBeGreaterThanOrEqual(2);
     expect(tsUnion(ts, name)).toEqual(new Set(go));
+  });
+
+  it("TeardownHoldKind is the Go kill and end action kinds", () => {
+    const go = [...read("internal/types/runner.go").matchAll(/RunnerAction(?:Kill|End)\s+RunnerActionKind = "([a-z_]+)"/g)].map((m) => m[1]);
+    expect(go).toHaveLength(2);
+    expect(tsUnion(ts, "TeardownHoldKind")).toEqual(new Set(go));
   });
 
   it("RunContainmentReason is the Go reason block", () => {

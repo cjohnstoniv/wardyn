@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -532,5 +533,30 @@ func TestSCIMCovGroupSnapshotMatch(t *testing.T) {
 	}
 	if err := (&Server{}).removeGroupMembers(context.Background(), nil, store.ScimGroup{}, nil, "x"); err != nil {
 		t.Errorf("removing no one = %v, want nil", err)
+	}
+}
+
+// A superseded answer is nil, so a real failure joined with the refusal is logged with whom it was for.
+func TestSCIMCovSupersededLogsWhatItDrops(t *testing.T) {
+	logs := miscCovCaptureLogs(t)
+	id, cause := uuid.New(), errors.New("cut failed")
+	if err := unlessSuperseded(t.Context(), errors.Join(cause, store.ErrSuperseded), id, slog.String("group", "g1")); err != nil {
+		t.Fatalf("a joined refusal answered %v, want nil", err)
+	}
+	r, ok := logs.find("stopped for a newer occurrence")
+	if !ok || r.Level != slog.LevelWarn {
+		t.Fatalf("the dropped error was not logged at warning level (found %v, level %v)", ok, r.Level)
+	}
+	if v, _ := logs.attr(r, "identity"); v.String() != id.String() {
+		t.Errorf("identity = %q, want %q", v, id)
+	}
+	if v, _ := logs.attr(r, "group"); v.String() != "g1" {
+		t.Errorf("group = %q, want the attr the caller passed", v)
+	}
+	if v, _ := logs.attr(r, "err"); !strings.Contains(v.String(), cause.Error()) {
+		t.Errorf("err = %q, want it to carry %q", v, cause)
+	}
+	if err := unlessSuperseded(t.Context(), cause, id); err != cause {
+		t.Errorf("a plain failure answered %v, want it unchanged", err)
 	}
 }

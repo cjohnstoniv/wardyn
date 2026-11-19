@@ -7,7 +7,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { access as api } from "../../../lib/api/access";
 import { PendingChangeError } from "../../../lib/api/core";
-import type { AccessResponse, AccessRole } from "../../../lib/types";
+import type { AccessResponse, AccessRole, GovernanceChange } from "../../../lib/types";
 import { GUARD, PEOPLE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
@@ -40,7 +40,7 @@ export function AddMappingForm({
   access: AccessResponse;
   onReload: () => void;
   /** Whether the last write was held for a second person (202) rather than saved. */
-  onHeld: (held: boolean) => void;
+  onHeld: (change: GovernanceChange | null) => void;
   // #913: a migrated row's "Choose a type" action sets this to that row's
   // value; consumed once (below) so a second click can prefill the same
   // value again.
@@ -63,6 +63,9 @@ export function AddMappingForm({
   // R1-F112: a demotion revokes outstanding tokens SILENTLY on the wire —
   // this is the one-line receipt for it, cleared on the next attempt.
   const [tokensRevoked, setTokensRevoked] = React.useState<number | null>(null);
+  // The save landed but some old-role tokens may still work: the server's
+  // remedy, kept until the next attempt.
+  const [revokeIncomplete, setRevokeIncomplete] = React.useState<string | null>(null);
 
   // #913: adopt a "Choose a type" prefill once, then tell the table it was
   // consumed — the same value re-submitted here is the natural upsert-in-place
@@ -82,6 +85,7 @@ export function AddMappingForm({
     setSaving(true);
     setError(null);
     setTokensRevoked(null);
+    setRevokeIncomplete(null);
     try {
       const res = await api.upsertMapping({
         value: value.trim(),
@@ -94,7 +98,8 @@ export function AddMappingForm({
       setGuardOpen(false);
       setAck(false);
       setTokensRevoked(res.tokensRevoked ?? null);
-      onHeld(false);
+      setRevokeIncomplete(res.tokensRevocationFailed ? (res.detail ?? "") : null);
+      onHeld(null);
       onReload();
     } catch (e) {
       if (e instanceof PendingChangeError) {
@@ -102,7 +107,7 @@ export function AddMappingForm({
         setUserType("");
         setGuardOpen(false);
         setAck(false);
-        onHeld(true);
+        onHeld(e.change);
         onReload();
         return;
       }
@@ -191,6 +196,7 @@ export function AddMappingForm({
           renders when it's non-zero, so a fresh mapping (nothing to revoke)
           says nothing. */}
       {!error && !!tokensRevoked && <Note tone="plain">{PEOPLE.TOKENS_REVOKED_RECEIPT(tokensRevoked)}</Note>}
+      {!error && revokeIncomplete !== null && <Note tone="red">{revokeIncomplete}</Note>}
 
       <AlertDialog open={guardOpen} onOpenChange={(o) => !o && setGuardOpen(false)}>
         <AlertDialogContent>

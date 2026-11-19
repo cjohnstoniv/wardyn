@@ -40,7 +40,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CollapsibleCard } from "../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../lib/format";
@@ -88,6 +88,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   const caps = useMyCapabilities(!operator);
   const addBlocked = !capabilityAllowed(caps, "feature", "ssh_key");
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     sshKeysApi
@@ -96,7 +97,10 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
         setKeys(k);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -129,7 +133,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
         {status === "loading" ? (
           <TableSkeleton rows={3} cols={4} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : keys.length === 0 ? (
           <EmptyState
             icon={KeyRound}
@@ -148,7 +152,9 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                 <TableHead>Name</TableHead>
                 <TableHead>Fingerprint</TableHead>
                 <TableHead>Added</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -293,14 +299,21 @@ export function AddSSHKeyDialog({
       onAdded();
       toast.success("SSH key added");
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to add key.");
+      setError(getErrorMessage(e, "Failed to add key."));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    // A key still being added keeps its dialog: closed and opened again, the answer would close the new one.
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o && saving) return;
+        onOpenChange(o);
+      }}
+    >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add key</DialogTitle>
@@ -312,6 +325,7 @@ export function AddSSHKeyDialog({
             <Input
               id="ssh-key-name"
               placeholder="laptop"
+              disabled={saving}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoComplete="off"
@@ -321,6 +335,7 @@ export function AddSSHKeyDialog({
             <Textarea
               id="ssh-key-value"
               placeholder="ssh-ed25519 AAAA…"
+              disabled={saving}
               value={publicKey}
               onChange={(e) => setPublicKey(e.target.value)}
               rows={4}
@@ -338,7 +353,7 @@ export function AddSSHKeyDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={save} disabled={saving || !publicKey.trim()} variant="info">

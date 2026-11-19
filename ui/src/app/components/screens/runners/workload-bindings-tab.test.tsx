@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { STALE_NOTE, STATES } from "../../wardyn/states";
 import { WorkloadBindingsTab } from "./workload-bindings-tab";
 
 const listMock = vi.fn();
@@ -61,6 +62,25 @@ afterEach(() => {
 });
 
 describe("Workload bindings tab", () => {
+  it("a failed first read shows the default line, not the raw error", async () => {
+    listMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(<WorkloadBindingsTab />);
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
+  });
+
+  it("a failed re-read after a delete keeps the rows and says they may be old", async () => {
+    removeMock.mockResolvedValue(undefined);
+    render(<WorkloadBindingsTab />);
+    const rows = await screen.findAllByTestId("binding-row");
+    listMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await userEvent.click(within(rows[0]).getByRole("button", { name: "Delete team-payments" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(STALE_NOTE);
+    expect(screen.getAllByTestId("binding-row")).toHaveLength(3);
+  });
+
   it("lists each binding with the mock's columns", async () => {
     render(<WorkloadBindingsTab />);
     const rows = await screen.findAllByTestId("binding-row");

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	neturl "net/url"
 	"os"
@@ -42,6 +43,17 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&spec); err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// A second object would be ignored with every restriction it names.
+	if err := dec.Decode(new(json.RawMessage)); err == nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: more than one JSON value", path)
+	} else if !errors.Is(err, io.EOF) {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// After the decode, which checks the syntax and the depth: it kept only the last of a key
+	// written twice, also in another letter case, so a restriction written first would be dropped.
+	if err := types.RefuseRepeatedJSONKeysFor(b, "the policy", &spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
@@ -163,6 +175,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 			return fmt.Errorf("denied_domains[%d]: %w", i, err)
 		}
 	}
+	if err := types.ValidateHostRuleSets(spec.HostRules); err != nil {
+		return err
+	}
 	if err := validateAllowedMethods(spec.AllowedMethods); err != nil {
 		return err
 	}
@@ -193,6 +208,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 		return err
 	}
 	if err := validateRecordingLevel(spec.Recording); err != nil {
+		return err
+	}
+	if err := validateDataOut(spec.DataOut); err != nil {
 		return err
 	}
 	if err := validateUIApps(spec.UIApps); err != nil {
@@ -375,8 +393,8 @@ func validateToolRules(rules []types.ToolRule) error {
 			return fmt.Errorf("tool_rules[%d]: duplicate rule for tool %q — two rules for one tool means one of them does nothing", i, name)
 		}
 		seen[name] = true
-		if !types.ValidToolEffect(r.Effect) {
-			return fmt.Errorf("tool_rules[%d]: invalid effect %q (want allow, hold or deny)", i, r.Effect)
+		if err := types.ValidToolRule(r); err != nil {
+			return fmt.Errorf("tool_rules[%d]: %v (effects: allow, hold, approve_each, deny)", i, err)
 		}
 	}
 	return nil
@@ -559,6 +577,18 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	return validateEligibleGrantMode(i, g, true)
 }
 
+// apiKeyRuleFromScope is injectionRuleFromScope for an authored api_key grant, whose host is also held to
+// the rule the proxy's config load holds an injection host to (proxy.ValidConfigHost).
+func apiKeyRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error) {
+	rule, err := injectionRuleFromScope(scope)
+	if err == nil {
+		if herr := proxy.ValidConfigHost(rule.Host); herr != nil {
+			err = fmt.Errorf("host %w", herr)
+		}
+	}
+	return rule, err
+}
+
 // validateEligibleGrantMode is validateEligibleGrant with the git_pat scope
 // decode chosen: strict for a write, lenient for record-mode synthesis.
 func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
@@ -608,7 +638,7 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 	// is a header-splitting shape rather than a typo. The injection sink
 	// (handleInternalInjection) enforces this too, defense-in-depth.
 	if g.Kind == types.GrantAPIKey {
-		rule, derr := injectionRuleFromScope(g.Scope)
+		rule, derr := apiKeyRuleFromScope(g.Scope)
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope invalid: %w", i, derr)
 		}
@@ -895,104 +925,6 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool, onRu
 	}
 	if err := validateLLMInspection(spec); err != nil {
 		return err
-	}
-	return nil
-}
-
-// validateLLMInspection enforces the structural invariants of the optional
-// outbound content-inspection block. A nil spec (the default) is valid (off).
-// Takes the FULL RunPolicySpec (not just LLMInspection) because
-// detector_sidecar_url is now validated against this SAME spec's own egress
-// allowlist — see the raw-value comment below.
-func validateLLMInspection(spec types.RunPolicySpec) error {
-	li := spec.LLMInspection
-	if li == nil {
-		return nil
-	}
-	mode := strings.ToLower(strings.TrimSpace(li.Mode))
-	switch mode {
-	case "", "off", "alert", "block":
-	default:
-		return fmt.Errorf("llm_inspection.mode: unknown mode %q", li.Mode)
-	}
-	// A raw VALUE may never be authored on a policy write —
-	// stored, inline, or WARDYN_DEFAULT_POLICY. Only dispatch ever populates
-	// this field, internally, in memory, on the ephemeral copy handed to the
-	// proxy sidecar (resolveLLMInspectionSecrets, runs_dispatch.go). An
-	// operator authors workspace_secret_names instead (types.LLMInspectionSpec).
-	if len(li.WorkspaceSecretValues) > 0 {
-		return fmt.Errorf("llm_inspection.workspace_secret_values may not be set on a policy write " +
-			"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
-	}
-	// The write-time half of the SINK guard. workspace_secret_names is
-	// resolved to PLAINTEXT onto the policy copy handed to the proxy sidecar
-	// (resolveLLMInspectionSecrets), which makes it a credential sink like the
-	// api_key/git_pat/ssh_key lanes — and sinkReservedSecret is the one guard
-	// they all take ("reject it at every sink", secrets.go). Refusing here means
-	// an operator authoring a reserved name gets a 400 instead of a run whose
-	// scanner silently covers one fewer value than they asked for.
-	for i, name := range li.WorkspaceSecretNames {
-		// #1048: an impossible name (upper-case, a leading space, a unicode
-		// hyphen, a path) used to pass write time and just cover one fewer
-		// value at dispatch, silently — the same gap env_secret had.
-		if !secretNameRE.MatchString(name) {
-			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is not a valid secret name", i, name)
-		}
-		if nameSinkReservedSecret(name) {
-			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
-		}
-		if name == bedrockAPIKeySecret {
-			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is read only for the grant Wardyn authors "+
-				"when a run launches on the Bedrock bearer key, never by name", i, name)
-		}
-	}
-	if mode != "" && mode != "off" {
-		if !li.DetectSecrets && !li.DetectSecretPatterns && !li.DetectEntropy &&
-			!li.DetectPII && li.DetectorSidecarURL == "" && len(li.ClassifiedMarkers) == 0 {
-			return fmt.Errorf("llm_inspection: at least one detector must be enabled when mode is %q", mode)
-		}
-		if u := strings.TrimSpace(li.DetectorSidecarURL); u != "" {
-			if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-				return fmt.Errorf("llm_inspection.detector_sidecar_url must be an http(s) URL")
-			}
-			// Belt-and-braces: the sidecar is dialed PROXY-SIDE with the
-			// outbound span TEXT (internal/contentscan/sidecar.go) — a surface the
-			// sandbox's own confinement class never bounds, so "trusted operator
-			// config" (that file's own framing) only actually holds once this
-			// URL's host is ALSO on this same policy's own egress allowlist — the
-			// same exact-entry bar a brokered credential injection already
-			// requires (domainAllowedExact) — rather than accepting any http(s)
-			// URL at face value. Doesn't widen egress by itself (the sidecar dial
-			// never goes through the sandbox's own allowlist); it requires the
-			// operator to have already named the host for something.
-			parsed, perr := neturl.Parse(u)
-			if perr != nil || parsed.Hostname() == "" {
-				return fmt.Errorf("llm_inspection.detector_sidecar_url is not a valid URL")
-			}
-			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, parsed.Hostname()) {
-				return fmt.Errorf("llm_inspection.detector_sidecar_url host %q must be in this policy's own allowed_domains "+
-					"(or allow_all_egress) — an operator allowlist, not a bare http(s) check", parsed.Hostname())
-			}
-		}
-		// require_inspectable_llm is a RUNTIME guarantee, and only TLS-MITM can
-		// inspect an opaque CONNECT (incl. an api-key run that overrides its base
-		// URL to CONNECT directly). So requiring inspectability requires MITM.
-		if li.RequireInspectableLLM && !li.InterceptTLS {
-			return fmt.Errorf("llm_inspection: require_inspectable_llm requires intercept_tls (only TLS-MITM gives a runtime inspection guarantee)")
-		}
-	}
-	if li.MaxScanBytes < 0 {
-		return fmt.Errorf("llm_inspection.max_scan_bytes must be >= 0")
-	}
-	switch strings.ToLower(strings.TrimSpace(li.OnScannerError)) {
-	case "", "pass", "block":
-	default:
-		return fmt.Errorf("llm_inspection.on_scanner_error: must be \"pass\" or \"block\"")
-	}
-	switch strings.ToLower(strings.TrimSpace(li.BlockMinSeverity)) {
-	case "", "low", "medium", "high", "critical":
-	default:
-		return fmt.Errorf("llm_inspection.block_min_severity: unknown severity %q", li.BlockMinSeverity)
 	}
 	return nil
 }

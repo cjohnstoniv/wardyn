@@ -130,20 +130,6 @@ const (
 	reasonRequestBodyUnreadable = "request_body_unreadable"
 )
 
-// /api/v1/policies (policies.go).
-const (
-	reasonPolicyRequestInvalid    = "policy_request_invalid"     // the create/update body fails decodePolicyRequest
-	reasonPolicySecretRefsInvalid = "policy_secret_refs_invalid" // a secret reference in the spec fails shape validation
-	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
-	// Shared by the policy CRUD door, POST /runs' inline_policy and a launch
-	// preset's inline_policy: the spec's
-	// azure_devops_capabilities names something the catalogue cannot grant.
-	reasonADOCapabilityUnknown = "ado_capability_unknown"
-	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
-	// that leaves nothing standing (POST /runs/preflight).
-	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
-)
-
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
 // arms outside writeProviderRefusal — which always carries its own reason,
 // llmRefusalAuditReason or the generic authz.ReasonModelProviderUnavailable.
@@ -157,6 +143,7 @@ const (
 // surface, not the member-facing API.
 const (
 	reasonInternalDecisionLogInvalid = "internal_decision_log_invalid" // the egress decision log body did not decode
+	reasonInternalDecisionUnrecorded = "internal_decision_unrecorded"  // the decision's egress row was neither written nor spooled; retry
 	reasonGroundtruthBatchInvalid    = "groundtruth_batch_invalid"     // the ground-truth batch body did not decode
 	reasonGroundtruthBatchTooLarge   = "groundtruth_batch_too_large"   // the batch named more than 1000 events
 	reasonGroundtruthActionNotKernel = "groundtruth_action_not_kernel" // an event's action lacks the required kernel. prefix
@@ -194,6 +181,9 @@ const (
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
 	reasonInternalLivenessReadFailed = "internal_liveness_read_failed"
+	// reasonViaOrgUpstreamProxyRefused is the via_org route's 503 when the run's engine cannot be built because
+	// the site's upstream proxy URL writes its host in a spelling the proxy refuses (via_org.go): no retry helps.
+	reasonViaOrgUpstreamProxyRefused = "via_org_upstream_proxy_refused"
 )
 
 // The credential-injection sinks' own closed set (injection.go's
@@ -224,6 +214,7 @@ const (
 	reasonAdminTokenNotConfigured  = "admin_token_not_configured"
 	reasonMissingBearerToken       = "missing_bearer_token"
 	reasonInvalidAdminToken        = "invalid_admin_token"
+	reasonAdminTokenRateLimited    = "admin_token_rate_limited" // too many failed admin token guesses from this address (429, Retry-After: 10)
 	// reasonIdentityProviderNotConfigured is shared by internalAuth and
 	// internalAuthGroundtruth: the identical cause (no embedded identity
 	// provider wired) refuses both the run-token and the sensor-token chains.
@@ -487,6 +478,7 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditUnitTargetFilter            = "audit_unit_target_filter"
 	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
 	reasonAuditPartitionNotFound           = "audit_partition_not_found"
 	reasonAuditPartitionOpen               = "audit_partition_open"
@@ -611,6 +603,24 @@ const (
 	reasonADOCallbackMissingCode     = "ado_callback_missing_code"
 	reasonADOCallbackIdentityBinding = "identity_binding"
 	reasonADOCallbackUnusableGrant   = "unusable_grant"
+	// reasonEndpointOIDCIssuerMismatch is an endpoint sign-in whose identity token came from an authority other
+	// than the one the console signs the person in with, under the console binding. Unlike identity_binding
+	// (the token is another person's), the person cannot fix it: their admin pointed the provider at the wrong
+	// authority.
+	reasonEndpointOIDCIssuerMismatch = "identity_issuer_mismatch"
+)
+
+// The sign-in door and callback of a custom endpoint that signs people in (endpoint_oidc.go), and the paste
+// door's refusal for such a row (model_provider_credentials.go). The callback's invalid reason buckets every
+// state, one-time cookie, MAC, session and stamped-row cause as one: the remedy is the same for all.
+const (
+	reasonModelProviderCredentialSignsIn = "model_provider_credential_signs_in"
+	reasonEndpointOIDCUnconfigured       = "endpoint_oidc_unconfigured"
+	reasonEndpointOIDCUnknownRow         = "endpoint_oidc_unknown_row"
+	reasonEndpointOIDCNoSession          = "endpoint_oidc_no_session"
+	reasonEndpointOIDCAuthority          = "endpoint_oidc_authority_unavailable"
+	reasonEndpointOIDCCallbackInvalid    = "endpoint_oidc_callback_invalid"
+	reasonEndpointOIDCMissingCode        = "endpoint_oidc_callback_missing_code"
 )
 
 // POST /api/v1/me/view (user_view.go): the admin/security-admin user-view
@@ -694,6 +704,8 @@ const (
 	// The Azure DevOps sign-in's configuration could not be read, so the erase
 	// could not take the sign-in's lock and refused (#1478).
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
+	// Revoking a token of the person's runs did not finish, so nothing was erased; POST /erasure too.
+	reasonCredentialEraseRevokeUnfinished = "credential_erase_revoke_unfinished"
 )
 
 // /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name
@@ -897,9 +909,10 @@ const reasonCredentialHostCollision = "credential_host_collision"
 // definition, shared-secret and store-unavailable refusals they also answer are
 // the gate's, declared above.
 const (
-	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
-	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
-	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentCapReached      = "component_cap_reached"      // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict    = "component_name_conflict"    // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound        = "component_not_found"        // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentVersionConflict = "component_version_conflict" // the row is no longer at the expected_version the caller read
 )
 
 // Runner registration request and deployment refusals. Token and claim refusals
@@ -951,15 +964,16 @@ const (
 	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
 	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
 	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
+	reasonDesktopSigninStarting          = "desktop_signin_starting"           // the sign-in's begin has not yet recorded that it stopped the agent; the end can be asked again
 	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
 	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
 	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
-	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed; the agent stays stopped
+	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed, or the agent could not be resumed; the agent stays stopped
 	reasonDesktopSigninSiteInvalid       = "desktop_signin_site_invalid"       // a share's site is not a registrable host name
 	reasonDesktopSigninShareFailed       = "desktop_signin_share_failed"       // a share's export or import failed; nothing was shared
 	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
 	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
-	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
+	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a sign-in's agent could not be resumed at its begin or its end, so the run was killed
 )
 
 // Sign-ins in a Linux VM's desktop (run_desktop_vm_signin.go).

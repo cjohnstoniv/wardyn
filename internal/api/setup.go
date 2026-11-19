@@ -167,15 +167,19 @@ type SetupFeatures struct {
 	// MacOSVMs is WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off, so the
 	// status of a deployment that leaves it off reads exactly as before.
 	MacOSVMs bool `json:"macos_vms,omitempty"`
+	// MacWindow is the site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window
+	// on their Mac. Absent when off or when the site config could not be read, which the console reads as off.
+	MacWindow bool `json:"mac_window,omitempty"`
 }
 
-func setupFeatures(multiAgentTasks bool) SetupFeatures {
+func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
 	return SetupFeatures{
 		ScheduledRuns:   envEnabled(envScheduledRuns),
 		KubectlCLI:      kubectlCLIOn(),
 		MultiAgentTasks: multiAgentTasks,
 		MCPLocalServers: envEnabled(envMCPLocalServers),
 		MacOSVMs:        envEnabled(envMacOSVMs),
+		MacWindow:       macWindow,
 	}
 }
 
@@ -228,6 +232,9 @@ type SetupRunner struct {
 	// call failed, so runnerCheck can tell it from "no runner configured". Never
 	// on the wire.
 	capsUnreadable bool
+	// netpolCheckedAt is when the k8s canary check that produced the verdict
+	// ran, for the egress-containment row. Never on the wire.
+	netpolCheckedAt time.Time
 }
 
 // SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
@@ -376,7 +383,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
-	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable); ok {
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable, rnr.netpolCheckedAt); ok {
 		checks = append(checks, chk)
 	}
 	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
@@ -475,7 +482,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       setupFeatures(s.cfg.MultiAgentTasks),
+		Features:       setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
@@ -692,11 +699,14 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		}
 	}
 	out.EphemeralDiskEnforcement = c.EphemeralDiskEnforcement
+	if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
+		out.netpolCheckedAt = c.NetworkPolicyCheck.At
+	}
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 
 // k8sNetpolVerdict grades a runner's aggregated NetworkPolicy signals into the
-// three live-daemon verdicts, or "" on any non-k8s driver. Shared by
+// live-daemon verdicts (runner.NetPolCheck's), or "" on any non-k8s driver. Shared by
 // setupRunnerInfo (admin-only /setup/status, its return value here is a k8s
 // egress-containment checklist row) and handleHealthz (anonymous /healthz's
 // "network_policy" field) — both already hold a driver name and a
@@ -710,11 +720,17 @@ func k8sNetpolVerdict(driver string, caps runner.Capabilities) string {
 	// caps.NetworkPolicy / caps.NetworkPolicyAcknowledged are the
 	// orchestrator-aggregated ClassSupport signals; a genuinely indeterminate
 	// canary (no ack, no override) refuses to boot entirely (internal/runner/
-	// k8s's newWithClient), so a LIVE daemon can only ever report one of these
-	// three. Acknowledged checked first: WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
+	// k8s's newWithClient), so a LIVE daemon boots on one of the last three.
+	// Acknowledged comes before enforced: WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
 	// produces a driver that never set NetworkPolicy true (it is not proof), so
 	// the two are mutually exclusive in practice, but acknowledged-not-proven
 	// must never read as the stronger "enforced" claim if that ever changed.
+	// A substrate that re-checks names its verdict itself, including "refused"
+	// and "not_proven" after a failed re-check; the flags below are the
+	// fallback for one that predates it, or names a verdict this build lacks.
+	if v := caps.NetworkPolicyCheck.Verdict; runner.KnownNetPolVerdict(v) {
+		return v
+	}
 	switch {
 	case caps.NetworkPolicyAcknowledged:
 		return "acknowledged"

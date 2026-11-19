@@ -48,11 +48,19 @@ type buildEventStore struct {
 	log *buildEventLog
 }
 
+// GetSiteConfig answers the launch's image admission read: nothing set, so admission is off.
+func (s *buildEventStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, detail string) error {
 	s.log.add("detail:" + detail)
 	return nil
 }
 func (s *buildEventStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+func (s *buildEventStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
+	return nil
+}
 
 // GetRun serves a live run: a build door reads its run before it builds.
 func (s *buildEventStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {

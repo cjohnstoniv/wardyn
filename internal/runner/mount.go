@@ -105,6 +105,27 @@ func ValidateDriveTarget(drive *types.DriveMount) error {
 	return fmt.Errorf("%q is not a drive path (%s, or one folder under %s)", target, DriveTarget, root)
 }
 
+// agentHome is the agent's home in a container or Linux guest, and macAgentHome
+// the same home in a macOS guest. They are written out here, not read from the
+// guest agent's package, which does not build for Windows (a pinning test beside
+// MacGuestPath holds them to its values).
+const (
+	agentHome    = "/home/agent"
+	macAgentHome = "/Users/agent"
+)
+
+// MacGuestPath is target as a person on a macOS VM run finds it: a path under
+// /home/agent is the same path under /Users/agent in that guest. It is for
+// what a person reads (a response, an audit row), never for a stored or
+// compared target, which stays the container path every overlap check reads.
+// Any other path is returned as it came.
+func MacGuestPath(target string) string {
+	if rest, ok := strings.CutPrefix(target, agentHome+"/"); ok {
+		return macAgentHome + "/" + rest
+	}
+	return target
+}
+
 // ScratchTmpPath, ScratchWorkPath and ScratchCachePath are where the
 // Kubernetes substrate mounts its three disk_mib-sized emptyDirs, the bytes
 // that substrate's `eviction` enforcement counts against a run's disk cap.

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, Recording } from "../../lib/types";
 import { makeRun } from "../../../test/factories";
@@ -209,6 +209,22 @@ describe("RecordingScreen", () => {
     fireEvent.change(search, { target: { value: "task number 3" } });
     await waitFor(() => expect(screen.queryByText("task number 0")).not.toBeInTheDocument());
     expect(screen.getByText("task number 3")).toBeInTheDocument();
+  });
+
+  it("names the search box and each filter by what it filters, not by its current value", async () => {
+    const runs = Array.from({ length: 5 }, (_, i) =>
+      recorded(`run_${i}`, {
+        task: `task number ${i}`,
+        agent: i % 2 ? "codex" : "claude-code",
+        state: i % 2 ? "FAILED" : "COMPLETED",
+      }),
+    );
+    listRunsMock.mockResolvedValue(page(runs));
+    renderScreen();
+    await screen.findByText("task number 0");
+    expect(screen.getByRole("textbox", { name: "Search recordings" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Filter by agent" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Filter by outcome" })).toBeInTheDocument();
   });
 
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {
@@ -584,5 +600,83 @@ describe("RecordingScreen — paging (#159)", () => {
     await screen.findByText(
       "Showing 1 of 5 recordings · Filters cover the 5 recordings loaded so far. Load more to search further back.",
     );
+  });
+
+  it("a page that answers after Refresh is dropped: it adds no rows and the next click asks for the offset after the first page", async () => {
+    let answerLate!: (v: unknown) => void;
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockReturnValueOnce(new Promise((r) => (answerLate = r)));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_9", { task: "ninth" })], false));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await screen.findByText("fix the leak");
+    expect(more()).toBeEnabled();
+
+    await act(async () => answerLate(page([recorded("run_3", { task: "third" })], false)));
+    expect(screen.queryByText("third")).not.toBeInTheDocument();
+    fireEvent.click(more());
+
+    await screen.findByText("ninth");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
+  });
+
+  it("a page that answers after Refresh does not enable Load more while the refreshed list's page is still out", async () => {
+    let answerOld!: (v: unknown) => void;
+    let answerNew!: (v: unknown) => void;
+    const loading = () => screen.getByRole("button", { name: "Loading…" });
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockReturnValueOnce(new Promise((r) => (answerOld = r)));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockReturnValueOnce(new Promise((r) => (answerNew = r)));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await screen.findByText("fix the leak");
+    fireEvent.click(more());
+    expect(loading()).toBeDisabled();
+
+    await act(async () => answerOld(page([recorded("run_3", { task: "third" })], false)));
+    expect(loading()).toBeDisabled();
+    expect(screen.queryByText("third")).not.toBeInTheDocument();
+
+    await act(async () => answerNew(page([recorded("run_9", { task: "ninth" })], false)));
+    await screen.findByText("ninth");
+  });
+
+  it("a page that fails after Refresh does not put the page error over the refreshed list", async () => {
+    let failLate!: (e: Error) => void;
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockReturnValueOnce(new Promise((_, rej) => (failLate = rej)));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await screen.findByText("fix the leak");
+
+    await act(async () => failLate(new Error("boom")));
+    expect(screen.queryByText("Couldn't load more recordings")).not.toBeInTheDocument();
+    expect(more()).toBeEnabled();
+  });
+
+  it("Refresh while the first page is still out shows the newer answer, not the older one that lands last", async () => {
+    let answerFirst!: (v: unknown) => void;
+    listRunsMock.mockReturnValueOnce(new Promise((r) => (answerFirst = r)));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_9", { task: "ninth" })]));
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await screen.findByText("ninth");
+
+    await act(async () => answerFirst(page([recorded("run_1", { task: "fix the leak" })])));
+    expect(screen.getByText("ninth")).toBeInTheDocument();
+    expect(screen.queryByText("fix the leak")).not.toBeInTheDocument();
   });
 });

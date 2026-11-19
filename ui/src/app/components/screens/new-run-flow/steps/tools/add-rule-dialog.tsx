@@ -45,7 +45,7 @@ export function AddRuleDialog({ fact, harnessName, existing, remoteMcp, onAdd, o
   const duplicate = existing.some((r) => r.tool === tool);
   const error = !submitted ? "" : !tool ? NR_TOOLS.RULE_ERR_TOOL : duplicate ? NR_TOOLS.RULE_ERR_DUPLICATE : "";
   // A hold on an MCP tool is answered by the harness, not by Wardyn (W-44).
-  const notes = tool.startsWith("mcp__") ? { hold: NR_TOOLS.MCP_ASKS } : undefined;
+  const notes = tool.startsWith("mcp__") ? { hold: NR_TOOLS.MCP_ASKS, approve_each: NR_TOOLS.MCP_APPROVE_EACH } : undefined;
 
   const add = () => {
     setSubmitted(true);

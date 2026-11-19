@@ -11,6 +11,8 @@ import (
 	"io"
 
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // policyToJSON accepts a policy document as either JSON or YAML and returns its
@@ -48,8 +50,8 @@ func policyToJSON(raw []byte) ([]byte, error) {
 var errNotOneDocument = errors.New("input must contain exactly one document")
 
 // decodeOneJSONStrict decodes exactly one JSON value from r into v, rejecting
-// unknown fields, a top-level null, and anything after the value (a second
-// document or trailing bytes, valid or not). It exists because a decoder that
+// unknown fields, a top-level null, a key written twice in one object, and
+// anything after the value (a second document or trailing bytes, valid or not). It exists because a decoder that
 // stops after the first value reads `{}` + the real document as "the desired
 // state is empty", and a --prune then deletes everything the real document
 // named. Empty or whitespace-only input is a parse error (io.EOF).
@@ -67,6 +69,11 @@ func decodeOneJSONStrict(r io.Reader, v any) error {
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); err != io.EOF {
 		return errNotOneDocument
+	}
+	// Decoding keeps only the last of a repeated key, also in another letter case, so the first
+	// one's value would be lost.
+	if err := types.RefuseRepeatedJSONKeysFor(first, "the document", v); err != nil {
+		return err
 	}
 	strict := json.NewDecoder(bytes.NewReader(first))
 	strict.DisallowUnknownFields()

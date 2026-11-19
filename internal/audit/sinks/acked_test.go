@@ -607,9 +607,9 @@ func TestAcked_TransportErrorDoesNotLeakTheURL(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := srv.URL + "/hec?token=SECRETQ"
-	srv.Close() // nothing listens: the POST fails in the transport
+	// Nothing listens at port 1, so the POST fails in the transport; a closed test server's port could be
+	// taken by another process.
+	url := "http://127.0.0.1:1/hec?token=SECRETQ"
 
 	st := &fakeDeliveryStore{haveRow: true}
 	st.setRows(ackedRows(2))

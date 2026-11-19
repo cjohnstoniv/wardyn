@@ -52,6 +52,16 @@ func TestTerminatesTLSMatchesHandleConnect(t *testing.T) {
 		c.ViaOrgRoutes = []ViaOrgRoute{{GrantID: uuid.New(), Host: "artifacts.corp.example"}}
 		o.ViaOrgRoutes = c.ViaOrgRoutes
 	}
+	// own.corp.example is named by the run's own set, which dispatch scopes to 443 (hostRuleMITMHosts);
+	// sealed.corp.example and api.openai.com only by a set the seal adds, which get no entry.
+	ownRule := []string{"own.corp.example:443"}
+	withRules := func(c *Config, o *Options) {
+		c.Policy.HostRules = []types.HostRuleSet{
+			{Rules: []types.HostRule{{Host: "own.corp.example", Effect: types.HostRuleAllow}}},
+			{Rules: []types.HostRule{{Host: "sealed.corp.example", Effect: types.HostRuleAllow}, {Host: "api.openai.com", Effect: types.HostRuleAllow}}},
+		}
+		o.Policy = CompilePolicy(c.Policy)
+	}
 
 	cases := []struct {
 		name  string
@@ -96,6 +106,14 @@ func TestTerminatesTLSMatchesHandleConnect(t *testing.T) {
 		{"via_org host, no CA", false, false, nil, "pkg.corp.example", 443, false, withViaOrg},
 		{"via_org host also a scoped corp host, other port", true, false, mitm, "artifacts.corp.example", 9999, true, withViaOrgArtifacts},
 		{"host a via_org route does not name", true, false, nil, "other.corp.example", 443, false, withViaOrg},
+		{"sealed-only rule host, 443", true, false, ownRule, "sealed.corp.example", 443, true, withRules},
+		{"sealed-only rule host, other port", true, false, ownRule, "sealed.corp.example", 8443, true, withRules},
+		{"sealed-only rule host, uppercase", true, false, ownRule, "Sealed.Corp.Example.", 443, true, withRules},
+		{"sealed-only rule host, no CA", false, false, ownRule, "sealed.corp.example", 443, false, withRules},
+		{"sealed-only rule host on an llm name, MITMLLM off", true, false, ownRule, "api.openai.com", 443, true, withRules},
+		{"own rule host, its port", true, false, ownRule, "own.corp.example", 443, true, withRules},
+		{"own rule host, other port", true, false, ownRule, "own.corp.example", 8443, false, withRules},
+		{"host no rule names", true, false, ownRule, "tunnel.corp.example", 443, false, withRules},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,8 +131,9 @@ func TestTerminatesTLSMatchesHandleConnect(t *testing.T) {
 			}
 			p := newProxy(opts)
 			_, viaOrg := p.viaOrgRouteForHost(strings.TrimSuffix(tc.host, "."))
+			h, _ := splitHostPort(net.JoinHostPort(tc.host, strconv.Itoa(tc.port)), 443) // as handleConnect reads it
 			real := p.ca != nil && viaOrg ||
-				p.ca != nil && p.isCorpMITMHost(tc.host) && p.mitmPortAllowed(tc.host, tc.port) ||
+				p.ca != nil && (p.isCorpMITMHost(tc.host) || p.policy.namesRuleHost(h)) && p.mitmPortAllowed(tc.host, tc.port) ||
 				p.isLLMHost(tc.host) && p.mitmLLMHost(tc.host, tc.port)
 			if real != tc.want {
 				t.Fatalf("the proxy's own decision = %v, case expects %v", real, tc.want)
@@ -209,6 +228,20 @@ func TestTerminatedHosts(t *testing.T) {
 			c.AzureARM = &AzureARMGrant{TenantID: "t", Subscriptions: []string{"s"}}
 			return c
 		}(), []string{"kube.corp.example:6443", AzureLoginHost + ":443", armscope.Host + ":443"}},
+		{"rule hosts: the run's own scoped, a sealed-only one any port", func() *Config {
+			c := cfg(false, true, "own.corp.example:443")
+			c.Policy.HostRules = []types.HostRuleSet{
+				{Rules: []types.HostRule{{Host: "own.corp.example", Effect: types.HostRuleAllow}}},
+				{Rules: []types.HostRule{{Host: "sealed.corp.example", Effect: types.HostRuleAllow}, {Host: "own.corp.example", Effect: types.HostRuleDeny}}},
+			}
+			c.Policy.AllowedDomains = []string{"tunnel.corp.example"}
+			return c
+		}(), []string{"own.corp.example:443", "sealed.corp.example"}},
+		{"rule hosts, no CA", func() *Config {
+			c := cfg(false, false)
+			c.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "sealed.corp.example", Effect: types.HostRuleAllow}}}}
+			return c
+		}(), []string{}},
 		{"IPv6 literals, scoped and any port", func() *Config {
 			c := cfg(false, true, "fd00::2")
 			c.KubeAPI = &KubeAPIGrant{Host: "fd00::1", Port: 6443, Namespaces: []string{"ns"}}

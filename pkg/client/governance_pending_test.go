@@ -580,3 +580,29 @@ func TestApplyGovernance_HeldChangeThatIsNotThisWriteFails(t *testing.T) {
 		t.Errorf("pending = %+v, want none", res.Pending)
 	}
 }
+
+// TestNoteGovernanceChange: NoteGovernanceChange PUTs the reason and ticket to the change's note route
+// and returns the change with its note.
+func TestNoteGovernanceChange(t *testing.T) {
+	id := uuid.New()
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, string(b)
+		_, _ = w.Write([]byte(`{"id":"` + id.String() + `","state":"pending","note":{"reason":"why","ticket":"INC-1"}}`))
+	}))
+	defer srv.Close()
+	got, err := client.New(srv.URL, "tok").NoteGovernanceChange(context.Background(), id, "why", "INC-1")
+	if err != nil {
+		t.Fatalf("NoteGovernanceChange: %v", err)
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/v1/governance/changes/"+id.String()+"/note" {
+		t.Errorf("request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody != `{"reason":"why","ticket":"INC-1"}` {
+		t.Errorf("body = %s", gotBody)
+	}
+	if got.Note == nil || got.Note.Reason != "why" || got.Note.Ticket != "INC-1" {
+		t.Errorf("note = %+v", got.Note)
+	}
+}

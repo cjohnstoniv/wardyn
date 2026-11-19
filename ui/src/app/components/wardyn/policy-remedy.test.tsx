@@ -70,6 +70,39 @@ describe("PolicyRemedy", () => {
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byThis run's policy");
   });
 
+  // A wall preset the run was launched with: the card names it, says who chose it, and has no one to ask.
+  describe("the run's wall preset (layer wall_preset)", () => {
+    const preset = { source: "wall_preset", layer: "wall_preset", name: "Docs triage", owner: "ana@example.com" };
+    const as = (principal: string, policy: { source: string; layer: string; name?: string; owner: string } = preset) =>
+      render(
+        <OperatorProvider operator={false} principal={principal}>
+          <PolicyRemedy policy={policy} copyable />
+        </OperatorProvider>,
+      );
+
+    it("reads Wall preset: name, Chosen by the owner, and a new run without it, to the owner", () => {
+      as("ana@example.com");
+      const card = screen.getByTestId("policy-remedy");
+      expect(card).toHaveTextContent("Set byWall preset: Docs triage");
+      expect(card).toHaveTextContent("Chosen byana@example.com");
+      expect(card).not.toHaveTextContent("Owner");
+      expect(card).toHaveTextContent("Can changeNot on this run. Launch a new run without it.");
+      expect(screen.queryByRole("link")).toBeNull();
+    });
+
+    it("tells an approver who is not the owner that the owner can launch another run with a different preset", () => {
+      as("lena@example.com");
+      expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Can changeNot on this run. The owner can launch a new run with a different preset.");
+    });
+
+    it("names no preset when the server sent no name (a personal preset seen by someone else)", () => {
+      as("lena@example.com", { source: "wall_preset", layer: "wall_preset", owner: "ana@example.com" });
+      const card = screen.getByTestId("policy-remedy");
+      expect(card).toHaveTextContent("Set byA personal wall preset");
+      expect(card).not.toHaveTextContent("Docs triage");
+    });
+  });
+
   // T4-c: a person's own walls name themselves, say the owner can change them, and have no one to ask.
   describe("the person's own walls (layer personal)", () => {
     const own = { source: "personal", layer: "personal", owner: "ana@example.com" };

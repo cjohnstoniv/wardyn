@@ -138,19 +138,33 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 // takeoverResponse is a take over / hand back answer: the row, and where the person drives.
 type takeoverResponse struct {
 	types.ApprovalRequest
-	// Surface is "desktop" when the run's policy declares a novnc UI app, else "terminal".
+	// Surface is "desktop" when the run declares a novnc UI app or is a VM run whose built-in desktop the
+	// browser can drive (the UI gateway on), else "terminal".
 	Surface string `json:"surface"`
 }
 
-// takeoverSurface is where a takeover of run puts the person: its declared desktop, else its terminal.
+// takeoverSurface is where a takeover of run puts the person: its declared desktop, or a desktop VM
+// run's built-in desktop (the gateway's __desktop app) while the browser can drive it, else its terminal.
+// A macOS VM run whose desktop is view only in the browser keeps the terminal, as does one whose agent
+// allows no desktop sign-ins (the door the desktop would open is refused), as does a run whose governance
+// profile denies UI apps.
 func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string {
-	apps, err := s.effectiveUIApps(ctx, run.ID)
-	if err == nil && s.uiGatewayEnabled() {
+	if !s.uiGatewayEnabled() {
+		return "terminal"
+	}
+	// The desktop door refuses a run under deny_ui_apps; an unreadable profile gets the terminal, which that limit does not refuse.
+	if p, err := s.runUnit(ctx, run); err != nil || (p != nil && p.Limits.DenyUIApps) {
+		return "terminal"
+	}
+	if apps, err := s.effectiveUIApps(ctx, run.ID); err == nil {
 		for _, app := range apps {
 			if app.Name == "novnc" {
 				return "desktop"
 			}
 		}
+	}
+	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.macOSDesktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
+		return "desktop"
 	}
 	return "terminal"
 }
@@ -258,7 +272,11 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 
 // handleHandBackApproval is POST /approvals/{id}/hand-back: the person holding control gives it back
 // and the agent's `wardyn needs-you` returns. recording.resume (on a recorded run) then
-// takeover.close, the order the gap closes in.
+// takeover.close, the order the gap closes in. The hand back stamps the person's presence first, so a
+// sweep pass that listed the run as idle before it fails its mark and undoes its freeze. A run frozen
+// idle while the person held control is thawed by that stamp, or through approvalClosed when the stamp
+// could not thaw it (the run's lock in use, or an earlier failed thaw backing off); neither counts a
+// decision. The pause sweep's backstop reads handed_back_at for a hand back whose thaw did not run.
 func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) {
 	ap, run, ok := s.loadTakeover(w, r)
 	if !ok {
@@ -289,6 +307,8 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 	s.ResumeDesktopRecording(r.Context(), run, takeoverHold(got.ID))
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.close", got.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": got.ID, "held_ms": held})))
+	_ = s.markPresent(r.Context(), got.RunID, actorType, principal, "presence")
+	s.approvalClosed(r.Context(), got.RunID)
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: s.takeoverSurface(r.Context(), run)})
 }
 

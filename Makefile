@@ -7,12 +7,12 @@ COMPOSE_FILE := deploy/compose/docker-compose.yaml
 # so a bump here is the ONLY place a version changes — no more drift between the
 # Makefile and the workflow. Override on the CLI for a one-off (e.g.
 # `make govulncheck GOVULNCHECK_VERSION=v1.7.0`).
-GOVULNCHECK_VERSION  ?= v1.6.0
-STATICCHECK_VERSION  ?= v0.7.0
+GOVULNCHECK_VERSION  ?= v1.9.0
+STATICCHECK_VERSION  ?= v0.8.2
 GITLEAKS_VERSION     ?= v8.30.1
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 ACTIONLINT_VERSION    ?= v1.7.12
 # Throwaway local registry for the real-daemon envbuild smoke test (U064). Pinned
 # by tag like the other daemon images CI pulls (postgres:17, alpine:latest).
@@ -197,9 +197,11 @@ build-k8s: ## Build Go binaries with -tags k8s
 	@echo "Building Go binaries (-tags k8s)..."
 	go build -tags k8s ./...
 
+# test and test-docker: internal/api compiles and links without DWARF, as in CI (scripts/ci-api-prebuild.sh has the
+# figures).
 test: ## Run all Go tests
 	@echo "Running Go tests..."
-	WARDYN_TEST_PG= go test ./...
+	WARDYN_TEST_PG= go test -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # Alias kept as a name developers already type: -race rides along INSIDE the
 # three test-report* suites below (see their comments and cover-check), so this
@@ -239,17 +241,17 @@ test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (
 # -timeout 30m, not go's 10m per-package default: internal/store's proofs alone take 6-7 minutes under
 # -race on a hosted runner, and a slow runner took them past 10 (a -timeout panic discards every verdict).
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|SweeperPurgesOnceAcrossInstances|OwedRefusalRowLandsOnceForTwoDrainers)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite|TestUnitAdminDecisionSerializesScopeWrites|TestPG_OrgRunnerRemovalWaitsOnTheTargetLockAndRefusesAGovernedPool|TestPG_WorkloadSweep_RetriesALapsedLaunch' ./internal/api/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_|TestGeneration_|TestKeptMachinePersonLimitAtInsert|TestClaimKeptMachineForRunLosesToAKillThatCommitsFirst|TestConcurrentClaimsAfterAnUncertainResetOnlyTheFreshStartWins|TestRunCreateKeyClaimRace' ./internal/maskstore/... ./internal/maskmanifest/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|GroupRemovalOlderCompletionLeavesTheNewerRemoval|SweeperPurgesOnceAcrossInstances|OwedRefusalRowLandsOnceForTwoDrainers)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite|TestUnitAdminDecisionSerializesScopeWrites|TestPG_OrgRunnerRemovalWaitsOnTheTargetLockAndRefusesAGovernedPool|TestPG_WorkloadSweep_RetriesALapsedLaunch|TestGatewayAudience_Concurrent|TestCreateRunKeyConcurrent|TestPG_CLISession_(DemotionSweepWaitsOnTheSessionLock|RevokeOfAReplacedAccessTokenStillEndsTheSession)|TestForcedRetry_TwoReplicasOneSuccessRow|TestServiceIdentity_Held(WriteStoresNoCredentialAfterRetire|RunCreateWritesNoRunAfterSuspension)|TestReadySweepPG_FreshAndResumedSessionsKeepAKeptSandbox' ./internal/api/...
 	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_AuditPartition_.*Contiguous|TestSweeperLeader_|TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits|TestNestedAcquireGuard_' ./internal/db/...
-	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun' ./cmd/wardynd/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun|TestPG_ADOSharedSweep_TwoFirstBootsKeepATokenSavedBetween' ./cmd/wardynd/...
 	go test -race -p 1 -count=1 -timeout 30m -run 'TestWorker_(TwoWorkersDeliver100RowsExactlyOnce|ExpiredLeaseIsReclaimedAndAStaleFinaliserLoses)' ./internal/notify/...
 	go test -race -p 1 -count=1 -timeout 30m -run 'TestPGStore_(EraseWithAPausedStreamAndAnInMemoryWriter|InMemorySaveDoesNotWaitBehindUploads)' ./internal/recording/...
 	go test -race -p 1 -count=1 -timeout 30m -run 'TestStoreMode_|TestMigrate_ToLocal|TestRecordLoginGroups_WaitsForAnAssignmentWrite|TestDelete_IfRevisionKeepsARowReplacedWhileItWaited' ./internal/secretstore/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
-	WARDYN_TEST_PG= go test -tags docker ./...
+	WARDYN_TEST_PG= go test -tags docker -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
 # Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
@@ -428,12 +430,12 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
 	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
-	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil (internal/runner/docker/network_test.go)"
+	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil / TestL0_DNSQueryIsRecorded / TestL0_HostAddressUnreachable (internal/runner/docker/network_test.go, dns_live_test.go), and TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce (proxy_replace_live_test.go)"
 	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
-	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
+	@echo "surface until the next nightly run. Scoped to just these six by -run: the rest of"
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
-	@echo "Run through test-report.sh (l0-docker): a rename or a skip of the three fails the job."
-	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
+	@echo "Run through test-report.sh (l0-docker): a rename or a skip of any of them fails the job."
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 10m -run '^(TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil|DNSQueryIsRecorded|HostAddressUnreachable)|TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)$$' ./internal/runner/docker/...
 	@echo "Running the remote-runner internal_hosts pin (internal/api TestInternalHostsOnRunnerDocker: local dispatch -> runner wire -> the real proxy image)."
 	@echo "Through test-report.sh (internal-hosts-docker): the test's testfloor.Mark makes a skip or a rename fail the job."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh internal-hosts-docker -tags docker -timeout 10m -run '^TestInternalHostsOnRunnerDocker$$' ./internal/api/
@@ -465,9 +467,12 @@ test-daemon-proxy-secret-kind: ## WARDYN_DAEMON_PROXY_SECRET on kind, 0440 + 040
 # Routed through scripts/test-report.sh (T-08/G9) — see test-conformance-docker
 # above for why: AgentCannotReachAPIServer, CreateStatusStop and WaitExitCode
 # must-pass here too.
+# conformance-k8s uses the 30m default; the agent-sandbox job passes a longer one, since its keep and warm pool cases
+# add their wait limits (TestAgentSandboxCaseBudgetsFitTheJobTimeout reads it from ci.yml).
+CONFORMANCE_K8S_TIMEOUT ?= 30m
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
+	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout $(CONFORMANCE_K8S_TIMEOUT) ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
@@ -477,7 +482,7 @@ test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_T
 # builder-stage duplicate) into a throwaway build context — mirrors
 # test-envbuild-integration's own tools-staging recipe.
 CONFORMANCE_AGENT_IMAGE ?= wardyn/conformance-agent:local
-build-conformance-agent-image: ## Build the busybox+wardyn-rec conformance agent image (deploy/kind/Dockerfile.conformance-agent)
+build-conformance-agent-image: ## Build the conformance agent image: busybox, wardyn-rec and an idle agent-run stub (deploy/kind/Dockerfile.conformance-agent)
 	@echo "Building the conformance agent image ($(CONFORMANCE_AGENT_IMAGE))..."
 	@set -eu; \
 	tools_dir="$$(mktemp -d)"; \
@@ -513,6 +518,8 @@ test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no c
 # daemon" skip cases in integration_test.go / agent_tool_integration_test.go
 # have to actually SUCCEED on this target's own provisioned daemon+registry,
 # so a skip here is real news, not a self-skip disguised as green.
+# WARDYN_TEST_REPORT_TAIL=210 puts a failed build's last 200 log lines (the step
+# that failed) in the job log, where the default 8 showed only envbuilder's trailer.
 test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs Docker)
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
@@ -531,6 +538,7 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
 	WARDYN_TEST_REPORT_COVER=0 \
+	WARDYN_TEST_REPORT_TAIL=210 \
 	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI|TestFinalizeBase_IDEqualsTheDaemonsAuxID' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
@@ -640,7 +648,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + actionlint gates + console ESLint
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + freed-port + actionlint gates + console ESLint
 	@echo "Running go vet (default + docker + docker,k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -663,6 +671,9 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	@echo "Running script-hazard gate (scripts/check-script-hazards.sh)..."
 	./scripts/check-script-hazards.sh --selftest
 	./scripts/check-script-hazards.sh
+	@echo "Running freed-port gate (scripts/check-freed-ports.sh)..."
+	./scripts/check-freed-ports.sh --selftest
+	./scripts/check-freed-ports.sh
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
@@ -744,6 +755,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-overlay-proof.sh
+	./scripts/test-rekey-fingerprint-check.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
 	./scripts/test-release-image-tag.sh
@@ -838,6 +850,10 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@echo "Linting + rendering the Helm chart..."
 	./scripts/check-helm-templates.sh
 	./scripts/test-helm-runnerd.sh
+	./scripts/test-helm-agent-sandbox.sh
+	./scripts/test-helm-warm-pools.sh
+	./scripts/test-helm-groundtruth.sh
+	./scripts/test-helm-env-once.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
@@ -872,10 +888,38 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set-string env.WARDYN_BASE_PATH= --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: ""' || { echo "an empty env.WARDYN_BASE_PATH no longer reaches wardynd as empty"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/readyz"' && echo "$$out" | grep -q 'path: "/metrics"' || { echo "an empty env.WARDYN_BASE_PATH serves wardynd at the root, but its probes or ServiceMonitor still use basePath"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set 'extraEnv[0].name=WARDYN_BASE_PATH' --set 'extraEnv[0].value=/via-extra' --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_BASE_PATH')" = "1" ] || { echo "basePath plus an extraEnv WARDYN_BASE_PATH renders two entries of that name; an upgrade patches env by name and may update the wrong one"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /via-extra/healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/via-extra/readyz"' && echo "$$out" | grep -q 'path: "/via-extra/metrics"' || { echo "an extraEnv WARDYN_BASE_PATH renders last and is what wardynd serves under, but the probes or the ServiceMonitor still use basePath"; exit 1; }; \
+	helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set 'extraEnv[0].name=WARDYN_BASE_PATH' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=c' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k' 2>&1 | grep -q 'extraEnv sets WARDYN_BASE_PATH through valueFrom' || { echo "chart no longer refuses an extraEnv WARDYN_BASE_PATH from valueFrom: the probes cannot follow a value the chart cannot read"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set 'extraEnv[0].name=WARDYN_BASE_PATH' --set-string 'extraEnv[0].value=' --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token) || { echo "basePath with an empty extraEnv WARDYN_BASE_PATH no longer renders"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_BASE_PATH')" = "1" ] && echo "$$out" | grep -A1 'name: WARDYN_BASE_PATH' | grep -q 'value: ""' || { echo "an empty extraEnv WARDYN_BASE_PATH does not reach wardynd as the one, empty entry of that name"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/readyz"' && echo "$$out" | grep -q 'path: "/metrics"' || { echo "an empty extraEnv WARDYN_BASE_PATH serves wardynd at the root, but its probes or ServiceMonitor still use basePath"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set 'extraEnv[0].name=WARDYN_BASE_PATH' --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token) || { echo "basePath with a name-only extraEnv WARDYN_BASE_PATH no longer renders"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_BASE_PATH')" = "1" ] || { echo "basePath plus a name-only extraEnv WARDYN_BASE_PATH renders two entries of that name"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/readyz"' && echo "$$out" | grep -q 'path: "/metrics"' || { echo "a name-only extraEnv WARDYN_BASE_PATH gives wardynd an empty base path, but its probes or ServiceMonitor still use basePath"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.DEPLOY_SEGMENT=wardyn --set-string 'env.WARDYN_BASE_PATH=/$$(DEPLOY_SEGMENT)' 2>&1) && { echo "an env WARDYN_BASE_PATH that references another variable rendered: the kubelet expands it for wardynd but not in the probe paths"; exit 1; }; \
+	echo "$$out" | grep -qF 'is not a literal sub-path' || { echo "an env WARDYN_BASE_PATH that references another variable was refused for another reason: $$out"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.DEPLOY_SEGMENT=wardyn --set 'extraEnv[0].name=WARDYN_BASE_PATH' --set-string 'extraEnv[0].value=/$$(DEPLOY_SEGMENT)' 2>&1) && { echo "an extraEnv WARDYN_BASE_PATH that references another variable rendered: the kubelet expands it for wardynd but not in the probe paths"; exit 1; }; \
+	echo "$$out" | grep -qF 'is not a literal sub-path' || { echo "an extraEnv WARDYN_BASE_PATH that references another variable was refused for another reason: $$out"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn/.. 2>&1) && { echo "basePath /wardyn/.. rendered: wardynd refuses a dot segment at boot"; exit 1; }; \
+	echo "$$out" | grep -qF 'is not a literal sub-path' || { echo "basePath /wardyn/.. was refused for another reason: $$out"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 390$$' || { echo "startupProbe window does not follow WARDYN_MIGRATE_TIMEOUT — a raised migrate budget would be killed mid-migration"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=10m --set 'extraEnv[0].name=WARDYN_MIGRATE_TIMEOUT' --set 'extraEnv[0].value=30m'); \
+	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 390$$' || { echo "startupProbe window does not follow an extraEnv WARDYN_MIGRATE_TIMEOUT, which renders after env and wins"; exit 1; }; \
+	helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set 'extraEnv[0].name=WARDYN_MIGRATE_TIMEOUT' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=c' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k' 2>&1 | grep -q 'extraEnv sets WARDYN_MIGRATE_TIMEOUT through valueFrom' || { echo "chart no longer refuses an extraEnv WARDYN_MIGRATE_TIMEOUT from valueFrom: the startup window would follow the 5m default"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m --set 'extraEnv[0].name=WARDYN_MIGRATE_TIMEOUT' --set-string 'extraEnv[0].value=') || { echo "an empty extraEnv WARDYN_MIGRATE_TIMEOUT over env no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "an empty extraEnv WARDYN_MIGRATE_TIMEOUT renders last, so wardynd uses its 5m default, but the startup window still follows env"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m --set 'extraEnv[0].name=WARDYN_MIGRATE_TIMEOUT') || { echo "a name-only extraEnv WARDYN_MIGRATE_TIMEOUT over env no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "a name-only extraEnv WARDYN_MIGRATE_TIMEOUT renders last, so wardynd uses its 5m default, but the startup window still follows env"; exit 1; }
+	@# NetworkPolicy ports: a TCP entry whose port renders empty is every TCP port, so the chart refuses it.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set networkPolicy.postgres.port= 2>&1) && { echo "an empty networkPolicy.postgres.port rendered: its egress rule allows every TCP port at any address"; exit 1; }; \
+	echo "$$out" | grep -qF 'networkPolicy.postgres.port must be a port number' || { echo "an empty networkPolicy.postgres.port was refused for another reason: $$out"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set 'k8s.apiServer.ports={}' 2>&1) && { echo "an empty k8s.apiServer.ports entry rendered: its egress rule allows every TCP port"; exit 1; }; \
+	echo "$$out" | grep -qF 'k8s.apiServer.ports must hold port numbers only' || { echo "an empty k8s.apiServer.ports entry was refused for another reason: $$out"; exit 1; }
 	@# goMemLimit: the default render gives wardynd GOMEMLIMIT below its memory limit, and an empty value renders none.
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -A1 'name: GOMEMLIMIT' | grep -q 'value: "400MiB"' || { echo "default render does not set GOMEMLIMIT=400MiB for wardynd"; exit 1; }; \
@@ -925,6 +969,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }; \
+	echo "$$out" | grep -q 'host: "\*.ui.example.com"' || { echo "uiSandbox.ingress in the all-on values rendered no wildcard host"; exit 1; }; \
 	echo "$$out" | grep -q "kind: ConfigMap" || { echo "defaultPolicy did not render a ConfigMap"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/etc/wardyn/default-policy/policy.json"' || { echo "defaultPolicy did not wire WARDYN_DEFAULT_POLICY at the ConfigMap mount path"; exit 1; }; \
 	echo "$$out" | grep -q "checksum/default-policy:" || { echo "defaultPolicy did not stamp the checksum pod annotation — an edit to the ConfigMap alone would not roll the pod"; exit 1; }; \
@@ -1192,6 +1237,24 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null --set secrets.ageKeySecretRef=null --set ingress=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map whose 0.6 blocks are PRESENT-but-null — what '--set uiSandbox=null' reproduces, and what an operator clearing a block by hand (or a values file carrying it as null) supplies; an unguarded .Values.uiSandbox.enabled, .Values.secrets.ageKeySecretRef, or .Values.ingress kills that render on a nil pointer. NOT a --reuse-values case: docs/OPERATIONS.md's upgrade section explains that a merely-ADDED block is ABSENT under --reuse-values (that is what the | default dict guards are for)"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set uiSandbox.port=8080 2>&1 | grep -q "uiSandbox.port and service.port are both" || { echo "chart no longer refuses uiSandbox.port == service.port — wardynd refuses to boot on it (validateUISandboxConfig), so the render would apply cleanly and then crash-loop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example >/dev/null 2>&1 || { echo "uiSandbox with no SSO and no originTemplate no longer renders — the chart warns in NOTES.txt there, it does not refuse"; exit 1; }
+	@# helm template does not render NOTES, so read the source, as scripts/test-helm-runnerd.sh does.
+	@grep -F -A3 '"WARDYN_OIDC_ISSUER"' deploy/helm/wardyn/templates/NOTES.txt | grep -F "so a page one run serves can reach another run's app in the same person's browser." >/dev/null || { echo "NOTES.txt no longer warns about a shared UI-sandbox origin with no SSO and no originTemplate"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://wardyn-ui.example.com --set uiSandbox.originTemplate=https://run-{run}.ui.example.com:8443 --set uiSandbox.ingress.enabled=true --show-only templates/ui-ingress.yaml) || { echo "uiSandbox.ingress no longer renders"; exit 1; }; \
+	echo "$$out" | grep -q 'host: "wardyn-ui.example.com"' || { echo "uiSandbox.ingress did not route the advertiseURL host"; exit 1; }; \
+	echo "$$out" | grep -q 'host: "\*.ui.example.com"' || { echo "uiSandbox.ingress did not route the wildcard host originTemplate needs"; exit 1; }; \
+	echo "$$out" | grep -q "name: ui$$" || { echo "uiSandbox.ingress does not target the ui port"; exit 1; }; \
+	echo "$$out" | grep -q "name: http$$" && { echo "uiSandbox.ingress targets the console's http port — the shared origin the second listener exists to prevent"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://wardyn-ui.example.com --set uiSandbox.originTemplate=https://ui.example.com/{run} --set uiSandbox.ingress.enabled=true 2>&1 | grep -q "needs {run} inside the first host label" || { echo "uiSandbox.ingress no longer refuses an originTemplate one wildcard host cannot cover"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=wardyn-ui.example.com --set uiSandbox.ingress.enabled=true 2>&1 | grep -q "needs uiSandbox.advertiseURL as a full URL" || { echo "uiSandbox.ingress no longer refuses an advertiseURL with no scheme — it would render host: \"\", which an Ingress reads as every host"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://wardyn.example.com --set uiSandbox.ingress.enabled=true --set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.com' 2>&1 | grep -q "also routes the console host" || { echo "uiSandbox.ingress no longer refuses the console's own host"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://wardyn-ui.example.com --set uiSandbox.originTemplate=https://run-{run}.ui.example.com --set uiSandbox.ingress.enabled=true --set ingress.enabled=true --set 'ingress.hosts[0].host=console.ui.example.com' 2>&1 | grep -q "also routes the console host" || { echo "uiSandbox.ingress no longer refuses a wildcard host that covers the console's host"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example 2>&1 | grep -q "uiSandbox.originTemplate is required" || { echo "chart no longer refuses uiSandbox with SSO and no originTemplate — wardynd refuses to boot on it, so the render would apply cleanly and then crash-loop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example --set uiSandbox.acceptSharedOrigin=true 2>&1 | grep -q "name: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN" || { echo "uiSandbox.acceptSharedOrigin did not render the WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN hatch wardynd needs to boot"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example --set uiSandbox.originTemplate=https://run-{run}.ui.example.com >/dev/null 2>&1 || { echo "uiSandbox with SSO and an originTemplate no longer renders"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example --set-string env.WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE=https://run-{run}.ui.example.com >/dev/null 2>&1 || { echo "uiSandbox with SSO and the origin set through env no longer renders — wardynd boots with it, so the chart must not refuse it"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example --set extraEnv[0].name=WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE --set-string extraEnv[0].value=https://run-{run}.ui.example.com >/dev/null 2>&1 || { echo "uiSandbox with SSO and the origin set through extraEnv no longer renders — wardynd boots with it, so the chart must not refuse it"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set env.WARDYN_OIDC_ISSUER=https://idp.example.com --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@b.example --set extraEnv[0].name=WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE --set extraEnv[0].valueFrom.secretKeyRef.name=s --set extraEnv[0].valueFrom.secretKeyRef.key=k >/dev/null 2>&1 || { echo "uiSandbox with SSO and the origin set through an extraEnv valueFrom no longer renders — wardynd boots with it, so the chart must not refuse it"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set ssh.port=8080 2>&1 | grep -q "ssh.port and service.port are both" || { echo "chart no longer refuses ssh.port == service.port — the Service would carry one port number twice and the API server rejects it"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 without ha.enabled — a second replica without HA mode would run without the shared masking registry and the cross-replica locks"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }

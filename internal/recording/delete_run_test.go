@@ -80,7 +80,7 @@ func TestHandler_ErasedRecordingRemainsHidden(t *testing.T) {
 		for _, key := range []string{run, run + "~attach", run + "~part-2"} {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run+"/recording/"+key, nil)
-			newTestRouterWithAuth(s, func(*http.Request, string) bool { return authorized }).ServeHTTP(w, req)
+			newTestRouterWithAuth(s, func(http.ResponseWriter, *http.Request, string) bool { return authorized }).ServeHTTP(w, req)
 			if w.Code != http.StatusNotFound || w.Body.String() != "recording not found\n" {
 				t.Fatalf("erased replay response = %d %s", w.Code, w.Body)
 			}

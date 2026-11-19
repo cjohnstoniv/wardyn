@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -55,9 +56,29 @@ type Server struct {
 	Mount func(context.Context, Mount) error
 	// Disk attaches one disk drive (MacDisks.Attach); nil refuses an Init that names one.
 	Disk func(context.Context, Disk) error
+	// ScreenLockOff turns the agent account's screen lock off (ScreenLock.Off), once at Init; nil does
+	// nothing (tests only). It never fails the Init.
+	ScreenLockOff func(context.Context) bool
+	// Scrub removes what a run wrote (MacScrub.Scrub), at POST /v1/scrub; nil answers that request
+	// 501 (tests only).
+	Scrub func(ctx context.Context, when string) ScrubReport
+	// EndAgent ends every process of the agent account, its desktop session included (AgentProcesses.End),
+	// and says how many were running; the stop scrub runs it before and after Scrub (stopScrub). nil ends
+	// none, and the stop scrub then reports failed.
+	EndAgent func(ctx context.Context) (int, error)
+	// Guest is the guest agent's own context, which ends when the guest goes down. After a stop scrub the
+	// agent account is kept ended until then (keepEnded); nil keeps nothing ended (tests only).
+	Guest context.Context
+	// RecordMCPTables records Init's Codex MCP table names for a later scrub
+	// (MacScrub.RecordMCPTables); nil records none (tests only). It never fails the Init.
+	RecordMCPTables func(env ...map[string]string) error
+	// BootScrub is this boot's scrub, which ran before the agent served; Init answers it once.
+	BootScrub *ScrubReport
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
+	// startProc starts an exec's process; nil is cmd.Start (tests hold it).
+	startProc func(*exec.Cmd) error
 
 	mu      sync.Mutex
 	fence   PauseFence // the order of pauses and resumes, as the marker directory keeps it
@@ -66,6 +87,16 @@ type Server struct {
 	execs   map[string]*detached
 	latest  string
 	counter int
+
+	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
+	stopping bool
+	// starts holds every exec's process start against the stop scrub, which closes it before it removes anything.
+	starts startFence
+	// stopCtx ends with the stop scrub, so the GUI settings step does not outlive the run's settings.
+	stopOnce   sync.Once
+	keepOnce   sync.Once
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 }
 
 type detached struct {
@@ -113,6 +144,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ready", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, Ready{Version: s.Version}) })
 	mux.HandleFunc("POST /v1/init", s.handleInit)
+	mux.HandleFunc("POST /v1/scrub", s.handleScrub)
 	mux.HandleFunc("POST /v1/exec", s.handleExec)
 	mux.HandleFunc("GET /v1/exec/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if d := s.lookup(r.PathValue("id")); d != nil {
@@ -157,8 +189,21 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad init: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A run with a desktop starts only once the agent account is at the console. Auto-login runs once per
+	// boot, so a guest still at the login window when the wait ends stays there: the run fails with that
+	// reason instead of running with a desktop nobody can sign in to. Nothing is written before.
+	if s.Desktop != nil && s.Cred != nil && in.DesktopPassword != "" && !in.SignInsOff {
+		if err := s.Desktop.awaitAgentConsole(r.Context(), s.Cred.Uid, bootTime()); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopping {
+		http.Error(w, errStopping.Error(), http.StatusConflict)
+		return
+	}
 	if s.inited {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
@@ -190,13 +235,13 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	if in.SignInsOff && s.Desktop != nil {
 		s.Desktop.Disable()
 	}
-	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, initMarkerFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
 	_ = marker.Close()
-	res := InitResult{SignIns: SignInsRunDisk}
+	res := InitResult{SignIns: SignInsRunDisk, Scrub: s.BootScrub}
 	if s.Desktop != nil {
 		res.DesktopPasswordSet = new(bool)
 	}
@@ -214,16 +259,56 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
+	if s.RecordMCPTables != nil {
+		if err := s.RecordMCPTables(in.Env, in.SecretEnv); err != nil {
+			slog.Warn("guest agent: the run's MCP tables are not recorded for the scrub", "err", err)
+		}
+	}
 	// Before Init answers, so before the host starts any agent process. A CA that is not trusted
 	// does not fail the Init: the answer says so, and the run goes on its CA bundle.
 	if in.RunCA != "" && s.TrustRunCA != nil {
 		res.KeychainTrust, res.KeychainTrustReason = s.TrustRunCA(r.Context(), in.RunCA)
 	}
 	if s.Desktop != nil {
-		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
+		*res.DesktopPasswordSet = s.initDesktop(r.Context(), in.Env, in.SecretEnv, ca, in.DesktopPassword, !in.SignInsOff)
+	}
+	if s.ScreenLockOff != nil {
+		s.ScreenLockOff(r.Context())
 	}
 	s.inited = true
 	writeJSON(w, res)
+}
+
+// errStopping refuses an Init or an exec after the stop scrub.
+var errStopping = errors.New("the sandbox is stopping: its run's settings are removed")
+
+// errRestarted is the refusal of an exec after the agent restarted: its Init marker is there, but its
+// memory of the run's env is not, and an exec would run without the proxy, the CA and the secrets.
+var errRestarted = errors.New("the guest agent restarted and lost the run's environment; end this run and start a new one")
+
+// handleScrub runs the stop scrub. It first closes the agent to Init and execs, so nothing starts on
+// a guest whose walls and CA are gone; it does not hold the lock while the scrub runs.
+func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
+	if s.Scrub == nil {
+		http.Error(w, "this agent cannot scrub", http.StatusNotImplemented)
+		return
+	}
+	s.mu.Lock()
+	s.stopping = true
+	s.mu.Unlock()
+	// An exec admitted before stopping may not have started its process yet: wait for one already
+	// starting, and refuse the rest, so none begins on the scrubbed guest and writes back what it removed.
+	s.starts.close(errStopping)
+	s.sessionCtx()
+	s.stopCancel()
+	// A program of the run already running, in an exec or on the desktop, could write back what the scrub
+	// removes: the account is ended first, and the scrub is done only when none of it ran at its end.
+	rep := stopScrub(r.Context(), s.EndAgent, s.Scrub)
+	// What starts as the agent account after this answer would run until the power-off.
+	if s.Guest != nil && s.EndAgent != nil {
+		s.keepOnce.Do(func() { go keepEnded(s.Guest, s.EndAgent) })
+	}
+	writeJSON(w, rep)
 }
 
 // buildCA writes MacCAFullPath from the system roots and the CA Init has just written.
@@ -236,23 +321,45 @@ func (s *Server) buildCA(files []File) error {
 	return nil
 }
 
-// initDesktop sets the run's VNC password (pw, from Init) and the CA variables in the desktop session,
-// and says whether the password is set. Neither fails the Init: a run without them is agent-only or
-// sees certificate errors in GUI apps, and InitResult.DesktopPasswordSet says which. The log lines name
-// the step and never the password.
-func (s *Server) initDesktop(ctx context.Context, ca []string, pw string, desktop bool) bool {
+// initDesktop sets the run's VNC password (pw, from Init), adds the agent account to Screen Sharing's access list
+// when the base has one, and gives the run's non-secret settings to the
+// shells and the desktop session (StartSessionEnv), and says whether the password is set. Neither fails
+// the Init: a run without them is agent-only or sees certificate errors in GUI apps, and
+// InitResult.DesktopPasswordSet says which. The GUI session's part runs on after Init answers, until the
+// agent account is at the console or the stop scrub cancels it. secret is passed only so StartSessionEnv
+// can drop a colliding key: its values never reach a shell or the session. The log lines name the step
+// and never the password.
+func (s *Server) initDesktop(ctx context.Context, env, secret map[string]string, ca []string, pw string, desktop bool) bool {
 	set := false
 	if desktop {
+		s.Desktop.AllowScreenSharing(ctx, s.User)
 		if err := s.Desktop.SetRunPassword(ctx, pw); err != nil {
 			slog.Warn("guest agent: no desktop password for this run", "err", err)
 		} else {
 			set = true
 		}
 	}
-	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
-		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)
+	uid := uint32(0)
+	if s.Cred != nil {
+		uid = s.Cred.Uid
 	}
+	s.Desktop.StartSessionEnv(s.sessionCtx(), SessionEnvPaths{}, uid, env, secret, ca)
 	return set
+}
+
+// bootTime is when the guest booted (kern.boottime), or now when it cannot be read.
+func bootTime() time.Time {
+	tv, err := unix.SysctlTimeval("kern.boottime")
+	if err != nil {
+		return time.Now()
+	}
+	return time.Unix(tv.Unix())
+}
+
+// sessionCtx is the context of the GUI settings step, ended by the stop scrub.
+func (s *Server) sessionCtx() context.Context {
+	s.stopOnce.Do(func() { s.stopCtx, s.stopCancel = context.WithCancel(context.Background()) })
+	return s.stopCtx
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process
@@ -309,7 +416,7 @@ func (s *Server) signalLatest(gen int64, sig unix.Signal) (int, string) {
 }
 
 // fenceFile, in the marker directory, keeps the PauseFence across a restart of the agent's service.
-const fenceFile = "wardyn-pause-fence"
+const fenceFile = pauseFenceFile
 
 // readFence reads the fence the marker directory keeps; none is the zero fence of a fresh boot.
 func readFence(dir string) (PauseFence, error) {
@@ -393,6 +500,17 @@ func (s *Server) command(er ExecRequest) (*exec.Cmd, error) {
 		return nil, errors.New("an exec needs argv")
 	}
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return nil, errStopping
+	}
+	// launchd starts this agent again after it ends, with none of the run's settings Init gave it.
+	if !s.inited {
+		if _, err := os.Lstat(filepath.Join(s.MarkerDir, initMarkerFile)); err == nil {
+			s.mu.Unlock()
+			return nil, errRestarted
+		}
+	}
 	env := append([]string{"HOME=" + s.Home, "USER=" + s.User, "LOGNAME=" + s.User, "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8"}, s.env...)
 	s.mu.Unlock()
 	if er.TTY {
@@ -421,6 +539,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd, err := s.command(er)
+	if errors.Is(err, errStopping) || errors.Is(err, errRestarted) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -476,6 +598,24 @@ func (f *frameWriter) stream(typ byte, r io.Reader) {
 	}
 }
 
+// start starts an attached exec's process through the stop fence (Server.starts): handleExec answers 200
+// before the start, so an exec admitted before the stop scrub can reach here after it.
+func (s *Server) start(cmd *exec.Cmd) error {
+	if err := s.starts.enter(); err != nil {
+		return err
+	}
+	defer s.starts.leave()
+	return s.startProcess(cmd)
+}
+
+// startProcess starts cmd; the caller holds the stop fence.
+func (s *Server) startProcess(cmd *exec.Cmd) error {
+	if s.startProc != nil {
+		return s.startProc(cmd)
+	}
+	return cmd.Start()
+}
+
 // runAttached runs cmd with the session's stdin and streams its output; a cancelled session (the
 // runner closed it, or the connection went) kills the process group.
 func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out *frameWriter) (int, error) {
@@ -491,7 +631,7 @@ func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out
 		defer master.Close()
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr.Setctty = true
-		err = cmd.Start()
+		err = s.start(cmd)
 		slave.Close()
 		if err != nil {
 			return 0, err
@@ -512,7 +652,7 @@ func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out
 		if err != nil {
 			return 0, err
 		}
-		if err := cmd.Start(); err != nil {
+		if err := s.start(cmd); err != nil {
 			return 0, err
 		}
 		stdin = in
@@ -580,8 +720,14 @@ func exitCode(cmd *exec.Cmd, err error) (int, error) {
 	return cmd.ProcessState.ExitCode(), nil
 }
 
-// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir.
+// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir. It holds the
+// stop fence from before the file is made until the exec is recorded: the stop scrub removes every exec's
+// output, so neither the file nor the process may begin after it.
 func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
+	if err := s.starts.enter(); err != nil {
+		return "", err
+	}
+	defer s.starts.leave()
 	s.mu.Lock()
 	s.counter++
 	id := strconv.Itoa(s.counter)
@@ -597,7 +743,7 @@ func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
 		return "", err
 	}
 	cmd.Stdout, cmd.Stderr = pw, pw
-	if err := cmd.Start(); err != nil {
+	if err := s.startProcess(cmd); err != nil {
 		f.Close()
 		pr.Close()
 		pw.Close()
@@ -700,15 +846,13 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 		return nil, nil, err
 	}
 	fd := master.Fd()
-	if err = ptyIoctl(fd, unix.TIOCPTYGRANT, 0); err == nil {
-		err = ptyIoctl(fd, unix.TIOCPTYUNLK, 0)
-	}
 	var name [128]byte
-	if err == nil {
-		err = ptyIoctl(fd, unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&name[0])))
-	}
-	if err == nil && cols > 0 && rows > 0 {
-		err = setWinsize(master, cols, rows)
+	if err = ptyIoctl(fd, unix.TIOCPTYGRANT, 0); err != nil {
+		err = fmt.Errorf("pty grant: %w", err)
+	} else if err = ptyIoctl(fd, unix.TIOCPTYUNLK, 0); err != nil {
+		err = fmt.Errorf("pty unlock: %w", err)
+	} else if err = ptyIoctl(fd, unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&name[0]))); err != nil {
+		err = fmt.Errorf("pty name: %w", err)
 	}
 	if err != nil {
 		master.Close()
@@ -717,7 +861,16 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 	slave, err := os.OpenFile(unix.ByteSliceToString(name[:]), os.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		master.Close()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("pty open slave: %w", err)
+	}
+	// The size goes on the slave, once it is open: the master of a pair with no open slave has no terminal
+	// behind it yet.
+	if cols > 0 && rows > 0 {
+		if err := setWinsize(slave, cols, rows); err != nil {
+			slave.Close()
+			master.Close()
+			return nil, nil, fmt.Errorf("pty size: %w", err)
+		}
 	}
 	return master, slave, nil
 }

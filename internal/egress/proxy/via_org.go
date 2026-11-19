@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -43,6 +44,12 @@ const (
 	// whose slot the run token takes on the forwarded request; the organisation
 	// restores it before its checks, which strip it.
 	ViaOrgAuthorizationHeader = "X-Wardyn-Via-Org-Authorization"
+	// ViaOrgRelayedHeader marks a forwarded request that came in on a VM run's relay listener, so the
+	// organisation does not count its decisions as the run working. Only the runner's proxy sets it.
+	ViaOrgRelayedHeader = "X-Wardyn-Via-Org-Relayed"
+	// DecisionRelayedHeader marks a decision post whose row is Relayed (egress.Request.Relayed is not
+	// serialised); the organisation trusts it only on a via_org engine's post for a VM run.
+	DecisionRelayedHeader = "Wardyn-Decision-Relayed"
 )
 
 // viaOrgRouteFor is the via_org route a sandbox request is for, and the
@@ -75,7 +82,7 @@ func (p *Proxy) viaOrgRouteFor(r *http.Request) (ViaOrgRoute, string, bool) {
 }
 
 func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
-	i := slices.IndexFunc(p.viaOrgRoutes, func(rt ViaOrgRoute) bool { return strings.EqualFold(rt.Host, host) })
+	i := slices.IndexFunc(p.viaOrgRoutes, func(rt ViaOrgRoute) bool { return hostKey(rt.Host) == hostKey(host) })
 	if i < 0 {
 		return ViaOrgRoute{}, false
 	}
@@ -87,7 +94,25 @@ func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
 // anything else is forwarded as it stands. No hold is raised and no decision is
 // written here: the organisation owns both.
 func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrgRoute, authority string) {
+	// The forward rides the control-plane transport, past evaluate and the egress dial, so a run with
+	// no network is refused here.
+	if p.noNetwork {
+		p.refuseNoNetwork(w, r, authority)
+		return
+	}
 	if r.Method != http.MethodConnect {
+		// The run's allowed_models judges a plain via_org request to a model host as serveMITMRequest
+		// judges a terminated one: the organisation forwards it on, and nothing after this would see it.
+		defaultPort := 443
+		if r.URL != nil && r.URL.Scheme == "http" {
+			defaultPort = 80
+		}
+		host, port := splitHostPort(authority, defaultPort)
+		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+		defer releaseModels()
+		if modelRefused {
+			return
+		}
 		p.forwardViaOrg(w, r, route, authority)
 		return
 	}
@@ -96,7 +121,7 @@ func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrg
 		return
 	}
 	host, port := splitHostPort(authority, 443)
-	p.mitmConnect(w, r, host, port)
+	p.mitmConnect(w, r, host, port, nil)
 }
 
 // forwardViaOrg sends one sandbox request to the organisation's via_org route,
@@ -127,12 +152,22 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 	}
 	out.ContentLength = r.ContentLength
 	out.Header = r.Header.Clone()
+	p.stripGatewayHeaders(out.Header)
+	// The organisation attaches the credential, so no sandbox routing header may ride to a gateway's
+	// host; the proxy does not know which header the organisation owns, so none is kept.
+	p.stripGatewayRoutingHeaders(out.Header, route.Host, "")
 	removeHopByHop(out.Header)
 	out.Header.Del(ViaOrgAuthorizationHeader)
 	for _, v := range r.Header.Values("Authorization") {
 		out.Header.Add(ViaOrgAuthorizationHeader, v)
 	}
 	out.Header.Set(ViaOrgAuthorityHeader, authority)
+	// The guest's own copies of the marks never ride the hop; the proxy sets the relay mark itself.
+	out.Header.Del(ViaOrgRelayedHeader)
+	out.Header.Del(DecisionRelayedHeader)
+	if p.relayLane(r.Context()) {
+		out.Header.Set(ViaOrgRelayedHeader, "1")
+	}
 	out.Header.Set("Authorization", "Bearer "+p.runToken.Get())
 	resp, err := p.controlTransport.RoundTrip(out)
 	if err != nil {
@@ -219,6 +254,9 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
+	r = trackNetworkBody(r)
+	defer interruptBodyReadOnCancel(w, r)()
+	host = hostKey(host) // the grant's destination as stored: the engine's tables are keyed in this one spelling
 	if e.refuseClosed(w) {
 		return
 	}
@@ -227,7 +265,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 		p.httpError(w, "via_org destination refused", errViaOrgCleartext, http.StatusForbidden)
 		return
 	}
-	decision, _, log := p.evaluate(r.Context(), host, 443, http.MethodConnect, "")
+	decision, _, log := p.evaluate(context.WithValue(r.Context(), engineHeldRequest{}, true), host, 443, http.MethodConnect, "")
 	switch decision {
 	case egress.Deny:
 		if log != nil {
@@ -248,6 +286,9 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 	if log != nil {
 		p.sink.emit(*log)
 	}
+	// The control plane's listener sets no read timeout, so the body gets the bound a terminated
+	// tunnel's does, armed after the hold above and before allowed_models, the first gate that reads it.
+	rearmBodyDeadline(w, r)
 	p.serveMITMRequest(w, r, host, 443)
 }
 
@@ -255,6 +296,8 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
+	r = trackNetworkBody(r)
+	defer interruptBodyReadOnCancel(w, r)()
 	if e.refuseClosed(w) {
 		return
 	}
@@ -264,8 +307,32 @@ func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	// The control plane's listener sets no read timeout, so the request body
 	// gets the same bound a terminated tunnel's does.
-	rearmBodyDeadline(w)
+	rearmBodyDeadline(w, r)
 	e.srv.proxy.handleGitBroker(w, r)
+}
+
+// interruptBodyReadOnCancel makes the end of a forwarded request's stream (run end, release, idle: the
+// control plane cancels r's context) end a body Read blocked on an upload that stopped arriving, by
+// re-arming the body deadline, which is now once the context has ended. The control plane's listener
+// sets no read timeout and its cancel sets only a write deadline. The returned stop fences the handler's
+// return, as the control plane fences that write deadline: AfterFunc's stop does not wait for a callback
+// already running, so the deadline is never set once the handler has returned.
+func interruptBodyReadOnCancel(w http.ResponseWriter, r *http.Request) (stop func()) {
+	var mu sync.Mutex
+	returned := false
+	stopAfter := context.AfterFunc(r.Context(), func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !returned {
+			rearmBodyDeadline(w, r)
+		}
+	})
+	return func() {
+		stopAfter()
+		mu.Lock()
+		returned = true
+		mu.Unlock()
+	}
 }
 
 // Close flushes the engine's decision rows and releases it.

@@ -68,15 +68,15 @@ type EndingCopy = {
 const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
   // run.build/failure is a BUILD, not a pull: a BYOI wrap, a request-level
   // devcontainer, or the workspace's own image (runs_create.go's buildFailed,
-  // workspace_run_image.go's buildAudit). The server's own hint on the run is
-  // "the run's sandbox image could not be built"; the builder's error rides
-  // data.error, which the block renders verbatim above these lines.
+  // workspace_run_image.go's buildAudit). The audit row names only the failed
+  // step; the run's failure_hint carries the cause, and the block renders it
+  // above these lines.
   image: {
     happened: () =>
       "The sandbox image could not be built, so the run stopped before the agent started. There is no exit code because nothing ran.",
     todo: [
       "Fix the image or the devcontainer it builds from, then start a new run — the policy and workspace are unchanged.",
-      "The audit row carries the builder's full output.",
+      "The failure line above is the run's own; the builder's full output is in the server log.",
     ],
   },
   selftest: {
@@ -138,14 +138,14 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
 // record says it cannot confirm — it does not invent who, when or how.
 const KILL_AUDIT_ROW = "The audit row names who killed it and the reason they gave.";
 const KILL_START_NEW = "Start a new run if the work still needs doing — a killed run cannot resume.";
-const KILL_AGAIN = "Kill it again to run teardown once more; the cascade is safe to repeat.";
+const KILL_AGAIN = "End it again to run teardown once more; the cascade is safe to repeat.";
 const KILL_SCRATCH_GONE = "Files written to a mounted workspace are still on the host; scratch is gone.";
 // run.kill carries outcome "failure" (plus a run.revoke/failure row) when
 // KillSandbox, the identity revoke or the broker revoke failed —
 // internal/api/runs_lifecycle.go's HONEST OUTCOME: the run IS marked KILLED,
 // but the sandbox may still be live and a minted token may still be valid.
 const KILL_PARTIAL_AUDIT_ROW = "The audit row names the step that failed — read it before treating this run as contained.";
-const KILL_PARTIAL_RETRY = "Killing it again re-runs the same teardown; the cascade is safe to repeat.";
+const KILL_PARTIAL_RETRY = "Ending it again re-runs the same teardown; the cascade is safe to repeat.";
 const KILL_PARTIAL_SCRATCH =
   "Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host.";
 
@@ -312,6 +312,11 @@ export function RunFailureBlock({
     void refresh();
   }, [credential, refresh]);
   if (!ending) return null;
+  // The audit row of a dispatch, build or selftest failure names only the step that failed ("Create
+  // sandbox"); the cause is the run's own failure_hint, the line the CLI prints. The row's text stands in
+  // only for a run with no hint (an older server).
+  const hintIsCause = dispatchFailure || ending.kind === "image" || ending.kind === "selftest";
+  const cause = hintIsCause && run.failure_hint ? run.failure_hint : ending.detail;
   // A kill Wardyn made itself for a desktop sign-in says why in words, not as its reason code.
   const signinLine = ending.kind === "killed" ? desktopSigninReasonLine(ending.detail) : undefined;
   const copy =
@@ -358,38 +363,39 @@ export function RunFailureBlock({
               entirely (review R-16); here the full server sentence always
               renders regardless of width. Gated on `!copy`: for a RECOGNISED
               ending (image/selftest/killed/auto_stop) `copy.happened` +
-              `ending.detail` already say the same thing in the vocabulary
+              `cause` already say the same thing in the vocabulary
               that kind owns — printing failure_hint too would be the same
-              fact stated three times. For `unknown` (D9's class) copy is
-              undefined, so this is the ONLY line — still the real prose,
-              never invented. */}
+              fact stated three times (for image, selftest and the dispatch kinds
+              it IS `cause`, the mono line below). For `unknown` (an ending no
+              kind names) copy is undefined, so this is the ONLY line — still
+              the real prose, never invented. */}
           {!copy && run.failure_hint && (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{run.failure_hint}</p>
           )}
           {/* The failing step's OWN words, mono because it is a wire value
-              (§3) — the same data.error the CLI's runFailureReason prints.
+              — the run's failure_hint, the line the CLI's runFailureReason prints.
               Under an unrecognised ending there is no copy block at all, so
               this never appears without a cause naming it. */}
           {signinLine ? (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{signinLine}</p>
           ) : (
-            ending.detail && (
+            cause && (
               <p className="mt-1 break-words text-muted-foreground">
-                <Mono>{dispatchFailure ? stripCriWrapper(ending.detail) : ending.detail}</Mono>
+                <Mono>{dispatchFailure ? stripCriWrapper(cause) : cause}</Mono>
               </p>
             )
           )}
-          {/* Only the two dispatch kinds: the unstripped text, and only when
+          {/* Only the dispatch kinds: the unstripped text, and only when
               stripping removed something (nothing new is fetched; it is the
-              row's own data.error). */}
-          {dispatchFailure && ending.detail && stripCriWrapper(ending.detail) !== ending.detail && (
+              run's own failure_hint, or the row's data.error without one). */}
+          {dispatchFailure && cause && stripCriWrapper(cause) !== cause && (
             <details className="group mt-1">
               <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground">
                 <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
                 {PLATFORM_MESSAGE}
               </summary>
               <p className="mt-1 break-words text-muted-foreground">
-                <Mono>{ending.detail}</Mono>
+                <Mono>{cause}</Mono>
               </p>
             </details>
           )}

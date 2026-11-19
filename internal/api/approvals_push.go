@@ -208,7 +208,7 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 	ap types.ApprovalRequest, l types.PushPathList) bool {
 	stored, err := s.cfg.Store.(store.PushPathListStore).RecordPushPathList(r.Context(), ap.ID, ap.RunID, l, maxPushPathListsPerRun)
 	if errors.Is(err, store.ErrPushPathListCap) {
-		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil {
+		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil && !errors.Is(xerr, types.ErrApprovalAlreadyDecided) {
 			writeServerError(w, r, "expire a push_content approval past the path-list cap", xerr)
 			return false
 		}
@@ -239,11 +239,23 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 // push_content_paths since no longer matches. A list that cannot be read is an
 // error: the export fails (handleExportAudit) instead of showing the row as if
 // it had no paths, since a reader could not tell that from an incomplete one.
+// A row an enrolled device forwarded names the device's own approval, whose
+// list stays on the device: it is marked paths_unavailable held_on_device
+// whatever its target, instead of being looked up here, where no list could
+// ever be found.
 func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+	var data map[string]json.RawMessage
+	if json.Unmarshal(ev.Data, &data) != nil {
+		return ev, nil
+	}
+	if ev.DeviceID != nil {
+		data["paths_unavailable"] = mustJSON("held_on_device")
+		ev.Data = mustJSON(data)
+		return ev, nil
+	}
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	id, perr := uuid.Parse(ev.Target)
-	var data map[string]json.RawMessage
-	if !ok || perr != nil || json.Unmarshal(ev.Data, &data) != nil {
+	if !ok || perr != nil {
 		return ev, nil
 	}
 	l, err := lists.GetPushPathList(ctx, id)
@@ -257,9 +269,10 @@ func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) (types.
 
 // handleGetPushPathList returns a push_content approval's complete path list
 // (GET /approvals/{id}/paths) to whoever GET /approvals shows the approval to:
-// the security tier, or the run's owner. Anyone else gets the byte-identical
-// 404 a missing approval gets. The row is immutable and read whatever state
-// the run is in, so the list outlives the run.
+// the security tier, the run's owner, or a decider its unit's rule names for
+// the hold. Anyone else gets the byte-identical 404 a missing approval gets.
+// The row is immutable and read whatever state the run is in, so the list
+// outlives the run.
 func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -273,7 +286,7 @@ func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !s.ownsRunOrAdmin(r, run) {
+	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !(s.ownsRunOrAdmin(r, run) || s.decidesApproval(r, ap, run)) {
 		// #656 slice 3: the SAME reasonApprovalNotFound notFoundIf's own 404
 		// above carries — TestPushPathListRouteVisibility pins this 404
 		// byte-identical to notFoundIf's for a genuinely missing approval, so

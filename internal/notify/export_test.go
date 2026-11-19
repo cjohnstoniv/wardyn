@@ -23,3 +23,8 @@ func (w *Worker) LoadNextTierDueAt(ctx context.Context, approvalID uuid.UUID, ti
 	f, _, err := w.loadFacts(ctx, approvalID, tier)
 	return f.NextTierDueAt, err
 }
+
+// UnitAdminEmails exposes the unit_admins target's read to the external test package.
+func (w *Worker) UnitAdminEmails(ctx context.Context, unit *uuid.UUID) ([]string, error) {
+	return w.unitAdminEmails(ctx, unit)
+}

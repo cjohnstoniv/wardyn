@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,66 @@ func TestPersonEraseSendsTheScopesAndPrintsWhatFinished(t *testing.T) {
 	}
 	if !strings.Contains(out, "erased run_tasks, credentials for alice/sub") {
 		t.Errorf("output = %q", out)
+	}
+}
+
+// A token the erasure could not revoke is named on stderr with the server's sentence, and the command
+// exits 1 after printing the erasure, with --json too.
+func TestPersonEraseSaysATokenMayStillWork(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},` +
+			`"detail":{"credentials":{"count":1,"tokens_revocation_failed":true,"detail":"remedy"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	cmd := personCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	// The root sets both (main.go): main prints the returned error, and cobra prints neither it nor the usage.
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	out, errOut := &strings.Builder{}, &strings.Builder{}
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"erase", "p", "--scope", "credentials"})
+	var ee *exitError
+	if err := cmd.Execute(); !errors.As(err, &ee) || ee.code != 1 || err.Error() != personEraseTokenLeft {
+		t.Fatalf("erase = %v, want exit 1 saying a token may still work", err)
+	}
+	if !strings.Contains(out.String(), "erased credentials for p") || errOut.String() != "warning: remedy\n" {
+		t.Errorf("stdout %q, stderr %q: want the erasure and then the server's sentence", out, errOut)
+	}
+	out.Reset()
+	cmd.SetArgs([]string{"erase", "p", "--scope", "credentials", "--json"})
+	if err := cmd.Execute(); !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(out.String(), `"tokens_revocation_failed":true`) {
+		t.Errorf("erase --json = %v, stdout %q: want the result printed and exit 1", err, out)
+	}
+}
+
+// Principals the erasure left alone are named on stderr, and --json keeps them.
+func TestPersonEraseNamesWhatWasNotErased(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},"detail":{},` +
+			`"not_erased":{"subjects":["y\u001b[2J"],"note":"not erased: erase by subject"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	run := func(args ...string) (string, string) {
+		t.Helper()
+		cmd := personCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+		out, errOut := &strings.Builder{}, &strings.Builder{}
+		cmd.SetOut(out)
+		cmd.SetErr(errOut)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errOut.String()
+	}
+	out, errOut := run("erase", "p", "--scope", "credentials")
+	if !strings.Contains(out, "erased credentials for p") || !strings.Contains(errOut, `warning: not erased: "y\x1b[2J"`) {
+		t.Errorf("stdout %q, stderr %q: want the erasure and then the principal left alone, escaped", out, errOut)
+	}
+	out, _ = run("erase", "p", "--scope", "credentials", "--json")
+	if !strings.Contains(out, `"not_erased":{"subjects":["y\u001b[2J"]`) {
+		t.Errorf("--json = %s, want not_erased kept", out)
 	}
 }
 

@@ -241,10 +241,12 @@ func decodeStrictJSON(raw []byte, into any) error {
 }
 
 // SetWorkspaceOwningUnit pins workspace id to unit, or unpins it when unit is nil. The column's only
-// writer: UpdateWorkspace never touches it. ErrNotFound when the workspace or the unit is unknown.
+// writer: UpdateWorkspace never touches it. Moving a pin keeps its strictness; unpinning clears it.
+// ErrNotFound when the workspace or the unit is unknown.
 func (s PG) SetWorkspaceOwningUnit(ctx context.Context, id uuid.UUID, unit *uuid.UUID) (types.Workspace, error) {
 	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET owning_unit_id=$1, updated_at=now() WHERE id=$2 RETURNING `+wsReadCols, unit, id))
+		`UPDATE workspaces SET owning_unit_id=$1, owning_unit_strict = owning_unit_strict AND $1::uuid IS NOT NULL,
+			updated_at=now() WHERE id=$2 RETURNING `+wsReadCols, unit, id))
 	if isForeignKeyViolation(err) {
 		return types.Workspace{}, ErrNotFound
 	}
@@ -256,10 +258,10 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pe) && pe.Code == "23503"
 }
 
-// SetWorkspaceOwningUnitQ is the pin write on q, for a held change's approval. ErrNotFound for an
-// unknown workspace or unit.
-func SetWorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID, unit *uuid.UUID) error {
-	tag, err := q.Exec(ctx, `UPDATE workspaces SET owning_unit_id=$1, updated_at=now() WHERE id=$2`, unit, id)
+// SetWorkspaceOwningUnitQ is the pin write on q, for a held change's approval: the unit and whether
+// the pin is strict (true needs a unit). ErrNotFound for an unknown workspace or unit.
+func SetWorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID, unit *uuid.UUID, strict bool) error {
+	tag, err := q.Exec(ctx, `UPDATE workspaces SET owning_unit_id=$1, owning_unit_strict=$3, updated_at=now() WHERE id=$2`, unit, id, strict)
 	if isForeignKeyViolation(err) {
 		return ErrNotFound
 	}
@@ -292,18 +294,17 @@ func (s PG) SetRunRestrictionIDs(ctx context.Context, id uuid.UUID, ids []uuid.U
 	return nil
 }
 
-// WorkspaceOwningUnitQ is workspace id's pin on q (nil when unpinned), for a held change's approval to
-// compare. ErrNotFound for an unknown workspace.
-func WorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID) (*uuid.UUID, error) {
-	var unit *uuid.UUID
-	err := q.QueryRow(ctx, `SELECT owning_unit_id FROM workspaces WHERE id=$1`, id).Scan(&unit)
+// WorkspaceOwningUnitQ is workspace id's pin on q (nil when unpinned) and whether it is strict, for a
+// held change's approval to compare. ErrNotFound for an unknown workspace.
+func WorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID) (unit *uuid.UUID, strict bool, err error) {
+	err = q.QueryRow(ctx, `SELECT owning_unit_id, owning_unit_strict FROM workspaces WHERE id=$1`, id).Scan(&unit, &strict)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: read workspace owning unit: %w", err)
+		return nil, false, fmt.Errorf("store: read workspace owning unit: %w", err)
 	}
-	return unit, nil
+	return unit, strict, nil
 }
 
 // restrictionIDsParam is the restriction_ids column's value: never NULL, which the column refuses.

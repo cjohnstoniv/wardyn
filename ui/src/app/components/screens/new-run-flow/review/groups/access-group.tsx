@@ -12,6 +12,7 @@ import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { reachedHosts, wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
+import { networkValue } from "../policy-rows";
 import { ReviewGroup } from "../review-group";
 import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
@@ -29,7 +30,7 @@ export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut, walls
   const closed = !!access && !access.unlisted.allow_all && access.unlisted.mode === "always_deny";
   // The count is the card's Network count: a host the walls take out is listed in its own line, not counted.
   const reached = access ? reachedHosts(access, leftOut) : 0;
-  const count = reached === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(reached);
+  const count = networkValue(reached, access?.unlisted.allow_all === true);
   const closedCount = reached === 1 ? NR_WALLS.REVIEW_SITE_ONE : NR_WALLS.REVIEW_SITES(reached);
   return (
     <ReviewGroup

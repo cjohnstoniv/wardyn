@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -90,7 +91,8 @@ func (s *Store) putFenced(ctx context.Context, name string, gen int64, r sealedR
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", rowRef(s.owner, name), err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// Put sets no bound of its own, so the rollback takes db.Rollback's: ctx's deadline or db.RollbackBound.
+	defer db.Rollback(ctx, tx)
 	if err := s.checkGeneration(ctx, tx, gen); err != nil {
 		return err
 	}

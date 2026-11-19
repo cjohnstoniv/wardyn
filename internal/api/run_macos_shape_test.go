@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +39,15 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 				f.harnesses = []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli", Task: "review it"}}
 			},
 			want: "A macOS VM starts one agent per run in this release, and another harness in this run has its own starting prompt. Remove that prompt, or choose a container or a Linux VM.", field: "tools"},
+		{name: "an interactive run that starts in the agent CLI", edit: func(req *createRunRequest) {
+			req.Agent, req.Interactive, req.InteractiveStart = "claude-code", true, "agent"
+		}, want: `A macOS VM's terminal opens a shell, not the agent, in this release. Turn off "Start the run in this harness", or send interactive_start: "shell" in the API.`, field: "interactive_start"},
+		{name: "an interactive run that starts in a shell", edit: func(req *createRunRequest) {
+			req.Agent, req.Interactive, req.InteractiveStart = "claude-code", true, "shell"
+		}},
+		{name: "a background task with an agent start named", edit: func(req *createRunRequest) { task(req); req.InteractiveStart = "agent" }},
+		{name: "a profile that pauses idle runs", edit: task, fold: func(f *runFold) { f.ceiling.Limits.PauseIdleAfterSec = 600 },
+			want: "A macOS VM can't be paused when idle, so your profile's idle pause can't apply to it. Choose a container or a Linux VM, or ask an admin to turn idle pause off.", field: "pause_idle_after_sec"},
 		{name: "a second harness with no prompt", edit: task,
 			fold: func(f *runFold) {
 				f.harnesses = []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "none"}}
@@ -91,10 +101,12 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 				}
 				return
 			}
-			body := w.Body.String()
-			if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `"placement_capability"`) || !strings.Contains(body, tc.want) ||
-				!strings.Contains(body, `"field":"`+tc.field+`"`) {
-				t.Fatalf("ok = %v, %d %s; want 422 placement_capability on %s saying %q", ok, w.Code, body, tc.field, tc.want)
+			// The sentence is compared decoded: in the JSON body its quotes are escaped.
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if ok || w.Code != http.StatusUnprocessableEntity || body.Reason != "placement_capability" || !strings.Contains(body.Error, tc.want) ||
+				body.Field != tc.field {
+				t.Fatalf("ok = %v, %d %s; want 422 placement_capability on %s saying %q", ok, w.Code, w.Body, tc.field, tc.want)
 			}
 		})
 	}

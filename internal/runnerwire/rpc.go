@@ -80,7 +80,52 @@ const (
 	// types.DriveMount), answered with ReclaimDriveResult. It is sent only to a runner whose caps carry
 	// MacVMCaps.DiskDrives, and the runner refuses every other backend.
 	MethodReclaimDrive = "reclaim_drive"
+	// MethodMacWindow asks the runner to put an attended window (keyboard and pointer) on a macOS VM
+	// run it holds (MacWindowArgs), on a runner whose caps carry MacVMCaps.Window; an older runner never
+	// gets the call. The runner answers with a mac_window stream (KindMacWindow) that lives as long as
+	// the window: the org ends the window by resetting or closing it, and the runner ends the stream when
+	// the window ends first.
+	MethodMacWindow = "mac_window"
+	// MethodKeptMachine acts on one kept machine's folder on the Mac (KeptMachineArgs), answered with
+	// KeptMachineResult. It is sent only to a runner whose caps carry MacVMCaps.KeptMachines.
+	MethodKeptMachine = "kept_machine"
+	// MethodFenceProxy cuts a contained run's agent off every network it is attached to (RefArgs, an empty
+	// reply). Sent only to a runner whose caps carry ProxyFence.
+	MethodFenceProxy = "fence_proxy"
 )
+
+// KeptMachineOpDelete is kept_machine's one op.
+const KeptMachineOpDelete = "delete"
+
+// KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
+// erasure, expiry or a revoked runner.
+type KeptMachineArgs struct {
+	Op string `json:"op"`
+	ID string `json:"id"`
+	By string `json:"by,omitempty"`
+}
+
+// KeptMachineResult is kept_machine's answer. Outcome is KeptMachineDeleted, or KeptMachineAlreadyAbsent
+// when the Mac holds no such folder; both end the delete.
+type KeptMachineResult struct {
+	Outcome string `json:"outcome"`
+}
+
+// KeptMachineResult.Outcome values.
+const (
+	KeptMachineDeleted       = "deleted"
+	KeptMachineAlreadyAbsent = "already_absent"
+)
+
+// MacWindowArgs is mac_window's input. GrantID names the org's grant for this one open (the helper logs
+// it, and a second open on the same run is refused whatever its id; letters, digits and . _ : -, at most
+// 128). Title is the window's title, which
+// names the run and the person.
+type MacWindowArgs struct {
+	Ref     string `json:"ref"`
+	GrantID string `json:"grant_id"`
+	Title   string `json:"title,omitempty"`
+}
 
 // ReclaimDriveResult is reclaim_drive's answer: Outcome when the disk is gone, or InUse when a run on
 // this Mac holds it, which deletes nothing.
@@ -118,6 +163,9 @@ type CreateSandboxResult struct {
 type RefArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation,omitempty"`
 	Ref                 string    `json:"ref"`
+	// PolicyGeneration is the run's policy generation the call acts for, sent only to a runner whose caps
+	// carry ProxyFence; 0 is none.
+	PolicyGeneration int `json:"policy_generation,omitempty"`
 }
 
 // AgentPauseArgs is pause_agent's and resume_agent's. Generation is the run's pause generation, which
@@ -223,6 +271,9 @@ type SyncFolderArgs struct {
 	RemoteDir string    `json:"remote_dir"`
 	Pull      bool      `json:"pull,omitempty"`
 	Deny      []string  `json:"deny,omitempty"`
+	// DeadlineUnixMs is when the org stops waiting for the pass (Unix ms); the runner ends the pass by
+	// then. Absent (an older org), the runner bounds only a pass back.
+	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
 }
 
 // SyncFolderWaitArgs waits for the pass on Stream to end.
@@ -242,8 +293,16 @@ type FolderPass struct {
 	BytesOut  int64           `json:"bytes_out"`
 	BytesIn   int64           `json:"bytes_in"`
 	// Unsynced is, on a pass back cut short, the sandbox's changed files it had not brought back.
-	Unsynced int    `json:"unsynced,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Unsynced int `json:"unsynced,omitempty"`
+	// UnsyncedPaths names those files, sorted, at most MaxFolderUnsyncedPaths of them.
+	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
+	// NotPreserved, from a runner of this release, is the first reason a change the pass owed the
+	// laptop was not proven kept there: an install, a directory sync or the state save failed, or a
+	// conflict's sandbox copy could not be kept. A pass that sets it is never a success.
+	NotPreserved string `json:"not_preserved,omitempty"`
+	// Recovered is the base name of an unreadable sync record the pass moved aside before comparing every file.
+	Recovered string `json:"recovered,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.
@@ -254,6 +313,9 @@ type FolderRefusal struct {
 
 // MaxFolderRefusals bounds FolderPass.Refused.
 const MaxFolderRefusals = 50
+
+// MaxFolderUnsyncedPaths bounds FolderPass.UnsyncedPaths.
+const MaxFolderUnsyncedPaths = 50
 
 type ResizeArgs struct {
 	Stream uint32 `json:"stream"`
@@ -284,6 +346,15 @@ type AgentStatusArgs struct {
 type ReplaceProxyArgs struct {
 	Ref     string `json:"ref"`
 	CfgJSON []byte `json:"cfg_json"`
+	// PolicyGeneration is the run's policy generation the call acts for, sent only to a runner whose caps
+	// carry ProxyFence; 0 is none.
+	PolicyGeneration int `json:"policy_generation,omitempty"`
+}
+
+// ReplaceProxyResult is replace_proxy's answer: runner.ProxyReviverHashed's hash of the bytes the
+// new proxy was handed. A runner that predates it answers nothing, which decodes as an empty hash.
+type ReplaceProxyResult struct {
+	ConfigSHA256 string `json:"config_sha256,omitempty"`
 }
 
 // SweepArgs is the crash-orphan sweep. A func cannot cross the wire, so it runs

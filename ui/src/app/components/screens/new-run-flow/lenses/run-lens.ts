@@ -6,9 +6,10 @@
 // Owns experience, workload.kind, runner_pool_id, machine_kind and confinement_class (a command
 // and the ports of an application server are apps-lens).
 
-import type { MachineKind } from "../../../../lib/types/machine-kind";
+import { isVMKind, type MachineKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
+import { withAskedRunMode } from "../document/legacy-run-mode";
 import type { RunIntent } from "../draft/run-intent";
 import { appIssues, commandOf } from "./apps-lens";
 import { withKeys } from "./lens-keys";
@@ -17,8 +18,18 @@ import { serviceIssues } from "./service-lens";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
-  if (intent.shape) return withKeys(intent, shapeCarriers(intent.shape, mode, intent));
-  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background" });
+  // Only an interactive run keeps or resumes a machine.
+  const machine = mode === "interactive" ? {} : { machine: undefined };
+  // A draft still in the older run-mode fields (a template that leaves its run mode to the person) is converted with
+  // the mode the person names. An interactive agent task starts its harness, so an older task is its first message;
+  // on a VM it starts none, as shapeCarriers writes it.
+  const start = intent.shape === "agent_task" && intent.agent && !isVMKind(intent.machine_kind) ? { interactive_start: "agent" as const } : {};
+  const asked = withAskedRunMode(intent, mode === "interactive" ? { interactive: true, ...start } : { interactive: false });
+  // Carriers converted to the draft's shape are the run as written; another shape says them again.
+  if (asked !== intent && (!intent.shape || asked.shape === intent.shape)) return withKeys(asked, machine);
+  const from = withKeys(asked, { shape: intent.shape });
+  if (from.shape) return withKeys(from, { ...shapeCarriers(from.shape, mode, from), ...machine });
+  return withKeys(from, { experience: mode === "interactive" ? "interactive" : "background", ...machine });
 }
 
 /** Organization pools and User pools: the wire's scope is the console's word for the two kinds of pool. */
@@ -29,12 +40,19 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
 
 /**
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
- * barrier chosen for a container is dropped with the switch. A macOS base belongs to a macOS VM and goes with it.
+ * barrier chosen for a container is dropped with the switch. A macOS base and a window on the Mac belong to a macOS VM
+ * and go with it.
+ * A VM's terminal opens a shell, not the agent, so a harness that starts the run is cleared with the switch (UXR-1).
  */
 export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
   kind === "container"
-    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined })
-    : withKeys(intent, { machine_kind: kind, confinement_class: undefined, ...(kind !== "macos_vm" && { macos_base: undefined }) });
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined, desktop_window: undefined, machine: undefined })
+    : withKeys(intent, {
+        machine_kind: kind,
+        confinement_class: undefined,
+        ...(kind !== "macos_vm" && { macos_base: undefined, desktop_window: undefined, machine: undefined }),
+        ...(intent.startup?.kind === "harness" && { startup: undefined }),
+      });
 
 /** The macOS VM's base. Standard is the default, so it is the absent key. */
 export const chooseMacOSBase = (intent: RunIntent, base: string | undefined): RunIntent => withKeys(intent, { macos_base: base });

@@ -39,11 +39,10 @@ Supporting evidence a reviewer can check independently:
 
 ## Contributors
 
-- Every commit to date is from a single human contributor, apart from dependency-update commits authored by the Dependabot bot.
+- Every commit to date is from the maintainer, apart from dependency-update commits authored by the Dependabot bot and one DCO-signed outside contribution (`229ffe478`).
 - `git shortlog -sne` lists that person under more than one address (a GitHub `noreply` address plus personal ones, from different machines);
   - [`AUTHORS`](AUTHORS) lists the canonical identity, and it is [`AUTHORS`](AUTHORS) — not the shortlog — that defines "The Wardyn Authors" in the copyright notice.
-- Run both: the addresses differ, the human does not.
-- There are no external human contributors yet, and [`GOVERNANCE.md`](GOVERNANCE.md) is candid that the bus factor is one.
+- [`GOVERNANCE.md`](GOVERNANCE.md) is candid that the bus factor is one.
 
 ## Developer Certificate of Origin
 
@@ -59,7 +58,7 @@ git log --no-merges --format='%H %(trailers:key=Signed-off-by,valueonly)' \
   | awk 'NF==1' | wc -l
 ```
 
-(No denominator is quoted: the commit total moves every release, and a frozen ratio is a claim that fails the moment someone runs it.)
+No denominator is quoted, because the commit total moves every release.
 
 **How the gate reads today.**
 
@@ -73,11 +72,11 @@ git log --no-merges --format='%H %(trailers:key=Signed-off-by,valueonly)' \
 
 ## AI assistance
 
-Parts of this codebase were written with AI assistance. The project's position:
+Most of this codebase is written by AI coding agents under a human maintainer ([how](docs/HOW-WARDYN-IS-BUILT.md)). The project's position:
 
 - AI assistance is permitted.
 - The **human** who signs off under the DCO takes full responsibility for the contribution — that it is theirs to submit, that it is licence-clean, and that it does not reproduce third-party code without attribution.
-- All such output is human-reviewed before it is committed.
+- A human maintainer directs the agents, makes the product and security calls, and tests the changes. A different model reviews each change.
 - Commits authored by a tooling identity acting on a contributor's behalf are that contributor's responsibility. The one exception on the released line is Dependabot (`dependabot[bot]`), whose dependency-update commits arrive as pull requests and are reviewed before merge.
 
-This is stated because it is an increasingly common intake question, and an undisclosed non-human `Author:` line is a worse discovery than a disclosed policy.
+An undisclosed non-human `Author:` line is a worse discovery than a disclosed policy.

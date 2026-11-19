@@ -6,17 +6,41 @@ package store
 import (
 	"context"
 	"fmt"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // EraseApprovalDecisionPersonalFields clears the decider and the typed reason of every approval
 // decided by one of principals, the approvals-table twin of EraseGovernanceChangePersonalFields: the
-// audit copy of the reason is sealed, this one is not. The state, its time and the decided scope stay.
+// audit copy of the reason is sealed, this one is not. In the same statement it removes the MCP call's
+// operation key from the scope of every approval raised in a run one of principals created (the key is
+// the caller's own text and may carry the run's correlation ID), and puts types.FileDownloadAskerErased
+// in place of one of principals as who asked for a file download, so the scope still parses. The state,
+// its time and the rest of the scope, a call's arguments and a file's name, size and hash included, stay.
 // It returns the rows it touched.
 func (s PG) EraseApprovalDecisionPersonalFields(ctx context.Context, principals []string) (int, error) {
 	if len(principals) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE approvals SET decided_by = '', reason = '' WHERE decided_by = ANY($1)`, principals)
+	// One UPDATE, never two on one table: a row can be both decided by principals and raised in their
+	// run, and every SET reads the row as it was. A pending approval whose scope, with the key removed or
+	// the asker erased, equals another pending one of its run fails the statement
+	// (approvals_pending_noncred_hash_uniq), so nothing lands, and a retry once either is decided or
+	// cancelled finishes it.
+	tag, err := s.Pool.Exec(ctx, `
+		WITH theirs AS (SELECT id FROM agent_runs WHERE created_by = ANY($1))
+		UPDATE approvals a SET
+			decided_by = CASE WHEN a.decided_by = ANY($1) THEN '' ELSE a.decided_by END,
+			reason = CASE WHEN a.decided_by = ANY($1) THEN '' ELSE a.reason END,
+			requested_scope = CASE
+				WHEN a.kind = $2 AND a.requested_scope->>'requested_by' = ANY($1)
+					THEN jsonb_set(a.requested_scope, '{requested_by}', to_jsonb($3::text))
+				WHEN a.run_id IN (SELECT id FROM theirs) THEN a.requested_scope - 'operation_key'
+				ELSE a.requested_scope END
+		WHERE a.decided_by = ANY($1)
+			OR (a.requested_scope ? 'operation_key' AND a.run_id IN (SELECT id FROM theirs))
+			OR (a.kind = $2 AND a.requested_scope->>'requested_by' = ANY($1))`,
+		principals, string(types.ApprovalFileDownload), types.FileDownloadAskerErased)
 	if err != nil {
 		return 0, fmt.Errorf("store: erase approval decision personal fields: %w", err)
 	}
@@ -24,22 +48,47 @@ func (s PG) EraseApprovalDecisionPersonalFields(ctx context.Context, principals 
 }
 
 // DeleteSettledRunPATsOf deletes the Azure DevOps token history of owners: every ado_run_pats row
-// already revoked or past its valid_to. A row still live at Azure DevOps stays, since revoking it
-// needs it. It returns the rows it deleted and the live rows it left.
-func (s PG) DeleteSettledRunPATsOf(ctx context.Context, owners []string) (deleted, liveLeft int64, err error) {
+// revoked or past its valid_to. A row still live at Azure DevOps stays, since revoking it needs it,
+// and so does a row whose revoke Azure DevOps refused (ListRefusedRunPATs) until its valid_to: that
+// token may still work, and a later erase reads the row to say so. It returns the rows it deleted
+// and the ids (run id/authorization id) of the rows it left, so a caller that erases one row under
+// two owner lists counts it once.
+func (s PG) DeleteSettledRunPATsOf(ctx context.Context, owners []string) (deleted int64, left []string, err error) {
 	if len(owners) == 0 {
-		return 0, 0, nil
+		return 0, nil, nil
 	}
-	// The count reads the snapshot from before the delete, so it is the rows the delete leaves.
+	// The ids read the snapshot from before the delete, so they are the rows the delete leaves.
 	err = s.Pool.QueryRow(ctx, `
-		WITH gone AS (DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (revoked_at IS NOT NULL OR valid_to <= now()) RETURNING 1)
+		WITH gone AS (DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (valid_to <= now() OR
+		    (revoked_at IS NOT NULL AND NOT (last_error <> '' AND revoke_reason <> $2))) RETURNING 1)
 		SELECT (SELECT count(*) FROM gone),
-		       (SELECT count(*) FROM ado_run_pats WHERE owner = ANY($1) AND revoked_at IS NULL AND (valid_to IS NULL OR valid_to > now()))`,
-		owners).Scan(&deleted, &liveLeft)
+		       ARRAY(SELECT run_id::text || '/' || authorization_id::text FROM ado_run_pats
+		           WHERE owner = ANY($1) AND valid_to > now() AND
+		           (revoked_at IS NULL OR (last_error <> '' AND revoke_reason <> $2)) ORDER BY 1)`,
+		owners, runPATRevokeExpired).Scan(&deleted, &left)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store: delete settled run tokens: %w", err)
+		return 0, nil, fmt.Errorf("store: delete settled run tokens: %w", err)
 	}
-	return deleted, liveLeft, nil
+	return deleted, left, nil
+}
+
+// DeleteErasedRefusedRunPATs deletes what DeleteSettledRunPATsOf kept of a token whose revoke Azure
+// DevOps refused, once the token is past its valid_to: a refused row created before an erase of its
+// owner's credentials last ended their sign-in (ado_signin_ends.erased_at), which a later disconnect
+// does not move, or one that end itself revoked (revoke_reason signInEndErase): a token created across
+// the end carries it, also when it was recorded after the end's last write or that write failed. A
+// person a SCIM purge removed is never erased again, so nothing else would delete it. Anyone else's
+// refused rows stay, as the history the console shows. It returns the rows it deleted.
+func (s PG) DeleteErasedRefusedRunPATs(ctx context.Context) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		DELETE FROM ado_run_pats p USING ado_signin_ends e
+		WHERE e.owner = p.owner AND (p.created_at < e.erased_at OR p.revoke_reason = $2) AND p.valid_to <= now()
+		  AND p.revoked_at IS NOT NULL AND p.last_error <> '' AND p.revoke_reason <> $1`,
+		runPATRevokeExpired, signInEndErase)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete erased refused run tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // DeleteDelegatedTokensOf deletes every delegated token minted for one of principals, live or
@@ -51,6 +100,32 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM delegated_tokens WHERE principal = ANY($1)`, principals)
 	if err != nil {
 		return 0, fmt.Errorf("store: delete delegated tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteRunCreateKeysOf deletes every POST /runs Idempotency-Key of one of principals, direct or through
+// a delegate, bound or not: a kept answer names the person's run. It returns the rows it deleted.
+func (s PG) DeleteRunCreateKeysOf(ctx context.Context, principals []string) (int64, error) {
+	if len(principals) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_create_keys WHERE principal = ANY($1)`, principals)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete idempotency keys: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ClearRunCreateResponsesOf clears the answers kept for the POST /runs Idempotency-Keys that name a run
+// createdBy created, and marks them so no later save refills them; each key stays bound to its run, so a
+// retry is rebuilt from the erased run and never makes a second one. It returns the keys it marked.
+func (s PG) ClearRunCreateResponsesOf(ctx context.Context, createdBy string) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE run_create_keys k
+		SET response_status = NULL, response_location = NULL, response_body = NULL, response_erased = true
+		FROM agent_runs r WHERE r.id = k.run_id AND r.created_by = $1 AND NOT k.response_erased`, createdBy)
+	if err != nil {
+		return 0, fmt.Errorf("store: clear a person's idempotency key answers: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

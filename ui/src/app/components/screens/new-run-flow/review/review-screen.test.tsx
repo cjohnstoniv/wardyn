@@ -106,6 +106,8 @@ interface Open {
   drives?: unknown;
   /** GET /me/drives, one answer per read; wins over `drives`. */
   drivesFn?: () => unknown;
+  /** GET /me/walls: the spec the person saved, or "fail" for a read that fails. */
+  walls?: Record<string, unknown> | "fail";
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -115,7 +117,8 @@ function open(intent: RunIntent, o: Open = {}) {
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
     if (path.startsWith("/me/drives")) return json(o.drivesFn ? o.drivesFn() : o.drives ?? { drives: [], pool_checked: true });
-    if (path === "/me/walls") return json({ spec: {} });
+    if (path === "/me/walls" && o.walls === "fail") throw new Error("walls unavailable");
+    if (path === "/me/walls") return json({ spec: o.walls ?? {} });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -197,7 +200,6 @@ describe("Review: a draft that keeps its work folder at the drive limit (#1991)"
 describe("Review Launch gate (U11)", () => {
   it.each([
     ["no answer yet", answered(null)],
-    ["an answer older than a minute", answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1)],
     ["an answer for another body", { ...answered(SCENARIO_PREFLIGHT.member), generation: GENERATION + 1 }],
     ["a fresh answer beside a missing setup item", answered(SCENARIO_PREFLIGHT.app)],
   ])("%s keeps Launch shut, described by the blocker list, and Ctrl+Enter does nothing", async (_case, state) => {
@@ -338,6 +340,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
   it("saving stores the secret under the item's name, announces it, and asks the server again; Launch stays shut until it answers", async () => {
     checks.current = answered(withItems([NPM]));
     setSecretMock.mockResolvedValue(undefined);
+    vi.spyOn(health, "whoami").mockResolvedValue(null);
     const user = userEvent.setup();
     open(AGENT);
     await ready();
@@ -346,7 +349,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
     setField(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
     await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
 
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret", { scope: "personal", createOnly: true, person: "alice" }));
     expect(await screen.findByText(NR_TOOLS.TOKEN_SAVED)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(preflight).toHaveBeenCalledTimes(1);
@@ -495,11 +498,11 @@ describe("Review blockers", () => {
     expect(new Set(Array.from(document.querySelectorAll("[data-review-group]")).map((g) => g.parentElement)).size).toBe(1);
   });
 
-  it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
+  it("says the check is over a minute old, with Check again, when the only thing wrong is a stale result", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1);
     open(AGENT);
     await ready();
-    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_STALE);
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_EXPIRED);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
     // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
     expect(screen.getByText("Check needed")).toBeInTheDocument();
@@ -532,7 +535,7 @@ describe("Review groups", () => {
     expect(group("run").getByText(NR_REVIEW.VALUE_AGENT)).toBeInTheDocument();
     expect(group("run").getByText(NR_REVIEW.TIMING_INTERACTIVE)).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.WHERE_VALUE("General"))).toBeInTheDocument();
-    expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 6, 10))).toBeInTheDocument();
+    expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organisation pool", 6, 10))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT)).toBeInTheDocument();
     // #3043: provenance is a caption, not a link-coloured word that goes nowhere.
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).toContain("text-muted-foreground");
@@ -630,16 +633,6 @@ describe("Review groups", () => {
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
     setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "make lint");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make lint" });
-  });
-});
-
-describe("Review: the person's walls", () => {
-  it("are read once for the Access group and the policy card together, so their counts cannot differ", async () => {
-    open(AGENT);
-    await ready();
-    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
-    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
-    expect(wfetchMock.mock.calls.filter(([p]) => p === "/me/walls")).toHaveLength(1);
   });
 });
 

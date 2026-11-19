@@ -26,7 +26,26 @@ describe("DialogFooter", () => {
     const footer = screen.getByRole("button", { name: "Save" }).parentElement!;
     expect(footer).toHaveAttribute("data-slot", "dialog-footer");
     expect(footer.className).toContain("sticky");
-    expect(footer.className).toContain("bottom-0");
+    // Pinned at the dialog's border, not its padding, so no scrolled field shows under the bar.
+    expect(footer.className).toContain("-bottom-6");
+  });
+});
+
+describe("DialogContent", () => {
+  // A half-height shift leaves a dialog of odd height on a half pixel, where a line of the scrolled body shows under the footer.
+  it("is centred top to bottom by its margins, not by a half-height shift", () => {
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Edit</DialogTitle>
+          <DialogDescription>Fields</DialogDescription>
+        </DialogContent>
+      </Dialog>,
+    );
+    const content = screen.getByRole("dialog");
+    expect(content).toHaveClass("inset-y-0", "my-auto", "h-fit");
+    expect(content).not.toHaveClass("top-[50%]");
+    expect(content).not.toHaveClass("translate-y-[-50%]");
   });
 });
 

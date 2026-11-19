@@ -79,7 +79,7 @@ func TestClassifyMethodOverride(t *testing.T) {
 		{
 			name: "a POST overridden to PATCH is classified as the PATCH",
 			req:  overridden(http.MethodPost, prPath, "PATCH", `{"status":"completed"}`),
-			want: CapPR,
+			want: CapPRComplete,
 		},
 		{
 			name: "the override still reaches the body rules",
@@ -89,7 +89,7 @@ func TestClassifyMethodOverride(t *testing.T) {
 		{
 			name: "a lowercase override is still the method",
 			req:  overridden(http.MethodPost, prPath, "patch", `{"status":"active"}`),
-			want: CapPR,
+			want: CapPRCreate,
 		},
 		{
 			name: "a POST overridden to GET is REFUSED — an override may only raise",
@@ -256,11 +256,11 @@ func TestClassifyPullRequestSubResourceBodies(t *testing.T) {
 	pr := "/acme/proj/_apis/git/repositories/r1/pullrequests/7"
 	prProject := "/acme/proj/_apis/git/pullrequests/7"
 	runCases(t, []caseT{
-		{name: "reviewers create (array)", req: adoReq(http.MethodPost, pr+"/reviewers", `[{"id":"a1b2"}]`), want: CapPR},
-		{name: "reviewers update (array)", req: adoReq(http.MethodPatch, pr+"/reviewers", `[{"id":"a1b2","vote":10}]`), want: CapPR},
-		{name: "properties JSON-Patch", req: adoReq(http.MethodPatch, pr+"/properties", `[{"op":"add","path":"/k","value":"v"}]`), want: CapPR},
-		{name: "attachment upload (bytes)", req: adoReq(http.MethodPost, pr+"/attachments/x.bin", "\x00\x01binary"), want: CapPR},
-		{name: "project-route reviewers (array)", req: adoReq(http.MethodPost, prProject+"/reviewers", `[{"id":"a1b2"}]`), want: CapPR},
+		{name: "reviewers create (array)", req: adoReq(http.MethodPost, pr+"/reviewers", `[{"id":"a1b2"}]`), want: CapPRVote},
+		{name: "reviewers update (array)", req: adoReq(http.MethodPatch, pr+"/reviewers", `[{"id":"a1b2","vote":10}]`), want: CapPRVote},
+		{name: "properties JSON-Patch", req: adoReq(http.MethodPatch, pr+"/properties", `[{"op":"add","path":"/k","value":"v"}]`), want: CapPRCreate},
+		{name: "attachment upload (bytes)", req: adoReq(http.MethodPost, pr+"/attachments/x.bin", "\x00\x01binary"), want: CapPRCreate},
+		{name: "project-route reviewers (array)", req: adoReq(http.MethodPost, prProject+"/reviewers", `[{"id":"a1b2"}]`), want: CapPRVote},
 		{name: "an array on the PR itself stays refused", req: adoReq(http.MethodPatch, pr, `[{"status":"completed"}]`), wantErr: true},
 	})
 }
@@ -274,9 +274,9 @@ func TestClassifyPullRequestBodyPeek(t *testing.T) {
 		return r
 	}
 	runCases(t, []caseT{
-		{name: "an ordinary completion", req: adoReq(http.MethodPatch, pr, `{"status":"completed"}`), want: CapPR},
-		{name: "a PATCH with no body", req: adoReq(http.MethodPatch, pr, ""), want: CapPR},
-		{name: "a PR delete", req: adoReq(http.MethodDelete, pr, ""), want: CapPR},
+		{name: "an ordinary completion", req: adoReq(http.MethodPatch, pr, `{"status":"completed"}`), want: CapPRComplete},
+		{name: "a PATCH with no body", req: adoReq(http.MethodPatch, pr, ""), want: CapPRCreate},
+		{name: "a PR delete", req: adoReq(http.MethodDelete, pr, ""), want: CapPRCreate},
 		{
 			name: "bypassPolicy true is a bypass, not a pull request",
 			req:  adoReq(http.MethodPatch, pr, `{"status":"completed","completionOptions":{"bypassPolicy":true,"bypassReason":"hotfix"}}`),
@@ -285,7 +285,7 @@ func TestClassifyPullRequestBodyPeek(t *testing.T) {
 		{
 			name: "bypassPolicy false is an ordinary pull request",
 			req:  adoReq(http.MethodPatch, pr, `{"completionOptions":{"bypassPolicy":false}}`),
-			want: CapPR,
+			want: CapPRComplete,
 		},
 		{
 			name: "a PR CREATED with the bypass set is a bypass too",
@@ -315,7 +315,7 @@ func TestClassifyPullRequestBodyPeek(t *testing.T) {
 		{
 			name: "an explicit identity encoding does not",
 			req:  withHeader(adoReq(http.MethodPatch, pr, `{"status":"completed"}`), "Content-Encoding", "identity"),
-			want: CapPR,
+			want: CapPRComplete,
 		},
 		{
 			name:    "a declared length longer than the peek is refused",
@@ -625,7 +625,7 @@ func TestOverrideOnNonPostIsIgnoredUnlessItRaises(t *testing.T) {
 		{name: "GET naming GET", req: over(http.MethodGet, pr, "GET", ""), want: CapCodeRead},
 		{name: "GET naming HEAD", req: over(http.MethodGet, pr, "HEAD", ""), want: CapCodeRead},
 		{name: "HEAD naming GET", req: over(http.MethodHead, pr, "GET", ""), want: CapCodeRead},
-		{name: "PATCH naming PATCH", req: over(http.MethodPatch, pr, "PATCH", `{}`), want: CapPR},
+		{name: "PATCH naming PATCH", req: over(http.MethodPatch, pr, "PATCH", `{}`), want: CapPRCreate},
 		{name: "PATCH naming a read is classified on the PATCH", req: over(http.MethodPatch, pr, "GET", `{"completionOptions":{"bypassPolicy":true}}`), want: CapPolicyBypass},
 		{name: "DELETE naming DELETE", req: over(http.MethodDelete, "/acme/proj/_apis/git/repositories/r1", "DELETE", ""), want: CapRepoAdmin},
 		{name: "GET raised to PATCH is still refused", req: over(http.MethodGet, pr, "PATCH", `{}`), wantErr: true},

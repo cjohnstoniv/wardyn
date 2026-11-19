@@ -293,10 +293,9 @@ func TestBootHybrid_NoCredentialNoTokenRefuses(t *testing.T) {
 }
 
 func TestBootHybrid_UnreachableOrgRefuses(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	srv.Close()
+	// Nothing listens at port 1; a closed test server's port could be taken by another process.
 	secrets := hybridSecrets{}
-	_, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_x", unlocked(secrets), &hybridStore{}, &hybridRecorder{})
+	_, err := bootHybrid(context.Background(), t.Context(), "http://127.0.0.1:1", "wde_x", unlocked(secrets), &hybridStore{}, &hybridRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "enrolment at WARDYN_ORG_URL failed") {
 		t.Fatalf("err = %v", err)
 	}

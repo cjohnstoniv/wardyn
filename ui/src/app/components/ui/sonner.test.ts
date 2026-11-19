@@ -47,15 +47,22 @@ describe("Toaster — closeButton + a longer default duration", () => {
 
   // #3385 — a toast at the bottom right covered Save providers for 8 s. Top centre, offset below the top bar
   // (top-bar.tsx is h-14 = 56px), so it covers page-title text and never a control.
-  it("opens at the top centre, offset below the 56px top bar, on desktop and phone alike", () => {
+  it("opens at the top centre, offset below the top bar, on desktop and phone alike", () => {
     expect(src).toMatch(/position="top-center"/);
-    const off = /\boffset=\{\{\s*top:\s*(\d+)/.exec(src);
-    const mob = /mobileOffset=\{\{\s*top:\s*(\d+)/.exec(src);
-    expect(off, "offset.top not found").not.toBeNull();
-    expect(mob, "mobileOffset.top not found").not.toBeNull();
-    expect(Number(off![1])).toBeGreaterThanOrEqual(56);
-    expect(Number(mob![1])).toBeGreaterThanOrEqual(56);
+    expect(src).toMatch(/\boffset=\{\{\s*top:/);
+    expect(src).toMatch(/mobileOffset=\{\{\s*top:/);
     // Placed before the {...props} spread, so a caller can still override.
     expect(src.indexOf('position="top-center"')).toBeLessThan(src.lastIndexOf("{...props}"));
+  });
+});
+
+// A toast must start under the shell's banner stack, not at a fixed 64px that lands on a banner's action button.
+describe("Toaster — offset below the shell's banners", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "sonner.tsx"), "utf8");
+
+  it("offsets from --shell-main-top on desktop and phone, falling back to the 56px top bar", () => {
+    expect(src).toContain('offset={{ top: "calc(var(--shell-main-top, 56px) + 8px)" }}');
+    expect(src).toContain('mobileOffset={{ top: "calc(var(--shell-main-top, 56px) + 8px)" }}');
+    expect(src).not.toMatch(/top:\s*64\b/);
   });
 });

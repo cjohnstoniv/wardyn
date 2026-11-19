@@ -89,6 +89,25 @@ func TestCreateVMWithAFolderNeedsTheRunnersVirtiofs(t *testing.T) {
 	}
 }
 
+// A runner whose caps do not say it shares a drive into a VM (one from before the flag, a Kubernetes
+// one) is sent no VM run that carries a drive, and the refusal says to update the runner.
+func TestCreateVMWithADriveNeedsTheRunnersDriveCap(t *testing.T) {
+	for _, drives := range []bool{false, true} {
+		rig := runnertest.NewRig(t, rid)
+		advertiseVM(t, rig, &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true, Drives: drives})
+		spec := vmSpec()
+		spec.Drives = []types.DriveMount{{ObjectName: "/srv/share/alice", Backend: types.DriveBackendHostPath, Target: runner.DriveTarget}}
+		_, err := rig.Sub.CreateSandbox(ctxT(t), spec)
+		refused := err != nil && strings.Contains(err.Error(), remote.VMNoDriveShare)
+		if refused == drives {
+			t.Fatalf("drives %v: VM create with a drive = %v", drives, err)
+		}
+		if !drives && (len(rig.Fake.Created) != 0 || len(rig.Fake.Calls) != 0) {
+			t.Fatalf("the refused VM reached the runner: created %d, calls %v", len(rig.Fake.Created), rig.Fake.Calls)
+		}
+	}
+}
+
 // advertiseVM sends caps that offer VMs as vm describes and waits until the substrate keeps them.
 func advertiseVM(t *testing.T, rig *runnertest.Rig, vm *runnerwire.VMCaps) {
 	t.Helper()

@@ -92,4 +92,9 @@ export const runners = {
     wfetch("/runners/settings", { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ enabled } satisfies RunnerSettingsRequest) }).then((r) =>
       asJson<RunnerSettings>(r),
     ),
+  /** PUT /runners/settings (super admin): only require_managed_device; enabled is left as stored. */
+  setRequireManagedDevice: (on: boolean) =>
+    wfetch("/runners/settings", { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ require_managed_device: on } satisfies RunnerSettingsRequest) }).then((r) =>
+      asJson<RunnerSettings>(r),
+    ),
 };

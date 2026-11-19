@@ -7,18 +7,52 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // maxApprovedEgress bounds the operator-owned approved-egress list — matches
 // the scanner's SuggestedEgress cap, its only intended feeder.
 const maxApprovedEgress = 64
+
+// workspaceIfMatch reads an If-Match naming the workspace version the caller's
+// list was read at: the workspace's own `updated_at` string, quoted or not. A
+// decision ("always" approve or deny) moves updated_at, so a full-list save made
+// from an older read can be refused instead of dropping that decision. Absent or
+// "*" is no condition (a caller that sends none works as before). A value that
+// is not a timestamp can never match, so it answers stale (ok false).
+func workspaceIfMatch(r *http.Request) (seen time.Time, present, ok bool) {
+	h := strings.TrimSpace(r.Header.Get("If-Match"))
+	if h == "" || h == "*" {
+		return time.Time{}, false, true
+	}
+	seen, err := time.Parse(time.RFC3339Nano, strings.Trim(strings.TrimPrefix(h, "W/"), `"`))
+	return seen, true, err == nil
+}
+
+// withWorkspaceIfMatch applies workspaceIfMatch to a list replace: it answers 412 for an unusable
+// value, and otherwise returns the context the store write runs under.
+func withWorkspaceIfMatch(w http.ResponseWriter, r *http.Request) (func(context.Context) context.Context, bool) {
+	seen, present, ok := workspaceIfMatch(r)
+	if !ok {
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonWorkspaceUpdateConflict, workspaceUpdateConflictMsg)
+		return nil, false
+	}
+	return func(ctx context.Context) context.Context {
+		if present {
+			return store.WithWorkspaceSeenAt(ctx, seen)
+		}
+		return ctx
+	}, true
+}
 
 // handleSetApprovedEgress replaces the workspace's operator-owned approved
 // egress list (PUT semantics: the body is the FULL list; un-approve by
@@ -43,6 +77,10 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	// The set itself is deadApprovedEgressHosts (workspaces_canon.go), shared
 	// with the observed-egress panel that produces what gets promoted here.
 	deadHosts := s.deadApprovedEgressHosts()
+	guard, ok := withWorkspaceIfMatch(w, r)
+	if !ok {
+		return
+	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
 		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -53,6 +91,9 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
 					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+				}
+				if err := proxy.ValidConfigHost(d); err != nil {
+					return nil, reasonWorkspaceApprovedEgressInvalid, "domains: " + err.Error()
 				}
 				if deadApprovedEgressHost(deadHosts, d) {
 					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
@@ -77,7 +118,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
 		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceApprovedEgress(ctx, id, doms)
+			return s.cfg.Store.SetWorkspaceApprovedEgress(guard(ctx), id, doms)
 		},
 		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }
@@ -100,14 +141,20 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 // consults as a plain ApprovedEgress entry, so promoting one is dead weight —
 // and it carries no model-provider guard. Copying it would make this PUT a
 // SECOND, unguarded door to that brick, on the one route whose entire job is
-// to be the escape hatch FROM that brick. So this validates only
-// hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/port/
-// wildcard) and nothing else — deliberately unguarded, on purpose, because a
-// deny-direction guard here would remove the only way to undo an over-broad
-// one.
+// to be the escape hatch FROM that brick. So this validates only the host's
+// shape — hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/
+// port/wildcard) and proxy.ValidConfigHost (a spelling the proxy refuses in
+// every request, which stops each run of the workspace at load) — and nothing
+// else: no deny-direction guard, on purpose, because one here would remove the
+// only way to undo an over-broad one. A list that leaves such a host out always
+// passes, so the spelling check never blocks that undo.
 func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 	type body struct {
 		Domains []string `json:"domains"`
+	}
+	guard, ok := withWorkspaceIfMatch(w, r)
+	if !ok {
+		return
 	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.deny",
 		func(req body) ([]string, string, string) {
@@ -120,6 +167,9 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 				if !hostrules.ValidApprovedHost(d) {
 					return nil, reasonWorkspaceDeniedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
+				if err := proxy.ValidConfigHost(d); err != nil {
+					return nil, reasonWorkspaceDeniedEgressInvalid, "domains: " + err.Error()
+				}
 				set[d] = struct{}{}
 			}
 			return sortedKeys(set), "", ""
@@ -127,7 +177,7 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
 		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceDeniedEgress(ctx, id, doms)
+			return s.cfg.Store.SetWorkspaceDeniedEgress(guard(ctx), id, doms)
 		},
 		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }

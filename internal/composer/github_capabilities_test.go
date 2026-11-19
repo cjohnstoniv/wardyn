@@ -4,6 +4,7 @@
 package composer
 
 import (
+	"math/rand/v2"
 	"slices"
 	"testing"
 
@@ -11,25 +12,97 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// github_capabilities follows azure_devops_capabilities exactly: Clamp keeps
-// a choice as proposed (dispatch, which knows the row, bounds it) and owns
-// its slice, and an unset choice stays unset.
-func TestClamp_GitHubCapabilitiesPassThrough(t *testing.T) {
-	r, pr, ra := ghscope.CapCodeRead, ghscope.CapPR, ghscope.CapRepoAdmin
-	for name, ceilingCaps := range map[string][]ghscope.Capability{"silent": nil, "disjoint": {pr}, "wider": {r, pr, ra}} {
+// A ceiling's github_capabilities bounds the proposal: entries it does not list
+// are dropped with a warning, in the proposal's order; a proposal that names none
+// takes the ceiling's list; and the result is within the ceiling. A ceiling that
+// names none leaves the choice as proposed. The clamped spec owns its slice.
+func TestClamp_GitHubCapabilitiesBoundedByTheCeiling(t *testing.T) {
+	r, w, pr, ra := ghscope.CapCodeRead, ghscope.CapCodeWrite, ghscope.CapPR, ghscope.CapRepoAdmin
+	caps := func(c ...ghscope.Capability) []ghscope.Capability { return c }
+	for _, tc := range []struct {
+		name              string
+		proposed, ceiling []ghscope.Capability
+		want              []ghscope.Capability
+		warn              bool
+	}{
+		{"wider than the ceiling", caps(r, w), caps(r), caps(r), true},
+		{"none named", nil, caps(r), caps(r), false},
+		{"within the ceiling", caps(pr, r), caps(r, w, pr), caps(ghscope.CapPRWrite, ghscope.CapPRReview, r), false},
+		{"order kept", caps(ra, pr, r), caps(r, pr), caps(ghscope.CapPRWrite, ghscope.CapPRReview, r), true},
+		{"nothing in common", caps(pr), caps(r), caps(r), true},
+		{"ceiling silent", caps(r, ra), nil, caps(r, ra), false},
+	} {
+		ceiling := operatorCeiling(t)
+		ceiling.GitHubCapabilities = tc.ceiling
+		proposed := types.RunPolicySpec{GitHubCapabilities: tc.proposed}
+		got, warns := Clamp(proposed, ceiling, types.GovernanceLimits{})
+		if !slices.Equal(got.GitHubCapabilities, tc.want) || hasWarn(warns, "github_capabilities") != tc.warn {
+			t.Errorf("%s: %v (warns %v), want %v with warning %v", tc.name, got.GitHubCapabilities, warns, tc.want, tc.warn)
+		}
+		if tc.ceiling != nil && !leqPosture(got, ceiling) {
+			t.Errorf("%s: the clamped list %v is not within the ceiling's %v", tc.name, got.GitHubCapabilities, tc.ceiling)
+		}
+		if len(got.GitHubCapabilities) > 0 {
+			got.GitHubCapabilities[0] = ghscope.CapOrgAdmin
+			if slices.Contains(tc.proposed, ghscope.CapOrgAdmin) || slices.Contains(ceiling.GitHubCapabilities, ghscope.CapOrgAdmin) {
+				t.Errorf("%s: the clamped spec aliases the proposal's or the ceiling's slice", tc.name)
+			}
+		}
+	}
+}
+
+// The spec's own example, through the whole of Leq: a member asking for
+// code_read and code_write under a ceiling of code_read gets code_read, a
+// warning, and a spec Leq calls within the ceiling.
+func TestClamp_GitHubCapabilitiesLeqTheCeiling(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
+	for _, proposed := range [][]ghscope.Capability{{ghscope.CapCodeRead, ghscope.CapCodeWrite}, nil} {
+		got, warns := Clamp(types.RunPolicySpec{GitHubCapabilities: proposed}, ceiling, types.GovernanceLimits{})
+		if !slices.Equal(got.GitHubCapabilities, []ghscope.Capability{ghscope.CapCodeRead}) {
+			t.Errorf("proposed %v: %v (warns %v), want [code_read]", proposed, got.GitHubCapabilities, warns)
+		}
+		if proposed != nil && !hasWarn(warns, "dropped code_write") {
+			t.Errorf("proposed %v: warns %v, want one naming the dropped code_write", proposed, warns)
+		}
+		if !Leq(got, ceiling, types.GovernanceLimits{}, types.GovernanceLimits{}) {
+			t.Errorf("proposed %v: Leq(clamped, ceiling) = false, want true", proposed)
+		}
+	}
+}
+
+// Narrow-only, over random subsets of the catalogue: the clamped list is within
+// the ceiling's, and within the proposal's wherever the two share an entry.
+func TestClamp_GitHubCapabilitiesNarrowOnly(t *testing.T) {
+	all := []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite, ghscope.CapWorkflowsWrite, ghscope.CapPR,
+		ghscope.CapIssuesRead, ghscope.CapIssuesWrite, ghscope.CapActionsRead, ghscope.CapRepoAdmin}
+	rng := rand.New(rand.NewPCG(1, 2))
+	subset := func() []ghscope.Capability {
+		var out []ghscope.Capability
+		for _, c := range all {
+			if rng.IntN(2) == 0 {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	within := func(a, b []ghscope.Capability) bool {
+		return !slices.ContainsFunc(a, func(c ghscope.Capability) bool { return !ghscope.Has(b, c) })
+	}
+	for i := 0; i < 500; i++ {
+		proposed, ceilingCaps := subset(), subset()
+		if len(ceilingCaps) == 0 {
+			continue
+		}
 		ceiling := operatorCeiling(t)
 		ceiling.GitHubCapabilities = ceilingCaps
-		proposed := types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{r, ra}}
-		got, warns := Clamp(proposed, ceiling, types.GovernanceLimits{})
-		if !slices.Equal(got.GitHubCapabilities, proposed.GitHubCapabilities) || hasWarn(warns, "github") {
-			t.Errorf("%s ceiling: %v (warns %v), want the choice unchanged", name, got.GitHubCapabilities, warns)
+		got, _ := Clamp(types.RunPolicySpec{GitHubCapabilities: proposed}, ceiling, types.GovernanceLimits{})
+		if len(got.GitHubCapabilities) == 0 || !within(got.GitHubCapabilities, ceilingCaps) {
+			t.Fatalf("proposed %v ceiling %v: %v, want a non-empty list within the ceiling", proposed, ceilingCaps, got.GitHubCapabilities)
 		}
-		got.GitHubCapabilities[0] = pr
-		if proposed.GitHubCapabilities[0] != r {
-			t.Errorf("%s ceiling: the clamped spec aliases the proposal's slice", name)
-		}
-		if got, _ := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{}); got.GitHubCapabilities != nil {
-			t.Errorf("%s ceiling: unset proposal = %v, want unset (never inherited)", name, got.GitHubCapabilities)
+		shared := slices.ContainsFunc(ghscope.ExpandPR(proposed), func(c ghscope.Capability) bool { return ghscope.Has(ceilingCaps, c) })
+		if shared && !within(got.GitHubCapabilities, proposed) {
+			t.Fatalf("proposed %v ceiling %v: %v, want it within the proposal too", proposed, ceilingCaps, got.GitHubCapabilities)
 		}
 	}
 }

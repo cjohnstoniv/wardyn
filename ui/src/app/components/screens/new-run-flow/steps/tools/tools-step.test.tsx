@@ -9,6 +9,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { adoCapName } from "../../../../../lib/ado-access-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
+import { health } from "../../../../../lib/api/health";
 import { secrets } from "../../../../../lib/api/secrets";
 import { MY_COMPONENTS, ORG_GITHUB } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
@@ -33,6 +34,11 @@ const h = vi.hoisted(() => ({
   refresh: vi.fn(),
   connect: vi.fn(),
   mine: vi.fn(),
+  presets: vi.fn(),
+}));
+vi.mock("../../../../../lib/api/wall-presets", async (orig) => ({
+  ...(await orig<typeof import("../../../../../lib/api/wall-presets")>()),
+  wallPresets: { list: () => h.presets() },
 }));
 vi.mock("../../draft/use-intent-checks", async (orig) => ({
   ...(await orig<typeof import("../../draft/use-intent-checks")>()),
@@ -65,6 +71,9 @@ function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNo
   }, [dispatch, intent]);
   return seeded ? <>{children}</> : null;
 }
+function Chosen() {
+  return <p data-testid="chosen-preset">{useNewRunDraft().intent.wall_preset ?? "none"}</p>;
+}
 function Revision() {
   return <p data-testid="revision">{useNewRunDraft().revision}</p>;
 }
@@ -72,7 +81,7 @@ const props: NewRunScreenProps = { location: { screen: "step", step: "tools" }, 
 function show(intent: RunIntent = READY) {
   return render(
     <NewRunDraftProvider owner="alice">
-      <Seed intent={intent}><ToolsStep {...props} /><Revision /></Seed>
+      <Seed intent={intent}><ToolsStep {...props} /><Revision /><Chosen /></Seed>
     </NewRunDraftProvider>,
   );
 }
@@ -85,7 +94,9 @@ beforeEach(() => {
   h.connect.mockReset().mockResolvedValue(true);
   answer(undefined, false);
   h.mine.mockReturnValue(new Promise(() => {}));
+  h.presets.mockReturnValue(new Promise(() => {}));
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
+  vi.spyOn(health, "whoami").mockResolvedValue(null);
 });
 afterEach(() => {
   cleanup();
@@ -383,7 +394,7 @@ describe("Tools and access step", () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
-    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok"));
+    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok", { scope: "shared", createOnly: true }));
   };
 
   it("counts only items the server reports missing: satisfied and unverified ones are neither listed nor counted", async () => {
@@ -489,5 +500,45 @@ describe("Tools and access step", () => {
     expect(h.connect).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
     expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Tools and access step: the wall preset", () => {
+  const LIST = {
+    presets: [
+      { id: "open", scope: "builtin", name: "Open", spec: {}, version: 1 },
+      { id: "read-only", scope: "builtin", name: "Read-only", spec: { push_rules: { deny_all: true } }, version: 1 },
+      { id: "sealed", scope: "builtin", name: "Sealed", spec: { allowed_domains: [], first_use_approval: "always_deny", push_rules: { deny_all: true } }, version: 1 },
+    ],
+    publish: { org: false, groups: [], groups_unverified: false },
+  };
+
+  it("offers the control with Open chosen, and a pick puts the preset on the draft and draws its line", async () => {
+    h.presets.mockResolvedValue(LIST);
+    show();
+    const open = await screen.findByRole("button", { name: "Open" });
+    expect(open).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("chosen-preset")).toHaveTextContent("none");
+    expect(screen.queryByTestId("wall-preset-apply")).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Sealed" }));
+    expect(screen.getByTestId("chosen-preset")).toHaveTextContent("sealed");
+    expect(await screen.findByTestId("wall-preset-apply")).toHaveTextContent("The Sealed wall preset applies:");
+  });
+
+  it("keeps a preset the list lacks chosen, as an error, and a pick clears it", async () => {
+    h.presets.mockResolvedValue(LIST);
+    show({ ...READY, wall_preset: "org-9" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("is no longer available");
+    expect(screen.getByTestId("chosen-preset")).toHaveTextContent("org-9");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.getByTestId("chosen-preset")).toHaveTextContent("open");
+    await waitFor(() => expect(screen.queryByText(/is no longer available/)).toBeNull());
+  });
+
+  it("offers no control where the store keeps no wall presets", async () => {
+    h.presets.mockRejectedValue(new HttpError(501, "no", "wall_presets_unavailable"));
+    show();
+    await screen.findByRole("heading", { name: NR_TOOLS.NETWORK_TITLE });
+    expect(screen.queryByTestId("wall-preset-picker")).toBeNull();
   });
 });

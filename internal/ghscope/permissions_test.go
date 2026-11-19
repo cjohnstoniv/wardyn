@@ -98,8 +98,8 @@ func TestPermissionTableCoversTheCatalogue(t *testing.T) {
 }
 
 func TestCatalogue(t *testing.T) {
-	if got := GrantableCapabilities(); len(got) != 15 || !slices.IsSorted(got) {
-		t.Fatalf("GrantableCapabilities() = %v, want the 15 grantable capabilities in order", got)
+	if got := GrantableCapabilities(); len(got) != 17 || !slices.IsSorted(got) {
+		t.Fatalf("GrantableCapabilities() = %v, want the 17 grantable capabilities in order", got)
 	}
 	all := append(GrantableCapabilities(), CapMetadata, CapDeniedTokens, CapDeniedHooks, CapDeniedSecrets,
 		CapDeniedAccount, CapDeniedSearch, CapDeniedGraphQL, CapRepoContentWriteREST, CapUnclassifiedWrite, CapUnclassifiedRead)

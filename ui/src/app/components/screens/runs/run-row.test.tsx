@@ -8,7 +8,7 @@
 // pins the click itself. runs-model.test.ts already pins that a lost `by=you`
 // row gets action:"revive" in the first place.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { makeRun } from "../../../../test/factories";
@@ -17,6 +17,7 @@ import type { AgentRun } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { RunRow } from "./run-row";
 import { rowPresentation } from "./runs-model";
 
@@ -49,9 +50,9 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: [], proxy_release: "r1" });
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    const button = screen.getByRole("button", { name: "Revive" });
+    const button = screen.getByRole("button", { name: /^Revive/ });
     await user.click(button);
-    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith(run.id));
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith(run.id, undefined));
   });
 
   it("shows Reviving… while the call is in flight, then Revive again on failure", async () => {
@@ -60,10 +61,10 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockReturnValue(new Promise((_res, rej) => { reject = rej; }));
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    await user.click(screen.getByRole("button", { name: "Revive" }));
-    expect(await screen.findByRole("button", { name: "Reviving… (about a minute)" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
+    expect(await screen.findByRole("button", { name: /^Reviving… \(about a minute\)/ })).toBeInTheDocument();
     reject(new Error("boom"));
-    expect(await screen.findByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Revive/ })).toBeInTheDocument();
     expect(toastErrorMock).toHaveBeenCalled();
   });
 
@@ -71,7 +72,7 @@ describe("RunRow — Revive (F1)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
     renderRow(makeRun({ attention: { kind: "lost", by: "you", pending: 0 } }));
-    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
     await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
@@ -79,7 +80,7 @@ describe("RunRow — Revive (F1)", () => {
   it("by=owner (not you): no action button at all", () => {
     const run = makeRun({ attention: { kind: "lost", by: "owner", pending: 0 } });
     renderRow(run);
-    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Revive/ })).not.toBeInTheDocument();
   });
 
   // F12 (PR #1317 round-2 review): the run page's own Revive already reports
@@ -90,7 +91,7 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: ["evil.example"], proxy_release: "r1" });
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
     await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 1 host now blocked."));
   });
 
@@ -100,7 +101,7 @@ describe("RunRow — Revive (F1)", () => {
   it("F18: a k8s lost row I own offers no Revive at all", () => {
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
     renderRow(run);
-    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Revive/ })).not.toBeInTheDocument();
   });
 });
 
@@ -135,8 +136,18 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     renderMine(signInRun());
     await flush();
     expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).toBeInTheDocument();
     expect(screen.getByTestId("run-row")).not.toHaveAttribute("data-attention");
+  });
+
+  it("names the Sign in button after its run, so a list of them is not N identical buttons", async () => {
+    signInMock.mockResolvedValue({ state: "waiting", verification_url: "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH", user_code: "ABCD-EFGH" });
+    const run = signInRun();
+    renderMine(run);
+    await flush();
+    const button = screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) });
+    expect(button.getAttribute("aria-label")).toMatch(new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}: .+`));
+    expect(button).toHaveTextContent(RUNS_ROW_ACTION.SIGN_IN);
   });
 
   it("answers not_waiting: the row is the plain Running row", async () => {
@@ -145,7 +156,7 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     await flush();
     expect(signInMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).not.toBeInTheDocument();
   });
 
   it("a run that queued for minutes still gets its grace once it is RUNNING: not_waiting, then waiting", async () => {
@@ -205,6 +216,30 @@ describe("RunRow — a local run's meta line (RS8)", () => {
   });
 });
 
+describe("RunRow — the machine kind in the meta line (UXR-31)", () => {
+  const metaOf = () => screen.getByTestId("run-row").querySelector("[title]")?.textContent ?? "";
+
+  it("names a macOS VM and a Linux VM after the repo, and says nothing for a container", () => {
+    const mac = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "macos_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · macOS VM · started /);
+    mac.unmount();
+    const linux = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "linux_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · Linux VM · started /);
+    linux.unmount();
+    renderRow(makeRun({ repo: "acme/payments", state: "RUNNING" }));
+    expect(metaOf()).toMatch(/^acme\/payments · started /);
+  });
+});
+
+describe("RunRow — a paused run (UXR-24)", () => {
+  it("says Paused in a neutral chip, not Running", () => {
+    renderRow(makeRun({ state: "RUNNING", paused_at: aheadByHours(-1), paused_reason: "idle" }));
+    const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
+    expect(pill.className).not.toMatch(/info|success|warning|danger/);
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
 describe("RunRow — a scheduled run", () => {
   const queued = (reason: string, over: Partial<AgentRun> = {}) =>
     makeRun({
@@ -220,17 +255,57 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.getByText("Scheduled")).toBeInTheDocument();
     expect(screen.getByTitle(/· starts Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
     expect(killRunMock).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "Kill run" }));
-    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
+    // A scheduled run has no sandbox, so the question is a plain cancel and does not talk about tearing one down.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(dialog).not.toHaveTextContent(/sandbox|credentials/i);
+    expect(screen.queryByRole("button", { name: "End run" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9", { notStarted: true }));
+  });
+
+  // The run starts while its Cancel confirm is open: the confirm said nothing was set up, so it closes, and the toast
+  // says the run started and was not cancelled. Nothing is sent: ending a started run is the End run confirm's.
+  it("closes the Cancel confirm and says so when the same row's run starts while it is open", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const view = renderRow(queued("scheduled"));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    view.rerender(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunRow run={queued("scheduled", { state: "RUNNING", queue: undefined })} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByText(CANCEL_NOT_STARTED.BODY)).toBeNull();
+    expect(toastInfoMock).toHaveBeenCalledWith(CANCEL_NOT_STARTED.STARTED("Nightly dependency bump"), { description: CANCEL_NOT_STARTED.STARTED_NEXT });
+    expect(killRunMock).not.toHaveBeenCalled();
+  });
+
+  // The run ended while its Cancel confirm was open: it has no End run to point to, so the confirm closes with no
+  // "has started" toast, and nothing is sent.
+  it("closes the Cancel confirm without the started toast when the same row's run ended while it is open", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const view = renderRow(queued("scheduled"));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    view.rerender(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunRow run={queued("scheduled", { state: "KILLED", queue: undefined })} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(toastInfoMock).not.toHaveBeenCalled();
+    expect(killRunMock).not.toHaveBeenCalled();
   });
 
   it("reads Waiting for sign-in with was due {when}, and a Sign in button that goes to the run", async () => {
     renderRow(queued("owner_sign_in"));
     expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
     expect(screen.getByTitle(/· was due Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).toBeInTheDocument();
   });
 
   it("says a run that waited out its sign-in was not started, in place of its times", () => {
@@ -244,7 +319,7 @@ describe("RunRow — a scheduled run", () => {
     renderRow(queued("runner_pool_at_capacity"));
     expect(screen.getByText("Queued")).toBeInTheDocument();
     expect(screen.getByTitle(/· started /)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Cancel run/ })).not.toBeInTheDocument();
   });
 });
 
@@ -268,6 +343,20 @@ describe("RunRow — the status pill", () => {
 });
 
 // Mock r15 T1-b: a live service says its health in place of Running, on the same row and under the same group.
+describe("RunRow — the glyph and the chip are one colour", () => {
+  const glyphOf = (container: HTMLElement) => container.querySelector("svg[aria-hidden='true']") as SVGElement;
+
+  it.each([
+    ["RUNNING", "text-success"],
+    ["COMPLETED", "text-success"],
+    ["KILLED", "text-danger"],
+    ["PENDING", "text-muted-foreground"],
+  ] as const)("a %s row draws its glyph in %s", (state, cls) => {
+    const { container } = renderRow(makeRun({ state }));
+    expect(glyphOf(container).getAttribute("class")).toContain(cls);
+  });
+});
+
 describe("RunRow: a live service's health chip", () => {
   const pillOf = (word: string) => screen.getByText(word).closest("span[class*='rounded']") as HTMLElement;
   const service = (service_status?: AgentRun["service_status"], over: Partial<AgentRun> = {}) =>
@@ -296,6 +385,16 @@ describe("RunRow: a live service's health chip", () => {
     unknown.unmount();
     renderRow(makeRun());
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
+  });
+
+  it("with Wardyn's check opted in, a missing check reading past the grace reads Health unknown; the same run without it Healthy", () => {
+    const long = { created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) };
+    const probe = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const opted = renderRow(service(seen("healthy"), { ...long, service: probe }));
+    expect(pillOf("Health unknown").className).toMatch(/muted/);
+    opted.unmount();
+    renderRow(service(seen("healthy"), long));
+    expect(pillOf("Healthy").className).toMatch(/success/);
   });
 
   it("keeps an attention row's amber chip and a finished service's own state", () => {

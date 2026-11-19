@@ -139,7 +139,7 @@ func TestMacVMStartRefusalsAreCanon(t *testing.T) {
 		"agent start": {func(s *runner.SandboxSpec) {
 			s.Interactive, s.Env = true, map[string]string{envInteractiveStart: "agent"}
 		},
-			"A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell."},
+			`A macOS VM's terminal opens a shell, not the agent, in this release. Turn off "Start the run in this harness", or send interactive_start: "shell" in the API.`},
 	} {
 		spec := macSpec()
 		tc.mut(&spec)
@@ -208,7 +208,7 @@ func TestMacPrepNetIsTheAllowlistProxyOnly(t *testing.T) {
 	if len(cfg.AllowedPeers) != 1 || cfg.AllowedPeers[0] != subnet {
 		t.Fatalf("allowed peers %v, want exactly the prep subnet %v", cfg.AllowedPeers, subnet)
 	}
-	if !slices.Contains(cfg.Policy.AllowedDomains, "swscan.apple.com:443") || len(cfg.Policy.AllowedDomains) != 7 {
+	if !slices.Contains(cfg.Policy.AllowedDomains, "swscan.apple.com:443") || len(cfg.Policy.AllowedDomains) != 8 {
 		t.Fatalf("allowed %v", cfg.Policy.AllowedDomains)
 	}
 	want := []string{"-stdio", "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)}

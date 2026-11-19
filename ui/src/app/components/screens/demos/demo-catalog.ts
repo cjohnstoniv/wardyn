@@ -339,7 +339,7 @@ export const DEMOS: Demo[] = [
         cmd: "curl -sSI https://example.com",
         text: "The same policy still holds against the agent's box: any host off the allowlist is refused. The agent can reach api.anthropic.com to think and nothing else.",
       },
-      { text: "Open the Audit panel below the terminal — every egress decision (allowed to Anthropic, denied elsewhere) is on the record, attributed to the run." },
+      { text: "Open the Audit panel below the terminal — each recorded egress decision (allowed to Anthropic, denied elsewhere) is on the record, attributed to the run." },
     ],
     setupUi: [
       "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",
@@ -392,9 +392,9 @@ export const DEMOS: Demo[] = [
     id: "once-or-for-good",
     section: "egress",
     title: "Once, or for good",
-    teaches: "The Once scope grants exactly one connection, not the run — approve it and the very next attempt has to ask again.",
+    teaches: "The Once scope grants one connection, not the run — approve it, and after that connection gets an answer the very next attempt has to ask again.",
     overview:
-      "Every approval above stuck around for the rest of the run once granted. Once is narrower: it spends itself on the single connection it was raised for, so the next attempt to that same host is refused all over again and raises a brand-new approval — nothing lingers by accident. Reach for it to unblock one call without opening the host for good.",
+      "Every approval above stuck around for the rest of the run once granted. Once is narrower: one answered connection spends it, so the next attempt to that same host is refused all over again and raises a brand-new approval — nothing lingers by accident. Reach for it to unblock one call without opening the host for good.",
     policy: {
       ...SHARED,
       allowed_domains: [],

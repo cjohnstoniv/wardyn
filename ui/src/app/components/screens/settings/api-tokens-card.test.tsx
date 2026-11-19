@@ -5,6 +5,7 @@
 
 // Your account > Your API tokens (r15 T2-d): a person's own tokens, listed with the Inbound only chip, minted
 // through the shared dialog (kind "inbound" only when Calling inbound ports is chosen) and revoked with a confirm.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -84,20 +85,55 @@ describe("ApiTokensCard", () => {
     expect(screen.getAllByText(T.INBOUND_ONLY)).toHaveLength(1);
   });
 
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    mount();
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    route = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    mount();
+    await openCard();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+  });
+
   it("shows nothing where there is no person to own a token (the admin token, local mode)", async () => {
     route = () => json({ error: "An API token belongs to a signed-in human", reason: "api_token_no_human" }, 403);
     const { container } = mount();
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  it("shows nothing where the api_token feature is not granted", async () => {
+  // Losing the feature takes away minting only: the server lists and revokes a person's own tokens without it,
+  // so a listed token keeps its Revoke and only Mint goes.
+  const noFeature = () => {
     const base = route;
     route = (m, p, b) =>
       p.startsWith("/api/v1/me/capabilities")
         ? json({ grants: [], enforcement: { feature: true }, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 })
         : base(m, p, b);
+  };
+
+  it("without the api_token feature, still lists the tokens with Revoke and hides only Mint", async () => {
+    noFeature();
+    mount(false);
+    await waitFor(() => expect(sent()).toContain("GET /api/v1/me/capabilities"));
+    await openCard();
+    expect(await screen.findByRole("table", { name: O.TABLE_LABEL })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: O.REVOKE_LABEL("laptop-cli") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: T.MINT })).not.toBeInTheDocument();
+  });
+
+  it("shows nothing with neither the api_token feature nor a token to list", async () => {
+    tokens = [];
+    noFeature();
     const { container } = mount(false);
     await waitFor(() => expect(sent()).toContain("GET /api/v1/me/capabilities"));
+    await waitFor(() => expect(sent()).toContain("GET /api/v1/me/tokens"));
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 

@@ -282,6 +282,15 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
+	// The boundary's or a restriction's cap, read now: a cap saved after dispatch that leaves out a
+	// capability this run holds ends its Azure DevOps access here, and a minted_pat run's tokens with it.
+	vcsCap, status, reason, body := s.adoCapAtResolve(ctx, claims.RunID, snapshot)
+	if status != 0 {
+		if reason == reasonCapabilityCapped {
+			s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
+		}
+		return fail(status, reason, body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
 		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
@@ -306,7 +315,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	var need []string
 	if r.URL.Query().Get("capability") != "" {
 		var ok bool
-		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
+		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, vcsCap, fail); !ok {
 			return true
 		}
 		// Cannot fail: answerADOCapability admits grantable capabilities only.
@@ -367,8 +376,35 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
 		return true
 	}
+	data := adoResolveSuccessAudit(grantID, minted.JTI, snapshot, responseCaps, access, capAsk)
+	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
+	// sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
+	writeJSON(w, http.StatusOK, injectionResponse{
+		Host:                minted.Injection.Host,
+		Header:              adoEntraInjectHeader,
+		Value:               value,
+		JTI:                 minted.JTI,
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
+		CredentialExpiresAt: credentialExpiry(access.ExpiresAt),
+		// Informational only: the proxy's gate pins the organisation from the
+		// dispatch-time ADOGrant in its own configuration, not from this.
+		Organisation: snapshot.Organisation,
+		// Not the gate's input either (dispatch-time ADOGrant are); the hold
+		// reads it only to confirm a capability ask came back granted.
+		Capabilities: adoCapabilityStrings(responseCaps),
+	})
+	return true
+}
+
+// adoResolveSuccessAudit is the data of the secret.read success row
+// resolveADOInjection records for an injected Entra access token.
+func adoResolveSuccessAudit(grantID uuid.UUID, jti string, snapshot adoEntraScopeSnapshot,
+	responseCaps []adoscope.Capability, access ADOEntraAccess, capAsk adoCapabilityGrant,
+) map[string]any {
 	data := map[string]any{
-		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
+		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": jti,
 		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
 		"organisation": snapshot.Organisation, "capabilities": responseCaps,
 		// What the AUTHORITY said the token carries — not what was asked
@@ -383,24 +419,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 			data["approval_id"] = capAsk.once.ID
 		}
 	}
-	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
-	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
-	// sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
-	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:      minted.Injection.Host,
-		Header:    adoEntraInjectHeader,
-		Value:     value,
-		JTI:       minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
-		// Informational only: the proxy's gate pins the organisation from the
-		// dispatch-time ADOGrant in its own configuration, not from this.
-		Organisation: snapshot.Organisation,
-		// Not the gate's input either (dispatch-time ADOGrant are); the hold
-		// reads it only to confirm a capability ask came back granted.
-		Capabilities: adoCapabilityStrings(responseCaps),
-	})
-	return true
+	return data
 }
 
 // adoResolveFailureAnswer maps a redemption failure class onto its answer. Each
@@ -497,7 +516,7 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(adoscope.ExpandPR(sn.Capabilities), row.Entra.Ceiling()):
 		return "capability_ceiling"
 	}
 	return ""

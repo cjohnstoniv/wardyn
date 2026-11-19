@@ -134,6 +134,9 @@ type refreshGrant struct {
 	scopes  []string
 	retired bool
 	who     *Identity
+	// family is the code grant this token descends from. With reuse detection on, presenting a retired
+	// token revokes every token of its family.
+	family string
 }
 
 // Identity is one person the picker offers (SetIdentities). Username is what
@@ -208,6 +211,13 @@ type Server struct {
 	// answerScope, when set, replaces the granted scope every token response
 	// reports (SetAnswerScope).
 	answerScope []string
+	// generic makes this a plain OIDC authority rather than an Entra tenant (SetGenericMode).
+	generic bool
+	// reuseDetection revokes a refresh token's whole family when a retired one is presented
+	// (SetReuseDetection).
+	reuseDetection bool
+	// refreshScopes is the `scope` form value of every refresh request, "" when it sent none.
+	refreshScopes []string
 
 	codes   map[string]codeGrant
 	access  map[string][]string
@@ -550,6 +560,10 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		redirectError(w, r, redirectURI, state, ErrInvalidRequest, "scope is required")
 		return
 	}
+	if s.isGeneric() {
+		s.finishAuthorize(w, r, redirectURI, state, requested)
+		return
+	}
 	if multipleResources(requested) {
 		redirectError(w, r, redirectURI, state, ErrInvalidRequest, multipleResourcesDescription)
 		return
@@ -571,27 +585,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	who, picked := s.pickIdentity(w, r)
-	if !picked {
-		return
-	}
-
-	code := randHex(16)
-	s.mu.Lock()
-	s.codes[code] = codeGrant{
-		challenge:   q.Get("code_challenge"),
-		scopes:      requested,
-		nonce:       q.Get("nonce"),
-		redirectURI: redirectURI,
-		who:         who,
-	}
-	s.mu.Unlock()
-
-	dest := redirectURI + "?code=" + url.QueryEscape(code)
-	if state != "" {
-		dest += "&state=" + url.QueryEscape(state)
-	}
-	http.Redirect(w, r, dest, http.StatusFound)
+	s.finishAuthorize(w, r, redirectURI, state, requested)
 }
 
 // pickIdentity is the test-only sign-in picker (SetIdentities). With no
@@ -716,7 +710,7 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	withIDToken, withRefresh := !s.omitIDToken, !s.omitRefreshToken
 	s.mu.Unlock()
-	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, withRefresh, grant.who)
+	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, withRefresh, grant.who, randHex(8))
 }
 
 // tokenFromRefresh redeems a refresh token, and is where the two properties the
@@ -734,9 +728,19 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	presented := r.Form.Get("refresh_token")
 	s.mu.Lock()
+	s.refreshScopes = append(s.refreshScopes, r.Form.Get("scope"))
 	grant, known := s.refresh[presented]
 	retired := known && grant.retired
 	invalidGrant, consentRequired, interactionRequired := s.invalidGrant, s.consentRequired, s.interactionRequired
+	generic, reuseDetection := s.generic, s.reuseDetection
+	if retired && reuseDetection {
+		// A spent token presented again: the whole family is revoked, the newest token with it.
+		for _, g := range s.refresh {
+			if g.family == grant.family {
+				g.retired = true
+			}
+		}
+	}
 	s.mu.Unlock()
 
 	if invalidGrant {
@@ -762,7 +766,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 
 	consented := slices.Clone(grant.scopes)
 	granted := consented
-	if requested := splitScope(r.Form.Get("scope")); len(requested) > 0 {
+	if requested := splitScope(r.Form.Get("scope")); len(requested) > 0 && !generic {
 		if multipleResources(requested) {
 			writeTokenError(w, http.StatusBadRequest, ErrInvalidRequest, multipleResourcesDescription)
 			return
@@ -800,7 +804,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	grant.retired = true
 	s.mu.Unlock()
 
-	s.issueTokens(w, granted, consented, "", false, true, grant.who)
+	s.issueTokens(w, granted, consented, "", false, true, grant.who, grant.family)
 }
 
 // issueTokens mints the access/refresh/id triple and answers with the GRANTED
@@ -813,7 +817,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 // when `openid` is in the request, and a control-plane renewal has no use for
 // one — the identity was bound once, at capture. withRefresh is false only
 // when SetOmitRefreshToken asks for a grant with no offline access.
-func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken, withRefresh bool, who *Identity) {
+func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken, withRefresh bool, who *Identity, family string) {
 	access := "fake-entra-access-" + randHex(16)
 	refresh := "fake-entra-refresh-" + randHex(16)
 
@@ -823,9 +827,9 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 	}
 	s.access[access] = slices.Clone(granted)
 	if withRefresh {
-		s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+		s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who, family: family}
 	}
-	onIssue, subject := s.onIssue, s.subject
+	onIssue, subject, generic := s.onIssue, s.subject, s.generic
 	s.mu.Unlock()
 	if who != nil {
 		subject = who.Subject
@@ -843,6 +847,9 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 		// what it was given rather than assume it got what it asked for, and on
 		// this service those differ whenever a caller asks for a subset.
 		"scope": strings.Join(granted, " "),
+	}
+	if generic {
+		delete(body, "scope") // RFC 6749 section 5.1: omitted when it is the requested set
 	}
 	if withRefresh {
 		body["refresh_token"] = refresh

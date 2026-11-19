@@ -4,10 +4,14 @@
  */
 
 import * as React from "react";
+import { useInRouterContext } from "react-router-dom";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch, Eye, EyeOff } from "lucide-react";
-import { secrets as secretsApi } from "../../lib/api/secrets";
+import { getExpectedPrincipal, HttpError } from "../../lib/api/core";
+import { secrets as secretsApi, type SecretScope } from "../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../lib/secret-refusals";
 import { providers as providersApi } from "../../lib/api/providers";
 import { getErrorMessage } from "../../lib/format";
+import { toast } from "sonner";
 import { useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { LANE_META, laneOfName, patLaneMeta, type Lane } from "../../lib/scm-provider";
@@ -36,17 +40,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { Field } from "../wardyn/form-primitives";
+import { Field, fieldHintId } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
+import { UNSAVED_GUARD } from "../wardyn/copy/shell";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
-import { OWN_SECRETS } from "../wardyn/copy/components";
+import { OWN_SECRETS, SECRETS_PAGE } from "../wardyn/copy/components";
 import { WRITE_ONLY } from "../wardyn/copy/door";
-import { useOperator } from "../wardyn/operator-context";
+import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
+import { useOperator, useOperatorResolved } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
 // here so we reject obviously-bad names before the round-trip.
@@ -59,9 +68,9 @@ const SECRET_NAME_RE = /^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$/;
 // github-pat/gitlab-pat are deliberately not suggested here — they're now
 // LEGACY_NAMES (lib/scm-provider.ts): the SCM ladder writes git-pat-<slug>
 // instead, and suggesting the old flat names would contradict that convention.
+// Nor are the old model key names: the API refuses to store them
+// (retiredModelCredentialNames), and the dialog points to Model providers instead.
 const PROVIDER_NAME_CHIPS = [
-  "anthropic-api-key",
-  "openai-api-key",
   "kubeconfig",
   "npm-token",
   "pypi-token",
@@ -87,38 +96,64 @@ export function SecretsScreen() {
   const [names, setNames] = React.useState<string[]>([]);
   const [mine, setMine] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [addOpen, setAddOpen] = React.useState(false);
-  const [rotateName, setRotateName] = React.useState<string | null>(null);
-  const [toDelete, setToDelete] = React.useState<string | null>(null);
+  // The namespace the rows on screen were read from, named by the route that read them. A Rotate or Delete
+  // chosen on a row keeps it, so a role change since (the same person signing in again as an admin, say) cannot
+  // send the write to the other namespace's secret of the same name: the route names the namespace, not the role.
+  const [listedIn, setListedIn] = React.useState<SecretScope>("shared");
+  const [rotate, setRotate] = React.useState<{ name: string; scope: SecretScope } | null>(null);
+  // The row whose Delete was chosen, and the person this tab had confirmed then:
+  // the delete names them, so it never lands on someone who signed in since.
+  const [toDelete, setToDelete] = React.useState<{ name: string; person: string; scope: SecretScope } | null>(null);
   // #381 F3: the real WARDYN_GIT_PAT_BROKER switch, read from the ONE door
-  // that projects it (GET /workspace-providers, operator-only). Defaults to
-  // the 0.7.10 default (on) for a non-operator viewer or before the fetch
-  // resolves — the same default git-tab.tsx's own patBrokerEnabled prop
-  // takes when it has no switch value in scope yet.
-  const [patBrokerEnabled, setPatBrokerEnabled] = React.useState(true);
-  React.useEffect(() => {
+  // that projects it (GET /workspace-providers, operator-only). null = not
+  // known: still loading, the lookup failed, or the viewer is not an operator.
+  // Unknown stays unknown: the header says nothing about where a Git token is
+  // held until the switch is read, because either answer can be the true one.
+  const [patBroker, setPatBroker] = React.useState<boolean | null>(null);
+  const [brokerFailed, setBrokerFailed] = React.useState(false);
+  const loadBroker = React.useCallback(() => {
     if (!operator) return;
+    setBrokerFailed(false);
     providersApi
       .getWorkspaceProviders()
-      .then((snap) => setPatBrokerEnabled(snap.providers.git_pat_broker_enabled ?? true))
-      .catch(() => {});
+      .then((snap) => setPatBroker(snap.providers.git_pat_broker_enabled ?? true))
+      .catch(() => setBrokerFailed(true));
   }, [operator]);
+  React.useEffect(loadBroker, [loadBroker]);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
+  const identityResolved = useOperatorResolved();
   const load = React.useCallback(() => {
     setStatus("loading");
+    // Which namespace is this person's own is known only once /me has answered; until then `operator` is the
+    // fail-open default, and a member's read of the shared list would only be refused.
+    if (!identityResolved) return;
+    const scope: SecretScope = operator ? "shared" : "personal";
+    // An administrator's rows are the shared namespace. A member's are their own; the admin-provided names beside
+    // them (no actions) still come from GET /secrets.
     (operator
-      ? secretsApi.listSecrets().then((n) => ({ names: n, mine: n }))
-      : secretsApi.listSecretsMine())
+      ? secretsApi.listScoped(scope).then((n) => ({ names: n, mine: n }))
+      : Promise.all([secretsApi.listScoped(scope), secretsApi.listSecretsMine()]).then(([own, r]) => ({ names: r.names, mine: own })))
       .then((r) => {
         setNames(r.names);
         setMine(r.mine);
+        setListedIn(scope);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
-  }, [operator]);
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
+  }, [operator, identityResolved]);
   React.useEffect(load, [load]);
 
+  // Add decides overwrite from `mine`; until a list has loaded for the person this tab has confirmed, a name
+  // missing from it proves nothing.
+  const inventoryKnown = status === "ready" && identityResolved;
   const ownSet = new Set(mine);
   const shown = [...mine, ...names.filter((n) => !ownSet.has(n))];
   const filtered = shown.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
@@ -128,20 +163,37 @@ export function SecretsScreen() {
       <PageHeader
         title="Secrets"
         // #381 F3: "Exception" only reads true when the broker is OFF (the
-        // resident posture really is an exception to brokerLine's claim); on
+        // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} ${
-          patBrokerEnabled ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
+        // storedSecretLine says a value "stays in Wardyn, unless a run delivers it": false for a Git token
+        // with the broker off (the git helper hands over the token itself), so it waits for the switch too.
+        description={`Write-only: values go in and never come out. ${
+          patBroker === null
+            ? SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE
+            : `${CAPABILITY.storedSecretLine} ${patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`}`
         }`}
         actions={
           <>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button
+              onClick={() => setAddOpen(true)}
+              disabled={!inventoryKnown}
+              aria-describedby={status === "error" ? "secrets-add-reason" : undefined}
+            >
               <Plus className="size-4" /> Add secret
             </Button>
           </>
         }
       />
+
+      {brokerFailed && patBroker === null && (
+        <p role="status" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          {SECRETS_BROKER_UNCHECKED.NOTE}
+          <Button variant="outline" size="sm" onClick={loadBroker}>
+            {SECRETS_BROKER_UNCHECKED.RETRY}
+          </Button>
+        </p>
+      )}
 
       {caps?.enforcement.secret && (
         <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.SECRETS_NARROWED}</p>
@@ -151,7 +203,8 @@ export function SecretsScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search secrets by name…"
-            value={query}
+            aria-label="Search secrets"
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
           />
@@ -168,7 +221,15 @@ export function SecretsScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={2} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState
+            message={loadMessage}
+            onRetry={load}
+            action={
+              <p id="secrets-add-reason" className="max-w-sm text-xs text-muted-foreground">
+                {SECRETS_PAGE.ADD_WAITS_FOR_LIST}
+              </p>
+            }
+          />
         ) : shown.length === 0 ? (
           <EmptyState
             icon={KeyRound}
@@ -182,7 +243,7 @@ export function SecretsScreen() {
               // This screen stores any credential, not just LLM keys — match
               // the header button's "Add secret" copy instead of narrowing a
               // first-time operator's mental model.
-              <Button onClick={() => setAddOpen(true)}>
+              <Button onClick={() => setAddOpen(true)} disabled={!inventoryKnown}>
                 <Plus className="size-4" /> Add your first secret
               </Button>
             }
@@ -202,7 +263,9 @@ export function SecretsScreen() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -221,7 +284,7 @@ export function SecretsScreen() {
                           </Chip>
                         )}
                         {ownSet.has(name) ? (
-                          <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
+                          <Chip tone="cyan" className="gap-1 [tr:hover_&]:bg-card" title={WRITE_ONLY.TOOLTIP}>
                             <Lock className="size-3" /> {WRITE_ONLY.CHIP}
                           </Chip>
                         ) : (
@@ -236,15 +299,15 @@ export function SecretsScreen() {
                     {ownSet.has(name) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-8" aria-label="Secret actions">
+                        <Button variant="ghost" size="icon" className="size-8" aria-label={`Secret actions: ${name}`}>
                           <MoreHorizontal className="size-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setRotateName(name)}>
+                        <DropdownMenuItem onClick={() => setRotate({ name, scope: listedIn })}>
                           <RotateCw className="size-4" /> Rotate
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setToDelete(name)} className="text-danger focus:text-danger">
+                        <DropdownMenuItem onClick={() => setToDelete({ name, person: getExpectedPrincipal(), scope: listedIn })} className="text-danger focus:text-danger">
                           <Trash2 className="size-4" /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -262,32 +325,36 @@ export function SecretsScreen() {
         open={addOpen}
         onOpenChange={setAddOpen}
         onSaved={load}
+        onStoredLate={load}
         existingNames={mine}
+        scope={listedIn}
         ownRows
-        patBrokerEnabled={patBrokerEnabled}
+        patBroker={patBroker}
       />
 
       <AddSecretDialog
-        open={!!rotateName}
-        onOpenChange={(o) => !o && setRotateName(null)}
+        open={!!rotate}
+        onOpenChange={(o) => !o && setRotate(null)}
         onSaved={() => {
-          setRotateName(null);
+          setRotate(null);
           load();
         }}
+        onStoredLate={load}
         existingNames={mine}
+        scope={rotate?.scope}
         ownRows
-        initialName={rotateName ?? ""}
-        patBrokerEnabled={patBrokerEnabled}
+        initialName={rotate?.name ?? ""}
+        patBroker={patBroker}
       />
 
       <DeleteConfirmDialog
-        name={toDelete}
+        name={toDelete?.name ?? null}
         entity="secret"
         // Only the caller's own rows have a menu, and a delete lands in their own namespace.
         allowed
         description="Runs that reference this secret by name will no longer be able to resolve it. This cannot be undone."
         onOpenChange={(o) => !o && setToDelete(null)}
-        onDelete={() => secretsApi.deleteSecret(toDelete!)}
+        onDelete={() => secretsApi.deleteSecret(toDelete!.name, toDelete!.person, toDelete!.scope)}
         onDeleted={() => {
           setToDelete(null);
           load();
@@ -314,6 +381,18 @@ function lockedNameHint(lane: Lane, hasHost: boolean): string {
   return hasHost ? `Locked — the conventional name for this host. ${bound}` : `Locked. ${bound}`;
 }
 
+// Closing the dialog with a typed name or value asks first; the buttons are the unsaved-changes guard's.
+const DISCARD_DRAFT = {
+  TITLE: "Clear this draft?",
+  BODY: "Closing clears what you entered here.",
+};
+// A save that fails after its dialog was closed and opened again, or unmounted, is said by name, in a toast. Only a
+// refusal proves nothing was saved: after a server error, or no answer, the value may already be held.
+const LATE_SAVE = {
+  REFUSED: (name: string) => `${name} was not saved`,
+  UNCONFIRMED: (name: string) => `${name} may not have been saved`,
+};
+
 // A write-only Add-secret dialog: name Input + value Textarea. The value field is
 // cleared after submit and its content is NEVER echoed back anywhere. Exported so
 // the New Run wizard can offer "Add secret" inline, and so this screen can reuse
@@ -322,23 +401,28 @@ export function AddSecretDialog({
   open,
   onOpenChange,
   onSaved,
+  onStoredLate,
   existingNames = [],
   initialName = "",
   lockName,
   host,
   lane,
-  patBrokerEnabled = true,
+  patBroker = null,
   ownRows = false,
+  scope,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onSaved?: (name: string) => void;
+  // A save that outlived its draft (the dialog was closed and opened again before it answered) was stored: a cue to
+  // refresh a list. Never onSaved, which callers use to close the dialog and apply the name.
+  onStoredLate?: (name: string) => void;
   // The names already stored, so we can warn before silently
   // overwriting one. Optional — callers without the list (e.g. inline in a
   // wizard) simply skip the overwrite warning.
   existingNames?: string[];
-  // Prefill the name field (e.g. the setup screen suggesting "anthropic-api-key",
-  // or this screen's "Rotate" action prefilling the secret being rotated).
+  // Prefill the name field (e.g. the proxy setup's "upstream-proxy-url", or
+  // this screen's "Rotate" action prefilling the secret being rotated).
   // Optional — defaults to "", preserving existing callers' blank-name behavior.
   initialName?: string;
   // Host-aware locked mode: Name becomes read-only — the
@@ -359,12 +443,16 @@ export function AddSecretDialog({
   // Optional — a caller with no switch value in scope (corp-network-proxy.tsx,
   // whose secret is never a git_pat) gets the 0.7.10 default (on), the same
   // fallback every other unwired surface takes.
-  patBrokerEnabled?: boolean;
+  /** The WARDYN_GIT_PAT_BROKER switch; null = not known (loading, failed, or a viewer who cannot read it): the dialog then claims nothing about where a value or a Git token is held. */
+  patBroker?: boolean | null;
   // The caller writes into the signed-in person's OWN namespace (PUT
   // /secrets/{name} stores under the caller, never another person), which any
   // signed-in person may do. Only the Secrets screen says so; every other
   // embedding keeps the operator gate below.
   ownRows?: boolean;
+  // The namespace to write into, named by the route (the Secrets page passes the one its rows came from). Omitted,
+  // PUT /secrets/{name} places the write by the caller's role, as every other embedding has always done.
+  scope?: SecretScope;
 }) {
   // This dialog is reused everywhere a secret gets written (this screen, the
   // SCM Provider step, the New Run wizard, the setup funnel) — gating its own
@@ -384,25 +472,50 @@ export function AddSecretDialog({
   // Require an explicit confirm-overwrite click when the typed name
   // already exists, so a save never silently clobbers a secret in use by runs.
   const [confirmOverwrite, setConfirmOverwrite] = React.useState(false);
+  const [confirmDiscard, setConfirmDiscard] = React.useState(false);
+  // Each open or close starts a new draft. A save remembers the draft it began in, so one that finishes after the
+  // dialog was closed and opened again never clears, closes or reports into the draft typed since.
+  const draft = React.useRef(0);
+  // A name the server already held although existingNames did not have it (the list was read before someone else
+  // stored it): the save asks before replacing it, exactly as for a listed name.
+  const [foundExisting, setFoundExisting] = React.useState("");
 
   React.useEffect(() => {
-    if (open) {
-      setName(initialName);
+    draft.current += 1;
+    if (!open) {
+      // A closed dialog keeps no typed value.
       setValue("");
-      setReveal(false);
-      setError(null);
-      setSaving(false);
-      setConfirmOverwrite(false);
+      return;
     }
+    setFoundExisting("");
+    setName(initialName);
+    setValue("");
+    setReveal(false);
+    setError(null);
+    setSaving(false);
+    setConfirmOverwrite(false);
+    setConfirmDiscard(false);
   }, [open, initialName]);
+  // Unmounting (the page was left) ends the draft too, so a save still in flight answers as a late one.
+  React.useEffect(() => () => void (draft.current += 1), []);
 
   // PUT is an upsert server-side: storing a name that already exists overwrites
   // its value. Detect that case (exact match on the trimmed name) so we can warn.
   const trimmed = name.trim();
-  const isOverwrite = existingNames.includes(trimmed);
+  const isOverwrite = existingNames.includes(trimmed) || (!!foundExisting && foundExisting === trimmed);
   const resolvedLane: Lane = lane ?? laneOfName(trimmed);
+  // A blank-name open offers suggestions; it also says where model keys go, since those names are refused here.
+  const suggest = !initialName && !lockName;
+  // The User view's pointer names the "Your model connections" card, which is on the page only where the
+  // deployment has a provider block (an empty one included); with none there is nowhere to point.
+  const adminView = useAdminView();
+  const hasModelConnections = useShellSetupStatus().status?.model_providers != null;
+  const modelKeysHint = adminView ? SECRETS_PAGE.MODEL_KEYS_HINT.ADMIN : hasModelConnections ? SECRETS_PAGE.MODEL_KEYS_HINT.USER : undefined;
+  const nameHint = lockName ? lockedNameHint(resolvedLane, !!host) : suggest ? modelKeysHint : undefined;
   // #381 F3: pat's meta depends on the real switch; app/ssh keep LANE_META.
-  const resolvedLaneMeta = resolvedLane === "pat" ? patLaneMeta(patBrokerEnabled) : LANE_META[resolvedLane];
+  // An unknown switch gets a plain "PAT" chip: brokered or in-sandbox would be a claim.
+  const resolvedLaneMeta =
+    resolvedLane !== "pat" ? LANE_META[resolvedLane] : patBroker === null ? { ...patLaneMeta(true), label: "PAT", tooltip: "", tone: "neutral" as const } : patLaneMeta(patBroker);
   // Editing the name clears any prior overwrite acknowledgement.
   React.useEffect(() => {
     setConfirmOverwrite(false);
@@ -426,27 +539,63 @@ export function AddSecretDialog({
       return;
     }
     setSaving(true);
+    // A save in flight takes the discard prompt down with it: nothing closes until the save answers.
+    setConfirmDiscard(false);
+    const mine = draft.current;
     try {
-      await secretsApi.setSecret(n, value);
+      // Create-only unless the person has said to replace: the list behind isOverwrite can be stale.
+      await secretsApi.setSecret(n, value, { scope, createOnly: !confirmOverwrite });
+      // Stored either way; a dialog closed and opened again since holds a new draft, which this save leaves alone.
+      if (draft.current !== mine) {
+        onStoredLate?.(n);
+        return;
+      }
       // Clear the value immediately — never retain or echo it.
       setValue("");
       onOpenChange(false);
       onSaved?.(n);
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to store secret.");
+      const why = getErrorMessage(e, "Failed to store secret.");
+      if (draft.current !== mine) {
+        // Not the new draft's error: said by name, so it is neither lost nor shown against the new draft.
+        const refused = e instanceof HttpError && e.status >= 400 && e.status < 500;
+        toast.error(refused ? LATE_SAVE.REFUSED(n) : LATE_SAVE.UNCONFIRMED(n), { description: why });
+        return;
+      }
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
+        setFoundExisting(n);
+        setSaving(false);
+        return;
+      }
+      setError(why);
       setSaving(false);
     }
   };
 
+  // Typed text that closing would lose. Nothing closes while a save is in flight.
+  const dirty = value !== "" || name !== initialName;
+  // A prompt left up while the typed text is removed again has nothing left to ask about.
+  React.useEffect(() => {
+    if (!dirty) setConfirmDiscard(false);
+  }, [dirty]);
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) setConfirmDiscard(true);
+    else onOpenChange(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{isOverwrite ? "Rotate secret" : "Add secret"}</DialogTitle>
           <DialogDescription>
             {lockName
               ? "The value is write-only — it can be replaced or removed, never read back."
-              : "The value is stored write-only — it is injected proxy-side at use time and is never returned by the API or shown again."}
+              : patBroker === null
+                ? "The value is stored write-only: it is never returned by the API or shown again."
+                : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
+            {!lockName && patBroker === false && " With the token broker off, a stored Git token is handed to git inside the sandbox."}
           </DialogDescription>
         </DialogHeader>
 
@@ -459,38 +608,55 @@ export function AddSecretDialog({
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground">
                 <GitBranch className="size-4" />
               </div>
-              <Mono className="text-sm text-foreground">{host}</Mono>
-              <Chip tone={resolvedLaneMeta.tone} title={resolvedLaneMeta.tooltip}>
-                {resolvedLaneMeta.label}
-              </Chip>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <Mono className="text-sm text-foreground [overflow-wrap:anywhere]">{host}</Mono>
+                <Chip tone={resolvedLaneMeta.tone} title={resolvedLaneMeta.tooltip}>
+                  {resolvedLaneMeta.label}
+                </Chip>
+              </div>
             </div>
           )}
           <Field
             label="Name"
             htmlFor="secret-name"
             required
-            hint={lockName ? lockedNameHint(resolvedLane, !!host) : undefined}
+            hint={nameHint}
           >
             {/* Suggestions only on a blank-name open (a fresh "Add secret", not a
                 rotate/fix-flow or locked open that already knows what it wants) —
                 prefill the name only, never a value. */}
-            {!initialName && !lockName && (
-              <ProviderNameChips onPick={setName} />
+            {suggest && (
+              <ProviderNameChips
+                onPick={(n) => {
+                  if (!saving) setName(n);
+                }}
+              />
             )}
             <Input
               id="secret-name"
-              placeholder="anthropic-api-key"
+              placeholder="npm-token"
+              // Field wires its hint only to a single child; the chips make two.
+              aria-describedby={nameHint ? fieldHintId("secret-name") : undefined}
               value={name}
               // Guarded, not just the readOnly attribute below: readOnly stops a
               // real user's keystrokes, but a dispatched change event still
-              // reaches a controlled input's onChange. Locked means locked.
+              // reaches a controlled input's onChange. Locked means locked, and a save in flight holds the
+              // draft it sent: an edit made then would be cleared, unsaved, when the save answers.
               onChange={(e) => {
-                if (!lockName) setName(e.target.value);
+                if (!lockName && !saving) setName(e.target.value);
+              }}
+              // Enter submits from this single-line field; the Value textarea keeps its newlines.
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                // A held key repeats: it must not walk through the overwrite confirmation by itself.
+                if (e.repeat) return;
+                if (mayWrite && !saving && name.trim() && value) void save();
               }}
               className="font-mono"
               autoComplete="off"
-              readOnly={lockName}
-              aria-readonly={lockName}
+              readOnly={lockName || saving}
+              aria-readonly={lockName || saving}
               required
             />
           </Field>
@@ -507,7 +673,11 @@ export function AddSecretDialog({
                 id="secret-value"
                 placeholder="sk-…"
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                // Held while a save is in flight, as the Name field is.
+                onChange={(e) => {
+                  if (!saving) setValue(e.target.value);
+                }}
+                readOnly={saving}
                 rows={3}
                 spellCheck={false}
                 autoComplete="off"
@@ -528,15 +698,7 @@ export function AddSecretDialog({
           </Field>
           {/* Warn when the name already exists so the operator
               doesn't silently overwrite a secret currently referenced by runs. */}
-          {isOverwrite && !error && (
-            <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                A secret named <span className="font-mono">{trimmed}</span> already exists. Saving
-                will overwrite its value for every run that references it. This cannot be undone.
-              </span>
-            </div>
-          )}
+          {isOverwrite && !error && <SecretOverwriteWarning name={trimmed} />}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below —
               this fires on every rejected save, a far more common path than
@@ -557,8 +719,29 @@ export function AddSecretDialog({
           )}
         </div>
 
+        {confirmDiscard && (
+          <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs">
+            <p className="font-medium text-foreground">{DISCARD_DRAFT.TITLE}</p>
+            <p className="mt-1 text-muted-foreground">{DISCARD_DRAFT.BODY}</p>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDiscard(false)}>
+                {UNSAVED_GUARD.STAY}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setConfirmDiscard(false);
+                  onOpenChange(false);
+                }}
+              >
+                {UNSAVED_GUARD.LEAVE}
+              </Button>
+            </div>
+          </div>
+        )}
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={saving} onClick={requestClose}>
             Cancel
           </Button>
           <Button
@@ -578,6 +761,29 @@ export function AddSecretDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// The warning before a save replaces a stored secret's value. Exported for the proxy setup's direct save, which asks
+// the same question when the server finds its secret name already taken.
+export function SecretOverwriteWarning({ name }: { name: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <span>
+        A secret named <span className="font-mono">{name}</span> already exists. Saving
+        will overwrite its value for every run that references it. This cannot be undone.
+      </span>
+    </div>
+  );
+}
+
+// Where a model key goes depends on the view: an admin's Settings has Model providers, a person's has their own
+// model connections. The dialog is also rendered outside a router (component tests), where no URL names a view.
+function useAdminView(): boolean {
+  const routed = useInRouterContext();
+  // `routed` cannot change while a tree stays mounted, so the same hook runs on every render.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return routed ? useConsoleMode() === "admin" : false;
 }
 
 // A row of common secret-name suggestions (toggle-button styling matches the

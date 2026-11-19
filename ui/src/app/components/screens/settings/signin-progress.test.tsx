@@ -6,9 +6,12 @@
 // #1419: SignInSteps now draws through the shared ProgressSteps. The door's
 // visible output must not change, so these strings are the markup it rendered
 // BEFORE that move (captured from the pre-change component, provider "AWS").
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import { SignInSteps, signInStepOf, type SignInStep } from "./signin-progress";
+import { extractDeviceSignIn } from "./login-pty-extract";
+import { SignInDoorState, SignInSteps, signInStepOf, type SignInStep } from "./signin-progress";
 
 const BEFORE: Record<SignInStep, string> = {
   "start":
@@ -46,5 +49,39 @@ describe("signInStepOf follows every witness the dialog has", () => {
     [{ ...none, pulling: true, interactiveStarted: true }, "wait"],
   ] as const)("%j -> %s", (facts, step) => {
     expect(signInStepOf(facts)).toBe(step);
+  });
+});
+
+// The door shows the code the server's sign-in read would answer, for every
+// waiting case the server's pane parser reads too
+// (internal/api/testdata/sign_in_pane_fixtures.json): a pre-filled link's
+// user_code, or the pane's code line for a sign-in page link, which carries none.
+describe("SignInDoorState shows the shared sign-in cases' code", () => {
+  const root = (() => {
+    let dir = resolve(process.cwd());
+    for (let i = 0; i < 8 && !existsSync(join(dir, "go.mod")); i++) dir = dirname(dir);
+    return dir;
+  })();
+  const { cases } = JSON.parse(readFileSync(join(root, "internal/api/testdata/sign_in_pane_fixtures.json"), "utf8")) as {
+    cases: { name: string; pane: string; go: { state: string; user_code?: string } }[];
+  };
+  const door = (url: string, code?: string) =>
+    render(<SignInDoorState provider="AWS" url={url} code={code} opened={false} showUrl onOpen={() => {}} />).queryByTestId(
+      "signin-device-code",
+    )?.textContent ?? "";
+
+  for (const c of cases.filter((x) => x.go.state === "waiting")) {
+    it(c.name, () => {
+      const got = extractDeviceSignIn(c.pane);
+      expect(door(got?.url ?? "", got?.code)).toBe(c.go.user_code);
+    });
+  }
+
+  const PAGE = "https://us-east-1.signin.aws/platform/authorize?request_uri=x&identitystore_id=d-0000000000";
+  it("shows no code for a sign-in page link without the pane's code", () => {
+    expect(door(PAGE)).toBe("");
+  });
+  it("a pre-filled link's own code wins over the pane's", () => {
+    expect(door(`${PAGE}&user_code=WXYZ-1234`, "ABCD-EFGH")).toBe("WXYZ-1234");
   });
 });

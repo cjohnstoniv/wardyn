@@ -4,10 +4,12 @@
 package maskstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +54,9 @@ type syncer struct {
 	cursor int64
 	loaded bool
 	rows   map[uuid.UUID]*ref
+	// pending is every per-run value publishRun cached whose run's fence no read has answered for yet, or
+	// that a read which found the run or the row gone is still taking out.
+	pending []*pendingRun
 
 	running   bool
 	done      chan struct{}
@@ -64,6 +69,88 @@ type syncer struct {
 
 	// listening is true while the LISTEN connection is up.
 	listening atomic.Bool
+}
+
+// pendingRun is a per-run value publishRun cached that waits for a read of its run's fence to answer
+// whether the run and the row are still live.
+type pendingRun struct {
+	runID  uuid.UUID
+	digest []byte
+	value  []byte
+	rf     *ref
+	added  bool
+	// gone is set by the read that settled p when the run or the row was no longer live; p is then on the
+	// pending list only until that read has taken the value out.
+	gone bool
+}
+
+// settle reads p's fence again: nil while the run and the row are live, ErrFenced once either is not, the
+// read's error when it fails, which leaves p pending. The first read to answer settles p. A live answer
+// takes p off the pending list. An answer that is not live takes back what publishRun cached: this
+// process's ref while it is still the one p noted, and the registry's copy when p added it, through the
+// drop guard, because the value may have been vouched for meanwhile; p stays on the list until the value
+// is out, so a registration of it meanwhile is refused. A later answer from an older read cannot turn
+// that into live.
+func (s *Store) settle(ctx context.Context, p *pendingRun) error {
+	var live bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_mask_manifest WHERE run_id=$1 AND fenced_at IS NULL)
+		AND EXISTS (SELECT 1 FROM mask_values WHERE bucket=$2 AND digest=$3 AND NOT tombstone)`, p.runID, bucketRun, p.digest).Scan(&live)
+	if err != nil {
+		return fmt.Errorf("maskstore: read the run's fence again: %w", err)
+	}
+	s.sync.mu.Lock()
+	i := slices.Index(s.sync.pending, p)
+	first := i >= 0 && !p.gone
+	if first {
+		p.gone = !live
+		if live {
+			s.sync.pending = slices.Delete(s.sync.pending, i, i+1)
+		}
+	}
+	ours := first && p.gone && p.rf != nil && s.sync.rows[p.rf.id] == p.rf
+	if ours {
+		delete(s.sync.rows, p.rf.id)
+	}
+	gone := p.gone
+	s.sync.mu.Unlock()
+	if first {
+		if ours {
+			clear(p.rf.value)
+		}
+		if gone {
+			if p.added {
+				s.reg.DropRunValue(p.runID, p.value)
+			}
+			s.sync.mu.Lock()
+			s.sync.pending = slices.DeleteFunc(s.sync.pending, func(q *pendingRun) bool { return q == p })
+			s.sync.mu.Unlock()
+		}
+		clear(p.value)
+	}
+	if gone || !live {
+		return ErrFenced
+	}
+	return nil
+}
+
+// SettleRun answers secretmask.Registry.Add for a value run runID already has: nil unless a registration
+// of it is pending, and then settle's answer for it.
+func (s *Store) SettleRun(runID uuid.UUID, value []byte) error {
+	var p *pendingRun
+	s.sync.mu.Lock()
+	for _, q := range s.sync.pending {
+		if q.runID == runID && bytes.Equal(q.value, value) {
+			p = q
+			break
+		}
+	}
+	s.sync.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	return s.settle(ctx, p)
 }
 
 // note records a row this process just committed, so a later tombstone for it
@@ -178,6 +265,7 @@ type row struct {
 // read is one read of the table above the cursor, applied to the registry. One
 // statement is one snapshot, and mask_gen.gen in it bounds the committed prefix
 // the rows belong to, so the cursor can move to it even when no row came back.
+// Every pending registration is settled before the cursor moves.
 func (s *Store) read(ctx context.Context) error {
 	sy := &s.sync
 	sy.mu.Lock()
@@ -200,6 +288,14 @@ func (s *Store) read(ctx context.Context) error {
 	}
 	if err := s.apply(ctx, rows, top, full); err != nil {
 		return err
+	}
+	sy.mu.Lock()
+	pending := slices.Clone(sy.pending)
+	sy.mu.Unlock()
+	for _, p := range pending {
+		if err := s.settle(ctx, p); err != nil && !errors.Is(err, ErrFenced) {
+			return err
+		}
 	}
 	sy.mu.Lock()
 	sy.cursor, sy.loaded = top, true

@@ -17,7 +17,7 @@ import { EFFECT_LABEL } from "./effect-choice";
 import type { ToolEffect } from "../../../../../lib/tool-effect";
 
 const ROW_CLASS = "flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5";
-const EFFECT_TONE: Record<ToolEffect, "success" | "info" | "danger"> = { allow: "success", hold: "info", deny: "danger" };
+const EFFECT_TONE: Record<ToolEffect, "success" | "info" | "warning" | "danger"> = { allow: "success", hold: "info", approve_each: "warning", deny: "danger" };
 
 export interface ToolRulesProps {
   fact: ToolPolicyFact;
@@ -49,7 +49,8 @@ export function ToolRules({ fact, harnessName, personal, remoteMcp, onAdd, onRem
             <li key={`mine:${r.tool}`} className={ROW_CLASS}>
               <span className="min-w-0 flex-1 font-mono [overflow-wrap:anywhere]">{r.tool}</span>
               {r.effect === "hold" && r.tool.startsWith("mcp__") && <span className="text-muted-foreground">{NR_TOOLS.MCP_ASKS}</span>}
-              <Chip tone={EFFECT_TONE[r.effect]}>{EFFECT_LABEL[r.effect]}</Chip>
+              {r.effect === "approve_each" && <span className="text-muted-foreground">{NR_TOOLS.MCP_APPROVE_EACH}</span>}
+              <Chip tone={EFFECT_TONE[r.effect as ToolEffect] ?? "neutral"}>{EFFECT_LABEL[r.effect as ToolEffect] ?? r.effect}</Chip>
               <Button type="button" variant="ghost" size="sm" aria-label={`${NR_TOOLS.ROW_REMOVE} ${r.tool}`} onClick={() => onRemove(r.tool)}>
                 {NR_TOOLS.ROW_REMOVE}
               </Button>

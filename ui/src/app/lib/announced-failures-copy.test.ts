@@ -43,7 +43,7 @@ const doc = new Map([...rawDoc].map(([key, value]) => [stripKeyNote(key), stripQ
 // (the preflight blocker and the Tools step's failed-preview alert both call it), so it is read out
 // of the source text, anchored on that function.
 const CHECK_FALLBACK =
-  /checkFailureText = [^\n]*getErrorMessage\(error\) \|\| "([^"]*)"/.exec(
+  /checkFailureText = [^\n]*getErrorMessage\(error, "([^"]*)"\)/.exec(
     readFileSync(resolve(process.cwd(), "src/app/components/screens/new-run-flow/draft/use-intent-checks.ts"), "utf8"),
   )?.[1] ?? "";
 

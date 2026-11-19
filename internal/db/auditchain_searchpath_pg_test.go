@@ -298,3 +298,105 @@ func TestPG_ReplayingTheTriggerMigrationsIsIdempotent(t *testing.T) {
 			"that runs but does not link", secondPrev, firstHash)
 	}
 }
+
+// TestPG_AuditFunctionsLookNamesUpOnlyInPgCatalog pins the search_path of every function in the
+// install's schema that runs as its owner or sets a path of its own: pg_catalog then pg_temp, and no
+// schema a role may create in. With the schema on that path, a role holding CREATE there could add a
+// function that matches one of their calls better than pg_catalog's (a text parameter for a quoted
+// literal where nextval takes regclass), and it ran as the audit log's owner. It checks again after a
+// boot-time restore of the chain trigger, whose replayed files put the schema back on the chain
+// function's path. Its own schema, outside public, so the replay re-creates no lane's chain function.
+func TestPG_AuditFunctionsLookNamesUpOnlyInPgCatalog(t *testing.T) {
+	pool, schema := probeSchemaPool(t)
+	ctx := context.Background()
+
+	check := func(when string) {
+		t.Helper()
+		rows, err := pool.Query(ctx, `
+			SELECT p.oid::regprocedure::text, p.prosecdef,
+			       COALESCE((SELECT s.v FROM unnest(p.proconfig) AS s(v) WHERE s.v LIKE 'search\_path=%'), '')
+			  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+			 WHERE n.nspname = $1
+			   AND (p.prosecdef OR EXISTS (SELECT 1 FROM unnest(p.proconfig) AS s(v) WHERE s.v LIKE 'search\_path=%'))`, schema)
+		if err != nil {
+			t.Fatalf("%s: list the functions in %s: %v", when, schema, err)
+		}
+		defer rows.Close()
+		definers := 0
+		for rows.Next() {
+			var fn, path string
+			var definer bool
+			if err := rows.Scan(&fn, &definer, &path); err != nil {
+				t.Fatalf("%s: scan: %v", when, err)
+			}
+			if definer {
+				definers++
+			}
+			if path != "search_path=pg_catalog, pg_temp" {
+				t.Errorf("%s: %s (SECURITY DEFINER %v) has %q, want search_path=pg_catalog, pg_temp", when, fn, definer, path)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("%s: rows: %v", when, err)
+		}
+		// audit_events_chain, audit_append, audit_ensure_partitions, audit_partition_digest,
+		// audit_retention_set_policy, audit_retention_drop, oidc_revocation_stamp, oidc_revocation_position.
+		if definers < 8 {
+			t.Errorf("%s: %d SECURITY DEFINER functions in %s, want the 8 Wardyn ships at least", when, definers, schema)
+		}
+	}
+	check("after Migrate")
+	if err := replayTriggerMigrations(ctx, pool, auditChainTrigger); err != nil {
+		t.Fatalf("replay the chain trigger's migrations: %v", err)
+	}
+	check("after the boot-time restore of the chain trigger")
+
+	// 0285 changes Wardyn's own functions by their exact signatures and nothing else: an operator's own
+	// routine there named audit_* with a path of its own keeps it, and a procedure, which ALTER FUNCTION
+	// refuses, would otherwise fail the migration and so the boot.
+	const op = `audit_operator_probe()`
+	if _, err := pool.Exec(ctx, `CREATE PROCEDURE `+op+` LANGUAGE sql SET search_path = public AS 'SELECT 1'`); err != nil {
+		t.Fatalf("create an operator's procedure named audit_*: %v", err)
+	}
+	mig, err := migrationFS.ReadFile("migrations/0285_audit_functions_search_path.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(mig)); err != nil {
+		t.Fatalf("run 0285 again beside an operator's procedure named audit_*: %v", err)
+	}
+	var cfg []string
+	if err := pool.QueryRow(ctx, `SELECT proconfig FROM pg_proc WHERE oid = '`+op+`'::regprocedure`).Scan(&cfg); err != nil ||
+		strings.Join(cfg, ",") != "search_path=public" {
+		t.Errorf("the operator's procedure has %v (%v), want [search_path=public], as it was", cfg, err)
+	}
+	if _, err := pool.Exec(ctx, `DROP PROCEDURE `+op); err != nil {
+		t.Fatalf("drop the operator's procedure: %v", err)
+	}
+	check("after 0285 runs again")
+
+	// 0285 changes a function only where the migrator owns it. Run as a role that owns none of the twelve
+	// it must change nothing and still succeed: PostgreSQL refuses an ALTER or a CREATE OR REPLACE of
+	// another role's function, which would fail the migration and so the boot. Needs a superuser to make
+	// the role and SET ROLE into it; the role and its grant go with the rollback.
+	var super bool
+	if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if super {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		other := schema + "_other"
+		for _, q := range []string{`CREATE ROLE ` + other + ` NOLOGIN`, `GRANT USAGE, CREATE ON SCHEMA ` + schema + ` TO ` + other, `SET LOCAL ROLE ` + other} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, string(mig)); err != nil {
+			t.Fatalf("run 0285 as a migrator that owns none of the functions it names: %v", err)
+		}
+	}
+}

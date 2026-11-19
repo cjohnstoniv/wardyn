@@ -69,6 +69,11 @@ export interface ComponentMCP {
   url?: string;
   transport: "http" | "stdio";
   launch?: ComponentMCPLaunch;
+  /**
+   * An organisation's remote server only: the audience of the run identity token the proxy sends to it.
+   * The org component editor's "Token audience" field.
+   */
+  gateway_audience?: string;
 }
 
 /** A local MCP server's command and arguments, started with no shell. */
@@ -96,7 +101,9 @@ export interface CLIKubectl {
   service_account: CLIServiceAccount;
   // 1 to 16 namespace names.
   namespaces: string[];
-  access: "read" | "write";
+  access: "read" | "restart" | "write";
+  // Each admitted write waits for a person's yes on that exact request; restart or write only.
+  approve_each?: boolean;
 }
 
 export interface CLIServiceAccount {
@@ -133,6 +140,10 @@ export interface Component {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // The unit an org component is pinned to: only runs in that unit or below it may attach it. Set only by
+  // PUT /components/{id}/owning-unit; owning_unit_name is the unit's name.
+  owning_unit_id?: string;
+  owning_unit_name?: string;
 }
 
 /** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, a run-only `inline` definition, or a built-in Git provider (`builtin`, OD-4). */
@@ -159,6 +170,8 @@ export type ComponentBuiltin = "github" | "azure_devops";
 export interface ComponentRequest {
   name: string;
   definition: ComponentDefinition;
+  // On a PUT, the version the editor opened: a row saved since answers 409 component_version_conflict.
+  expected_version?: number;
 }
 
 /** One thing a saved component still needs before a run can use it. */
@@ -172,6 +185,8 @@ export interface ComponentRequirement {
 /** A component save's answer: the stored row plus what it still needs (empty when nothing). */
 export interface ComponentSaved extends Component {
   requirements: ComponentRequirement[];
+  // Advisory, present only when there is something to say; never refuses a save.
+  warnings?: string[];
 }
 
 /** One secret of an org component as a granted person sees it: how it is delivered and whose it is, never its name. */
@@ -192,6 +207,9 @@ export interface OrgComponentView {
   category: "cli" | "mcp" | "api";
   cli?: CLIView;
   mcp?: MCPView;
+  // The unit the component is pinned to, when it is: the console can offer "Run in <unit>".
+  owning_unit_id?: string;
+  owning_unit_name?: string;
 }
 
 /** The non-secret face of a CLI row: which kind and what it pins. */
@@ -215,6 +233,7 @@ export interface CLIView {
 
 /** The non-secret face of an MCP server row. */
 export interface MCPView {
+  // A remote server's origin as the server shows it to a granted person; "" for a local one.
   url: string;
   transport: string;
 }

@@ -120,6 +120,43 @@ func TestLeqRefusesAnAddedSidecarComposition(t *testing.T) {
 	}
 }
 
+// TestLeqRefusesAnOffWebPortOfABareBaseEntry: a port other than 80 or 443 of an entry the base
+// names bare is a port the base reaches only with the port rule off, so Leq does not prove it
+// within the base and the change waits for a second approver. The meet reads the bare entry the
+// same way: an overlay naming that port composes to nothing, which Leq proves within the base.
+func TestLeqRefusesAnOffWebPortOfABareBaseEntry(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example"}}}
+	port := []string{"b.example:8443"}
+	if leqOf(composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: port}}, base) {
+		t.Error("Leq holds for b.example:8443 under a base naming b.example bare")
+	}
+	got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &port}})
+	if err != nil || len(got.Ceiling.AllowedDomains) != 0 {
+		t.Fatalf("ApplyOverlay = %v (%v), want []", got.Ceiling.AllowedDomains, err)
+	}
+	if !leqOf(got, base) {
+		t.Error("Leq refuses the empty meet")
+	}
+}
+
+// TestLeqRefusesAPortAddedBesideABareEntry: under a base naming h and h:22, a composition that goes
+// from [h] to [h, h:22] keeps the port (both sides name it), and Leq does not prove it within [h].
+func TestLeqRefusesAPortAddedBesideABareEntry(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example", "b.example:22"}}}
+	compose := func(list ...string) composer.Authority {
+		t.Helper()
+		got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &list}})
+		if err != nil || !slices.Equal(got.Ceiling.AllowedDomains, list) {
+			t.Fatalf("ApplyOverlay(%v) = %v (%v), want it kept", list, got.Ceiling.AllowedDomains, err)
+		}
+		return got
+	}
+	before, after := compose("b.example"), compose("b.example", "b.example:22")
+	if leqOf(after, before) {
+		t.Error("Leq holds for [b.example b.example:22] within [b.example]")
+	}
+}
+
 // Leq is judged against ENFORCEMENT, not against its own comparators: whenever
 // it says x is at most as permissive as y, the independent oracle that compiles
 // both through the proxy finds nothing x reaches that y does not. The pairs are
@@ -180,31 +217,33 @@ func TestLeqIsReflexiveAndTransitive(t *testing.T) {
 // that no row's expectation is read back from the code under test.
 func leqFixture() (types.RunPolicySpec, types.GovernanceLimits) {
 	ro := true
-	return types.RunPolicySpec{
-			AllowedDomains:      []string{"*.corp.example", "pypi.org"},
-			DeniedDomains:       []string{"evil.example"},
-			FirstUseApproval:    types.FirstUseDenyWithReview,
-			FirstUseHoldSeconds: 30,
-			MaxHolds:            16,
-			AllowedMethods:      []string{"GET", "POST"},
-			MinConfinementClass: types.CC2,
-			EligibleGrants:      leqBaseGrants(),
-			AutoStopAfterSec:    600,
-			WorkspaceMounts:     []types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &ro}},
-			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "corp/app", Target: "/w/app"}},
-			UIApps:              []types.UIApp{{Name: "docs", Port: 8000}},
-			Resources:           &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096, PidsLimit: 256, DiskMiB: 1024},
-			ToolRules:           []types.ToolRule{{Tool: "*", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}},
-			PushRules:           &types.PushRulesSpec{DenyPaths: []string{".github/**"}, MaxInspectPackMiB: 8, HoldSeconds: 60},
-		}, types.GovernanceLimits{
-			DenyInteractive:   true,
-			MaxConcurrentRuns: 4,
-			MaxCPUMillis:      4000,
-			AutonomyRubric:    &types.AutonomyRubric{EgressOpen: types.AutonomyL1},
-			RunLimits: types.RunLimits{
-				MaxEndAheadSec: 3600, DefaultEndSec: 600, MaxWaitSec: 300, PauseIdleAfterSec: 120,
-			},
-		}
+	spec := types.RunPolicySpec{
+		AllowedDomains:      []string{"*.corp.example", "pypi.org"},
+		DeniedDomains:       []string{"evil.example"},
+		FirstUseApproval:    types.FirstUseDenyWithReview,
+		FirstUseHoldSeconds: 30,
+		MaxHolds:            16,
+		AllowedMethods:      []string{"GET", "POST"},
+		MinConfinementClass: types.CC2,
+		EligibleGrants:      leqBaseGrants(),
+		AutoStopAfterSec:    600,
+		WorkspaceMounts:     []types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &ro}},
+		WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "corp/app", Target: "/w/app"}},
+		UIApps:              []types.UIApp{{Name: "docs", Port: 8000}},
+		Resources:           &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096, PidsLimit: 256, DiskMiB: 1024},
+		ToolRules:           []types.ToolRule{{Tool: "*", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}},
+		PushRules:           &types.PushRulesSpec{DenyPaths: []string{".github/**"}, MaxInspectPackMiB: 8, HoldSeconds: 60},
+	}
+	limits := types.GovernanceLimits{
+		DenyInteractive:   true,
+		MaxConcurrentRuns: 4,
+		MaxCPUMillis:      4000,
+		AutonomyRubric:    &types.AutonomyRubric{EgressOpen: types.AutonomyL1},
+		RunLimits: types.RunLimits{
+			MaxEndAheadSec: 3600, DefaultEndSec: 600, MaxWaitSec: 300, PauseIdleAfterSec: 120,
+		},
+	}
+	return spec, limits
 }
 
 func TestLeqFixtureIsWithinItself(t *testing.T) {
@@ -382,6 +421,8 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a lifted interactive denial", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyInteractive = false }},
 		{name: "a lifted exec denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = false }},
 		{name: "a lifted member-drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = false }},
+		{name: "a lifted kept-machine denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = false }},
+		{name: "a lifted background watch denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = false }},
 		{name: "a lifted drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = false }},
 		{name: "a lifted placement denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.DenyPlacements = []types.Placement{types.PlacementLocal}
@@ -490,7 +531,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"a smaller run cap", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 1 }},
 		{"a new denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }},
+		{"a new background watch denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }},
 		{"a new member-drive denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }},
+		{"a new kept-machine denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }},
 		{"a new placement denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.DenyPlacements = []types.Placement{types.PlacementLocal}
 		}},
@@ -585,5 +628,24 @@ func TestGrantWithinFailsClosed(t *testing.T) {
 		if err := composer.GrantWithin(g, ceiling); err == nil {
 			t.Errorf("%s: GrantWithin = nil, want a refusal", name)
 		}
+	}
+}
+
+// TestLeqPushDenyAll: deny_all is a refusal, so a proposal without it is wider than a ceiling with it,
+// and one with it is no wider than a ceiling with or without it.
+func TestLeqPushDenyAll(t *testing.T) {
+	leq := func(a, b *types.PushRulesSpec) bool {
+		return composer.Leq(types.RunPolicySpec{PushRules: a}, types.RunPolicySpec{PushRules: b}, types.GovernanceLimits{}, types.GovernanceLimits{})
+	}
+	on := &types.PushRulesSpec{DenyAll: true}
+	paths := &types.PushRulesSpec{DenyPaths: []string{".github/**"}}
+	if leq(nil, on) || leq(paths, on) {
+		t.Error("a proposal without deny_all reads as within a ceiling that sets it")
+	}
+	if !leq(on, on) || !leq(on, nil) {
+		t.Error("a proposal with deny_all reads as wider than a ceiling with or without it")
+	}
+	if !leq(&types.PushRulesSpec{DenyAll: true, DenyPaths: []string{".github/**"}}, paths) {
+		t.Error("adding deny_all to the ceiling's own rules reads as a widening")
 	}
 }

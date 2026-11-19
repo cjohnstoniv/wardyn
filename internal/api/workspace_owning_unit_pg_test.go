@@ -61,8 +61,8 @@ func TestOwningUnitSelection(t *testing.T) {
 	if _, err := e.pg.SetWorkspaceOwningUnit(ctx, ws.ID, &owner.ID); err != nil {
 		t.Fatal(err)
 	}
-	pins, err := e.srv.owningUnitFromRequest(ctx, createRunRequest{WorkspaceID: &ws.ID})
-	if err != nil || len(pins) != 1 || pins[0] != owner.ID {
+	pins, strict, err := e.srv.owningUnitFromRequest(ctx, createRunRequest{WorkspaceID: &ws.ID})
+	if err != nil || len(pins) != 1 || pins[0] != owner.ID || len(strict) != 0 {
 		t.Fatalf("owningUnitFromRequest = %v %v, want [%s]", pins, err, owner.ID)
 	}
 	run := func(sub string, pins ...uuid.UUID) (governanceCeiling, error) {
@@ -221,7 +221,9 @@ func TestOwningUnitOverlappingMoves(t *testing.T) {
 		return got.OwningUnitID
 	}
 	w := overlapAtTargetLock(t, e, govKindWorkspaceOwningUnit, ws.ID.String(),
-		func(q store.Querier) error { return store.SetWorkspaceOwningUnitQ(t.Context(), q, ws.ID, &other.ID) },
+		func(q store.Querier) error {
+			return store.SetWorkspaceOwningUnitQ(t.Context(), q, ws.ID, &other.ID, false)
+		},
 		func() *httptest.ResponseRecorder {
 			return e.call(e.alice, http.MethodPut, pinPath(ws), pinBody(&kid.ID))
 		})

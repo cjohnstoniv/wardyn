@@ -158,6 +158,31 @@ func TestPG_AttachTicket_AuthorityRoundTrip(t *testing.T) {
 
 // GetDelegatedTokenByID is the by-grant-id twin of GetDelegatedTokenByRaw: live
 // while unexpired and its portal registered, ErrNotFound otherwise.
+func TestPG_AttachTicket_CredentialRoundTrip(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tokenID, sessionID := uuid.New(), uuid.New()
+	for name, want := range map[string]store.AttachTicket{
+		"a personal token": {TokenID: tokenID},
+		"a CLI session":    {CLISessionID: sessionID},
+		"neither":          {},
+	} {
+		tok := uuid.NewString()
+		want.RunID, want.ActorType, want.Principal, want.AuthorizedAt = uuid.New(), types.ActorHuman, "alice", now
+		if err := st.MintAttachTicket(ctx, tok, want, now, now.Add(30*time.Second)); err != nil {
+			t.Fatalf("%s: mint: %v", name, err)
+		}
+		got, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+		if err != nil || !ok {
+			t.Fatalf("%s: consume: ok=%v err=%v", name, ok, err)
+		}
+		if got.TokenID != want.TokenID || got.CLISessionID != want.CLISessionID {
+			t.Fatalf("%s: credential = %v/%v, want %v/%v", name, got.TokenID, got.CLISessionID, want.TokenID, want.CLISessionID)
+		}
+	}
+}
+
 func TestPG_GetDelegatedTokenByID(t *testing.T) {
 	st := store.NewPG(runsPGPool(t))
 	ctx := context.Background()
@@ -182,7 +207,7 @@ func TestPG_GetDelegatedTokenByID(t *testing.T) {
 	if _, err := st.GetDelegatedTokenByID(ctx, uuid.New(), now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown grant: err=%v, want ErrNotFound", err)
 	}
-	if _, err := st.RevokeDelegate(ctx, d.ID, now); err != nil {
+	if _, _, err := st.RevokeDelegate(ctx, d.ID, now, false); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if _, err := st.GetDelegatedTokenByID(ctx, grant.ID, now); !errors.Is(err, store.ErrNotFound) {
@@ -225,5 +250,43 @@ func TestPG_SweepExpiredEphemeral(t *testing.T) {
 	}
 	if count("attach_tickets") != 1 || count("delegated_tokens") != 1 {
 		t.Errorf("after the sweep: tickets %d tokens %d, want the live row of each", count("attach_tickets"), count("delegated_tokens"))
+	}
+}
+
+// TestSweepExpiredEphemeralTakesRunCreateKeys: the sweep deletes an Idempotency-Key past its 24 hours,
+// bound or not, and keeps a live one.
+func TestSweepExpiredEphemeralTakesRunCreateKeys(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	expired := store.RunCreateKey{RunCreateKeyID: store.RunCreateKeyID{Principal: "alice", KeySHA256: "old"}, RequestSHA256: "r"}
+	live := store.RunCreateKey{RunCreateKeyID: store.RunCreateKeyID{Principal: "alice", KeySHA256: "new"}, RequestSHA256: "r"}
+	for _, k := range []store.RunCreateKey{expired, live} {
+		if _, err := st.ClaimRunCreateKey(ctx, k, time.Minute); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run_create_keys SET expires_at = now() - interval '1 hour' WHERE key_sha256 = 'old'`); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := st.SweepExpiredEphemeral(ctx, time.Now().UTC())
+	if err != nil || gone != 1 {
+		t.Fatalf("sweep = %d, %v; want the 1 expired key", gone, err)
+	}
+	var left []string
+	rows, err := pool.Query(ctx, `SELECT key_sha256 FROM run_create_keys`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, k)
+	}
+	if len(left) != 1 || left[0] != "new" {
+		t.Errorf("after the sweep the keys are %v, want [new]", left)
 	}
 }

@@ -172,7 +172,7 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	// without its reads and a row that named no profile would otherwise store
 	// as valid and refuse every request the row exists to serve.
 	for _, c := range cfg.Profile() {
-		if !slices.Contains(cfg.CapabilityCeiling, c) {
+		if !adoscope.Has(cfg.CapabilityCeiling, c) {
 			return fmt.Errorf(providers400EntraProf, i, string(c))
 		}
 	}

@@ -52,7 +52,7 @@ func StampDelegation(ctx context.Context, data json.RawMessage) json.RawMessage 
 		}
 	}
 	m["via"] = via
-	// A map of RawMessage and a struct of two UUIDs cannot fail to marshal.
+	// A map of RawMessage and a struct of UUIDs and strings cannot fail to marshal.
 	out, _ := json.Marshal(m)
 	return out
 }

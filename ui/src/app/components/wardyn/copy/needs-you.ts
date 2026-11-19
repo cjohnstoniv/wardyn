@@ -39,6 +39,8 @@ export const NEEDS_YOU = {
     snooze60: "Snooze for 1 hour",
     // M8-States 9.
     snoozedUntil: (time: string) => `Snoozed until ${time}`,
+    // UXR-16: a macOS VM run whose desktop is view only in the browser, so a takeover opens the terminal.
+    macViewOnly: "This Mac's desktop is view only in the browser. Take over in the terminal, or open a window on your Mac.",
   },
   card: {
     title: "Take over the desktop",
@@ -54,6 +56,8 @@ export const NEEDS_YOU = {
     offDetail: "This run isn't being recorded.",
     handBack: "Hand back",
     handingBack: "Handing back…",
+    // Not on the boards: opens the held takeover's desktop again in a new tab.
+    openDesktop: "Open the desktop",
   },
   done: {
     title: "You handed control back",
@@ -73,11 +77,18 @@ export const NEEDS_YOU = {
   toast: {
     title: (run: string) => `${run} needs you`,
     later: "Later",
+    // UXR-42: the toast's button only opens the run page, so it says so (a background run's included).
+    openRun: "Open run",
+    // UXR-25: a hold on the person's own run, raised off the run page. Action: "Review".
+    holdTitle: (run: string, host: string) => `${run} is waiting for approval: ${host}`,
+    review: "Review",
     browserTitle: (run: string) => `Needs you: ${run}`,
   },
   // Not on the boards: failures of the three verbs, with the server's reason after.
   failed: {
     takeOver: "Couldn't take over",
+    // The takeover is held but its desktop did not open.
+    openDesktop: "You have control, but the desktop didn't open",
     handBack: "Couldn't hand back",
     decline: "Couldn't decline",
   },

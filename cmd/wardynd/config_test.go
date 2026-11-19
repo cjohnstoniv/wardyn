@@ -400,7 +400,7 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 		{"203.0.113.5:8080", demoAdminToken, true}, // public bind
 		{":8080", demoAdminToken, false},           // compose: unspecified bind → warn, still boots
 		{"127.0.0.1:8080", demoAdminToken, false},  // loopback demo → warn, still boots
-		{"10.0.0.5:8080", "a-real-token", false},   // the operator's own token is their business
+		{"10.0.0.5:8080", "a-real-token", true},    // an own token this short is refused on a non-loopback bind (below)
 	}
 	for _, tt := range tests {
 		f := &bootFlags{
@@ -414,6 +414,49 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 		if (err != nil) != tt.wantErr {
 			t.Errorf("resolveLocalMode(listen=%q, token=%q) error = %v, want error: %v", tt.listen, tt.token, err, tt.wantErr)
 		}
+	}
+}
+
+// A WARDYN_ADMIN_TOKEN under 32 bytes is refused on any bind that is not loopback-only, the unspecified
+// compose bind included, because every peer that can connect may guess at the super-admin bearer. The
+// published demo token keeps its own handling (TestResolveLocalModeRefusesPublishedDemoToken), and a loopback
+// bind or a token of 32 bytes or more boots.
+func TestResolveLocalModeRefusesShortAdminTokenOffLoopback(t *testing.T) {
+	long := strings.Repeat("a", minAdminTokenLen)
+	tests := []struct {
+		name    string
+		listen  string
+		token   string
+		wantErr bool
+	}{
+		{"short, LAN bind", "10.0.0.5:8080", "a-real-token", true},
+		{"short, unspecified bind", ":8080", "a-real-token", true},
+		{"short by one byte, public bind", "203.0.113.5:8080", long[1:], true},
+		{"short, padded by spaces to the length", ":8080", " " + long[1:] + " ", true},
+		{"exactly the minimum, LAN bind", "10.0.0.5:8080", long, false},
+		{"long, unspecified bind", ":8080", long + "b", false},
+		{"short, loopback bind", "127.0.0.1:8080", "a-real-token", false},
+		{"short, IPv6 loopback bind", "[::1]:8080", "a-real-token", false},
+		{"demo token, unspecified bind: warns, boots", ":8080", demoAdminToken, false},
+		{"no token", ":8080", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &bootFlags{
+				listen:        &tt.listen,
+				adminToken:    &tt.token,
+				localMode:     new(bool),
+				localOperator: new(string),
+				oidcIssuer:    new(string),
+			}
+			_, err := resolveLocalMode(f)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolveLocalMode(listen=%q, token of %d bytes) error = %v, want error: %v", tt.listen, len(tt.token), err, tt.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "WARDYN_ADMIN_TOKEN") {
+				t.Errorf("the refusal does not name WARDYN_ADMIN_TOKEN: %v", err)
+			}
+		})
 	}
 }
 

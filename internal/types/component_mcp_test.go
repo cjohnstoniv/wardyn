@@ -183,3 +183,36 @@ func TestComponentRef_MCPHarnessesShape(t *testing.T) {
 		}
 	}
 }
+
+// TestComponentMCP_GatewayAudience: the audience is an organisation's remote server's alone, one
+// printable line within its bound. A person's own server and a stdio one are refused.
+func TestComponentMCP_GatewayAudience(t *testing.T) {
+	with := func(aud string) types.ComponentDefinition {
+		d := mcpDef("https://mcp.corp.example/mcp", "mcp.corp.example")
+		d.MCP.GatewayAudience = aud
+		return d
+	}
+	for _, aud := range []string{"", "https://mcp.corp.example/wardyn", strings.Repeat("a", types.MaxComponentMCPGatewayAudience)} {
+		if err := with(aud).Validate(proxy.ValidDomainEntry, false); err != nil {
+			t.Errorf("org, audience %.20q: %v", aud, err)
+		}
+	}
+	for name, aud := range map[string]string{
+		"padded":    " gw",
+		"control":   "gw\nx",
+		"too long":  strings.Repeat("a", types.MaxComponentMCPGatewayAudience+1),
+		"not UTF-8": "gw\xff",
+	} {
+		if err := with(aud).Validate(proxy.ValidDomainEntry, false); err == nil || !strings.HasPrefix(err.Error(), "mcp.gateway_audience") {
+			t.Errorf("%s: want an mcp.gateway_audience refusal, got %v", name, err)
+		}
+	}
+	if err := with("gw").Validate(proxy.ValidDomainEntry, true); err == nil || !strings.HasPrefix(err.Error(), "mcp.gateway_audience") {
+		t.Errorf("a person's own server: want an mcp.gateway_audience refusal, got %v", err)
+	}
+	local := localMCP("npx", "-y", "@example/mcp@1.0.0")
+	local.MCP.GatewayAudience = "gw"
+	if err := local.Validate(proxy.ValidDomainEntry, false); err == nil || !strings.HasPrefix(err.Error(), "mcp.gateway_audience") {
+		t.Errorf("a stdio server: want an mcp.gateway_audience refusal, got %v", err)
+	}
+}

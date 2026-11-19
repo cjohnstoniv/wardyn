@@ -98,7 +98,7 @@ type (
 
 	// ToolRule is one tool name and what to do with it, carried in
 	// RunPolicySpec.ToolRules and AgentOverrides.ToolRules; ToolEffect is its
-	// allow, hold or deny.
+	// allow, hold, approve_each or deny.
 	ToolRule   = types.ToolRule
 	ToolEffect = types.ToolEffect
 
@@ -273,6 +273,9 @@ type (
 	// Aliased for the same reason as ArtifactOverride: without a nameable
 	// type a caller could not author one at all.
 	AutonomyRubric = types.AutonomyRubric
+
+	// ConfinementFloors is GovernanceLimits.ConfinementFloors's pointed-to type, aliased for the same reason.
+	ConfinementFloors = types.ConfinementFloors
 
 	// AutonomyLevel is one rung on AutonomyRubric's ladder (see the AutonomyL0
 	// .. AutonomyL3 values below).

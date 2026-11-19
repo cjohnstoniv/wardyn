@@ -27,6 +27,7 @@ type childState struct {
 // case it returns the last observed error.
 type Fanout struct {
 	children []*childState
+	enrich   *correlationEnricher // nil until EnrichRuns
 }
 
 // NewFanout creates a Fanout over the supplied sinks.
@@ -45,6 +46,9 @@ func (f *Fanout) Name() string { return "fanout" }
 // panics, and blocks until all have returned. Returns nil unless every child
 // failed, in which case it returns the last error seen.
 func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
+	if f.enrich != nil {
+		ev = f.enrich.apply(ctx, ev)
+	}
 	results := make(chan error, len(f.children))
 
 	for _, cs := range f.children {

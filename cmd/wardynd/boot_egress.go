@@ -30,3 +30,18 @@ func egressPortRule(v string) string {
 	}
 	return v
 }
+
+// modelUsageOffFromEnv reads WARDYN_MODEL_USAGE. Counting model tokens is on by default (unset, empty or
+// "on"); "off" is the admin's opt-out. Any other value refuses to boot, so a typo never counts when the
+// admin meant off. Run proxies get the same variable through runner.ProxySidecarEnvKnobs.
+func modelUsageOffFromEnv(v string) bool {
+	switch v {
+	case "", "on":
+		return false
+	case "off":
+		return true
+	}
+	fmt.Fprintf(flag.CommandLine.Output(), "invalid WARDYN_MODEL_USAGE=%q: want on or off\n", v)
+	os.Exit(2)
+	return false
+}

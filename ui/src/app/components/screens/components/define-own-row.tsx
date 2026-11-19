@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { PendingChangeError } from "../../../lib/api/core";
 import { permissions as api } from "../../../lib/api/permissions";
 import { getErrorMessage } from "../../../lib/format";
-import type { CapabilityGrant } from "../../../lib/types";
+import type { CapabilityGrant, GovernanceChange } from "../../../lib/types";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
@@ -37,7 +37,7 @@ export function DefineOwnComponentsRow({
   /** The grant list after a write that landed. */
   onGrants: (next: CapabilityGrant[]) => void;
   /** The write was held for a second person (202): nothing changed yet. */
-  onSubmitted: () => void;
+  onSubmitted: (change: GovernanceChange) => void;
 }) {
   const [busy, setBusy] = React.useState(false);
   const deny = grants.find(everyoneDeny);
@@ -62,7 +62,7 @@ export function DefineOwnComponentsRow({
         onGrants([...grants.filter((g) => g.id !== grant.id), grant]);
       }
     } catch (e) {
-      if (e instanceof PendingChangeError) onSubmitted();
+      if (e instanceof PendingChangeError) onSubmitted(e.change);
       else toast.error(T.DEFINE_FAILED, { description: getErrorMessage(e) });
     } finally {
       setBusy(false);

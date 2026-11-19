@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { IntegrationsStep, STEP_LEDE_LINK, STEP_LEDE_PREFIX, STEP_LEDE_SUFFIX } from "./integrations-step";
+import { IntegrationsStep, STEP_LEDE, STEP_LEDE_LINK } from "./integrations-step";
 
 function renderStep(path = "/setup") {
   return render(
@@ -28,7 +28,7 @@ describe("IntegrationsStep", () => {
     // is asserted with a function matcher rather than a single exact node.
     expect(
       screen.getByText(
-        (_, node) => node?.tagName === "P" && node.textContent === STEP_LEDE_PREFIX + STEP_LEDE_LINK + STEP_LEDE_SUFFIX,
+        (_, node) => node?.tagName === "P" && node.textContent === STEP_LEDE,
       ),
     ).toBeInTheDocument();
   });

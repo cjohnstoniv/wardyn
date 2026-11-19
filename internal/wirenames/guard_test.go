@@ -32,6 +32,7 @@ var wireWord = regexp.MustCompile(`(^|_)(profiles?|assignments?)(_|$)`)
 var otherConcept = map[string]string{
 	// Another concept, wherever it appears ("*" matches any file).
 	"*:default_profile":                                            "the ADO capability list a run gets by default",
+	"*:default_profile_removed":                                    "the default-profile ADO capabilities a drafted cap removes",
 	"*:built_profile_hash":                                         "the workspace scan profile hash",
 	"*:key_domain_assignment":                                      "key-domain assignment",
 	"*:key_domain_assignments":                                     "key-domain assignments",

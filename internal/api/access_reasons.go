@@ -24,6 +24,8 @@ var accessSentences = map[string]string{
 	"policy_stricter_default":    "Your policy {asks first for|blocks} tools with no rule. A run can only be stricter.",
 	"policy_stricter_tool":       "Your policy {asks first for|blocks} {tool}. A run can only be stricter.",
 	"harness_no_hold":            "Codex CLI can't pause a tool call for approval.",
+	"approve_each_default":       "Approve each call names one MCP tool. Add it as a rule for that tool.",
+	"approve_each_no_remote_mcp": "Approve each call works for a tool of a remote MCP server this run reaches through the proxy. Turn one on for this harness.",
 	"command_no_hold":            "A command can't pause a tool call for approval.",
 	"harness_no_block_builtin":   "Wardyn can't block Codex CLI's own tools. Rules for its MCP tools still apply.",
 	"attended_no_skip":           "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking.",
@@ -44,14 +46,14 @@ var accessSentences = map[string]string{
 	"delivery." + deliveryShortLived:  "In the sandbox, short-lived",
 
 	"unlisted.always_deny":                    "Anything else is refused and logged.",
-	"unlisted.deny_with_review." + deciderYou: "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again.",
-	"unlisted.deny_with_review." + deciderAdmin: "Anything else is refused the first time the run asks for it and raises a request. " +
+	"unlisted.deny_with_review." + deciderYou: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again.",
+	"unlisted.deny_with_review." + deciderAdmin: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. " +
 		"Once an admin approves it, the run can try again.",
-	"unlisted.deny_with_review." + deciderYouOrAdmin: "Anything else is refused the first time the run asks for it and raises a request. " +
+	"unlisted.deny_with_review." + deciderYouOrAdmin: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. " +
 		"Once you or an admin approves it, the run can try again.",
-	"unlisted.wait_for_review." + deciderYou:        "Anything else is held for your review the first time the run asks for it.",
-	"unlisted.wait_for_review." + deciderAdmin:      "Anything else is held for an admin's review the first time the run asks for it.",
-	"unlisted.wait_for_review." + deciderYouOrAdmin: "Anything else is held for your or an admin's review the first time the run asks for it.",
+	"unlisted.wait_for_review." + deciderYou:        "Another host is held for your review the first time the run asks for it, unless it is always blocked.",
+	"unlisted.wait_for_review." + deciderAdmin:      "Another host is held for an admin's review the first time the run asks for it, unless it is always blocked.",
+	"unlisted.wait_for_review." + deciderYouOrAdmin: "Another host is held for your or an admin's review the first time the run asks for it, unless it is always blocked.",
 	"unlisted.hold_timeout":                         "If nobody decides within {n} seconds, it's refused.",
 	"unlisted.allow_all":                            "Any other public host is allowed, except ones your organisation blocks.",
 	"unlisted.requested":                            "Your organisation's ceiling still narrows this list at review.",

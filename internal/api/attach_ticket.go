@@ -88,7 +88,8 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 		return ticketActor{}, false, nil
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
-		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App}, true, nil
+		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App,
+		tokenID: t.TokenID, cliSessionID: t.CLISessionID}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -121,6 +122,12 @@ type ticketActor struct {
 	// app is the one UI app a ticket minted for an app opens, and caller the callers entry of that inbound
 	// app its person matched (inbound_ticket.go); a ticket with either never opens a terminal.
 	caller, app string
+	// tokenID is the personal API token the ticket was minted under, and cliSessionID the CLI session whose
+	// access token did; both uuid.Nil for a console session's or the admin token's ticket. A CLI sign-in's
+	// access token binds to its session alone (a refresh replaces it and the session lives on), as for a Mac
+	// window; a cli_admin step-up binds to its own token (credentialBinding). The ticket's authority check asks after whichever is set, so a revoke, an expiry or a sign-out of that
+	// credential ends the terminal it opened (ticketAuthority).
+	tokenID, cliSessionID uuid.UUID
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -208,6 +215,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // issueAttachTicket is the end both ticket routes share (this file's and inbound_ticket.go's): it mints t,
 // admitted at authorizedAt, and answers {ticket, expires_in_seconds}.
 func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t store.AttachTicket, authorizedAt time.Time) {
+	// The ticket is bound to the credential that asked for it, so ending that credential ends the terminal.
+	t.TokenID, t.CLISessionID = credentialBinding(r.Context())
 	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
 	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
 	// handleAddSSHKey keep).

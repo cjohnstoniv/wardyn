@@ -24,10 +24,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { cn } from "../ui/utils";
 import { Field } from "../wardyn/form-primitives";
 import { Chip, SectionCard } from "../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { ERASE, KEY_DOMAINS } from "../wardyn/copy/credentials";
 
-type Load = { kind: "loading" } | { kind: "error" } | { kind: "absent" } | { kind: "ready"; data: KeyDomains };
+type Load = { kind: "loading" } | { kind: "error"; message?: string } | { kind: "absent" } | { kind: "ready"; data: KeyDomains };
 
 // The sentence is a question and its consequence; the dialog titles itself with the question.
 function splitQuestion(s: string): [string, string] {
@@ -48,7 +48,7 @@ export function KeyDomainsSection() {
     keyDomainsApi
       .list()
       .then((data) => setLoad({ kind: "ready", data }))
-      .catch((e) => setLoad(e instanceof HttpError && (e.status === 501 || e.status === 403) ? { kind: "absent" } : { kind: "error" }));
+      .catch((e) => setLoad(e instanceof HttpError && (e.status === 501 || e.status === 403) ? { kind: "absent" } : { kind: "error", message: failureSentence(e) }));
   }, []);
   React.useEffect(reload, [reload]);
 
@@ -75,6 +75,7 @@ export function KeyDomainsSection() {
           <TableSkeleton rows={3} cols={3} />
         ) : load.kind === "error" ? (
           <ErrorState
+            message={load.message}
             onRetry={() => {
               setLoad({ kind: "loading" });
               reload();
@@ -128,7 +129,9 @@ export function KeyDomainsSection() {
                     <TableRow className="hover:bg-transparent">
                       <TableHead>{KEY_DOMAINS.COL_SUBJECT}</TableHead>
                       <TableHead>{KEY_DOMAINS.COL_DOMAIN}</TableHead>
-                      <TableHead />
+                      <TableHead>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -197,7 +200,9 @@ function AssignDialog({ domains, onClose, onWrote }: { domains: string[]; onClos
         <DialogHeader>
           <DialogTitle>{KEY_DOMAINS.ASSIGN_CTA}</DialogTitle>
         </DialogHeader>
-        <fieldset className="space-y-2">
+        {/* The fields are read-only while the write is in flight: it sends what they held at the click, and its
+            answer closes the dialog, so a choice changed meanwhile would be lost. */}
+        <fieldset disabled={busy} className="space-y-2">
           <legend className="text-sm font-medium text-foreground">{KEY_DOMAINS.COL_SUBJECT}</legend>
           <div className="flex flex-wrap gap-4">
             {TYPES.map((t) => (
@@ -210,12 +215,13 @@ function AssignDialog({ domains, onClose, onWrote }: { domains: string[]; onClos
         </fieldset>
         {type !== "all" && (
           <Field label={typeLabel} htmlFor="key-domain-subject">
-            <Input id="key-domain-subject" autoFocus autoComplete="off" value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <Input id="key-domain-subject" autoFocus autoComplete="off" disabled={busy} value={subject} onChange={(e) => setSubject(e.target.value)} />
           </Field>
         )}
         <Field label={KEY_DOMAINS.FIELD_DOMAIN} htmlFor="key-domain-domain" hint={KEY_DOMAINS.ASSIGN_HINT}>
           <select
             id="key-domain-domain"
+            disabled={busy}
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
             className="border-input bg-input-background focus-visible:border-ring focus-visible:ring-ring dark:bg-input/30 h-9 w-full rounded-md border px-2 font-mono text-body outline-none focus-visible:ring-[3px]"

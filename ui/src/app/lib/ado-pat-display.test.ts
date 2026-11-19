@@ -23,17 +23,26 @@ import {
   runTokenView,
 } from "./ado-pat-display";
 import { ADO_PAT_REASON, adoPatRefusalReason } from "./api/ado-pat";
+import { ADO_PAT } from "./ado-pat-copy";
 import { HttpError } from "./api/core";
+import { shortDate, shortTime } from "./format";
+
+// Clock times follow the reader's locale (lib/format.ts shortTime), so the expected text is built the same way.
+const hm = (s: string) => {
+  const [h, m] = s.split(":").map(Number);
+  return shortTime(new Date(2000, 8, 29, h, m).toISOString());
+};
 
 // Local-time instants, so the clock text is the same in any timezone.
 const at = (h: number, m: number, day = 29) => new Date(2000, 8, day, h, m).toISOString();
+// The moment the card is read in the last-token cases: the same day, before the 17:02 expiry.
+const NOON = Date.parse(at(12, 0));
 const access = (over: Partial<SCMAccessPAT>): SCMAccessPAT => ({ state: "live", org: "https://dev.azure.com/wardyn-live-test", ...over }) as SCMAccessPAT;
 
 describe("times", () => {
-  it("formats a clock as 24-hour HH:MM and a day as 'D Month'", () => {
-    expect(formatClock(at(9, 2))).toBe("09:02");
-    expect(formatClock(at(0, 5))).toBe("00:05");
-    expect(formatClock(at(17, 2))).toBe("17:02");
+  it("formats a clock the way the rest of the console does and a day as 'D Month'", () => {
+    for (const [h, m] of [[9, 2], [0, 5], [17, 2]]) expect(formatClock(at(h, m))).toBe(shortTime(at(h, m)));
+    expect(formatClock("not a time")).toBe("not a time");
     expect(formatDay(new Date(2000, 9, 27).toISOString())).toBe("27 October");
   });
   it("reads a date-only string as a calendar day in the reader's zone, not midnight UTC", () => {
@@ -81,18 +90,51 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     expect(v.disconnect).toBe(false);
   });
   it("connected says how tokens are made, names the last finished token, offers Disconnect", () => {
-    const v = patCardView(access({ ...minted, last_token: { created_at: at(9, 2), revoked_at: at(9, 41) } }), "Azure DevOps")!;
+    const v = patCardView(access({ ...minted, last_token: { created_at: at(9, 2), valid_to: at(17, 2), revoked_at: at(9, 41) } }), "Azure DevOps")!;
     expect(v.chip).toEqual({ label: "Connected", tone: "success" });
     expect(v.body).toEqual([
       "Tokens are created in your name, one per run, and revoked when it ends. Azure DevOps lists them under Personal access tokens as 'Wardyn run …'.",
-      "Last token: created 09:02, revoked 09:41.",
+      `Last token: created ${hm("09:02")}, revoked ${hm("09:41")}.`,
     ]);
     expect(v.action).toBeNull();
     expect(v.disconnect).toBe(true);
   });
   it("connected with a token still live names no last token", () => {
-    const v = patCardView(access({ ...minted, last_token: { created_at: at(9, 2) } }), "Azure DevOps")!;
+    const v = patCardView(access({ ...minted, last_token: { created_at: at(9, 2), valid_to: at(17, 2) } }), "Azure DevOps")!;
     expect(v.body).toHaveLength(1);
+  });
+  it("a closed last token is not called revoked unless it was", () => {
+    const line = (last: Partial<NonNullable<SCMAccessPAT["last_token"]>>) =>
+      patCardView(access({ ...minted, last_token: { created_at: at(9, 2), valid_to: at(17, 2), ...last } }), "Azure DevOps", NOON)!.body[1];
+    expect(line({ revoked_at: at(9, 41), revoke_reason: "run_end", revoke_failed: true })).toBe(
+      `Last token: created ${hm("09:02")}. Wardyn couldn't revoke it, so it works until ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
+    );
+    expect(line({ revoke_pending: true })).toBe(
+      `Last token: created ${hm("09:02")}. Its revoke isn't confirmed; it stops working by ${hm("17:02")} at the latest.`,
+    );
+    expect(line({ revoked_at: at(17, 5), revoke_reason: "expired" })).toBe(`Last token: created ${hm("09:02")}, expired ${hm("17:02")}.`);
+  });
+  it("a token that may still work names the day it stops when that is not today, and is expired once that has passed", () => {
+    const failed = { created_at: at(9, 2), revoked_at: at(9, 41), revoke_reason: "disconnect", revoke_failed: true };
+    const card = (state: string, valid_to: string, now: number) =>
+      patCardView(access({ ...minted, state, last_token: { ...failed, valid_to } }), "Azure DevOps", now)!.body;
+    expect(card("live", at(17, 2, 30), NOON)[1]).toBe(
+      `Last token: created ${hm("09:02")}. Wardyn couldn't revoke it, so it works until ${shortDate(at(17, 2, 30))}, ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
+    );
+    const after = Date.parse(at(17, 3));
+    expect(card("live", at(17, 2), after)[1]).toBe(`Last token: created ${hm("09:02")}, expired ${hm("17:02")}.`);
+    expect(card("not_configured", at(17, 2), after)).toEqual([ADO_PAT.MEMBER_NOT_CONNECTED]);
+    const pending = patCardView(access({ ...minted, last_token: { created_at: at(9, 2), valid_to: at(17, 2), revoke_pending: true } }), "Azure DevOps", after)!.body;
+    expect(pending[1]).toBe(`Last token: created ${hm("09:02")}, expired ${hm("17:02")}.`);
+  });
+  it("not connected still names a last token that may still work, and only that", () => {
+    const body = (last: Partial<NonNullable<SCMAccessPAT["last_token"]>>) =>
+      patCardView(access({ ...minted, state: "not_configured", last_token: { created_at: at(9, 2), valid_to: at(17, 2), ...last } }), "Azure DevOps", NOON)!.body;
+    expect(body({ revoked_at: at(9, 41), revoke_reason: "disconnect", revoke_failed: true })).toEqual([
+      ADO_PAT.MEMBER_NOT_CONNECTED,
+      ADO_PAT.MEMBER_LAST_TOKEN_NOT_REVOKED(hm("09:02"), hm("17:02")),
+    ]);
+    expect(body({ revoked_at: at(9, 41), revoke_reason: "disconnect" })).toEqual([ADO_PAT.MEMBER_NOT_CONNECTED]);
   });
   it("sign in again, whichever cause ended the connection, offers Connect", () => {
     for (const cause of ["ended", "consent_needed", undefined]) {
@@ -280,27 +322,27 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
   const tok = (over: Partial<ADORunToken>): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), scope: READ, ...over });
   it("6a: an active token is one plain line", () => {
     const v = runTokenView([tok({})], false);
-    expect(v.lines).toEqual([{ text: "Azure DevOps token: created 09:02 · expires 17:02", old: false }]);
+    expect(v.lines).toEqual([{ text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")}`, old: false }]);
     expect(v.paused).toBe(false);
   });
   it("6b: a renewed token is never revoked early: the older one reads (renewed), from its position", () => {
     const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoke_reason: "expired", revoked_at: at(17, 2) })], false);
     expect(v.lines).toEqual([
-      { text: "Azure DevOps token: created 09:02 · expires 17:02 (renewed)", old: true },
-      { text: "Azure DevOps token: created 15:02 · expires 23:02", old: false },
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (renewed)`, old: true },
+      { text: `Azure DevOps token: created ${hm("15:02")} · expires ${hm("23:02")}`, old: false },
     ]);
     // Position alone decides it: the same with no reason at all, and no "revoked" word.
     const bare = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);
-    expect(bare.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
+    expect(bare.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (renewed)`);
     expect(bare.lines[0].text).not.toMatch(/revoked/);
   });
   it("an expired token that nothing replaced reads (expired), never revoked", () => {
     const v = runTokenView([tok({ revoke_reason: "expired", revoked_at: at(17, 2) })], false);
-    expect(v.lines).toEqual([{ text: "Azure DevOps token: created 09:02 · expires 17:02 (expired)", old: true }]);
+    expect(v.lines).toEqual([{ text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`, old: true }]);
   });
   it("6c: a paused run says its token was revoked", () => {
     const v = runTokenView([tok({ revoked_at: at(11, 30), revoke_reason: "pause" })], true);
-    expect(v.lines[0]).toEqual({ text: "Azure DevOps token: created 09:02 · expires 17:02 · revoked 11:30 (paused)", old: true });
+    expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("11:30")} (paused)`, old: true });
     expect(v.paused).toBe(true);
   });
   it("6d: the last token of a finished run stays plain, each reason the server writes reads as its words", () => {
@@ -316,12 +358,12 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
     };
     for (const [wire, words] of Object.entries(reasons)) {
       const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: wire })], false);
-      expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (${words})`, old: false });
+      expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("09:41")} (${words})`, old: false });
     }
   });
   it("a reason this console has no words for adds no uncopied text, and is still drawn as revoked", () => {
     const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: "mystery" })], false);
-    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41");
+    expect(v.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("09:41")}`);
   });
   it("a token minted but never handed out reads as such, and does not make its predecessor (renewed)", () => {
     const v = runTokenView(
@@ -329,36 +371,62 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
       false,
     );
     expect(v.lines).toEqual([
-      { text: "Azure DevOps token: created 09:02 · expires 17:02", old: false },
-      { text: "Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:03 (not handed out)", old: false },
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")}`, old: false },
+      { text: `Azure DevOps token: created ${hm("15:02")} · expires ${hm("23:02")} · revoked ${hm("15:03")} (not handed out)`, old: false },
     ]);
     const unreadable = runTokenView([tok({ revoked_at: at(9, 3), revoke_reason: "ends_unreadable" })], false);
-    expect(unreadable.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:03 (sign-in state unreadable)");
+    expect(unreadable.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("09:03")} (sign-in state unreadable)`);
   });
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
-    expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual(["17:02"]);
+    expect(runTokenView([tok({ revoke_failed: true })], false, NOON).revokeFailedAt).toEqual([hm("17:02")]);
+  });
+  it("6f: a token whose revoke failed or is unconfirmed is never drawn revoked", () => {
+    const v = runTokenView(
+      [tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" }), tok({ created_at: at(9, 20), valid_to: at(17, 20), revoke_pending: true })],
+      false,
+      NOON,
+    );
+    expect(v.lines).toEqual([
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (not revoked)`, old: false },
+      { text: `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (revoke not confirmed)`, old: false },
+    ]);
+  });
+  it("6g: past its expiry a token whose revoke failed or is unconfirmed reads (expired), with no revoke by hand to ask for", () => {
+    const tokens = [tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" }), tok({ created_at: at(9, 20), valid_to: at(17, 20), revoke_pending: true })];
+    const v = runTokenView(tokens, false, Date.parse(at(17, 20)));
+    expect(v.lines).toEqual([
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`, old: true },
+      { text: `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (expired)`, old: true },
+    ]);
+    expect(v.revokeFailedAt).toEqual([]);
+    // Between the two expiries only the first has died.
+    const between = runTokenView(tokens, false, Date.parse(at(17, 3)));
+    expect(between.lines.map((l) => l.text)).toEqual([
+      `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`,
+      `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (revoke not confirmed)`,
+    ]);
   });
   it("7: a token whose successor's scope is a strict superset reads (access added), whenever it was replaced", () => {
     // Replaced at 09:20, 18 minutes into an eight-hour life: the timing says nothing, the scope does.
     const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: [...READ, "vso.code_write"] }), tok({})], false);
     expect(v.lines.map((l) => l.text)).toEqual([
-      "Azure DevOps token: created 09:02 · expires 17:02 (access added)",
-      "Azure DevOps token: created 09:20 · expires 17:20",
+      `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (access added)`,
+      `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")}`,
     ]);
   });
   it("an equal, narrower or unrelated successor scope is a renewal, whenever it came", () => {
     for (const next of [READ, ["vso.code"], ["vso.code", "vso.work"], ["vso.build"]]) {
       const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: next }), tok({})], false);
-      expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
+      expect(v.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (renewed)`);
     }
   });
   it("scope order and duplicates do not matter to a widening", () => {
     const v = runTokenView([tok({ created_at: at(9, 20), scope: ["vso.project", "vso.code_write", "vso.code"] }), tok({})], false);
-    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (access added)");
+    expect(v.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (access added)`);
   });
   it("lists oldest first whatever order the wire sends", () => {
     const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);
-    expect(v.lines[0].text).toContain("created 09:02");
+    expect(v.lines[0].text).toContain(`created ${hm("09:02")}`);
   });
 });
 

@@ -23,9 +23,11 @@ var (
 		"userDrivesResponse.Grants":     true,
 		"userDrivesResponse.Disabled":   true,
 		"userDrivesResponse.GrantTotal": true,
+		"userDrivesResponse.TeamDrives": true,
 
 		"UserDriveListItem.UserDrive":  true,
 		"UserDriveListItem.GrantCount": true,
+		"UserDriveListItem.SingleHost": true,
 
 		"UserDrive.ID":           true,
 		"UserDrive.Name":         true,
@@ -38,6 +40,7 @@ var (
 		"UserDrive.CreatedAt":    true,
 		"UserDrive.UpdatedAt":    true,
 		"UserDrive.CreatedBy":    true,
+		"UserDrive.Team":         true,
 
 		"UserDriveGrant.ID":               true,
 		"UserDriveGrant.SubjectType":      true,
@@ -50,6 +53,7 @@ var (
 		"UserDriveGrant.Enabled":          true,
 		"UserDriveGrant.CreatedAt":        true,
 		"UserDriveGrant.CreatedBy":        true,
+		"UserDriveGrant.MembersCanWrite":  true,
 	}
 	securityViewSuperOnly = map[string]bool{
 		"userDrivesResponse.HostRootsConfigured": true,
@@ -62,16 +66,13 @@ var (
 
 		// Fields added after the projection was written: securityAdminDrive copies none of them, so a
 		// security admin's read goes without them. Copying one is a decision, made in both places.
-		"UserDriveListItem.SingleHost":        true,
 		"UserDriveListItem.PlacementEligible": true,
 		"UserDriveListItem.MountsFrom":        true,
-		"UserDrive.Team":                      true,
 		"UserDrive.KeptFromRun":               true,
 		"UserDrive.AltBackend":                true,
 		"UserDrive.AltHostRoot":               true,
 		"UserDrive.AltRunnerID":               true,
 		"UserDrive.HomeRunnerID":              true,
-		"UserDriveGrant.MembersCanWrite":      true,
 	}
 )
 
@@ -197,4 +198,31 @@ func fieldExists(walked []reflect.Type, key string) bool {
 		}
 	}
 	return false
+}
+
+// TestSecurityAdminDrivesViewCarriesTheTeamFacts: a security admin's answer says which drives are team
+// drives, which of those live on one Docker host, and whether the deployment's team_drives switch is on,
+// and still withholds the host path.
+func TestSecurityAdminDrivesViewCarriesTheTeamFacts(t *testing.T) {
+	in := userDrivesResponse{
+		TeamDrives: true,
+		Drives: []types.UserDriveListItem{{
+			UserDrive:  types.UserDrive{Name: "Team Data", Team: true, HostRoot: "/srv/drives"},
+			SingleHost: true,
+		}},
+		Grants: []types.UserDriveGrant{
+			{Subject: "writers", MembersCanWrite: true},
+			{Subject: "readers", MembersCanWrite: false},
+		},
+	}
+	out := securityAdminDrivesView(in)
+	if !out.Grants[0].MembersCanWrite || out.Grants[1].MembersCanWrite {
+		t.Errorf("grants = %+v, want members_can_write carried as true for writers and false for readers", out.Grants)
+	}
+	if !out.TeamDrives || !out.Drives[0].Team || !out.Drives[0].SingleHost {
+		t.Errorf("view = %+v, want team_drives, team and single_host carried", out)
+	}
+	if out.Drives[0].HostRoot != "" {
+		t.Errorf("view carries host_root %q, want it withheld", out.Drives[0].HostRoot)
+	}
 }

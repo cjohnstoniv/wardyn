@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Skips the Setup Assistant panes macOS 26 shows a new user, so a run's first window opens on the desktop.
+  Replace each __PLACEHOLDER__ with a fresh UUID (uuidgen) or your own identifier prefix before use.
+  Installs by hand (one approval in System Settings during macos-vm edit-base) or from MDM.
+-->
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadIdentifier</key>
+	<string>__IDENTIFIER_PREFIX__.setup-assistant</string>
+	<key>PayloadUUID</key>
+	<string>__PROFILE_UUID__</string>
+	<key>PayloadDisplayName</key>
+	<string>Wardyn macOS VM: Setup Assistant</string>
+	<key>PayloadOrganization</key>
+	<string>__ORGANIZATION__</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.SetupAssistant.managed</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>__IDENTIFIER_PREFIX__.setup-assistant.skip</string>
+			<key>PayloadUUID</key>
+			<string>__PAYLOAD_UUID__</string>
+			<key>PayloadDisplayName</key>
+			<string>Skip Setup Assistant panes</string>
+			<key>SkipSetupItems</key>
+			<array>
+				<string>Accessibility</string>
+				<string>AppleID</string>
+				<string>Appearance</string>
+				<string>Biometric</string>
+				<string>Diagnostics</string>
+				<string>FileVault</string>
+				<string>iCloudDiagnostics</string>
+				<string>iCloudStorage</string>
+				<string>Intelligence</string>
+				<string>OSShowcase</string>
+				<string>Payment</string>
+				<string>Privacy</string>
+				<string>ScreenTime</string>
+				<string>Siri</string>
+				<string>TermsOfAddress</string>
+				<string>UpdateCompleted</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

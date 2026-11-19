@@ -20,4 +20,13 @@ describe("needs-you copy", () => {
     expect(NEEDS_YOU.inUse.title("priya", "10:13")).toBe("priya took over at 10:13.");
     expect(NEEDS_YOU.toast.browserTitle("Renew staging certificates")).toBe("Needs you: Renew staging certificates");
   });
+
+  it("keeps the attention copy verbatim", () => {
+    expect(NEEDS_YOU.banner.macViewOnly).toBe(
+      "This Mac's desktop is view only in the browser. Take over in the terminal, or open a window on your Mac.",
+    );
+    expect(NEEDS_YOU.toast.holdTitle("build", "api.example.com")).toBe("build is waiting for approval: api.example.com");
+    expect(NEEDS_YOU.toast.review).toBe("Review");
+    expect(NEEDS_YOU.toast.openRun).toBe("Open run");
+  });
 });

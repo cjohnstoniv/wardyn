@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -168,11 +169,14 @@ func (s *Store) commitMigration(ctx context.Context, target string, before rowSn
 	if err != nil {
 		return loc, err
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := replaceSnapshot(ctx, tx, before, after); err != nil {
 		return loc, err
 	}
-	return loc, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return loc, fmt.Errorf("this row's own commit: %w, so the row may have moved: %w", ErrCommitOutcomeUnknown, err)
+	}
+	return loc, nil
 }
 
 // Delete only while the row's session lock excludes external writers. A

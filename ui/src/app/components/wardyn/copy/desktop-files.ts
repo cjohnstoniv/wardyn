@@ -27,6 +27,8 @@ export const DESKTOP_FILES = {
   download: "Download",
   downloaded: (at: string, sha: string) => `Downloaded ${at} · sha256 ${sha.slice(0, 4)}…${sha.slice(-4)}`,
   downloadsAllowed: "Downloads were allowed by your team. Each one is logged by size and hash.",
+  // Row 29: a VM desktop has no clipboard at all, so the Allowed/Blocked strip would claim a relay that is not there.
+  clipboardVM: "Copy and paste: not available on VM desktops yet",
   pasteIn: "Paste in",
   copyOut: "Copy out",
   allowed: "Allowed",
@@ -34,7 +36,27 @@ export const DESKTOP_FILES = {
   // Not on the boards: the upload-blocked twin of the board's download-blocked state, a failed
   // transfer, and an empty allowed folder.
   uploadBlocked: "Blocked: uploading files",
-  notSent: "Not sent",
+  uploadFailed: "Upload failed",
   downloadFailed: "Download failed",
   emptyFolder: "Nothing in the transfer folder yet.",
+  // Downloads held for a person's yes (desktop.download: review).
+  requestDownload: "Request download",
+  asking: "Asking…",
+  downloadApproved: "Download approved",
+  stateWaiting: "Waiting for approval",
+  stateApproved: "Approved",
+  stateDenied: "Denied",
+  stateExpired: "Expired",
+  askedLine: (at: string, sha: string) => `Asked ${at} · sha256 ${sha.slice(0, 4)}…${sha.slice(-4)}`,
+  approvedLine: (by: string, at: string) => `Approved by ${by} · ${at}`,
+  deniedLine: (by: string, reason: string, at: string) => (reason ? `${by}: “${reason}” · ${at}` : `${by} · ${at}`),
+  expiredLine: (at: string) => `Nobody decided it in time · ${at}`,
+  reviewFooter:
+    "Downloads from this run wait for a person's yes, and each yes releases the file once. Every download is logged by size and hash.",
+  // A spent approval whose file did not come to this browser: the decision time is not when anything arrived.
+  approvalUsed: "Approval used; request another download",
+  notAsked: "Not asked",
+  requestsUnreadable: "Couldn't check this run's download requests.",
+  retry: "Try again",
+  loadFailed: "Couldn't load this desktop's files. Check the connection and try again.",
 } as const;

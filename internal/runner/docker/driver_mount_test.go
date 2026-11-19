@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -20,13 +19,14 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // helper: run CreateSandbox with the given mounts and return the agent's applied
 // bind mounts (excluding the recording mount, which is off in these tests) plus
-// any error.
+// any error. The run's resolver volume mount (driver_dns.go) is among them.
 func createWithMounts(t *testing.T, mounts []runner.Mount) ([]mount.Mount, error) {
 	t.Helper()
 	f := newFakeDocker()
@@ -101,6 +101,7 @@ func TestCreateSandbox_AllowedMountApplied(t *testing.T) {
 	// and only this line is about the mounts nobody asked for.
 	assertMountSet(t, got, []mountSummary{
 		{Target: "/home/agent/work", Source: "/home/maintainer/repo", ReadOnly: false},
+		resolverSummary(testSpec().RunID), // the run's resolver file (driver_dns.go), asserted in full by driver_dns_test.go
 	})
 	var found *mount.Mount
 	for i := range got {
@@ -646,9 +647,9 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 // validated before the drive is appended, so the refusal lands before
 // ensureDriveVolume: a run that fails on a legacy policy row must not leave a
 // persistent, member-owned volume behind, and nothing in this package removes
-// one (there is no VolumeRemove call anywhere in it, and CreateSandbox's
-// rollback deliberately skips drive volumes so a retry finds the member's
-// files). Reordered, every failed run on such a deployment would allocate
+// one (the only VolumeRemove calls in it are ReclaimDrive's and the removal of a
+// run's own resolver volume, and CreateSandbox's rollback deliberately skips
+// drive volumes so a retry finds the member's files). Reordered, every failed run on such a deployment would allocate
 // storage nobody ever reclaims.
 //
 // Asserted with AND without a drive on the same run, so the refusal is a
@@ -757,7 +758,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	drive := hostPathDrive(home)
 
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
-	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
+	got, _, err := d.driveMount(context.Background(), drive, true)
 	if err != nil {
 		t.Fatalf("driveMount for an in-root share: %v", err)
 	}
@@ -771,7 +772,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	// The SAME drive, on a deployment that configured no roots: refused. No
 	// flag, provenance stamp or backend detail sits between the two calls.
 	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
-	if _, err := unset.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true); err == nil {
+	if _, _, err := unset.driveMount(context.Background(), drive, true); err == nil {
 		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
 	} else if !strings.Contains(err.Error(), "denied user drive") {
 		t.Errorf("the refusal should identify the denied drive, got: %v", err)
@@ -986,4 +987,52 @@ func TestCreateSandbox_DriveRefusalsNeverNameAHostPath(t *testing.T) {
 			t.Errorf("refusal = %q, want it to name the drive", err)
 		}
 	})
+}
+
+// The macOS VM directory and the ledger and socket directories beside it are held out of every container
+// bind, on both paths that make one: a workspace mount (agentMounts) and a share drive. A runner's default VM
+// directory is under the login's home, so HOME decides where it is; the home, which contains it, is refused,
+// and a sibling folder is not. The refusal is a sentence with no path (it becomes the run's failure hint),
+// which agentMounts runs after the member gate. Hosted-only: -tags docker.
+func TestCreateSandbox_MacVMDirIsRefusedAsABind(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, sibling := filepath.Join(base, "home"), filepath.Join(base, "sibling")
+	vm := filepath.Join(home, "Library", "Application Support", "Wardyn", "macos-vm.noindex")
+	for _, dir := range []string{vm, sibling} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	want := []string{vm, admission.DefaultDir, admission.DefaultSockDir}
+	if got := newTestDriver(newFakeDocker()).macVMBindDirs(); !slices.Equal(got, want) {
+		t.Fatalf("the protected directories = %q, want %q", got, want)
+	}
+
+	for _, tc := range []struct {
+		src string
+		ok  bool
+	}{{home, false}, {vm, false}, {sibling, true}} {
+		_, err := createWithMounts(t, []runner.Mount{{Source: tc.src, Target: "/work/x"}})
+		if (err == nil) != tc.ok {
+			t.Errorf("workspace mount %s: err = %v, want ok %v", tc.src, err, tc.ok)
+		}
+		if tc.src == vm {
+			// A drive named macos-vm.noindex is refused, by that member-visible name, before this check.
+			continue
+		}
+		// A share drive's bind: its root is the folder above the drive's directory.
+		drive := hostPathDrive(tc.src)
+		drive.HomeName = filepath.Base(tc.src)
+		_, _, err = createWithDrive(t, drive, []string{filepath.Dir(tc.src)})
+		if (err == nil) != tc.ok {
+			t.Errorf("share drive %s: err = %v, want ok %v", tc.src, err, tc.ok)
+		}
+		if err != nil && strings.Contains(err.Error(), base) {
+			t.Errorf("refusal of %s names a path: %v", tc.src, err)
+		}
+	}
 }

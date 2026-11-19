@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 )
 
 // Setup by hand's window keeps its text byte for byte: screen_darwin.m (cgo, built only on a Mac) holds
@@ -76,16 +77,18 @@ func TestSetupWindowShowCodeControl(t *testing.T) {
 	if n := strings.Count(m, "dataWithContentsOfFile"); n != 1 {
 		t.Errorf("the code file is read in %d places, want 1", n)
 	}
-	if n := strings.Count(m, "wardynScreenReadCode("); n != 2 {
-		t.Errorf("wardynScreenReadCode appears %d times, want its definition and one call", n)
+	if n := strings.Count(m, "wardynScreenReadCode("); n != 3 {
+		t.Errorf("wardynScreenReadCode appears %d times, want its definition and the Show code and Type code clicks' calls", n)
 	}
-	_, after, ok := strings.Cut(m, "- (void)toggle:(id)sender {\n")
-	if !ok {
-		t.Fatal("screen_darwin.m has no toggle: click action")
-	}
-	body, _, _ := strings.Cut(after, "\n}\n")
-	if !strings.Contains(body, "wardynScreenReadCode(self.codeFile)") {
-		t.Errorf("the click action does not read the file:\n%s", body)
+	for _, click := range []string{"toggle", "typeCode"} {
+		_, after, ok := strings.Cut(m, "- (void)"+click+":(id)sender {\n")
+		if !ok {
+			t.Fatalf("screen_darwin.m has no %s: click action", click)
+		}
+		body, _, _ := strings.Cut(after, "\n}\n")
+		if !strings.Contains(body, "wardynScreenReadCode(self.codeFile)") {
+			t.Errorf("the %s click action does not read the file:\n%s", click, body)
+		}
 	}
 	// What is passed in is the path, never a code.
 	if !strings.Contains(m, "const char *steps, const char *codeFile) {") {
@@ -98,8 +101,9 @@ func TestSetupWindowShowCodeControl(t *testing.T) {
 	}
 }
 
-// Only the setup and edit windows are made by wardynScreenShow, and it is called from one place; a window of
-// another kind (a run's desktop view) must not be given the control, so any new caller shows up here.
+// Only setup by hand's window is made by wardynScreenShow (the edit window is a run window with the edit's
+// controls, wardynScreenShowWindow), and it is called from one place; a window of another kind (a run's
+// desktop view) must not be given the control, so any new caller shows up here.
 func TestScreenShowHasOneCaller(t *testing.T) {
 	files, err := filepath.Glob("*")
 	if err != nil {
@@ -119,7 +123,18 @@ func TestScreenShowHasOneCaller(t *testing.T) {
 	}
 }
 
-// Prepare's setup by hand and the edit both hand the window the code file's path.
+// textFirstBoot is the fake first boot, keeping the window text it is given.
+type textFirstBoot struct {
+	*macvmtest.FirstBoot
+	text *macvm.ScreenText
+}
+
+func (b textFirstBoot) WithScreen(text macvm.ScreenText) macvm.FirstBooter {
+	*b.text = text
+	return b.FirstBoot
+}
+
+// Prepare's setup by hand hands the window the code file's path, as the edit does its own window.
 func TestSetupByHandWindowGetsTheCodeFilePath(t *testing.T) {
 	f, _, _ := handPrep(t)
 	var text macvm.ScreenText
@@ -129,5 +144,44 @@ func TestSetupByHandWindowGetsTheCodeFilePath(t *testing.T) {
 	}
 	if want := (macvm.ScreenText{CodeFile: f.opts.Layout.SetupCode()}); text != want {
 		t.Errorf("setup by hand's window text %+v, want %+v", text, want)
+	}
+}
+
+// The edit window is the run window's code with the edit's controls (screen_darwin.*, built only on a Mac,
+// pinned by its text): its close button calls back into Go off the main thread and leaves the window up
+// until the guest has shut down, a screen lock does not tear it down, and its strip gets the code file. A
+// run window still gets no code file and no callback.
+func TestEditWindowControlsInTheRunWindow(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	m, g := read("screen_darwin.m"), read("screen_darwin.go")
+	for _, want := range []string{
+		"void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop, int canTrust) {",
+		"- (BOOL)windowShouldClose:(NSWindow *)sender {\n\tdispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{\n\t\twardynWindowAction(WARDYN_WINDOW_ASK_STOP);\n\t});\n\treturn NO;\n}",
+		"#define WARDYN_WINDOW_ASK_STOP 0",
+		"if (wardynScreenViewOnly && !wardynScreenAsksStop && wardynScreenWindow != nil) {",
+		"[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf, edit, trust)];",
+		"wardynScreenAsksStop = NO;",
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("screen_darwin.m lost the edit window's control:\n%s", want)
+		}
+	}
+	for _, want := range []string{
+		"//export wardynWindowAction\nfunc wardynWindowAction(n C.int) {",
+		"windowActionAskStop = iota",
+		"C.wardynScreenShowWindow(vm, title, steps, nil, 0, 0)",
+	} {
+		if !strings.Contains(g, want) {
+			t.Errorf("screen_darwin.go lost the window's callback wiring:\n%s", want)
+		}
+	}
+	if strings.Count(g, "C.wardynScreenShowWindow(") != 2 {
+		t.Error("wardynScreenShowWindow is called from other than the run window and the edit window")
 	}
 }

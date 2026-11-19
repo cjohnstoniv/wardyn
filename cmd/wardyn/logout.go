@@ -44,9 +44,9 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 				return err
 			}
 			// Renew a spent token first (this takes and releases the lock itself).
-			_, loadErr := loadSession(cmd.Context(), origin)
+			_, loadErr := loadSession(cmd.Context(), origin, uuid.Nil)
 			beforeLogoutLock()
-			unlock, ok, err := lockRefresh(dir)
+			unlock, ok, err := lockRefresh(cmd.Context(), dir)
 			if err != nil {
 				return err
 			}
@@ -56,7 +56,12 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 			defer unlock()
 			// The item as stored now, under the lock: another command may have rotated it since.
 			var serverErr error
-			if it, found, err := storeFor(kind, dir).get(origin); err == nil && found {
+			it, found, getErr := storeFor(kind, dir).get(origin)
+			switch {
+			case getErr != nil:
+				// An item that cannot be read may hold a session still live at the server.
+				serverErr = errors.New(readCause(getErr))
+			case found:
 				now := time.Now()
 				switch tok, _ := it.bearer(now); {
 				case tok != "":

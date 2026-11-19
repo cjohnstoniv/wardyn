@@ -46,7 +46,8 @@ func TestPGLocker_NestingSemantics(t *testing.T) {
 
 func TestPGLocker_CredentialKeysAscend(t *testing.T) {
 	a, _, _ := twoReplicas(t)
-	requireCredentialKeysAscend(t, a)
+	requireKeysAscend(t, a, AWSSSOCredentialLockClass)
+	requireKeysAscend(t, a, RunStartLockClass)
 }
 
 // A nested lock reuses its caller's connection: with ONE slot, a hold that

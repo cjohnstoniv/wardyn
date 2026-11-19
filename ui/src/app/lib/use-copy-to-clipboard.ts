@@ -53,9 +53,11 @@ export function useCopyToClipboard(resetMs: number | null = 1500) {
     }
   };
 
-  const copy = async (text: string): Promise<void> => {
+  // Resolves to whether the write worked, for a caller that acts on a successful copy (CopyButton's onCopied).
+  const copy = async (text: string): Promise<boolean> => {
     const ok = await copyAsync(text);
     if (!ok) toast.error(COPY_FAILED_TOAST);
+    return ok;
   };
 
   return { copied, setCopied, copy, copyAsync };

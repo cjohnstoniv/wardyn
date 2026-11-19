@@ -85,7 +85,7 @@ Migration `0152_runner_pools` adds the runner pool catalogue: pools, their membe
 | `runners.enabled` true | Identity and route authorization checks still apply. |
 | Generic `PUT /site-config` | Retains stored runner settings; cannot enable or disable runners. |
 
-An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` is HTTPS (`http` is accepted only for localhost) and `WARDYN_CONTROL_PLANE_URL` is HTTPS with no localhost exception, because the relay serves only on the internal TLS listener. Turning off is never refused. Off stops new registrations, claims and stream connections and ends every live runner session the replica that served the request holds. A session another replica holds stays open until the runner reconnects, but every sandbox create on a runner re-reads the switch first, so it gets no new work. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
+An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. The same route takes `{"require_managed_device": true}`, which refuses a new local run on a `personal`-trust runner (`runner_trust_required`); it is off by default and a field left out is left as stored ([Device posture](operations/hybrid-laptops.md#device-posture)). Turning on is refused until `WARDYN_RUNNER_ORG_URL` is HTTPS (`http` is accepted only for localhost) and `WARDYN_CONTROL_PLANE_URL` is HTTPS with no localhost exception, because the relay serves only on the internal TLS listener. Turning off is never refused. Off stops new registrations, claims and stream connections and ends every live runner session the replica that served the request holds. A session another replica holds stays open until the runner reconnects, but every sandbox create on a runner re-reads the switch first, so it gets no new work. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
 
 ## Runner inventory and unused tokens
 
@@ -96,7 +96,7 @@ An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1
 | `GET /api/v1/me/runners`, `GET /api/v1/me/runners/{id}` | the owner | The caller's own runners only; another person's runner and an absent id answer alike. An unclaimed runner's fingerprint is abbreviated here, so it cannot be copied from the console into the claim. |
 | `GET /api/v1/runners/tokens?owner=&limit=&offset=` | admin or `security_admin` | Unused, unexpired registration tokens, optionally one person's. No token value is ever returned. |
 | `DELETE /api/v1/runners/tokens/{id}` | admin or `security_admin` | The token stops being redeemable at once; audited as `runner.token.revoke`. Minting stays admin only. |
-| `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool}`, readable while the runner routes refuse. |
+| `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool, "require_managed_device": bool}`, both always present (`false` included), readable while the runner routes refuse. |
 | `PUT /api/v1/me/runners/{id}` | the owner | `{"limits": {...}}` declares the runner's limits; see [Runner limits](#runner-limits). |
 | `GET /api/v1/me/runners/{id}/folders?path=&survey=1` | the owner | A folder-only runner's folders under `path` (its roots when empty): names, file counts and sizes; `survey=1` adds what a run would get. See [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox). |
 | `GET /api/v1/me/runner-pools` | any signed-in person | The pools you may use (for an admin, without the oversight rows); accepts `run_type`. |
@@ -244,7 +244,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 |---|---|
 | Runner binary | `--runnerd <file>`, else a `wardyn-runnerd` beside the CLI or on `PATH`, else a download. Each is checked against the SHA-256 this CLI pins, and refused on a mismatch |
 | Package runner | The macOS package's `/usr/local/wardyn/bin/wardyn-runnerd` needs no hash while it and its directory are root-owned and nobody else can write them |
-| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the saved one, `/healthz.cli_artifact_base`, else the release |
+| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the macOS managed preference `ArtifactBase`, the saved one, `/healthz.cli_artifact_base`, else the release |
 | Registration token | Minted only when this computer has no runner identity: single use, 1 hour, yours only. It reaches `wardyn-runnerd setup --token-file /dev/fd/3` over a pipe: never on disk, in an argument or in an environment variable |
 | Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN`, `WARDYN_ADMIN_TOKEN` and `ANTHROPIC_API_KEY` |
 | Claim and pool | The CLI claims the runner with your own credential, then applies `--pool` and `--default` |
@@ -256,11 +256,12 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - On Windows it refuses: run it inside your WSL2 distribution.
 - A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
 - To upgrade, see [Upgrading a runner](#upgrading-a-runner).
+- Before the first run, check [the policy's `github_token` grant](#before-the-first-run): on a fresh install it is refused on a person's runner until the delivery policy or the grant changes.
 - Org runners keep the operator's `--token-file` path.
 
 ### `wardyn runner install` and `wardyn runner upgrade`
 
-`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes setup's flags and `--version` (this CLI's own release when left out). On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
+`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes `--version` (this CLI's own release when left out), `--pool`, `--default`, `--name` and `--artifact-base`, but not `--runnerd`. On a computer that already runs a runner it ignores `--pool`, `--default` and `--name` and says so; `wardyn runner upgrade` takes `--version` and `--artifact-base` only. On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
 
 | Step | What it does |
 |---|---|
@@ -283,6 +284,21 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone adds `--log-file` to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it. On a runner already on the current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand.
+
+### Before the first run
+
+The shipped default policy ([`examples/policies/default.json`](../examples/policies/default.json), which the wardynd image sets as `WARDYN_DEFAULT_POLICY`; `demo.json` has the same grant) carries an eligible `github_token` grant. The organisation's credential delivery policy (`local_credential_delivery`) holds no row for `github_token` until an administrator writes one, and a class with no row is refused. A run on a person's own runner is then refused at create with `placement_credential` (`422`), for example:
+
+```
+ProxyConfig.Policy.EligibleGrants[0]: github_token credential is not delivered to a local runner of trust class personal (delivery policy: refuse)
+```
+
+The runner is fine; the run's policy asks for something the organisation does not deliver to it. Either fix lets the run start:
+
+| Fix | Who | How |
+|---|---|---|
+| Deliver the token through the organisation | A security administrator | In *Governance → Runner credentials* (or `PUT /governance/credential-delivery`) set `github_token` to `via_org`. The token stays in the organisation, which uses it through its egress for the run ([the delivery table](operations/hybrid-laptops.md#resident-credentials-and-posture)). A deployment that holds changes for a second person holds this one too |
+| Drop the grant | Whoever owns the policy | Remove the `github_token` entry from `eligible_grants` in the policy the run uses. For the deployment default, edit the file `WARDYN_DEFAULT_POLICY` names and restart `wardynd`, which reads it once at boot. The run then has no GitHub token |
 
 ## The runner's settings file
 
@@ -335,7 +351,9 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
-| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` | `drive_root` |
+| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` (all [folder-share settings](operations/hybrid-laptops.md#sharing-a-folder-the-settings)) | `drive_root` |
+| `guest-agent` | macOS VM runners with a base only: how the last tools update signed the guest agent. FAIL when it went in signed ad hoc, which loses Full Disk Access at each tools update, with why each signer failed; OK when this Mac's cert signed it. Whether the base trusts the cert is shown for information only | the next tools update; `tools-update.log` |
+| `folder-shares` | macOS VM runners with a base only: whether a folder can be shared into a run. OK when a drive root is set and the base last read Full Disk Access for the guest agent as allowed; otherwise a skip naming the missing setting (no drive root, Full Disk Access refused or not read, or, for a guest agent signed ad hoc, a tools update since the reading). A guest agent signed on this Mac keeps the reading through an update, so it is shown as the base last read it. It cannot read the organisation's workspace roots | `drive_root`; `macos-vm edit-base` |
 | `service` | The installed service, and on Linux whether systemd reports it running | |
 | `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
@@ -410,5 +428,5 @@ The console shows a runner that registered but has not connected as Offline. Rea
 | `runner still offline, retrying` | Once a minute: `offline_for`, `last_error` and `last_error_age`, the last attempt's error and how long ago it ended, and `waiting_on`, the step the current attempt is on (`dial`, `authenticate`, `org_pending`, `inventory`, `replay`, `before_ready` or `retry_wait`). |
 | `the trusted CA file …` | A certificate in `--trusted-ca-file` that expired or is not a CA, or a file another account can change. The file is still used. |
 
-- Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it.
+- Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it. A proxy image that cannot be pulled is the exception, whether it is missing, the registry refuses access, or the network fails: the runner stays up and retries (about 15 s, 30 s, 1 minute, 2 minutes, then every 5 minutes), and `wardyn-runnerd doctor` shows the next try.
 

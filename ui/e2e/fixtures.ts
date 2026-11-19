@@ -48,7 +48,9 @@ export const MEMBER_TOKEN = personToken("e2e-member");
 const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
 const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
 const OPEN_EGRESS_TOKEN = personToken("e2e-open-egress");
+const UNIT_ADMIN_TOKEN = personToken("e2e-unit-admin");
 export const MEMBER_PRINCIPAL = "e2e-member";
+export const UNIT_ADMIN_PRINCIPAL = "e2e-unit-admin";
 export const OPEN_EGRESS_PRINCIPAL = "e2e-open-egress";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -243,6 +245,16 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
     window.history.pushState({}, "", p);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, path);
+}
+
+// Every box in the dialog that scrolls or clips sideways, the dialog itself included; empty when none does. A text
+// field scrolling its own text is how a field works, so inputs are not counted.
+export async function sidewaysScroll(dialog: Locator): Promise<string[]> {
+  return dialog.evaluate((d) =>
+    [d, ...d.querySelectorAll("*")]
+      .filter((e) => (e === d || getComputedStyle(e).overflowX !== "visible") && !e.matches(".sr-only, input, textarea") && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1)
+      .map((e) => `${e.tagName.toLowerCase()} ${e.scrollWidth}/${e.clientWidth}`),
+  );
 }
 
 // Resolves once `target` has not moved for `frames` animation frames in a row. The shell's banners are lazy
@@ -527,6 +539,21 @@ async function asRealPerson(page: Page, token: string, principal: string, role: 
 
 export async function asRealMember(page: Page): Promise<void> {
   await asRealPerson(page, MEMBER_TOKEN, MEMBER_PRINCIPAL, "user");
+}
+
+// A role `user` who holds no grant at seed time: a spec makes them a unit admin with grantUnitAdmin first.
+export async function asRealUnitAdmin(page: Page): Promise<void> {
+  await asRealPerson(page, UNIT_ADMIN_TOKEN, UNIT_ADMIN_PRINCIPAL, "user");
+}
+
+// Makes e2e-unit-admin a unit admin of the profile `unitId`, with the admin token. The second-person switch is
+// off on this harness, so the grant applies at once (201) rather than being held.
+export async function grantUnitAdmin(page: Pick<Page, "request">, unitId: string): Promise<void> {
+  const response = await page.request.post(`/api/v1/governance/units/${unitId}/admins`, {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    data: { subject_type: "user", subject: UNIT_ADMIN_PRINCIPAL },
+  });
+  expect(response.status(), await response.text()).toBe(201);
 }
 
 export async function asRealSecurityAdmin(page: Page): Promise<void> {

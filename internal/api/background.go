@@ -38,6 +38,20 @@ func (s *Server) GoBackground(fn func()) {
 	s.goBackground(fn)
 }
 
+// sshGoTracked is sshGo, with its panic containment, for an SSH gateway
+// goroutine that may write an audit row: a connection, and each door that
+// runs a bridge. WaitBackground waits for it, so a daemon stop has that row
+// stored, or spooled by the recorder chain, before the pool closes and the
+// process exits. A stop ends each one: handleSSHConn closes the connection,
+// and every bridge ends with its context.
+func (s *Server) sshGoTracked(fn func()) {
+	s.bg.Add(1)
+	sshGo(func() {
+		defer s.bg.Done()
+		fn()
+	})
+}
+
 // backgroundShutdownBudget bounds WaitBackground. killCascadeTimeout
 // (runs_lifecycle.go) is the longest bound most goroutines tracked by
 // goBackground give themselves internally (killTeardownTail's own
@@ -47,13 +61,15 @@ func (s *Server) GoBackground(fn func()) {
 // (signInCaptureReadTimeout) plus killRunCascade (killCascadeTimeout, claim and
 // teardown under one shared bound), so the strict ceiling is
 // supersedeCASAttempts * (signInCaptureReadTimeout + killCascadeTimeout), 105s.
-// This constant is one pass of that sum. It covers the kill because a pass that
-// loses its swap to the launch moving the run forward tears nothing down: it
-// costs a read and one row update, then re-reads, so the teardown runs once, in
-// the pass that wins. A store where every read and every lost swap ran to its
-// full timeout could pass the budget; the goroutine is then abandoned with the
-// WARN below and the run is ended by ReconcileOnBoot or its idle cap. The budget
-// is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
+// This constant is one pass of that sum. The loop checks BaseCtx before every
+// pass and BaseCtx is cancelled before WaitBackground, so a shutdown lets the
+// pass under way finish and starts no further one: the goroutine outlives
+// shutdown by at most one pass, which this budget covers. A pass that loses its
+// swap to the launch moving the run forward tears nothing down, so the retries
+// the shutdown skips are the cheap ones; the run is then ended by its 30-minute
+// idle cap (harnessLoginIdleCap). A single pass whose store calls all ran to their full
+// timeouts can still pass the budget and is abandoned with the WARN below. The
+// budget is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
 // flush must fit the 70s termination grace (TestShutdownGraceCoversTheBudget).
 //
 // finishCreateRunLaunch has no such inner bound: a devcontainer build may take
@@ -62,7 +78,13 @@ func (s *Server) GoBackground(fn func()) {
 // non-terminal is picked up by ReconcileOnBoot's passes (reconcile.go).
 const backgroundShutdownBudget = killCascadeTimeout + killRevokeTimeout + signInCaptureReadTimeout
 
-// WaitBackground blocks until every goroutine started through goBackground has
+// BackgroundShutdownBudget is backgroundShutdownBudget. cmd/wardynd waits for
+// the secret store's clean-ups beside WaitBackground, within this budget, so
+// the termination grace does not grow.
+const BackgroundShutdownBudget = backgroundShutdownBudget
+
+// WaitBackground blocks until every goroutine started through goBackground or
+// sshGoTracked (an SSH connection, a session channel's door, a port forward) has
 // returned, or until backgroundShutdownBudget elapses — whichever comes first.
 // Bounded because this runs on the shutdown path with an operator waiting: a
 // genuinely wedged teardown (a runner call that never returns) must not turn
@@ -83,7 +105,7 @@ func (s *Server) WaitBackground() {
 	case <-done:
 	case <-time.After(budget):
 		slog.Warn("wardynd: shutdown budget hit with background work (a launch, a teardown, output persistence, "+
-			"or a sweeper or run watcher that did not stop on cancel) still running; abandoning it", slog.Duration("budget", budget))
+			"an SSH connection or door, or a sweeper or run watcher that did not stop on cancel) still running; abandoning it", slog.Duration("budget", budget))
 	}
 }
 

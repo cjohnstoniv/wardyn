@@ -137,6 +137,12 @@ export interface UserDrivesSnapshot {
    * grant write answers 422 and no run mounts one; everything here is kept.
    */
   disabled: boolean;
+  /**
+   * The deployment's `storage.user_drive.team_drives` switch, for every reader of
+   * this answer (a security admin's included): off, a drive marked `team` resolves
+   * per person. Absent on a daemon older than the field, which reads as unknown.
+   */
+  team_drives?: boolean;
 }
 
 // pkg/client.MemberDriveAdminItem — one person's drive in GET /drives/member (super admin). The registry's own
@@ -268,6 +274,22 @@ export function teamWritable(d: UserDriveListItem, grants: UserDriveGrant[]): bo
   return teamGrantsKnown(d, grants) && own.every((g) => !!g.members_can_write);
 }
 
+// What the Mode column may say about a team drive: true (Writable), false (Read only) or null
+// (not shown). Writability resolves per allocation, as the server does it: the allocation's
+// writable_override first, then its members_can_write, and never on a drive that is itself read-only.
+// It is not an AND across groups, so one false allocation does not make the drive read-only. The
+// column claims a mode only when the page lists every allocation and every one resolves the same.
+// This is display only; the editor keeps the conservative teamWritable.
+export function teamMode(d: UserDriveListItem, grants: UserDriveGrant[]): boolean | null {
+  if (!d.writable) return false;
+  if (d.grant_count === 0) return true;
+  if (!teamGrantsKnown(d, grants)) return null;
+  const modes = grants.filter((g) => g.drive_id === d.id).map((g) => (g.writable_override ?? true) && !!g.members_can_write);
+  if (modes.every(Boolean)) return true;
+  if (modes.every((m) => !m)) return false;
+  return null;
+}
+
 // Whether the grants page lists every allocation the drive has. The page is cut
 // (at 1000 rows), and then the allocations it leaves out carry write bits the
 // console cannot see: an editor must not seed or send a write bit for them.
@@ -351,6 +373,8 @@ export const drives = {
       host_roots_configured: !!body.host_roots_configured,
       runner_target: body.runner_target ?? "",
       disabled: !!body.disabled,
+      // Carried as sent: absent (an older daemon) is "unknown", not off.
+      team_drives: typeof body.team_drives === "boolean" ? body.team_drives : undefined,
     };
   },
 
@@ -358,8 +382,10 @@ export const drives = {
   // reach the caller as an HttpError carrying the server's own message: the
   // host root outside the roots, the denied prefix, the backend/runner
   // mismatch, `hash` on a share, and a zero size on a k8s_pvc claim.
-  async createDrive(input: UserDriveInput): Promise<UserDrive> {
-    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
+  // `person` on this and the drive and allocation writes below: a later step of the editor's save names the person
+  // the save began under (core.ts WfetchInit.asPerson).
+  async createDrive(input: UserDriveInput, person?: string): Promise<UserDrive> {
+    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", asPerson: person ?? true, body: JSON.stringify(input) }));
   },
 
   // PUT /api/v1/drives/{id} -> 200. Rename included: ON DELETE RESTRICT makes
@@ -369,9 +395,9 @@ export const drives = {
   // on a drive with allocations answers 409 (driveRehomeGuard) UNLESS
   // `confirmRehome` is set, which re-sends the SAME body with `?confirm=rehome`
   // — the one query param the guard reads (user_drives.go's driveRehomeConfirm).
-  async updateDrive(id: string, input: UserDriveInput, confirmRehome = false): Promise<UserDrive> {
+  async updateDrive(id: string, input: UserDriveInput, confirmRehome = false, person?: string): Promise<UserDrive> {
     const qs = confirmRehome ? "?confirm=rehome" : "";
-    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) });
+    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: person ?? true, body: JSON.stringify(input) });
     return asJson<UserDrive>(res);
   },
 
@@ -417,16 +443,16 @@ export const drives = {
   // allocation and 200 when an existing one was REPOINTED (the store returns
   // the existing row's id on conflict). The console renders ALLOC_REPLACED on
   // the 200, so the status is surfaced rather than swallowed.
-  async upsertGrant(input: UserDriveGrantInput): Promise<{ grant: UserDriveGrant; replaced: boolean }> {
-    const res = await wfetch("/drives/grants", { method: "POST", asPerson: true, body: JSON.stringify(input) });
+  async upsertGrant(input: UserDriveGrantInput, person?: string): Promise<{ grant: UserDriveGrant; replaced: boolean }> {
+    const res = await wfetch("/drives/grants", { method: "POST", asPerson: person ?? true, body: JSON.stringify(input) });
     const replaced = res.status === 200;
     return { grant: await asJson<UserDriveGrant>(res), replaced };
   },
 
   // DELETE /api/v1/drives/grants/{id} -> 204. Deletes no data: the directory
   // stays until the admin reclaims it.
-  async deleteGrant(id: string): Promise<void> {
-    const res = await wfetch(`/drives/grants/${encodeURIComponent(id)}`, { method: "DELETE" });
+  async deleteGrant(id: string, person?: string): Promise<void> {
+    const res = await wfetch(`/drives/grants/${encodeURIComponent(id)}`, { method: "DELETE", asPerson: person });
     if (!res.ok && res.status !== 404) throw new HttpError(res.status, await errText(res));
   },
 

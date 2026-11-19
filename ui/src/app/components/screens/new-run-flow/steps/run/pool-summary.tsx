@@ -87,7 +87,7 @@ function Allowance({ allowance }: { allowance: PersonAllowance }) {
   );
 }
 
-export function PoolSummary({ pool, runType, allowance }: { pool: RunnerPoolCatalogueEntry; runType: RunnerPoolRunType | undefined; allowance: PersonAllowance | undefined }) {
+export function PoolSummary({ pool, runType, allowance, unitName }: { pool: RunnerPoolCatalogueEntry; runType: RunnerPoolRunType | undefined; allowance: PersonAllowance | undefined; unitName?: string }) {
   const { slots } = pool;
   const limits = limitsFor(pool, runType);
   const cells = limits ? limitCells(limits, allowance) : [];
@@ -113,7 +113,7 @@ export function PoolSummary({ pool, runType, allowance }: { pool: RunnerPoolCata
         <div>
           <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-[13px]">
             <span className={LABEL}>{NR_RUN.LIMITS_LABEL}</span>
-            <Sub>{limitsNote(allowance)}</Sub>
+            <Sub>{limitsNote(allowance, unitName)}</Sub>
           </div>
           <dl className="grid grid-cols-2 min-[521px]:grid-cols-4">
             {cells.map((c) => (

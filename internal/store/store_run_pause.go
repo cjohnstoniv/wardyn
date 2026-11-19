@@ -39,17 +39,18 @@ type PauseCandidate struct {
 	// WaitingRequest: one of those counts toward a waiting pause
 	// (waitingHoldSQL).
 	WaitingRequest bool
-	// RequestDecidedSincePause: a request of the run was decided after the run
-	// was paused (false for a run that is not paused). It is how the sweep tells
-	// an idle pause whose closing request was missed from one that simply has
-	// no request open.
+	// RequestDecidedSincePause: a request of the run was decided, or a takeover
+	// of it handed back, after the run was paused (false for a run that is not
+	// paused). It is how the sweep tells an idle pause whose closing request was
+	// missed from one that simply has no request open.
 	RequestDecidedSincePause bool
 }
 
 // decidedSincePauseSQL is TRUE when agent_runs (the outer query's row) is
-// paused and has a request decided after paused_at.
+// paused and has a request decided, or a takeover handed back, after paused_at.
 const decidedSincePauseSQL = `EXISTS (SELECT 1 FROM approvals a WHERE a.run_id = agent_runs.id
-		  AND agent_runs.paused_at IS NOT NULL AND a.decided_at > agent_runs.paused_at)`
+		  AND agent_runs.paused_at IS NOT NULL
+		  AND (a.decided_at > agent_runs.paused_at OR a.handed_back_at > agent_runs.paused_at))`
 
 // RunPauser is the pause surface. Optional like RunLeaser and for the same
 // reason; the api layer runs no pause sweep, and stamps no presence, when a
@@ -81,11 +82,14 @@ type RunPauser interface {
 
 var _ RunPauser = PG{}
 
-// PauseSettle is one run a pause compensation may have left with its agent
-// container not matching its pause mark (migration 0132).
+// PauseSettle is one run a pause, or its compensation, may have left with its
+// agent container not matching its pause mark (migration 0132).
 type PauseSettle struct {
 	RunID uuid.UUID
 	DueAt time.Time
+	// Last is true once DueAt is the listing's lookFor or more in the past (the
+	// database's clock): the settle that finds it so is the record's last.
+	Last bool
 }
 
 // PauseSettler is the durable record of the runs whose container may not match
@@ -95,8 +99,17 @@ type PauseSettler interface {
 	// database's clock), moving a due_at already recorded only forward, and
 	// returns the due_at it holds.
 	NotePauseSettle(ctx context.Context, id uuid.UUID, after time.Duration) (time.Time, error)
-	// DuePauseSettles lists the runs whose settle is due.
-	DuePauseSettles(ctx context.Context) ([]PauseSettle, error)
+	// NotePauseIntent records run id as owing a settle from after on, as a
+	// pause does before its freeze, unless a record is already held: that one
+	// is left as it is. It returns the due_at the record holds and whether this
+	// call wrote it.
+	NotePauseIntent(ctx context.Context, id uuid.UUID, after time.Duration) (due time.Time, wrote bool, err error)
+	// PauseSettleFor returns run id's due_at, or the zero time when no settle
+	// is recorded for it.
+	PauseSettleFor(ctx context.Context, id uuid.UUID) (time.Time, error)
+	// DuePauseSettles lists the runs whose settle is due, each with Last set
+	// once its due_at is lookFor or more in the past.
+	DuePauseSettles(ctx context.Context, lookFor time.Duration) ([]PauseSettle, error)
 	// ClearPauseSettle deletes run id's record only while it still reads due,
 	// so a later note survives.
 	ClearPauseSettle(ctx context.Context, id uuid.UUID, due time.Time) error
@@ -117,15 +130,52 @@ func (s PG) NotePauseSettle(ctx context.Context, id uuid.UUID, after time.Durati
 	return due, nil
 }
 
+// NotePauseIntent — see PauseSettler. A record another writer commits between
+// the statement's snapshot and its insert leaves no row to return
+// (pgx.ErrNoRows): an error, and the caller's next try reads that record.
+func (s PG) NotePauseIntent(ctx context.Context, id uuid.UUID, after time.Duration) (time.Time, bool, error) {
+	var (
+		due   time.Time
+		wrote bool
+	)
+	err := s.Pool.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO run_pause_settles (run_id, due_at) VALUES ($1, now() + make_interval(secs => $2))
+			ON CONFLICT (run_id) DO NOTHING
+			RETURNING due_at)
+		SELECT due_at, true FROM ins
+		UNION ALL
+		SELECT due_at, false FROM run_pause_settles WHERE run_id = $1 AND NOT EXISTS (SELECT 1 FROM ins)`,
+		id, after.Seconds()).Scan(&due, &wrote)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("store: note a pause intent: %w", err)
+	}
+	return due, wrote, nil
+}
+
+// PauseSettleFor — see PauseSettler.
+func (s PG) PauseSettleFor(ctx context.Context, id uuid.UUID) (time.Time, error) {
+	var due time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT due_at FROM run_pause_settles WHERE run_id = $1`, id).Scan(&due)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("store: read a pause settle: %w", err)
+	}
+	return due, nil
+}
+
 // DuePauseSettles — see PauseSettler.
-func (s PG) DuePauseSettles(ctx context.Context) ([]PauseSettle, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT run_id, due_at FROM run_pause_settles WHERE due_at <= now() ORDER BY due_at`)
+func (s PG) DuePauseSettles(ctx context.Context, lookFor time.Duration) ([]PauseSettle, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT run_id, due_at, due_at + make_interval(secs => $1) <= now()
+		FROM run_pause_settles WHERE due_at <= now() ORDER BY due_at`, lookFor.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("store: list due pause settles: %w", err)
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PauseSettle, error) {
 		var p PauseSettle
-		return p, r.Scan(&p.RunID, &p.DueAt)
+		return p, r.Scan(&p.RunID, &p.DueAt, &p.Last)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list due pause settles: %w", err)
@@ -198,7 +248,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 	if reason != types.PauseWaiting && reason != types.PauseIdle {
 		return false, fmt.Errorf("store: mark run paused: unknown reason %q", reason)
 	}
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET paused_at=now(), paused_reason=$2
 		WHERE id=$1 AND state=$3 AND lost_at IS NULL AND paused_at IS NULL
 		  AND active_at IS NOT DISTINCT FROM $4
@@ -213,7 +263,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 
 // ClearRunPaused — see RunPauser.
 func (s PG) ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET paused_at=NULL, paused_reason='', active_at=now()
 		WHERE id=$1 AND paused_at IS NOT NULL`, id)
 	if err != nil {

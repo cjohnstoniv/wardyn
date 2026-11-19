@@ -35,6 +35,9 @@ const (
 	queueStartFailedHint    = "This run left the queue, but could not be started. Start it again."
 	queueStartRefusedToken  = "queue_start_refused"
 	queueStartFailedLogName = "wardynd: queue start"
+	// queueStartClockUnreadable is the run.queue.start failure row's reason when the cap check could not read
+	// the database's clock and the requeue that answer asks for could not be written either.
+	queueStartClockUnreadable = "database_clock_unreadable"
 )
 
 // promotedStartCtxKey marks a request context as the queue's start replaying a promoted run. Its value
@@ -99,6 +102,12 @@ type queueEnd struct {
 	hint  string
 	extra map[string]any
 	wait  runnerpool.WaitReason
+	// wallPreset is what the run's wall preset had become, when its change ended the run; it is kept on
+	// the run (types.WallPresetOnRun.Changed).
+	wallPreset *types.WallPresetChange
+	// quiet requeues (wait) without kicking the queue: the run is promoted again on the queue's own sweep
+	// tick, so a cause that persists (an unreadable database clock) is retried at that pace, not in a loop.
+	quiet bool
 }
 
 // queuedStart is one promoted run's start: the run and its queue row, the owner's identity, and the
@@ -172,8 +181,8 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
-	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits, StrictPins: st.launch.StrictPins}
+	st.ctx = withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
@@ -213,9 +222,13 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end != nil {
 		return end
 	}
-	if end := s.queuePolicyUnchanged(st, req); end != nil {
+	if end := s.queueScheduleDoor(st, ceiling); end != nil {
 		return end
 	}
+	if end := s.queuePolicyUnchanged(st, req, nil); end != nil {
+		return end
+	}
+	s.queueRaceAt(queueRaceStartAfterPrecheck)
 	reqCC, refusal := runRequestEnums(req)
 	if refusal.write(s, st.cw, st.r) {
 		return st.refusalEnd()
@@ -238,6 +251,11 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 		}
 	}
 	st.f = f
+	// The fold read the wall preset again: it starts with the copy it froze only if that is the one the
+	// run was reviewed under, checked before anything is minted or written.
+	if end := s.queuePolicyUnchanged(st, req, f.source.wallPreset); end != nil {
+		return end
+	}
 	if end := s.queueNarrowOnly(st); end != nil {
 		return end
 	}
@@ -289,6 +307,21 @@ func (s *Server) foldRaisedDefault(st *queuedStart, req createRunRequest, ceilin
 	}
 	st.cw, st.classRaised = cw, true
 	return f, raised, true, nil
+}
+
+// queuedLifetimeEnd is the end of a promoted run whose cap passed while it waited, judged on the database's
+// clock (the cap counts from admitted_at, a database time); nil when it may start. A failed read is not an end:
+// the run goes back to its queue with the wait every queued run carries until a slot frees (WaitAtCapacity), and
+// the queue's next sweep tick, not a kick, promotes it again (quiet), so a clock that stays unreadable is retried
+// at that pace. Only if that requeue cannot be written either does endPromoted fail the run, with hint, and its
+// failure row then names the clock read (queueStartClockUnreadable).
+func (s *Server) queuedLifetimeEnd(ctx context.Context, anchor types.AgentRun) *queueEnd {
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return &queueEnd{hint: queueStartFailedHint, wait: runnerpool.WaitAtCapacity, quiet: true,
+			extra: map[string]any{"reason": queueStartClockUnreadable}}
+	}
+	return lifetimePassedEnd(anchor, now)
 }
 
 // signInEnd is end, or for a scheduled run whose start found its owner's model sign-in refused (the
@@ -406,17 +439,42 @@ func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
 	return ceiling.Unit.ID == *recorded
 }
 
-// queuePolicyUnchanged is step 5 (Q7-A): the stored policy or launch preset the run was reviewed under
-// is the one it would start under. An edit fails the run, so nothing starts that nobody reviewed.
-func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest) *queueEnd {
-	now, err := s.queuePolicyRef(st.ctx, req)
+// queuePolicyUnchanged is step 5 (Q7-A): the stored policy, launch preset or wall preset the run was
+// reviewed under is the one it would start under. An edit fails the run, so nothing starts that nobody
+// reviewed. frozen is the wall preset the start's fold froze (queuePolicyRef), nil before the fold, when
+// a preset the owner can no longer read counts as gone.
+func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest, frozen *types.WallPresetOnRun) *queueEnd {
+	now, err := s.queuePolicyRef(st.ctx, st.r, req, frozen)
 	if err != nil {
 		return &queueEnd{hint: queueStartFailedHint}
 	}
 	if !jsonEqual(now, st.entry.PolicyRef) {
-		return &queueEnd{token: string(types.RunEndQueuePolicyChanged), hint: types.RunEndQueuePolicyChanged.Sentence()}
+		end := &queueEnd{token: string(types.RunEndQueuePolicyChanged), hint: types.RunEndQueuePolicyChanged.Sentence()}
+		if queued, c := queueWallPresetChange(st.entry.PolicyRef, now); c != nil {
+			end.wallPreset = c
+			end.extra = map[string]any{"wall_preset": map[string]any{"queued_version": queued, "version": c.Version, "gone": c.Gone}}
+		}
+		return end
 	}
 	return nil
+}
+
+// queueWallPresetChange is what the run's wall preset became between the reference recorded at enqueue
+// and the one read now, with the version it was queued under; nil when that part did not change.
+func queueWallPresetChange(recorded, now json.RawMessage) (queued int, change *types.WallPresetChange) {
+	type part struct {
+		ID      string `json:"wall_preset"`
+		Version int    `json:"wall_preset_version"`
+		Gone    bool   `json:"wall_preset_gone"`
+	}
+	var was, is part
+	if json.Unmarshal(recorded, &was) != nil || json.Unmarshal(now, &is) != nil || was.ID == "" || was == is {
+		return 0, nil
+	}
+	if is.Gone || is.ID != was.ID {
+		return was.Version, &types.WallPresetChange{Gone: true}
+	}
+	return was.Version, &types.WallPresetChange{Version: is.Version}
 }
 
 func jsonEqual(a, b json.RawMessage) bool {
@@ -460,24 +518,41 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	anchor := run
 	anchor.CreatedAt = *run.AdmittedAt
 	s.captureRunLimits(&anchor, ceiling, &f.end)
+	// A run whose cap passed while it waited (a cap set by an elevation that ended, say) ends here,
+	// before anything is minted, rather than starting for the seconds until the sweep kills it.
+	if end := s.queuedLifetimeEnd(st.ctx, anchor); end != nil {
+		return end
+	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(st.ctx, run.ID, runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), internalAudience, run.OperatorOwned)
+	id, err := s.mintRunIdentity(st.ctx, run.ID, st.auth.workload(), runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), run.OperatorOwned)
 	if err != nil {
 		slog.ErrorContext(st.base, queueStartFailedLogName+": mint run identity", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}
 	}
+	imageInput := createDigestInput(req, f.carriedImage) // what this start's fold held to the digest rule, for a revive
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
-		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
+		SPIFFEID: id.SPIFFEID, TokenJTI: id.JTI, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID, RestrictionIDs: anchor.RestrictionIDs,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
+		ImageInput:     &imageInput,
+		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
+		WallPreset:     f.source.wallPreset,
+		Binding:        st.auth.Binding,
 	})
 	switch {
+	case errors.Is(err, store.ErrWorkloadBindingGone):
+		// A custom resource's run whose namespace binding was deleted while it waited never starts.
+		return &queueEnd{token: reasonWorkloadBindingInactive, hint: workloadBindingGoneMsg}
 	case errors.Is(err, store.ErrRunnerAtCapacity):
 		// Every runner the run could start on filled between the promotion and this start.
 		return &queueEnd{token: string(placement.ReasonRunnerAtCapacity), hint: runnerpool.RunnerAtCapacityMsg(f.place.pool.Name)}
+	case errors.Is(err, store.ErrRunTasksErased):
+		// The owner's run_tasks erasure marked the run after its promotion and this start holds the erased
+		// task: it ends with the reason that erasure gives the runs it cancels (eraseRunTasks).
+		return &queueEnd{token: "person_erased", hint: queueStartFailedHint}
 	case err != nil:
 		slog.ErrorContext(st.base, queueStartFailedLogName+": write start columns", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}
@@ -549,13 +624,22 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 // failure is audited and the metric counted. The slot it held frees, and casRunState kicks the queue.
 func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 	run := st.run
-	if end.wait != "" && s.requeuePromoted(st, end.wait) {
+	if end.wait != "" && s.requeuePromoted(st, end.wait, !end.quiet) {
 		return
 	}
 	if end.token != "" {
 		if qs, ok := s.queueStore(); ok {
 			if err := qs.SetPromotedStatusDetail(st.base, run.ID, statusDetailQueuePrefix+end.token); err != nil {
 				slog.WarnContext(st.base, queueStartFailedLogName+": record end reason", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			}
+		}
+	}
+	if end.wallPreset != nil {
+		if ws, ok := s.cfg.Store.(interface {
+			SetRunWallPresetChange(ctx context.Context, id uuid.UUID, c types.WallPresetChange) error
+		}); ok {
+			if err := ws.SetRunWallPresetChange(st.base, run.ID, *end.wallPreset); err != nil {
+				slog.WarnContext(st.base, queueStartFailedLogName+": record the wall preset change", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 			}
 		}
 	}
@@ -566,7 +650,7 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 	for k, v := range end.extra {
 		data[k] = v
 	}
-	if end.token == "" {
+	if data["reason"] == "" { // no end token and no reason of its own in extra
 		data["reason"] = queueStartRefusedToken
 	}
 	s.metrics.queueWait(queueOutcomeRefused, run.AdmittedAt.Sub(st.entry.QueuedAt))
@@ -574,20 +658,27 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 }
 
 // requeuePromoted puts a promoted run back in its queue row as it was promoted (owner, authority,
-// provider, deadline), waiting for reason, and kicks the queue for the slot it freed. false when the run
+// provider, deadline), waiting for reason, and kicks the queue for the slot it freed unless kick is false (the
+// queue's sweep tick then promotes it). false when the run
 // had already moved (a kill won, and wrote its own rows) or the store could not do it; the caller then
-// ends it as before, which a moved run ignores.
-func (s *Server) requeuePromoted(st *queuedStart, reason runnerpool.WaitReason) bool {
+// ends it as before, which a moved run ignores. A run whose pool was deleted since its promotion has no
+// queue to go back to: it is ended runner_pool_removed, as the delete ended the runs it found waiting,
+// and true is returned.
+func (s *Server) requeuePromoted(st *queuedStart, reason runnerpool.WaitReason, kick bool) bool {
 	qs, ok := s.queueStore()
 	if !ok {
 		return false
 	}
 	moved, err := qs.RequeuePromotedRun(st.base, st.entry, statusDetailQueuePrefix+string(reason))
+	if errors.Is(err, store.ErrNotFound) {
+		s.endPromoted(st, &queueEnd{token: string(types.RunEndRunnerPoolRemoved), hint: types.RunEndRunnerPoolRemoved.Sentence()})
+		return true
+	}
 	if err != nil {
 		slog.WarnContext(st.base, queueStartFailedLogName+": return the run to its queue", slog.String("run_id", st.run.ID.String()), slog.Any("err", err))
 		return false
 	}
-	if moved {
+	if moved && kick {
 		s.kickQueue()
 	}
 	return moved

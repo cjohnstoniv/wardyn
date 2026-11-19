@@ -61,12 +61,17 @@ func bedrockRefusalHint(fault string) (string, bool) {
 	if m[2] != "" {
 		what += " " + m[2]
 	}
-	return bedrockRefusalHintLead + what + "). Wardyn did not record AWS's message; the agent's own output, in the " +
-		"run's recording, says what it refused.", true
+	return bedrockRefusalHintLead + what + "). Wardyn did not record AWS's message; the agent's own output may hold AWS's " +
+		"explanation, and so may the run's recording if the run has one.", true
 }
 
 // noteBedrockDataPlaneFault records fault (a class, or "recovered") on the
-// run's failure_hint. Best-effort, like every other hint write.
+// run's failure_hint. Best-effort, like every other hint write. A run that is
+// over (runIsOverNow, on the database's clock) takes it on a write that leaves
+// updated_at, which its tail grace is counted from (runEndedHintSetter), so a
+// late report that carries a fault cannot open that grace again; a store
+// without that write, or a database clock that cannot be read, leaves the hint
+// unwritten.
 func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID, fault string) {
 	setter, ok := s.cfg.Store.(runFailureHintSetter)
 	if !ok {
@@ -97,10 +102,28 @@ func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID,
 		// hint is the watcher having won the race with this row's post.
 		return
 	}
-	if err := setter.SetRunFailureHint(ctx, runID, hint); err != nil {
+	set := setter.SetRunFailureHint
+	over, err := s.runIsOverNow(ctx, run)
+	if err != nil {
+		return // which write leaves the run's tail grace alone cannot be told: the hint waits for the next report
+	}
+	if over {
+		ended, ok := s.cfg.Store.(runEndedHintSetter)
+		if !ok {
+			return
+		}
+		set = ended.SetEndedRunFailureHint
+	}
+	if err := set(ctx, runID, hint); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not persist bedrock data-plane hint",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+}
+
+// runEndedHintSetter writes a run's failure_hint without moving updated_at
+// (store.PG.SetEndedRunFailureHint), for a run that is over.
+type runEndedHintSetter interface {
+	SetEndedRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error
 }
 
 // bedrockFaultHintSet is bedrockFaultHints' values, for "is this hint ours".

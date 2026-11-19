@@ -9,7 +9,10 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
@@ -362,5 +365,77 @@ func TestPG_ADOSharedSweepMarkerSetOnlyAfterTheDelete(t *testing.T) {
 	}
 	if holders, _ := st.Holders(t.Context(), []string{"git-pat-dev-azure-com"}); len(holders) != 0 {
 		t.Errorf("the credential survived the retried sweep: %v", holders)
+	}
+}
+
+// TestPG_ADOSharedSweep_TwoFirstBootsKeepATokenSavedBetween: two replicas start
+// together for the first time. One reads the marker pending and is held there
+// while the other runs. A person saves their own Server token once a boot has
+// finished its sweep, as they may as soon as it serves, and the held boot, let
+// go, must not delete it.
+func TestPG_ADOSharedSweep_TwoFirstBootsKeepATokenSavedBetween(t *testing.T) {
+	pool := envelopeDB(t)
+	st, err := buildSecretStore(t.Context(), pool, mustAgeIdentity(t).String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const alice, name = "alice@example.com", "git-pat-tfs-corp-example"
+	if err := st.For("").Put(t.Context(), name, []byte("synthetic-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo)
+	var taken atomic.Bool
+	afterADOSweepPendingRead = func() {
+		if taken.CompareAndSwap(false, true) {
+			close(held)
+			<-release
+		}
+	}
+	t.Cleanup(func() { afterADOSweepPendingRead = func() {} })
+	boot := func() <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			done <- sweepRetiredADOSharedCredentials(t.Context(), pool, st, adoRetireSite(), &capturingRecorder{})
+		}()
+		return done
+	}
+	saveOwn := func() {
+		t.Helper()
+		if err := st.For(alice).Put(t.Context(), name, []byte("alices-own-token-value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait := func(done <-chan error) {
+		t.Helper()
+		if err := <-done; err != nil {
+			t.Fatalf("boot sweep: %v", err)
+		}
+	}
+
+	first := boot()
+	<-held
+	second := boot()
+	select {
+	case err := <-second: // the second boot ran past the held one and serves
+		if err != nil {
+			t.Fatalf("boot sweep: %v", err)
+		}
+		saveOwn()
+		letGo()
+		wait(first)
+	case <-time.After(3 * time.Second): // the second boot waits for the held one
+		letGo()
+		wait(first)
+		saveOwn()
+		wait(second)
+	}
+	holders, err := st.Holders(t.Context(), []string{name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(holders[name], []string{alice}) {
+		t.Fatalf("after both first boots %s is held by %q, want only alice's own token, saved after a boot finished its sweep", name, holders[name])
 	}
 }

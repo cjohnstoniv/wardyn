@@ -14,8 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -52,6 +54,7 @@ type metrics struct {
 	runs         map[types.RunState]int64 // runs that reached a terminal state
 	approvals    map[string]int64         // "approved" / "denied"
 	egressDenies int64
+	modelTok     map[[2]string]int64 // {vendor, direction} -> tokens (metrics_model_usage.go)
 	mints        int64
 	launchSum    float64 // seconds, run creation -> RUNNING
 	launchCount  int64
@@ -69,6 +72,8 @@ type metrics struct {
 	// sshRefused counts SSH gateway connections closed at a connection bound,
 	// by the bound's name (sshConnLimits.refused).
 	sshRefused map[string]int64
+	// sshLimits is the running SSH gateway's connection bounds, kept so a test can read its accounting.
+	sshLimits atomic.Pointer[sshConnLimits]
 	// deviceIngestSuppressed is authFailedSuppressed's twin for
 	// device.audit.ingest: a refusal whose row was folded into its device's
 	// streak or dropped by the per-device bucket (device_audit_bounds.go).
@@ -123,7 +128,7 @@ type metrics struct {
 	// credentialReauthOutcomes counts each mid-run credential re-auth WORKFLOW's
 	// outcome: requested when a lapsed credential opens a hold,
 	// resolved when a sign-in answers it, and expired/cancelled when the row was
-	// aged out or the run ended under it. timeout is the one the operator
+	// aged out or ended by a provider write, or the run ended under it. timeout is the one the operator
 	// actually tunes on — it means the sandbox's SDK was told to fail because
 	// nobody signed in inside WARDYN_CREDENTIAL_REAUTH_TIMEOUT, and a series that
 	// is mostly timeouts is a deployment whose people are not seeing the request.
@@ -133,8 +138,8 @@ type metrics struct {
 	//
 	// Every label is counted at its own transition, which is the whole
 	// correction: requested at the raise, resolved at the resolution, expired
-	// where the sweeper ages a row out, cancelled where a terminal run cancels
-	// one, timeout where the daemon ingests the sidecar's decision row. The
+	// where the sweeper ages a row out or a provider write's end moves one, cancelled
+	// where a terminal run cancels one, timeout where the daemon ingests the sidecar's decision row. The
 	// first shape bumped expired/cancelled at a later RESOLVE that happened to
 	// meet a terminal row, which counts retries rather than outcomes (with the
 	// measured ~30 s cadence, dozens per row) and never fired at all once the
@@ -468,14 +473,15 @@ func (m *metrics) write(w io.Writer) {
 	// change (the filed alternative in M2-canon-sheet.md §2/§6b).
 	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny (proxy decision ingest). Unlabeled: does not break down by reason.\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
+	m.writeModelTokens(w)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) "+
 		"was dropped by a rate limiter: the shared one (about 1 row/sec) or, for refusals naming a registered SSH key, that key's own bucket. This series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
-	fmt.Fprint(w, "# HELP wardyn_ssh_connections_refused_total SSH gateway connections closed at a connection bound, by bound: handshake (all handshakes in progress), source (one source address's share of them) or established (authenticated connections).\n"+
+	fmt.Fprint(w, "# HELP wardyn_ssh_connections_refused_total SSH gateway connections closed at a connection bound, by bound: handshake (all handshakes in progress), source (one source address's share of them), established (authenticated connections) or principal (one person's share of those).\n"+
 		"# TYPE wardyn_ssh_connections_refused_total counter\n")
-	for _, bound := range []string{sshBoundHandshake, sshBoundSource, sshBoundEstablished} {
+	for _, bound := range []string{sshBoundHandshake, sshBoundSource, sshBoundEstablished, sshBoundPrincipal} {
 		fmt.Fprintf(w, "wardyn_ssh_connections_refused_total{bound=%q} %d\n", bound, m.sshRefused[bound])
 	}
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
@@ -518,13 +524,21 @@ func (m *metrics) write(w io.Writer) {
 // (healthz.go); a buffer is what makes that all-or-nothing true of a panic too.
 // One small allocation per scrape, on a body of a few KB.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	body := s.MetricsText(r.Context())
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+// MetricsText is the whole /metrics body, composed as the scrape composes it.
+// cmd/wardynd's OTLP metrics push sends this same body, so a scrape and a push
+// read one set of counters.
+func (s *Server) MetricsText(ctx context.Context) []byte {
 	var body bytes.Buffer
 	s.metrics.write(&body)
-	s.writeHealthGauges(r, &body)
-	s.writeFleetGauges(r, &body)
-	s.writeQueueGauges(r, &body)
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	_, _ = w.Write(body.Bytes())
+	s.writeHealthGauges(ctx, &body)
+	s.writeFleetGauges(ctx, &body)
+	s.writeQueueGauges(ctx, &body)
+	return body.Bytes()
 }
 
 // writeHealthGauges appends the two LIVE gauges — sampled at scrape time rather
@@ -539,13 +553,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // disk. A spool that grows and never drains back to 0 is the fallback doing
 // its job while the drain loop is not doing its own — invisible until now
 // outside a log line.
-func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
+func (s *Server) writeHealthGauges(ctx context.Context, w io.Writer) {
 	// ONE bounded context for every store read this scrape makes. A scrape must
 	// answer or fail; it must never hang, and a store that accepts a PING while
 	// stalling a query is exactly the asymmetry wardyn_auth_store_errors_total
 	// exists to describe — so the ground-truth read below gets the same deadline
 	// the ping does rather than the caller's unbounded request context.
-	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
 	defer cancel()
 	// Nil Store (tests, and only tests) matches /readyz: nothing to be down.
 	up := 1
@@ -564,13 +578,17 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
 	fmt.Fprintf(w, "# HELP wardyn_audit_outcome_refused_total Audit rows refused before the store because their outcome is not success, failure or denied; each is also an ERROR log naming the action.\n"+
 		"# TYPE wardyn_audit_outcome_refused_total counter\nwardyn_audit_outcome_refused_total %d\n", store.RefusedAuditOutcomes())
+	fmt.Fprintf(w, "# HELP wardyn_lock_holds_over_limit_total Holds of a run's lock that ran past their 10 minute limit; each is also a WARN log naming the lock and the functions that took it. The lock is never freed for it.\n"+
+		"# TYPE wardyn_lock_holds_over_limit_total counter\nwardyn_lock_holds_over_limit_total %d\n", db.LongLockHolds())
 	if s.cfg.OrgFederation != nil {
 		fmt.Fprintf(w, "# HELP wardyn_org_federation_lag Local audit rows the organisation has not yet acknowledged (hybrid laptops only).\n"+
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
 	}
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
+	s.writeOTLPPushFailures(w)
 	s.writeAuditDelivery(ctx, w)
+	s.writeAuditCheckpoint(w)
 	writeApprovalNotify(w)
 	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
@@ -690,10 +708,12 @@ func writeApprovalNotify(w io.Writer) {
 }
 
 // RecordCredentialReauthExpired counts credential_reauth rows the approval
-// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, which is the
-// ONLY place this transition happens: by the time a row expires the sidecar
+// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, the only
+// place a row ages out: by the time a row expires the sidecar
 // that held for it gave up hours ago, so no resolve will ever meet it and
-// counting at a resolve would count nothing at all.
+// counting at a resolve would count nothing at all. An AWS sign-in request a
+// provider write ends is counted in endSignInRequest, only by the end that
+// moved the row from PENDING.
 func (s *Server) RecordCredentialReauthExpired(n int) {
 	for i := 0; i < n; i++ {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeExpired)

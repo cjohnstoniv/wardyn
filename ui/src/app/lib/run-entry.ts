@@ -20,6 +20,9 @@ export type RunEntryFacts = { created_by?: string; operator_owned?: boolean };
 /** A run a service identity created: created_by is "service:<name>", and the sponsor enters it (service_attach). */
 export const isServiceRun = (run: RunEntryFacts): boolean => !!run.created_by?.startsWith("service:");
 
+/** A background run (Go: AgentRun.BackgroundOnly): it has no terminal, SSH or interactive door; its desktop is watched, never driven. */
+export const isBackgroundRun = (run: { experience?: string }): boolean => run.experience === "background";
+
 export function mayEnterRun(run: RunEntryFacts, principal: string | null | undefined, operator: boolean): boolean {
   return (!!principal && run.created_by === principal) || (operator && !!run.operator_owned);
 }

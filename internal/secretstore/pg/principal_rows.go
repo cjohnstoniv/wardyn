@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -246,14 +247,17 @@ func (s *Store) commitPrincipalRow(ctx context.Context, before rowSnapshot, afte
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := lockRow(ctx, tx, before.ownedBy, before.name); err != nil {
 		return err
 	}
 	if err := replaceSnapshot(ctx, tx, before, after); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("this row's own commit: %w, so the row may have moved: %w", ErrCommitOutcomeUnknown, err)
+	}
+	return nil
 }
 
 // sealV1ToPrincipal unwraps a v1 row's data key under its KEK and seals it

@@ -27,9 +27,13 @@ type sponsorUIStore struct {
 	sponsorSinceNs             atomic.Int64 // when set, unix nanoseconds it began, compared exactly as the store does
 }
 
-// ServiceStillSponsored answers as the real store does: the sponsor is current, and the sponsorship
-// did not begin after openedAt, so a re-sponsor A to B to A ends a session opened before it.
-func (s *sponsorUIStore) ServiceStillSponsored(_ context.Context, _, _ string, openedAt time.Time) (bool, error) {
+// ServiceStillSponsored answers as the real store does: the sponsor asked is the current one (sponsor-sub,
+// while still holds), and the sponsorship did not begin after openedAt, so a re-sponsor A to B to A ends a
+// session opened before it.
+func (s *sponsorUIStore) ServiceStillSponsored(_ context.Context, _, sponsor string, openedAt time.Time) (bool, error) {
+	if sponsor != "sponsor-sub" {
+		return false, nil
+	}
 	if ns := s.sponsorSinceNs.Load(); ns != 0 {
 		return s.still.Load() && !time.Unix(0, ns).After(openedAt), nil
 	}

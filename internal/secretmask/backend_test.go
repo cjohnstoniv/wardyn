@@ -291,3 +291,32 @@ func TestBackend_ATombstoneReadKeepsTheEvictingReplicasRetirement(t *testing.T) 
 }
 
 func (b *fakeBackend) GlobalGeneration(context.Context) (int64, error) { return 0, nil }
+
+// settlingBackend is a fakeBackend that holds a run value cached before a failed read of the run's fence.
+type settlingBackend struct {
+	fakeBackend
+	settled [][]byte
+}
+
+func (b *settlingBackend) SettleRun(_ uuid.UUID, value []byte) error {
+	b.settled = append(b.settled, bytes.Clone(value))
+	return errBackendDown
+}
+
+// A registration of a value the run already has returns the backend's settlement of it, not nil: a run
+// erased while an earlier registration could not read its fence must not have the value handed out again.
+func TestBackend_AddOfAKnownRunValueReturnsTheBackendsSettlement(t *testing.T) {
+	b := &settlingBackend{}
+	r := NewRegistry()
+	r.SetBackend(b)
+	run, v := uuid.New(), []byte("a-run-value-registered-twice")
+	if err := r.Add(run, v); err != nil || len(b.settled) != 0 {
+		t.Fatalf("the first registration = %v with %d settlements, want nil and none", err, len(b.settled))
+	}
+	if err := r.Add(run, v); !errors.Is(err, errBackendDown) {
+		t.Errorf("the second registration = %v, want the backend's settlement", err)
+	}
+	if len(b.settled) != 1 || !bytes.Equal(b.settled[0], v) {
+		t.Errorf("settlements asked = %q, want the value once", b.settled)
+	}
+}

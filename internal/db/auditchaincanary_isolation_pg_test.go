@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -90,13 +91,15 @@ func TestPG_BootCanaryRunsAtReadCommittedWhateverTheServerDefaultIs(t *testing.T
 
 	for _, q := range []string{
 		`CREATE SEQUENCE iso_witness`,
-		`CREATE FUNCTION iso_witness_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+		// The sequence is named with its schema: audit_append runs with search_path pg_catalog, pg_temp, so a bare name
+		// would not resolve from the trigger it fires.
+		fmt.Sprintf(`CREATE FUNCTION iso_witness_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 		 BEGIN
 		   IF current_setting('transaction_isolation') <> 'read committed' THEN
-		     PERFORM nextval('iso_witness');
+		     PERFORM nextval('%s');
 		   END IF;
 		   RETURN NULL;
-		 END; $$`,
+		 END; $$`, pgx.Identifier{schema, "iso_witness"}.Sanitize()),
 		// AFTER, so the boot check reports it rather than refusing over it.
 		`CREATE TRIGGER audit_events_zz_iso_witness AFTER INSERT ON audit_events
 		 FOR EACH ROW EXECUTE FUNCTION iso_witness_fn()`,

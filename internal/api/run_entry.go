@@ -187,6 +187,19 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 // again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
 // minted through a portal.
 func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
+	// The credential the ticket was minted under (a personal token, or a CLI sign-in's session) is asked after
+	// by id, as a Mac window's is: its revoke, expiry or sign-out ends the terminal though no person-level cut
+	// was written. A store that cannot say refuses.
+	if ta.tokenID != uuid.Nil || ta.cliSessionID != uuid.Nil {
+		gone, err := s.macWindowCredentialGone(ctx, macWindowAuthority{TokenID: ta.tokenID, CLISessionID: ta.cliSessionID})
+		if err != nil {
+			slog.ErrorContext(ctx, "wardynd: attach ticket credential lookup failed", "run_id", runID, "err", err)
+			return time.Time{}, verdictRevocationUnavailable
+		}
+		if gone {
+			return time.Time{}, verdictRevoked
+		}
+	}
 	if s.cfg.SessionRevocations != nil {
 		revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, ta.principal, ta.email, oidc.Issue{At: ta.authorizedAt, Seq: ta.revSeq})
 		if err != nil {

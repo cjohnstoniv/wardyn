@@ -93,6 +93,19 @@ func TestPersonalNamesTheWallsOwner(t *testing.T) {
 	}
 }
 
+func TestWallPresetNamesThePresetAndWhoChoseIt(t *testing.T) {
+	want := Ref{Source: LayerWallPreset, Name: "Sealed", Owner: "ana@example.com", Layer: LayerWallPreset}
+	if r := Layered(WallPreset("Sealed", "ana@example.com")); r == nil || *r != want {
+		t.Fatalf("Layered(WallPreset) = %+v, want %+v", r, want)
+	}
+	if r := WallPreset("", "ana@example.com"); r.Name != "" || r.Owner != "ana@example.com" {
+		t.Fatalf("a personal preset's unnamed ref = %+v", r)
+	}
+	if r := WallPreset("Seal\ned", "ana\nevil"); r.Name != "" || r.Owner != "" || r.Source != LayerWallPreset {
+		t.Fatalf("WallPreset with line breaks kept them: %+v", r)
+	}
+}
+
 func TestRequestRoute(t *testing.T) {
 	tests := []struct {
 		name string
@@ -135,7 +148,7 @@ func TestFields(t *testing.T) {
 }
 
 func TestLayered(t *testing.T) {
-	for _, source := range []string{SourceUnit, SourceDeployment, LayerPersonal} {
+	for _, source := range []string{SourceUnit, SourceDeployment, LayerPersonal, LayerWallPreset} {
 		if got := Layered(&Ref{Source: source}); got.Layer != source {
 			t.Errorf("Layered(%s).Layer = %q, want %q", source, got.Layer, source)
 		}

@@ -5,8 +5,9 @@
 
 // The pool form registers with the shared unsaved guard while it holds edits.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 const getMock = vi.fn();
 const membersMock = vi.fn();
@@ -22,6 +23,9 @@ vi.mock("../../../../lib/api/runner-pools", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { unsavedSnapshot } from "../../../../lib/unsaved-registry";
+import { UnsavedGuardProvider } from "../../../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../../../lib/unsaved-copy";
+import { POOL_FORM } from "../../../wardyn/copy/runner-pools";
 import { setField } from "../../../../../test/set-field";
 import { pool } from "./pool-test-fixtures";
 import { PoolFormScreen } from "./pool-form";
@@ -73,5 +77,37 @@ describe("PoolFormScreen unsaved guard", () => {
     expect(unsavedSnapshot()).not.toBeNull();
     unmount();
     expect(unsavedSnapshot()).toBeNull();
+  });
+});
+
+// The screen's own Back navigated with no question: the shared guard sees link clicks and the browser's Back only.
+describe("PoolFormScreen Back with unsaved edits", () => {
+  function Where() {
+    return <span data-testid="where">{useLocation().pathname}</span>;
+  }
+
+  it("asks first, stays on Keep editing, and leaves on Discard", async () => {
+    const user = userEvent.setup();
+    render(
+      <UnsavedGuardProvider>
+        <MemoryRouter initialEntries={["/account/pools/new"]}>
+          <Routes>
+            <Route path="/account/pools/new" element={<PoolFormScreen scope="mine" />} />
+            <Route path="/account" element={null} />
+          </Routes>
+          <Where />
+        </MemoryRouter>
+      </UnsavedGuardProvider>,
+    );
+    setField(await screen.findByLabelText(/^Name/), "Build box");
+    await user.click(screen.getByRole("button", { name: POOL_FORM.BACK_MINE }));
+    const ask = await screen.findByRole("alertdialog", { name: UNSAVED.TITLE });
+    expect(screen.getByTestId("where")).toHaveTextContent("/account/pools/new");
+    await user.click(within(ask).getByRole("button", { name: UNSAVED.STAY }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/account/pools/new");
+
+    await user.click(screen.getByRole("button", { name: POOL_FORM.BACK_MINE }));
+    await user.click(within(await screen.findByRole("alertdialog", { name: UNSAVED.TITLE })).getByRole("button", { name: UNSAVED.DISCARD }));
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/account$/);
   });
 });

@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -406,7 +407,7 @@ func TestAttachAuthority_TicketDelegationWithdrawn(t *testing.T) {
 		}
 		_, ends[i] = rig.dial(t, nil, tok, readOnly)
 	}
-	if _, err := rig.ast.RevokeDelegate(context.Background(), via.Delegate, time.Now()); err != nil {
+	if _, _, err := rig.ast.RevokeDelegate(context.Background(), via.Delegate, time.Now(), false); err != nil {
 		t.Fatal(err)
 	}
 	wantAuthEnded(t, ends)
@@ -582,4 +583,107 @@ func TestAttachAuthority_ProfileEditEndsAnOpenCookieTerminal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sponsorLookupStore is sponsorUIStore with a sponsorship lookup that fails with err when it is set.
+type sponsorLookupStore struct {
+	*sponsorUIStore
+	err error
+}
+
+func (s *sponsorLookupStore) ServiceStillSponsored(ctx context.Context, name, sponsor string, openedAt time.Time) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.sponsorUIStore.ServiceStillSponsored(ctx, name, sponsor, openedAt)
+}
+
+// TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship: a terminal a sponsor opened on a service
+// identity's run is checked against the sponsorship as the handshake did, from the ticket's own authority
+// time. A sponsorship that ended (replaced, suspended or retired), one that began again after the ticket
+// (A to B to A), and a lookup that fails each end it at the next check; a sponsor who still is one, and a
+// person on their own run whatever the service store says, keep it. The check is the one a ticket's writer
+// socket and observer socket both run.
+func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
+	opened := time.Now().Add(-time.Minute)
+	type sponsorRig struct {
+		h  *uiHarness
+		st *sponsorLookupStore
+	}
+	newRig := func(t *testing.T, serviceRun bool) sponsorRig {
+		h := newUIHarness(t, okBackend())
+		st := &sponsorLookupStore{sponsorUIStore: &sponsorUIStore{uiMemStore: h.store}}
+		st.still.Store(true)
+		h.srv.cfg.Store = st
+		if serviceRun {
+			h.run.CreatedBy = "service:ci-bot"
+			h.store.putRun(h.run)
+		}
+		return sponsorRig{h: h, st: st}
+	}
+	checkAs := func(g sponsorRig, principal string) func(context.Context) error {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+g.h.run.ID.String()+"/attach", nil)
+		ta := ticketActor{actorType: types.ActorHuman, principal: principal, role: oidc.RoleUser, authorizedAt: opened}
+		check := g.h.srv.attachAuthority(r.WithContext(withTicketActor(r.Context(), ta)), g.h.run.ID)
+		if check == nil {
+			t.Fatal("a sponsor's ticket socket has no re-check")
+		}
+		return check
+	}
+	ended := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, errAttachAuthorityEnded) {
+			t.Fatalf("check = %v, want %v", err, errAttachAuthorityEnded)
+		}
+	}
+	t.Run("a sponsor who still is one keeps the terminal", func(t *testing.T) {
+		g := newRig(t, true)
+		if err := checkAs(g, "sponsor-sub")(context.Background()); err != nil {
+			t.Fatalf("check = %v, want nil", err)
+		}
+	})
+	t.Run("a sponsorship that ended ends it, and a restored one is read afresh", func(t *testing.T) {
+		g := newRig(t, true)
+		check := checkAs(g, "sponsor-sub")
+		g.st.still.Store(false) // replaced, suspended or retired: the store answers not sponsored
+		ended(t, check(context.Background()))
+		g.st.still.Store(true)
+		if err := check(context.Background()); err != nil {
+			t.Fatalf("check after the sponsorship was restored = %v, want nil", err)
+		}
+	})
+	t.Run("a sponsorship that began again after the ticket ends it", func(t *testing.T) {
+		g := newRig(t, true)
+		g.st.sponsorSince.Store(opened.Add(time.Second).Unix())
+		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
+	})
+	t.Run("a sponsorship that began before the ticket keeps it", func(t *testing.T) {
+		g := newRig(t, true)
+		g.st.sponsorSince.Store(opened.Add(-time.Second).Unix())
+		if err := checkAs(g, "sponsor-sub")(context.Background()); err != nil {
+			t.Fatalf("check = %v, want nil", err)
+		}
+	})
+	t.Run("a service identity that is gone ends it", func(t *testing.T) {
+		g := newRig(t, true)
+		g.st.err = store.ErrNotFound
+		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
+	})
+	t.Run("a lookup that fails ends it", func(t *testing.T) {
+		g := newRig(t, true)
+		g.st.err = errors.New("store down")
+		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
+	})
+	t.Run("another person's ticket on a service run ends", func(t *testing.T) {
+		g := newRig(t, true)
+		ended(t, checkAs(g, "someone-else")(context.Background()))
+	})
+	t.Run("a person's own run is not asked of the service store", func(t *testing.T) {
+		g := newRig(t, false)
+		g.st.still.Store(false)
+		g.st.err = errors.New("store down")
+		if err := checkAs(g, g.h.owner)(context.Background()); err != nil {
+			t.Fatalf("check = %v, want nil", err)
+		}
+	})
 }

@@ -11,6 +11,7 @@ import * as React from "react";
 import { runs } from "../../../../lib/api/runs";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { usePoll } from "../../../../lib/use-poll";
+import { failureSentence } from "../../../wardyn/states";
 import type { LaunchedRun } from "./launched-model";
 
 /** Run detail's cadence. */
@@ -27,6 +28,8 @@ export interface LaunchedRead {
   /** undefined: not read yet. null: the server has no such run. */
   run: LaunchedRun | null | undefined;
   failed: boolean;
+  /** The server's own sentence for the failed read, when it worded one. */
+  failMessage?: string;
   now: number;
   reload: () => void;
   pool: WaitingPool | undefined;
@@ -57,6 +60,7 @@ export function useWaitingPool(poolId: string | undefined): WaitingPool | undefi
 export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead {
   const [run, setRun] = React.useState<LaunchedRun | null | undefined>(seed);
   const [failed, setFailed] = React.useState(false);
+  const [failMessage, setFailMessage] = React.useState<string | undefined>();
   const [now, setNow] = React.useState(Date.now);
   const current = React.useRef(runId);
   current.current = runId;
@@ -67,8 +71,11 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
       if (current.current !== runId) return;
       setRun(next ?? null);
       setFailed(false);
-    } catch {
-      if (current.current === runId) setFailed(true);
+    } catch (e) {
+      if (current.current === runId) {
+        setFailMessage(failureSentence(e));
+        setFailed(true);
+      }
     }
     if (current.current === runId) setNow(Date.now());
   }, [runId]);
@@ -83,5 +90,5 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
 
   const pool = useWaitingPool(run?.queue?.pool_id);
 
-  return { run, failed, now, reload: () => void read(), pool };
+  return { run, failed, failMessage, now, reload: () => void read(), pool };
 }

@@ -20,6 +20,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
+// The detail of a source.scan failure row the server caused names the step that failed, never the error's text:
+// a store or driver error can name hosts, users and databases. writeServerError and the log keep the cause.
+const (
+	scanAuditLaunchFault  = "Launch scan run"
+	scanAuditRunnerUnread = "Read the folder's runner"
+	scanAuditPersistFault = "Persist scan profile"
+)
+
 // source_scan.go — the tier-1 scan: a SOURCE scans itself. This is what
 // structurally fixes the old whole-workspace scan's bug (a repo+dir workspace
 // never scanned its dirs — the repo branch won on every call and the "later
@@ -31,9 +39,14 @@ import (
 // handleScanSource scans one library source.
 //
 //   - local_dir: host-side inline (bounded, read-only workspacescan.Scan),
-//     exactly the old inline path one row over. A missing/non-dir path
-//     persists status=error and 422s with the same diagnosis the workspace
-//     scan gives — never a false green.
+//     exactly the old inline path one row over. A folder inside a member
+//     workspace root, or one a member's workspace attaches, is opened as a
+//     member's own scan opens it (openScanSource); one that open refuses (a
+//     link out of the root, a missing folder, a file, a member workspace whose
+//     owner's roots no longer hold it) persists status=error and 422s
+//     workspace_source_mount_not_allowed. A missing/non-dir path outside
+//     every member root persists status=error and 422s with the same
+//     diagnosis the workspace scan gives. Never a false green.
 //
 //   - repo: a governed clone-and-scan run, fenced on the SOURCE's own
 //     active_run_id. 202 with scan_run_id; the profile lands when the run
@@ -68,7 +81,45 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 
 	switch src.Kind {
 	case types.SourceLocalDir:
-		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src)
+		// A folder inside a member workspace root is one a member can replace with a
+		// link, and its scan shows in every workspace that attaches it: it is checked
+		// and opened as a member's own scan opens it, held to every member whose
+		// workspace attaches it, and read only through the handle.
+		dir, derr := s.openScanSource(r.Context(), "", src)
+		if errors.Is(derr, errScanHoldersUnread) {
+			// The row names the read that failed, never the store's text; writeServerError logs the cause.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": errScanHoldersUnread.Error()})))
+			writeServerError(w, r, "scan source", derr)
+			return
+		}
+		if derr != nil {
+			// A refused folder is a failed scan, as a missing one is: the row says error. A source
+			// row has no field for why, so the reason and its sentence go on the audit row.
+			_, _ = s.cfg.Store.SetSourceScanResultUnfenced(r.Context(), src.ID, src.Profile, types.WorkspaceError, nil)
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{
+					"detail": derr.Error(), "reason": reasonWorkspaceSourceMountNotAllowed})))
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, derr.Error())
+			return
+		}
+		profile, aiRan, aiChanged, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
+		if dir != nil {
+			_ = dir.Close()
+		}
+		if fault != nil {
+			// The scan ran and its result could not be saved: a server fault, which a retry may
+			// clear, or not found when the row is gone.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditPersistFault})))
+			if errors.Is(fault, store.ErrNotFound) {
+				// The source was deleted while its scan ran: not a fault, the row is gone.
+				writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
+				return
+			}
+			writeServerError(w, r, scanAuditPersistFault, fault)
+			return
+		}
 		if !ok {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
@@ -105,7 +156,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		}
 		if lerr != nil {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": scanAuditLaunchFault})))
 			writeServerError(w, r, "launch scan run", lerr)
 			return
 		}
@@ -152,8 +203,9 @@ func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, 
 // boundary makes such rows poison auto-granting, so discovery can never mint
 // a credential. The store REBUILDS the scan_seeded subset of the contract from
 // this seed on every successful scan (a name a rescan no longer finds is
-// dropped, not stuck forever); operator-edited/non-scan_seeded rows always win
-// regardless; a nil seed (a failed scan) leaves the contract untouched.
+// dropped, not stuck forever), except that an incomplete scan's seed keeps the
+// earlier scan_seeded rows (types.KeepScanSeeded); operator-edited/non-scan_seeded
+// rows always win regardless; a nil seed (a failed scan) leaves the contract untouched.
 func seedSourceRequirements(kind types.SourceKind, locator string, p workspacescan.WorkspaceProfile) map[string]types.WorkspaceRequirement {
 	seed := map[string]types.WorkspaceRequirement{}
 	for _, sec := range p.RequiredSecrets {
@@ -163,6 +215,11 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 		// (compose.go's normalize-to-storable rule), skip what nothing maps.
 		name := sanitizeSecretName(sec.Name)
 		if name == "" {
+			continue
+		}
+		// Two scanned names can map onto one stored name (SESSION_SECRET and
+		// session_secret): a required one holds the row whichever sorts later.
+		if seed["secret:"+name].Level == "required" {
 			continue
 		}
 		level := "required"
@@ -181,30 +238,44 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 }
 
 // scanLocalDirSource runs the bounded host-side scan for one directory source
-// and persists the outcome on the source row. ok=false returns the 422 detail
-// (already persisted as status=error) — the same never-a-false-green rule the
-// workspace scan enforces, with the same sealed-daemon diagnosis.
+// and persists the outcome on the source row. ok=false with a nil fault returns
+// the 422 detail (already persisted as status=error) — the same
+// never-a-false-green rule the workspace scan enforces, with the same
+// sealed-daemon diagnosis. A fault is the write of the scanned profile failing:
+// the row keeps its old status, and the caller answers it as a server fault. A row
+// that is gone is not found for one source, and skipped in a fan-out.
 //
 // Consults the SAME opt-in ADVISORY AI gap-fill the sandboxed repo-scan upload
 // lane does (applyScanAIAdvisor, scanresult.go) — WARDYN_SCAN_AI_ADVISOR
 // also fires for a local_dir source, since the flag's own help text makes no
 // such distinction between source kinds. aiRan/aiChanged mirror uploadSourceScanResult's own
 // audit discriminator for the caller to record.
-func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
-	fi, serr := os.Stat(src.Locator)
-	if serr != nil || !fi.IsDir() {
+//
+// dir is a source as openScanSource checked and opened it, and the scan reads
+// only through it; nil reads by its path a source that no member root holds
+// under the name memberLocation gives it and no member's workspace attaches.
+func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *os.Root) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool, fault error) {
+	var facts workspacescan.ScanFacts
+	if dir != nil {
+		facts = workspacescan.CollectFactsIn(dir)
+	} else if fi, serr := os.Stat(src.Locator); serr != nil || !fi.IsDir() {
 		detail := localDirScanFailureDetail(src.Locator, serr == nil && !fi.IsDir(),
 			os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
 		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError, nil)
-		return workspacescan.WorkspaceProfile{}, false, false, detail, false
+		return workspacescan.WorkspaceProfile{}, false, false, detail, false, nil
+	} else {
+		facts = workspacescan.CollectFacts(src.Locator)
 	}
-	facts := workspacescan.CollectFacts(src.Locator)
 	profile = workspacescan.DeriveProfile(facts)
 	profile, aiRan, aiChanged = s.applyScanAIAdvisor(ctx, facts, profile)
-	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seedSourceRequirements(src.Kind, src.Locator, profile)); err != nil {
-		return workspacescan.WorkspaceProfile{}, false, false, "persist scan profile: " + err.Error(), false
+	seed := seedSourceRequirements(src.Kind, src.Locator, profile)
+	if profile.Incomplete {
+		seed = types.KeepScanSeeded(seed, src.Requirements)
 	}
-	return profile, aiRan, aiChanged, "", true
+	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seed); err != nil {
+		return workspacescan.WorkspaceProfile{}, false, false, "", false, err // the caller's writeServerError logs it
+	}
+	return profile, aiRan, aiChanged, "", true, nil
 }
 
 // launchSourceScanRun is launchScanRun retargeted one tier down: the fence is
@@ -426,6 +497,60 @@ func (s *Server) scanCredentialRefusal(w http.ResponseWriter, r *http.Request, r
 	return true
 }
 
+// fanoutFolder is how one local folder of the whole-workspace scan ended: scanned, gone from the store while its
+// result was written (skipped like a dangling attachment), or answered, which stops the fan-out.
+type fanoutFolder int
+
+const (
+	fanoutFolderScanned fanoutFolder = iota
+	fanoutFolderGone
+	fanoutFolderStopped
+)
+
+// scanFanoutFolder opens, scans and saves one local folder of scanAttachedSources. Every refusal and fault is
+// answered here, with its audit row from partialAudit, and reported as fanoutFolderStopped.
+func (s *Server) scanFanoutFolder(ctx context.Context, w http.ResponseWriter, r *http.Request, owner string, id uuid.UUID, src types.Source, partialAudit func(uuid.UUID, string)) fanoutFolder {
+	// The member mount gate the run door re-runs (validateWorkspaceSources):
+	// a scan reads the directory host-side, so roots narrowed after
+	// onboarding, or a source repointed since, refuse it here too. A
+	// member's directory is opened at that check and read only through
+	// the handle, so a link swapped in after the check is not read through.
+	// An operator's workspace holds a folder inside a member workspace
+	// root to the same open: the scan lands on the folder's one library
+	// row, which a member's workspace attaching it reads too, and every
+	// member whose workspace attaches it holds it to their roots.
+	dir, err := s.openScanSource(ctx, owner, src)
+	if errors.Is(err, errScanHoldersUnread) {
+		partialAudit(id, errScanHoldersUnread.Error()) // the read that failed, never the store's text
+		writeServerError(w, r, "scan source", err)
+		return fanoutFolderStopped
+	}
+	if err != nil {
+		partialAudit(id, err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, s.scanRefusalFor(r, err))
+		return fanoutFolderStopped
+	}
+	_, _, _, detail, ok, fault := s.scanLocalDirSource(r.Context(), src, dir)
+	if dir != nil {
+		_ = dir.Close()
+	}
+	if fault != nil {
+		if errors.Is(fault, store.ErrNotFound) {
+			// Deleted while its scan ran: gone like a dangling attachment, so there is nothing to scan.
+			return fanoutFolderGone
+		}
+		partialAudit(id, scanAuditPersistFault)
+		writeServerError(w, r, scanAuditPersistFault, fault)
+		return fanoutFolderStopped
+	}
+	if !ok {
+		partialAudit(id, detail)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
+		return fanoutFolderStopped
+	}
+	return fanoutFolderScanned
+}
+
 // scanAttachedSources is the whole-workspace scan's attachment-backed branch:
 // fan out over every attached non-ephemeral source — dirs inline, repos as
 // their own governed runs. 202 when anything launched (the workspace's merged
@@ -446,6 +571,8 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		return
 	}
 
+	// Each folder read here is held to the workspaces that attach it: one list read for the request.
+	ctx := context.WithValue(r.Context(), workspaceListKey{}, &workspaceListMemo{})
 	// launched/scanned accumulate what already succeeded before a failing
 	// source aborts the fan-out (bug-workspace-2): the moment source i fails,
 	// every source 0..i-1 already scanned inline or already launched a
@@ -487,7 +614,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				// A binding that no longer holds refuses by name, as a run would; a live one is skipped.
 				rn, state, err := s.boundRunnerState(r.Context(), *src.RunnerID, ws.OwnedBy)
 				if err != nil {
-					partialAudit(id, err.Error())
+					partialAudit(id, scanAuditRunnerUnread)
 					writeServerError(w, r, "read the folder's runner", err)
 					return
 				}
@@ -500,17 +627,10 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				skipped = append(skipped, id)
 				continue
 			}
-			// The member mount gate the run door re-runs (validateWorkspaceSources):
-			// a scan reads the directory host-side, so roots narrowed after
-			// onboarding, or a source repointed since, refuse it here too.
-			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, types.WorkspaceMount{Source: src.Locator}); err != nil {
-				partialAudit(id, err.Error())
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err.Error())
-				return
-			}
-			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
-				partialAudit(id, detail)
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
+			switch s.scanFanoutFolder(ctx, w, r, ws.OwnedBy, id, src, partialAudit) {
+			case fanoutFolderGone:
+				continue
+			case fanoutFolderStopped:
 				return
 			}
 			scanned = append(scanned, id)
@@ -536,7 +656,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				return
 			}
 			if lerr != nil {
-				partialAudit(id, lerr.Error())
+				partialAudit(id, scanAuditLaunchFault)
 				writeServerError(w, r, "launch scan run", lerr)
 				return
 			}

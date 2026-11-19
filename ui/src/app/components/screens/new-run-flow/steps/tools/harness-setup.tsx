@@ -17,7 +17,7 @@ import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { Chip } from "../../../../wardyn/primitives";
-import { signsIn } from "../../../../../lib/model-access";
+import { providerSignsIn } from "../../../../../lib/model-access";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { RunIntent } from "../../draft/run-intent";
 import { providerControlId, setModelProvider, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
@@ -79,8 +79,9 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
   const delivery = credential?.delivery === "proxy" ? NR_TOOLS.PROVIDER_PROXY : credential?.delivery === "sandbox_short_lived" ? NR_TOOLS.DELIVERY_SHORT_LIVED : undefined;
   const state = status?.provider_access?.find((a) => a.provider === selected)?.state ?? "";
   const signedOut = NEEDS_SIGN_IN.includes(state);
-  // A stored sign-in keeps its door: AWS can refuse to renew a session that still reads as signed in.
-  const stored = !!current && signsIn(current.kind) && (state === "live" || state === "expiring");
+  // A stored sign-in keeps its door: AWS can refuse to renew a session that still reads as signed in. Whether
+  // the provider signs people in is the server's word for the row (sign_in), not its kind.
+  const stored = !!current && providerSignsIn(current) && (state === "live" || state === "expiring");
 
   return (
     <div className="flex flex-col gap-2">
@@ -161,7 +162,8 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
               labelledBy={labelId}
               value={selected as ToolEffect}
               choices={defaultChoices(fact, name, localMcp)}
-              onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
+              // The default row greys Approve each call (it names one tool), so it never arrives here.
+              onChange={(effect) => { if (effect === "approve_each") return; setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
             {help && <p className="text-sm text-muted-foreground">{help}</p>}
             {codex && <p className="text-sm text-muted-foreground">{localMcp ? NR_TOOLS.CODEX_NOTE_REMOTE : NR_TOOLS.CODEX_NOTE}</p>}

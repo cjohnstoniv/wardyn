@@ -72,7 +72,7 @@ func (h *hardDeny) name(host string) bool {
 		return false
 	}
 	host = normalizeHost(host)
-	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+	if ip := literalHostIP(host); ip != nil { // every spelling a resolver reads as an address, too
 		return h.ip(ip)
 	}
 	if h.names[host] {

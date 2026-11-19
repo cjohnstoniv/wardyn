@@ -58,6 +58,9 @@ type SyslogSink struct {
 	Addr    string // syslog endpoint, e.g. "host:514"; ignored when Network is ""
 
 	w syslogWriter
+	// pending is a write that outlived its timeout and has not returned yet, nil when there is none. Only
+	// writeLoop touches it, so it needs no lock.
+	pending chan error
 
 	queue   chan []byte    // bounded buffer of pre-marshalled JSON messages
 	drops   atomic.Int64   // events dropped due to overflow or write timeout
@@ -123,7 +126,7 @@ func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 	return nil
 }
 
-// writeLoop drains the buffer, bounding each write with syslogWriteTimeout so a stalled collector wedges
+// writeLoop drains the buffer, bounding each event with syslogWriteTimeout so a stalled collector wedges
 // at most one in-flight write (dropped) rather than filling the buffer forever.
 func (s *SyslogSink) writeLoop() {
 	defer s.wg.Done()
@@ -148,16 +151,33 @@ func (s *SyslogSink) writeLoop() {
 	}
 }
 
-// timedWrite bounds one syslog write with syslogWriteTimeout by racing it in its own goroutine against a
-// timer, since log/syslog.Writer has no write deadline; on timeout the event counts as dropped and the
-// abandoned goroutine exits later once the collector recovers or the connection closes.
+// timedWrite bounds one event with syslogWriteTimeout by racing its write in its own goroutine against a
+// timer, since log/syslog.Writer has no write deadline; on timeout the event counts as dropped and its write
+// stays pending. While a write is pending no other starts: log/syslog would queue each one on its lock with
+// its message, so the next event waits out its own timeout for the pending write and is dropped if it is
+// still stuck.
 func (s *SyslogSink) timedWrite(b []byte) {
-	done := make(chan error, 1)
-	go func() { done <- s.w.Info(string(b)) }()
-
 	timeout := syslogWriteTimeout()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+
+	if s.pending != nil {
+		select {
+		case <-s.pending: // its event was counted when it timed out
+			s.pending = nil
+		case <-timer.C:
+			s.drops.Add(1)
+			slog.Error("sinks.syslog: an earlier write to the collector is still blocked; dropping the event",
+				slog.String("network", s.Network),
+				slog.String("addr", s.Addr),
+				slog.Duration("timeout", timeout),
+				slog.Int64("drops", s.drops.Load()))
+			return
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.w.Info(string(b)) }()
 
 	select {
 	case err := <-done:
@@ -168,6 +188,7 @@ func (s *SyslogSink) timedWrite(b []byte) {
 				slog.Any("err", err))
 		}
 	case <-timer.C:
+		s.pending = done
 		s.drops.Add(1)
 		slog.Error("sinks.syslog: write to collector timed out",
 			slog.String("network", s.Network),
@@ -212,8 +233,8 @@ func (s *SyslogSink) abandonQueued() int {
 
 // Close signals the background writer to drain and stop, then closes the syslog connection, all within
 // SyslogCloseTimeout. Past it, whatever is still queued counts as dropped and the connection is closed without
-// waiting for a write that holds the writer's lock; the abandoned goroutines end when the collector answers or
-// the process exits.
+// waiting for a write that holds the writer's lock; the abandoned write ends when the collector answers or the
+// process exits.
 func (s *SyslogSink) Close() error {
 	// Signal the writer to drain and exit; guard against a double Close.
 	select {

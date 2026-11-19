@@ -23,7 +23,7 @@ test.describe("Run cockpit — a run killed for a desktop sign-in", () => {
     });
     await page.goto(`runs/${id}`);
     const block = page.getByTestId("run-failure-block");
-    await expect(block).toContainText("Wardyn couldn't resume the agent after a sign-in, so it ended the run rather than leave it frozen. Start the run again.");
+    await expect(block).toContainText("Wardyn couldn't confirm a sign-in's desktop closed or couldn't resume the agent after it, so it ended the run rather than leave it frozen. Start the run again.");
     await expect(block).not.toContainText("desktop_signin_resume_failed");
   });
 });

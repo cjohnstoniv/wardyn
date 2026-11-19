@@ -65,6 +65,9 @@ type Options struct {
 	// "scratch" is used (drivers that cannot pull scratch should substitute
 	// their own minimal image).
 	SandboxImage string
+	// DNSProbe, when non-nil, gets the ref of a sandbox at the strongest class: it reads that sandbox's resolver, looks an external name
+	// up inside it, and asserts the run proxy is the only nameserver and the lookup fails. Injected as DefaultRouteProbe is; nil skips DNSAudit.
+	DNSProbe func(t *testing.T, ref string)
 	// Timeout is applied to each individual operation. Defaults to 30s.
 	Timeout time.Duration
 	// ExitArgv, when non-nil, builds the argv for a short-lived in-sandbox
@@ -101,6 +104,9 @@ type Options struct {
 	// Exec returned (running, exit code, pid). Diagnostic only: the Wait
 	// exit-code case logs it when the code is wrong, and asserts nothing on it.
 	ExecState func(ctx context.Context, execID string) string
+	// RealProxy says the proxy sidecar is the real wardyn-proxy, so a case may assert its answers. False is a stand-in that only
+	// exists on the network (the docker suites run busybox): NoNetwork then asserts only that a connect through it fails.
+	RealProxy bool
 }
 
 func (o Options) timeout() time.Duration {
@@ -125,6 +131,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("CreateStatusStop", func(t *testing.T) { testCreateStatusStop(t, r, opts) })
 	t.Run("KillMissingRef", func(t *testing.T) { testKillMissingRef(t, r, opts) })
 	t.Run("L0StructuralEgress", func(t *testing.T) { testL0StructuralEgress(t, r, opts) })
+	t.Run("DNSAudit", func(t *testing.T) { testDNSAudit(t, r, opts) })
 	t.Run("WaitExitCode", func(t *testing.T) { testWaitExitCode(t, r, opts) })
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
@@ -132,6 +139,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("EphemeralDiskLimit", func(t *testing.T) { testEphemeralDiskLimit(t, r, opts) })
 	t.Run("ManagedFiles", func(t *testing.T) { testManagedFiles(t, r, opts) })
 	t.Run("UserDrives", func(t *testing.T) { testUserDrives(t, r, opts) })
+	t.Run("NoNetwork", func(t *testing.T) { testNoNetwork(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.

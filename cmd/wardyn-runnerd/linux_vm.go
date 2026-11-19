@@ -31,7 +31,7 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 		return nil
 	}
 	c := docker.VMConfig{
-		StateDir:  filepath.Join(stateDir, "vm"),
+		StateDir:  vmStateDir(stateDir),
 		QEMUImage: getenv("WARDYN_RUNNER_VM_QEMU_IMAGE"),
 		CPUModel:  cmp.Or(getenv("WARDYN_RUNNER_VM_CPU_MODEL"), defaultVMCPUModel),
 	}
@@ -51,15 +51,21 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 
 // vmCaps is what the runner's caps offer for the VMs the probe found it can start. Desktop: the driver
 // opens every VM's display (docker.Driver.DialDesktop). SignIns: it hands every VM its sign-in store
-// and pauses its agent (docker.Driver.PauseAgent).
+// and pauses its agent (docker.Driver.PauseAgent). Drives: a drive bound to the runner is shared as a
+// folder is, so it needs what a folder needs.
 func vmCaps(c docker.VMConfig) *runnerwire.VMCaps {
-	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs, Desktop: true, SignIns: true}
+	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs, Desktop: true, SignIns: true, Drives: c.Virtiofs}
 }
 
-// endVMsOnFullSpool puts the full-spool rule behind the Linux VM switch: only a runner that offers VM
-// sandboxes (caps non-nil) ends a VM whose run's audit spool is full. Container runs are untouched.
-func endVMsOnFullSpool(sink *spoolSink, caps *runnerwire.VMCaps, end func(context.Context, uuid.UUID) (bool, error)) {
-	if caps != nil {
+// vmStateDir is where the runner keeps its Linux VMs' images and run directories.
+func vmStateDir(stateDir string) string { return filepath.Join(stateDir, "vm") }
+
+// endVMsOnFullSpool puts the full-spool rule behind the Linux VM switch: a runner that offers VM
+// sandboxes (caps non-nil) ends a VM whose run's audit spool is full, and so does one whose VM
+// sandboxes went off, or failed their start-up check, while VMs it made may still exist (their run
+// directories are still under stateDir). Container runs are untouched.
+func endVMsOnFullSpool(sink *spoolSink, caps *runnerwire.VMCaps, stateDir string, end func(context.Context, uuid.UUID) (bool, error)) {
+	if caps != nil || (docker.VMConfig{StateDir: vmStateDir(stateDir)}).MayHoldRuns() {
 		sink.EndVMsOnFullSpool(end)
 	}
 }

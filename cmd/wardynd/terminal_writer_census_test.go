@@ -47,6 +47,7 @@ var terminalWriterCensus = map[string]string{
 	"finalizeUndispatchedRuns": "reconcileFinalize -> finalizeRunTail",
 	"sweepRunWatchers":         "reconcileFinalize -> finalizeRunTail",
 	"reconcileWatch":           "reconcileFinalize -> finalizeRunTail",
+	"failInterruptedMacPrep":   "CASes, then finalizeRunTail",
 	// (2) The kill switch, which deliberately does NOT route through the tail.
 	// handleKillRun is the HTTP half only; the cascade is killRunCascade
 	// (claimKillTransition then killTeardownTail — #122 split the CAS out of the
@@ -67,16 +68,27 @@ var terminalWriterCensus = map[string]string{
 	// claim must not read "exempt: fails a run that never reached RUNNING" —
 	// that is false at three call sites, and would let a PENDING approval sit in
 	// the queue for 24h and expire as "nobody answered".
-	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
+	"failAndRevoke": "failedRunEffects calls cancelRunApprovals when from==RunRunning; exempt below it",
+	// The queue's stale-lease pass (run_queue_promote.go): FailStalePromotedRun moves a promoted run from
+	// PENDING to FAILED in SQL, only while its start's lease is still stale, then failedRunEffects with
+	// from=RunPending. Below RUNNING no approval can exist, so it cancels none, as failAndRevoke below it.
+	"failStaleStart": "FailStalePromotedRun (PENDING to FAILED, lease re-checked), then failedRunEffects; exempt below RUNNING",
 	// (5) The lease (#568) and lost runs (#574): a run whose end passed, or
 	// whose sandbox was lost, and could not be kept, or whose grace ran out.
 	// CASes RUNNING->STOPPED or FAILED, then finalizeRunTail.
 	"stopKeptRun": "CASes, then finalizeRunTail",
+	// The same end taken without the run's lock once it is past due: StopKeptRunForcedIf wins the terminal
+	// state (and marks the forced stop), then finalizeRunTailOrdered -> finalizeRunEffects ->
+	// cancelRunApprovals. The retry of an unconfirmed stop (sweepForcedStops) writes no state.
+	"forceKeptStop": "CASes (StopKeptRunForcedIf), then finalizeRunTailOrdered -> finalizeRunEffects -> cancelRunApprovals",
 	// A run whose token lapsed and that cannot be kept (#574).
 	"sweepLapsedRunTokens": "reconcileFinalize -> finalizeRunTail",
 	// A revived run whose proxy could not be replaced and that cannot be kept
 	// lost (#575).
 	"reloseRun": "reconcileFinalize -> finalizeRunTail",
+	// A RUNNING run whose proxy did not confirm its policy, and that cannot be
+	// kept lost: its proxy or sandbox is stopped, then the run ends.
+	"stopUnconfirmedProxyAt": "reconcileFinalize -> finalizeRunTail",
 	// (6) The runner substrate's store methods end runs in SQL. A revoke kills
 	// the runner's RUNNING runs, and revokeRunner then hands each one to
 	// revokedRunKillTail, which calls cancelRunApprovals.
@@ -154,10 +166,11 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 
 // writesTerminalState reports whether call is a run-state write whose TARGET is
 // one of the terminal states — the three primitives every transition goes
-// through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
-// run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
-// — or a finalize helper handed a terminal state — or one of the two runner
-// store methods that end runs themselves (RevokeRunner, AcceptRunnerExit).
+// through (internal/api's casRunState and casRunStateHeld, its bounded twin for a holder of the run's lock
+// (run_held_store.go), its StopKeptRunIf and StopKeptRunForcedIf
+// siblings for a kept run's atomic-mark CAS (F04) and its forced end, and the reaper's guarded UpdateRunStateIfIdle)
+// — or a finalize helper handed a terminal state — or one of the store methods
+// that end runs themselves (RevokeRunner, AcceptRunnerExit, FailStalePromotedRun).
 func writesTerminalState(call *ast.CallExpr) bool {
 	name := ""
 	switch fn := call.Fun.(type) {
@@ -167,11 +180,11 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		name = fn.Sel.Name
 	}
 	switch name {
-	case "RevokeRunner", "AcceptRunnerExit":
+	case "RevokeRunner", "AcceptRunnerExit", "FailStalePromotedRun":
 		// Store methods that end runs in SQL, with the terminal state inside the
 		// statement rather than in an argument.
 		return true
-	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize":
+	case "casRunState", "casRunStateHeld", "StopKeptRunIf", "StopKeptRunForcedIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
 	default:
 		return false
 	}

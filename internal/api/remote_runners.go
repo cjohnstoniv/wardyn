@@ -222,6 +222,10 @@ func (s *Server) handlePutRemoteRunnerPeoplePolicy(w http.ResponseWriter, r *htt
 		}
 		subjects = nil
 	case types.PeoplePoolsListed:
+		if slices.ContainsFunc(subjects, func(sub types.RunnerPoolSubject) bool { return sub.SubjectType == types.RunnerPoolSubjectUnit }) {
+			writePoolInvalid(w, "A runner's people policy lists people, groups or roles. A unit narrows an organization pool's use policy only.")
+			return
+		}
 		if subjects, ok = s.canonicalPoolSubjects(w, r, subjects); !ok {
 			return
 		}

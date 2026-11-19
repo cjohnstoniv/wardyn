@@ -46,13 +46,14 @@ import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { Chip } from "../../wardyn/primitives";
 import { TRUST_LABEL } from "../runners/runner-trust";
 import type { RunnerTrustClass } from "../../../lib/types/runners";
+import type { GovernanceChange } from "../../../lib/types";
 import { Ban } from "lucide-react";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
 
 // The credential, the three options, then what people see: one grid for the header and every row.
 // Joined from single tokens: the no-own-copy scan reads any quoted run of words as prose.
-const ROW_GRID = ["grid", "gap-x-4", "gap-y-2", "px-6", "py-3", "md:grid-cols-[minmax(0,1.7fr)_repeat(3,minmax(0,1fr))_minmax(0,1fr)]", "md:items-start"].join(" ");
+const ROW_GRID = ["grid", "gap-x-4", "gap-y-2", "px-6", "py-3", "lg:grid-cols-[minmax(0,1.7fr)_repeat(3,minmax(0,1fr))_minmax(0,1fr)]", "lg:items-start"].join(" ");
 
 const MODES = ["via_org", "runner_resident", "refuse"] as const;
 type EditableMode = (typeof MODES)[number];
@@ -175,7 +176,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   // GET's buildable_modes: the modes the server can build per class. Null on a server that does not send it.
   const [buildable, setBuildable] = React.useState<CredentialDeliverySnapshot["buildable_modes"] | null>(null);
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
-  const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
+  const [outcome, setOutcome] = React.useState<{ kind: "saved" } | { kind: "submitted"; change: GovernanceChange } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
   // The draft as it stood when a save met a 412 (someone saved first): shown in the shared saved-elsewhere banner so
   // the person can copy it, while the screen itself is reloaded to the stored document and its ETag.
@@ -236,7 +237,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
         load();
       } else if (e instanceof PendingChangeError) {
         setSubmittedJson(JSON.stringify(policy));
-        setOutcome({ kind: "submitted" });
+        setOutcome({ kind: "submitted", change: e.change });
         onSubmitted?.();
       } else {
         setOutcome({ kind: "refused", message: e instanceof HttpError ? e.message : getErrorMessage(e) });
@@ -279,7 +280,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
       {status === "ready" && (
         <>
           <div className="mt-4 divide-y divide-border border-t border-border">
-            <div className={`${ROW_GRID} label-eyebrow max-md:hidden`}>
+            <div className={`${ROW_GRID} label-eyebrow max-lg:hidden`}>
               <span>{DELIVERY.COL_CREDENTIAL}</span>
               {MODES.map((mode) => (
                 <span key={mode}>{DELIVERY.MODE[mode]}</span>
@@ -306,7 +307,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
           <div className="flex flex-col gap-2 px-6 py-4">
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
-            {outcome?.kind === "submitted" && <SubmittedNote />}
+            {outcome?.kind === "submitted" && <SubmittedNote change={outcome.change} />}
             {outcome?.kind === "refused" && (
               <Note tone="red" role="alert">
                 <h3 ref={refusedRef} tabIndex={-1} className="font-semibold outline-none">
@@ -344,7 +345,7 @@ function ReadOnlyRow({ cls }: { cls: DeliveryClass }) {
         <h3 className="text-sm font-medium text-foreground">{DELIVERY.CLASS[cls]}</h3>
         {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
       </div>
-      <p className="text-sm text-muted-foreground md:col-span-4">{value}</p>
+      <p className="text-sm text-muted-foreground lg:col-span-4">{value}</p>
     </div>
   );
 }
@@ -397,7 +398,7 @@ function ClassRow({
               <div className="flex items-center gap-2">
                 <RadioGroupItem id={id} value={mode} disabled={!!reason} aria-describedby={`${id}-d`} className="peer" />
                 {/* The column header names the option on wide screens; on a phone each cell names itself. */}
-                <Label htmlFor={id} className="text-sm md:sr-only">
+                <Label htmlFor={id} className="text-sm lg:sr-only">
                   {DELIVERY.MODE[mode]}
                   {notBuilt && ` — ${DELIVERY.BOUND_NOT_BUILT}`}
                 </Label>
@@ -411,7 +412,7 @@ function ClassRow({
           );
         })}
         <div className="text-sm">
-          <span className="mb-0.5 block text-xs text-muted-foreground md:hidden">{DELIVERY.COL_PEOPLE_SEE}</span>
+          <span className="mb-0.5 block text-xs text-muted-foreground lg:hidden">{DELIVERY.COL_PEOPLE_SEE}</span>
           {row.mode === DEFAULT_MODE ? (
             <span data-people-see="default" className="text-muted-foreground">
               {DELIVERY.LOCAL_DELIVERY[row.mode]}

@@ -106,7 +106,7 @@ export function gapAt(gaps: ReplayGap[], ms: number): ReplayGap | undefined {
   return gaps.find((g) => g.startMs <= ms && ms < g.endMs);
 }
 
-type ActionData = { direction?: string; bytes?: number; sha256?: string; reason?: string; gap_ms?: number };
+type ActionData = { direction?: string; review?: string; bytes?: number; sha256?: string; reason?: string; gap_ms?: number };
 
 function shortHash(h?: string): string {
   return h && h.length > 8 ? `${h.slice(0, 4)}…${h.slice(-4)}` : (h ?? "");
@@ -129,6 +129,8 @@ function describe(e: AuditEvent): { text: string; detail: string } | undefined {
     }
     case "desktop.file.transfer":
       if (d.direction === "upload") return { text: ok ? C.ACT_UPLOAD : C.ACT_UPLOAD_TRIED, detail: sized(d) };
+      // A reviewed download's ask moves no file: only its release, or a download with no review, is one.
+      if (d.direction === "download" && d.review === "requested") return { text: ok ? C.ACT_REVIEW_ASKED : C.ACT_REVIEW_ASK_TRIED, detail: sized(d) };
       if (d.direction === "download") return { text: ok ? C.ACT_DOWNLOAD : C.ACT_DOWNLOAD_TRIED, detail: sized(d) };
       return undefined;
     case "desktop.recording.pause":
@@ -171,6 +173,15 @@ export function jumpTo(action: ReplayAction, duration: number): number {
 /** The playhead after one clock tick of tickMs at speed, stopping at the end. */
 export function advance(ms: number, tickMs: number, speed: number, duration: number): number {
   return clamp(ms + tickMs * speed, duration);
+}
+
+/** The playhead after a key on the seek control: arrows step 5 s, Home and End go to either end; undefined for any other key. */
+export function seekKey(key: string, ms: number, duration: number): number | undefined {
+  const step = { ArrowLeft: -5000, ArrowDown: -5000, ArrowRight: 5000, ArrowUp: 5000 }[key];
+  if (step !== undefined) return clamp(ms + step, duration);
+  if (key === "Home") return 0;
+  if (key === "End") return duration;
+  return undefined;
 }
 
 /** A position as a share of the timeline, for CSS. */

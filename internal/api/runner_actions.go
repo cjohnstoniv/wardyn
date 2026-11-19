@@ -256,12 +256,14 @@ func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, sessio
 	case runnerwire.EventSpool:
 		err = s.DecisionIngestFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventPosture:
-		err = s.PostureFromRunner(ctx, runnerID, ev)
+		err = s.PostureFromRunner(ctx, runnerID, remote.EventSession(ctx), ev)
 	case runnerwire.EventResidentErase:
 		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventWorkload:
 		// The session the frame came in on, resumed ones included: session above is a fresh session's only.
 		err = s.WorkloadFromRunner(ctx, runnerID, remote.EventSession(ctx), ev)
+	case runnerwire.EventMacWindowUnexpected:
+		err = s.MacWindowUnexpectedFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
 	case runnerwire.EventWaiting:

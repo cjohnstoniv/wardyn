@@ -36,8 +36,8 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 	live, pending, kept, finished, rebootLost := profiled(types.RunRunning), profiled(types.RunPending),
 		profiled(types.RunRunning), profiled(types.RunCompleted), profiled(types.RunRunning)
 	unprofiled := newRun(types.RunRunning)
-	for _, r := range []types.AgentRun{live, pending, kept, finished, rebootLost, unprofiled} {
-		persistRun(t, ctx, pool, r)
+	for _, r := range []*types.AgentRun{&live, &pending, &kept, &finished, &rebootLost, &unprofiled} {
+		*r = persistRun(t, ctx, pool, *r)
 	}
 	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
 		t.Fatalf("MarkRunEnded: %v", err)

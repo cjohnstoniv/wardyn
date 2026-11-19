@@ -39,7 +39,7 @@ func (s *Store) DeleteProviderChanges(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: erase provider history: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if s.owner != "" {
 		if _, err := tx.Exec(ctx, `INSERT INTO secret_owner_generations (owned_by) VALUES ($1) ON CONFLICT (owned_by) DO NOTHING`, s.owner); err != nil {
 			return fmt.Errorf("pg secretstore: erase provider history: %w", err)
@@ -113,8 +113,8 @@ func lockProviderOwners(ctx context.Context, tx pgx.Tx, invalidations []secretst
 
 // providerSecretNames are the credential names a provider uid's connections are stored under.
 func providerSecretNames(uid string) []string {
-	names := make([]string, 0, 4)
-	for _, part := range []string{"key", "oauth", "sso", "entra"} {
+	names := make([]string, 0, 5)
+	for _, part := range []string{"key", "oauth", "sso", "entra", "oidc"} {
 		names = append(names, types.ModelProviderSecretPrefix+uid+"-"+part)
 	}
 	return names

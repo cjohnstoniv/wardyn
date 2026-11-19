@@ -79,7 +79,7 @@ describe("macOSOfferOf", () => {
   });
   it("not managed names the trust command only when the wire gave the runner id (a security operator)", () => {
     expect(text(one({ why: "not_managed", runner_id: "r-1" }))).toBe("mac-studio-07 is not marked as company-managed. Mark it with `wardyn runner trust r-1 managed_device`.");
-    expect(text(one({ why: "not_managed" }))).toBe("mac-studio-07 is not marked as company-managed. Ask a security operator to mark it.");
+    expect(text(one({ why: "not_managed" }))).toBe("mac-studio-07 is not marked as company-managed. Ask a security admin to mark it as a managed device.");
   });
   it("several Macs get the pool form: MV-N05 when one does not offer macOS VMs, else MV-N14", () => {
     const refusals = (...whys: PoolMacOSVMRefusal["why"][]) => whys.map((why, i) => refusal({ why, runner: `mac-${i}` }));

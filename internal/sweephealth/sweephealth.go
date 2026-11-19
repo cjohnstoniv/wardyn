@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -122,20 +123,34 @@ func (t *Tracker) Register(sweeps ...Sweep) {
 }
 
 // Tick runs one sweep tick: it records the attempt, runs body, and records the
-// success only when body returned nil. Both writes are best-effort, logged and
-// never allowed to stop the body. A body that panics or errors leaves the
-// success time where it was (the success write follows the call, it is not in
-// a defer). A nil Tracker just runs body.
+// success only when body returned nil without calling NotOwner. Both writes are
+// best-effort, logged and never allowed to stop the body. A body that panics or
+// errors leaves the success time where it was (the success write follows the
+// call, it is not in a defer). A nil Tracker just runs body.
 func (t *Tracker) Tick(ctx context.Context, sweep string, body func(context.Context) error) error {
 	if t == nil {
 		return body(ctx)
 	}
 	t.mark(ctx, sweep, false)
-	err := body(ctx)
-	if err == nil {
+	var notOwner atomic.Bool
+	err := body(context.WithValue(ctx, notOwnerKey{}, &notOwner))
+	if err == nil && !notOwner.Load() {
 		t.mark(ctx, sweep, true)
 	}
 	return err
+}
+
+type notOwnerKey struct{}
+
+// NotOwner marks the tick running under ctx as one that did not do the shared
+// work its row reports: a follower's pass of a sweep every replica runs but only
+// the sweeper leader finishes. Its success would hide a failing leader, so Tick
+// keeps the attempt and leaves the success time where it was. Outside a Tick it
+// does nothing.
+func NotOwner(ctx context.Context) {
+	if f, ok := ctx.Value(notOwnerKey{}).(*atomic.Bool); ok {
+		f.Store(true)
+	}
 }
 
 func (t *Tracker) mark(ctx context.Context, sweep string, success bool) {

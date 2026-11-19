@@ -63,9 +63,9 @@ var errDriveTargetInvalid = errors.New("this drive cannot be mounted on Kubernet
 // beside a share (applyDriveToPod).
 var errDriveShareBesideManaged = errors.New("a shared drive and a managed drive cannot be mounted in one Kubernetes run: the managed drive needs the pod's fsGroup, which is never set beside a shared drive (it would re-own other people's files on it); attach one of them")
 
-var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's refusal; re-creating it would undo an operator's deliberate reclaim
+var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's and recheckDriveClaims' refusal; re-creating it would undo an operator's deliberate reclaim
 
-var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again") // ensureDrivePVC's refusal when a create race is lost twice; the next run's Get→Create self-heals
+var errDriveClaimVanished = errors.New("your drive's volume claim was deleted while your run was starting; start the run again") // ensureDrivePVC's refusal when a create race is lost twice, and recheckDriveClaims' for a claim deleted or replaced while the run starts; the next run checks afresh
 
 // errDriveClaimForeign: reuseDriveClaim's refusal of a claim whose IDENTITY
 // labels say it belongs to a different member (driveClaimIdentity). The
@@ -85,6 +85,6 @@ var errSecondExec = errors.New("k8s: exec: this sandbox already has an agent exe
 // add-only limit as errSecondExec.
 var errBYOIUnsupported = errors.New("k8s: BYOI (wardyn-byoi/ images) is docker-only and is refused on this substrate: ephemeral containers cannot honour the selftest-then-task double-exec")
 
-// errTeardownUnresolved: teardown found the pod but its wardyn.run-id label
-// was missing/unparseable, so its sibling resources can't be located.
-var errTeardownUnresolved = errors.New("k8s: teardown could not resolve run id from the sandbox's wardyn.run-id label; sibling proxy/netpols/secret may be orphaned")
+// errTeardownUnresolved: teardown found a pod under a ref that is not a wardyn
+// agent pod name, so no run, and none of its sibling resources, can be keyed from it.
+var errTeardownUnresolved = errors.New("k8s: teardown could not resolve a run id from the sandbox ref; the pod is not a wardyn agent pod and is left alone")

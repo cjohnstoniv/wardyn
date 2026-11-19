@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,5 +120,48 @@ func TestUploadRecording_ErasurePreservesRefusalPriority(t *testing.T) {
 	w := do(t, masked.srv, http.MethodPut, path, masked.mintRunToken(t, run), "cast")
 	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), reasonRecordingErased) {
 		t.Fatalf("mid-stream masking refusal = %d %s", w.Code, w.Body)
+	}
+}
+
+type countedReader struct {
+	io.Reader
+	reads int
+}
+
+func (c *countedReader) Read(p []byte) (int, error) { c.reads++; return c.Reader.Read(p) }
+
+// After an erased run's save, the rest of the body decides the answer: a size or masking refusal met there,
+// else the erasure. A save that failed some other way, or did not fail, is answered as it is, its body unread.
+func TestRefusalBeforeErasure(t *testing.T) {
+	storeFailed, readFailed := errors.New("store failed"), errors.New("read failed")
+	overCap := func() io.Reader {
+		return http.MaxBytesReader(httptest.NewRecorder(), io.NopCloser(strings.NewReader("cast")), 3)
+	}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		body     io.Reader
+		want     error
+		tooLarge bool
+		read     bool
+	}{
+		{name: "saved", body: strings.NewReader("cast")},
+		{name: "store failure", err: storeFailed, body: overCap(), want: storeFailed},
+		{name: "erased", err: recording.ErrErased, body: strings.NewReader("cast"), want: recording.ErrErased, read: true},
+		{name: "erased, over the cap", err: recording.ErrErased, body: overCap(), tooLarge: true, read: true},
+		{name: "erased, masking lost", err: recording.ErrErased, body: iotest.ErrReader(errMaskUncovered), want: errMaskUncovered, read: true},
+		{name: "erased, read failed", err: recording.ErrErased, body: iotest.ErrReader(readFailed), want: recording.ErrErased, read: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &countedReader{Reader: tc.body}
+			got := refusalBeforeErasure(tc.err, body)
+			var maxErr *http.MaxBytesError
+			if tooLarge := errors.As(got, &maxErr); tooLarge != tc.tooLarge || (!tooLarge && !errors.Is(got, tc.want)) {
+				t.Errorf("answer = %v, want %v (too large: %v)", got, tc.want, tc.tooLarge)
+			}
+			if (body.reads > 0) != tc.read {
+				t.Errorf("body reads = %d, want read: %v", body.reads, tc.read)
+			}
+		})
 	}
 }

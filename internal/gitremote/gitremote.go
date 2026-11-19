@@ -20,11 +20,14 @@ import (
 	"maps"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 	"unicode"
+
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 )
 
 // Bounds keep detection fast and safe on large/hostile trees.
@@ -47,44 +50,54 @@ var skipDirNames = map[string]struct{}{
 // sorted, de-duplicated set of github.com "owner/repo" remotes found in
 // .git/config and .gitmodules files, plus the sorted set of non-GitHub remote
 // HOSTS (for an operator warning). It never returns an error: detection is
-// best-effort and fail-safe.
+// best-effort and fail-safe. Canonicalised first (ResolveRoot), so a root that
+// is itself a link is walked; then read only through the opened directory.
 func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
+	dir, err := os.OpenRoot(ResolveRoot(root))
+	if err != nil {
+		return nil, nil
+	}
+	defer dir.Close()
+	return DetectGitHubReposIn(dir)
+}
+
+// DetectGitHubReposIn is DetectGitHubRepos over an open directory: it lists and
+// reads only through dir and follows no link at any component (foldersync.FS,
+// OpenRegularIn), so a folder swapped for a link after the walk saw it is not
+// read through.
+func DetectGitHubReposIn(dir *os.Root) (github []string, otherHosts []string) {
 	ghSet := map[string]struct{}{}
 	otherSet := map[string]struct{}{}
 	gitDirs := 0
 
-	root = ResolveRoot(root)
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	fsys := foldersync.FS(dir)
+	_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil // skip unreadable entries; keep walking siblings
 		}
-		// Never descend or follow symlinks (also prevents escaping `root`). The
-		// ROOT is exempt: WalkDir lstats it like every other entry, so a root
-		// that is ITSELF a link would otherwise end the walk on its first
-		// callback and silently report zero repos. ResolveRoot already
-		// canonicalised it; this arm holds when that failed.
-		if p != root && d.Type()&fs.ModeSymlink != 0 {
+		// Never descend or follow symlinks (also prevents escaping the root).
+		if p != "." && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		if !d.IsDir() {
 			if d.Name() == ".gitmodules" {
-				scanRemotes(readCapped(p), ghSet, otherSet)
+				scanRemotes(readCapped(dir, p), ghSet, otherSet)
 			}
 			return nil
 		}
 		// Never descend a repo's .git internals: it is stat'd directly below, so
 		// re-walking it would make the scan O(git-objects) instead of O(repo-roots).
 		// The root itself is never skipped by name: a workspace folder called "node_modules" is the workspace.
-		if _, skip := skipDirNames[d.Name()]; (skip && p != root) || d.Name() == ".git" {
+		if _, skip := skipDirNames[d.Name()]; (skip && p != ".") || d.Name() == ".git" {
 			return fs.SkipDir
 		}
-		if depthUnder(root, p) > maxDepth {
+		if depthUnder(p) > maxDepth {
 			return fs.SkipDir
 		}
 		// A repo's .git is a directory (normal) or a "gitdir:" pointer file
 		// (submodules / linked worktrees). Parse its config either way.
-		gitPath := filepath.Join(p, ".git")
-		fi, statErr := os.Lstat(gitPath)
+		gitPath := path.Join(p, ".git")
+		fi, statErr := fs.Stat(fsys, gitPath) // FS.Stat looks at the name without following it
 		if statErr != nil {
 			return nil
 		}
@@ -92,8 +105,8 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 			return fs.SkipDir
 		}
 		gitDirs++
-		if cfg := resolveConfigPath(gitPath, fi, root); cfg != "" {
-			scanRemotes(readCapped(cfg), ghSet, otherSet)
+		if cfg := resolveConfigPath(dir, gitPath, fi); cfg != "" {
+			scanRemotes(readCapped(dir, cfg), ghSet, otherSet)
 		}
 		return nil
 	})
@@ -116,66 +129,63 @@ func ResolveRoot(root string) string {
 	return resolved
 }
 
-// depthUnder returns how many path segments p is below root.
-func depthUnder(root, p string) int {
-	rel, err := filepath.Rel(root, p)
-	if err != nil || rel == "." {
+// depthUnder returns how many path segments the slash-separated rel is below the walk's root.
+func depthUnder(rel string) int {
+	if rel == "." {
 		return 0
 	}
-	return len(strings.Split(rel, string(filepath.Separator)))
+	return strings.Count(rel, "/") + 1
 }
 
-// resolveConfigPath returns the path to the config file for a .git entry: a
-// directory yields <gitPath>/config; a "gitdir: X" pointer file is resolved to
-// <X>/config but ONLY if X, symlinks resolved, stays inside root (else skipped).
-// Non-following on symlinks too.
-func resolveConfigPath(gitPath string, fi os.FileInfo, root string) string {
+// resolveConfigPath returns the slash-separated path inside dir of the config
+// file for a .git entry: a directory yields <gitPath>/config; a "gitdir: X"
+// pointer file is resolved to <X>/config but ONLY if X stays inside dir and
+// opens with no link at any component (else skipped). An absolute X is taken
+// against the path dir was opened at.
+func resolveConfigPath(dir *os.Root, gitPath string, fi fs.FileInfo) string {
 	if fi.IsDir() {
-		return filepath.Join(gitPath, "config")
+		return path.Join(gitPath, "config")
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return ""
 	}
-	data := readCapped(gitPath)
+	data := readCapped(dir, gitPath)
 	line := strings.TrimSpace(string(data))
 	const prefix = "gitdir:"
 	if !strings.HasPrefix(line, prefix) {
 		return ""
 	}
 	target := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(gitPath), target)
+	if filepath.IsAbs(target) {
+		rel, err := filepath.Rel(filepath.Clean(dir.Name()), filepath.Clean(target))
+		if err != nil {
+			return ""
+		}
+		target = filepath.ToSlash(rel)
+	} else {
+		target = path.Join(path.Dir(gitPath), filepath.ToSlash(target))
 	}
-	target = filepath.Clean(target)
-	if !within(root, target) {
+	if !fs.ValidPath(target) {
 		return "" // pointer escapes the workspace — ignore
 	}
-	// A lexically inner path can still run through a symlink out of root (root is
-	// already resolved), so judge where it really lands. A target that does not
-	// exist has no config to read.
-	real, err := filepath.EvalSymlinks(target)
-	if err != nil || !within(root, real) {
+	// A lexically inner path can still run through a symlink out of the root, and
+	// a target that does not exist has no config to read.
+	sub, err := foldersync.OpenDir(dir, target)
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(real, "config")
+	_ = sub.Close()
+	return path.Join(target, "config")
 }
 
-func within(root, p string) bool {
-	rel, err := filepath.Rel(root, p)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// readCapped reads at most maxConfigBytes from a REGULAR file, failing safe
-// to nil for anything else. It is the single chokepoint behind all three
-// read sites: OpenRegular gives O_NOFOLLOW (no symlinked final component)
-// and O_NONBLOCK+IsRegular (a FIFO can't block open(2) forever), wrapped
-// with io.ReadFull over a LimitReader since a single Read can silently
-// truncate mid-line.
-func readCapped(p string) []byte {
-	f, err := OpenRegular(p)
+// readCapped reads at most maxConfigBytes from the REGULAR file rel inside dir,
+// failing safe to nil for anything else. It is the single chokepoint behind all
+// three read sites: OpenRegularIn follows no link at any component and gives
+// O_NONBLOCK+IsRegular (a FIFO can't block open(2) forever), wrapped with
+// io.ReadFull over a LimitReader since a single Read can silently truncate
+// mid-line.
+func readCapped(dir *os.Root, rel string) []byte {
+	f, err := OpenRegularIn(dir, rel)
 	if err != nil {
 		return nil
 	}
@@ -188,33 +198,43 @@ func readCapped(p string) []byte {
 	return buf[:n]
 }
 
-// OpenRegular opens a file for reading that is PROVABLY an ordinary file and
-// never reached through a symlink — the shared door for every read a
-// workspace walk performs, since such walks run on an HTTP handler goroutine
-// over a tree the scanned party controls. O_NOFOLLOW refuses a symlinked
-// final component; O_NONBLOCK makes open(2) return on a FIFO instead of
-// waiting forever, and the fstat then decides nothing is read from it —
-// race-free, since the flags pick what gets opened and the fstat judges the
-// thing actually opened. The caller closes and bounds what it reads; this
-// only says WHAT may be opened.
-func OpenRegular(p string) (*os.File, error) {
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+// OpenRegularIn opens the file rel (slash-separated, inside dir) for reading
+// when it is PROVABLY an ordinary file reached through no symlink — the shared
+// door for every read a workspace walk performs, since such walks run on an
+// HTTP handler goroutine over a tree the scanned party controls. Each folder
+// on the way is opened by foldersync.OpenDir, which follows no link at any
+// component, and the file opened must be the entry its folder holds under that
+// name (a link there is refused). O_NONBLOCK makes open(2) return on a FIFO
+// instead of waiting forever, and the fstat then decides nothing is read from
+// it. The caller closes and bounds what it reads; this only says WHAT may be
+// opened.
+func OpenRegularIn(dir *os.Root, rel string) (*os.File, error) {
+	if !fs.ValidPath(rel) || rel == "." {
+		return nil, errNotRegular
+	}
+	parent, leaf := path.Split(rel)
+	if parent != "" {
+		sub, err := foldersync.OpenDir(dir, strings.TrimSuffix(parent, "/"))
+		if err != nil {
+			return nil, err
+		}
+		defer sub.Close()
+		dir = sub
+	}
+	f, err := dir.OpenFile(leaf, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
+	fi, ferr := f.Stat()
+	li, lerr := dir.Lstat(leaf)
+	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
 		f.Close()
 		return nil, errNotRegular
 	}
 	return f, nil
 }
 
-// errNotRegular is what OpenRegular returns for a FIFO, device, socket or
+// errNotRegular is what OpenRegularIn returns for a FIFO, device, socket or
 // directory. Callers here all fail safe on ANY error, so it is deliberately
 // not distinguishable from an unreadable file: neither one is evidence.
 var errNotRegular = errors.New("gitremote: not a regular file")

@@ -21,24 +21,29 @@ import type {
   NodeTuple,
   RunContainment,
   RunNodeRecord,
+  RunTeardownHold,
 } from "../../../lib/types/run-containment";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { CONTAINMENT as C } from "../../wardyn/copy/run-containment";
+import { CONTAINMENT as C, TEARDOWN as T } from "../../wardyn/copy/run-containment";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 
 const SELECT_CLASS =
   "h-9 w-full max-w-[260px] rounded-md border border-border-strong bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
 
-// How often a held run's containment is re-read: the egress bound passes with the clock and a
-// security operator's record is answered on the server, neither of which moves the run's updated_at.
+// How often a held run's containment is re-read: the egress bound passes with the clock, and a security
+// operator's record and the runner's word that a held kill or end finished are answered on the server, none
+// of which moves the run's updated_at.
 const CONTAINMENT_POLL_MS = 5000;
+
+/** Whether the run is held: containment pending, or a kill or end its runner has not finished. */
+const holding = (c: RunContainment | null) => !!c?.pending || (!!c?.teardown_hold && !c.teardown_hold.cleared_at);
 
 /**
  * Reads the run's containment; null until read, or when the run is not on a registered runner.
  * A failed read keeps the last good answer and reports `failed`, so the panel says it may be out of date
- * (and offers a retry) instead of vanishing. While the run is held it is re-read on a timer.
+ * (and offers a retry) instead of vanishing. While the run is held (`holding`) it is re-read on a timer.
  */
 export function useRunContainment(run: RunDetail): [RunContainment | null, () => void, boolean] {
   const [state, setState] = React.useState<RunContainment | null>(null);
@@ -70,7 +75,7 @@ export function useRunContainment(run: RunDetail): [RunContainment | null, () =>
     if (!local) return;
     void read();
   }, [local, read, run.updated_at, tick]);
-  usePoll(read, CONTAINMENT_POLL_MS, !local || !state?.pending);
+  usePoll(read, CONTAINMENT_POLL_MS, !local || !holding(state));
   return [local ? state : null, () => setTick((t) => t + 1), local && failed];
 }
 
@@ -81,7 +86,27 @@ export function RunLifetimeWithContainment({ run, pending, onChanged }: { run: R
     <>
       <RunLifetimeBanner run={run} pending={pending} onChanged={onChanged} containmentPending={!!containment?.pending} />
       <ContainmentPending runId={run.id} containment={containment} onChanged={reload} failed={failed} />
+      <TeardownHold hold={containment?.teardown_hold} />
     </>
+  );
+}
+
+/** A kill or end the run's runner holds because it could not see it finish; once it has, when it finished. */
+export function TeardownHold({ hold }: { hold?: RunTeardownHold }) {
+  if (!hold) return null;
+  if (hold.cleared_at) {
+    return (
+      <p data-testid="run-teardown-hold" className="mx-4 mt-2 shrink-0 text-xs text-muted-foreground">
+        {T.cleared(hold.kind, absoluteTime(hold.cleared_at))}
+      </p>
+    );
+  }
+  return (
+    <div data-testid="run-teardown-hold" className="mx-4 mt-2 shrink-0 rounded-md border border-warning/40 bg-warning-subtle px-3 py-2.5 text-xs">
+      <h3 className="text-sm font-medium text-foreground">{T.heldTitle(hold.kind)}</h3>
+      <p className="mt-1 text-muted-foreground">{T.heldBody(hold.kind)}</p>
+      <p className="mt-1 text-muted-foreground">{T.heldSince(absoluteTime(hold.since))}</p>
+    </div>
   );
 }
 

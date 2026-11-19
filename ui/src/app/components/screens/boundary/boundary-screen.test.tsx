@@ -28,6 +28,7 @@ import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY, RUN_LIMITS } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import type { GovernanceChange } from "../../../lib/types";
 import type { BoundaryReport } from "../../../lib/api/boundary";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -37,7 +38,7 @@ import { BoundaryScreen } from "./boundary-screen";
 const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
 // A boundary already in hard_limits (set through the store).
 const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
-const emptyReport: BoundaryReport = { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [] };
+const emptyReport: BoundaryReport = { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [], provider_rows: [] };
 const REFUSED = "invalid Wardyn boundary: denied_domains: not a hostname";
 
 function renderScreen(securityOperator = true) {
@@ -141,6 +142,7 @@ describe("BoundaryScreen", () => {
     expect(screen.getByTestId("boundary-mode-chip")).toHaveTextContent(BOUNDARY.CHIP_HARD);
     expect(hardRadio()).toBeEnabled();
     expect(within(hardPanel).getByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeInTheDocument();
+    expect(screen.getByLabelText("Barrier floor")).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(BOUNDARY.FLOOR_LABEL), "CC2");
     expect(within(hardPanel).getByText(BOUNDARY.FLOOR_TAIL("Wall"))).toBeInTheDocument();
     expect(within(hardPanel).queryByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeNull();
@@ -266,6 +268,38 @@ describe("BoundaryScreen", () => {
     );
   });
 
+  it("a Data out choice and its lock are sent, keeping the other spec keys and the stored locks", async () => {
+    getMock.mockResolvedValue({ ...hardLimits, spec: { denied_domains: ["paste.example.org"] }, locked_knobs: ["allowed_domains"] });
+    const user = userEvent.setup();
+    renderScreen();
+    const row = await screen.findByRole("group", { name: "Content leaving a run" });
+    await user.click(within(row).getByRole("radio", { name: "Blocked" }));
+    await user.click(within(row).getByRole("checkbox", { name: BOUNDARY_DESKTOP.LOCK_ROW }));
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
+    expect(putMock).toHaveBeenCalledWith(
+      { mode: "hard_limits", spec: { denied_domains: ["paste.example.org"], data_out: "blocked" }, limits: {}, locked_knobs: ["allowed_domains", "data_out"] },
+      '"b1"',
+    );
+  });
+
+  it("a stored data_out reads in the card and survives a save that does not touch it", async () => {
+    getMock.mockResolvedValue({ ...hardLimits, spec: { data_out: "review" } });
+    const user = userEvent.setup();
+    renderScreen();
+    const row = await screen.findByRole("group", { name: "Content leaving a run" });
+    expect(within(row).getByRole("radio", { checked: true })).toHaveAttribute("value", "review");
+    await draftHosts("paste.example.org");
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
+    expect(putMock).toHaveBeenCalledWith(
+      { mode: "hard_limits", spec: { data_out: "review", denied_domains: ["paste.example.org"] }, limits: {} },
+      '"b1"',
+    );
+  });
+
   it("Submit sends the draft with the ETag it read, and a refused write reads in the server's words", async () => {
     getMock.mockResolvedValue(hardLimits);
     putMock.mockRejectedValue(new HttpError(400, REFUSED, "boundary_invalid"));
@@ -290,6 +324,7 @@ describe("BoundaryScreen", () => {
     const report = await screen.findByTestId("boundary-dry-run");
     await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(await within(report).findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(within(report).getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByText(DELIVERY.SAVED)).toBeNull();
     expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeDisabled();
   });

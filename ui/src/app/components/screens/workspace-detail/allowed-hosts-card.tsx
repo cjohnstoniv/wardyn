@@ -13,11 +13,14 @@ import * as React from "react";
 import { Globe } from "lucide-react";
 import { toast } from "sonner";
 import { getErrorMessage } from "../../../lib/format";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/types";
 import { EmptyState } from "../../wardyn/states";
 import { DetailSectionCard } from "./section-card";
 import { HostList, type HostRow } from "./host-list";
+import { reloadIfStale } from "./reload-if-stale";
+import { WORKSPACE_HOSTS as H } from "../../wardyn/copy/workspace-hosts";
 import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
@@ -130,10 +133,14 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
 
   const remove = async (host: string) => {
     setRemoving(host);
+    let cleared = true;
+    // The second write goes out as the person who removed the host, never as whoever signs in after the first.
+    const person = getExpectedPrincipal();
     try {
       const updated = await workspacesApi.setApprovedEgress(
         ws.id,
         (ws.approved_egress ?? []).filter((h) => h !== host),
+        ws.updated_at,
       );
       // This write has LANDED on the server. Publish it BEFORE attempting the
       // second one below — the two are separate PUTs on separate route tiers
@@ -152,17 +159,20 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
         const nextReqs = { ...updated.requirements };
         delete nextReqs[reqKey];
         try {
-          onWorkspaceUpdated(await workspacesApi.setRequirements(ws.id, nextReqs));
+          onWorkspaceUpdated(await workspacesApi.setRequirements(ws.id, nextReqs, person));
         } catch (e) {
           // Half-done, said as half-done: the allowlist no longer carries the
           // host, the required-host row still does.
+          cleared = false;
           toast.error(`Removed ${host} from the allowlist, but its required-host row could not be cleared`, {
             description: getErrorMessage(e),
           });
         }
       }
+      if (cleared) toast.success(H.REMOVED_ALLOWED(host));
     } catch (e) {
       toast.error(`Failed to remove ${host}`, { description: getErrorMessage(e) });
+      await reloadIfStale(e, ws.id, onWorkspaceUpdated);
     } finally {
       setRemoving(null);
     }
@@ -176,7 +186,8 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       {rows.length === 0 ? (
         <EmptyState size="compact" icon={Globe} title={EGRESS.ALLOWED_EMPTY_TITLE} description={EGRESS.ALLOWED_EMPTY_BODY} />
       ) : (
-        <HostList rows={rows} emptyText={EGRESS.ALLOWED_EMPTY_TITLE} canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
+        <HostList rows={rows} emptyText={EGRESS.ALLOWED_EMPTY_TITLE} canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)}
+          confirm={{ title: (h) => H.ALLOWED_TITLE(h, ws.name), body: H.ALLOWED_BODY }} />
       )}
     </DetailSectionCard>
   );

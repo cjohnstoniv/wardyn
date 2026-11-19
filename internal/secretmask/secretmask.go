@@ -31,6 +31,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,8 +50,9 @@ var placeholder = []byte("<secret-hidden>")
 //
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
-	mu     sync.RWMutex
-	perRun map[uuid.UUID][][]byte // run id -> set of secret values
+	mu        sync.RWMutex
+	perRun    map[uuid.UUID][][]byte                       // run id -> set of secret values
+	dropGuard atomic.Pointer[func(runID uuid.UUID) func()] // brackets a Drop*Value or Evict (backend.go)
 	// globals is every process-wide value masked right now, on every run: the
 	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
@@ -140,14 +142,14 @@ func NewRegistry() *Registry {
 // ignored. The value is copied so the caller may reuse the backing array.
 // Never logs the secret value.
 //
-// With a Backend the value is committed to it before Add returns, and an error
-// means it is NOT on record: the caller must not hand the credential out.
+// With a Backend the value is committed to it before Add returns. An error means
+// the caller must not hand the credential out; the value may still be on record.
 func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	if r == nil || len(value) < MinLen {
 		return nil
 	}
-	// Re-registering a value the run already has is a no-op: masking is
-	// exact-match over a set, so a duplicate could never mask anything new. A
+	// Re-registering a value the run already has commits nothing (settledRun):
+	// masking is exact-match over a set, so a duplicate masks nothing new. A
 	// value that is only in the global set is NOT known: a global is let go
 	// when its credential is replaced or deleted, and a run that was handed
 	// the value before then still holds it. There is deliberately no CAP
@@ -158,12 +160,12 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	b := r.backend
 	r.mu.RUnlock()
 	if known {
-		return nil
+		return settledRun(b, runID, value)
 	}
-	// Commit first, cache second: a failed commit must leave the value unknown
-	// here, or the retry would see it as known and never persist it.
+	// Commit first, cache second: a failed commit must leave the value unknown here, or the retry would see
+	// it as known and never persist it. A backend that caches (runCacher) has put it here itself.
 	if b != nil {
-		if err := b.PutRun(runID, value); err != nil {
+		if err := b.PutRun(runID, value); err != nil || cachesRuns(b) {
 			return err
 		}
 	}
@@ -173,18 +175,19 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 
 // AddLocal is Add into this process's cache only, for a value that is already
 // committed elsewhere (a masking manifest's renderings, a row another replica
-// wrote). It never fails.
-func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
+// wrote). It never fails. It reports whether it added the value, so a caller can RemoveLocal exactly that.
+func (r *Registry) AddLocal(runID uuid.UUID, value []byte) bool {
 	if r == nil || len(value) < MinLen {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if containsSlice(r.perRun[runID], value) {
-		return
+		return false
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
 	r.gen++
+	return true
 }
 
 // AddGlobal registers values as the CURRENT values of one credential (owner,
@@ -569,7 +572,7 @@ func ownValues(own [][]byte, shared map[string]struct{}) [][]byte {
 // so the cost follows the corpus size, not globals times run values.
 func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 	perRun, globals := r.perRun[runID], r.globals
-	out := make([][]byte, 0, len(perRun)+len(globals))
+	out := make([][]byte, 0, len(globals))
 	held := make(map[string]struct{}, len(perRun))
 	for _, v := range perRun {
 		out = append(out, bytes.Clone(v))
@@ -596,14 +599,14 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
 	}
+	defer r.guardDrop(runID)() // brackets the removal: nothing vouches for the run until it is done
 	r.mu.Lock()
 	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
 	delete(r.cached, runID)
-	// The bump is CONDITIONAL: gen is the cache key for every run, so an
-	// unconditional bump would invalidate every OTHER run's cached Masker on
-	// every eviction. An eviction that deleted no per-run secrets changed
-	// nothing any other run's Masker was built from.
+	// The bump is CONDITIONAL: gen keys every run's cached Masker, so a bump on
+	// each eviction would invalidate every OTHER run's. An eviction that
+	// deleted no per-run secrets changed nothing any other Masker was built from.
 	if hadSecrets {
 		r.gen++
 	}
@@ -623,7 +626,7 @@ func (r *Registry) RunIDs() []uuid.UUID {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]uuid.UUID, 0, len(r.perRun)+len(r.cached))
+	out := make([]uuid.UUID, 0, len(r.cached))
 	for id := range r.perRun {
 		out = append(out, id)
 	}
@@ -647,9 +650,9 @@ func (r *Registry) RunIDs() []uuid.UUID {
 // run's corpus carries every person's global values, so it grows with the
 // organisation, not the run.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
-	out := make([][]byte, len(snap), len(snap)*3)
+	out := make([][]byte, len(snap))
 	copy(out, snap)
-	seen := make(map[string]struct{}, len(snap)*3)
+	seen := make(map[string]struct{}, len(snap))
 	for _, s := range snap {
 		seen[string(s)] = struct{}{}
 	}
@@ -745,7 +748,7 @@ func NewMasker(secrets [][]byte) Masker {
 // built over one shared set hold it once. A value of own that shared holds is left out.
 func newMaskerOver(own [][]byte, shared [][]byte, sharedSet map[string]struct{}) Masker {
 	mine := NewMasker(ownValues(own, sharedSet)).secrets
-	merged := make([][]byte, 0, len(mine)+len(shared))
+	merged := make([][]byte, 0, len(shared))
 	i, j := 0, 0
 	for i < len(mine) || j < len(shared) {
 		if j == len(shared) || (i < len(mine) && len(mine[i]) > len(shared[j])) {

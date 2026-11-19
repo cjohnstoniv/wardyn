@@ -50,11 +50,11 @@ func (f *poolLimitFlags) register(cmd *cobra.Command, verb string) {
 		case strings.HasSuffix(n, "-memory"), strings.HasSuffix(n, "-disk"):
 			help += ", in GB"
 		case n == "background-lifetime":
-			help += " as Go durations, or none (no end)"
+			help += " as Go durations in whole seconds, or none (no end)"
 		case n == "interactive-idle":
-			help += " as Go durations, or never"
+			help += " as Go durations in whole seconds, or never"
 		default:
-			help += " as Go durations"
+			help += " as Go durations in whole seconds"
 		}
 		fl.StringVar(f.amounts[n], n, "", help)
 	}
@@ -190,7 +190,12 @@ func (f *poolLimitFlags) applyAmounts(l *sdk.RunnerPoolLimits) error {
 			if err != nil || d < time.Second || d.Seconds() > math.MaxInt32 {
 				return 0, fmt.Errorf("--%s: %q is not a Go duration of a second or more", n, s)
 			}
-			return int(d.Seconds()), nil
+			// The limit is whole seconds: a fraction would be dropped after the default-to-maximum
+			// check, so 1.9s:1.1s would be saved as 1s:1s.
+			if d%time.Second != 0 {
+				return 0, fmt.Errorf("--%s: %q is not a whole number of seconds", n, s)
+			}
+			return int(d / time.Second), nil
 		})
 		if err != nil {
 			return err

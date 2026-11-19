@@ -30,7 +30,7 @@ var _ runner.OutputRecoverer = (*Driver)(nil)
 // process's memory, which does not survive the restart this exists for.
 func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
 	if d.vmFor(ctx, ref) != nil {
-		return errVMUnsupported
+		return fmt.Errorf("%w: %w", runner.ErrOutputUnrecoverable, errVMUnsupported)
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
@@ -40,6 +40,10 @@ func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) err
 		return fmt.Errorf("docker: recover output: inspect: %w", err)
 	}
 	c := res.Container
+	// A VM the lookup above could not reach or inspect is still a VM: its log is QEMU's, not the agent's.
+	if isLinuxVM(c.Config) {
+		return fmt.Errorf("%w: %w", runner.ErrOutputUnrecoverable, errVMUnsupported)
+	}
 	if c.HostConfig == nil || runtimeSupportsExec(c.HostConfig.Runtime) {
 		return runner.ErrOutputUnrecoverable
 	}

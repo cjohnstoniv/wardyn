@@ -73,6 +73,11 @@ var memberDeniedSegments = map[string]bool{
 	".gemini":          true, // another agent CLI's login
 	".npmrc":           true, // registry auth tokens
 	".pypirc":          true,
+	// The macOS VM directory (~/Library/Application Support/Wardyn/macos-vm.noindex, internal/macvm
+	// RootDirName): every run's disk, the guest agent's signing key and the Mac's inspection CA key. A
+	// segment, not a pair with Wardyn, so a folder pass of Wardyn itself, whose paths start below it, is
+	// refused too.
+	"macos-vm.noindex": true,
 }
 
 // memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
@@ -143,6 +148,216 @@ func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool)
 	return p.Writable().allows(src, real)
 }
 
+// ScanHolder is a member whose workspace attaches the folder a scan reads, and that workspace's name.
+type ScanHolder struct{ Owner, Workspace string }
+
+// OpenScanSource opens src for a folder scan on this host. What the scan finds lands on the folder's
+// one source row, which every workspace attaching it shows, so the folder is held, whoever scans, to:
+//
+//   - every member workspace root that holds the folder under the name memberLocation gives it: a
+//     member can replace any folder in their root with a link, and a person's own root often lies
+//     inside the shared one, so it must resolve inside each of them, not any one;
+//   - owner's own roots, at the door of a workspace a member owns ("" is an operator's door), with
+//     ValidateUserMount's refusals, checked first: a folder the member's own roots refuse tells them
+//     nothing of another person's workspace;
+//   - each holder's roots: one of them must still hold the folder, or the scan is refused with a
+//     StaleWorkspaceError naming that workspace, since its owner could not onboard the folder today.
+//
+// The resolved folder is then opened with open(real). The caller passes foldersync.OpenFromTop, which
+// opens it one folder at a time from the top of its volume with no link followed (this package cannot
+// import foldersync: foldersync's tests import this one), and reads only through the handle, so a
+// folder swapped for a link after the check is never read through. An open that fails is the member
+// refusal, its cause in the operator's log. At an operator's door a folder no root holds and no member
+// workspace attaches gets no handle and no error, and the caller reads it by its path.
+// One the walk cannot follow (a link loop, more than memberWalkLinks links, or a name on its way
+// that is missing or cannot be read) while a member workspace attaches it is refused for that, never as that
+// person's narrowed roots.
+func (p UserMountPolicy) OpenScanSource(owner, src string, holders []ScanHolder, open func(real string) (*os.Root, error)) (*os.Root, error) {
+	at, held, gaveUp := p.memberLocation(src)
+	roots := held // the roots a refusal names
+	var real string
+	var err error
+	if owner != "" {
+		roots = p.RootsFor(owner)
+		if real, err = validateUserSource(src, roots); err != nil {
+			return nil, err
+		}
+	} else if len(held) == 0 && len(holders) == 0 {
+		return nil, nil
+	} else if gaveUp != nil {
+		return nil, walkGaveUp(src, gaveUp)
+	}
+	for _, h := range holders {
+		own := p.RootsFor(h.Owner)
+		if h.Owner != owner && !slices.ContainsFunc(own, func(r string) bool { return slices.Contains(held, r) }) {
+			return nil, &StaleWorkspaceError{Source: src, Holder: h, Roots: own}
+		}
+	}
+	if owner == "" {
+		if real, err = validateUserSource(at, roots); err != nil {
+			return nil, err
+		}
+	}
+	for _, root := range held {
+		if !withinAnyRoot(real, []string{root}) {
+			return nil, memberSourceRefused(src, real, roots, fmt.Errorf("resolves outside the member workspace root %q that holds it", root))
+		}
+	}
+	userSourceChecked()
+	dir, err := open(real)
+	if err != nil {
+		return nil, memberSourceRefused(src, real, roots, err)
+	}
+	return dir, nil
+}
+
+// userSourceChecked runs in OpenScanSource between the check and the open; tests swap the source there.
+var userSourceChecked = func() {}
+
+// StaleWorkspaceError refuses a folder scan because a member workspace attaches the folder while none
+// of its owner's roots holds it any more (narrowed or removed since onboarding). The scan would land
+// on the row that person reads, so every scan of the folder waits until it is taken out of that
+// workspace or the roots cover it again. Error names the workspace and its owner for an operator;
+// Unnamed is the same refusal for a member, who may not learn another person's workspace.
+type StaleWorkspaceError struct {
+	Source string
+	Holder ScanHolder
+	Roots  []string // the owner's roots now; empty when none is set
+}
+
+func (e *StaleWorkspaceError) Error() string {
+	roots := "none set"
+	if len(e.Roots) > 0 {
+		roots = strings.Join(e.Roots, ", ")
+	}
+	return fmt.Sprintf("%s: the folder %q is attached to the workspace %q of %s, and none of that person's member workspace roots (%s) holds it now; "+
+		"remove the folder from that workspace, or set that person's roots to cover it again (WARDYN_USER_WORKSPACE_ROOTS / _MAP), then scan again",
+		errMemberSourceRefused, e.Source, e.Holder.Workspace, e.Holder.Owner, roots)
+}
+
+// Unnamed is the refusal without the workspace, its owner or their roots.
+func (e *StaleWorkspaceError) Unnamed() string {
+	return fmt.Sprintf("%s: the folder %q is attached to a workspace whose owner's member workspace roots no longer hold it, so no scan of it can run; "+
+		"an operator can see which workspace in the audit log", errMemberSourceRefused, e.Source)
+}
+
+func (e *StaleWorkspaceError) Unwrap() error { return errMemberSourceRefused }
+
+// walkGaveUp refuses a folder scan at an operator's door when memberLocation could not follow src
+// while a member workspace attaches it: no root can be said to hold the folder, and that person's
+// roots are not the cause. The cause goes to the operator's log; the refusal names no workspace.
+func walkGaveUp(src string, cause error) error {
+	slog.Warn("runner: member mount source refused", slog.String("source", src), slog.Any("err", cause))
+	return fmt.Errorf("%w: the folder %q could not be followed on this host (a link loop, more than %d links, or a name on its way that is missing or could not be read) "+
+		"while a member workspace attaches it, so no scan of it can run; fix the folder's path on this host, or remove it from every member workspace that attaches it",
+		errMemberSourceRefused, src, memberWalkLinks)
+}
+
+// memberWalkLinks is how many links memberLocation follows before it gives up: filepath.EvalSymlinks'
+// own limit, so a folder the walk gives up on is one EvalSymlinks refuses too. Never lower it: a name
+// EvalSymlinks resolves would then lose the root that holds it.
+const memberWalkLinks = 255
+
+// memberLocation is where src lies among the member workspace roots: at is the name to check it by
+// and held every root that holds at by its text. A src whose text a root holds is itself. Any other
+// is walked one name at a time from the top, following each link on the way as EvalSymlinks does,
+// up to the first folder that is a root, compared by identity (os.SameFile), so another name of the
+// root (a link to it or above it, another letter case on a volume that ignores case) is that root;
+// at is then src named from that root as configured. The walk stops at the first root and never
+// looks below it, where a member can make any folder a link; a bind or second mount of a folder
+// below a root is not that root, and the walk goes on through it. held is empty when the walk meets
+// no root or cannot go on; gaveUp is set only in the second case, with why: a name on the way that
+// is missing or cannot be read, or more than memberWalkLinks links (a loop among them).
+func (p UserMountPolicy) memberLocation(src string) (at string, held []string, gaveUp error) {
+	all := p.allRoots()
+	holding := func(at string) []string {
+		var out []string
+		for _, root := range all {
+			if rootHolds(root, at) {
+				out = append(out, root)
+			}
+		}
+		return out
+	}
+	if held := holding(src); len(held) > 0 {
+		return src, held, nil
+	}
+	type rootDir struct {
+		name string
+		fi   os.FileInfo
+	}
+	var dirs []rootDir
+	for _, root := range all {
+		if fi, err := os.Stat(root); err == nil && root != string(filepath.Separator) {
+			dirs = append(dirs, rootDir{root, fi})
+		}
+	}
+	if len(dirs) == 0 {
+		return src, nil, nil
+	}
+	cur, rest := string(filepath.Separator), strings.Split(src, "/") // a stored folder is "/"-rooted and clean
+	for links := 0; len(rest) > 0; {
+		name := rest[0]
+		rest = rest[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, name)
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return src, nil, err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			for _, d := range dirs {
+				if os.SameFile(fi, d.fi) {
+					// A name left that is not plain (a link's own "..") leaves at unclean,
+					// which validateUserSource refuses: nothing below a root is walked.
+					at := strings.Join(append([]string{d.name}, slices.DeleteFunc(rest, func(n string) bool { return n == "" || n == "." })...), string(filepath.Separator))
+					return at, holding(at), nil
+				}
+			}
+			cur = next
+			continue
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return src, nil, err
+		}
+		if links++; links > memberWalkLinks {
+			return src, nil, fmt.Errorf("more than %d links on the way to %s", memberWalkLinks, src)
+		}
+		if filepath.IsAbs(target) {
+			cur = filepath.VolumeName(target) + string(filepath.Separator)
+			target = target[len(filepath.VolumeName(target)):]
+		}
+		rest = append(strings.Split(filepath.ToSlash(target), "/"), rest...)
+	}
+	return src, nil, nil
+}
+
+// rootHolds reports whether src, by its text alone, is root or lies under it,
+// with root taken as configured or as it resolves. A root of "/" holds nothing
+// but itself, as in withinAnyRoot: it admits no member folder, so it makes no
+// operator folder a member's.
+func rootHolds(root, src string) bool {
+	return withinAnyCanon(src, []string{root}, filepath.Clean) || withinAnyRoot(src, []string{root})
+}
+
+// allRoots is every member root the policy sets, the shared list and each
+// person's own, sorted and without repeats.
+func (p UserMountPolicy) allRoots() []string {
+	roots := slices.Clone(p.Roots)
+	for _, own := range p.RootsByPrincipal {
+		roots = append(roots, own...)
+	}
+	slices.Sort(roots)
+	return slices.Compact(roots)
+}
+
 // ValidateUserMountLexical is the AUTHORING-time gate for a folder bound to a
 // person's runner: the folder lives on that machine, so nothing on this host is
 // read. Everything the path's text can show is still refused: the operator
@@ -159,7 +374,7 @@ func (p UserMountPolicy) ValidateUserMountLexical(principal, src string, writabl
 		return fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	if !withinAnyCanon(src, roots, filepath.Clean) {
-		return fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return fmt.Errorf("%w: mount source %q is outside every member workspace root (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 	}
 	if seg := DeniedUserSegment(src); seg != "" {
 		return fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
@@ -276,11 +491,10 @@ func validateUserSource(src string, roots []string) (string, error) {
 		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	refused := func(real string, cause error) (string, error) {
-		slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
-		return "", fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return "", memberSourceRefused(src, real, roots, cause)
 	}
 	if !withinAnyRootLexical(src, roots) {
-		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 	}
 	if err := denySourceSymlink(src); err != nil {
 		return refused("", err)
@@ -299,6 +513,13 @@ func validateUserSource(src string, roots []string) (string, error) {
 		return "", fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
 	}
 	return real, nil
+}
+
+// memberSourceRefused logs cause for the operator and returns the refusal the
+// member reads, which says nothing about what the filesystem held.
+func memberSourceRefused(src, real string, roots []string, cause error) error {
+	slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
+	return fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 }
 
 // errMemberSourceRefused is the one refusal a member reads for a source that
@@ -381,6 +602,14 @@ func DeniedUserSegment(real string) string {
 		}
 	}
 	return ""
+}
+
+// DeniedUserSegmentUnder is DeniedUserSegment for rel, a slash-separated path relative to dir: the
+// credential rules read dir's own names too, so a pair that spans the boundary matches. A pass of
+// ~/Library leaves out Keychains/x, and a pass of ~/.config leaves out gh/hosts.yml, as a pass of the
+// folder above does.
+func DeniedUserSegmentUnder(dir, rel string) string {
+	return DeniedUserSegment(filepath.Join(dir, filepath.FromSlash(rel)))
 }
 
 // ParseUserMountPolicy builds the policy from its four raw operator/MDM env

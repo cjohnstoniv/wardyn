@@ -17,6 +17,8 @@
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
 # WARDYN_TEST_REPORT_NAME renames the report directory only (the suite name still scopes the skip floor).
 # WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
+# WARDYN_TEST_REPORT_TAIL=<n> echoes the last n output lines of each failing test into the log (default 8); a failing
+# test's -race report ("WARNING: DATA RACE" to the closing "=================="), 200 lines at most, is echoed first.
 # test/go-quarantine.txt (WARDYN_GO_QUARANTINE overrides the path) lists the flaky Go tests every suite
 # skips with `go test -skip`; the file is validated first and an expired or malformed entry exits 1.
 # Its format and rules are the ones in ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh).
@@ -88,9 +90,15 @@ GO_EXIT=$?
 # its name (#1209), and any package that failed with no failing test to name
 # (a -timeout panic, a panic in init, os.Exit or a failure in TestMain) prints
 # its package name and the panic, or else its last few output lines.
+# A -race failure echoes its "WARNING: DATA RACE" blocks first, since its last
+# lines no longer hold the access stacks. A package whose test binary exited
+# while a test ran (os.Exit inside a test, as the pool guard's) is listed under
+# "failed outside any named test" too, beside its named failures, with that
+# test's name and its last 200 lines: the exit skipped every later test.
 if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
   python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
 import json
+import os
 import sys
 from collections import deque
 
@@ -99,13 +107,31 @@ build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fa
 build_fails = {}   # ImportPath -> [Output, ...]
 pkg_fails = set()  # Package: failed with no Test and not a build failure
 tail = {}          # Package -> its last few output lines
-test_tail = {}     # (Package, Test) -> that test's last few output lines (#1209)
+test_out = {}      # (Package, Test) -> that test's last output lines as (n, line), n counting its lines from 1 (#1209)
+race = {}          # (Package, Test) -> that test's "WARNING: DATA RACE" blocks as (n, line), LONG lines at most
+in_race = set()    # (Package, Test) whose output is inside a race block
+count = {}         # (Package, Test) -> how many output lines that test has had
+running = {}       # Package -> the tests that started and are neither ended (pass, fail or skip) nor paused
+exited = {}        # Package -> the tests still running when its test binary ended: it exited inside them
 panics = {}        # Package -> its first `panic:` line and the lines after it
 panic_test = {}    # Package -> the test that panic was attributed to, if any
+TEST_TAIL = int(os.environ.get("WARDYN_TEST_REPORT_TAIL") or 8)
+# The most lines echoed for a failing test's race blocks, and for a test its binary exited inside: a race report
+# holds two access stacks and two creation stacks, and an exit's cause (a guard's message and its stacks) sits
+# just before the exit.
+LONG = 200
+REPORT = os.path.basename(sys.argv[1])
 
 
 def emit(out):
     sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+
+
+def last(buf, k):
+    """The last k entries of buf; none when k is 0."""
+    buf = list(buf)
+    return buf[len(buf) - min(k, len(buf)):]
+
 
 with open(sys.argv[1]) as f:
     for line in f:
@@ -117,34 +143,70 @@ with open(sys.argv[1]) as f:
         except ValueError:
             continue  # a non-JSON line (e.g. `go test` itself failed to start)
         action = ev.get("Action")
+        pkg, test = ev.get("Package", ""), ev.get("Test", "")
         if action == "build-output":
             build_output.setdefault(ev.get("ImportPath", ""), []).append(ev.get("Output", ""))
         elif action == "build-fail":
             ip = ev.get("ImportPath", "")
             build_fails[ip] = build_output.get(ip, [])
-        elif action == "output" and ev.get("Package"):
-            pkg, out = ev["Package"], ev.get("Output", "")
+        elif action in ("run", "cont") and test:
+            running.setdefault(pkg, set()).add(test)
+        elif action == "pause" and test:
+            running.get(pkg, set()).discard(test)
+        elif action == "output" and pkg:
+            out = ev.get("Output", "")
             tail.setdefault(pkg, deque(maxlen=8)).append(out)
-            if ev.get("Test"):
-                test_tail.setdefault((pkg, ev["Test"]), deque(maxlen=8)).append(out)
+            if test:
+                key = (pkg, test)
+                n = count[key] = count.get(key, 0) + 1
+                test_out.setdefault(key, deque(maxlen=max(TEST_TAIL, LONG))).append((n, out))
+                # A -race failure names its cause in each "WARNING: DATA RACE" block, from that line to
+                # the closing "==================", which a test's last lines no longer hold.
+                text = out.rstrip("\n")
+                if text == "WARNING: DATA RACE":
+                    in_race.add(key)
+                if key in in_race:
+                    block = race.setdefault(key, [])
+                    if len(block) < LONG:
+                        block.append((n, out))
+                    if text == "==================":
+                        in_race.discard(key)
             # A -timeout panic is attributed to the running test but emits no
             # fail event for it, and its last lines are goroutine frames: the
             # `panic:` line and the ones after it are what name the cause.
             if pkg not in panics and out.startswith("panic: "):
                 panics[pkg] = [out]
-                panic_test[pkg] = ev.get("Test", "")
+                panic_test[pkg] = test
             elif pkg in panics and len(panics[pkg]) < 8:
                 panics[pkg].append(out)
-        elif action == "fail" and ev.get("Test"):
-            fails.add((ev.get("Package", ""), ev["Test"]))
+        elif action in ("pass", "skip", "fail") and test:
+            running.get(pkg, set()).discard(test)
+            if action == "fail":
+                fails.add((pkg, test))
+            else:
+                # Only a failing test's lines are echoed: a passed or skipped one's are dropped.
+                for kept in (test_out, race, count):
+                    kept.pop((pkg, test), None)
+                in_race.discard((pkg, test))
         elif action == "fail" and not ev.get("FailedBuild"):
-            pkg_fails.add(ev.get("Package", ""))
+            pkg_fails.add(pkg)
+            # A test that started and never ended was running when the binary exited (os.Exit or a
+            # crash inside it): test2json gives it no end event, and the package's fail is all that comes.
+            if running.get(pkg) and (pkg, panic_test.get(pkg)) not in fails:
+                exited[pkg] = sorted(running[pkg])
 
 if fails:
     print(">> failing tests:")
     for pkg, test in sorted(fails):
         print(f">>   {pkg} {test}")
-        for out in test_tail.get((pkg, test), []):
+        block = race.get((pkg, test), [])
+        for _, out in block:
+            emit(out)
+        after = block[-1][0] if block else 0
+        lines = [(n, out) for n, out in last(test_out.get((pkg, test), []), TEST_TAIL) if n > after]
+        if block and lines and lines[0][0] > after + 1:
+            print(f">>     ... {lines[0][0] - after - 1} lines cut (the whole output is in {REPORT})")
+        for _, out in lines:
             emit(out)
 
 if build_fails:
@@ -156,12 +218,22 @@ if build_fails:
 
 named_fail_pkgs = {pkg for pkg, _ in fails}
 # An ordinary panic in a test fails that test, already named above; a -timeout
-# panic fails no test, so it still needs its package listed here.
+# panic fails no test, so it still needs its package listed here. So does a
+# binary that exited inside a test: the exit skipped every later test.
 orphan_panics = {p for p in panics if (p, panic_test[p]) not in fails}
-unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p not in named_fail_pkgs)
+unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p in exited or p not in named_fail_pkgs)
 if unnamed:
     print(">> failed outside any named test:")
     for pkg in unnamed:
+        if pkg in exited and pkg not in orphan_panics:
+            print(f">>   {pkg} (the test binary exited while {', '.join(exited[pkg])} ran)")
+            for test in exited[pkg]:
+                lines = last(test_out.get((pkg, test), []), LONG)
+                if lines and lines[0][0] > 1:
+                    print(f">>     ... {lines[0][0] - 1} earlier lines of {test} cut (the whole output is in {REPORT})")
+                for _, out in lines:
+                    emit(out)
+            continue
         print(f">>   {pkg}")
         for out in panics.get(pkg) or tail.get(pkg, []):
             emit(out)
@@ -204,13 +276,13 @@ fi
 if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   DECLARE_FLOOR=0
 fi
-# conformance-docker, conformance-k8s, envbuild and l0-docker have no testfloor.Mark
+# conformance-docker, conformance-k8s, conformance-vm, envbuild and l0-docker have no testfloor.Mark
 # probes of their own (see the REQUIRE_ALL floor right below, which is their
 # equivalent) — the testfloor.Mark floor further down must not run for them,
 # or it would read "no package suite tested calls testfloor.Mark" as a red
 # floor instead of a floor that simply lives elsewhere.
 case "$SUITE" in
-  conformance-docker | conformance-k8s | envbuild | l0-docker) DECLARE_FLOOR=0 ;;
+  conformance-docker | conformance-k8s | conformance-vm | envbuild | l0-docker) DECLARE_FLOOR=0 ;;
 esac
 
 # T-08 (G9): conformance and envbuild have no must-pass floor at all today —
@@ -230,13 +302,22 @@ esac
 # or renaming one case reddens the job even while the others still match.
 # The PlacementRouting cases cannot skip here: these substrates advertise CC1 only (no gVisor or Kata on
 # CI; the k8s suite sets no ConfinementRuntimes), and the remote suite supplies the offline runner.
+# FreezeAgentOnlyAndInspectExec does not skip where a class cannot freeze (nightly's runsc leg): it checks the refusal.
 REQUIRE_ALL=""
 if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally'
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/DNSAudit TestConformanceDocker/CreateStatusStop TestConformanceDocker/WaitExitCode TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally TestConformanceDocker/InteractiveAttach TestConformanceDocker/ExecStreamLoopbackRelay TestRunLifetimeDocker/EndKeepsAgentAndCutsEgress TestRunLifetimeDocker/LostProxyCutsEgress TestRunLifetimeDocker/ReviveReusesAddressAndCA TestMemberDriveDocker TestRecordingDocker TestConformanceDocker/KillMissingRef TestConformanceDocker/NoNetwork TestRunLifetimeDocker/FreezeAgentOnlyAndInspectExec'
   fi
   if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured'
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured TestConformanceK8s/LiveProxyNarrow TestConformanceK8s/ClosedOffAfterTeardown TestConformanceK8s/ManagedFiles TestConformanceK8s/ExecStream TestConformanceK8s/InteractiveAttach TestConformanceK8s/ExecStreamLoopbackRelay TestConformanceK8s/NoNetwork TestConformanceK8s/EphemeralDiskLimit TestRecordingK8s TestConformanceK8s/NoNetworkProxyPodReachesOnlyWardyn'
+    if [ "${WARDYN_TEST_K8S_AGENT_SANDBOX:-}" = "1" ]; then
+      REQUIRE_ALL="$REQUIRE_ALL TestAgentSandboxGoneAfterTeardown TestAgentSandboxNetworkPolicyFirst"
+    fi
+  fi
+  # The ephemeral-disk case's image and environment skips are in its nested cases, and a skipped nested case
+  # leaves its parent passing: each one is named, so a skip of any of them goes red.
+  if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+    REQUIRE_ALL="$REQUIRE_ALL TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Tmp TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Workdir TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted/Cache TestConformanceK8s/EphemeralDiskLimit/AnOversizedLimitStillSchedules"
   fi
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI TestFinalizeBase_IDEqualsTheDaemonsAuxID'
@@ -251,11 +332,40 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
   fi
+  # The gateway recipes run the real LiteLLM, Portkey and Presidio images, which only the hosted job may
+  # pull, so the test self-skips anywhere else; named here only where it can run, a rename or a skip goes red.
+  if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    REQUIRE_ALL="$REQUIRE_ALL TestGatewayRecipes_Live"
+  fi
+  # Revive after a reboot, which docs/RUNTIME-CONTRACT.md cites as holding. It runs on a fake daemon with no
+  # skip, so every docker suite runs it, WARDYN_TEST_DOCKER or not; named here, a rename goes red.
+  if [ "$SUITE" = "docker" ]; then
+    REQUIRE_ALL="${REQUIRE_ALL:+$REQUIRE_ALL }TestStartSandbox_OnlyBehindARunningProxy"
+  fi
   # #707: `make test-conformance-docker` ran these through a bare
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil'
+    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce'
+  fi
+  # The four Linux VM cases: three docs/RUNTIME-CONTRACT.md cites, and the guest proof that docs/POLICIES.md's VM
+  # host rules judge plain HTTP. Both funcs skip unless all three WARDYN_TEST_VM_*_IMAGE are set; ci.yml's vm job, the suite's
+  # one caller, builds and sets them, so the floor keys on the suite alone and a dropped variable goes red as a
+  # skip.
+  if [ "$SUITE" = "conformance-vm" ]; then
+    REQUIRE_ALL='TestLinuxVMSandbox TestLinuxVMSandbox/ForwardDialsGuestLoopbackOnly TestLinuxVMSandbox/HostRulesJudgedInTheGuest TestLinuxVMDrives'
+  fi
+  # The SSH gateway's -L forwarding, the editor path over it, the UI relay and the macOS VM Screen Sharing
+  # refusal (gateway and guest agent). None needs Postgres or Docker, so they run in the plain unit suite,
+  # and none may skip or be renamed away without this job going red. Built by appends because a name is
+  # matched whole: REQUIRE_ALL must stay one space-separated line.
+  if [ "$SUITE" = "unit" ]; then
+    REQUIRE_ALL='TestSSHGateway_DirectTCPIPLoopbackRestriction TestSSHGateway_ForwardAuditSurvivesKill'
+    REQUIRE_ALL="$REQUIRE_ALL TestSSHGateway_VMRunDoors TestSSHGateway_ContainerRunForwardStaysSocat"
+    REQUIRE_ALL="$REQUIRE_ALL TestSSHGateway_RemoteSSHChannelsOnOneConnection"
+    REQUIRE_ALL="$REQUIRE_ALL TestUIGateway_MacOSVMScreenSharingPortRefused"
+    REQUIRE_ALL="$REQUIRE_ALL TestUIRelay_AnotherAppsIdlePoolDoesNotRefuseAnApp TestUIRelay_ActiveConnectionsStillRefuseAnApp"
+    REQUIRE_ALL="$REQUIRE_ALL TestForwardRefusesMacScreenSharingPorts TestForwardDialsLoopbackOnly"
   fi
 fi
 if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then

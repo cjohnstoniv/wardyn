@@ -315,3 +315,70 @@ test.describe("Run lifetime — the ending-soon warning", () => {
     await expect(banner).toHaveCount(0);
   });
 });
+
+test.describe("Run page: a run that ends with an elevation", () => {
+  const ELEVATION_SENTENCE = /This run ends when your elevation ends, .+\. It can't be extended\./;
+
+  test("the pill reads the cap, and its menu holds the elevation sentence and no Extend item", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e elevation pill " + randomUUID().slice(0, 8));
+    const cap = aheadByHours(2);
+    await stubRunDetail(page, id, { ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" });
+    await navToRoute(page, `/runs/${id}`);
+
+    const pill = page.getByTestId("run-ends-pill");
+    await expect(pill).toHaveText(/^Ends: (?!never)/);
+    await pill.click();
+    await expect(page.getByTestId("lock-reason")).toHaveText(ELEVATION_SENTENCE);
+    await expect(page.getByRole("menuitem", { name: "1 more day" })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: "1 more week" })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: "Change…" })).toHaveCount(0);
+  });
+
+  test("ten minutes before the cap, the warning has the elevation body and Dismiss only", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e elevation warning " + randomUUID().slice(0, 8));
+    const cap = new Date(Date.now() + 9 * 60_000).toISOString();
+    await stubRunDetail(page, id, { ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" });
+    await navToRoute(page, `/runs/${id}`);
+
+    const banner = page.getByTestId("run-lifetime-warning");
+    await expect(banner.getByText("This run ends in 10 minutes")).toBeVisible();
+    await expect(banner).toContainText("because your elevation ends then. Push or save anything you need before then.");
+    await expect(banner).not.toContainText("files are kept");
+    await expect(banner.getByRole("button", { name: "Extend 1 day" })).toHaveCount(0);
+    await expect(banner.getByRole("button", { name: "Change end…" })).toHaveCount(0);
+    await banner.getByRole("button", { name: "Dismiss" }).click();
+    await expect(banner).toHaveCount(0);
+  });
+
+  test("a run killed at its elevation's end shows the ended banner with Request elevation", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e elevation ended " + randomUUID().slice(0, 8));
+    await stubRunDetail(page, id, {
+      state: "KILLED",
+      status_reason: "max_lifetime_reached",
+      lifetime_cap_at: aheadByHours(-1),
+      lifetime_cap_source: "elevation",
+    });
+    await navToRoute(page, `/runs/${id}`);
+
+    const banner = page.getByTestId("run-lifetime-elevation-ended");
+    await expect(banner.getByText("This run ended when your elevation ended")).toBeVisible();
+    await expect(banner).toContainText("To keep working, ask for elevation again and start a new run.");
+    await expect(banner.getByRole("button", { name: "Request elevation" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "End run" })).toHaveCount(0);
+  });
+
+  test("the same run under a pool cap keeps its Extend items", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e pool cap " + randomUUID().slice(0, 8));
+    const cap = aheadByHours(2);
+    await stubRunDetail(page, id, { ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "pool" });
+    await navToRoute(page, `/runs/${id}`);
+
+    await page.getByTestId("run-ends-pill").click();
+    await expect(page.getByRole("menuitem", { name: "1 more day" })).toBeVisible();
+    await expect(page.getByTestId("lock-reason")).toHaveCount(0);
+  });
+});

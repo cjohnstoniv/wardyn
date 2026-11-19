@@ -85,7 +85,7 @@ func TestRunPATSweepLeavesRetainedTokensOnLiveRun(t *testing.T) {
 	ctx := context.Background()
 	fx := newADOPATFixture(t)
 	first := fx.ok(t, "dev.azure.com", nil)
-	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(-adoRunPATRenewWindow + time.Minute))
+	fx.setClock(fx.validTo(t, first.JTI).Add(-adoRunPATRenewWindow + time.Minute))
 	renewed := fx.ok(t, "vssps.dev.azure.com", nil)
 	if renewed.JTI == first.JTI || len(fx.st.unrevoked(t)) != 2 {
 		t.Fatalf("renewal: JTI %s, %d open rows, want a second token beside the first", renewed.JTI, len(fx.st.unrevoked(t)))
@@ -109,5 +109,17 @@ func TestAdoRunPATRefusalTransientIs503(t *testing.T) {
 	}
 	if got, _, _ := adoRunPATRefusal(&adoPATError{Status: http.StatusForbidden}); got != http.StatusForbidden {
 		t.Errorf("HTTP 403 answered %d, want 403", got)
+	}
+}
+
+// The sweep deletes what an erase kept of a token Azure DevOps refused to revoke, once it has expired,
+// so a person a SCIM purge removed, whom nobody erases again, keeps no record of it.
+func TestRunPATSweepDeletesWhatAnEraseKept(t *testing.T) {
+	fx := newADOPATFixture(t)
+	swept := 0
+	fx.srv.cfg.Store = tokenHistoryLeft{adoConsoleStore: adoConsoleStore{fx.st}, swept: &swept}
+	fx.advance(adoRunPATSweepEvery + time.Second)
+	if err := fx.srv.sweepRunPATs(context.Background()); err != nil || swept != 1 {
+		t.Fatalf("sweepRunPATs = %v, deletes asked %d; want one", err, swept)
 	}
 }

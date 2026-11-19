@@ -183,7 +183,7 @@ func TestLive_RealModel(t *testing.T) {
 		// MANUAL path (reliable): launch a real claude-code agent directly with an
 		// inline policy; its model credential is its model provider's. Proves "a real
 		// model-backed agent actually completes the task" under EACH installed
-		// confinement substrate (so a real Opus agent is exercised at CC1 AND CC2,
+		// confinement substrate (so a real model-backed agent is exercised at CC1 AND CC2,
 		// not just the best tier).
 		for _, class := range sortedInstalled(installedRM) {
 			class := class

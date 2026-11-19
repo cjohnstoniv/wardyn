@@ -125,7 +125,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
 			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
-			ExecOutputUncaptured: cs.ExecOutputUncaptured,
+			ExecOutputUncaptured: cs.ExecOutputUncaptured, NetworkPolicyCheck: cs.NetworkPolicyCheck,
 		},
 		Source: types.RunEvidenceRunnerAsserted, Capacity: reported.Capacity, AllowedRoots: reported.AllowedRoots, impl: ep.sub,
 	}, nil
@@ -215,6 +215,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.StructuralEgress = out.StructuralEgress && s.StructuralEgress
 		out.NetworkPolicy = out.NetworkPolicy && s.NetworkPolicy
 		out.NetworkPolicyAcknowledged = out.NetworkPolicyAcknowledged && s.NetworkPolicyAcknowledged
+		out.NetworkPolicyCheck = runner.WorseNetPolCheck(out.NetworkPolicyCheck, s.NetworkPolicyCheck) // the worst verdict, with its own time
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles
@@ -259,6 +260,8 @@ type placementDemands struct {
 	// VMFolders is a Linux VM run that carries a folder mount: its runner must share it into the
 	// guest (virtiofs), exactly as a container's bind.
 	VMFolders bool
+	// VMDrives is a Linux VM run that carries a drive: its runner must say it shares one into the guest.
+	VMDrives bool
 	// MacOSVM is machine_kind macos_vm: only a registered Mac runner whose caps offer it, and that the
 	// managed-Mac gate admits, starts one (macOSVMOffer).
 	MacOSVM bool
@@ -278,7 +281,7 @@ const macOSVMOnRemote = "macOS VMs run only on a registered runner that offers t
 
 // linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
 // plain shell in this release (no shared session to open in the agent CLI or to take over).
-const linuxVMAgentStart = "A Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+const linuxVMAgentStart = "A Linux VM's terminal opens a shell, not the agent, in this release. Turn off \"Start the run in this harness\", or send interactive_start: \"shell\" in the API."
 
 // runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
 type runnerCaps interface {
@@ -303,6 +306,9 @@ func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal 
 		}
 		if d.VMFolders && !caps.LinuxVM.Virtiofs {
 			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind", Detail: remote.VMNoFolderShare}
+		}
+		if d.VMDrives && !caps.LinuxVM.Drives {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "drives", Detail: remote.VMNoDriveShare}
 		}
 	}
 	if !d.IdlePause {
@@ -335,6 +341,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		p, runners = place.placement, place.eligibleRunners()
 	}
 	demands := requestDemands(req, ceiling, mounts)
+	demands.VMDrives = demands.LinuxVM && ask.MountsDrives
 	if demands.LinuxVM && p != types.PlacementLocal {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
 	}
@@ -342,7 +349,16 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
 	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
-		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, linuxVMAgentStart)
+	}
+	if f := macOSVMRunShapeRefusal(req, demands); f != nil {
+		return f
+	}
+	if demands.LinuxVM && ask.KeepsWorkFolder {
+		// A kept work folder is a Docker or cluster volume, which a Linux VM can never open (it takes only a drive bound to its
+		// runner), so this answers at Review for every runner, whatever it reports, rather than failing the start.
+		const msg = "A Linux VM sandbox can't keep its work folder as a drive in this release. Turn off keep_work_folder, or choose a container."
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "keep_work_folder"}, msg)
 	}
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
@@ -353,10 +369,11 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
 			return runServerError("read macOS VM capability", err)
 		}
-		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil {
+		// A resume names no base: its machine's own is checked by stepKeptMachine, never the Mac's current one.
+		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil && !keptResume(req) {
 			return f
 		}
-		baseLimit.Base = req.MacOSBase
+		baseLimit.Base, baseLimit.Kept = req.MacOSBase, keptResume(req)
 	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
@@ -382,6 +399,21 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	return nil
 }
 
+// macOSVMRunShapeRefusal is the refusal of a macOS VM run shape the runner cannot honour, whichever Mac
+// it lands on: a terminal that opens the agent CLI (the runner's own sentence) and a profile that pauses
+// idle runs (a macOS VM has no pause; the runner's Freeze answers runner.ErrFreezeUnsupported).
+func macOSVMRunShapeRefusal(req createRunRequest, demands placementDemands) *runRefusal {
+	switch {
+	case !demands.MacOSVM:
+		return nil
+	case requestIsInteractive(req) && req.InteractiveStart == "agent":
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, runner.MacVMAgentStart)
+	case demands.IdlePause:
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "pause_idle_after_sec"}, runner.MacVMNoIdlePause)
+	}
+	return nil
+}
+
 // placementRunRefusal is a placement refusal as the run's refusal, saying msg and naming the request
 // field it is about (errorBody.Field) when it names one, so the console takes the person to where
 // that field is changed.
@@ -399,6 +431,10 @@ type macOSVMAsk struct {
 	MemoryMiB int
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
+	// MountsDrives is that the run names a drive of its own; KeepsWorkFolder that it keeps its work folder, which is
+	// not one a Linux VM can mount. Only a Linux VM reads these two (placementDemands.VMDrives, the kept-folder refusal);
+	// the rest of this ask is a macOS VM's.
+	MountsDrives, KeepsWorkFolder bool
 	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
 	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. DiskDrives is the run
 	// mounts a person's disk drive or keeps its work folder, which a macOS VM attaches as a disk; a runner
@@ -460,6 +496,9 @@ type macOSBaseLimit struct {
 	Now     time.Time
 	// Base is the base the run picked (CreateRunRequest.MacOSBase), whose age is the one read; "" is Standard.
 	Base string
+	// Kept: the run resumes a kept machine, which boots its own disk, so the Mac's current base (its state,
+	// name, age, harnesses and minimum size) is not what it runs; the runner checks the machine's own.
+	Kept bool
 }
 
 // macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
@@ -540,18 +579,19 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	base, harnesses, known := macOSChosenBase(mc, limit)
 	out.Harnesses = harnesses
 	ageRefusal, days := macOSBaseRefusal(name, base, limit)
+	kept := len(limit) > 0 && limit[0].Kept // a resumed machine boots its own disk, whatever the Mac's base is now
 	switch {
-	case mc.Base.State == runnerwire.MacVMBasePreparing:
+	case !kept && mc.Base.State == runnerwire.MacVMBasePreparing:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
-	case mc.Base.State != runnerwire.MacVMBaseReady:
+	case !kept && mc.Base.State != runnerwire.MacVMBaseReady:
 		detail := name + " has no macOS base image ready yet."
 		if mc.Base.Error != "" {
 			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
 		}
 		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
-	case !known:
+	case !kept && !known:
 		out.Refusal, out.Why = macOSBaseNotFound(limit[0].Base), client.MacOSVMWhyNoBase
-	case ageRefusal != nil:
+	case !kept && ageRefusal != nil:
 		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
 	case live >= mc.Max && mc.Max >= 2:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
@@ -605,7 +645,7 @@ func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
 // the pass rested on, or the first check that failed. No device-certificate check exists in 0.10.0.
 func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *placement.Refusal) {
 	if rn.TrustClass != types.RunnerTrustManagedDevice {
-		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security operator to mark it."
+		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security admin to mark it as a managed device."
 		if operator {
 			detail = fmt.Sprintf("%s is not marked as company-managed. Mark it with `wardyn runner trust %s managed_device`.", macRunnerName(rn), rn.ID)
 		}
@@ -639,9 +679,9 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	rn.ID = id
 	var live int
 	if st, ok := s.cfg.Store.(interface {
-		RunnerMacOSVMHolders(context.Context, []uuid.UUID) (map[uuid.UUID]int, error)
+		RunnerMacOSVMHolders(context.Context, []uuid.UUID, uuid.UUID) (map[uuid.UUID]int, error)
 	}); ok && haveCaps {
-		held, err := st.RunnerMacOSVMHolders(ctx, []uuid.UUID{id})
+		held, err := st.RunnerMacOSVMHolders(ctx, []uuid.UUID{id}, promotedRun(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -656,6 +696,10 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	}
 	fit := *caps.MacOSVM
 	fit.Harnesses = offer.Harnesses // the picked base's
+	// The runner checks a resumed machine's harnesses and size against its own disk.
+	if limit.Kept {
+		ask.Harnesses, ask.CPUMillis, ask.MemoryMiB = nil, 0, 0
+	}
 	return macOSVMFit(&fit, rn, ask, pool), nil
 }
 
@@ -766,7 +810,9 @@ func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) bool {
 		return false
 	}
 	return req.ToolApprovals == "hold" || slices.ContainsFunc(req.Tools, hasPersonalToolRules) ||
-		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold || r.Effect == types.ToolDeny })
+		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
+			return r.Effect == types.ToolHold || r.Effect == types.ToolApproveEach || r.Effect == types.ToolDeny
+		})
 }
 
 // macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no

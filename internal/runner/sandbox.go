@@ -47,22 +47,27 @@ const (
 // REPLACE the client trust store. Keep in lockstep with install_mitm_ca in
 // deploy/images/common/agent-run-lib.sh. A runner's own bundle mounted at
 // TrustedCAMountPath is appended after the PEM. No-op when WARDYN_MITM_CA_PEM is
-// unset and nothing is mounted there. The idle loop is TERM-aware: as PID 1, a bare `sleep` ignores
-// SIGTERM and would wait out the full kill timeout; this exits 143/130, not
-// 0, so an out-of-band stop still reads as a signal kill downstream.
+// unset and nothing is mounted there. Each file is written to a temp file in the same
+// directory and renamed into place, mitm-ca.pem first and ca-bundle.pem last, so a
+// reader (ExecCAWait, a TLS client) never sees a partial file. The script holds no "$$" or "$(": Kubernetes
+// rewrites those in a pod Command, and bring-back matches PID 1's command line to this text byte for byte. The idle loop is
+// TERM-aware: as PID 1, a bare `sleep` ignores SIGTERM and would wait out the full
+// kill timeout; this exits 143/130, not 0, so an out-of-band stop still reads as a
+// signal kill downstream.
 const AgentIdleScript = `d=/tmp/wardyn
 t=` + TrustedCAMountPath + `
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s "$t" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
-  { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
+  n="$d/.ca-tmp"
+  { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$n" && chmod 0644 "$n" && mv -f "$n" "$d/mitm-ca.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
   sys=""
   for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
     [ -f "$c" ] && sys="$c" && break
   done
   if [ -n "$sys" ]; then
-    { cat "$sys" "$d/mitm-ca.pem" > "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+    { cat "$sys" "$d/mitm-ca.pem" > "$n" && chmod 0644 "$n" && mv -f "$n" "$d/ca-bundle.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
   else
-    { cp "$d/mitm-ca.pem" "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+    { cp "$d/mitm-ca.pem" "$n" && chmod 0644 "$n" && mv -f "$n" "$d/ca-bundle.pem"; } 2>/dev/null || rm -f "$n" 2>/dev/null || true
     echo "wardyn: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
   fi
   if command -v update-ca-certificates >/dev/null 2>&1; then
@@ -72,6 +77,25 @@ fi
 trap 'exit 143' TERM
 trap 'exit 130' INT
 while :; do sleep 3600 & wait $!; done`
+
+// ExecCAWait is the shell a person's exec runs first (internal/api's sshExecArgv). A run reads RUNNING
+// once its sandbox has started, while the idle process (AgentIdleScript, or install_mitm_ca under
+// `agent-run --idle`) may still be writing /tmp/wardyn/mitm-ca.pem and ca-bundle.pem, so a TLS call
+// in the first exec failed on a file its CA variables name. When those variables name these files and
+// a CA was delivered (the idle script's own test), it waits up to 15 seconds for both, then refuses
+// with a sentence and exit 1. A run with no CA, or whose variables name other files, never waits, nor
+// does a macOS guest, where nothing writes /tmp/wardyn (its CA lands in ~/.wardyn). The counter's name is one no image is expected to export.
+const ExecCAWait = `if [ "${SSL_CERT_FILE:-}" = /tmp/wardyn/ca-bundle.pem ] && { [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s ` + TrustedCAMountPath + ` ]; } && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  wardyn_ca_wait=0
+  while [ ! -s /tmp/wardyn/mitm-ca.pem ] || [ ! -s /tmp/wardyn/ca-bundle.pem ]; do
+    if [ "$wardyn_ca_wait" -ge 75 ]; then
+      echo "wardyn: this run's CA files (/tmp/wardyn/mitm-ca.pem and ca-bundle.pem) were not written within 15 seconds, so the command did not run: its TLS calls would fail." >&2
+      echo "wardyn: try again; if it keeps happening, end the run and start a new one." >&2; exit 1
+    fi
+    if sleep 0.2 2>/dev/null; then wardyn_ca_wait=$((wardyn_ca_wait+1)); else sleep 1; wardyn_ca_wait=$((wardyn_ca_wait+5)); fi
+  done
+fi
+`
 
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a
 // per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc
@@ -143,6 +167,11 @@ var proxySidecarEnvKnobNames = []string{
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 	// The git broker's wait for a wait_for_review mint approval (docs/ENV.md).
 	"WARDYN_GIT_APPROVAL_TIMEOUT",
+	// The admin's opt-out from model token counting: off stops the proxy metering. A proxy older than
+	// the meter ignores it, so an older pinned proxy is never refused for it.
+	"WARDYN_MODEL_USAGE",
+	// The proxy's shorter bound on serving a last-good injected credential past its lease (inject.go).
+	"WARDYN_PROXY_STALE_CREDENTIAL_MAX",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the
@@ -199,6 +228,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		MITMHosts:            pc.MITMHosts,
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
+		GitPushWithheld:      pc.GitPushWithheld,
 		PATGrants:            pc.PATGrants,
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ResidentMints:        pc.ResidentMints,
@@ -214,21 +244,29 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMChannelHosts:      pc.LLMChannelHosts,
+		LLMHeaders:           pc.LLMHeaders,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		LocalModels:          pc.LocalModels,
+		AllowedModels:        pc.ModelLimit.proxyList(),
+		BedrockRoutes:        pc.ModelLimit.proxyRoutes(),
+		GatewayIdentity:      pc.GatewayIdentity,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
+		ForgeHosts:           pc.ForgeHosts,
 		HarnessToolRules:     pc.HarnessToolRules,
 		ViaOrgRoutes:         pc.ViaOrgRoutes,
 		HarnessCredentials:   pc.HarnessCredentials,
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
+		MCPApproveEach:       pc.MCPApproveEach,
+		ActivityIgnoreHosts:  pc.ActivityIgnoreHosts,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
+		NoNetwork:            pc.NoNetwork,
 	}
 	if pc.DesktopSignins {
 		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)

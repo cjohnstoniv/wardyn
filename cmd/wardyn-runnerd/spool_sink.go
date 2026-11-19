@@ -343,15 +343,14 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		old.conn.Close() // superseded: its gen is fenced in the manifest already
 	}
 	_ = c.SetDeadline(time.Time{})
-	if ss.send(proxy.SinkFrame{T: proxy.FrameAccept, Seq: acc.Seq}) != nil || ss.send(grantFrame(acc.Grant, ss.epoch)) != nil {
+	if ss.send(proxy.SinkFrame{T: proxy.FrameAccept, Seq: acc.Seq, Usage: true, DNS: true}) != nil || ss.send(grantFrame(acc.Grant, ss.epoch)) != nil {
 		s.ended(ss)
 		return
 	}
+	// pump returns only with the error that ended the session.
 	err = s.pump(ctx, ss)
 	s.ended(ss)
-	if err != nil {
-		slog.Info("runnerd: decision sink session disconnected", slog.String("run_id", r.id.String()), slog.Any("err", err))
-	}
+	slog.Info("runnerd: decision sink session disconnected", slog.String("run_id", r.id.String()), slog.Any("err", err))
 }
 
 func grantFrame(g runnerspool.Grant, epoch uuid.UUID) proxy.SinkFrame {

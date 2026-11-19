@@ -53,12 +53,17 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 		"changeForRead"},
 	"GET /api/v1/governance/changes/{id}": {"a held change's diff is stored rendered and re-withheld for the reader's tier by changeForRead",
 		"changeForRead"},
+	"GET /api/v1/governance/requests": {"each held request the caller may see (canSeeGovernanceChange) is served through changeForRead, " +
+		"as the changes list serves it; a request's diff names a unit, a person and a duration or an image, never a ceiling", "changeForRead"},
+	"GET /api/v1/governance/units/{id}/model-usage": {"the unit tree decides the subtree whose usage is summed and names its units; " +
+		"the answer is unit ids, names and token counts, never a spec", ""},
 	"GET /api/v1/runner-pools":                   {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
 	"GET /api/v1/me/runner-pools":                {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
 	"GET /api/v1/runs/{id}/desktop/files":        {"the run's resolved desktop rules decide the transfer defaults it reports; the answer carries file names and sizes, never a spec", ""},
 	"GET /api/v1/runs/{id}/desktop/files/{name}": {"the run's resolved desktop rules decide whether a download is allowed; the body is the file, never a spec", ""},
 	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
 	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
+	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
 }
 
 // specCensus is the parsed source the route census reads.

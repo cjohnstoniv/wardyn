@@ -60,7 +60,7 @@ func TestReviewExecWithNoBaseImageWorkspaceRefusesWithNoImage(t *testing.T) {
 	}
 }
 
-// Opus review of PR #1079: the success path itself was unpinned.
+// The success path itself was unpinned (PR #1079).
 // TestReviewExecWithSingleWorkspacePassesAgentGate only asserts the response
 // is NOT the OLD "agent is required" 400 — against workspaceStoreFake (no
 // ImageBuilder wired), the request instead 400s on "no image builder wired"

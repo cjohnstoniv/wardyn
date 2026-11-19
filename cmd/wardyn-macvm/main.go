@@ -11,6 +11,8 @@
 //	                                     build this Mac's macOS base image
 //	wardyn-macvm update-tools --root <dir> --cpus N --memory-mib M
 //	                                     bring the base up to the shipped tool pins
+//	wardyn-macvm drive-open --root <dir> --cpus N --memory-mib M --runner-id R --ledger-entry E --drive O --drive-label L
+//	                                     boot a throwaway guest with one disk drive; stops when stdin ends
 //	wardyn-macvm probe                   say (JSON) whether this Mac and build can run macOS VMs
 //	wardyn-macvm version
 //
@@ -70,6 +72,8 @@ type deps struct {
 	sockFstat func(fd int, name string) (unix.Stat_t, error)
 	// powerSource replaces pmset for a tools update (tests).
 	powerSource macvm.PowerSource
+	// editScreen replaces the Mac's edit-base window (tests).
+	editScreen macvm.WindowScreen
 }
 
 func (d deps) power() macvm.PowerSource {
@@ -97,7 +101,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|drive-open|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -114,6 +118,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdUpdateTools(ctx, args[1:], d)
 	case macvm.EditBaseCommand:
 		return cmdEditBase(ctx, args[1:], d)
+	case macvm.DriveOpenCommand:
+		return cmdDriveOpen(ctx, args[1:], d)
 	case macvm.InstallCommand:
 		return cmdInstall(ctx, d)
 	case "probe":
@@ -148,9 +154,13 @@ func cmdLedgerSetup(args []string, d deps) int {
 }
 
 // runShim is the run's desktop shim: view only unless the run's base has desktop control, read here so
-// the rule holds whatever the gateway in front of the runner lets through.
+// the rule holds whatever the gateway in front of the runner lets through. A run the control plane forces
+// view only (macvm.RunConfig.DesktopViewOnly) is so whatever its base says; a run.json it cannot read
+// forces nothing, and BaseViewOnly then keeps the desktop view only.
 func runShim(dir string, pw *macvm.DesktopSecret, log *slog.Logger) *macvm.RFBShim {
-	return &macvm.RFBShim{Credential: pw.Credential, ViewOnly: macvm.BaseViewOnly(dir), Log: log}
+	cfg, err := macvm.ReadRunConfig(dir)
+	forced := err == nil && cfg.DesktopViewOnly
+	return &macvm.RFBShim{Credential: pw.Credential, ViewOnly: forced || macvm.BaseViewOnly(dir), ForceViewOnly: forced, Log: log}
 }
 
 func cmdRun(ctx context.Context, args []string, d deps) int {
@@ -295,7 +305,7 @@ type jobFlags struct {
 	root, runner, entry, ledgerDir, sockRoot *string
 	slot, cpus                               *int
 	memMiB                                   *uint64
-	baseFile                                 *string
+	baseFile, inspCA                         *string
 }
 
 func newJobFlags(fs *flag.FlagSet) jobFlags {
@@ -309,6 +319,7 @@ func newJobFlags(fs *flag.FlagSet) jobFlags {
 		ledgerDir: fs.String(macvm.FlagLedgerDir, "", "the admission ledger directory (default: the package's)"),
 		sockRoot:  fs.String(macvm.FlagSockRoot, "", "the socket root (default: the package's)"),
 		baseFile:  fs.String(macvm.FlagBaseFile, "", "the install list stage 2 installs into the base as admin (the runner setting macos_vm_base_file)"),
+		inspCA:    fs.String(macvm.FlagInspectionCA, "", "this Mac's inspection CA certificate, which stage 2 adds to the install list (the runner setting macos_vm_inspection_ca)"),
 	}
 }
 
@@ -380,14 +391,25 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 			return nil, err
 		}
 	}
+	if *j.inspCA != "" {
+		if items, err = macvm.WithInspectionCA(items, *j.inspCA); err != nil {
+			return nil, err
+		}
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
+	// Stage 2's warnings (a harness withheld, the agent signed ad hoc and how to recover) go to the job's
+	// log, as the command's own do, not nowhere.
+	log := slog.New(slog.NewTextHandler(d.stderr, nil))
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
+		Log:     log,
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
-		Items: items,
+		// Signed with this Mac's identity first, so the agent keeps Full Disk Access through updates.
+		Signer: &macvm.HostAgentSigner{Dir: macvm.Layout{Root: *j.root}.AgentSigningDir(), Log: log},
+		Items:  items,
 	}}, nil
 }
 
@@ -495,9 +517,14 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	fs.SetOutput(d.stderr)
 	j := newJobFlags(fs)
 	force := fs.Bool(macvm.FlagForce, false, "update even when the base looks current, and retry every withheld harness")
+	kept := fs.String(macvm.FlagKept, "", "update the kept machine in this folder instead of the base")
 	variant := fs.String(macvm.FlagVariant, "", "derive this macOS base from Standard instead, with --"+macvm.FlagBaseFile+" its own install list")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	if *kept != "" && *variant != "" {
+		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s and --%s cannot be used together\n", fs.Name(), macvm.FlagKept, macvm.FlagVariant)
+		return 2
 	}
 	if *variant != "" && !macvm.ValidBaseName(*variant) {
 		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %q is not a macOS base name\n", fs.Name(), macvm.FlagVariant, *variant)
@@ -533,7 +560,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	}
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
-		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
+		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, KeptDir: *kept, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
 		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), ItemsDigest: st.Items.Digest(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
@@ -553,9 +580,9 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 }
 
 // cmdEditBase is `wardyn-macvm edit-base`, which `wardyn-runnerd macos-vm edit-base` starts under an
-// edit_base ledger entry: macvm.EditBase, its two guest-agent boots on stage-2 boots whose network this
-// helper hands them itself (silentNet), its window on prepare's prep network. The person's lines go to
-// stdout; an error, a refusal or a discard is the last stderr line.
+// edit_base ledger entry: macvm.EditBase, its two headless guest-agent boots on stage-2 boots whose network
+// this helper hands them itself (silentNet), and its window on a third stage-2 boot on prepare's prep
+// network. The person's lines go to stdout; an error, a refusal or a discard is the last stderr line.
 func cmdEditBase(ctx context.Context, args []string, d deps) int {
 	fs := flag.NewFlagSet(macvm.EditBaseCommand, flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
@@ -578,22 +605,26 @@ func cmdEditBase(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
-	fb := d.firstBoot
-	if fb == nil {
-		fb = macvm.NewProvisioner()
-	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
 	o := macvm.EditOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Admit: j.admit(macvm.EditBaseCommand, d),
-		Guest:     silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
-		FirstBoot: fb, PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Leaked: j.leaked(d),
+		Guest:      silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
+		WindowBoot: boot.WindowBoot(), PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Screen: d.editScreen,
 		CPUs: *j.cpus, MemoryMiB: *j.memMiB, Out: d.stdout, Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
 	if *j.baseFile != "" {
 		// A list that cannot be read stages no profile again: the edit offers none, and they stay staged.
 		if o.Items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
 			o.Log.Warn("wardyn-macvm: edit-base offers no staged profile: the install list could not be read", "err", err.Error())
+		}
+	}
+	if *j.inspCA != "" {
+		// edit-base prints this Mac's CA's subject beside its fingerprint when the base does not trust it yet.
+		if l, caErr := macvm.WithInspectionCA(o.Items, *j.inspCA); caErr != nil {
+			o.Log.Warn("wardyn-macvm: edit-base prints no subject for this Mac's inspection CA: its certificate could not be read", "err", caErr.Error())
+		} else {
+			o.Items = l
 		}
 	}
 	if _, err := macvm.EditBase(ctx, o); err != nil {

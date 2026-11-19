@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -123,7 +124,7 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 	registered := rec.Value
 	token, expires, err := mintKubectlToken(ctx, *live, registered, s.cfg.Now())
 	if err != nil {
-		return fail(http.StatusBadGateway, reasonSinkResolveFailed, kubectlResolveMintFailed, map[string]any{"error": err.Error()})
+		return fail(http.StatusBadGateway, reasonSinkResolveFailed, kubectlResolveMintFailed, map[string]any{"error": auditStep(ctx, auditStepKubectlMint, err, slog.String("run_id", claims.RunID.String()))})
 	}
 	value := formatInjectionValue("Bearer %s", []byte(token))
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(token), []byte(value)) {
@@ -137,7 +138,8 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 	})))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: value, JTI: minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: expires}),
+		ExpiresAt:           s.subscriptionLease(minted, subscription.Token{ExpiresAt: expires}),
+		CredentialExpiresAt: credentialExpiry(expires),
 	})
 	return true
 }

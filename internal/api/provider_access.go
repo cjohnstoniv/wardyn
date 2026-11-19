@@ -63,13 +63,17 @@ const (
 // AddedAt and LastUsedAt are the caller's own stored credential's metadata
 // (CS-6), absent when none is stored.
 type SetupProviderAccess struct {
-	Provider       string     `json:"provider"`
-	State          string     `json:"state"`
-	Action         string     `json:"action,omitempty"`
-	Deadline       string     `json:"deadline,omitempty"`
-	SourceRunID    string     `json:"source_run_id,omitempty"`
-	AddedAt        *time.Time `json:"added_at,omitempty"`
-	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+	Provider    string     `json:"provider"`
+	State       string     `json:"state"`
+	Action      string     `json:"action,omitempty"`
+	Deadline    string     `json:"deadline,omitempty"`
+	SourceRunID string     `json:"source_run_id,omitempty"`
+	AddedAt     *time.Time `json:"added_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	// SignedInAt is when the person last signed in to an endpoint that signs people in (the capture's own time).
+	// Unlike AddedAt, which a replaced credential keeps, it moves on every sign-in, and never on a renewal, so a
+	// console can tell a sign-in it just started from the one it began with.
+	SignedInAt     *time.Time `json:"signed_in_at,omitempty"`
 	Cause          string     `json:"cause,omitempty"`
 	ChangedAt      *time.Time `json:"changed_at,omitempty"`
 	NewDestination string     `json:"new_destination,omitempty"`
@@ -297,6 +301,12 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 		s.gradeProviderSubscription(ctx, &row, p, owner)
 	case types.ModelProviderAzureFoundry:
 		s.gradeProviderAzureFoundry(ctx, &row, p, owner)
+	case types.ModelProviderCustomEndpoint:
+		if p.OIDC != nil {
+			s.gradeProviderEndpointOIDC(ctx, &row, p, owner)
+		} else {
+			s.gradeProviderKey(ctx, &row, p, owner)
+		}
 	default:
 		// Every other closed kind is a typed key or token: providerTypedKinds
 		// (model_provider_credentials.go) — anthropic_api_key, openai_api_key,
@@ -389,8 +399,8 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 // SSO provider, reusing awsSSOCredentialState/modelAccessAction/
 // modelAccessDeadline — modelaccess.go's own vocabulary — over the
 // provider-scoped read providerBedrockRefusal already reads from at dispatch.
-// A session the provider's own account/role pin no longer allows grades
-// expired_signin: a live,
+// A session the provider's own account/role pin, access portal or region no
+// longer allows grades expired_signin: a live,
 // renewable session for the WRONG identity is not "live" from this person's
 // seat, and dispatch would refuse it (mpBRPinned) the instant they tried.
 func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
@@ -428,6 +438,15 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 		row.State = modelAccessExpiredSignin
 		row.Deadline = ""
 		row.Action = providerAccessPortalAction
+		return
+	}
+	// And after the portal, dispatch's refusal of a session for another region than the
+	// provider's (mpBRNotSignedIn), which no sign-in stores: only a new sign-in serves. A
+	// provider with no region is refused for that instead, which no sign-in repairs.
+	if p.Bedrock.Region != "" && blob.Region != p.Bedrock.Region {
+		row.State = modelAccessExpiredSignin
+		row.Deadline = ""
+		row.Action = modelAccessSignInAction
 	}
 }
 

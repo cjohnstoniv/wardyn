@@ -6,7 +6,7 @@
 // 0.8.6 ppl-p2: the admin People page (mock M12). The strings are written out, not read from the copy
 // module, so a drift in people.ts fails this suite.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { PersonSummary } from "../../../lib/types";
@@ -43,10 +43,13 @@ vi.mock("../../../lib/api/scim", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
+import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
 import { setField } from "../../../../test/set-field";
+import { STATES } from "../../wardyn/states";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const HOUR = 3_600_000;
@@ -98,6 +101,13 @@ beforeEach(() => {
 });
 
 describe("the people table", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows the heading, lead and each person's state and holdings", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "People", level: 1 })).toBeInTheDocument();
@@ -105,13 +115,24 @@ describe("the people table", () => {
     const ana = (await screen.findByText("ana@example.com")).closest("tr")!;
     expect(within(ana).getByText("User")).toBeInTheDocument();
     expect(within(ana).getByText("Active")).toBeInTheDocument();
-    expect(within(ana).getByText("1 session · 2 tokens · 1 key")).toBeInTheDocument();
+    expect(within(ana).getByText("1 session · 2 tokens · 1 SSH key")).toBeInTheDocument();
     const fresh = screen.getByText("new@example.com").closest("tr")!;
     expect(within(fresh).getByText("Never signed in")).toBeInTheDocument();
     expect(within(fresh).getAllByText("—")).toHaveLength(2);
     const left = screen.getByText("left@example.com").closest("tr")!;
     expect(within(left).getByText("Deactivated")).toBeInTheDocument();
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();
+  });
+
+  it("bounds a long identity with a tooltip and lets the Holds sentence wrap, so the table stays in its column", async () => {
+    const long = "firstname.lastname.contractor@subsidiary.contoso.com";
+    listMock.mockResolvedValue({ people: [person({ principal: "sub-long", email: long })] });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: long });
+    expect(button).toHaveAttribute("title", long);
+    expect(button.className).toContain("truncate");
+    const holds = within(button.closest("tr")!).getByText(/session|token|key|credential/);
+    expect(holds.closest("td")!.className).toContain("whitespace-normal");
   });
 
   it("labels a role the server could not derive from truncated groups as Unknown", async () => {
@@ -171,17 +192,25 @@ describe("the people table", () => {
   });
 
   it("keeps the same rows mounted while a re-read is in flight, so the opener a drawer returns focus to survives", async () => {
-    renderScreen();
+    const user = userEvent.setup();
+    listMock.mockResolvedValueOnce({ people: ROWS, next_cursor: "c1" });
+    renderScreen({ operator: false });
     const opener = await screen.findByRole("button", { name: "ana@example.com" });
     let answer!: (page: { people: PersonSummary[] }) => void;
     listMock.mockReturnValueOnce(new Promise((done) => { answer = done; }));
-    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
-    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
+    await user.click(opener);
+    const drawer = await screen.findByRole("dialog");
+    await user.click(within(drawer).getByRole("button", { name: "Remove all" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove all" }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     expect(opener.isConnected).toBe(true);
-    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    // The old cursor went with the re-read: Load more would otherwise supersede it and append to the stale page.
+    expect(screen.queryByRole("button", { name: "Load more", hidden: true })).toBeNull();
+    // The open drawer hides the table from the accessibility tree; the row is still the one that opened it.
+    expect(screen.getByRole("button", { name: "ana@example.com", hidden: true })).toBe(opener);
     answer({ people: [ROWS[0]] });
     await waitFor(() => expect(screen.queryByText("new@example.com")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    expect(screen.getByRole("button", { name: "ana@example.com", hidden: true })).toBe(opener);
   });
 
   it("pages: Load more appends the next page by cursor", async () => {
@@ -194,6 +223,69 @@ describe("the people table", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
   });
+
+  it("a failed Load more keeps the pages already read and retries from the same cursor", async () => {
+    listMock
+      .mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" })
+      .mockRejectedValueOnce(new Error("HTTP 500"))
+      .mockResolvedValueOnce({ people: [ROWS[1]] });
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText(P.MORE_FAILED)).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: P.MORE_RETRY }));
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.queryByText(P.MORE_FAILED)).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
+  });
+
+  it("disables Load more while the next page is on its way", async () => {
+    let finish: (v: unknown) => void = () => {};
+    listMock.mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" }).mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: P.LOADING_MORE })).toBeDisabled();
+    finish({ people: [ROWS[1]] });
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+  });
+
+  it("a state filter drops the old rows and cursor, and offers no Load more until its own first page lands", async () => {
+    let answer: ((page: { people: PersonSummary[]; next_cursor?: string }) => void) | undefined;
+    listMock
+      .mockResolvedValueOnce({ people: [ROWS[0], ROWS[1]], next_cursor: "c1" })
+      .mockReturnValueOnce(new Promise((done) => (answer = done)));
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deactivated" }));
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ state: "deactivated", cursor: undefined })));
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(screen.queryByText("ana@example.com")).toBeNull();
+    await act(async () => answer?.({ people: [ROWS[2]], next_cursor: "d1" }));
+    expect(screen.getByText("left@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ state: "deactivated", cursor: "d1" }));
+  });
+
+  it("a new search drops the old rows and cursor, and offers no Load more until its own first page lands", async () => {
+    let answer: ((page: { people: PersonSummary[] }) => void) | undefined;
+    listMock.mockResolvedValueOnce({ people: [ROWS[0], ROWS[1]], next_cursor: "c1" }).mockReturnValueOnce(new Promise((done) => (answer = done)));
+    renderScreen();
+    await screen.findByRole("button", { name: "Load more" });
+    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana", cursor: undefined })));
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(screen.queryByText("new@example.com")).toBeNull();
+    await act(async () => answer?.({ people: [ROWS[0]] }));
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
 });
 
 describe("who can sign in", () => {
@@ -205,7 +297,7 @@ describe("who can sign in", () => {
 
   it("a security admin sees the super-admin-only line and never calls GET /access", async () => {
     renderScreen({ operator: false });
-    expect(await screen.findByText("Only the super admin can see and change who can sign in.")).toBeInTheDocument();
+    expect(await screen.findByText("Only people with the Admin role can see and change who can sign in.")).toBeInTheDocument();
     await screen.findByText("ana@example.com");
     expect(getAccessMock).not.toHaveBeenCalled();
   });
@@ -233,7 +325,7 @@ describe("the person drawer", () => {
   });
 
   it.each([
-    ["Sign out everywhere", "Sign ana@example.com out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
+    ["Sign out everywhere", "Sign ana@example.com out of every browser and CLI session? Their personal API tokens and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
     ["Remove all", "Remove every SSH key ana@example.com has added? Their open SSH sessions end.", () => removeKeysMock],
   ])("%s asks first, naming the person, and only then acts", async (button, sentence, mock) => {
     const { user, drawer } = await openAna();
@@ -243,6 +335,38 @@ describe("the person drawer", () => {
     expect(mock()).not.toHaveBeenCalled();
     await user.click(within(confirm).getByRole("button", { name: button }));
     await waitFor(() => expect(mock()).toHaveBeenCalledWith("sub-ana"));
+  });
+
+  it.each([
+    ["idp|123", "wardyn person invite -- 'idp|123'"],
+    ["a$b", "wardyn person invite -- 'a$b'"],
+    ["o'neil", "wardyn person invite -- 'o'\\''neil'"],
+    ["-x", "wardyn person invite -- '-x'"],
+  ])("the invite command keeps the subject %s one shell word", (subject, command) => {
+    expect(P.INVITE_CMD(subject)).toBe(command);
+  });
+
+  it("the sign-out copy names browser and CLI sessions and does not say CLI tokens keep working", () => {
+    expect(P.SIGN_OUT_CONFIRM("ana")).toMatch(/^Sign ana out of every browser and CLI session\? Their personal API tokens and SSH keys keep working;/);
+    expect(P.SIGN_OUT_CONFIRM("ana")).not.toContain("CLI's");
+    expect(P.SIGN_OUT_DONE("ana")).toBe("Signed ana out of every browser and CLI session.");
+  });
+
+  it.each([
+    ["Sign out everywhere", "Sign out everywhere?", "Signed ana@example.com out of every browser and CLI session."],
+    ["Remove all", "Remove all SSH keys?", "Removed 1 SSH key for ana@example.com."],
+  ])("%s confirm is titled for its object and its toast says what happened", async (button, title, toastText) => {
+    const { user, drawer } = await openAna();
+    await user.click(within(drawer).getByRole("button", { name: button }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByRole("heading", { name: title })).toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: button }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(toastText));
+  });
+
+  it("tells the admin how to let the person create a token", async () => {
+    const { drawer } = await openAna();
+    expect(within(drawer).getByText("wardyn person invite -- 'sub-ana'")).toBeInTheDocument();
   });
 
   // The count beside the list is the server's active count (unrevoked, unexpired), so the list is too.
@@ -262,11 +386,20 @@ describe("the person drawer", () => {
 
   // #1815: the token read used to swallow its rejection, so the section showed the count with no
   // names under it — indistinguishable from a person who holds none, with no way back.
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't load this person's tokens."],
+  ])("a token read that fails with %s says so", async (_name, error, text) => {
+    tokensMock.mockRejectedValueOnce(error);
+    const { drawer } = await openAna();
+    expect(await within(drawer).findByText(text)).toBeInTheDocument();
+  });
+
   it("says the token read failed instead of showing an empty list, and Retry refetches", async () => {
-    tokensMock.mockRejectedValueOnce(new HttpError(503, "tokens store down"));
+    tokensMock.mockRejectedValueOnce(Object.assign(new HttpError(503, "Service Unavailable"), { said: "" }));
     const { user, drawer } = await openAna();
     expect(await within(drawer).findByRole("button", { name: /retry/i })).toBeInTheDocument();
-    expect(within(drawer).getByText("Wardyn isn't answering. Try again.")).toBeInTheDocument();
+    expect(within(drawer).getByText("Wardyn couldn't load this person's tokens. Try again.")).toBeInTheDocument();
     expect(within(drawer).queryByText("ci-bot")).toBeNull();
     await user.click(within(drawer).getByRole("button", { name: /retry/i }));
     expect(await within(drawer).findByText("ci-bot")).toBeInTheDocument();
@@ -327,13 +460,13 @@ describe("the person drawer", () => {
 
 describe("Add a person", () => {
   it("creates the person and re-reads the list", async () => {
-    createMock.mockResolvedValue(undefined);
+    createMock.mockResolvedValue(true);
     const user = userEvent.setup();
     renderScreen();
     await screen.findByText("ana@example.com");
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Add someone before their first sign-in, so you can give them a user type or key domain ahead of time. They create their own API tokens after they sign in.")).toBeInTheDocument();
     // #2904: the required field says so and says what a subject is; the other says it is optional.
     expect(within(dialog).getByLabelText("Sign-in subject")).toBeRequired();
     expect(within(dialog).getByText("The subject (sub) your identity provider sends for this person, exactly as it sends it.")).toBeInTheDocument();
@@ -344,6 +477,7 @@ describe("Add a person", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     await waitFor(() => expect(createMock).toHaveBeenCalledWith("sub-zed", "zed@example.com"));
     await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(before));
+    expect(toast.success).toHaveBeenCalledWith("Added zed@example.com.");
   });
 
   it("shows the server's refusal in the dialog", async () => {

@@ -9,7 +9,7 @@
 
 import { setup } from "../../../../../lib/api/setup";
 import type { SetupHarnessTool } from "../../../../../lib/types/setup";
-import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
+import { NR_HARNESSES, NR_HARNESSES_LOOKUP } from "../../../../wardyn/copy/new-run/harnesses";
 import { harnessRefusal, type MacOSOffer } from "../run/macos-offer";
 
 export interface Roster {
@@ -24,6 +24,9 @@ export interface Roster {
 
 export async function loadRoster(): Promise<Roster> {
   const status = await setup.getSetupStatus();
+  // The status read's own fallback (unreachable) carries no roster: a failed read, never an empty catalogue that would
+  // leave nothing to add. The error reaches each caller as a failed load.
+  if (status.unreachable) throw new Error(NR_HARNESSES_LOOKUP.UNREACHABLE);
   return { harnesses: status.harnesses ?? [], sets: status.harness_sets ?? [], multiAgent: status.features?.multi_agent_tasks === true };
 }
 

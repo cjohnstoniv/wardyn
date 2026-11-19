@@ -108,6 +108,10 @@ func (a *AgentRun) Main(args []string) int {
 	switch arg {
 	case "--selftest":
 		return a.selftest()
+	case "--prepare":
+		return a.prepareOnly()
+	case "--session-env-retry":
+		return a.sessionEnvRetry()
 	case "--tasks":
 		return a.refuse(agentRunTasksRefused)
 	case "--idle", "--revive", "--boot-seed", "--continue":
@@ -154,6 +158,44 @@ func (a *AgentRun) Main(args []string) int {
 		return a.codex(arg)
 	}
 	return a.claude(arg)
+}
+
+// prepareOnly is `agent-run --prepare`: the prep a task gets, for a run that starts no task. An interactive
+// run's terminal is the guest's shell, so the control plane runs this first and the person finds the repo
+// cloned and the harnesses set up, their credentials in place. It checks the managed files and runs prepare
+// for the start harness; a run that starts as a shell names none, so it prepares every harness the run lists
+// that a macOS VM serves (and one pass with none when the run lists none). It exits 0; a failure prints its
+// sentence and exits 1, as a task's does.
+func (a *AgentRun) prepareOnly() int {
+	if err := a.managedFilesInPlace(); err != nil {
+		a.say(err.Error())
+		return 1
+	}
+	var harnesses []string
+	if start := a.Env["WARDYN_START_HARNESS"]; start != "" {
+		h, err := a.harness()
+		if err != nil {
+			a.say(err.Error())
+			return 1
+		}
+		harnesses = []string{h}
+	} else {
+		for _, h := range strings.Fields(a.Env["WARDYN_HARNESSES"]) {
+			if h == "claude-code" || h == "codex-cli" {
+				harnesses = append(harnesses, h)
+			}
+		}
+	}
+	if len(harnesses) == 0 {
+		harnesses = []string{""}
+	}
+	for _, h := range harnesses {
+		if _, err := a.prepare(h); err != nil {
+			a.say(err.Error())
+			return 1
+		}
+	}
+	return 0
 }
 
 func (a *AgentRun) say(msg string) { fmt.Fprintln(a.Stderr, "agent-run: "+msg) }

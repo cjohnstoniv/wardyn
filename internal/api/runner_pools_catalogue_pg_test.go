@@ -122,6 +122,76 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	want("an own runner online", reasonOf(e.person, "", home.ID), "")
 }
 
+// An organization pool whose only members are claimed organization runners reads available and counts
+// them in its capacity, as placement already places on them; one whose runner belongs to another
+// organisation stays unavailable (no_eligible_member), and the remote-hosted cases read as before.
+func TestPG_OrgPoolOfClusterRunnersOnlyIsAvailable(t *testing.T) {
+	e := newPlacementEnv(t)
+	cluster := e.createPool("Cluster", types.RunnerPoolOrganization)
+	foreign := e.createPool("Foreign", types.RunnerPoolOrganization)
+	remote := e.createPool("Remote", types.RunnerPoolOrganization)
+	e.addExecutors(remote.ID, "alpha")
+	empty := e.createPool("Empty", types.RunnerPoolOrganization)
+	mine, theirs := e.orgRunner(), e.orgRunner()
+	for pool, id := range map[uuid.UUID]uuid.UUID{cluster.ID: mine, foreign.ID: theirs} {
+		if w := e.admin(http.MethodPut, orgRunnerPath(pool, id), ""); w.Code != http.StatusCreated {
+			t.Fatalf("add org runner = %d %s", w.Code, w.Body)
+		}
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET org_url_sha256 = $2 WHERE id = $1`, theirs, "other-org"); err != nil {
+		t.Fatal(err)
+	}
+
+	list, _ := e.list(e.person, "")
+	got := entryOf(t, list, cluster.ID)
+	if got.Availability != client.RunnerPoolAvailable || got.Reason != "" || got.Capacity == nil || got.Capacity.Runners != 1 {
+		t.Errorf("cluster runner only: %s %q capacity %+v, want available with 1 runner", got.Availability, got.Reason, got.Capacity)
+	}
+	// The runner is online and offers every class (orgRunner), so the barriers are known: CC1 is below
+	// the test deployment's CC2 floor (govTestPolicy), CC2 and CC3 are available, the strongest the default.
+	for _, o := range got.BarrierOptions {
+		below := o.Class == types.CC1
+		if o.Available == below || (below && o.ReasonCode != runnerpool.BarrierBelowFloor) || o.Default != (o.Class == types.CC3) {
+			t.Errorf("cluster runner only: barrier %+v, want CC1 below the floor, CC2 and CC3 available, only %s the default", o, types.CC3)
+		}
+	}
+	if len(got.BarrierOptions) != 3 {
+		t.Errorf("cluster runner only: %d barrier options, want 3", len(got.BarrierOptions))
+	}
+	if got := entryOf(t, list, foreign.ID); got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember ||
+		got.Capacity == nil || got.Capacity.Runners != 0 {
+		t.Errorf("another organisation's runner: %s %q capacity %+v, want unavailable no_eligible_member with 0 runners", got.Availability, got.Reason, got.Capacity)
+	}
+	if got := entryOf(t, list, remote.ID); got.Availability != client.RunnerPoolAvailable || got.Reason != "" {
+		t.Errorf("remote-hosted pool: %s %q, want available", got.Availability, got.Reason)
+	}
+	if got := entryOf(t, list, empty.ID); got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember {
+		t.Errorf("empty pool: %s %q, want unavailable no_eligible_member", got.Availability, got.Reason)
+	}
+}
+
+// An organization runner is a candidate of the local kind, so deny_placements holds it as placement
+// does: a local deny makes a cluster-runner pool placement_denied, a remote deny leaves it available.
+func TestPG_OrgPoolOfClusterRunnersFollowsDenyPlacements(t *testing.T) {
+	for _, tc := range []struct {
+		deny  types.Placement
+		want  runnerpool.Reason
+		avail string
+	}{{types.PlacementLocal, runnerpool.AvailabilityPlacementDenied, client.RunnerPoolUnavailable}, {types.PlacementRemote, "", client.RunnerPoolAvailable}} {
+		e := newPlacementEnv(t)
+		pool := e.createPool("Cluster", types.RunnerPoolOrganization)
+		if w := e.admin(http.MethodPut, orgRunnerPath(pool.ID, e.orgRunner()), ""); w.Code != http.StatusCreated {
+			t.Fatalf("add org runner = %d %s", w.Code, w.Body)
+		}
+		e.assignProfile("deny "+string(tc.deny), types.GovernanceLimits{DenyPlacements: []types.Placement{tc.deny}})
+		list, _ := e.list(e.person, "")
+		got := entryOf(t, list, pool.ID)
+		if got.Reason != tc.want || got.Availability != tc.avail || (got.Reason == "") != (got.Availability == client.RunnerPoolAvailable) {
+			t.Errorf("deny %s: %s %q, want %s %q", tc.deny, got.Availability, got.Reason, tc.avail, tc.want)
+		}
+	}
+}
+
 // T10: another person's runner in the same pool (a membership no route can write) is never named, never
 // counted as capacity and never makes the pool available to the caller.
 func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {

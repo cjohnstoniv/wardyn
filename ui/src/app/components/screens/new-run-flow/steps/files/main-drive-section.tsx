@@ -8,6 +8,7 @@
 // facts for the pool the run lands in.
 
 import * as React from "react";
+import { TriangleAlert } from "lucide-react";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../../ui/popover";
@@ -146,14 +147,22 @@ export function useMainDriveSize(view: MainDriveView) {
 
   // What the field means: the stored size once committed, else what its text reads as.
   const mib = !dirty && committed !== undefined ? committed : parseSize(text, unit);
+  // A stored size over the cap (a template's, a run again's, or one from before a pool change): the field keeps the
+  // request, the run gets the cap, and the server's cut stands. A size being typed over the cap says the same thing
+  // at once (blur then clamps it). `mib` is the typed size while editing, the stored one when not editing, and
+  // the pool's prefill (read from the field's text) when not editing and nothing is stored. An over-cap prefill
+  // therefore shows the note too; the server cuts a default to the cap (internal/api/run_main_drive.go:55-57).
+  const over = mib !== undefined && view.capMib !== undefined && mib > view.capMib
+    ? { size: sizeWords(mib), cap: sizeWords(view.capMib) } : undefined;
   return {
+    over,
     text,
     unit,
     mib,
     missing: mib === undefined,
     // The size in words for the summary and the mount map: exact once stored; while it is being typed, the typed
     // text in its own unit, so "500" in MiB never reads "0.5 GiB" before blur.
-    words: mib === undefined ? undefined : dirty ? (unit === "MiB" ? NR_SHARED.MIB(text) : NR_SHARED.GIB(text)) : sizeWords(mib),
+    words: over ? over.cap : mib === undefined ? undefined : dirty ? (unit === "MiB" ? NR_SHARED.MIB(text) : NR_SHARED.GIB(text)) : sizeWords(mib),
     note: draft.guided.mainDriveClampNote,
     // The exact stored size, whenever the field's text does not say it.
     exact: !dirty && committed !== undefined && parseSize(text, unit) !== committed ? committed : undefined,
@@ -174,6 +183,7 @@ export function MainDriveSection({ view, size, keep = keepDoor(undefined, false)
   const draft = useNewRunDraft();
   const [touched, setTouched] = React.useState(false);
   const errorId = React.useId();
+  const overId = React.useId();
   const showError = size.missing && touched;
   const life = lifecycleText(lifecycleOf(draft.intent, view), draft.intent.keep_work_folder === true);
 
@@ -193,7 +203,7 @@ export function MainDriveSection({ view, size, keep = keepDoor(undefined, false)
               className="h-[42px] pr-10"
               value={size.text}
               aria-invalid={showError || undefined}
-              aria-describedby={showError ? errorId : undefined}
+              aria-describedby={[showError && errorId, size.over && overId].filter(Boolean).join(" ") || undefined}
               onChange={(e) => size.setText(e.target.value)}
               onBlur={() => { setTouched(true); size.commit(); }}
             />
@@ -202,10 +212,16 @@ export function MainDriveSection({ view, size, keep = keepDoor(undefined, false)
           <span className="text-muted-foreground max-[520px]:col-span-full">{view.capMib !== undefined && NR_FILES.UP_TO(sizeWords(view.capMib))}</span>
           <span className="max-[520px]:col-span-full">{view.facts && <Enforcement facts={view.facts} />}</span>
         </div>
-        {(size.note || size.exact !== undefined) && (
+        {size.over && (
+          <p id={overId} data-testid="nr-main-drive-over-cap" className="flex items-start gap-1.5 text-sm text-warning">
+            <TriangleAlert className="mt-0.5 size-3.5 flex-none" aria-hidden="true" />
+            {NR_FILES.OVER_CAP(size.over.size, size.over.cap)}
+          </p>
+        )}
+        {((size.note && !size.over) || size.exact !== undefined) && (
           <p className="text-sm text-muted-foreground">
-            {size.note}
-            {size.note && size.exact !== undefined ? " " : ""}
+            {!size.over && size.note}
+            {size.note && !size.over && size.exact !== undefined ? " " : ""}
             {size.exact !== undefined && <span data-testid="nr-main-drive-exact">{NR_FILES.SIZE_EXACT(size.exact)}</span>}
           </p>
         )}

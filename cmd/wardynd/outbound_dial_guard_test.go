@@ -289,6 +289,12 @@ var sanctionedDialHomes = []dialAllowance{
 			"proxy.NewServer (injection resolve, decisions, approvals) — never the egress path, which " +
 			"is proxy.go's own transport above.",
 	},
+	{
+		relFile: "cmd/wardyn-proxy/narrow.go",
+		kinds:   kindSet("net.Dial*"),
+		why: "runNarrow's net.DialTimeout is a unix-socket dial to this pod's own proxy, its narrowing " +
+			"socket in $WARDYN_PROXY_LIVE_DENY_DIR: local IPC inside the proxy container, never egress.",
+	},
 }
 
 func allowedDialSite(s dialSite) (bool, string) {

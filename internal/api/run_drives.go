@@ -30,6 +30,18 @@ type runDrive struct {
 	legacy   bool
 	// id is the drives[] id that named it; "" for the legacy drive.enabled flag.
 	id string
+	// macOS marks a macOS VM run's drive: target stays the container path the
+	// overlap checks and the mount read, and shownTarget is the guest's.
+	macOS bool
+}
+
+// shownTarget is the path a person is told the drive is at: the guest's on a
+// macOS VM run, else target.
+func (d runDrive) shownTarget() string {
+	if d.macOS {
+		return runner.MacGuestPath(d.target)
+	}
+	return d.target
 }
 
 // readOnly is the grant's posture narrowed by the request, never widened.
@@ -67,12 +79,13 @@ func driveSelectionRefusal(req createRunRequest) *runRefusal {
 // paused winner refuses and never falls through; two drives deriving one path
 // refuse rather than shadow each other.
 func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, ceiling governanceCeiling) ([]runDrive, *runRefusal) {
+	macOS := types.MachineKind(req.MachineKind).IsMacOSVM()
 	if len(req.Drives) == 0 {
 		resolved, refusal := s.authorizeRequestDrive(r, req, ceiling)
 		if resolved == nil {
 			return nil, refusal
 		}
-		return []runDrive{{resolved: *resolved, target: runner.DriveTargetFor(*resolved, true), narrow: req.Drive.ReadOnly, legacy: true}}, nil
+		return []runDrive{{resolved: *resolved, target: runner.DriveTargetFor(*resolved, true), narrow: req.Drive.ReadOnly, legacy: true, macOS: macOS}}, nil
 	}
 	if refusal := s.driveDoorsRefusal(r, ceiling); refusal != nil {
 		return nil, refusal
@@ -105,7 +118,7 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 			msg := driveTargetConflictMsg(out[j].resolved.Drive.Name, d.winner.Drive.Name, d.target())
 			return nil, driveDenied(authz.Deny(authz.ReasonDriveTargetConflict, "runs.drive", msg), msg)
 		}
-		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID})
+		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID, macOS: macOS})
 	}
 	return out, driveKindMixRefusal(out)
 }
@@ -233,7 +246,7 @@ func driveTargets(drives []runDrive) []runTarget {
 func startFolderDriveOwner(id string) string { return attachmentDrive + ":" + id }
 
 // stampDriveAudit records on run.create each drive a drives[] request attaches:
-// its id, name, path and mode, never a host path or object name. A legacy
+// its id, name, path (the guest's on a macOS VM run) and mode, never a host path or object name. A legacy
 // drive.enabled run records nothing here, as before; its mount is
 // run.drive.mount's. A keep_work_folder run adds keep_work_folder and the id
 // of the drive it keeps its work folder in.
@@ -244,7 +257,7 @@ func stampDriveAudit(data map[string]any, drives []runDrive, keep bool, runID uu
 	var out []map[string]any
 	for _, d := range drives {
 		if d.id != "" {
-			out = append(out, map[string]any{"drive_id": d.id, "name": d.resolved.Drive.Name, "target": d.target, "read_only": d.readOnly()})
+			out = append(out, map[string]any{"drive_id": d.id, "name": d.resolved.Drive.Name, "target": d.shownTarget(), "read_only": d.readOnly()})
 		}
 	}
 	if out != nil {

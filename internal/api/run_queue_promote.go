@@ -36,12 +36,12 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		return nil
 	}
 	// The pass judges other people's runs, so it works on the daemon's own context: a caller's identity
-	// on ctx must never reach it.
-	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx), bound)
+	// on ctx must never reach it. Its judging reads the runners once for each hold key (queueJudging).
+	pctx, cancel := context.WithTimeout(withQueueJudging(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx)), bound)
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
-		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity),
+		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity), HoldKey: queueHoldKey,
 	}, s.queueAdmit)
 	var errs []error
 	switch {
@@ -53,9 +53,17 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
+	// The promoted runs are committed with a lease that only their start renews, so they start before
+	// the waits below are recorded: that write is advisory, and one held up behind a lock must not keep a
+	// promoted run from its start until the sweep fails it as lost.
+	for _, p := range promoted {
+		s.runEvents.moved(p.Run.ID, types.RunQueued, types.RunPending)
+		s.goBackground(func() { s.startQueuedRun(context.WithoutCancel(s.cfg.BaseCtx), p) })
+	}
 	// Reason precedence for a waiting run: the pool's cap (runner_pool_at_capacity) outranks a reason
 	// found while judging, because the judging held no lock and the pool may have filled since. The store
-	// drops these writes when the pool is full by the time it writes them.
+	// drops these writes when the pool is full by the time it writes them. The write is held to the pass's
+	// bound (pctx), so a stuck one gives up and the next pass writes the waits again.
 	details := map[uuid.UUID]string{}
 	for _, h := range held {
 		if h.Wait != "" {
@@ -63,16 +71,50 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		}
 	}
 	if len(details) > 0 {
-		if err := qs.SetHeldQueueWaits(ctx, poolID, details); err != nil {
+		if err := qs.SetHeldQueueWaits(pctx, poolID, details); err != nil {
 			slog.WarnContext(ctx, "wardynd: record queue waits", slog.String("pool_id", poolID.String()), slog.Any("err", err))
 			errs = append(errs, fmt.Errorf("record queue waits of pool %s: %w", poolID, err))
 		}
 	}
-	for _, p := range promoted {
-		s.runEvents.moved(p.Run.ID, types.RunQueued, types.RunPending)
-		s.goBackground(func() { s.startQueuedRun(context.WithoutCancel(s.cfg.BaseCtx), p) })
-	}
 	return errors.Join(errs...)
+}
+
+// queueHoldKey is the runs one owner-wide wait holds (store.PromotePass.HoldKey): the owner under one
+// identity and one frozen unit, which see the same pools and runners. The identity is the stored
+// authority without its session epoch, revocation sequence, delegated token id and agent, which differ
+// between one person's sessions and tokens. queueAuthority.context puts the epoch and the sequence on no
+// context: only the start's owner check (queueOwnerLive) reads them. It puts the token id and agent back
+// only as the delegation mark (audit.WithDelegation), and the reads of pools and runners ask that mark
+// only whether a token was used (neverOperator). A pool or runner read that comes to use the token id or
+// agent must be added to this key first.
+// A launch that cannot be read is held by no other run: queueAdmit admits it for its start to end.
+func queueHoldKey(e store.RunQueueEntry) string {
+	var launch queuedLaunch
+	if json.Unmarshal(e.Launch, &launch) != nil {
+		return e.RunID.String()
+	}
+	unit := "-"
+	if launch.UnitID != nil {
+		unit = launch.UnitID.String()
+	}
+	return e.Owner + "\x00" + queueIdentity(e.Authority) + "\x00" + unit
+}
+
+// queueIdentity is a stored authority without the fields that tell one person's sessions and tokens
+// apart (queueHoldKey says which and why no pass reads them); bytes that do not parse are their own.
+// One row does carry the token id and agent: the audit row of a refusal a kept read writes (a user type
+// that is gone, callerSubjects) is stamped with those of the identity's first run of the pass or judging.
+func queueIdentity(authority []byte) string {
+	var auth queueAuthority
+	if json.Unmarshal(authority, &auth) != nil {
+		return string(authority)
+	}
+	auth.Epoch, auth.Seq, auth.Actor = nil, 0, nil
+	if auth.Grant != nil {
+		auth.Grant = &uuid.UUID{}
+	}
+	b, _ := json.Marshal(auth) //nolint:errcheck // plain fields only, so it cannot fail
+	return string(b)
 }
 
 // queueAdmit is the verdict on one waiting run, asked before the pass takes any lock: the run must be
@@ -88,14 +130,13 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	octx := withQueueOwner(auth.context(ctx), e.Owner, e.Authority)
+	octx := withQueueRunners(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), e)
 	room, err := s.queueRunnerFree(octx, pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
 	if room.wait != "" {
-		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
-		return store.QueueVerdict{Wait: string(room.wait), Owner: !room.pinned}, nil
+		return store.QueueVerdict{Wait: string(room.wait), Owner: room.ownerWide}, nil
 	}
 	if wait := s.queueOwnerSignIn(octx, e, launch); wait != "" {
 		return store.QueueVerdict{Wait: string(wait)}, nil
@@ -122,6 +163,17 @@ type queueRoom struct {
 	// needs is the size the run would start with on each of those runners, by runner key; empty for a
 	// launch queued before its unbound size was recorded.
 	needs map[string]types.RunnerAmounts
+	// pool, candidates and fits are what the wait sentence names a limit from (waitLimitSentence): the
+	// pool's name, the online runners the run could go to, and the figures they were judged by. Candidates
+	// all lack room when wait is WaitRunnersAtCapacity.
+	pool       string
+	candidates []poolTarget
+	fits       map[string]runnerFit
+	// ownerWide says the wait holds every other run of the owner too, whatever it asks for: the pool needs
+	// a recording store there is none of, or no runner the owner may use there is online with room for a
+	// run of no size. A run that names its runner, or waits for its own barrier, kind, drives, folders or
+	// size while a runner has room for another run, holds only itself.
+	ownerWide bool
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now.
@@ -138,7 +190,8 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
 	out := queueRoom{pinned: req.RunnerID != ""}
-	rows, refusal := s.queuePermittedPools(ctx, ps)
+	// The run's frozen unit decides a unit row, as it does at the start (queuedStart.bind).
+	rows, refusal := s.queuePermittedPools(withFrozenPoolUnit(ctx, launch.UnitID), ps)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
 			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)
@@ -159,7 +212,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
-	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	org, err := queueOrgDefaults(ctx, ps)
 	if err != nil {
 		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
 	}
@@ -167,10 +220,10 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// A required setting with no store has no room anywhere, and no runner coming online changes that, so
 	// it is said before any runner is looked at: the start would refuse recording_store_off.
 	if requireRecording && s.cfg.RecordingStore == nil {
-		out.wait = runnerpool.WaitRecordingStoreOff
+		out.wait, out.ownerWide = runnerpool.WaitRecordingStoreOff, !out.pinned
 		return out, nil
 	}
-	targets, refusal := s.poolTargets(ctx, &req, ps, row)
+	targets, refusal := s.queuePoolTargets(ctx, &req, ps, row)
 	if refusal != nil && refusal.err != nil {
 		// A read that failed says nothing about the runners: the run keeps its place with no wait recorded.
 		return out, fmt.Errorf("read the pool's runners: %w", refusal.err)
@@ -187,19 +240,21 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	fits, err := s.runnerFits(ctx)
+	fits, err := s.queueRunnerFits(ctx)
 	if err != nil {
 		return out, err
 	}
 	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits,
-		requireRecording: requireRecording}
+		requireRecording: runnerRecordingDemand(requireRecording, types.MachineKind(req.MachineKind))}
 	out.needs = map[string]types.RunnerAmounts{}
+	out.pool, out.fits = row.Pool.Name, fits
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {
 		if demand.refusal(t) != "" || (out.pinned && t.id != req.RunnerID) {
 			continue
 		}
 		online = true
+		out.candidates = append(out.candidates, t)
 		f := demand.fits[t.id]
 		var need types.RunnerAmounts
 		if launch.Unbound != nil && f.limits != nil {
@@ -223,7 +278,20 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	case len(out.runners)+len(out.remotes) == 0:
 		out.wait = runnerpool.WaitRunnersAtCapacity
 	}
+	// Every filter above (kind, barrier, drives, folders, size) only narrows targets, and a run of no size
+	// fits wherever any run fits: when no target has room for one, no run that sees these targets (the
+	// same queueHoldKey) can start here.
+	out.ownerWide = out.wait != "" && !out.pinned && !roomForARun(targets, fits)
 	return out, nil
+}
+
+// roomForARun reports whether one of targets is online, serves its namespace and has room for a run of
+// no size, by the runner limits fits read.
+func roomForARun(targets []poolTarget, fits map[string]runnerFit) bool {
+	return slices.ContainsFunc(targets, func(t poolTarget) bool {
+		f := fits[t.id]
+		return !t.offline && t.servesRunsNamespace() && !t.full && runnerpool.Fits(f.limits, f.used, types.RunnerAmounts{}) == runnerpool.FitOK
+	})
 }
 
 // kickQueue asks every pool with waiting runs to promote, off the caller's path. Concurrent kicks
@@ -286,6 +354,12 @@ func (s *Server) SweepRunQueue(ctx context.Context) error {
 
 // expireQueued ends each waiting run past its deadline: FAILED queue_timeout, or queue_sign_in_timeout
 // for a scheduled run last held for its owner's sign-in, with run.queue.expire.
+//
+// The deadline is judged on this server's clock because a server's clock stamped it: entry sets queued_at
+// to the run's create time and deadline_at from queued_at and the wait, and queued_at is also the issue
+// time of the authority the run waits with, which queueOwnerLive judges as a time on a server's clock.
+// Neither is a database stamp, so the database's clock would only add its own skew. A run queued on one
+// server and swept on another is judged by the skew between those two servers' clocks.
 func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()
@@ -330,7 +404,8 @@ const queueLeaseStale = watcherLeaseStaleAfter
 
 // failStalePromoted fails each promoted run (PENDING, no sandbox, admitted_at set) whose start stopped
 // touching its lease, revoking any identity it was given, so its slot frees within a tick. A plain
-// PENDING run in its image build is never listed: only promotion writes admitted_at.
+// PENDING run in its image build is never listed: only promotion writes admitted_at. The list is a
+// snapshot: failStaleStart's own transition decides, and only a run it ended is audited.
 func (s *Server) failStalePromoted(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	runs, err := qs.StalePromotedRuns(ctx, queueLeaseStale)
@@ -340,21 +415,42 @@ func (s *Server) failStalePromoted(ctx context.Context) error {
 	}
 	var errs []error
 	for _, run := range runs {
-		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
-			// false is also "a concurrent kill or start won", which is no failure: only a run still PENDING
-			// (or unreadable) means the transition itself failed, and failAndRevoke has only logged that.
-			switch cur, gerr := s.cfg.Store.GetRun(ctx, run.ID); {
-			case gerr != nil:
-				errs = append(errs, fmt.Errorf("read the stale promoted run %s: %w", run.ID, gerr))
-			case cur.State == types.RunPending:
-				errs = append(errs, fmt.Errorf("fail the stale promoted run %s: the transition did not apply", run.ID))
-			}
+		won, ferr := s.failStaleStart(ctx, qs, run.ID)
+		if ferr != nil {
+			errs = append(errs, fmt.Errorf("fail the stale promoted run %s: %w", run.ID, ferr))
+			continue
+		}
+		if !won {
+			// A concurrent kill or start moved the run, or its start touched its lease after the list:
+			// not this pass's to end, and no failure.
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}
 	return errors.Join(errs...)
+}
+
+// failStaleStart is failAndRevoke for a run the stale-lease pass listed. Its transition to FAILED
+// (FailStalePromotedRun) re-checks, in the same statement, that the run is still promoted, PENDING with no
+// sandbox and no lost mark, and that its start has still not touched its lease for queueLeaseStale by the
+// database's clock: a start whose heartbeat landed after the list keeps its run. Only a won transition
+// sets the hint, revokes and finishes the output (failedRunEffects); the caller audits it. A failed write
+// is audited as failAndRevoke audits one, and the next sweep tries again.
+func (s *Server) failStaleStart(ctx context.Context, qs queueStore, runID uuid.UUID) (bool, error) {
+	applied, err := qs.FailStalePromotedRun(ctx, runID, queueLeaseStale)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: fail a stale promoted run; the next sweep tries again",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": auditStepStaleStart})))
+		return false, err
+	}
+	s.runStateMoved(runID, types.RunPending, types.RunFailed, applied)
+	if applied {
+		s.failedRunEffects(ctx, runID, types.RunPending, queueStartLostHint)
+	}
+	return applied, nil
 }
 
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.

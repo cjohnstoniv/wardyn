@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -93,6 +94,10 @@ type Store struct {
 	ext        secretstore.External
 	writeExt   bool
 	extTimeout time.Duration // bounds each call to ext
+	// cleanUpLimit caps the clean-ups running at once (afterPut), at
+	// cleanUpCap of the pool; 0, a Store made outside register.go as tests
+	// make one, sets no cap.
+	cleanUpLimit int64
 	// owner is the secretstore.Store.For namespace this view is scoped to;
 	// "" is the operator namespace.
 	owner string
@@ -500,7 +505,7 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: delete %s: begin: %w", ref, err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// A guarded delete (WithIfRevision) is the Put's compare-and-set: a holder
 	// that lost its lock must not delete a newer row. The check runs under the
 	// row's locks, before deleteLocked touches an external store.
@@ -531,7 +536,7 @@ func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, erro
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if err := recordProviderChanges(ctx, tx); err != nil {
 		return 0, err
 	}

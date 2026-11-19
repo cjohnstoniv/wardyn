@@ -145,7 +145,7 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     };
     const created = await request.post("/api/v1/policies", { headers: auth, data: { name, spec } });
     expect(created.status(), await created.text()).toBe(201);
-    const policyId = ((await created.json()) as { id: string }).id;
+    const { id: policyId, updated_at: openedAt } = (await created.json()) as { id: string; updated_at: string };
     try {
       const launched = await request.post("/api/v1/runs", {
         headers: auth,
@@ -165,7 +165,7 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
       );
       const edited = await request.put(`/api/v1/policies/${policyId}`, {
         headers: auth,
-        data: { name, spec: { ...spec, allowed_domains: ["api.anthropic.com"] } },
+        data: { name, spec: { ...spec, allowed_domains: ["api.anthropic.com"] }, expected_updated_at: openedAt },
       });
       expect(edited.status(), await edited.text()).toBe(200);
 

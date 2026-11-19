@@ -29,7 +29,10 @@ func TestAuditLostStart_NoteMatchesTheCause(t *testing.T) {
 	if got := note(nil); !strings.Contains(got, "concurrent kill/stop") {
 		t.Errorf("no cause: %s, want the concurrent kill note", got)
 	}
-	if got := note(errors.New("pool exhausted")); strings.Contains(got, "concurrent kill/stop") || !strings.Contains(got, "pool exhausted") {
-		t.Errorf("store fault: %s, must not blame a concurrent kill and must carry the error", got)
+	// A store fault keeps its worded note, its error names the failed step, and the store's error is in the log.
+	logs := captureSlog(t)
+	if got := note(errors.New("pool exhausted")); strings.Contains(got, "concurrent kill/stop") || !strings.Contains(got, "because the store failed") ||
+		!strings.Contains(got, `"error":"`+auditStepMarkRunning+`"`) || !strings.Contains(logs.String(), "pool exhausted") {
+		t.Errorf("store fault: %s, log %q; must not blame a concurrent kill, must name the step and must log the error", got, logs.String())
 	}
 }

@@ -84,7 +84,7 @@ func TestRecordingK8s(t *testing.T) {
 
 	restCfg, cs := k8sTestClient(t)
 
-	sub, err := k8s.New(k8s.Config{Namespaces: []string{ns}, ProxyImage: proxyImage, Record: true})
+	sub, err := k8s.New(k8sSuiteConfig(k8s.Config{Namespaces: []string{ns}, ProxyImage: proxyImage, Record: true}))
 	if err != nil {
 		t.Fatalf("k8s.New: %v (this cluster's CNI must enforce NetworkPolicy — see ci.yml's Calico step)", err)
 	}
@@ -170,8 +170,21 @@ func k8sTestClient(t *testing.T) (*rest.Config, *kubernetes.Clientset) {
 	return restCfg, cs
 }
 
+// conformanceAdmin is a clientset that impersonates an admin. The suite runs as wardynd, and with keep on the chart's
+// admission policy holds wardynd to a run's own Service, so the suite's own stand-in Services are made as an admin.
+func conformanceAdmin(t *testing.T, restCfg *rest.Config) *kubernetes.Clientset {
+	t.Helper()
+	cfg := rest.CopyConfig(restCfg)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "wardyn-conformance-admin", Groups: []string{"system:masters"}}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("clientset as an admin: %v", err)
+	}
+	return cs
+}
+
 // startHopFakeK8s builds test/conformance/hopfake, runs it in a pod (using
-// the already-kind-loaded agent image, which is busybox plus wardyn-rec) in
+// the already-kind-loaded agent image, built on busybox) in
 // ns fronted by a same-named ClusterIP Service (so the proxy sidecar
 // can resolve host over cluster DNS), with a serving cert for host signed by
 // ca. Unlike docker's startHopFake (CopyToContainer before the container's
@@ -205,7 +218,7 @@ func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientse
 			Containers: []corev1.Container{{
 				Name: "hopfake",
 				// The already-kind-loaded agent image, not a bare busybox
-				// pull: it's busybox plus wardyn-rec (see
+				// pull: it is built on busybox (see
 				// deploy/kind/Dockerfile.conformance-agent), so it already
 				// has sh, tar and sleep, and needs no extra image pinned or
 				// loaded just to host this fake.
@@ -239,6 +252,7 @@ func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientse
 		_ = cs.CoreV1().Pods(ns).Delete(context.Background(), host, metav1.DeleteOptions{})
 	})
 
+	admin := conformanceAdmin(t, restCfg)
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: host, Namespace: ns},
 		Spec: corev1.ServiceSpec{
@@ -246,11 +260,11 @@ func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientse
 			Ports:    []corev1.ServicePort{{Port: 8443, TargetPort: intstr.FromInt32(8443), Protocol: corev1.ProtocolTCP}},
 		},
 	}
-	if _, err := cs.CoreV1().Services(ns).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+	if _, err := admin.CoreV1().Services(ns).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create hopfake service: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = cs.CoreV1().Services(ns).Delete(context.Background(), host, metav1.DeleteOptions{})
+		_ = admin.CoreV1().Services(ns).Delete(context.Background(), host, metav1.DeleteOptions{})
 	})
 
 	if err := waitForPodRunning(ctx, cs, ns, host); err != nil {

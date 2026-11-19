@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -19,12 +19,14 @@ import { aheadByHours } from "../../lib/test-clock";
 const listPoliciesMock = vi.fn();
 const createPolicyMock = vi.fn();
 const updatePolicyMock = vi.fn();
+const getPolicyMock = vi.fn();
 const getDefaultPolicyMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
 vi.mock("../../lib/api/policies", () => ({
   policies: {
     listPolicies: () => listPoliciesMock(),
     createPolicy: (...a: unknown[]) => createPolicyMock(...a),
     updatePolicy: (...a: unknown[]) => updatePolicyMock(...a),
+    getPolicy: (...a: unknown[]) => getPolicyMock(...a),
     deletePolicy: vi.fn(),
     getDefaultPolicy: () => getDefaultPolicyMock(),
   },
@@ -43,12 +45,22 @@ vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: () => getSetupStatusMock() },
 }));
 
+// The person's own Azure DevOps rows; [] (no row) unless a test sets one.
+const getMineMock = vi.fn<() => Promise<unknown>>(() => Promise.resolve([]));
+vi.mock("../../lib/api/scm-access", () => ({
+  scmAccess: { getMine: () => getMineMock() },
+}));
+
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { BOUNDARY } from "../../lib/boundary-copy";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -83,6 +95,11 @@ describe("PoliciesScreen — table row semantics (ui-secretsPolicies-1)", () => 
     expect(screen.getByRole("row", { name: /payments-strict/i })).toBe(row);
   });
 
+  it("names each row's actions menu after the policy", async () => {
+    render(<PoliciesScreen />);
+    expect(await screen.findByRole("button", { name: "Policy actions: payments-strict" })).toBeInTheDocument();
+  });
+
   it("stays keyboard-operable (tabIndex + Enter opens the detail sheet)", async () => {
     render(<PoliciesScreen />);
     const cell = await screen.findByText("payments-strict");
@@ -91,6 +108,19 @@ describe("PoliciesScreen — table row semantics (ui-secretsPolicies-1)", () => 
 
     fireEvent.keyDown(row, { key: "Enter" });
     expect(await screen.findByRole("heading", { name: "payments-strict" })).toBeInTheDocument();
+  });
+
+  // jsdom measures no layout, so this pins the structure that keeps a 128-character unbroken name off the Close
+  // button: the name is a flex item of its own that may shrink and break anywhere, and the icon never shrinks.
+  it("puts the policy name in its own shrinkable, breakable span in the drawer title", async () => {
+    render(<PoliciesScreen />);
+    fireEvent.keyDown((await screen.findByText("payments-strict")).closest("tr")!, { key: "Enter" });
+    const title = await screen.findByRole("heading", { name: "payments-strict" });
+    const name = within(title).getByText("payments-strict");
+    expect(name.tagName).toBe("SPAN");
+    expect(name.className).toContain("min-w-0");
+    expect(name.className).toContain("[overflow-wrap:anywhere]");
+    expect(title.querySelector("svg")!.getAttribute("class")).toContain("shrink-0");
   });
 });
 
@@ -103,6 +133,43 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     listPoliciesMock.mockReturnValue(new Promise(() => {})); // never resolves
     render(<PoliciesScreen />);
     expect(screen.queryByPlaceholderText(/search policies/i)).not.toBeInTheDocument();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listPoliciesMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    render(<PoliciesScreen />);
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a policy lands on the same filtered list", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" }), policy({ id: "b", name: "two" })]);
+    render(
+      <MemoryRouter initialEntries={["/?q=two"]}>
+        <PoliciesScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("two")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search policies/i)).toHaveValue("two");
+    expect(screen.queryByText("one")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" })]);
+    render(
+      <LaggingRouter>
+        <PoliciesScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("one");
+    const box = screen.getByPlaceholderText(/search policies/i);
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
   });
 
   it("hides the toolbar (and its duplicate Refresh) on error, leaving only ErrorState's retry", async () => {
@@ -121,6 +188,13 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
 
     await userEvent.type(screen.getByPlaceholderText(/search policies/i), "one");
     await waitFor(() => expect(screen.getByText("1 of 2 policies")).toBeInTheDocument());
+  });
+
+  it("names the search box, not only by its placeholder", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" })]);
+    render(<PoliciesScreen />);
+    await screen.findByText("one");
+    expect(screen.getByRole("textbox", { name: "Search policies" })).toBeInTheDocument();
   });
 });
 
@@ -290,9 +364,12 @@ describe("PoliciesScreen — reading a policy never writes it", () => {
 });
 
 describe("PoliciesScreen — the editor opens in YAML and saves what it parses to", () => {
+  // The updated_at the editor opened with, at the server's microsecond precision: the save sends it back verbatim.
+  const OPENED_AT = "2026-11-13T03:00:00.123456Z";
   beforeEach(() => {
     listPoliciesMock.mockReset();
-    listPoliciesMock.mockResolvedValue([policy()]);
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT })]);
+    getPolicyMock.mockReset();
     createPolicyMock.mockReset();
     updatePolicyMock.mockReset();
     updatePolicyMock.mockResolvedValue(policy());
@@ -314,10 +391,168 @@ describe("PoliciesScreen — the editor opens in YAML and saves what it parses t
     fireEvent.change(box, { target: { value: "# tightened\nallowed_domains: []\nmin_confinement_class: CC3\n" } });
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(1));
-    expect(updatePolicyMock).toHaveBeenCalledWith("pol-1", "payments-strict", {
-      allowed_domains: [],
-      min_confinement_class: "CC3",
-    });
+    expect(updatePolicyMock).toHaveBeenCalledWith(
+      "pol-1",
+      "payments-strict",
+      {
+        allowed_domains: [],
+        min_confinement_class: "CC3",
+      },
+      OPENED_AT,
+    );
+  });
+
+  it("a save refused because the policy was saved since keeps the draft, and Discard reloads the stored policy", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains:\n  - api.anthropic.com\n  - removed.example.com\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    updatePolicyMock.mockRejectedValueOnce(
+      new HttpError(409, "Someone saved this policy since you opened it. Reload it, then apply your edit again.", "policy_stale"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+    expect(box.value).toBe(draft);
+    expect(screen.queryByText(/Someone saved this policy since you opened it/)).not.toBeInTheDocument();
+
+    const stored = policy({ updated_at: "2026-11-13T03:05:00.654321Z", spec: { ...policy().spec, allowed_domains: ["api.anthropic.com"] } });
+    getPolicyMock.mockResolvedValueOnce(stored);
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(box.value).toBe(`${toYaml(stored.spec)}\n`));
+    expect(getPolicyMock).toHaveBeenCalledWith("pol-1");
+    expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(2));
+    expect(updatePolicyMock).toHaveBeenLastCalledWith(
+      "pol-1",
+      "payments-strict",
+      expect.objectContaining({ allowed_domains: ["api.anthropic.com"] }),
+      "2026-11-13T03:05:00.654321Z",
+    );
+  });
+
+  // Saves the draft into a 409 policy_stale, which raises the saved-elsewhere banner and its Discard.
+  const saveIntoStale = async () => {
+    updatePolicyMock.mockRejectedValueOnce(new HttpError(409, "Someone saved this policy since you opened it.", "policy_stale"));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE);
+  };
+  const openEditOf = async (name: string) => {
+    await userEvent.click(await screen.findByRole("button", { name: `Policy actions: ${name}` }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^edit/i }));
+    return (await screen.findByLabelText(/^Spec \(YAML\)/)) as HTMLTextAreaElement;
+  };
+
+  it("a reload that answers after the editor closed and opened another policy leaves that policy's draft and save alone", async () => {
+    const other = policy({ id: "pol-2", name: "payments-open", updated_at: "2026-11-13T03:10:00.111111Z" });
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT }), other]);
+    render(<PoliciesScreen />);
+    fireEvent.change(await openEditOf("payments-strict"), { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let answerFirst!: (p: RunPolicy) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (answerFirst = r)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const box = await openEditOf("payments-open");
+    const draft = "allowed_domains:\n  - b.example.com\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await act(async () => answerFirst(policy({ updated_at: "2026-11-13T03:05:00.654321Z" })));
+    expect(box.value).toBe(draft);
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("payments-open");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(2));
+    expect(updatePolicyMock).toHaveBeenLastCalledWith(
+      "pol-2",
+      "payments-open",
+      { allowed_domains: ["b.example.com"], min_confinement_class: "CC2" },
+      "2026-11-13T03:10:00.111111Z",
+    );
+  });
+
+  it("while Discard's reload is pending the name, the spec and Save are frozen, and Save shows it is busy", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let answer!: (p: RunPolicy) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (answer = r)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(screen.getByRole("dialog")).toHaveFocus();
+    expect(box.closest("fieldset[inert]")).not.toBeNull();
+    expect(box).toBeDisabled();
+    expect(screen.getByLabelText(/^Name/)).toBeDisabled();
+    expect(save).toBeDisabled();
+    expect(save.querySelector(".animate-spin")).not.toBeNull();
+
+    const stored = policy({ updated_at: "2026-11-13T03:05:00.654321Z" });
+    await act(async () => answer(stored));
+    expect(box).toBeEnabled();
+    expect(box.value).toBe(`${toYaml(stored.spec)}\n`);
+  });
+
+  it("a reload that fails leaves the draft as it was and the editor open for edits", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains: []\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await saveIntoStale();
+    getPolicyMock.mockRejectedValueOnce(new Error("The policy could not be read."));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The policy could not be read.");
+    expect(box.value).toBe(draft);
+    expect(box).toBeEnabled();
+    expect(screen.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+  });
+
+  it("a reload that fails after the editor closed and opened another policy says nothing in that policy's editor", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT }), policy({ id: "pol-2", name: "payments-open" })]);
+    render(<PoliciesScreen />);
+    fireEvent.change(await openEditOf("payments-strict"), { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let failFirst!: (e: Error) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((_, j) => (failFirst = j)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await openEditOf("payments-open");
+    await act(async () => failFirst(new Error("The policy could not be read.")));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("an answer that names another policy is not applied", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains: []\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await saveIntoStale();
+    getPolicyMock.mockResolvedValueOnce(policy({ id: "pol-2", name: "payments-open" }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(box.value).toBe(draft);
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("payments-strict");
+  });
+
+  it("the editor cannot close while a save is in flight, so its answer never lands in another policy's editor", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    let land!: (p: RunPolicy) => void;
+    updatePolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (land = r)));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => land(policy()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("Discard is held while a second save is in flight, so its refusal cannot land over the reloaded policy", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    updatePolicyMock.mockReturnValueOnce(new Promise<RunPolicy>(() => {}));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeDisabled();
   });
 
   it("an invalid source cannot be saved: nothing is sent, least of all the last valid policy", async () => {
@@ -394,5 +629,52 @@ describe("PoliciesScreen — the door to the Wardyn boundary", () => {
     renderAs(false);
     await screen.findByRole("button", { name: /New policy/ });
     expect(screen.queryByRole("link", { name: BOUNDARY.TITLE })).toBeNull();
+  });
+});
+
+// #2146: the Azure DevOps capability lock follows the person's own row, even with one organisation.
+describe("PoliciesScreen: Azure DevOps capability lock follows the person's own row", () => {
+  const WIDER = { scm_access: { capability_ceiling: ["code_read", "pr"] }, model_providers: [] };
+  const OWN = [{ state: "live", org: "https://dev.azure.com/acme", capability_ceiling: ["code_read"] }];
+
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+    getSetupStatusMock.mockReset();
+    getMineMock.mockReset();
+  });
+  afterEach(() => {
+    getSetupStatusMock.mockReset();
+    getMineMock.mockReset();
+    getMineMock.mockResolvedValue([]);
+  });
+
+  it("locks against the person's row when /setup/status settles first", async () => {
+    let settleMine!: (v: unknown) => void;
+    getSetupStatusMock.mockResolvedValue(WIDER);
+    getMineMock.mockReturnValue(new Promise((r) => (settleMine = r)));
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeEnabled());
+    settleMine(OWN);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled());
+    expect(screen.getByRole("checkbox", { name: /^Read code/ })).toBeEnabled();
+  });
+
+  it("locks against the person's row when /me/scm-access settles first", async () => {
+    let settleSetup!: (v: unknown) => void;
+    getMineMock.mockResolvedValue(OWN);
+    getSetupStatusMock.mockReturnValue(new Promise((r) => (settleSetup = r)));
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled());
+    settleSetup(WIDER);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /^Read code/ })).toBeEnabled();
   });
 });

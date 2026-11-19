@@ -76,6 +76,9 @@ func TestMacShareProbeBounds(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// This check is about the freed slots, not the wait: a loaded runner can take longer than 50ms to run a
+	// check that returns at once.
+	p.wait = time.Minute
 	if got, err := p.run(context.Background(), func() (string, error) { return "/ok", nil }); err != nil || got != "/ok" {
 		t.Fatalf("a quick check after the stuck ones: %q, %v", got, err)
 	}

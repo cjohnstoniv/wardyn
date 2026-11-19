@@ -33,4 +33,4 @@ func askMacOSVM(*cobra.Command, string, *setupPlan, *types.RunnerLimits) error {
 func prepareMacOSVMBase(*cobra.Command, setupPlan, *types.RunnerLimits) {}
 
 // macOSVMDoctorStages is doctor's macOS VM stage, where there is none.
-func macOSVMDoctorStages() []doctor.Stage { return nil }
+func macOSVMDoctorStages([]string, string) []doctor.Stage { return nil }

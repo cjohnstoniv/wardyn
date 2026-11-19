@@ -135,6 +135,8 @@ function RedirectRow({
       tabIndex={0}
       onClick={onExpand}
       onKeyDown={(e) => {
+        // Test and Remove live inside this row: a key pressed on them is theirs, not the row's.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onExpand();

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,5 +105,44 @@ func TestLostRun_OnlyAHeadlessRunnerRunSkipsTheRebootMark(t *testing.T) {
 				t.Errorf("lost at %v, want no mark", lostAt)
 			}
 		})
+	}
+}
+
+// failFirstGetRun fails the first GetRun it is asked for, as a store that is still coming up does.
+type failFirstGetRun struct {
+	*lostStore
+	reads atomic.Int32
+}
+
+func (s *failFirstGetRun) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.reads.Add(1) == 1 {
+		return types.AgentRun{}, errors.New("store: pool timeout")
+	}
+	return s.lostStore.GetRun(ctx, id)
+}
+
+// TestLostRun_AFailedReadDoesNotFinalizeARebootedRun: after a reboot the adopted watcher sees the
+// agent stopped, and one failed run read on that tick must not skip the keep path and finalize the
+// run. The next tick reads again and marks the run lost (reboot).
+func TestLostRun_AFailedReadDoesNotFinalizeARebootedRun(t *testing.T) {
+	f := newLostFixture(t)
+	flaky := &failFirstGetRun{lostStore: f.ls}
+	f.srv.cfg.Store = flaky
+	f.srv.cfg.ExecOutputTailOff = true
+	prev := reconcileWatchIntervalNS.Swap(int64(time.Millisecond))
+	t.Cleanup(func() { reconcileWatchIntervalNS.Store(prev) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	f.srv.reconcileWatch(ctx, f.run.ID, f.run.SandboxRef, f.run.AgentExecID)
+	if ctx.Err() != nil {
+		t.Fatal("the watcher never acted on the stopped agent")
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostReboot {
+		t.Fatalf("lost = %v %q, want the run marked lost (reboot)", lostAt, reason)
+	}
+	// Kept as TestLostRun_ARebootKeepsTheRun keeps it: the agent ended (EndSandbox), not torn down (StopSandbox).
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.rn.endCount() != 1 {
+		t.Errorf("state %s, StopSandbox %d, EndSandbox %d; want RUNNING, 0, 1: the run is kept, not torn down",
+			f.st.State(), f.rn.stopCount(), f.rn.endCount())
 	}
 }

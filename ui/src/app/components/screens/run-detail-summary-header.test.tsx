@@ -30,6 +30,7 @@ import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
+import { END_RUN } from "../wardyn/copy/run-lifetime";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -53,6 +54,30 @@ const runningInteractive: AgentRun = {
   placement: "",
   interactive: true,
 };
+
+describe("SummaryHeader — a paused run (UXR-24)", () => {
+  it("reads Paused in the state pill, in a neutral tone, whenever paused_at is set", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="me">
+        <SummaryHeader run={{ ...runningInteractive, paused_at: aheadByHours(-1), paused_reason: "idle" }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
+    expect(pill.className).not.toMatch(/info|success|warning|danger/);
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
+describe("SummaryHeader — a lost run is not Paused", () => {
+  it.each(["reboot", "outage", "gone"] as const)("%s with paused_at set does not read Paused", (lost_reason) => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="me">
+        <SummaryHeader run={{ ...runningInteractive, paused_at: aheadByHours(-1), paused_reason: "idle", lost_reason }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText("Paused")).toBeNull();
+  });
+});
 
 describe("SummaryHeader — attachable chip predicate", () => {
   // ticket: W25-1
@@ -217,7 +242,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "COMPLETED" }} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.queryByRole("button", { name: /kill/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /end run/i })).toBeNull();
   });
 
   it("keeps Kill on a terminal run whose teardown the trail does not prove", () => {
@@ -226,7 +251,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "KILLED" }} terminal={true} canKillAgain onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("keeps Kill enabled on a live run", () => {
@@ -235,7 +260,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("shows the pending-approval count when non-zero", () => {
@@ -363,7 +388,7 @@ describe("SummaryHeader — clone door", () => {
     );
     const clone = screen.getByRole("button", { name: RUN.CLONE_CTA });
     expect(clone.className).not.toContain("text-danger");
-    const kill = screen.getByRole("button", { name: /kill/i });
+    const kill = screen.getByRole("button", { name: /end run/i });
     expect(kill.className).toContain("text-danger");
   });
 });
@@ -426,7 +451,7 @@ describe("SummaryHeader — state once, with a visible status sentence", () => {
         <SummaryHeader run={runningInteractive} terminal={false} onCopyLink={() => {}} onRename={() => {}} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: END_RUN })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: RUN_HEADER.MORE }));
     expect(await screen.findByRole("menuitem", { name: "Copy link to this run" })).toBeInTheDocument();
   });
@@ -810,6 +835,27 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     expect(screen.queryByLabelText("Title")).toBeNull();
   });
 
+  // The edit row unmounts with the field that held focus; focus must land on the Rename button, not the body.
+  describe.each([
+    ["Cancel", async () => user.click(screen.getByRole("button", { name: "Cancel" }))],
+    ["Save", async () => user.click(screen.getByRole("button", { name: "Save" }))],
+    ["Escape in the field", async () => user.keyboard("{Escape}")],
+  ])("closing the edit row with %s", (_name, close) => {
+    it("puts focus back on the Rename button", async () => {
+      const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+      renderHeader(
+        <OperatorProvider operator={false} principal="me">
+          <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+        </OperatorProvider>,
+      );
+      await user.click(screen.getByRole("button", { name: "Rename" }));
+      expect(screen.getByLabelText("Title")).toHaveFocus();
+      await close();
+      expect(screen.queryByLabelText("Title")).toBeNull();
+      expect(screen.getByRole("button", { name: "Rename" })).toHaveFocus();
+    });
+  });
+
   it("still submits a non-empty edited draft", async () => {
     const onRename = vi.fn();
     const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
@@ -908,6 +954,19 @@ describe("SummaryHeader — a live service's badge", () => {
     expect(screen.getByText("Unhealthy · 3 restarts").closest("span[class*='rounded']")?.className).toMatch(/warning/);
     expect(screen.queryByText("Running")).toBeNull();
     expect(screen.queryByText("Interactive")).toBeNull();
+  });
+
+  it("with Wardyn's check opted in, a missing check reading reads Starting inside the grace and Health unknown after it", () => {
+    const probe = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const healthy = { health: "healthy" as const, restarts: 0, observed_at: aheadByHours(-0.01) };
+    show(svc({ service: probe, service_status: healthy, created_at: aheadByHours(-0.01), admitted_at: aheadByHours(-0.01) }));
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service: probe, service_status: healthy, created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) }));
+    expect(screen.getByText("Health unknown")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service_status: healthy, created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) }));
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
   });
 
   it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {

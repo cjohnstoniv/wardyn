@@ -7,13 +7,17 @@
 // who may launch runs on organization pools; a policy lists people, groups and roles; a policy whose people have
 // all left reads "Nobody can use this pool." Both admin tiers may edit it. A save or a clear that a second person
 // must approve answers 202 (PendingChangeError): nothing changed yet, so the section says it is held and leaves
-// edit mode. Any other refusal is the server's sentence under the editor.
+// edit mode. Any other refusal is the server's sentence under the editor. A unit is named by its profile: the
+// profiles are read once, the first time a unit is chosen or listed, and the uuid is what the policy stores.
 import * as React from "react";
 import { toast } from "sonner";
 import { PendingChangeError } from "../../../../lib/api/core";
+import { governance, type GovernanceUnit } from "../../../../lib/api/governance";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { getErrorMessage } from "../../../../lib/format";
+import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../../lib/types/governance";
 import type { RunnerPoolSubject, RunnerPoolUsePolicy } from "../../../../lib/types/runner-pools";
+import { POOL_UNIT } from "../../../wardyn/copy/pool-unit";
 import { POOL_DIALOG, POOL_DRAWER } from "../../../wardyn/copy/runner-pools";
 import { Mono } from "../../../wardyn/code-block";
 import { Notice } from "../../../wardyn/notice";
@@ -28,7 +32,7 @@ import { ConfirmDialog } from "../confirm-dialog";
 import { Sec } from "../resource-table";
 
 type SubjectType = RunnerPoolSubject["subject_type"];
-const TYPES: SubjectType[] = ["user", "group", "user_type"];
+const TYPES: SubjectType[] = ["user", "group", "user_type", "unit"];
 
 /**
  * A pool with no policy answers with no subjects and the zero time for updated_at (the server always
@@ -36,20 +40,28 @@ const TYPES: SubjectType[] = ["user", "group", "user_type"];
  */
 const hasPolicy = (p: RunnerPoolUsePolicy | null) => !!p?.updated_at && !p.updated_at.startsWith("0001-01-01");
 
-function SubjectList({ subjects, onRemove }: { subjects: RunnerPoolSubject[]; onRemove?: (i: number) => void }) {
+/** A unit row's profile: undefined before the profiles are read, or when none has that uuid. */
+const profileOf = (profiles: GovernanceUnit[] | null, id: string) => profiles?.find((p) => p.id === id);
+
+function SubjectList({ subjects, profiles, onRemove }: { subjects: RunnerPoolSubject[]; profiles: GovernanceUnit[] | null; onRemove?: (i: number) => void }) {
   return (
     <ul className="mb-2 space-y-1">
-      {subjects.map((s, i) => (
-        <li key={`${s.subject_type}:${s.subject}`} className="flex flex-wrap items-center gap-2 py-1">
-          <Chip>{POOL_DRAWER.SUBJECT[s.subject_type]}</Chip>
-          {s.subject_type === "user" ? <span className="break-all">{s.subject}</span> : <Mono className="break-all">{s.subject}</Mono>}
-          {onRemove && (
-            <Button variant="ghost" size="sm" aria-label={POOL_DRAWER.REMOVE_SUBJECT(s.subject)} onClick={() => onRemove(i)}>
-              {POOL_DRAWER.REMOVE}
-            </Button>
-          )}
-        </li>
-      ))}
+      {subjects.map((s, i) => {
+        const unit = s.subject_type === "unit" ? profileOf(profiles, s.subject) : undefined;
+        return (
+          <li key={`${s.subject_type}:${s.subject}`} className="flex flex-wrap items-center gap-2 py-1">
+            <Chip>{POOL_DRAWER.SUBJECT[s.subject_type]}</Chip>
+            {s.subject_type === "user" || unit ? <span className="break-all">{unit ? unit.name : s.subject}</span> : <Mono className="break-all">{s.subject}</Mono>}
+            {unit && <span className="text-xs text-muted-foreground">{POOL_UNIT.BELOW}</span>}
+            {s.subject_type === "unit" && profiles && !unit && <span className="text-xs text-muted-foreground">{POOL_UNIT.ORPHAN}</span>}
+            {onRemove && (
+              <Button variant="ghost" size="sm" aria-label={POOL_DRAWER.REMOVE_SUBJECT(unit ? unit.name : s.subject)} onClick={() => onRemove(i)}>
+                {POOL_DRAWER.REMOVE}
+              </Button>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -76,6 +88,10 @@ export function PoolPolicy({
   const [type, setType] = React.useState<SubjectType>("user");
   const [name, setName] = React.useState("");
   const [clearing, setClearing] = React.useState(false);
+  // The profiles a unit row names: null until read. One read, made when a unit is first chosen or listed.
+  const [profiles, setProfiles] = React.useState<GovernanceUnit[] | null>(null);
+  const [profilesFailed, setProfilesFailed] = React.useState(false);
+  const reading = React.useRef(false);
   const heldByClear = React.useRef(false);
 
   const read = React.useCallback(() => {
@@ -95,6 +111,19 @@ export function PoolPolicy({
     read();
   }, [read]);
 
+  const readProfiles = React.useCallback(() => {
+    if (reading.current) return;
+    reading.current = true;
+    setProfilesFailed(false);
+    governance
+      .getGovernance()
+      .then((g) => setProfiles(g.profiles))
+      .catch(() => setProfilesFailed(true))
+      .finally(() => {
+        reading.current = false;
+      });
+  }, []);
+
   const startEdit = () => {
     setDraft(policy?.subjects ?? []);
     setHeld(false);
@@ -107,7 +136,7 @@ export function PoolPolicy({
     const subject = name.trim();
     if (!subject) return setError(POOL_DRAWER.ERR_SUBJECT_EMPTY);
     if (draft.some((s) => s.subject_type === type && s.subject === subject)) {
-      return setError(POOL_DRAWER.ERR_SUBJECT_TWICE(POOL_DRAWER.SUBJECT[type].toLowerCase(), subject));
+      return setError(POOL_DRAWER.ERR_SUBJECT_TWICE(POOL_DRAWER.SUBJECT[type].toLowerCase(), (type === "unit" && profileOf(profiles, subject)?.name) || subject));
     }
     setDraft([...draft, { subject_type: type, subject }]);
     setName("");
@@ -153,6 +182,11 @@ export function PoolPolicy({
   };
 
   const subjects = editing ? draft : (policy?.subjects ?? []);
+  const choosingUnit = editing && type === "unit";
+  const wantProfiles = choosingUnit || subjects.some((s) => s.subject_type === "unit");
+  React.useEffect(() => {
+    if (wantProfiles && profiles === null && !profilesFailed) readProfiles();
+  }, [wantProfiles, profiles, profilesFailed, readProfiles]);
   const nobody = hasPolicy(policy) && subjects.length === 0 && !editing;
   const set = hasPolicy(policy);
 
@@ -173,7 +207,7 @@ export function PoolPolicy({
           </Notice>
         </div>
       )}
-      {subjects.length > 0 && <SubjectList subjects={subjects} onRemove={editing ? (i) => setDraft(draft.filter((_, j) => j !== i)) : undefined} />}
+      {subjects.length > 0 && <SubjectList subjects={subjects} profiles={profiles} onRemove={editing ? (i) => setDraft(draft.filter((_, j) => j !== i)) : undefined} />}
       {policy && !editing && (
         <div className="mt-1">
           <Button variant="outline" onClick={startEdit}>
@@ -187,7 +221,13 @@ export function PoolPolicy({
           <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-3 max-sm:grid-cols-1">
             <div className="space-y-1.5">
               <Label htmlFor="pol-type">{POOL_DRAWER.ADD}</Label>
-              <Select value={type} onValueChange={(v) => setType(v as SubjectType)}>
+              <Select
+                value={type}
+                onValueChange={(v) => {
+                  setType(v as SubjectType);
+                  setName("");
+                }}
+              >
                 <SelectTrigger id="pol-type">
                   <SelectValue />
                 </SelectTrigger>
@@ -200,28 +240,61 @@ export function PoolPolicy({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pol-val">{POOL_DRAWER.NAME}</Label>
-              <Input
-                id="pol-val"
-                value={name}
-                placeholder={POOL_DRAWER.NAME_PLACEHOLDER}
-                autoComplete="off"
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? "pol-err" : undefined}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    add();
-                  }
-                }}
-              />
-            </div>
-            <Button variant="outline" onClick={add}>
-              {POOL_DRAWER.ADD_TO_LIST}
-            </Button>
+            {choosingUnit ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="pol-unit">{POOL_UNIT.LABEL}</Label>
+                {profilesFailed ? (
+                  <p id="pol-unit" className="flex h-9 items-center rounded-md border border-danger/40 px-3 text-xs text-danger">
+                    {POOL_UNIT.LOAD_FAILED}
+                  </p>
+                ) : (
+                  <Select value={name} onValueChange={setName} disabled={profiles === null}>
+                    <SelectTrigger id="pol-unit">
+                      <SelectValue placeholder={profiles === null ? POOL_UNIT.LOADING : undefined} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(profiles ?? [])
+                        .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
+                        .map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label htmlFor="pol-val">{POOL_DRAWER.NAME}</Label>
+                <Input
+                  id="pol-val"
+                  value={name}
+                  placeholder={POOL_DRAWER.NAME_PLACEHOLDER}
+                  autoComplete="off"
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? "pol-err" : undefined}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      add();
+                    }
+                  }}
+                />
+              </div>
+            )}
+            {choosingUnit && profilesFailed ? (
+              <Button variant="outline" onClick={readProfiles}>
+                {POOL_UNIT.RETRY}
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={add}>
+                {POOL_DRAWER.ADD_TO_LIST}
+              </Button>
+            )}
           </div>
+          {choosingUnit && <p className="mt-1.5 text-xs text-muted-foreground">{POOL_UNIT.HELP}</p>}
           {error && (
             <p id="pol-err" role="alert" className="mt-1.5 text-xs text-danger">
               {error}

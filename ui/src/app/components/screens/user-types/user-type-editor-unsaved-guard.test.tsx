@@ -5,12 +5,13 @@
 
 // The user-type editor registers with the shared unsaved guard while it holds edits.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { unsavedSnapshot } from "../../../lib/unsaved-registry";
 import type { UserType } from "../../../lib/types";
 import { setField } from "../../../../test/set-field";
 import { aheadByHours } from "../../../lib/test-clock";
 import { UserTypeEditor } from "./user-type-editor";
+import { USER_TYPES as UT } from "../../../lib/user-types-copy";
 
 const EXISTING: UserType = {
   id: "contractor",
@@ -46,6 +47,19 @@ describe("UserTypeEditor unsaved guard", () => {
     expect(unsavedSnapshot()).not.toBeNull();
     setField(document.getElementById("user-type-priority")!, "10");
     expect(unsavedSnapshot()).toBeNull();
+  });
+
+  it("its fields are read-only while the save is in flight, so nothing typed then is lost when it closes", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    try {
+      renderEditor(EXISTING);
+      fireEvent.click(screen.getByRole("button", { name: UT.SAVE }));
+      expect(nameField()).toBeDisabled();
+      expect(document.getElementById("user-type-priority")).toBeDisabled();
+      expect(document.getElementById("user-type-description")).toBeDisabled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("unregisters on unmount", () => {

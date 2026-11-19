@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -65,14 +66,21 @@ func (s *Server) remoteUsage(ctx context.Context, rr types.RemoteRunner, used ty
 	return u
 }
 
-// poolCapacity adds up a pool's runners the caller's catalogue row may show: its organization runners,
-// or a user pool's own runners and remote-hosted runners. Total and In use count every member that
+// poolCapacity adds up a pool's runners the caller's catalogue row may show: its organization runners (the claimed ones bound
+// to this organisation), or a user pool's own runners and remote-hosted runners. Total and In use count every member that
 // declares limits; Available counts the online ones, and none in a pool that is switched off; the
 // largest per-run limit is the biggest run a member takes. Numbers only.
 func (s *Server) poolCapacity(row store.RunnerPoolCatalogueRow, fits map[string]runnerFit, online func(key string) bool) *client.PoolCapacity {
 	keys := slices.Clone(row.ExecutorIDs)
 	for _, id := range row.OwnRunnerIDs {
 		keys = append(keys, id.String())
+	}
+	// Only the organization runners placement can offer: claimed (the fits hold no other) and bound to this organisation.
+	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
+	for _, id := range row.OrgRunnerIDs {
+		if f, ok := fits[id]; ok && f.runner.OrgURLSHA256 == orgHash {
+			keys = append(keys, id)
+		}
 	}
 	out := &client.PoolCapacity{Runners: len(keys)}
 	active := row.Pool.State == types.RunnerPoolActive

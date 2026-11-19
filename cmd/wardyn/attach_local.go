@@ -85,7 +85,7 @@ var localAttachDir = defaultLocalAttachDir
 var presenceEvery = 10 * time.Second
 
 // localEndGrace is how long a session the runner ended waits for the organisation's close, whose reason
-// is the one shown.
+// is the one shown, and how long a session the organisation ended waits for the runner's last output.
 var localEndGrace = 2 * time.Second
 
 // localHelloTimeout bounds the socket's answer to the hello.
@@ -319,17 +319,22 @@ func localPipe(ws *websocket.Conn, lc *localConn, first []byte) attachPipe {
 			go func() { localDone <- localOutput(lc, show) }()
 			select {
 			case err := <-wsDone:
-				return err
+				if !endedOnItsOwn(err) {
+					return err
+				}
+				return localTail(ctx, localDone)
 			case <-ctx.Done():
 				return ctx.Err()
 			case lerr := <-localDone:
 				// The runner ended the terminal. The organisation's close names why (take-over,
-				// sign-out, lease lost) as on the relay, so wait for it before saying anything.
+				// sign-out, lease lost) as on the relay, so wait for it before saying anything. A
+				// socket that ends with no close frame names no reason: that is how the organisation's
+				// socket ends when the runner ended the session, so the runner's reason is the end shown.
 				t := time.NewTimer(localEndGrace)
 				defer t.Stop()
 				select {
 				case err := <-wsDone:
-					if !isNormalClose(err) {
+					if !isNormalClose(err) && websocket.CloseStatus(err) != -1 {
 						return err
 					}
 				case <-ctx.Done():
@@ -370,6 +375,41 @@ func localPipe(ws *websocket.Conn, lc *localConn, first []byte) attachPipe {
 			_ = lc.conn.Close()
 			_ = ws.Close(websocket.StatusNormalClosure, "")
 		},
+	}
+}
+
+// endedOnItsOwn reports whether the control socket ended without the organisation stopping the session:
+// its normal close, or no close frame at all, which is how the organisation's socket ends when the runner
+// ended the session (the shell exited, the run ended) and what a lost connection looks like. A take-over,
+// a sign-out and a lost lease each close with their own code: those stay prompt.
+func endedOnItsOwn(err error) bool {
+	cs := websocket.CloseStatus(err)
+	return cs == websocket.StatusNormalClosure || cs == websocket.StatusGoingAway || cs == -1
+}
+
+// errLocalOutputIncomplete is shown when a session ended on its own but the runner's last output did not
+// reach this terminal within localEndGrace.
+var errLocalOutputIncomplete = errors.New("the session ended before this terminal finished showing its output; the output may be incomplete")
+
+// localTail waits for the runner's output to reach the terminal after the control socket ended without
+// the organisation stopping the session: the runner may have bytes still queued on the local socket, and a
+// detach now would drop them. It returns nil, a clean detach, once the runner's own clean end is read
+// (everything before it has been shown), the local stream's error when it ended any other way,
+// errLocalOutputIncomplete after localEndGrace, and ctx's error at once when the session is stopped.
+func localTail(ctx context.Context, done <-chan error) error {
+	t := time.NewTimer(localEndGrace)
+	defer t.Stop()
+	select {
+	case lerr := <-done:
+		var end *localEnded
+		if errors.As(lerr, &end) && localCleanEnds[end.reason] {
+			return nil
+		}
+		return lerr // the terminal could not be written to, or the runner's stream broke or ended another way
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return errLocalOutputIncomplete
 	}
 }
 

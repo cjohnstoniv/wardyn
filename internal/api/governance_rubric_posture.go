@@ -199,11 +199,14 @@ func rubricPostureSentence(r rubricReach) string {
 	return strings.Join(out, " ")
 }
 
-// everyRow sets all nine rows, so FoldAutonomy names exactly the rows a posture selects.
+// everyRow sets every row (all ten), so FoldAutonomy names exactly the rows a posture selects. The posture
+// built here never carries a self-defined component, so the tenth row is never named; it is set so the
+// list stays complete.
 var everyRow = types.AutonomyRubric{
 	EgressOpen: types.AutonomyL0, EgressReviewed: types.AutonomyL0, EgressSealed: types.AutonomyL0,
 	SecretsPowerful: types.AutonomyL0, SecretsBaseline: types.AutonomyL0, SecretsNone: types.AutonomyL0,
 	ConfinementCC1: types.AutonomyL0, ConfinementCC2: types.AutonomyL0, ConfinementCC3: types.AutonomyL0,
+	SelfDefinedComponent: types.AutonomyL0,
 }
 
 func orList[T ~string](xs []T) string  { return joinLast(xs, " or ") }

@@ -58,7 +58,7 @@ func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.Credential
 	policy := policyOf(g)
 	policy.AllowedDomains = []string{fillTestHost}
 	f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()),
-		dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy})
+		dispatchParams{RunToken: runToken(t, f.srv, run.ID), Image: "wardyn/claude-code:latest", Policy: policy})
 	f.srv.WaitBackground()
 	for _, ev := range syncAuditRows(f.audit, "run.dispatch") {
 		if ev.RunID != nil && *ev.RunID == run.ID && ev.Outcome == "failure" {

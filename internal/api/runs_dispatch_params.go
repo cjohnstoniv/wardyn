@@ -25,6 +25,7 @@ type dispatchParams struct {
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
 	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
 	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
+	GitPushWithheld    map[string]string    // broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld)
 	// PATBroker reports whether the never-resident git_pat lane is on: the PAT is
 	// minted PROXY-SIDE and no grant id reaches the sandbox env.
 	//
@@ -139,4 +140,13 @@ type dispatchParams struct {
 	// desktop sign-ins (signinVariantUngranted). Set only by
 	// finishCreateRunLaunch, from the fold.
 	SigninImageUngranted bool
+	// DesktopWindowAtStart: the request asked for a window onto the run on its own Mac as it comes up
+	// (CreateRunRequest.DesktopWindow); dispatch asks for it once the run is RUNNING.
+	DesktopWindowAtStart bool
+	// Machine is the kept machine stepKeptMachine planned (a keep or a resume); dispatch inserts or claims
+	// it before any runner work. nil for a run that keeps none. Set only by finishCreateRunLaunch.
+	Machine *keptMachinePlan
+	// modelLimit is the run's governed allowed-models limit. Never set by a caller: dispatchRun copies it
+	// from the required ceiling before any phase reads it, so a lane cannot leave it out.
+	modelLimit allowedModelsLimit
 }

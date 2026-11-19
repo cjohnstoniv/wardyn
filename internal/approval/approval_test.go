@@ -559,10 +559,11 @@ func TestExpireOne_MovesPendingToExpired(t *testing.T) {
 	}
 }
 
-// TestExpireOne_AlreadyDecidedIsSilent proves the idempotent race handling: a
-// row a human (or the periodic sweep) already decided must not error and must
-// not emit a second, contradicting audit row.
-func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
+// TestExpireOne_AlreadyDecidedSaysSo proves the race handling: a row a human (or
+// the periodic sweep, or another end) already decided is left as it is, emits no
+// second, contradicting audit row, and answers ErrAlreadyDecided, so a caller
+// counts only the end that moved the row.
+func TestExpireOne_AlreadyDecidedSaysSo(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
 	runID := uuid.New()
@@ -575,8 +576,8 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 	before := len(st.audit)
 
-	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
-		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != approval.ErrAlreadyDecided {
+		t.Fatalf("expire one on an already-decided row = %v, want ErrAlreadyDecided", err)
 	}
 	got, _ := st.GetApproval(ctx, ap.ID)
 	if got.State != types.ApprovalApproved {
@@ -584,6 +585,37 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 	if len(st.audit) != before {
 		t.Errorf("expected no new audit event for a no-op race, got %d new", len(st.audit)-before)
+	}
+}
+
+// TestExpireOne_AServerEndIsTheSystems: a row the server ends because it can no longer be
+// answered (an AWS sign-in request whose provider now signs in elsewhere) is recorded as the
+// system's, never as an agent's.
+func TestExpireOne_AServerEndIsTheSystems(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	ap, _ := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalCredentialReauth, json.RawMessage(`{"owner":"alice"}`)))
+	if err := approval.ExpireOne(ctx, st, ap.ID, "wardynd", "provider_sign_in_changed"); err != nil {
+		t.Fatalf("expire one: %v", err)
+	}
+	if got, _ := st.GetApproval(ctx, ap.ID); got.State != types.ApprovalExpired {
+		t.Errorf("want EXPIRED, got %s", got.State)
+	}
+	n := 0
+	for _, ev := range st.audit {
+		if ev.Action != "approval.expire" {
+			continue
+		}
+		n++
+		if ev.ActorType != types.ActorSystem || ev.Actor != "wardynd" {
+			t.Errorf("want actor system wardynd, got %s %s", ev.ActorType, ev.Actor)
+		}
+		if !strings.Contains(string(ev.Data), `"reason":"provider_sign_in_changed"`) {
+			t.Errorf("want reason provider_sign_in_changed in data, got %s", ev.Data)
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected 1 expire audit event, got %d", n)
 	}
 }
 
@@ -1291,6 +1323,45 @@ func TestRequestApproval_StoresOneSpellingPerNumber(t *testing.T) {
 		}
 		if string(got.RequestedScope) != want {
 			t.Errorf("%s stored as %s, want %s", in, got.RequestedScope, want)
+		}
+	}
+}
+
+// TestDecideAuditCarriesCallFields: a decision on an MCP call row names the
+// tool, the server and the call hash at the top level of the audit row, so the
+// chain from the request to the forwarded call joins without parsing the scope.
+func TestDecideAuditCarriesCallFields(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	scope := json.RawMessage(`{"tool":"mcp__jira__delete_issue","mcp_server":"jira","arguments":{"id":1},"call_sha256":"abc123"}`)
+	ap, err := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalToolCall, scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Scope: types.ScopeOnce,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	for k, want := range map[string]string{"tool": "mcp__jira__delete_issue", "mcp_server": "jira", "call_sha256": "abc123", "decision_scope": "once"} {
+		if data[k] != want {
+			t.Errorf("approval.decide data[%q] = %v, want %q", k, data[k], want)
+		}
+	}
+	// A tool_call that is not an MCP call row gains none of the fields.
+	ap2, _ := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash","cmd":"ls"}`)))
+	if _, err := approval.Decide(ctx, st, ap2.ID, types.ActorHuman, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "alice@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	var data2 map[string]any
+	_ = json.Unmarshal(st.audit[1].Data, &data2)
+	for _, k := range []string{"tool", "mcp_server", "call_sha256"} {
+		if _, has := data2[k]; has {
+			t.Errorf("a plain tool_call decision carries %q", k)
 		}
 	}
 }

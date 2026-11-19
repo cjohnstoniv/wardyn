@@ -295,9 +295,11 @@ func TestAttachPromotion_WebPromotionResizesRemainingObservers(t *testing.T) {
 	if !m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderSecond {
 		t.Fatalf("the remaining observer's frame = %+v, want read_only naming the promoted client %s", m, holderSecond)
 	}
-	if c, r := remaining.lastSize(); c != 120 || r != 40 {
-		t.Fatalf("the remaining observer's PTY = %dx%d after the writer changed to 120x40", c, r)
-	}
+	// The resize reaches the observers only once the promoted writer's exec is installed, after the frames.
+	waitFor(t, "the remaining observer's PTY to follow the writer's 120x40", func() bool {
+		c, r := remaining.lastSize()
+		return c == 120 && r == 40
+	})
 }
 
 // TestAttachPromotion_TakeoverPromotesOnlyTheTaker pins both halves of the
@@ -616,9 +618,11 @@ func TestAttachPromotion_SSHPromotionResizesRemainingObservers(t *testing.T) {
 		defer ch.Close()
 	}
 	remaining := srv.attachObservers(run.ID)[1]
-	if c, r := remaining.mux.lastSize(); c != 120 || r != 40 {
-		t.Fatalf("the remaining observer started at %dx%d, want the writer's 120x40", c, r)
-	}
+	// The writer's size reaches a joining observer after its session starts, so it is waited for, not read at once.
+	waitFor(t, "the remaining observer to start at the writer's 120x40", func() bool {
+		c, r := remaining.mux.lastSize()
+		return c == 120 && r == 40
+	})
 
 	channels[0].Close()
 	rn.session(t, 3)

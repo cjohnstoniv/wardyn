@@ -77,7 +77,7 @@ describe("M-R1 runner drawer section", () => {
     const { container } = section(ready);
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText("Ready: macOS 27.0.1 (26A434)")).toBeInTheDocument();
-    for (const t of ["Guest", "macOS 27.0.1 (26A434)", "Running now: 1 of 2", "Smallest run it can take", "4 CPUs · 8 GB memory", "Harnesses", "Claude Code, Codex CLI, Your own tools", "Desktop", "Opens from the run page"]) {
+    for (const t of ["Guest", "macOS 27.0.1 (26A434)", "Running now: 1 of 2", "Smallest run it can take", "4 CPUs · 8 GiB memory", "Harnesses", "Claude Code, Codex CLI, Your own tools", "Desktop", "Opens from the run page"]) {
       expect(screen.getByText(t)).toBeInTheDocument();
     }
     expect(container.textContent).toContain("Apple's licence allows 2 macOS VMs on a Mac. Preparing or updating macOS uses one of them.");

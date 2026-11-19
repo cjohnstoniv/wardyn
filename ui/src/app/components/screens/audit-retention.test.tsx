@@ -26,13 +26,16 @@ vi.mock("../../lib/api/audit", () => ({
   },
 }));
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun: vi.fn().mockResolvedValue(undefined) } }));
-vi.mock("../../lib/api/health", () => ({ health: { health: () => Promise.resolve({}) } }));
+vi.mock("../../lib/api/health", () => ({
+  health: { health: () => Promise.resolve({}), whoami: () => Promise.resolve(null) },
+}));
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: (...a: unknown[]) => toastError(...a) } }));
 
 import { HttpError } from "../../lib/api/core";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { AuditScreen } from "./audit";
+import { STATES } from "../wardyn/states";
 
 function status(over: Partial<AuditRetentionStatus> = {}): AuditRetentionStatus {
   return {
@@ -187,6 +190,13 @@ describe("Audit → Retention", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/months of partitions ready$/)).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRetentionMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    await openRetention();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a failed read is an error with a retry, not an empty card", async () => {
@@ -354,6 +364,18 @@ describe("Audit → Retention", () => {
         await waitFor(() => expect(created).toContain("audit_events_legacy.raw.ndjson"));
         expect(exportMock).toHaveBeenCalledWith("audit_events_legacy", "readable");
         expect(exportMock).toHaveBeenCalledWith("audit_events_legacy", "raw");
+      });
+
+      it("an export revokes the object URL only after the click's task, so the browser has the file first", async () => {
+        exportMock.mockResolvedValue(new Blob(["x"]));
+        const atClick: number[] = [];
+        vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+          setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+        });
+        const dialog = await openDrop();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Readable export" }));
+        await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:archive"));
+        expect(atClick).toEqual([0]);
       });
 
       it("a row's Export menu offers both forms, and a failed export says so", async () => {

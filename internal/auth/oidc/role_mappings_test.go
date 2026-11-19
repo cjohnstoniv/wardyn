@@ -130,13 +130,13 @@ func TestMergeRoleMapsConsoleRowShadowedByOperatorEmail(t *testing.T) {
 }
 
 // TestMergeRoleMapsRejectsNonCanonicalRow supersedes the old
-// TestMergeRoleMapsUsesRowsVerbatim: an Opus review found that storing a
+// TestMergeRoleMapsUsesRowsVerbatim: storing a
 // non-canonical row VERBATIM (the old contract) let a bad row become either a
 // permanent dead key (never hit by deriveRole's lowered claim lookup) or,
 // worse, an empty/whitespace key that matches ANY empty/whitespace claim —
 // admin escalation. mergeRoleMaps now REJECTS a non-canonical row instead of
-// trusting the write boundary; this is the sanctioned rewrite the review
-// asked for, pinning the closed contract rather than the old open one.
+// trusting the write boundary; this is the sanctioned rewrite,
+// pinning the closed contract rather than the old open one.
 func TestMergeRoleMapsRejectsNonCanonicalRow(t *testing.T) {
 	rows := []writoidc.RoleMapping{{Value: "Eng-Team", Role: writoidc.RoleUser}}
 

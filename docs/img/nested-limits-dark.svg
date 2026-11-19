@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 594" width="1000" height="594" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">Nested limits on a run</title>
+  <desc id="desc">From the organisation's boundary inward: the Wardyn boundary, the deployment default and unit profiles, restrictions, the run's policy, your walls and the wall preset. Each layer only narrows, so the run gets what every layer allows.</desc>
+  <style>
+    .bg { fill: #0d1117; stroke: #3d444d; }
+    .zone { fill: #161b22; stroke: #3d444d; stroke-width: 1.5; }
+    .card { fill: #0d1117; stroke: #9198a1; stroke-width: 1.5; }
+    .sand { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; stroke-dasharray: 8 5; }
+    .ok { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; }
+    .held { fill: #2e2410; stroke: #d29922; stroke-width: 2; }
+    .deny { fill: #0d1117; stroke: #ff7b72; stroke-width: 1.5; }
+    .outline { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .frame { fill: none; stroke: #9198a1; stroke-width: 1.5; }
+    .tab { fill: #161b22; stroke: #9198a1; stroke-width: 1.5; }
+    .halo { paint-order: stroke; stroke: #0d1117; stroke-width: 5px; stroke-linejoin: round; }
+    .dot { fill: #9198a1; }
+    .pill { fill: #3cc6b6; stroke: none; }
+    .pt { fill: #0d1117; }
+    .t { fill: #e6edf3; }
+    .m { fill: #9198a1; }
+    .a { fill: #3cc6b6; }
+    .r { fill: #ff7b72; }
+    .h { fill: #d29922; }
+    .ln { fill: none; stroke: #9198a1; stroke-width: 2; }
+    .lt { fill: none; stroke: #3cc6b6; stroke-width: 2.5; }
+    .lr { fill: none; stroke: #ff7b72; stroke-width: 2; }
+    .lh { fill: none; stroke: #d29922; stroke-width: 2; }
+    .life { fill: none; stroke: #3d444d; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .edge { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .dash { stroke-dasharray: 6 4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  </style>
+  <defs><marker id="h-ln" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9198a1"/></marker><marker id="h-lt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3cc6b6"/></marker><marker id="h-lr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#ff7b72"/></marker><marker id="h-lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d29922"/></marker></defs>
+  <rect class="bg" x="0.5" y="0.5" width="999" height="593" rx="10"/>
+  <rect class="outline" x="24" y="24" width="952" height="490" rx="12"/>
+  <text class="t" x="40" y="52" font-size="15" font-weight="600">The organisation's boundary, outside Wardyn</text>
+  <rect class="zone" x="50" y="68" width="900" height="430" rx="12"/>
+  <text class="t" x="66" y="96" font-size="15" font-weight="600">Wardyn boundary</text>
+  <text class="m mono" x="206.0" y="96" font-size="14">boundary</text>
+  <rect class="card" x="76" y="112" width="848" height="370" rx="12"/>
+  <text class="t" x="92" y="140" font-size="15" font-weight="600">Deployment default and unit profiles</text>
+  <text class="m mono" x="408.40000000000003" y="140" font-size="14">deployment, unit</text>
+  <rect class="zone" x="102" y="156" width="796" height="310" rx="12"/>
+  <text class="t" x="118" y="184" font-size="15" font-weight="600">Restrictions</text>
+  <text class="m mono" x="232.8" y="184" font-size="14">restriction</text>
+  <rect class="card" x="128" y="200" width="744" height="250" rx="12"/>
+  <text class="t" x="144" y="228" font-size="15" font-weight="600">The run's policy</text>
+  <text class="m mono" x="292.4" y="228" font-size="14">member</text>
+  <rect class="zone" x="154" y="244" width="692" height="190" rx="12"/>
+  <text class="t" x="170" y="272" font-size="15" font-weight="600">Your walls</text>
+  <text class="m mono" x="268.0" y="272" font-size="14">personal</text>
+  <rect class="card" x="180" y="288" width="640" height="130" rx="12"/>
+  <text class="t" x="196" y="316" font-size="15" font-weight="600">Wall preset</text>
+  <text class="m mono" x="302.4" y="316" font-size="14">wall_preset</text>
+  <rect class="ok" x="206" y="332" width="588" height="70" rx="10"/>
+  <text class="t" x="500.0" y="373.0" font-size="17" text-anchor="middle" font-weight="600">The run</text>
+  <text class="m" x="24" y="548" font-size="14">Each layer only narrows, so a run gets what every layer allows. A wider value is cut to the outer layer, with a warning.</text>
+  <text class="m" x="24" y="572" font-size="14">At dispatch and revive, the boundary and your walls' denies and withheld credentials are applied again.</text>
+</svg>

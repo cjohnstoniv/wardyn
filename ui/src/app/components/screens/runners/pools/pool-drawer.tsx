@@ -259,7 +259,7 @@ export function PoolDrawer({
           aria-describedby={undefined}
         >
           <SheetHeader className="pb-2">
-            <div className="pr-8">
+            <div>
               <SheetTitle>
                 <span ref={titleRef} tabIndex={-1} className="break-words outline-none">
                   {pool.name}

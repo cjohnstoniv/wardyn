@@ -108,6 +108,60 @@ func brokerOffPATRefusal(grants []types.GrantSpec, env patNarrowingEnv) (reason,
 	return "", ""
 }
 
+// refusesEveryPush reports whether the run's push rules set deny_all: the policy's own block, the
+// base rules of an entry with no set, or any entry's set.
+func refusesEveryPush(policy types.RunPolicySpec, base *types.PushRulesSpec, sets []types.PushRuleSet) bool {
+	return (policy.PushRules != nil && policy.PushRules.DenyAll) || (base != nil && base.DenyAll) ||
+		slices.ContainsFunc(sets, func(s types.PushRuleSet) bool { return s.Rules.DenyAll })
+}
+
+// denyAllForgeHosts is proxy.Config.ForgeHosts: the code hosts the proxy refuses while the run
+// refuses every push (types.DenyAllForgeHosts, never empty, so a runner that does not name
+// forge_hosts is refused the run), nil when it does not.
+func denyAllForgeHosts(policy types.RunPolicySpec, sets []types.PushRuleSet, site types.SiteConfig, rows []types.CredentialGrant) []string {
+	if !refusesEveryPush(policy, nil, sets) {
+		return nil
+	}
+	return types.DenyAllForgeHosts(site, patGrantSpecs(rows))
+}
+
+// pushDenyAllSecrets is the preview's push_deny_all_secrets: the run refuses every push and carries
+// an environment or file secret of its own, which Wardyn can't read.
+func pushDenyAllSecrets(spec types.RunPolicySpec, sets []types.PushRuleSet) bool {
+	return refusesEveryPush(spec, nil, sets) && slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		return g.Kind == types.GrantEnvSecret || g.Kind == types.GrantFileSecret
+	})
+}
+
+// pushDenyAllRefusal refuses a run that refuses every push but would hold a credential that pushes
+// around the broker, where deny_all is enforced: a git_pat the broker-off lane puts in the sandbox,
+// a runner_resident one included, or an ssh_key. A credential withheld because its forge is
+// GitHub-brokered (dropBrokeredGrants) pushes nowhere, so it is not refused. "" when none.
+func pushDenyAllRefusal(denyAll bool, grants []types.GrantSpec, brokerOn, brokered bool) (reason, detail string) {
+	if !denyAll {
+		return "", ""
+	}
+	for _, g := range grants {
+		switch g.Kind {
+		case types.GrantGitPAT:
+			sc, err := types.DecodeGitPATScope(g.Scope)
+			if brokerOn || (err == nil && brokered && brokeredForgeHost(sc.Host)) {
+				continue
+			}
+			return reasonPushDenyAllResidentPAT, "This run refuses every push, but this install gives runs their git token " +
+				"directly, so pushes can't be stopped. Ask your admin to turn the git token broker on."
+		case types.GrantSSHKey:
+			host, _, _, _, err := sshKeyScopeFields(g.Scope)
+			if err == nil && brokered && brokeredForgeSSHHost(host) {
+				continue
+			}
+			return reasonPushDenyAllSSHKey, "This run refuses every push, but it holds an SSH key, and a push over SSH " +
+				"can't be stopped. Launch without the SSH key, or without the setting that refuses every push."
+		}
+	}
+	return "", ""
+}
+
 // brokeredLaneSpecs is the specs of rows the broker-off lane would serve: every
 // row but a runner_resident one.
 func brokeredLaneSpecs(rows []types.CredentialGrant) []types.GrantSpec {
@@ -224,6 +278,10 @@ func (s *Server) enforceablePATNarrowing(ctx context.Context, run types.AgentRun
 	if reason, detail := brokerOffPATRefusal(brokeredLaneSpecs(rows), env); reason != "" {
 		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
 	}
+	denyAll := refusesEveryPush(p.Policy, nil, p.PushRuleSets)
+	if reason, detail := pushDenyAllRefusal(denyAll, patGrantSpecs(rows), env.brokerOn, env.brokered); reason != "" {
+		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
+	}
 	if reason, detail := patNarrowingRefusal(patGrantSpecs(rows), env); reason != "" {
 		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
 	}
@@ -292,6 +350,9 @@ func (s *Server) patNarrowingAtDoor(r *http.Request, req createRunRequest, spec 
 		env.adoHosts = lane.laneHosts()
 	}
 	if reason, detail := brokerOffPATRefusal(spec.EligibleGrants, env); reason != "" && !pooled {
+		return reason, detail
+	}
+	if reason, detail := pushDenyAllRefusal(refusesEveryPush(spec, nil, nil), spec.EligibleGrants, env.brokerOn, env.brokered); reason != "" {
 		return reason, detail
 	}
 	return patNarrowingRefusal(spec.EligibleGrants, env)

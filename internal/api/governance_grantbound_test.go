@@ -283,7 +283,7 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 	}
 
 	t.Run("a faithful copy warns about nothing", func(t *testing.T) {
-		if got := governanceOmissionWarnings(deployment, deployment, types.GovernanceLimits{}); len(got) != 0 {
+		if got := governanceOmissionWarnings(deployment, deployment, types.GovernanceLimits{LocalSelfDefinedComponents: true}); len(got) != 0 {
 			t.Errorf("warnings = %v, want none for a ceiling identical to the deployment default", got)
 		}
 	})
@@ -321,7 +321,7 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 		profile := deployment
 		profile.DeniedDomains = []string{"internal.corp.example", "also.blocked.example"}
 		profile.MinConfinementClass = types.CC3
-		if got := governanceOmissionWarnings(profile, deployment, types.GovernanceLimits{}); len(got) != 0 {
+		if got := governanceOmissionWarnings(profile, deployment, types.GovernanceLimits{LocalSelfDefinedComponents: true}); len(got) != 0 {
 			t.Errorf("warnings = %v, want none: adding a deny and raising confinement omits nothing", got)
 		}
 	})

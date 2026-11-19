@@ -42,8 +42,13 @@ const (
 	GovernanceTargetUnitAdmin              = "governance_unit_admin"
 	GovernanceTargetRestriction            = "governance_restriction"
 	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
+	GovernanceTargetComponentOwningUnit    = "component_owning_unit"
 	GovernanceTargetApprovalRule           = "approval_rule"
 	GovernanceTargetRecording              = "org_recording"
+	GovernanceTargetUnitDeciders           = "governance_unit_deciders"
+	GovernanceTargetEnvelope               = "governance_envelope"
+	GovernanceTargetElevation              = "governance_elevation"
+	GovernanceTargetImageRequest           = "governance_image_request"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the
@@ -67,6 +72,9 @@ type GovernanceChange struct {
 	DecidedAt  *time.Time      `json:"decided_at,omitempty"`
 	// Reason is a rejection's optional explanation.
 	Reason string `json:"reason,omitempty"`
+	// Note is the proposer's reason and ticket (migration: note_reason, note_ticket), absent when
+	// none was written. It is separate from Reason, which a rejection sets.
+	Note *ChangeNote `json:"note,omitempty"`
 
 	// Payload, hashes and emails stay server-side.
 	Payload         json.RawMessage `json:"-"`

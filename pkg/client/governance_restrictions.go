@@ -175,3 +175,40 @@ func (c *Client) SetWorkspaceOwningUnit(ctx context.Context, id uuid.UUID, unit 
 	}
 	return out, nil
 }
+
+// SetWorkspaceOwningUnitStrict pins workspace id to a unit as SetWorkspaceOwningUnit does, and sets
+// whether the pin is strict: a strict pin runs only people whose own unit is the pin or below it.
+// Making a pin plain is held like a widening move. PUT /api/v1/workspaces/{id}/owning-unit.
+func (c *Client) SetWorkspaceOwningUnitStrict(ctx context.Context, id uuid.UUID, unit *uuid.UUID, strict bool) (types.Workspace, error) {
+	var out types.Workspace
+	pending, err := c.doPending(ctx, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/owning-unit",
+		struct {
+			UnitID *uuid.UUID `json:"unit_id"`
+			Strict bool       `json:"strict"`
+		}{unit, strict}, &out)
+	if err != nil {
+		return types.Workspace{}, err
+	}
+	if pending != nil {
+		return types.Workspace{}, &PendingApprovalError{Changes: []GovernanceChange{*pending}}
+	}
+	return out, nil
+}
+
+// SetComponentOwningUnit pins organisation component id to a unit, or unpins it with a nil unit:
+// only a run in that unit or a unit below it may attach it. A move the server holds for a second
+// approver returns a *PendingApprovalError. PUT /api/v1/components/{id}/owning-unit.
+func (c *Client) SetComponentOwningUnit(ctx context.Context, id uuid.UUID, unit *uuid.UUID) (types.Component, error) {
+	var out types.Component
+	pending, err := c.doPending(ctx, http.MethodPut, "/api/v1/components/"+id.String()+"/owning-unit",
+		struct {
+			UnitID *uuid.UUID `json:"unit_id"`
+		}{unit}, &out)
+	if err != nil {
+		return types.Component{}, err
+	}
+	if pending != nil {
+		return types.Component{}, &PendingApprovalError{Changes: []GovernanceChange{*pending}}
+	}
+	return out, nil
+}

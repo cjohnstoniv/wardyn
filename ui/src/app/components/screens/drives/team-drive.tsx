@@ -138,13 +138,14 @@ export function TeamGroups({
  * writable before any allocation says members can write.
  * `wrote`, when given, is kept current with each allocation this call stores or removes, so a caller
  * whose save fails part way can fold what was done into the baseline of its retry.
+ * `person`, when given, is named on every write: the person the caller's save began under.
  */
-export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true, shown: UserDriveGrant[] = grants, wrote?: Map<string, UserDriveGrant>): Promise<void> {
+export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true, shown: UserDriveGrant[] = grants, wrote?: Map<string, UserDriveGrant>, person?: string): Promise<void> {
   const mine = grants.filter((g) => g.drive_id === driveId && g.subject_type === "group");
   for (const g of mine) {
     // Only an allocation the editor listed can be taken off; one the cut page hid was never on screen.
     if (!groups.includes(g.subject) && shown.some((s) => s.id === g.id)) {
-      await api.deleteGrant(g.id);
+      await api.deleteGrant(g.id, person);
       wrote?.delete(g.id);
     }
   }
@@ -161,7 +162,7 @@ export async function syncTeamGroups(driveId: string, groups: string[], write: b
       ...(had?.writable_override != null ? { writable_override: had.writable_override } : {}),
       enabled: had?.enabled ?? true,
       members_can_write: had ? write === true : fresh,
-    });
+    }, person);
     wrote?.set(grant.id, grant);
   }
 }

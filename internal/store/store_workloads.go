@@ -98,6 +98,9 @@ type Workload struct {
 	// Intent is the door-normalised intent; Digest hashes it with RunIn and RestartKey.
 	Intent json.RawMessage
 	Digest string
+	// PolicyPin is the launch policy digest every launch must resolve to, "" for none
+	// (SetWorkloadPolicyPin). An apply never writes it.
+	PolicyPin string
 	// Generation counts digest changes; CurrentGeneration is the one CurrentRunID was launched from.
 	Generation        int64
 	CurrentRunID      *uuid.UUID
@@ -117,13 +120,18 @@ type Workload struct {
 // WorkloadView is a workload with the state of its current run, as the reads report it: RunState is empty
 // while it has no run, and ServiceHealth when the run has no service health yet. RunPausedAt and
 // ServiceObservedAt are the run's paused_at and its service health's observed_at, for the API to project
-// that health as it projects a run's.
+// that health as it projects a run's. ServiceProbe is the run's last reading of Wardyn's own check, nil for none;
+// ServiceProbeOn is whether the run's frozen spec opted in to that check, and RunStartedAt is when the run was
+// admitted (or created, before admission), so a missing reading reads as renewal reads it.
 type WorkloadView struct {
 	Workload
 	RunState          types.RunState
 	ServiceHealth     string
 	RunPausedAt       *time.Time
 	ServiceObservedAt *time.Time
+	ServiceProbe      *types.RunServiceProbe
+	ServiceProbeOn    bool
+	RunStartedAt      *time.Time
 }
 
 // WorkloadPut is the record half of an apply. Digest is the caller's, over Intent, RunIn and RestartKey.
@@ -204,8 +212,12 @@ type WorkloadBinding struct {
 // them 501, as RunnerPoolStore does.
 type WorkloadStore interface {
 	PutWorkload(ctx context.Context, in WorkloadPut) (Workload, WorkloadWrite, error)
+	PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error)
 	ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error)
 	SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
+	SetBoundWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID, binding uuid.UUID) (*uuid.UUID, error)
+	WorkloadHoldsRun(ctx context.Context, owner, name string, runID uuid.UUID) (held, deferred bool, err error)
+	DropWorkloadRunEndIfHeld(ctx context.Context, owner, name string, runID uuid.UUID) (bool, error)
 	RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error
 	RestartWorkload(ctx context.Context, id uuid.UUID) (Workload, error)
 	SetWorkloadStatusPushed(ctx context.Context, id uuid.UUID, hash string) error
@@ -221,10 +233,12 @@ type WorkloadStore interface {
 	PruneK8sWorkload(ctx context.Context, w Workload, by WorkloadReporter) (Workload, error)
 	OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error
 	ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error)
+	ListDueWorkloadRunEnds(ctx context.Context, olderThan time.Duration, after *WorkloadRunEndKey, limit int) ([]WorkloadRunEnd, *WorkloadRunEndKey, error)
 	DropWorkloadRunEnd(ctx context.Context, runID uuid.UUID) error
 	RestoreWorkloadRun(ctx context.Context, e WorkloadRunEnd, refusal WorkloadRefusal) (bool, error)
 	CreateWorkloadBinding(ctx context.Context, b WorkloadBinding) (WorkloadBinding, error)
 	ListWorkloadBindings(ctx context.Context, p Page) ([]WorkloadBinding, error)
+	GetWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
 	DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
 	BindingForRunner(ctx context.Context, runner uuid.UUID, namespace string) (WorkloadBinding, error)
 }
@@ -233,14 +247,15 @@ var _ WorkloadStore = PG{}
 
 const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESCE(w.source_namespace, ''), w.source_runner_id,
 	w.k8s_generation, w.description, w.run_in, w.restart_key, w.intent, w.digest, w.generation, w.current_run_id,
-	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at, w.k8s_uid`
+	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at, w.k8s_uid, w.policy_pin`
 
 // workloadViewCols and workloadViewFrom read a workload with its current run. The run's service health is
 // read by name out of the row's JSON, so this query does not depend on the order the migration that adds
 // that column lands in.
 const (
 	workloadViewCols = workloadCols + `, COALESCE(r.state, ''), COALESCE(to_jsonb(r) -> 'service_status' ->> 'health', ''), r.paused_at,
-		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz`
+		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz, to_jsonb(r) -> 'service_status' -> 'probe',
+		COALESCE(to_jsonb(r) -> 'service' -> 'health' ->> 'probe', ''), COALESCE(r.admitted_at, r.created_at)`
 	workloadViewFrom = ` FROM workloads w LEFT JOIN agent_runs r ON r.id = w.current_run_id`
 )
 
@@ -248,7 +263,7 @@ func scanWorkloadInto(row pgx.Row, w *Workload, extra ...any) error {
 	var refusal []byte
 	err := row.Scan(append([]any{&w.ID, &w.Owner, &w.Name, &w.Source, &w.SourcePoolID, &w.SourceNamespace, &w.SourceRunnerID,
 		&w.K8sGeneration, &w.Description, &w.RunIn, &w.RestartKey, &w.Intent, &w.Digest, &w.Generation, &w.CurrentRunID,
-		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt, &w.K8sUID}, extra...)...)
+		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt, &w.K8sUID, &w.PolicyPin}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -272,8 +287,20 @@ func scanWorkload(row pgx.Row) (Workload, error) {
 
 func scanWorkloadView(row pgx.Row) (WorkloadView, error) {
 	var v WorkloadView
-	err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt)
-	return v, err
+	var probe []byte
+	var probeSpec string
+	if err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt, &probe,
+		&probeSpec, &v.RunStartedAt); err != nil {
+		return v, err
+	}
+	v.ServiceProbeOn = probeSpec == types.ServiceProbeControlPlane
+	if len(probe) > 0 && string(probe) != "null" {
+		v.ServiceProbe = &types.RunServiceProbe{}
+		if err := json.Unmarshal(probe, v.ServiceProbe); err != nil {
+			return v, fmt.Errorf("store: decode workload service probe: %w", err)
+		}
+	}
+	return v, nil
 }
 
 func sameUUIDPtr(a, b *uuid.UUID) bool {
@@ -293,7 +320,9 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 //     nothing is written. The source runner's own report of the new uid, or of the old one's delete,
 //     moves the row.
 //   - A report whose session is not its runner's current one: ErrWorkloadStaleSession, nothing written.
-//   - A different digest: the spec is replaced and the generation moves by one (WorkloadUpdated).
+//   - A different digest: the spec is replaced and the generation moves by one (WorkloadUpdated). A launch
+//     claim in flight is released with it: that launch is of the older spec, so its record is refused
+//     (ErrWorkloadSuperseded) and its run ended, and the newer spec's launch can claim at once.
 //   - The same digest: only the description is written, and for a custom resource the reporting runner,
 //     metadata.generation and metadata.uid (WorkloadUnchanged).
 //
@@ -363,7 +392,8 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		if cur.Digest != in.Digest {
 			out, err = scanWorkload(q.QueryRow(ctx, `
 				UPDATE workloads w SET intent = $2, digest = $3, run_in = $4, restart_key = $5, description = $6,
-					source_runner_id = $7, k8s_generation = $8, k8s_uid = $9, generation = w.generation + 1, updated_at = now()
+					source_runner_id = $7, k8s_generation = $8, k8s_uid = $9, generation = w.generation + 1, updated_at = now(),
+					launch_claim_until = NULL, launch_claim_token = NULL
 				WHERE w.id = $1 RETURNING `+workloadCols,
 				cur.ID, []byte(in.Intent), in.Digest, in.RunIn, in.RestartKey, in.Description, in.SourceRunnerID, in.K8sGeneration, in.K8sUID))
 			write = WorkloadUpdated
@@ -381,6 +411,36 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		return Workload{}, "", err
 	}
 	return out, write, nil
+}
+
+// PlanWorkloadPut answers what PutWorkload would do with in, for the API source, and writes nothing: no
+// lock, no row. It returns the stored row (nil when there is none) and the write, or the error
+// PutWorkload would return for the same state. A new API-source branch in PutWorkload updates this, and
+// TestPG_Workload_PlanWorkloadPutMatchesPut gets its row. The answer is a read at one moment: a
+// concurrent apply can move the row after it.
+func (s PG) PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error) {
+	if in.Source != WorkloadSourceAPI {
+		return nil, "", errors.New("store: plan workload put: only the API source is planned")
+	}
+	cur, err := scanWorkload(s.Pool.QueryRow(ctx, `SELECT `+workloadCols+` FROM workloads w WHERE w.owner = $1 AND w.name = $2`, in.Owner, in.Name))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		var n int
+		if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM workloads WHERE owner = $1`, in.Owner).Scan(&n); err != nil {
+			return nil, "", err
+		}
+		if n >= MaxWorkloadsPerOwner {
+			return nil, "", ErrWorkloadCapReached
+		}
+		return nil, WorkloadCreated, nil
+	case err != nil:
+		return nil, "", err
+	case cur.Source != in.Source:
+		return &cur, "", ErrWorkloadSourceConflict
+	case cur.Digest != in.Digest:
+		return &cur, WorkloadUpdated, nil
+	}
+	return &cur, WorkloadUnchanged, nil
 }
 
 // ClaimWorkloadLaunch takes the right to launch the workload's current generation for WorkloadLaunchClaim.
@@ -417,12 +477,23 @@ func workloadRunRanSQL(tbl, states string) string {
 // handed back, and a run already waiting on it waits on runID instead; once it ran, that older run is owed
 // its end at once.
 // ErrNotFound when the workload is gone, and ErrWorkloadSuperseded when claim is no longer the workload's
-// (it lapsed and was taken again, or its holder already recorded) or that generation, or a later one, was
-// recorded first; the caller ends runID (OweWorkloadRunEnd).
+// (it lapsed and was taken again, its holder already recorded, or a changed spec released it) or that
+// generation, or a later one, was recorded first; the caller ends runID (OweWorkloadRunEnd).
 func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
+	return s.setWorkloadRun(ctx, nil, id, claim, generation, runID)
+}
+
+// setWorkloadRun is SetWorkloadRun with fence, when set, run first in its transaction: an error from it is
+// returned and nothing is written.
+func (s PG) setWorkloadRun(ctx context.Context, fence func(q Querier) error, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
 	var prev *uuid.UUID
 	var deferred bool
 	err := s.inTx(ctx, func(q Querier) error {
+		if fence != nil {
+			if err := fence(q); err != nil {
+				return err
+			}
+		}
 		var cur int64
 		var token *uuid.UUID
 		var owner, name string
@@ -473,6 +544,12 @@ func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation 
 			waiters = nil
 		}
 		if _, err := q.Exec(ctx, `UPDATE workload_run_ends SET after_run_id = $2 WHERE after_run_id = $1`, *prev, waiters); err != nil {
+			return err
+		}
+		// prev is the workload's current run under this row lock, so an owed end of prev's for this workload
+		// that waits on nothing was left by a record whose outcome was unknown: this record's owed end replaces it.
+		if _, err := q.Exec(ctx, `DELETE FROM workload_run_ends WHERE run_id = $1 AND owner = $2 AND name = $3 AND after_run_id IS NULL`,
+			*prev, owner, name); err != nil {
 			return err
 		}
 		end := WorkloadRunEnd{RunID: *prev, Owner: owner, Name: name, Generation: generation, Reason: WorkloadEndReplaced}
@@ -639,17 +716,18 @@ func (s PG) deleteWorkload(ctx context.Context, by WorkloadReporter, where strin
 
 // The reasons a workload's run is owed its end, which its run.kill row carries.
 const (
-	WorkloadEndReplaced = "workload_replaced" // a newer launch of the workload replaced it
-	WorkloadEndDeleted  = "workload_deleted"  // the workload was deleted
+	WorkloadEndReplaced       = "workload_replaced"        // a newer launch of the workload replaced it
+	WorkloadEndDeleted        = "workload_deleted"         // the workload was deleted
+	WorkloadEndBindingDeleted = "workload_binding_deleted" // its namespace binding was deleted while it started
 )
 
 // WorkloadRunEnd is a run a workload let go of that is still owed its end (migration 0244): written in the
 // transaction that let it go, and dropped once the run is ended, so an end cut short is still owed. Owner,
-// Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced or
-// WorkloadEndDeleted. AfterRunID, when set, is the queued run that replaces it: the end waits until that
-// run is running. AfterState and AfterDetail are that run's state and status_detail, and AfterRan whether
-// it took its slot (workloadRunRanSQL: a run that ran and then ended still replaced this one), as
-// ListWorkloadRunEnds read them.
+// Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced,
+// WorkloadEndDeleted or WorkloadEndBindingDeleted. AfterRunID, when set, is the queued run that replaces
+// it: the end waits until that run is running. AfterState and AfterDetail are that run's state and
+// status_detail, and AfterRan whether it took its slot (workloadRunRanSQL: a run that ran and then ended
+// still replaced this one), as ListWorkloadRunEnds read them.
 type WorkloadRunEnd struct {
 	RunID       uuid.UUID
 	Owner       string
@@ -685,7 +763,8 @@ func (s PG) OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error {
 }
 
 // ListWorkloadRunEnds returns up to limit owed ends recorded more than olderThan ago, oldest first, each
-// with the state of the run it waits on.
+// with the state of the run it waits on, the ones still waiting included (the sweep reads
+// ListDueWorkloadRunEnds).
 func (s PG) ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error) {
 	return collect(ctx, s.Pool, "list", "owed workload run ends", `
 		SELECT e.run_id, e.owner, e.name, e.generation, e.reason, e.after_run_id, COALESCE(a.state, ''), COALESCE(a.status_detail, ''),

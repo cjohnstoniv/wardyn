@@ -114,23 +114,128 @@ export function extractAuthUrl(s: string): string | null {
 // parser reads too). (The alternative — requiring a fixed code shape — ties
 // this to AWS's current `XXXX-XXXX` format; the buffer already holds the
 // evidence to pick correctly without assuming that.)
+//
+// Newer IAM Identity Center sends a regional sign-in page instead,
+// `https://<one label>.signin.aws/platform/authorize?…`, whose link carries no
+// code: the CLI prints the code on its own line after "Then enter the code:".
+// That link is an attempt only once that line has printed in the code's shape
+// (codeLineAfter); it is never the bare fallback. The hosts, this rule and the
+// latest-wins rule must agree with the server's parseSignInPane
+// (internal/api/run_sign_in.go), which the shared cases pin. Every letter the
+// link patterns name (scheme, host and the /platform/authorize path alike)
+// matches in any ASCII case: without the `u` flag, `i` folds no non-ASCII
+// letter (ſ, the Kelvin sign) onto an ASCII one, as the server's ASCII
+// lower-casing does not.
 export function extractDeviceVerificationUrl(s: string): string | null {
+  return extractDeviceSignIn(s)?.url ?? null;
+}
+
+// The regional sign-in page's link alone, and the code's shape
+// (signInPlatformRe and signInCodeShape in run_sign_in.go).
+const PLATFORM_LINK = /^https:\/\/[a-z0-9-]+\.signin\.aws\/platform\/authorize\?/i;
+const CODE_SHAPE = /^[A-Za-z0-9]{1,16}(?:-[A-Za-z0-9]{1,16}){0,3}$/;
+const CODE_PROMPT = "Then enter the code:";
+
+// codeLineAfter returns the first non-empty line after a CODE_PROMPT line in
+// seg (the output after a link, up to the next link), when it has the code's
+// shape and its line has ended; "" otherwise, so a code still streaming is
+// never taken. A row move ends a line, a cursor-forward is a space and any
+// other escape is dropped, so a tmux redraw reads as its rows.
+function codeLineAfter(seg: string): string {
+  const lines = seg
+    .replace(/\x1b\[[0-9;]*[HfdBE]/g, "\n")
+    .replace(/\x1b\[[0-9;]*C/g, " ")
+    .replace(ANSI_ESCAPES, "")
+    .split(/\r\n|\r|\n/);
+  let asked = false;
+  for (const raw of lines.slice(0, -1)) {
+    const line = raw.replace(/[ \t]+/g, " ").replace(/^ | $/g, "");
+    if (line === "") continue;
+    if (asked) return CODE_SHAPE.test(line) ? line : "";
+    if (line === CODE_PROMPT) asked = true;
+  }
+  return "";
+}
+
+// A tmux client wider than its window gets the window's rows one by one: each
+// row cleared by a move to its last column and an erase to its start
+// (ROW_CLEAR, whose column is the row width), and a link longer than a row
+// split at that width by a line end or the next row's clear (ROW_BREAK).
+// joinRows returns the link starting at start whose first row ends at end,
+// with those rows joined back, and where its last row ends; width is the
+// column of the last row clear before start (0 for none). A row is joined to
+// the next while it starts a line, is all ASCII and is exactly the row width
+// long, and the next row starts with URL characters. printing is true while a
+// full row's line end or the next row has not arrived. Its twin is
+// signInJoinRows (run_sign_in.go).
+const ROW_CLEAR = /\x1b\[[0-9]+;([0-9]+)H\x1b\[1K/g;
+const ROW_BREAK = /^(?:\r\n|\x1b\[[0-9]+;[0-9]+H\x1b\[1K\r)/;
+const URL_BODY = new RegExp(`^${URL_BODY_CHARS}+`);
+function joinRows(s: string, start: number, end: number, width: number): { link: string; last: number; printing: boolean } {
+  let link = s.slice(start, end);
+  let last = end;
+  // Starting a line is a safety margin: the exact-width rule already keeps a
+  // link that starts mid-row from being joined.
+  if (width === 0 || (start > 0 && s[start - 1] !== "\n" && s[start - 1] !== "\r")) return { link, last, printing: false };
+  let row = link;
+  while (row.length === width && /^[!-~]+$/.test(row)) {
+    const rest = s.slice(last);
+    const br = ROW_BREAK.exec(rest)?.[0] ?? "";
+    // A line end cut off at the end of what has arrived.
+    if (!br) return { link, last, printing: rest === "\r" || (rest.length < 16 && !/[\r\n]/.test(rest)) };
+    row = URL_BODY.exec(rest.slice(br.length))?.[0] ?? "";
+    if (br.length + row.length >= rest.length) return { link, last, printing: true };
+    if (!row) break;
+    link += row;
+    last += br.length + row.length;
+  }
+  return { link, last, printing: false };
+}
+
+// extractDeviceSignIn is extractDeviceVerificationUrl's link with its code:
+// user_code= from a pre-filled link, the code line for a sign-in page link,
+// and "" for the bare fallback. Exported for tests.
+export function extractDeviceSignIn(s: string): { url: string; code: string } | null {
   const re = new RegExp(
-    `https://(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/${URL_BODY_CHARS}*`,
+    `https://(?:(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/|[a-z0-9-]+\\.signin\\.aws/platform/authorize\\?)${URL_BODY_CHARS}*`,
     "gi",
   );
-  let bestComplete: string | null = null; // the latest attempt's user_code= candidate
+  const matches = [...s.matchAll(re)];
+  let bestComplete: { url: string; code: string } | null = null; // the latest attempt
   let bestBare: string | null = null; // fallback: first complete match without one
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index + m[0].length >= s.length) continue; // still streaming
-    const url = m[0].replace(/[.,)]+$/, "");
-    if (url.includes("user_code=")) {
-      const truncatedRepaint = !!bestComplete && url.length < bestComplete.length && bestComplete.startsWith(url);
-      if (!truncatedRepaint) bestComplete = url;
-    } else if (!bestBare) {
-      bestBare = url;
+  // Every row clear, found in one pass; ci walks to the last one before each match.
+  const clears = [...s.matchAll(ROW_CLEAR)];
+  let ci = 0;
+  let width = 0;
+  let joined = 0;
+  let done = false;
+  matches.forEach((m, i) => {
+    if (done) return;
+    for (; ci < clears.length && clears[ci].index + clears[ci][0].length <= m.index; ci++) width = Number(clears[ci][1]);
+    if (m.index < joined) return; // inside the rows of a link already joined
+    const end = m.index + m[0].length;
+    if (end >= s.length) return; // still streaming
+    const { link, last, printing } = joinRows(s, m.index, end, width);
+    // A link still printing runs to the end of the buffer, so every later link
+    // is inside it; going on would re-join each of its rows.
+    if (printing) {
+      done = true;
+      return;
     }
-  }
-  return bestComplete ?? bestBare;
+    joined = last;
+    const url = link.replace(/[.,)]+$/, "");
+    let code = "";
+    if (url.includes("user_code=")) {
+      code = /[?&]user_code=([^&#\s]+)/.exec(url)?.[1] ?? "";
+    } else if (PLATFORM_LINK.test(url)) {
+      code = codeLineAfter(s.slice(last, matches.slice(i + 1).find((n) => n.index >= last)?.index ?? s.length));
+      if (!code) return;
+    } else {
+      if (!bestBare) bestBare = url;
+      return;
+    }
+    const truncatedRepaint = !!bestComplete && url.length < bestComplete.url.length && bestComplete.url.startsWith(url);
+    if (!truncatedRepaint) bestComplete = { url, code };
+  });
+  return bestComplete ?? (bestBare ? { url: bestBare, code: "" } : null);
 }

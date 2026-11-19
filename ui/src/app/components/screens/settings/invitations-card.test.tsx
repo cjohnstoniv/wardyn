@@ -5,6 +5,7 @@
 
 // Your account > Invitations (#1508, mock M-SVC v2): the person's own pending invitations, and Claim through the
 // shared dialog. The token is shown once and held nowhere after the dialog closes.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -223,6 +224,23 @@ describe("InvitationsCard", () => {
     await openCard();
     expect(await screen.findByText(T.UNAVAILABLE_TITLE)).toBeInTheDocument();
     expect(screen.getByText(T.UNAVAILABLE_BODY)).toBeInTheDocument();
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    mount();
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    route = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    mount();
+    await openCard();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("offers Retry when the list cannot be read", async () => {

@@ -53,6 +53,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "per-entry shape; the ceiling's denies are unioned in (a deny only ever widens)"},
 	"AllowAllEgress": {validated: false, clamped: true,
 		why: "a bool: nothing bounds it at write (validateLLMInspection only READS it to decide whether a sidecar URL's host is allowed). Documented inert under allow-all; forced false when the ceiling is not allow-all"},
+	"RefuseIPLiterals": {validated: false, clamped: true,
+		why: "a bool that only narrows; Clamp keeps it on where the ceiling sets it (clampOperatorSwitches)"},
 	"FirstUseApproval": {validated: true, clamped: true,
 		why: "closed enum; raised to the ceiling's stricter mode by firstUseApprovalRank"},
 	"FirstUseHoldSeconds": {validated: true, clamped: true,
@@ -61,6 +63,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "same doors, same reason, and lowered to the ceiling's own value by composer.Clamp (normMaxHolds). max_holds is a channel capacity in the proxy, so the cap is a resource bound as well as a ceiling"},
 	"AllowedMethods": {validated: true, clamped: true,
 		why: "a blank entry is refused; intersected down to the ceiling's method list. An unrecognised method matches no request and so denies rather than widens — it can only ever narrow this run"},
+	"HostRules": {validated: true, clamped: true,
+		why: "host exact and lowercase, methods uppercase tokens, paths in normal form, at most 16 sets of 64 rules, effect allow or deny (types.ValidateHostRuleSets); the ceiling's sets are appended, never merged, so a proposal only ever adds sets"},
 	"MinConfinementClass": {validated: true, clamped: true,
 		why: "required and must be a known class; raised to the ceiling's floor"},
 	"EligibleGrants": {validated: true, clamped: true,
@@ -81,6 +85,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"Recording": {validated: true, clamped: true,
 		why: "closed levels (validateRecordingLevel), none of them keystrokes; raised to the ceiling's level (clampRecording), since a ceiling's level is a minimum. The organisation's level and lock apply at dispatch (types.RecordingChoice)"},
+	"DataOut": {validated: true, clamped: true,
+		why: "closed values (validateDataOut); the stricter of the proposal's and the ceiling's rule stands (clampDataOut), and an unset rule reads as allowed. The doors that hold content in read the sealed value at the run"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
 	"Desktop": {validated: true, clamped: true,
@@ -89,8 +95,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "forced false unless the ceiling sets it — a boolean with no shape to validate. Grade adds the item so the human is told when it is on"},
 	"AzureDevOpsCapabilities": {validated: true, clamped: false,
 		why: "each entry must be adoscope-grantable (a 400 with its own reason). Bounded at DISPATCH, not by the clamp, because the bound needs the run's Azure DevOps row: an operator's list must sit inside the row's capability_ceiling; a member's stands only where it meets the row's default_profile or their governance ADO list, from any policy source, and a list meeting nothing refuses the launch (adoStandingBound). The clamp passes it through so an explicit choice never reaches dispatch narrowed to nothing, which would read as the row's default"},
-	"GitHubCapabilities": {validated: false, clamped: false,
-		why: "AzureDevOpsCapabilities' twin, inert until the GitHub provider row block and the per-person lanes read it. NOT YET validated: the catalogue check (each entry ghscope-grantable) lands in internal/api/policy.go in a later wave, after that file's in-flight edit; until then an unknown entry is stored and matches no capability. Passed through by the clamp for the ADO reason — the bound needs the run's GitHub row, so it is dispatch's"},
+	"GitHubCapabilities": {validated: false, clamped: true,
+		why: "AzureDevOpsCapabilities' twin. NOT YET validated: the catalogue check (each entry ghscope-grantable) lands in internal/api/policy.go in a later wave, after that file's in-flight edit; until then an unknown entry is stored and matches no capability. Bounded by the clamp (clampGitHubCapabilities): a member keeps only the entries the ceiling lists, and one naming none takes the ceiling's list. Nothing on GitHub reads the list as a grant, so it only narrows: pushes withheld without code_write, the GitHub CLI kept to it. A list sharing nothing with the ceiling's refuses the run (githubCapabilitiesDisjoint)"},
 	"PushRules": {validated: true, clamped: true,
 		why: "#176: deny_paths per-entry byte/charset shape (no count cap — see maxPushRulesPathBytes' own doc for why, same stance as denied_domains), max_inspect_pack_mib range-checked. It only NARROWS what a push may touch, so an operator-silent ceiling leaves a proposal's own push_rules untouched; a ceiling that sets one (PushRulesSpec.IsSet — an all-zero push_rules:{} does not count) is a FLOOR — an unset proposal inherits it wholesale, a set one gets the ceiling's deny_paths unioned in EXACT-STRING (unionPaths, not union — a git path is case-sensitive) and max_inspect_pack_mib capped. composer.Grade adds a medium-risk item when it is set (same PushRulesSpec.IsSet guard) and the run's only git grant is ssh_key (unenforceable, not unsafe). #180: require_review_paths takes deny_paths' per-entry checks and unions the same exact-string way; hold_seconds is range-checked 0..600 (the proxy's maxHoldTimeout, which also clamps it sidecar-side) and clamps to the shorter of two authored holds"},
 }
@@ -99,7 +105,12 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 	// The fields the write-time validators bound, read off the syntax tree: a
 	// substring match over the whole file is satisfied by a field mentioned only
 	// in a comment, or only READ by a validator for another field's sake.
+	// validateLLMInspection lives in its own file (the file-size cap); its validator is part of
+	// the same write-time bound, so both files are read.
 	validated := writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy.go"))
+	for f := range writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy_llm_inspection.go")) {
+		validated[f] = true
+	}
 	// cloneProposal is the clamp's OWNERSHIP copy (it reallocates the caller's
 	// slices and pointees so the clamped spec aliases nothing). It names EVERY
 	// reference-semantics field by construction and bounds none of them, so
@@ -122,7 +133,7 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 			t.Errorf("RunPolicySpec.%s: the row needs a reason, not just two booleans", f.Name)
 		}
 		if got := validated[f.Name]; got != row.validated {
-			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go %s reference it",
+			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go and policy_llm_inspection.go %s reference it",
 				f.Name, row.validated, saysOrNot(got))
 		}
 		if got := strings.Contains(clampSrc, "."+f.Name); got != row.clamped {

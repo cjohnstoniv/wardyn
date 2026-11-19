@@ -14,17 +14,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Restrictions (the policy tree, DESIGN-TREE §4.1 step 8, §4.3, §4.6): deny-only lists that follow
-// people. A governed run of a covered person meets each one, in name order, after its unit's walls and
-// the boundary, in every unit they run in. A restriction never counts as a context, and never reaches
-// an ungoverned or break-glass run: those resolve before this file is asked (resolveChainCeiling).
+// Restrictions (the policy tree): narrowing rules that follow people. A governed run of a covered
+// person meets each one, in name order, after its unit's walls and the boundary, in every unit they run
+// in. A restriction never counts as a context, and never reaches an ungoverned or break-glass run: those resolve before this file is asked (resolveChainCeiling).
 // This file is the resolve, the seal layers, the live doors, the approval hook and the revive; the
 // write routes are in governance_restriction_routes.go.
 
@@ -90,7 +91,7 @@ func (s *Server) withRestrictions(ctx context.Context, c governanceCeiling, list
 	}
 	ids := slices.Clone(c.RestrictionIDs)
 	for _, r := range list {
-		out, _, err := composer.ApplyOverlay(auth, composer.Overlay{Ceiling: r.Spec.Overlay(), Limits: r.Limits.Overlay()})
+		out, _, err := composer.ApplyRestrictionOverlay(auth, composer.Overlay{Ceiling: r.Spec.Overlay(), Limits: r.Limits.Overlay()})
 		if err != nil {
 			return governanceCeiling{}, fmt.Errorf("api: apply restriction %q: %w", r.Name, err)
 		}
@@ -150,7 +151,7 @@ func (s *Server) restrictionContacts(ctx context.Context, ids []uuid.UUID) map[s
 	return out
 }
 
-// restrictionSealLayers is run's captured restrictions as deny-only seal layers, by their current
+// restrictionSealLayers is run's captured restrictions as seal layers, by their current
 // specs (a deleted id is skipped). A restriction that cannot be read seals the run to no egress and
 // no credential, as an unread boundary does.
 func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) []sealLayer {
@@ -166,17 +167,26 @@ func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) 
 	if !ok || err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the run's restrictions at the seal; the run is sealed to no egress",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		off := false
+		off, held := false, types.TransferBlocked
 		return []sealLayer{{rec: policyref.Provenance{Layer: policyref.LayerRestriction}, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}}}
+			grants: &[]types.GrantSpec{}, dataOut: &held, denyAllPushes: true,
+			adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}, unread: true}}
 	}
 	layers := make([]sealLayer, 0, len(list))
 	for _, r := range list {
-		layers = append(layers, sealLayer{rec: restrictionProvenance(r),
-			egress:         types.CeilingOverlay{DeniedDomains: r.Spec.DeniedDomains, AllowAllEgress: r.Spec.AllowAllEgress},
-			withheldGrants: r.Spec.WithheldGrants})
+		layers = append(layers, restrictionSealLayer(r))
 	}
 	return layers
+}
+
+// restrictionSealLayer is one restriction as a seal layer, read from the same overlay the create applies
+// (RestrictionSpec.Overlay): the seal meets its egress, tool, push and recording knobs, blocks its desktop
+// directions, and keeps its withheld credentials from the run.
+func restrictionSealLayer(r types.Restriction) sealLayer {
+	ov := r.Spec.Overlay()
+	return sealLayer{rec: restrictionProvenance(r), egress: ov, desktop: ov.Desktop, dataOut: ov.DataOut, withheldGrants: r.Spec.WithheldGrants,
+		denyAllPushes: ov.PushRules != nil && ov.PushRules.DenyAll != nil && *ov.PushRules.DenyAll || dataOutBlocks(ov.DataOut),
+		adoCap:        r.Spec.AzureDevOpsCapabilities, githubCap: r.Spec.GitHubCapabilities}
 }
 
 // foldRestrictionLimits is p with the current limits of run's captured restrictions met into it, so a
@@ -261,7 +271,7 @@ func (s *Server) admitApprovalBounds(w http.ResponseWriter, r *http.Request, ap 
 }
 
 // restrictionAdmitApproval is the restrictions' bound on an egress approval, beside the boundary's:
-// for any decider, a host a restriction the run captured denies is not admitted. ok=false: the 403 is
+// for any decider, a host a restriction the run captured denies, or its allowlist leaves out, is not admitted. ok=false: the 403 is
 // written and the approval stays pending. It returns the run, read here when the gate before it had not.
 func (s *Server) restrictionAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
 	rs, ok := s.restrictionStore()
@@ -286,7 +296,9 @@ func (s *Server) restrictionAdmitApproval(w http.ResponseWriter, r *http.Request
 	}
 	host := approvalHost(ap)
 	for _, rst := range list {
-		if rst.Spec.DeniedDomains != nil && ceilingDenies(*rst.Spec.DeniedDomains, host) {
+		denied := rst.Spec.DeniedDomains != nil && ceilingDenies(*rst.Spec.DeniedDomains, host)
+		outside := rst.Spec.AllowedDomains != nil && !ceilingDenies(*rst.Spec.AllowedDomains, host)
+		if denied || outside {
 			contact := "the restriction's owner"
 			if rst.Contact != nil && rst.Contact.Owner != "" {
 				contact = rst.Contact.Owner
@@ -341,7 +353,8 @@ func mergeRestrictions(a, b []types.Restriction) []types.Restriction {
 }
 
 // withRevivedRestrictions adds list to a revive's owner ceiling: their denied hosts, placements and allowed
-// macOS bases, and their ids for the run to be re-captured with.
+// macOS bases, and their ids for the run to be re-captured with: the revive's seal then meets each at its
+// current spec (restrictionSealLayer), allowlist and rules included.
 func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCeiling {
 	c.restrictionIDs = c.restrictionIDs[:0:0]
 	for _, r := range list {
@@ -352,8 +365,16 @@ func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCei
 		if r.Limits.DenyPlacements != nil {
 			c.denyPlacements = append(slices.Clone(c.denyPlacements), *r.Limits.DenyPlacements...)
 		}
+		c = c.withRevivedDenyLists(r.Limits)
 		if r.Limits.AllowedMacOSBases != nil && len(*r.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = append(slices.Clone(c.allowedMacOSBases), *r.Limits.AllowedMacOSBases)
+		}
+		if r.Limits.RequiredImageSigners != nil { // a requirement: the union, as meet takes it
+			for _, n := range *r.Limits.RequiredImageSigners {
+				if !slices.Contains(c.requiredImageSigners, n) {
+					c.requiredImageSigners = append(slices.Clone(c.requiredImageSigners), n)
+				}
+			}
 		}
 	}
 	return c

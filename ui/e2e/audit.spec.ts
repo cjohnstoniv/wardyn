@@ -80,7 +80,7 @@ test("renders the seeded, day-grouped audit trail with append-only framing", asy
 test("the truncated indicator is ABSENT below the 500-event cap", async ({ page }) => {
   await expect(eventCount(page)).toBeVisible();
   // Far under the cap, so the truncation warning must not appear.
-  await expect(page.getByText(/Showing the first 500 events/i)).toHaveCount(0);
+  await expect(page.getByText(/Showing the newest 500 events/i)).toHaveCount(0);
   await expect(page.getByText(/\(truncated\)/i)).toHaveCount(0);
 });
 
@@ -242,6 +242,42 @@ test("a cache-hit image row reads reused, a build reads built", async ({ page })
   await page.reload();
   await expect(verb(page, "Reused the cached sandbox image — ws-hit")).toBeVisible();
   await expect(verb(page, "Built the sandbox image — ws-miss")).toBeVisible();
+});
+
+// The call id on an egress row that went to a gateway: a line under the sentence, copied whole. It is text from the wire, so
+// a value that is not a UUID is not shown. A row without it has the sentence alone.
+test("an egress row shows its gateway call id with a copy button; a row without one is unchanged", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const callId = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
+  const row = (id: string, action: string, target: string, data: Record<string, unknown>) => ({
+    id,
+    time: new Date().toISOString(),
+    actor_type: "agent",
+    actor: "spiffe://wardyn/agent",
+    action,
+    target,
+    outcome: action === "egress.deny" ? "denied" : "success",
+    run_id: "run_e2ecallid",
+    data,
+  });
+  await page.route(/\/api\/v1\/audit(\?|$)/, (route) =>
+    route.fulfill({
+      json: [
+        row("with", "egress.allow", "gateway.example.com", { gateway_call_id: callId }),
+        row("without", "egress.allow", "registry.example.com", {}),
+        row("hostile", "egress.allow", "evil.example.com", { gateway_call_id: "<b>x</b>" }),
+      ],
+    }),
+  );
+  await page.reload();
+  await expect(verb(page, "Allowed egress to gateway.example.com")).toBeVisible();
+  const lines = page.getByTestId("audit-call-id");
+  await expect(lines).toHaveCount(1);
+  await expect(lines).toHaveText(`Call id ${callId}`);
+  await expect(verb(page, "Allowed egress to registry.example.com")).toBeVisible();
+  await expect(verb(page, "Allowed egress to evil.example.com")).toBeVisible();
+  await lines.getByRole("button", { name: "Copy call id" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
 });
 
 // A long run's trail is served oldest-first, so the drill-in asks for its NEWEST page (order=desc): the events an

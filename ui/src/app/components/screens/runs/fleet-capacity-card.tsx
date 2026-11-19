@@ -21,7 +21,7 @@ import { runPath, useConsoleMode } from "../../wardyn/console-view";
 import { FLEET_CAPACITY as FC, FLEET_CAPACITY_AGE_LABELS } from "../../wardyn/copy/fleet-capacity";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { Chip, SectionLabel, runStateLabel } from "../../wardyn/primitives";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { STARTING_UNSCHEDULABLE } from "../run-status-detail";
 
 const OWNERS_COLLAPSED = 5;
@@ -100,6 +100,7 @@ export function FleetCapacityCard() {
   const view = useConsoleMode();
   const [data, setData] = React.useState<RunCapacityResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [failMessage, setFailMessage] = React.useState<string | undefined>();
   const [showAll, setShowAll] = React.useState(false);
 
   const load = React.useCallback(() => {
@@ -107,7 +108,10 @@ export function FleetCapacityCard() {
     runsApi
       .getAdminRunCapacity()
       .then(setData)
-      .catch(() => setFailed(true));
+      .catch((e) => {
+        setFailMessage(failureSentence(e));
+        setFailed(true);
+      });
   }, []);
 
   React.useEffect(() => {
@@ -151,7 +155,7 @@ export function FleetCapacityCard() {
   return (
     <CollapsibleCard title={FC.TITLE} summary={summary} testId="fleet-capacity-card" className="mb-4">
       {failed ? (
-        <ErrorState onRetry={load} as="h4" />
+        <ErrorState message={failMessage} onRetry={load} as="h4" />
       ) : !data ? null : (
         <div className="space-y-3 text-body">
           <p className="text-muted-foreground">{FC.LEDE}</p>

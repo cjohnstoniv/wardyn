@@ -58,13 +58,14 @@ import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
 import { MacOSVMSettingsCard } from "./macos-vm-settings-card";
+import { RunnersSettingsCard } from "./runners-settings-card";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { CARD_STATUS, SETTINGS_GROUPS } from "../../wardyn/copy/card-status";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { Chip } from "../../wardyn/primitives";
 
 type FactTone = "success" | "warning" | "neutral";
 
@@ -106,10 +107,11 @@ function FactTile({
 }
 
 // A small heading over the cards that belong together, so the page reads as three places, not nine rows.
+// A real h2, in the eyebrow look: the card titles are h3, and heading navigation must not jump from h1 to h3.
 function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div role="group" aria-label={title} className="space-y-1">
-      <SectionLabel>{title}</SectionLabel>
+      <h2 className="label-eyebrow">{title}</h2>
       {children}
     </div>
   );
@@ -119,6 +121,8 @@ function HostCard({
   status,
   siteConfig,
   onRecheck,
+  rechecking,
+  checkedJustNow,
 }: {
   status: SetupStatus;
   /**
@@ -129,6 +133,10 @@ function HostCard({
    */
   siteConfig: SiteConfig | null | "error";
   onRecheck: () => void;
+  /** A Re-check is in flight: the button waits and says so. */
+  rechecking: boolean;
+  /** The last Re-check has landed: say so, since the card may look the same afterwards. */
+  checkedJustNow: boolean;
 }) {
   const navigate = useNavigate();
   // The strongest installed class — the server-computed default, read
@@ -213,7 +221,7 @@ function HostCard({
             Getting started's: a host with nothing to launch on is a fact
             about the HOST, not something a compact-picker fallback should
             restate in its own words. */}
-        {noRunner && <NoRunnerCard noDriver={noDriver} />}
+        {noRunner && <NoRunnerCard noDriver={noDriver} k8s={k8s} />}
         {/* k8s Runner/Egress containment/Confinement classes/Agent images —
             unconditional on noRunner, exactly like EnvironmentStep: a
             driver:"k8s" host still gets these rows even when it reports
@@ -300,9 +308,17 @@ function HostCard({
             )}
           </button>
         )}
-        <Button variant="outline" size="sm" className="ml-auto" onClick={onRecheck}>
-          <RotateCw className="size-3.5" /> {HOST_CARD.RECHECK}
-        </Button>
+        <div className="ml-auto flex items-center gap-3">
+          {checkedJustNow && !rechecking && (
+            <span role="status" data-testid="host-checked" className="text-meta text-muted-foreground">
+              {HOST_CARD.CHECKED_JUST_NOW}
+            </span>
+          )}
+          <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
+            <RotateCw className={rechecking ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden />{" "}
+            {rechecking ? HOST_CARD.RECHECKING : HOST_CARD.RECHECK}
+          </Button>
+        </div>
       </div>
     </CollapsibleCard>
   );
@@ -337,15 +353,23 @@ export function AdminSettingsScreen() {
   // the two-state prop they already reason about; HostCard is the one that
   // makes POSITIVE claims from it, so it is the one that is told.
   const [configFailed, setConfigFailed] = React.useState(false);
+  // The Host card's Re-check: in flight, and landed.
+  const [rechecking, setRechecking] = React.useState(false);
+  const [checkedJustNow, setCheckedJustNow] = React.useState(false);
 
   // Only the latest load may write: a slow first load (made before /me resolved, so without the site-config
   // read) landing after the second would reset the config to null and claim a proxied deployment goes direct.
   const loadId = React.useRef(0);
-  const load = React.useCallback(() => {
+  const load = React.useCallback((opts?: { recheck?: boolean }) => {
     const mine = ++loadId.current;
     let failed = false;
+    const recheck = opts?.recheck === true;
+    if (recheck) {
+      setRechecking(true);
+      setCheckedJustNow(false);
+    }
     Promise.all([
-      setupApi.getSetupStatus(),
+      recheck ? setupApi.getSetupStatus({ recheck: true }) : setupApi.getSetupStatus(),
       adminReads
         ? health.getSiteConfig().catch(() => {
             failed = true;
@@ -355,13 +379,23 @@ export function AdminSettingsScreen() {
     ])
       .then(([s, cfg]) => {
         if (mine !== loadId.current) return;
+        setRechecking(false);
+        // getSetupStatus never rejects: a dead network or a 5xx comes back as a made-up, `unreachable` payload that
+        // reads as "no barrier installed". Nothing on this page would be true, so show the error, not the facts.
+        if (s.unreachable) {
+          setState("error");
+          return;
+        }
         setStatus(s);
         setSiteConfig(cfg);
         setConfigFailed(failed);
+        setCheckedJustNow(recheck);
         setState("ready");
       })
       .catch(() => {
-        if (mine === loadId.current) setState("error");
+        if (mine !== loadId.current) return;
+        setRechecking(false);
+        setState("error");
       });
   }, [adminReads]);
   // S-5: nothing is fetched for a refused caller — the effect below never
@@ -392,7 +426,9 @@ export function AdminSettingsScreen() {
         description="This host, what runs your agents, and how Wardyn reaches your code."
       />
       {state === "loading" && <TableSkeleton />}
-      {state === "error" && <ErrorState onRetry={load} />}
+      {state === "error" && (
+        <ErrorState title={HOST_CARD.UNREACHABLE_TITLE} message={HOST_CARD.UNREACHABLE_BODY} onRetry={() => load()} />
+      )}
       {state === "ready" && status && (
         // Cards sit tight (space-y-1) so the collapsed groups fit the viewport budget set in settings-compact-viewport.spec.ts (#1200).
         <div className="space-y-5">
@@ -400,7 +436,9 @@ export function AdminSettingsScreen() {
             <HostCard
               status={status}
               siteConfig={configFailed ? "error" : siteConfig}
-              onRecheck={load}
+              onRecheck={() => load({ recheck: true })}
+              rechecking={rechecking}
+              checkedJustNow={checkedJustNow}
             />
             {/* #1125 (B-1): beside Host and Model providers, super admin only —
                 the server refuses anyone else's save regardless. Unconditional
@@ -434,6 +472,8 @@ export function AdminSettingsScreen() {
             <AdminSshKeysCard />
             {/* rc.9 (M11a, board J7): the oldest macOS base a run may use; reads its own site-config snapshot. */}
             <MacOSVMSettingsCard />
+            {/* The runner placement rule: only a managed device takes a new local run. */}
+            <RunnersSettingsCard />
           </SettingsGroup>
           <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
             {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications

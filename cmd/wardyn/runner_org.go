@@ -30,8 +30,8 @@ func runnerOrgCmds(client clientFn) []*cobra.Command {
 			return err
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "Single-use organization runner token expires %s; a security operator then claims the runner with `wardyn runner claim-org`.\n", token.ExpiresAt.Format(time.RFC3339))
-		fmt.Fprintln(cmd.OutOrStdout(), token.Token)
-		return nil
+		return printMintedToken(cmd.OutOrStdout(), token.Token, token.ID, token.ExpiresAt,
+			"`wardyn runner tokens revoke "+token.ID.String()+"` revokes it before then")
 	}}
 	mint.Flags().StringVar(&name, "name", "", "a label for the token, kept in its audit row (required)")
 	_ = mint.MarkFlagRequired("name")

@@ -16,6 +16,12 @@ export const BRAND_HEADER = {
   SUPPORT_CHIP: "Support",
 } as const;
 
+// Not in docs/design/branding-canon.md (branding-copy.test.ts holds BRANDING to that table, row for row).
+export const BRANDING_FORM = {
+  ERR_NAME: "Enter your organisation's name to save.",
+  LOAD_FAILED_TITLE: "Couldn't load branding.",
+} as const;
+
 export const BRANDING = {
   TITLE: "Branding",
   LOAD_FAILED_SUMMARY: "Couldn't load",

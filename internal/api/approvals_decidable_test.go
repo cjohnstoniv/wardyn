@@ -297,6 +297,40 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 			},
 		},
 		{
+			name: "a member decides a held kubectl write on their OWN run: allowed, as one MCP call",
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				f := newMDFixture(t, types.ApprovalToolCall, kubeCallScopeJSON(t, "PATCH", "", `{"spec":{"replicas":3}}`), nil, memberSub, nil, nil)
+				sess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
+				ctx := withOIDCRole(withOIDCEmail(withOIDCHuman(context.Background(), memberSub), "member@corp.example"), oidc.RoleUser)
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return doSSO(t, f.srv, http.MethodPost, f.path(verb), sess, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
+			name: "a member decides a held kubectl write on a FOREIGN run: refused (404)",
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				f := newMDFixture(t, types.ApprovalToolCall, kubeCallScopeJSON(t, "PATCH", "", `{"spec":{"replicas":3}}`), nil, "sub-someone-else", nil, nil)
+				sess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
+				ctx := withOIDCRole(withOIDCEmail(withOIDCHuman(context.Background(), memberSub), "member@corp.example"), oidc.RoleUser)
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return doSSO(t, f.srv, http.MethodPost, f.path(verb), sess, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
+			name: "capability four-eyes ON: mayDecide and POST agree for a member on their OWN held kubectl write",
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				t.Setenv(envCapabilitySecondHuman, "1")
+				f := newMDFixture(t, types.ApprovalToolCall, kubeCallScopeJSON(t, "PATCH", "", `{"spec":{"replicas":3}}`), nil, memberSub, nil, nil)
+				sess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
+				ctx := withOIDCRole(withOIDCEmail(withOIDCHuman(context.Background(), memberSub), "member@corp.example"), oidc.RoleUser)
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return doSSO(t, f.srv, http.MethodPost, f.path(verb), sess, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
 			name: "local mode refuses the four-eyes switch outright: 503, unconditionally",
 			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
 				t.Setenv(envEgressSecondHuman, "1")
@@ -320,6 +354,7 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 			},
 		},
 	}
+	cases = append(cases, decidersMDCases()...) // the same agreement under unit deciders (deciders_decide_test.go)
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

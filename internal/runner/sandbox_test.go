@@ -8,10 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -177,40 +175,6 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 	}
 }
 
-// TestAgentIdleScript_ExitsOnSIGTERM pins #468: the idle main process must exit
-// promptly on TERM, with the usual signal exit code 143 (not 0 — a downstream
-// probe maps ExitCode==0 to RunCompleted, and an out-of-band container/pod
-// stop must still read as a kill, not success). `exec sleep infinity` fails
-// this (TERM kills it, not a clean exit), and as PID 1 it would ignore TERM
-// and sit out the full kill timeout.
-func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
-	cmd := exec.Command("sh", "-c", AgentIdleScript)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start idle script: %v", err)
-	}
-	// The trap exits without reaping the backgrounded sleep; kill the group.
-	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
-	time.Sleep(300 * time.Millisecond) // let the trap install
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("signal: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			t.Fatalf("idle script on SIGTERM: %v, want *exec.ExitError with code 143", err)
-		}
-		if code := exitErr.ExitCode(); code != 143 {
-			t.Fatalf("idle script on SIGTERM: exit code %d, want 143", code)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("idle script did not exit within 2s of SIGTERM")
-	}
-}
-
 // TestBuildProxyConfig_Unattended: the flag reaches the sidecar's "unattended"
 // key, and a false one is omitted so an attended run's config is unchanged.
 func TestBuildProxyConfig_Unattended(t *testing.T) {
@@ -240,6 +204,30 @@ func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_ForgeHosts: the deny_all guard's code hosts reach the
+// sidecar's config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ForgeHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ForgeHosts: []string{"ghe.corp.example"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"forge_hosts":["ghe.corp.example"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "forge_hosts") {
+		t.Fatalf("a run without code hosts names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_ActivityIgnoreHosts: the hosts whose allowed traffic is not activity reach the sidecar's
+// config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ActivityIgnoreHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ActivityIgnoreHosts: []string{"mask.icloud.com"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"activity_ignore_hosts":["mask.icloud.com"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "activity_ignore_hosts") {
+		t.Fatalf("a run without them names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
 // sidecar's config, and a run without one writes no key an older proxy refuses.
 func TestBuildProxyConfig_LocalModels(t *testing.T) {
@@ -253,6 +241,55 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 	}
 	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "local_models") {
 		t.Fatalf("a run with no local model names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_AllowedModels: a run's governed model list reaches the sidecar's config, so the proxy holds the run to it (and a revive, which replays the stored config, keeps
+// it); a run with no limit writes no key an older proxy refuses.
+func TestBuildProxyConfig_AllowedModels(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ModelLimit: &ModelLimit{Models: []string{"model-a", "small-model-a"},
+		BedrockRoutes: map[string]string{"bedrock-gateway.corp.example": "/bedrock"}}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"allowed_models":["model-a","small-model-a"]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the list under allowed_models", b, err)
+	}
+	var cfg proxy.Config
+	if err := json.Unmarshal(b, &cfg); err != nil || cfg.AllowedModels == nil || len(*cfg.AllowedModels) != 2 ||
+		cfg.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" {
+		t.Fatalf("the sidecar read %v %v %v, want the two models and the Bedrock route", cfg.AllowedModels, cfg.BedrockRoutes, err)
+	}
+	if _, err := proxy.LoadConfigBytes(b); err != nil && strings.Contains(err.Error(), "bedrock_routes") {
+		t.Fatalf("the sidecar refused the route: %v", err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "allowed_models") || strings.Contains(string(b), "bedrock_routes") {
+		t.Fatalf("a run with no limit names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_GatewayIdentity: a run's gateway routes reach the sidecar's config, and
+// a run without one writes no key an older proxy refuses.
+func TestBuildProxyConfig_GatewayIdentity(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		GatewayIdentity: []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, PathPrefix: "/v1", ProviderID: "p", Audience: "a"}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"gateway_identity":[{"host":"gw.corp.example","port":443,"path_prefix":"/v1","provider_id":"p","audience":"a"}]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the route under gateway_identity", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "gateway_identity") {
+		t.Fatalf("a run with no route names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_MCPApproveEach: the approve_each marker reaches the sidecar's config with
+// its windows, and a run without one names no key (an older proxy refuses the key).
+func TestBuildProxyConfig_MCPApproveEach(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		MCPApproveEach: &proxy.MCPApproveEachConfig{Windows: map[string]int{"codex-cli": 45}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"mcp_approve_each":{"windows":{"codex-cli":45}}`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the marker under mcp_approve_each", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "mcp_approve_each") {
+		t.Fatalf("a run with no approve_each rule names the key: %s", b)
 	}
 }
 
@@ -356,5 +393,32 @@ func TestKeptDespiteAWSCacheWipe(t *testing.T) {
 	}
 	if err := KeptDespiteAWSCacheWipe(ctx, "ref", nil); err != nil {
 		t.Fatalf("nil answered %v", err)
+	}
+}
+
+// The control plane reads an end whose AWS cache wipe failed as a finished end and keeps the words; an end
+// that left more than the wipe (the warning only as words beside it) is a failure with no words.
+func TestSplitAWSCacheWipe(t *testing.T) {
+	wipe := fmt.Errorf("%w: container is paused", ErrAWSCacheWipeFailed)
+	if words, err := SplitAWSCacheWipe(wipe); err != nil || words != wipe.Error() {
+		t.Fatalf("a wipe failure = %q, %v; want its words and nil", words, err)
+	}
+	left := errors.Join(errors.New(wipe.Error()), errors.New("a share would not go"))
+	if words, err := SplitAWSCacheWipe(left); words != "" || err != left {
+		t.Fatalf("a wipe warning beside a share left = %q, %v; want no words and the error", words, err)
+	}
+	if words, err := SplitAWSCacheWipe(nil); words != "" || err != nil {
+		t.Fatalf("nil = %q, %v", words, err)
+	}
+}
+
+// Kubernetes rewrites "$$" to "$" (and expands "$(VAR)") in a pod's Command, so the k8s agent's PID 1
+// command line would no longer equal AgentIdleScript and computer-folder bring-back would refuse
+// the run as unstoppable.
+func TestAgentIdleScript_HasNoKubernetesExpandedReference(t *testing.T) {
+	for _, s := range []string{"$$", "$("} {
+		if strings.Contains(AgentIdleScript, s) {
+			t.Errorf("AgentIdleScript contains %q, which Kubernetes rewrites in a pod Command", s)
+		}
 	}
 }

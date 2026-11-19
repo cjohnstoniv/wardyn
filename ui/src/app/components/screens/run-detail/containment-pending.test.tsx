@@ -9,11 +9,11 @@ import { PendingChangeError } from "../../../lib/api/core";
 import { absoluteTime } from "../../../lib/format";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange, RunDetail } from "../../../lib/types";
-import type { RunContainment, RunContainmentPending } from "../../../lib/types/run-containment";
+import type { RunContainment, RunContainmentPending, RunTeardownHold } from "../../../lib/types/run-containment";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { CONTAINMENT as C } from "../../wardyn/copy/run-containment";
+import { CONTAINMENT as C, TEARDOWN as T } from "../../wardyn/copy/run-containment";
 import { runners } from "../../../lib/api/runners";
-import { ContainmentPending, useRunContainment } from "./containment-pending";
+import { ContainmentPending, TeardownHold, useRunContainment } from "./containment-pending";
 
 const recordNode = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({ runners: { recordNode: (...a: unknown[]) => recordNode(...a), runContainment: vi.fn() } }));
@@ -162,6 +162,31 @@ describe("ContainmentPending — a stale or failed read (#K3b-L1)", () => {
   });
 });
 
+describe("TeardownHold", () => {
+  const FINISHED = aheadByHours(-0.5);
+
+  it("shows a kill the runner holds, with since when, and never as finished", () => {
+    render(<TeardownHold hold={{ kind: "kill", since: SINCE }} />);
+    const row = screen.getByTestId("run-teardown-hold");
+    expect(row).toHaveTextContent(T.heldTitle("kill"));
+    expect(row).toHaveTextContent(T.heldBody("kill"));
+    expect(row).toHaveTextContent(T.heldSince(absoluteTime(SINCE)));
+    expect(row).not.toHaveTextContent("finished this run's");
+  });
+
+  it("once the runner says it finished, shows only when", () => {
+    render(<TeardownHold hold={{ kind: "end", since: SINCE, cleared_at: FINISHED }} />);
+    const row = screen.getByTestId("run-teardown-hold");
+    expect(row).toHaveTextContent(T.cleared("end", absoluteTime(FINISHED)));
+    expect(row).not.toHaveTextContent(T.heldTitle("end"));
+  });
+
+  it("renders nothing for a run whose runner reported no hold", () => {
+    render(<TeardownHold />);
+    expect(screen.queryByTestId("run-teardown-hold")).toBeNull();
+  });
+});
+
 describe("useRunContainment — keeping a held run's containment current", () => {
   const localRun = { id: "run-1", placement: "local", updated_at: "t0" } as unknown as RunDetail;
   const read = runners.runContainment as unknown as ReturnType<typeof vi.fn>;
@@ -201,6 +226,23 @@ describe("useRunContainment — keeping a held run's containment current", () =>
       await vi.advanceTimersByTimeAsync(5000);
     });
     expect(result.current[2]).toBe(false);
+  });
+
+  it("re-reads a run whose runner holds a kill until it says the kill finished, then stops", async () => {
+    vi.useFakeTimers();
+    const held: RunTeardownHold = { kind: "kill", since: SINCE };
+    read.mockResolvedValueOnce({ records: [], teardown_hold: held }).mockResolvedValue({ records: [], teardown_hold: { ...held, cleared_at: aheadByHours(-0.5) } });
+    const { result } = renderHook(() => useRunContainment(localRun));
+    await act(async () => {});
+    expect(result.current[0]?.teardown_hold?.cleared_at).toBeUndefined();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current[0]?.teardown_hold?.cleared_at).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it("a run with no hold is read once and not polled", async () => {

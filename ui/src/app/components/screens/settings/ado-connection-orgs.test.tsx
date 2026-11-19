@@ -10,6 +10,7 @@ import type { SetupStatus } from "../../../lib/types";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { expandCard } from "../../../lib/test-dom";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 const getMineMock = vi.fn();
 vi.mock("../../../lib/api/scm-access", () => ({
@@ -52,5 +53,38 @@ describe("AdoConnectionCard with several own-token organisations", () => {
     await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.queryByTestId("ado-own-token-cards")).not.toBeInTheDocument();
     expect(screen.getByTestId("ado-pat-card")).toBeInTheDocument();
+  });
+});
+
+// UXA-39: a state that needs the person stands out on the collapsed card, as Host's does.
+describe("AdoConnectionCard — collapsed, a state that needs the person", () => {
+  beforeEach(() => getMineMock.mockReset());
+  const expired = { ...acme, state: "expired_signin" };
+
+  it("several organisations: the summary counts the ones that need you, with the pill", async () => {
+    getMineMock.mockResolvedValue([expired, beta, { ...own, state: "live", org: "https://dev.azure.com/gamma" }]);
+    renderCard();
+    expect(await screen.findByText("3 organisations · 1 need you")).toBeInTheDocument();
+    expect(screen.getByText(CARD_STATUS.NEEDS_ATTENTION)).toBeInTheDocument();
+  });
+
+  it("several organisations, none needing you: a plain count and no pill", async () => {
+    getMineMock.mockResolvedValue([acme, { ...acme, org: "https://dev.azure.com/gamma" }]);
+    renderCard();
+    expect(await screen.findByText("2 organisations")).toBeInTheDocument();
+    expect(screen.queryByText(CARD_STATUS.NEEDS_ATTENTION)).toBeNull();
+  });
+
+  it("one organisation with an expired token: the pill", async () => {
+    getMineMock.mockResolvedValue([expired]);
+    render(<MemoryRouter initialEntries={["/account"]}><AdoConnectionCard status={status(expired)} onChanged={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText(CARD_STATUS.NEEDS_ATTENTION)).toBeInTheDocument();
+  });
+
+  it("one organisation with a live token: no pill", async () => {
+    getMineMock.mockResolvedValue([acme]);
+    renderCard();
+    await screen.findByText(ADO_PAT.CHIP_CONNECTED);
+    expect(screen.queryByText(CARD_STATUS.NEEDS_ATTENTION)).toBeNull();
   });
 });

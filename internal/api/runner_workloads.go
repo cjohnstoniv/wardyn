@@ -163,7 +163,7 @@ func (s *Server) workloadUnbound(ctx context.Context, ws store.WorkloadStore, ru
 	}
 	if !slices.ContainsFunc(bindings, func(b store.WorkloadBinding) bool { return b.Namespace == rep.Namespace }) {
 		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseNotBound, "",
-			"No Wardyn workload binding names this namespace on this runner's pools. A security admin binds it to a service identity.")
+			"No Wardyn workload binding names this namespace. A security admin binds it to a service identity.")
 	}
 	return nil
 }
@@ -266,6 +266,8 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 // carries none, records the launch refused workload_binding_inactive, and the current run keeps running.
 // The launch is claimed before the standing is read, so a standing that cannot be read launches nothing,
 // is the error and leaves the claim to lapse: the lapsed-launch sweep retries it once a claim, not every pass.
+// b is read again under the claim (bindingStanding), and the run is recorded only while b exists, so a launch
+// that waited past b's delete starts no run, and one whose b is deleted while its run starts records none.
 func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity,
 	wl store.Workload,
 ) (client.WorkloadLaunch, error) {
@@ -275,18 +277,18 @@ func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b 
 	}
 	live := false
 	if found {
-		if live, err = s.bindingLive(sr.Context(), b, si); err != nil {
+		if found, live, err = s.bindingStanding(sr.Context(), ws, b, si); err != nil {
 			return client.WorkloadLaunch{}, err
 		}
 	}
 	if live {
-		return s.launchClaimed(sr, ws, claimed)
+		return s.launchClaimed(sr, ws, claimed, &b.ID)
 	}
 	msg := workloadBindingInactiveMsg
 	if !found {
 		msg = workloadBindingGoneMsg
 	}
-	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg)
+	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg, nil)
 }
 
 // workloadBindingOf finds, in bindings, the one wl, a custom resource's workload, launches under now: the
@@ -372,6 +374,9 @@ func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr
 	if uid != "" {
 		data["uid"] = uid
 	}
+	if removed.PolicyPin != "" {
+		data["policy_pin"] = removed.PolicyPin // the pin the delete drops: an apply of the same name starts unpinned
+	}
 	if id := removed.CurrentRunID; id != nil {
 		data["ended_run_id"] = *id
 		s.goBackground(func() {
@@ -428,7 +433,7 @@ func workloadStatusOf(v store.WorkloadView, now time.Time) runnerwire.WorkloadSt
 	health := types.ServiceHealthState(v.ServiceHealth)
 	st := viewServiceStatus(v, now)
 	if st != nil {
-		health = st.Health
+		health = viewServiceHealth(v, st, now)
 	}
 	switch {
 	case v.CurrentGeneration < v.Generation || v.RunState == "":

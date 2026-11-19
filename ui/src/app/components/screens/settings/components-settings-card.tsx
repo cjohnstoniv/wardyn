@@ -15,7 +15,7 @@
 // sign-in help card, so a save can't spread a stale document over a newer one.
 // Super-admin only, by being mounted from AdminSettingsScreen alone.
 import * as React from "react";
-import { Loader2, RotateCw } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
@@ -28,6 +28,8 @@ import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { Switch } from "../../wardyn/form-primitives";
+import { ErrorState, failureSentence } from "../../wardyn/states";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 
 type Cap = NonNullable<ComponentSettings["autonomy_cap"]>;
 
@@ -82,12 +84,14 @@ export function ComponentsSettingsCard() {
   const [saved, setSaved] = React.useState(draftOf());
   const [draft, setDraft] = React.useState(draftOf());
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
+  const [staleKept, setStaleKept] = React.useState(false);
 
-  // The 412 path reloads too, which also drops the stale draft: the three settings are one block.
-  const load = React.useCallback(() => {
+  // The 412 path reloads too: the three settings are one block. It resolves to the settings just read, or null if the read failed.
+  const load = React.useCallback((): Promise<ReturnType<typeof draftOf> | null> => {
     return health
       .getSiteConfigSnapshot()
       .then(({ siteConfig, etag: tag }) => {
@@ -97,20 +101,28 @@ export function ComponentsSettingsCard() {
         setSaved(next);
         setDraft(next);
         setState("ready");
+        return next;
       })
-      .catch(() => setState("failed"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState("failed");
+        return null;
+      });
   }, []);
   React.useEffect(() => {
     void load();
   }, [load]);
 
   const dirty = draft.cap !== saved.cap || draft.residentAllowed !== saved.residentAllowed || draft.vault !== saved.vault;
+  // Leaving with an edit that was not saved asks first, like Branding.
+  useUnsavedGuard("components-settings-card", dirty, () => summaryOf(draft));
 
   const save = async () => {
     if (!base) return;
     setSaving(true);
     setRefused(null);
     setSavedElsewhere(false);
+    setStaleKept(false);
     try {
       const result = await health.putSiteConfig({ ...base, components: settingsBody(draft) }, etag);
       const next = draftOf(result.siteConfig.components);
@@ -121,8 +133,15 @@ export function ComponentsSettingsCard() {
       toast.success(T.SETTINGS_SAVED_TOAST);
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
-        await load();
-        setSavedElsewhere(true);
+        // The ETag covers the whole site-config document, so another card's save also lands here. Only a change to
+        // THIS card's block is "someone else"; otherwise the person's edit goes back on the fresh document.
+        const fresh = await load();
+        if (fresh && JSON.stringify(fresh) === JSON.stringify(saved)) {
+          setDraft(draft);
+          setStaleKept(true);
+        } else {
+          setSavedElsewhere(true);
+        }
       } else if (e instanceof HttpError && e.status === 400) {
         setRefused(e.message);
       } else {
@@ -141,16 +160,8 @@ export function ComponentsSettingsCard() {
     >
       <p className="text-body leading-snug text-muted-foreground">{T.SETTINGS_LEAD}</p>
 
-      {state === "loading" && <Loader2 className="mt-4 size-4 animate-spin text-muted-foreground" />}
-      {state === "failed" && (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <p className="text-sm text-muted-foreground">{T.SETTINGS_LOAD_FAILED}</p>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            <RotateCw className="size-3.5" />
-            {T.SETTINGS_RETRY}
-          </Button>
-        </div>
-      )}
+      {state === "loading" && <Loader2 role="status" aria-label="Loading" className="mt-4 size-4 animate-spin text-muted-foreground" />}
+      {state === "failed" && <ErrorState size="compact" title={T.SETTINGS_LOAD_FAILED_TITLE} message={loadMessage} onRetry={() => void load()} />}
 
       {state === "ready" && (
         <div className="mt-3 divide-y divide-border">
@@ -160,6 +171,7 @@ export function ComponentsSettingsCard() {
             <RadioGroup
               aria-label={T.CAP_LABEL}
               value={draft.cap || "none"}
+              disabled={saving}
               onValueChange={(v) => setDraft({ ...draft, cap: v === "none" ? "" : (v as Cap) })}
               className="mt-3 gap-3"
             >
@@ -176,15 +188,20 @@ export function ComponentsSettingsCard() {
           </fieldset>
 
           <Row label={T.RESIDENT_LABEL} hint={T.RESIDENT_HINT}>
-            <Switch checked={draft.residentAllowed} onChange={(v) => setDraft({ ...draft, residentAllowed: v })} label={T.RESIDENT_LABEL} />
+            <Switch disabled={saving} checked={draft.residentAllowed} onChange={(v) => setDraft({ ...draft, residentAllowed: v })} label={T.RESIDENT_LABEL} />
           </Row>
           <Row label={T.VAULT_LABEL} hint={T.VAULT_HINT}>
-            <Switch checked={draft.vault} onChange={(v) => setDraft({ ...draft, vault: v })} label={T.VAULT_LABEL} />
+            <Switch disabled={saving} checked={draft.vault} onChange={(v) => setDraft({ ...draft, vault: v })} label={T.VAULT_LABEL} />
           </Row>
 
           {savedElsewhere && (
             <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
               {T.SETTINGS_SAVED_ELSEWHERE}
+            </p>
+          )}
+          {staleKept && (
+            <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+              {T.SETTINGS_STALE_KEPT}
             </p>
           )}
           {refused && (

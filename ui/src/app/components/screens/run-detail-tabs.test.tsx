@@ -25,6 +25,7 @@ vi.mock("../../lib/api/runs", () => ({
     // layout decisions, not the widgets (widgets.test.tsx owns those).
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
     takeoverAttach: vi.fn(),
   },
@@ -52,6 +53,7 @@ const auditMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  gatewayCallId: (await importOriginal<typeof import("../../lib/api/audit")>()).gatewayCallId,
   // attachSessions (run-detail.tsx) canonicalizes before comparing — the
   // REAL mapping, as in run-detail.test.tsx's mock (C-02).
   canonicalAuditAction: (await importOriginal<typeof import("../../lib/api/audit")>()).canonicalAuditAction,
@@ -208,6 +210,31 @@ describe("RunDetailScreen — failure-hint chip", () => {
     renderRun({ ...RUN, state: "FAILED" });
     await screen.findByText("Failed");
     expect(screen.queryByText("image not found on daemon")).not.toBeInTheDocument();
+  });
+});
+
+// P-85: the queued run's end sentence, then a muted line saying which wall preset version changed. Rendered whole page.
+describe("RunDetailScreen — a queued run whose wall preset changed (P-85)", () => {
+  const ended = { ...RUN, state: "FAILED", failure_hint: "The policy this run used changed while it waited. Start it again to review it." };
+  const line = () => screen.queryByTestId("wall-preset-queued-changed");
+
+  it("names the preset and both versions when its version changed", async () => {
+    renderRun({ ...ended, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 3, changed: { version: 4 } } } as typeof RUN);
+    expect(await screen.findByText(/The policy this run used changed/)).toBeInTheDocument();
+    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It was at version 4 when the run would have started.");
+  });
+
+  it("says the preset is no longer available when it went", async () => {
+    renderRun({ ...ended, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 3, changed: { gone: true } } } as typeof RUN);
+    await screen.findByText(/The policy this run used changed/);
+    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It was no longer available to this run when it would have started.");
+  });
+
+  it("names nothing for a personal preset read by a non-owner, which carries its scope alone", async () => {
+    renderRun({ ...ended, wall_preset: { scope: "person", changed: { version: 5 } } } as typeof RUN);
+    await screen.findByText(/The policy this run used changed/);
+    expect(line()).toBeNull();
+    expect(document.body).not.toHaveTextContent(/queued with the/);
   });
 });
 
@@ -381,9 +408,9 @@ describe("RunDetailScreen — Audit tab row shape", () => {
 describe("RunDetailScreen — Audit tab wording", () => {
   const base = { time: new Date().toISOString(), actor_type: "system", actor: "wardynd", outcome: "success", run_id: "run-1" };
 
-  async function openAuditTab(rows: Record<string, unknown>[]) {
+  async function openAuditTab(rows: Record<string, unknown>[], run: typeof RUN = RUN) {
     listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
-    renderRun(RUN);
+    renderRun(run);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /audit/i }));
     return screen.findAllByTestId("run-audit-row");
@@ -405,6 +432,49 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
   });
 
+  // P-70: a push refused for deny_all names the run's wall preset when the policy view says that preset added deny_all.
+  const denyAll = { ...base, id: "e9", action: "egress.deny", target: "github.com", actor_type: "proxy", outcome: "deny", data: { rule_source: "brokered:git:push-deny-all" } };
+  const withPreset = { ...RUN, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 2 } } as unknown as typeof RUN;
+  const viewOf = (wall_preset: unknown) => getPolicyMock.mockResolvedValue({ run_id: "run-1", state: "recorded", source: { kind: "default" }, redacted: false, changes: [], complete: true, wall_preset });
+
+  it("names a saved preset under a deny-all refusal when its policy view says it added deny_all", async () => {
+    viewOf({ id: "o1", name: "Docs triage", scope: "org", version: 2, narrowed: ["push_rules"], added: { push_rules: ["deny_all"] } });
+    const [row] = await openAuditTab([denyAll], withPreset);
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
+    expect(await within(row).findByTestId("wall-preset-refusal-line")).toHaveTextContent("Refused by this run's Docs triage wall preset.");
+  });
+
+  it.each([
+    ["the preset narrowed push paths only", { id: "o1", name: "Docs triage", scope: "org", version: 2, narrowed: ["push_rules"], added: { denied_domains: ["x"] } }],
+    ["a personal preset read by a non-owner", { scope: "person" }],
+  ])("names no preset under a deny-all refusal when %s", async (_n, wall_preset) => {
+    viewOf(wall_preset);
+    const [row] = await openAuditTab([denyAll], withPreset);
+    await waitFor(() => expect(getPolicyMock).toHaveBeenCalled());
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
+    expect(within(row).queryByTestId("wall-preset-refusal-line")).toBeNull();
+  });
+
+  it("does not read the policy view for a run with no wall preset, or with no deny-all refusal", async () => {
+    getPolicyMock.mockClear();
+    await openAuditTab([denyAll]);
+    await openAuditTab([{ ...base, id: "e10", action: "egress.allow", target: "pypi.org", actor_type: "proxy" }], withPreset);
+    expect(getPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("says a declined agent output cast could not be saved, with a failure badge and its reason; a saved session is unchanged", async () => {
+    const [failed, saved] = await openAuditTab([
+      { ...base, id: "e6", action: "session.recording.write", target: "run-1~agent", outcome: "failure", data: { session: "agent", reason: "no_tail" } },
+      { ...base, id: "e7", action: "session.recording.write", target: "run-1~console-1", data: { session: "console-1" } },
+    ]);
+    expect(within(failed).getByTestId("run-audit-action")).toHaveTextContent("Could not save the terminal recording");
+    expect(within(failed).getByTestId("run-audit-outcome")).toHaveTextContent("failure");
+    expect(within(failed).getByTestId("run-audit-detail")).toHaveTextContent("reason: no_tail");
+    expect(within(saved).getByTestId("run-audit-action")).toHaveTextContent("Recorded the terminal session");
+    expect(within(saved).queryByTestId("run-audit-outcome")).toBeNull();
+    expect(within(saved).queryByTestId("run-audit-detail")).toBeNull();
+  });
+
   it("reads an egress row with no target as the Audit screen does", async () => {
     const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
     expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
@@ -423,6 +493,26 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(deny).getByTestId("run-audit-outcome")).toHaveTextContent("deny");
     expect(within(deny).getByTestId("run-audit-detail")).toHaveTextContent("reason credential_invalid · via token · POST /v1/refunds");
     expect(within(deny).getByText("no caller")).toBeInTheDocument();
+  });
+
+  // The call id a row went to a gateway under: a line under the sentence, copied whole; a row without it is as it was.
+  it("shows the gateway call id on an egress row with a copy button, and nothing on a row without one", async () => {
+    const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
+    const rows = await openAuditTab([
+      { ...base, id: "e6", action: "egress.allow", target: "gateway.example.com", actor_type: "agent", data: { gateway_call_id: id } },
+      { ...base, id: "e7", action: "egress.deny", target: "gateway.example.com", actor_type: "agent", outcome: "denied", data: {} },
+      { ...base, id: "e8", action: "egress.allow", target: "evil.example.com", actor_type: "agent", data: { gateway_call_id: "<img src=x onerror=alert(1)>" } },
+      { ...base, id: "e9", action: "run.create", target: "run-1", data: { gateway_call_id: id } },
+    ]);
+    const [withId, without, hostile, other] = rows;
+    expect(within(withId).getByTestId("run-audit-call-id")).toHaveTextContent(`Call id ${id}`);
+    for (const row of [without, hostile, other]) expect(within(row).queryByTestId("run-audit-call-id")).not.toBeInTheDocument();
+    expect(hostile.querySelector("img")).toBeNull();
+    expect(without.className).toContain("sm:flex-nowrap");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await userEvent.click(within(withId).getByRole("button", { name: "Copy call id" }));
+    expect(writeText).toHaveBeenCalledWith(id);
   });
 });
 

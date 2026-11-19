@@ -6,11 +6,13 @@ package api
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -95,5 +97,72 @@ func TestStartAgentOrIdle_BYOILocalSelftestUnchanged(t *testing.T) {
 	}
 	if got := st.State(); got == types.RunFailed {
 		t.Fatalf("run state = %q, want not FAILED", got)
+	}
+}
+
+// An interactive run with no task on a runner holds no generation, so its warn-only selftest does not run:
+// no call, no failure row, and a row that says it did not run.
+func TestStartAgentOrIdle_BYOIInteractiveNoTaskOnRunner_SelftestNotRun(t *testing.T) {
+	h := newHarness(t)
+	runID, runnerID := uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	run := types.AgentRun{
+		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunRunning,
+		RunnerTarget: "docker", RunnerID: &runnerID,
+	}
+	st := &dispatchTestStore{run: run, state: types.RunRunning}
+	rn := &selftesterRunner{quickExecRunner: &quickExecRunner{fakeRunner: &fakeRunner{}}}
+	audit := &syncAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner, cfg.Audit = rn, audit
+	srv := New(cfg)
+
+	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", true, runnerExecution{}, nil)
+
+	if rn.selftests != 0 || len(rn.argvs) != 0 {
+		t.Fatalf("selftest calls = %d, Exec argvs = %v; want neither", rn.selftests, rn.argvs)
+	}
+	if audit.has(runID, "run.selftest", "failure") {
+		t.Fatal("a selftest that did not run recorded a failure")
+	}
+	rows := audit.eventsFor(runID, "run.selftest")
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
+		t.Fatalf("run.selftest rows = %+v, want the one saying it did not run", rows)
+	}
+	if got := st.State(); got != types.RunRunning {
+		t.Fatalf("run state = %q, want RUNNING", got)
+	}
+}
+
+// The skip is only for a warn-only run with no generation: a fail-closed gate never skips its check, and a
+// warn-only call under an issued generation still checks.
+func TestByoiSelftest_OnRunnerSkipIsWarnOnlyWithoutAGeneration(t *testing.T) {
+	h := newHarness(t)
+	runID, runnerID := uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	run := types.AgentRun{
+		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunRunning,
+		RunnerTarget: "docker", RunnerID: &runnerID,
+	}
+	issued := runnerExecution{runnerID: runnerID, runID: runID, generation: uuid.New(), operation: runnerwire.MethodExec}
+	for _, tc := range []struct {
+		name       string
+		execution  runnerExecution
+		failClosed bool
+	}{
+		{"fail-closed with no generation", runnerExecution{}, true},
+		{"warn-only under an issued generation", issued, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rn := &selftesterRunner{quickExecRunner: &quickExecRunner{fakeRunner: &fakeRunner{}}}
+			cfg := baseTestConfig(h, &dispatchTestStore{run: run, state: types.RunRunning})
+			cfg.Runner = rn
+			New(cfg).byoiSelftest(context.Background(), run, "fake-"+runID.String(), tc.execution, tc.failClosed)
+			if rn.selftests != 1 {
+				t.Fatalf("selftest calls = %d, want the check to run", rn.selftests)
+			}
+		})
 	}
 }

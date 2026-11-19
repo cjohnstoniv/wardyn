@@ -47,7 +47,7 @@ const resourceURI = "https://app.vssps.visualstudio.com/"
 // capabilityScopes is the capability -> Entra scope table, and THE ONE
 // PLACE a capability becomes a scope: consent, the person's token request and
 // any narrower credential all go through ScopesFor. SEVERAL CAPABILITIES SHARE
-// ONE SCOPE (CapCodeWrite/CapPR/CapPolicyAdmin/CapPolicyBypass all resolve to
+// ONE SCOPE (CapCodeWrite/CapPR/CapPRCreate/CapPRVote/CapPRComplete/CapPolicyAdmin/CapPolicyBypass all resolve to
 // vso.code_write, since ADO has no finer scope — the classifier, not the
 // token, is what distinguishes them). ONE CAPABILITY MAY NEED SEVERAL
 // (CapSecurityAdmin covers three).
@@ -58,6 +58,9 @@ var capabilityScopes = func() map[Capability][]string {
 	m := map[Capability][]string{
 		CapCodeWrite:    {"vso.code_write"},
 		CapPR:           {"vso.code_write"},
+		CapPRCreate:     {"vso.code_write"},
+		CapPRVote:       {"vso.code_write"},
+		CapPRComplete:   {"vso.code_write"},
 		CapPolicyAdmin:  {"vso.code_write"},
 		CapPolicyBypass: {"vso.code_write"},
 		CapRepoAdmin:    {"vso.code_manage"},
@@ -148,5 +151,5 @@ func Permits(granted []Capability, v Verdict) bool {
 	if v.Capability == CapDiscovery {
 		return slices.ContainsFunc(granted, Capability.Grantable)
 	}
-	return v.Capability.Grantable() && slices.Contains(granted, v.Capability)
+	return v.Capability.Grantable() && Has(granted, v.Capability)
 }

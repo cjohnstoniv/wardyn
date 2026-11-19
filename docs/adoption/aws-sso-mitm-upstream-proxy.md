@@ -131,7 +131,7 @@ the corp proxy resolves and dials; the forward then runs over the shared transpo
 `internal/egress/proxy/upstream.go`'s own comment says every forward-egress dial is included, "the
 MITM LLM path" named explicitly.
 
-**`builtin:upstream-proxy` is emitted once per run, at proxy construction — not once per dial.** So
+**`builtin:upstream-proxy` is emitted once per run, as the proxy starts — not once per dial.** So
 "used exactly once and never again" is not something that datum can show; its presence proves only
 that an upstream *was configured* for that run. (The console compounds this by rendering that row as
 "Refused by the built-in guard" although it is an allow.)
@@ -190,7 +190,7 @@ They asked two questions the code answers:
   offer we made: on an estate with a corporate CA configured, the egress transport inherited `h2`
   in its ALPN list from a TLS config it shares with the sidecar's own control-plane client, which
   enables HTTP/2 and edits that config in place. So the transport offered HTTP/2 and then could
-  not speak it — the same defect the control-plane row of your table was immune to only because
+  not speak it — the same defect the control-plane client was immune to only because
   its client can. 0.7.9 fixes that sharing as well (#360).
 - **Is `ForceAttemptHTTP2: false` a deliberate invariant?** No. It has been on the egress
   transport since the first public release, and nothing records a reason for it.

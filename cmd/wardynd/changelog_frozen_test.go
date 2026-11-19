@@ -84,6 +84,9 @@ var changelogPreexistingCorrections = map[string]string{
 	// rc.2 said a Mac can run two macOS VM sandboxes; that count was never run on a real Mac, so the line now
 	// says it is built for two and links the guide's untested list.
 	"0.10.0-rc.2": "0d17b871bdcb7b13fd6b356bfebfd342210fa0ea", // docs: a pending leaver purge is retried by the sweeper; link the macOS VM untested list
+	// rc.12 said the guest turns a macOS VM's screen lock off at the start of each run; it only tries, and when
+	// that fails it logs why and the run starts anyway, so the line now says so.
+	"0.10.0-rc.12": "ed9061ab94a5cb6b3a59675a7f205c6a322d7e6f", // Docs: the screen-lock changelog line says the guest tries
 }
 
 // changelogKnownGaps matches the spellings the #466 move unified into one

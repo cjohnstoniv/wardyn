@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -340,5 +341,54 @@ func TestSetApprovedEgress_DeniedHostRefused(t *testing.T) {
 	}
 	if fake.updated != nil {
 		t.Errorf("a refused approval was written: %+v", fake.updated.ApprovedEgress)
+	}
+}
+
+// staleEgressStore answers every list replace as the PG store does when the caller's version no
+// longer matches, and counts the writes it was asked for.
+type staleEgressStore struct {
+	approvedEgressStore
+	writes int
+}
+
+func (s *staleEgressStore) SetWorkspaceApprovedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
+	s.writes++
+	return types.Workspace{}, store.ErrWorkspaceStale
+}
+
+func (s *staleEgressStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
+	s.writes++
+	return types.Workspace{}, store.ErrWorkspaceStale
+}
+
+// A list save from a stale read answers 412 on both routes, and an If-Match that is not a version
+// never reaches the store. (The version check itself is the store's UPDATE: see
+// TestPG_EgressListSaveRefusesAStaleVersion.)
+func TestSetEgressList_StaleVersionIs412(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	fake := &staleEgressStore{approvedEgressStore: approvedEgressStore{ws: types.Workspace{ID: wsID, Name: "w", Status: types.WorkspaceScanned}}}
+	srv := New(baseTestConfig(h, fake))
+	for _, route := range []string{"approved-egress", "denied-egress"} {
+		path := "/api/v1/workspaces/" + wsID.String() + "/" + route
+		put := func(ifMatch string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"domains":["example.com"]}`))
+			r.Header.Set("Authorization", "Bearer "+adminToken)
+			r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
+			if ifMatch != "" {
+				r.Header.Set("If-Match", ifMatch)
+			}
+			w := httptest.NewRecorder()
+			panicFails(t, srv.Handler()).ServeHTTP(deadlineRecorder{w}, r)
+			return w
+		}
+		fake.writes = 0
+		if w := put(`"` + time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano) + `"`); w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), reasonWorkspaceUpdateConflict) || fake.writes != 1 {
+			t.Errorf("%s stale version: %d %s (%d writes), want 412 %s after one write attempt", route, w.Code, w.Body.String(), fake.writes, reasonWorkspaceUpdateConflict)
+		}
+		fake.writes = 0
+		if w := put("not-a-version"); w.Code != http.StatusPreconditionFailed || fake.writes != 0 {
+			t.Errorf("%s unusable If-Match: %d (%d writes), want 412 and no write", route, w.Code, fake.writes)
+		}
 	}
 }

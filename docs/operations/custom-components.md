@@ -22,6 +22,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - Variable and file delivery put the value where any code in the sandbox can read it. [CREDENTIALS.md](../CREDENTIALS.md) states what each leaves readable and what bounds it.
 - A `header` delivery names a bare host with no port, and the header goes to that host's standard TLS port only.
 - The proxy terminates TLS for each such host, because it can add a header only to a request it can read.
+- Recipes that use these pieces for ops commands, read-only databases and kubectl: [Brokered operations](brokered-operations.md).
 
 **The `components` settings.**
 
@@ -61,6 +62,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - Every save answers `requirements[]`: one row per secret the component names, `present` or `missing`, with the fix `add_secret` for a missing one. It lists names and verdicts only, never a header or config value, and never refuses a save.
 - A person's component is looked up in their own namespace; an organisation's `shared` secret in the operator's.
 - A person holds at most 32 saved components, the organisation 256.
+- A `PUT` with `expected_version`, the version its caller read, replaces the row only at that version, else `409` `component_version_conflict` with nothing changed, CLI sign-ins included. The console sends it on every edit.
 
 **One credential per host.**
 
@@ -69,6 +71,16 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - For every run, with or without components, two credentials bound to one host are refused `credential_host_collision` at create, Review and the policy preview, and dispatch checks again.
 - On the per-person Azure DevOps lane a redirect for a lane host loses its token instead ([Egress redirects: two tiers](../OPERATIONS.md#egress-redirects-two-tiers)); a component header or policy `api_key` on a lane host is refused.
 
+**Pinned to a unit.**
+
+- A security admin can pin an organisation component to a unit: `PUT /api/v1/components/{id}/owning-unit` with `{"unit_id": "<unit>"}`, or `null` to unpin. Only a run whose context is that unit or a unit below it may attach the component, whatever component grants the person holds. A run elsewhere is refused `component_unit_pinned`, with the unit's name and contact.
+- Pinning an unpinned component, or moving the pin to a unit below, applies at once. Any other move is held for a second person when held governance writes are on.
+- A pin moved after launch reaches a running run at its next credential mint: every credential on the run, and every gateway token for an organisation MCP server, is then refused `component_unit_pinned`. A revive, restart or end extension is refused with the same reason.
+- A deleted organisation component reaches a running run that carries it at its next credential mint or redeem: every credential on the run, and every gateway token for an organisation MCP server, is then refused `component_gone`, as a revive, restart or end extension is.
+- A `custom_component` feature no longer allowed to a run's owner reaches a running run that carries a component they defined at its next credential mint or redeem: every credential on the run, and every gateway token for an organisation MCP server, is then refused `capability_component`.
+- A person's own `wardyn` sign-in to a component (the AWS and Azure CLI sign-ins) is not a run, has no context and is not pinned.
+- A unit with a component pinned to it cannot be deleted until the component is unpinned.
+
 **What a launch leaves behind.**
 
 - `run.create` carries `components`, and `run.component.attach` is written once per component. A refused launch writes `run.component.refuse`. A component that widened egress writes `run.egress.add` with `kind` `component` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
@@ -76,7 +88,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - The run's resolved policy and grants are the run's own record. A finished run keeps the hosts and secret names it used, as it keeps any other policy host, and so do its `run.env_secret.resolve`, `run.file_secret.resolve` and `secret.read` rows.
 - Migration `0136_components` holds saved components; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `components`.
 - Migration `0137_run_components` holds each run's snapshot; grant the app role `SELECT, INSERT, UPDATE` on `run_components`, and keep it in backups.
-- A revive, restart or end extension re-checks the owner's doors from that snapshot. An organisation component that was deleted refuses it with `component_gone`; one no longer granted, or a `custom_component` no longer allowed, refuses with the capability reason.
+- A revive, restart or end extension re-checks the owner's doors from that snapshot. An organisation component that was deleted refuses it with `component_gone`; one no longer granted, or a `custom_component` no longer allowed, refuses with the capability reason. A component now pinned to a unit the run is not in refuses it with `component_unit_pinned`.
 
 **An organisation's shared secret.**
 

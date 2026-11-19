@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/sys/unix"
@@ -58,17 +59,45 @@ var stage2Ports = []uint32{AgentPort, DesktopPort, ToolsPort}
 // boot does.
 func (c Stage2BootConfig) ToolsBoot() ToolsBoot {
 	return func(ctx context.Context, spec MachineSpec) (ToolsGuest, func(context.Context) error, error) {
-		if len(spec.Shares) > 0 || len(spec.Disks) > 0 {
-			return nil, nil, errSharesOutsideRun
-		}
-		// The disk's directory (a staging copy, a derived base, or prepare's base) holds the key its guest
-		// has; with none, nothing is built.
-		key, err := readPairKey(filepath.Dir(spec.DiskPath))
-		if err != nil {
-			return nil, nil, err
-		}
-		return c.boot(ctx, spec, key)
+		return c.toolsBoot(ctx, spec, nil)
 	}
+}
+
+// WindowBoot boots spec as ToolsBoot's stage-2 boot does, with the guest agent's control and tools sessions,
+// but on nic: the guest side of a NIC pair whose host side the caller serves (the edit's no-egress prep
+// network), so it waits for no net_fd. Its guest is a WindowGuest, for the edit window.
+type WindowBoot func(ctx context.Context, spec MachineSpec, nic *os.File) (g ToolsGuest, stop func(ctx context.Context) error, err error)
+
+// WindowGuest is a window boot's guest as a window needs it: the VM a window draws, a request that the guest
+// shut down (the window's close button), and the VM's end.
+type WindowGuest interface {
+	ViewMachine
+	RequestStop() error
+	Done() <-chan struct{}
+	State() MachineState
+}
+
+// WindowBoot returns this configuration's window boot.
+func (c Stage2BootConfig) WindowBoot() WindowBoot {
+	return func(ctx context.Context, spec MachineSpec, nic *os.File) (ToolsGuest, func(context.Context) error, error) {
+		if nic == nil {
+			return nil, nil, errors.New("macvm: a window boot needs its NIC")
+		}
+		return c.toolsBoot(ctx, spec, nic)
+	}
+}
+
+func (c Stage2BootConfig) toolsBoot(ctx context.Context, spec MachineSpec, nic *os.File) (ToolsGuest, func(context.Context) error, error) {
+	if len(spec.Shares) > 0 || len(spec.Disks) > 0 {
+		return nil, nil, errSharesOutsideRun
+	}
+	// The disk's directory (a staging copy, a derived base, or prepare's base) holds the key its guest
+	// has; with none, nothing is built.
+	key, err := readPairKey(filepath.Dir(spec.DiskPath))
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.boot(ctx, spec, key, nic)
 }
 
 // ErrStage2Stopped is a stage-2 boot that runnerd stopped through its ctl.sock.
@@ -125,7 +154,31 @@ func (v *stage2VM) netFD(f *os.File) error {
 func (v *stage2VM) subscribe() (<-chan Event, func()) { return v.events.subscribe() }
 func (v *stage2VM) desktopPassword() (string, error)  { return "", ErrNoDesktopPassword }
 
-func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte) (ToolsGuest, func(context.Context) error, error) {
+// bridgeNetFD waits for runnerd's net_fd and bridges it to a new guest network pair, whose guest end it
+// returns. Each thing it opens is closed by an entry it appends to undo, in the order opened.
+func (c Stage2BootConfig) bridgeNetFD(ctx context.Context, v *stage2VM, undo *[]func()) (*os.File, error) {
+	attach, err := waitNetFD(ctx, v, cmpDuration(c.NetWait, 2*time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	attachConn, err := net.FileConn(attach)
+	_ = attach.Close()
+	if err != nil {
+		return nil, fmt.Errorf("macvm: network descriptor: %w", err)
+	}
+	*undo = append(*undo, func() { _ = attachConn.Close() })
+	guestNet, hostNet, err := NewNetPair()
+	if err != nil {
+		return nil, err
+	}
+	*undo = append(*undo, func() { _ = guestNet.Close(); _ = hostNet.Close() })
+	go func() { _ = (&Bridge{Guest: hostNet, Attach: attachConn, Stderr: logWriter{c.Log}}).Run() }()
+	return guestNet, nil
+}
+
+// boot is the stage-2 boot on runnerd's net_fd, or on nic when it is set (a window boot), whose guest is then
+// a windowGuest. The caller keeps nic and closes it after stop.
+func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte, nic *os.File) (ToolsGuest, func(context.Context) error, error) {
 	if c.Engine == nil || c.SockKey == "" {
 		return nil, nil, errors.New("macvm: a stage-2 boot needs an engine and a socket key")
 	}
@@ -157,27 +210,20 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte
 		return fail(err)
 	}
 	undo = append(undo, func() { _ = ctl.Close() })
+	if nic != nil {
+		v.st.Network, spec.Net = NetAttached, nic // before ctl.sock serves: no net_fd is taken
+	}
 	go serveControl(ctl, v)
-	attach, err := waitNetFD(ctx, v, cmpDuration(c.NetWait, 2*time.Minute))
-	if err != nil {
-		return fail(err)
+	if nic == nil {
+		guestNet, err := c.bridgeNetFD(ctx, v, &undo)
+		if err != nil {
+			return fail(err)
+		}
+		spec.Net = guestNet
 	}
-	attachConn, err := net.FileConn(attach)
-	_ = attach.Close()
-	if err != nil {
-		return fail(fmt.Errorf("macvm: network descriptor: %w", err))
-	}
-	undo = append(undo, func() { _ = attachConn.Close() })
-	guestNet, hostNet, err := NewNetPair()
-	if err != nil {
-		return fail(err)
-	}
-	undo = append(undo, func() { _ = guestNet.Close(); _ = hostNet.Close() })
-	go func() { _ = (&Bridge{Guest: hostNet, Attach: attachConn, Stderr: logWriter{c.Log}}).Run() }()
 	if err := thermalGate(c.Engine); err != nil {
 		return fail(err)
 	}
-	spec.Net = guestNet
 	plan, err := BuildPlan(spec)
 	if err != nil {
 		return fail(err)
@@ -278,7 +324,60 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte
 		}
 		return err
 	}
+	if nic != nil {
+		return &windowGuest{toolsGuest: g, m: m}, stop, nil
+	}
 	return g, stop, nil
+}
+
+// windowGuest is a window boot's guest: the tools guest, the VM a window draws, and the edit window's guest
+// actions. Those go over the tools session only: the guest agent serves them in tools mode, which listens
+// only on a base boot of the host's own, and never on the control session that a run's exec uses.
+type windowGuest struct {
+	*toolsGuest
+	m Machine
+}
+
+var _ WindowGuest = (*windowGuest)(nil)
+
+func (g *windowGuest) ViewHandle() (unsafe.Pointer, error) {
+	vm, ok := g.m.(ViewMachine)
+	if !ok {
+		return nil, errors.New("macvm: this engine's VM gives no view to draw")
+	}
+	return vm.ViewHandle()
+}
+
+func (g *windowGuest) RequestStop() error    { return g.m.RequestStop() }
+func (g *windowGuest) Done() <-chan struct{} { return g.m.Done() }
+func (g *windowGuest) State() MachineState   { return g.m.State() }
+
+// EditAdminTerminal opens Terminal at `su - wardyn-admin` in the guest's console session.
+func (g *windowGuest) EditAdminTerminal(ctx context.Context) (guestagent.EditActionResult, error) {
+	ctx, cancel := g.bound(ctx)
+	defer cancel()
+	return g.tools.ToolsEditAdminTerminal(ctx)
+}
+
+// EditTrustCAs opens Terminal at one trust command per certificate staged in the guest.
+func (g *windowGuest) EditTrustCAs(ctx context.Context) (guestagent.EditActionResult, error) {
+	ctx, cancel := g.bound(ctx)
+	defer cancel()
+	return g.tools.ToolsEditTrustCAs(ctx)
+}
+
+// EditFullDiskAccess opens the Full Disk Access pane and shows the guest agent in Finder.
+func (g *windowGuest) EditFullDiskAccess(ctx context.Context) (guestagent.EditActionResult, error) {
+	ctx, cancel := g.bound(ctx)
+	defer cancel()
+	return g.tools.ToolsEditFullDiskAccess(ctx)
+}
+
+// EditShutDown asks the guest agent to shut the guest down as root, which macOS does not confirm.
+func (g *windowGuest) EditShutDown(ctx context.Context) error {
+	ctx, cancel := g.bound(ctx)
+	defer cancel()
+	return g.tools.ToolsEditShutDown(ctx)
 }
 
 func cmpDuration(d, def time.Duration) time.Duration {

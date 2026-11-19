@@ -366,3 +366,28 @@ func TestKeepWorkFolderHoldsNoDeliveredSecret(t *testing.T) {
 		t.Errorf("a delivered secret at %s was admitted", inside.Path)
 	}
 }
+
+// TestDriveGuestPaths_KeptDriveAuditNamesTheGuestFolder: a macOS VM run's
+// drive.member.create row gives the kept work folder at the guest's path; the
+// mount keptWorkFolderMount builds keeps the container path.
+func TestDriveGuestPaths_KeptDriveAuditNamesTheGuestFolder(t *testing.T) {
+	st := newMemberDriveStore()
+	st.site = keepSite(true, true, 3, 0)
+	rec := &recRecorder{}
+	srv := New(Config{BaseCtx: context.Background(), Store: &keepStore{memberDriveStore: st}, Audit: rec, Runner: &keepRunner{}, RunnerTarget: "docker"})
+	ctx := personCtx(aliceSub)
+	k, refusal := keepGates(t, srv, ctx, types.RunPolicySpec{})
+	if refusal != nil {
+		t.Fatalf("gates refused: %+v", refusal)
+	}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, State: types.RunPending, MachineKind: types.MachineMacOSVM}
+	if refusal := srv.keepWorkFolder(keepRequest(ctx), k, run); refusal != nil {
+		t.Fatalf("keep refused: %+v", refusal)
+	}
+	if data := driveAuditData(t, rec, "drive.member.create"); data["target"] != "/Users/agent/work" {
+		t.Errorf("drive.member.create target = %v, want /Users/agent/work", data["target"])
+	}
+	if mount, _, _, ok := srv.keptWorkFolderMount(context.Background(), run); !ok || mount.Target != runner.ScratchWorkPath {
+		t.Errorf("kept mount target = %q (ok %v), want the container path %s", mount.Target, ok, runner.ScratchWorkPath)
+	}
+}

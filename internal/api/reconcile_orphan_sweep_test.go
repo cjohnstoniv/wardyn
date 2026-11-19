@@ -6,13 +6,16 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -218,38 +221,45 @@ func TestReconcileOnBoot_OrphanSweepFailureAudited(t *testing.T) {
 	}
 }
 
-// refusedStopRunner answers each ref's direct stop and kill with the error given, and records kills.
-type refusedStopRunner struct {
+// orphanTeardownRunner answers each ref's direct stop and kill with the error given, and records both.
+type orphanTeardownRunner struct {
 	*fakeRunner
-	mu     sync.Mutex
-	stops  map[string]error
-	kills  map[string]error
-	killed []string
+	mu      sync.Mutex
+	stops   map[string]error
+	kills   map[string]error
+	stopped []string
+	killed  []string
 }
 
-func (r *refusedStopRunner) StopSandbox(_ context.Context, ref string) error { return r.stops[ref] }
+func (r *orphanTeardownRunner) StopSandbox(_ context.Context, ref string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopped = append(r.stopped, ref)
+	return r.stops[ref]
+}
 
-func (r *refusedStopRunner) KillSandbox(_ context.Context, ref string) error {
+func (r *orphanTeardownRunner) KillSandbox(_ context.Context, ref string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.killed = append(r.killed, ref)
 	return r.kills[ref]
 }
 
-// TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused: an online runner's record kept only
-// for containment refuses the sweep's direct stop and leaves no answer to follow at the next boot, so
-// the sweep follows the refusal with one kill, which such a record takes. A stop queued for an offline
-// runner and a sandbox on no runner get no kill, and each failed chain is audited once.
-func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T) {
+// TestReconcileOrphanSweep_KillsARunnerSandboxNeverStopsIt: a terminal run's sandbox on a runner is
+// killed, never stopped. A stop queued for an offline runner (at boot, every runner) is an end, which a
+// runner that cannot keep an ended sandbox refuses, and so does a record kept only for containment;
+// every runner takes a kill. A sandbox on no runner is still stopped, and each failed teardown is
+// audited once.
+func TestReconcileOrphanSweep_KillsARunnerSandboxNeverStopsIt(t *testing.T) {
 	h := newHarness(t)
 	runnerID := uuid.New()
-	refused := placement.RunnerRefPrefix(runnerID.String()) + "refused"
+	killed := placement.RunnerRefPrefix(runnerID.String()) + "killed"
 	pending := placement.RunnerRefPrefix(runnerID.String()) + "pending"
 	stuck := placement.RunnerRefPrefix(runnerID.String()) + "stuck"
 	local := "local"
 	now := time.Now().UTC()
 	var runs []types.AgentRun
-	for _, ref := range []string{refused, pending, stuck, local} {
+	for _, ref := range []string{killed, pending, stuck, local} {
 		run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
 			Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed, RunnerTarget: "docker", SandboxRef: ref}
 		if ref != local {
@@ -258,10 +268,9 @@ func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T
 		runs = append(runs, run)
 	}
 	st := &orphanSweepStore{runs: runs}
-	refusal := errors.New("containment-only identity refuses this operation")
-	rn := &refusedStopRunner{fakeRunner: &fakeRunner{},
-		stops: map[string]error{refused: refusal, pending: runner.ErrPendingOnRunner, stuck: refusal, local: refusal},
-		kills: map[string]error{stuck: context.DeadlineExceeded}}
+	rn := &orphanTeardownRunner{fakeRunner: &fakeRunner{},
+		stops: map[string]error{local: errors.New("docker: stop: refused")},
+		kills: map[string]error{pending: runner.ErrPendingOnRunner, stuck: context.DeadlineExceeded}}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
 	srv := testServer(t, cfg)
@@ -269,8 +278,11 @@ func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T
 	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(rn.killed, ","); got != refused+","+stuck {
-		t.Fatalf("kills %q, want one each for the refused stops on the runner", got)
+	if got := strings.Join(rn.killed, ","); got != killed+","+pending+","+stuck {
+		t.Fatalf("kills %q, want one for each sandbox on the runner", got)
+	}
+	if got := strings.Join(rn.stopped, ","); got != local {
+		t.Fatalf("stops %q, want only the sandbox on no runner", got)
 	}
 	for i, want := range []string{"", pending, stuck, local} {
 		if got := st.runs[i].SandboxRef; got != want {
@@ -341,8 +353,26 @@ func (s *keptFolderStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) 
 	return types.RunLocalFolderStatus{}, nil
 }
 
-func (s *keptFolderStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+func (s *keptFolderStore) SetRunLocalFolderStatusIf(context.Context, uuid.UUID, store.FolderStatusGuard, types.RunLocalFolderStatus) (bool, error) {
 	return true, nil
+}
+
+func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	st, err := s.RunLocalFolderStatus(ctx, id)
+	st.Gen, st.GenAt = st.Gen+1, at
+	return st, err == nil, err
+}
+
+func (s *keptFolderStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.GiveUpParams) (store.GiveUpOutcome, error) {
+	return store.GiveUpOutcome{}, nil
+}
+
+func (s *keptFolderStore) MarkGivenUpAudited(context.Context, uuid.UUID, int) (bool, error) {
+	return false, nil
+}
+
+func (s *keptFolderStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 
 // orphanVerdictRunner records the orphan sweep's verdict on each run it is asked about.
@@ -351,6 +381,10 @@ type orphanVerdictRunner struct {
 	verdicts map[uuid.UUID]bool
 }
 
+// StopProxy makes the runner a substrate that can cut a kept sandbox's agent off, which the orphan passes now ask
+// for before they keep a sandbox (folderKeepVerdict).
+func (r *orphanVerdictRunner) StopProxy(context.Context, string) error { return nil }
+
 func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.Duration, isOrphan func(uuid.UUID) bool) (int, error) {
 	for id := range r.verdicts {
 		r.verdicts[id] = isOrphan(id)
@@ -358,8 +392,350 @@ func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.D
 	return 0, nil
 }
 
+// hangingCutRunner is a substrate whose proxy stop never answers until its context ends.
+type hangingCutRunner struct{ *orphanVerdictRunner }
+
+func (hangingCutRunner) StopProxy(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A cut that never answers is bounded on both orphan passes. On the boot pass it counts as unconfirmed and the
+// sandbox kept for its computer folder is stopped. On the label sweep, run on its own fixture so the ref is still
+// there and the cut is really sent, it ends at the sweep's bound and decides nothing: the run is not called an
+// orphan, keeps its ref and is left to the terminal sweep. Catches: an unbounded cut in the boot pass or the label
+// sweep, a timed-out boot cut read as a keep, and a label sweep with nothing to cut.
+func TestOrphanPasses_AHangingCutTimesOutAndTheSandboxIsStopped(t *testing.T) {
+	old := reconcileCutBound
+	reconcileCutBound = 50 * time.Millisecond
+	t.Cleanup(func() { reconcileCutBound = old })
+	h := newHarness(t)
+	now := time.Now().UTC()
+	kept := uuid.New()
+	run := types.AgentRun{ID: kept, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: "kept"}
+	st := &keptFolderStore{orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run}}, kept: map[uuid.UUID]bool{kept: true}}
+	rn := &orphanVerdictRunner{orphanSweepRunner: &orphanSweepRunner{fakeRunner: &fakeRunner{}}, verdicts: map[uuid.UUID]bool{kept: false}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = hangingCutRunner{rn}
+	srv := testServer(t, cfg)
+	start := time.Now()
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := rn.stopCount("kept"); n != 1 {
+		t.Errorf("boot orphan pass stopped the sandbox %d times; want 1: its cut timed out", n)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the boot pass took %v; a cut must end at its bound", took)
+	}
+
+	const bound = 100 * time.Millisecond
+	lsrv, lst, lrn, _ := keptSweepRig(t, 1, bound)
+	lrn.hang.Store(true)
+	id := lst.runs[0].ID
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // only a cut with no bound of its own waits this out
+	defer cancel()
+	start = time.Now()
+	if err := lsrv.sweepOrphanedSandboxes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lrn.cuts() != 1 {
+		t.Fatalf("the label sweep sent %d cuts; want 1, the kept run's", lrn.cuts())
+	}
+	if dl := lrn.deadline(0); dl.IsZero() || dl.After(start.Add(bound+time.Second)) {
+		t.Errorf("the cut ran to %v, %v after the sweep began; want the sweep's bound of %v", dl, dl.Sub(start), bound)
+	}
+	if lrn.verdicts[id] || len(lst.clearedRefs) != 0 || lst.runs[0].SandboxRef == "" {
+		t.Errorf("verdict %v, refs cleared %v; want the run left with its ref, not called an orphan", lrn.verdicts[id], lst.clearedRefs)
+	}
+}
+
+// sweepCutRunner is orphanVerdictRunner whose proxy stop is counted with the deadline it ran under: while hang is set
+// it never answers until its context ends, and otherwise it fails at once.
+type sweepCutRunner struct {
+	*orphanVerdictRunner
+	hang      atomic.Bool
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (r *sweepCutRunner) StopProxy(ctx context.Context, _ string) error {
+	dl, _ := ctx.Deadline()
+	r.mu.Lock()
+	r.deadlines = append(r.deadlines, dl)
+	r.mu.Unlock()
+	if r.hang.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return errors.New("the proxy did not stop")
+}
+
+func (r *sweepCutRunner) cuts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deadlines)
+}
+
+func (r *sweepCutRunner) deadline(i int) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= len(r.deadlines) {
+		return time.Time{}
+	}
+	return r.deadlines[i]
+}
+
+// deadCtxRefusingAudit is recRecorder that refuses a row on a context that has ended, as the store's recorder does
+// where no audit spool holds the row.
+type deadCtxRefusingAudit struct{ recRecorder }
+
+func (a *deadCtxRefusingAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return a.recRecorder.Record(ctx, ev)
+}
+
+// keptSweepRig is a server over n ended runs whose sandboxes are kept for their computer folders, on a
+// sweepCutRunner, with the label sweep's bound shortened to bound and an audit log that refuses a row on an ended
+// context.
+func keptSweepRig(t *testing.T, n int, bound time.Duration) (*Server, *keptFolderStore, *sweepCutRunner, *deadCtxRefusingAudit) {
+	t.Helper()
+	old := orphanSweepBound
+	orphanSweepBound = bound
+	t.Cleanup(func() { orphanSweepBound = old })
+	h := newHarness(t)
+	now := time.Now().UTC()
+	st := &keptFolderStore{orphanSweepStore: &orphanSweepStore{}, kept: map[uuid.UUID]bool{}}
+	rn := &sweepCutRunner{orphanVerdictRunner: &orphanVerdictRunner{orphanSweepRunner: &orphanSweepRunner{fakeRunner: &fakeRunner{}},
+		verdicts: map[uuid.UUID]bool{}}}
+	for range n {
+		id := uuid.New()
+		st.runs = append(st.runs, types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+			ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: "kept-" + id.String()})
+		st.kept[id] = true
+		rn.verdicts[id] = false
+	}
+	audit := &deadCtxRefusingAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	cfg.Audit = audit
+	return testServer(t, cfg), st, rn, audit
+}
+
+// cutFailureRows is the sandbox.orphan.sweep failure rows naming a cut's teardown_error for run id.
+func cutFailureRows(audit *deadCtxRefusingAudit, id uuid.UUID) int {
+	n := 0
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "sandbox.orphan.sweep" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == id &&
+			strings.Contains(string(ev.Data), "teardown_error") {
+			n++
+		}
+	}
+	return n
+}
+
+// Cuts that never answer share the label sweep's one bound, not a fresh bound each: three of them take that bound in
+// all, and the failure row of the cut it ended may take up to one runTeardownBudget past it (the allowance the
+// slow-row pin, TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound, tests; the sweep's own reads and
+// the lock's release are outside both). The first cut is sent and times out, and the others are not sent once the
+// bound is spent. None of the runs is called an orphan or loses its ref, so each is still owed to the terminal sweep,
+// and the next sweep, whose cuts answer, decides every one of them. Nothing is dropped. Catches: a fresh bound per
+// cut (N times the bound per sweep), and a timed-out cut read as an orphan whose stop then fails on the spent sweep.
+func TestOrphanSweep_HangingCutsShareTheSweepsBoundAndAreLeftOwed(t *testing.T) {
+	old := reconcileCutBound
+	reconcileCutBound = 100 * time.Millisecond // a fresh per-cut bound, were one given, would also time out
+	t.Cleanup(func() { reconcileCutBound = old })
+	const bound = 100 * time.Millisecond
+	srv, st, rn, audit := keptSweepRig(t, 3, bound)
+	rn.hang.Store(true)
+	start := time.Now()
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rn.cuts() != 1 {
+		t.Errorf("%d cuts sent in one sweep; want 1, the rest left once the sweep's bound was spent", rn.cuts())
+	}
+	if dl := rn.deadline(0); dl.IsZero() || dl.After(start.Add(bound+time.Second)) {
+		t.Errorf("the cut ran to %v after the sweep began; want the sweep's bound of %v", dl.Sub(start), bound)
+	}
+	rows := 0
+	for _, r := range st.runs {
+		if rn.verdicts[r.ID] || r.SandboxRef == "" {
+			t.Errorf("run %s: verdict %v, ref %q; want it not an orphan and its ref kept", r.ID, rn.verdicts[r.ID], r.SandboxRef)
+		}
+		if kept, err := srv.keepsSandboxForFolder(context.Background(), r); !kept || err != nil {
+			t.Errorf("run %s: still kept for its folder = %v, %v; want it owed", r.ID, kept, err)
+		}
+		rows += cutFailureRows(audit, r.ID)
+	}
+	if len(st.clearedRefs) != 0 || rows != 1 {
+		t.Errorf("refs cleared %v, %d cut failure rows; want none cleared and the one timed-out cut's row", st.clearedRefs, rows)
+	}
+	rn.hang.Store(false)
+	orphanSweepBound = time.Minute // the hang is off: a long bound, so three cuts and their rows cannot run it out
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range st.runs {
+		if !rn.verdicts[r.ID] {
+			t.Errorf("run %s: the next sweep left it; want its failed cut decided as an orphan", r.ID)
+		}
+	}
+	if rn.cuts() != 1+len(st.runs) {
+		t.Errorf("%d cuts over two sweeps; want %d: every run cut in the second", rn.cuts(), 1+len(st.runs))
+	}
+}
+
+// slowRowAudit is deadCtxRefusingAudit whose cut failure rows are slow but honour their context: each waits slow, or
+// until its context ends, and the row's context deadline and the time the write returned are noted.
+type slowRowAudit struct {
+	*deadCtxRefusingAudit
+	slow               time.Duration
+	mu                 sync.Mutex
+	deadline, returned time.Time
+}
+
+func (a *slowRowAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action == "sandbox.orphan.sweep" && ev.Outcome == "failure" {
+		dl, _ := ctx.Deadline()
+		select {
+		case <-ctx.Done():
+		case <-time.After(a.slow):
+		}
+		a.mu.Lock()
+		a.deadline, a.returned = dl, time.Now()
+		a.mu.Unlock()
+	}
+	return a.deadCtxRefusingAudit.Record(ctx, ev)
+}
+
+func (a *slowRowAudit) noted() (deadline, returned time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.deadline, a.returned
+}
+
+// The failure row of the cut the sweep's bound ended is the one write allowed past that bound: on an audit log that
+// is slow but honours its context, the row's context ends no later than the sweep's end plus one runTeardownBudget,
+// the row is written, and the sweep returns once that write does. It pins that allowance on the cuts and their row,
+// not a bound on the whole sweep (whose own reads here are a fake's). Catches: a row on a context that outlives the
+// budget (so the stated allowance is wrong), a row on the spent sweep context (lost), and a wait after the row.
+func TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound(t *testing.T) {
+	const bound, slow, slack = 100 * time.Millisecond, 300 * time.Millisecond, time.Second
+	srv, st, rn, audit := keptSweepRig(t, 1, bound)
+	sa := &slowRowAudit{deadCtxRefusingAudit: audit, slow: slow}
+	srv.cfg.Audit = sa
+	rn.hang.Store(true)
+	start := time.Now()
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	took, end := time.Since(start), time.Now()
+	cutEnd := rn.deadline(0)
+	dl, returned := sa.noted()
+	if cutEnd.IsZero() || dl.IsZero() || returned.IsZero() {
+		t.Fatalf("cut deadline %v, row deadline %v, row returned %v; want a timed-out cut and its row", cutEnd, dl, returned)
+	}
+	if !dl.After(cutEnd) || dl.After(start.Add(bound+runTeardownBudget+slack)) {
+		t.Errorf("the row's context ends %v after the cut's and %v after the sweep began; want past the cut and within "+
+			"the bound %v plus one runTeardownBudget %v", dl.Sub(cutEnd), dl.Sub(start), bound, runTeardownBudget)
+	}
+	if n := cutFailureRows(audit, st.runs[0].ID); n != 1 {
+		t.Errorf("%d cut failure rows; want the timed-out cut's one row", n)
+	}
+	if end.Sub(returned) > slack || took > bound+runTeardownBudget+slack {
+		t.Errorf("the sweep took %v and returned %v after the row's write; want it back once the write is, within %v",
+			took, end.Sub(returned), bound+runTeardownBudget+slack)
+	}
+}
+
+// ctxWaitingLocker is a Locker whose TryLock never takes the lock: it waits until its context ends, as a lock
+// connection that never answers does, and notes that context's deadline. Lock is the wrapped Locker's.
+type ctxWaitingLocker struct {
+	db.Locker
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (l *ctxWaitingLocker) TryLock(ctx context.Context, _ db.LockKey) (context.Context, func(), bool, error) {
+	dl, _ := ctx.Deadline()
+	l.mu.Lock()
+	l.deadlines = append(l.deadlines, dl)
+	l.mu.Unlock()
+	<-ctx.Done()
+	return ctx, nil, false, ctx.Err()
+}
+
+// The run's lock wait is inside the label sweep's bound: a lock whose acquisition never answers is given up at that
+// bound (the sweep call returns within it plus slack; its other reads are a fake's here), and the run is left owed:
+// no cut sent, no failure row, not called an orphan, its ref kept. The next sweep, with the lock free, decides it.
+// The caller's context carries a long deadline, so a wait outside the bound fails by assertion, not by the test
+// timeout. Catches: the lock taken on the caller's context, which waits past the bound for as long as that lasts.
+func TestOrphanSweep_ALockThatNeverAnswersEndsAtTheSweepsBound(t *testing.T) {
+	const bound, slack = 100 * time.Millisecond, time.Second
+	srv, st, rn, audit := keptSweepRig(t, 1, bound)
+	lk := &ctxWaitingLocker{Locker: db.NewLocalLocker()}
+	srv.locks.override = lk
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // only a lock taken outside the bound waits this out
+	defer cancel()
+	start := time.Now()
+	err := srv.sweepOrphanedSandboxes(ctx)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took > bound+slack {
+		t.Errorf("the sweep took %v with a lock that never answers; want it back within the bound %v", took, bound)
+	}
+	lk.mu.Lock()
+	dls := append([]time.Time(nil), lk.deadlines...)
+	lk.mu.Unlock()
+	if len(dls) != 1 || dls[0].IsZero() || dls[0].After(start.Add(bound+slack)) {
+		t.Errorf("lock attempts with deadlines %v (sweep began %v); want one, ending within the bound %v", dls, start, bound)
+	}
+	r := st.runs[0]
+	if rn.cuts() != 0 || rn.verdicts[r.ID] || r.SandboxRef == "" || len(st.clearedRefs) != 0 || cutFailureRows(audit, r.ID) != 0 {
+		t.Errorf("%d cuts, verdict %v, ref %q, refs cleared %v, %d cut failure rows; want no cut, not an orphan, its ref "+
+			"kept, no row", rn.cuts(), rn.verdicts[r.ID], r.SandboxRef, st.clearedRefs, cutFailureRows(audit, r.ID))
+	}
+	if kept, err := srv.keepsSandboxForFolder(context.Background(), r); !kept || err != nil {
+		t.Errorf("still kept for its folder = %v, %v; want it owed", kept, err)
+	}
+	srv.locks.override = nil       // the lock is free again
+	orphanSweepBound = time.Minute // a long bound for the deciding sweep; the rig restores it
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rn.cuts() != 1 || !rn.verdicts[r.ID] {
+		t.Errorf("the next sweep: %d cuts, verdict %v; want its cut sent and the run decided", rn.cuts(), rn.verdicts[r.ID])
+	}
+}
+
+// The failure row of a cut that timed out is written past the cut's own bound, on a context of its own: an audit log
+// with no spool refuses a row on the ended verdict context. Catches: the row written on the expired context and lost.
+func TestOrphanPasses_ATimedOutCutsFailureRowIsWrittenOnALiveContext(t *testing.T) {
+	old := reconcileCutBound
+	reconcileCutBound = 50 * time.Millisecond
+	t.Cleanup(func() { reconcileCutBound = old })
+	srv, st, rn, audit := keptSweepRig(t, 1, time.Minute)
+	rn.hang.Store(true)
+	id, ref := st.runs[0].ID, st.runs[0].SandboxRef
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := cutFailureRows(audit, id); n != 1 || rn.cuts() != 1 {
+		t.Errorf("%d cut failure rows after %d cuts; want the timed-out cut's one row", n, rn.cuts())
+	}
+	if n := rn.stopCount(ref); n != 1 {
+		t.Errorf("the sandbox was stopped %d times; want 1: its cut timed out", n)
+	}
+}
+
 // Neither orphan pass tears down a sandbox that its computer folder's pass back keeps for
-// resumeComputerFolderBacks; another terminal run's sandbox still goes (#3466).
+// the tail owner; another terminal run's sandbox still goes (#3466).
 func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC()
@@ -385,5 +761,166 @@ func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
 	}
 	if rn.verdicts[kept] || !rn.verdicts[ended] {
 		t.Errorf("orphan sweep verdicts: kept %v, ended %v; want false and true", rn.verdicts[kept], rn.verdicts[ended])
+	}
+}
+
+// givenUpSweepStore is keptFolderStore whose kept runs hold resume and have a folder for the given_up row. Each
+// give-up is noted with the ref its run held when it was made; it applies unless refuse is set, and a kept run's
+// record cannot be read when unreadable is. The kept run's folder is on a folder runner and seeded, both ways
+// unless copiedIn.
+type givenUpSweepStore struct {
+	*keptFolderStore
+	resume       *types.FolderResume
+	refuse       bool
+	unreadable   bool
+	copiedIn     bool
+	folderRunner uuid.UUID
+	giveUps      []store.GiveUpParams
+	refAt        []string
+}
+
+func (s *givenUpSweepStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if s.kept[id] && s.unreadable {
+		return types.RunLocalFolderStatus{}, errors.New("record unreadable")
+	}
+	if s.kept[id] {
+		return types.RunLocalFolderStatus{Gen: 2, Settled: 2, Resume: s.resume}, nil
+	}
+	return types.RunLocalFolderStatus{}, nil
+}
+
+func (s *givenUpSweepStore) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		if r.ID == id {
+			s.refAt = append(s.refAt, r.SandboxRef)
+		}
+	}
+	s.giveUps = append(s.giveUps, p)
+	if s.refuse {
+		return store.GiveUpOutcome{}, nil
+	}
+	return store.GiveUpOutcome{Applied: true, Gen: 3}, nil
+}
+
+func (s *givenUpSweepStore) RunLocalFolderSeed(_ context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if !s.kept[id] {
+		return &types.RunLocalFolder{Name: "work", Direction: types.ComputerFolderBoth}, store.LocalFolderSeed{}, nil
+	}
+	dir, at := types.ComputerFolderBoth, time.Now().UTC()
+	if s.copiedIn {
+		dir = types.ComputerFolderIn
+	}
+	return &types.RunLocalFolder{Name: "work", Direction: dir, RunnerID: &s.folderRunner}, store.LocalFolderSeed{SeededAt: &at}, nil
+}
+
+func (s *givenUpSweepStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
+func (s *givenUpSweepStore) SetRunLocalFolderSeed(context.Context, uuid.UUID, string) (bool, error) {
+	return false, nil
+}
+
+// The boot pass that tears down a sandbox kept for its computer folder, on a cut it could not confirm, gives the
+// owed copy back up before it clears the run's ref: the give-up is made while the ref is still set, due at once (a
+// zero cap), its final record keeps the count and names of the changes left behind, and its run.folder.transfer
+// given_up row is written. A give-up that leaves the record open keeps the ref for the next boot. A record that
+// cannot be read is decided by the owed checks that need no record: this folder is on a folder runner, seeded and both
+// ways, so its copy back is owed and is given up with the keep as its cap, noted that the record could not be read.
+// Inside the keep the database does not apply that, so the ref stays; past it the give-up lands with its given_up row
+// and the ref is cleared. A folder copied in only owes nothing, and its ref is cleared with no give-up and no row. A
+// run with nothing owed is not given up and its ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
+func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
+	for _, c := range []struct {
+		name                         string
+		refuse, unreadable, copiedIn bool
+	}{
+		{"applied", false, false, false},
+		{"left open", true, false, false},
+		{"record unreadable inside the keep", true, true, false},
+		{"record unreadable past the keep", false, true, false},
+		{"record unreadable, a folder copied in only", false, true, true},
+	} {
+		refuse, unreadable := c.refuse, c.unreadable
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			now := time.Now().UTC()
+			kept, ended := uuid.New(), uuid.New()
+			run := func(id uuid.UUID, ref string) types.AgentRun {
+				return types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+					ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: ref}
+			}
+			st := &givenUpSweepStore{keptFolderStore: &keptFolderStore{
+				orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run(kept, "kept"), run(ended, "ended")}},
+				kept:             map[uuid.UUID]bool{kept: true}},
+				resume: &types.FolderResume{Unsynced: 3, Counted: true, Paths: []string{"a.txt", "b.txt"}}, refuse: refuse, unreadable: unreadable, copiedIn: c.copiedIn}
+			rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}} // no fence and no proxy stop: no cut is confirmed
+			audit := &recRecorder{}
+			cfg := baseTestConfig(h, st)
+			cfg.Runner = rn
+			cfg.Audit = audit
+			srv := testServer(t, cfg)
+			if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if k, e := rn.stopCount("kept"), rn.stopCount("ended"); k != 1 || e != 1 {
+				t.Fatalf("stopped the kept sandbox %d times and the other %d; want 1 and 1", k, e)
+			}
+			if unreadable {
+				rows := 0
+				for _, ev := range audit.snapshot() {
+					if ev.Action != "run.folder.transfer" {
+						continue
+					}
+					rows++
+					if !strings.Contains(string(ev.Data), `"status_unreadable":true`) {
+						t.Errorf("audit row %s %s; want it to say the record could not be read", ev.Action, ev.Data)
+					}
+				}
+				wantGiveUps, wantRows, cleared := 1, 0, false // inside the keep: given up with the keep as its cap, not applied
+				switch {
+				case c.copiedIn:
+					wantGiveUps, cleared = 0, true // a folder copied in only owes nothing
+				case !c.refuse:
+					wantRows, cleared = 1, true
+				}
+				if len(st.giveUps) != wantGiveUps || rows != wantRows || slices.Contains(st.clearedRefs, kept) != cleared ||
+					!slices.Contains(st.clearedRefs, ended) {
+					t.Errorf("%d give-ups, %d rows, refs cleared %v; want %d, %d, the kept ref cleared %v and the other cleared",
+						len(st.giveUps), rows, st.clearedRefs, wantGiveUps, wantRows, cleared)
+				}
+				for _, p := range st.giveUps {
+					if p.Cap != srv.pendingCap() || p.D1 || !strings.HasSuffix(p.Back.Error, folderStatusUnreadable) {
+						t.Errorf("give-up %+v; want the keep as its cap, no containment terms, and the unreadable record noted", p)
+					}
+				}
+				return
+			}
+			if len(st.giveUps) != 1 || st.refAt[0] != "kept" {
+				t.Fatalf("%d give-ups, refs at give-up %v; want one, for the kept run, made while its ref was set", len(st.giveUps), st.refAt)
+			}
+			p := st.giveUps[0]
+			if p.Cap != 0 || p.D1 || p.Back.GivenUpAt == nil || p.Back.GivenUpCount == nil || *p.Back.GivenUpCount != 3 ||
+				!slices.Equal(p.Back.GivenUpPaths, []string{"a.txt", "b.txt"}) || p.Back.GivenUpPathsMore != 1 {
+				t.Errorf("give-up %+v; want a zero cap, no containment terms, and the record given up with 3 changes, 2 named and 1 more", p)
+			}
+			rows := 0
+			for _, ev := range audit.snapshot() {
+				if ev.Action == "run.folder.transfer" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == kept &&
+					strings.Contains(string(ev.Data), "changed files not brought back: 3") {
+					rows++
+				}
+			}
+			wantRows := 1
+			if refuse {
+				wantRows = 0
+			}
+			if rows != wantRows || slices.Contains(st.clearedRefs, kept) == refuse || !slices.Contains(st.clearedRefs, ended) {
+				t.Errorf("%d given_up rows, refs cleared %v; want %d rows, the kept run's ref cleared only when the record is final, "+
+					"and the other run's cleared", rows, st.clearedRefs, wantRows)
+			}
+		})
 	}
 }

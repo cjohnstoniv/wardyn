@@ -131,6 +131,15 @@ func TestValidateLLMInspection(t *testing.T) {
 		// Checking only the http(s) prefix would let an operator-authored (or
 		// member-smuggled) ceiling point the sidecar at an unlisted host.
 		{"sidecar url host NOT in operator allowlist is rejected", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, nil, false},
+		{"presidio format in alert mode, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio"}, presidio, true},
+		{"presidio format in block mode at medium", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "medium"}, presidio, true},
+		{"presidio format in block mode at high", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "high"}, presidio, true},
+		{"presidio format in block mode at critical", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "critical"}, presidio, true},
+		{"presidio format in block mode with the default severity is refused", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio"}, presidio, false},
+		{"presidio format in block mode at low is refused", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "low"}, presidio, false},
+		{"presidio format needs detector_sidecar_url", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true, DetectorSidecarFormat: "presidio"}, nil, false},
+		{"an unknown detector_sidecar_format is refused", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "custom"}, presidio, false},
+		{"a wardyn-format sidecar in block mode at low stays valid", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze"}, presidio, true},
 		{"bad sidecar url (no scheme, rejected before the allowlist check)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "presidio:8080"}, nil, false},
 		{"negative max_scan_bytes", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, MaxScanBytes: -1}, nil, false},
 		{"bad on_scanner_error", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, OnScannerError: "explode"}, nil, false},
@@ -340,6 +349,32 @@ func TestLoadPolicySpecRejectsUnknownField(t *testing.T) {
 	}
 	if _, err := LoadPolicySpec(path); err == nil {
 		t.Error("unknown field accepted; want rejection (fail closed)")
+	}
+}
+
+// A policy file is one JSON object with no key written twice: a second object, text after the first,
+// or a repeated key fails the load, since a restriction would otherwise be ignored.
+func TestLoadPolicySpecRefusesAnAmbiguousFile(t *testing.T) {
+	const one = `{"min_confinement_class":"CC2","push_rules":{"max_file_size_mib":500}}`
+	for name, content := range map[string]string{
+		"second object": one + ` {"denied_domains":["example.com"]}`,
+		"trailing text": one + ` junk`,
+		"a key twice":   `{"min_confinement_class":"CC3","push_rules":{"max_file_size_mib":500},"min_confinement_class":"CC2"}`,
+	} {
+		path := filepath.Join(t.TempDir(), "policy.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadPolicySpec(path); err == nil {
+			t.Errorf("%s: loaded, want the file refused", name)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.WriteFile(path, []byte(one+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicySpec(path); err != nil {
+		t.Errorf("one object and a line break: %v", err)
 	}
 }
 

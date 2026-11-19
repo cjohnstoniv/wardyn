@@ -24,7 +24,17 @@ name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 with (root / 'events').open('a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 if name == 'curl':
-    url, output = args[1], pathlib.Path(args[3])
+    valued = {'-o', '--retry', '--retry-delay', '--retry-max-time', '--connect-timeout'}
+    url, output, i = None, None, 0
+    while i < len(args):
+        if args[i] == '-o':
+            output, i = pathlib.Path(args[i + 1]), i + 2
+        elif args[i] in valued:
+            i += 2
+        elif args[i].startswith('-'):
+            i += 1
+        else:
+            url, i = args[i], i + 1
     source = 'manifest' if url.endswith('/manifest.json') else 'binary'
     if 'awscli.amazonaws.com/' in url:
         source = 'sig' if url.endswith('.sig') else 'zip'

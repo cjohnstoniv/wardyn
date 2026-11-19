@@ -14,6 +14,8 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { FleetCapacityCard } from "./fleet-capacity-card";
 import type { RunCapacityResponse, RunCapacitySums } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
+import { STATES } from "../../wardyn/states";
+import { HttpError } from "../../../lib/api/core";
 
 const getMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
@@ -90,6 +92,14 @@ async function expand() {
 beforeEach(() => vi.clearAllMocks());
 
 describe("FleetCapacityCard", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderCard();
+    await expand();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("renders nothing, and never reads, for a non-security-operator", async () => {
     getMock.mockResolvedValue(response());
     const { container } = renderCard(false);

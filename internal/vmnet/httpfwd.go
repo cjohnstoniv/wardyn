@@ -93,6 +93,13 @@ func serveHTTP(gc net.Conn, name string, rt http.RoundTripper) string {
 			writeStatus(gc, http.StatusForbidden, "the request's Host is not the name this connection was resolved as\n")
 			return "host-mismatch"
 		}
+		// A request target that is neither origin-form (starts with "/") nor absolute-form, such as the
+		// asterisk of OPTIONS *, has no path to join to the resolved name: forwarding it would send a host
+		// of name + "*". It is refused, and nothing is forwarded.
+		if req.URL.Host == "" && !strings.HasPrefix(req.RequestURI, "/") && req.Method != http.MethodConnect {
+			writeStatus(gc, http.StatusBadRequest, "the request target must start with /\n")
+			return ""
+		}
 		if req.Header.Get("Upgrade") != "" {
 			writeStatus(gc, http.StatusNotImplemented, "protocol upgrades over plain HTTP are not carried\n")
 			return ""

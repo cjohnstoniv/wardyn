@@ -81,6 +81,9 @@ const (
 	maxEntryNameBytes = 4096
 	// maxPeel bounds tag-to-tag chasing when a push updates a tag ref.
 	maxPeel = 8
+	// maxCommitParents bounds one commit's parent headers: every one is kept, and one 32 MiB commit
+	// holds about 700,000 of them.
+	maxCommitParents = 1024
 	// maxVarintBytes bounds the length of a pack's variable-length integers.
 	maxVarintBytes = 10
 )
@@ -121,6 +124,10 @@ var ErrTooLarge = errors.New("gitpack: the push exceeds an inspection ceiling")
 // ErrTooDeep is the ErrTooLarge for trees nested deeper than maxTreeDepth: a ceiling like the
 // others, whose remedy is a flatter tree rather than fewer commits.
 var ErrTooDeep = fmt.Errorf("%w: trees nested deeper than %d", ErrTooLarge, maxTreeDepth)
+
+// ErrTooManyParents is the ErrTooLarge for a commit with more than maxCommitParents parents, whose
+// remedy is a merge of fewer branches rather than fewer commits.
+var ErrTooManyParents = fmt.Errorf("%w: a commit with more than %d parents", ErrTooLarge, maxCommitParents)
 
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
@@ -183,7 +190,9 @@ type Result struct {
 	// Bases are the commits the push builds on: every parent a pack commit
 	// names that the pack doesn't carry, sorted and deduplicated. TRUST
 	// BOUNDARY: a commit may name ANY object id as its parent, so a caller
-	// must establish for itself that a base belongs to trusted history.
+	// must establish for itself that a base belongs to trusted history. The
+	// pack may also carry commits outside every command's history, and their
+	// parents are here too: Reaches says which ids each command's new value builds on.
 	Bases []string
 
 	// idx is the parsed pack, kept so Settle can answer again without

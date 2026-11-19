@@ -11,6 +11,7 @@ const (
 	PrepareCommand     = "prepare"
 	UpdateToolsCommand = "update-tools"
 	EditBaseCommand    = "edit-base"
+	DriveOpenCommand   = "drive-open"
 
 	FlagRoot        = "root"         // the login's macos-vm.noindex
 	FlagCPUs        = "cpus"         // the runner's per-run CPU limit, never raised
@@ -26,6 +27,9 @@ const (
 	FlagSHA256      = "sha256"       // prepare only: the SHA-256 the --ipsw file or the --ipsw-url image must have
 	FlagIPSWURL     = "ipsw-url"     // prepare only: download the restore image from this HTTPS mirror instead of Apple
 	FlagForce       = "force"        // update-tools only: an update someone asked for
+	FlagKept        = "kept"         // update-tools only: update the kept machine in this folder (Layout.KeptMachineDir), not the base
+	FlagDrive       = "drive"        // drive-open only: the drive's object name, wardyn-drive-...
+	FlagDriveLabel  = "drive-label"  // drive-open only: the name of the drive's volume
 )
 
 // JobControlSock is the ctl.sock of a prepare's or a tools update's stage-2

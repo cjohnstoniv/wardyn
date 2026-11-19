@@ -22,8 +22,8 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { useTheme } from "../wardyn/theme-provider";
 import {
-  errText,
   HttpError,
+  serverSentence,
   setToken,
   wfetch,
   withLimit,
@@ -163,11 +163,11 @@ export function SignIn({
     // decide what the screen offers. trust_domain / identity_provider are
     // deliberately NOT read here any more.
     void health.health().then((h) => {
-      // health() resolves the EMPTY object for "no answer" (health.ts:237-243:
-      // `if (!res.ok) return {}` / `catch { return {} }`), and a real /healthz
-      // body is never empty — it always carries at least status and version. So
-      // an empty object is the outage, and the last known answer survives it.
-      if (Object.keys(h).length === 0) {
+      // health() resolves the EMPTY object for "no answer" and `failedStatus` alone
+      // for an answer that is not a readable 2xx body, and a real /healthz body
+      // always carries at least status and version. So either is the outage, and
+      // the last known answer survives it.
+      if (Object.keys(h).length === 0 || h.failedStatus !== undefined) {
         setUnansweredReads((n) => Math.min(n + 1, STILL_CHECKING_AFTER_READS));
         return;
       }
@@ -229,7 +229,8 @@ export function SignIn({
         onSignIn();
         return;
       }
-      setError(await errText(res));
+      // An answer that named no sentence of its own: a 5xx may pass, a 403 or another 4xx will not.
+      setError((await serverSentence(res)) || (res.status >= 500 ? SIGNIN.CHECK_FAILED : SIGNIN.CHECK_FAILED_FINAL));
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         setToken(null); // a real rejection — don't keep carrying a bad token
@@ -291,7 +292,7 @@ export function SignIn({
         )}
       </Button>
 
-      <div className="relative w-full max-w-[400px]">
+      <main className="relative w-full max-w-[400px]">
         {/* #1125: a brand's logo (or monogram) and product name; unbranded,
             exactly the shield and "Wardyn" as before. */}
         <BrandSlot
@@ -434,9 +435,13 @@ export function SignIn({
                   }}
                   className="pl-9 font-mono"
                   autoComplete="off"
+                  aria-invalid={error === SIGNIN.TOKEN_REJECTED ? true : undefined}
+                  aria-describedby={error === SIGNIN.TOKEN_REJECTED ? "token-hint token-error" : "token-hint"}
                 />
               </div>
-              <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
+              <p id="token-hint" className="text-xs text-muted-foreground">
+                {SIGNIN.TOKEN_HINT}
+              </p>
               <label className="mt-1 flex items-start gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={remember}
@@ -471,6 +476,7 @@ export function SignIn({
 
           {error && (
             <div
+              id="token-error"
               role="alert"
               className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
             >
@@ -482,7 +488,7 @@ export function SignIn({
             <SignInHelp text={help.text} url={help.url} />
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

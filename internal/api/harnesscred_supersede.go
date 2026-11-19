@@ -209,9 +209,9 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 		applied, err := s.claimKillTransition(claimCtx, run)
 		claimCancel()
 		if err != nil {
+			// Tried again from a fresh read: the claim's wait for the run's start fence can spend claimCtx.
 			slog.WarnContext(ctx, "wardynd: could not supersede a live sign-in sandbox",
 				slog.String("run_id", run.ID.String()), slog.Any("error", err))
-			return
 		}
 		if applied {
 			detached := context.WithoutCancel(ctx)
@@ -238,8 +238,8 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 			})
 			return
 		}
-		// Lost the CAS to a forward transition. Re-read and try from the state it
-		// actually holds; if it ended on its own there is nothing left to do.
+		// Lost the CAS to a forward transition, or the claim failed. Re-read and try
+		// from the state it actually holds; if it ended on its own there is nothing left to do.
 		got, gerr := s.cfg.Store.GetRun(ctx, run.ID)
 		if gerr != nil || isTerminalRunState(got.State) {
 			return

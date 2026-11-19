@@ -7,20 +7,21 @@
 // extending is always allowed (the lease); shortening/No end/the wait need
 // the run's own captured user_changes_limits gate.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { RunDetail } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RunEndsControls } from "./run-ends-row";
+import { RunEndsControls, weekdayClock } from "./run-ends-row";
 
 const setRunEndAndWaitMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: { setRunEndAndWait: (...a: unknown[]) => setRunEndAndWaitMock(...a) },
 }));
 const toastWarningMock = vi.fn();
+const toastErrorMock = vi.fn();
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn(), warning: (...a: unknown[]) => toastWarningMock(...a) },
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), success: vi.fn(), warning: (...a: unknown[]) => toastWarningMock(...a) },
 }));
 
 const NOW = Date.now();
@@ -225,6 +226,137 @@ describe("RunEndsControls — Set an end… (F7: Save on the untouched default m
   });
 });
 
+// A failed pick used to show only a toast; it now stays on a line under the pills, with the menus there to try again.
+describe("RunEndsControls — a failed pick stays on screen", () => {
+  it("a failed extend stays under the pills, not in a toast, and the next pick that works clears it", async () => {
+    const onChanged = vi.fn();
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    renderRow(detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } }), onChanged);
+    await pickEnds("1 more day");
+    expect(await screen.findByTestId("run-ends-failure")).toHaveTextContent("Couldn't change this run's end: no answer");
+    expect(screen.getByTestId("run-ends-failure")).toHaveAttribute("role", "alert");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("run-ends-pill")).toBeEnabled();
+    await pickEnds("1 more day");
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("run-ends-failure")).toBeNull();
+  });
+
+  it("a failed wait pick stays under the pills, not in a toast", async () => {
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("runner offline"));
+    renderRow(detail({ wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } }));
+    const user = await openMenu("run-waits-pill");
+    await user.click(await screen.findByRole("menuitem", { name: "Keep it for up to 24 hours" }));
+    expect(await screen.findByTestId("run-ends-failure")).toHaveTextContent("Couldn't change the wait: runner offline");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("run-waits-pill")).toBeEnabled();
+  });
+
+  it("a failure clears once a change saved in the Change end dialog works", async () => {
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    renderRow(detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } }));
+    await pickEnds("1 more day");
+    expect(await screen.findByTestId("run-ends-failure")).toBeInTheDocument();
+    const user = await pickEnds("Change…");
+    await user.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByTestId("run-ends-failure")).toBeNull());
+  });
+
+  it("a failure from before the controls went does not come back with them", async () => {
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    const live = detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } });
+    const row = (run: RunDetail) => (
+      <OperatorProvider operator={false} principal={OWNER}>
+        <RunEndsControls run={run} onChanged={() => {}} />
+      </OperatorProvider>
+    );
+    const view = render(row(live));
+    await pickEnds("1 more day");
+    expect(await screen.findByTestId("run-ends-failure")).toBeInTheDocument();
+    view.rerender(row({ ...live, lost_at: new Date().toISOString() }));
+    expect(screen.queryByTestId("run-ends-pill")).toBeNull();
+    view.rerender(row(live));
+    expect(screen.getByTestId("run-ends-pill")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-ends-failure")).toBeNull();
+  });
+
+  it("a pick that fails after the controls went is never put in the page on the way back", async () => {
+    let fail = () => {};
+    setRunEndAndWaitMock.mockReturnValueOnce(new Promise((_, reject) => (fail = () => reject(new Error("run ended")))));
+    const live = detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } });
+    const row = (run: RunDetail) => (
+      <OperatorProvider operator={false} principal={OWNER}>
+        <RunEndsControls run={run} onChanged={() => {}} />
+      </OperatorProvider>
+    );
+    const view = render(row(live));
+    await pickEnds("1 more day");
+    view.rerender(row({ ...live, lost_at: new Date().toISOString() }));
+    await act(async () => {
+      fail();
+      await Promise.resolve();
+    });
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.body, { childList: true, subtree: true });
+    view.rerender(row(live));
+    const added = observer.takeRecords().flatMap((r) => [...r.addedNodes]).flatMap((n) => (n instanceof Element ? [n, ...n.querySelectorAll("*")] : []));
+    observer.disconnect();
+    expect(screen.getByTestId("run-ends-pill")).toBeInTheDocument();
+    expect(added.map((e) => e.getAttribute("data-testid"))).not.toContain("run-ends-failure");
+  });
+
+  it("a pick that fails after the controls went does not come back with them", async () => {
+    let fail = () => {};
+    setRunEndAndWaitMock.mockReturnValueOnce(new Promise((_, reject) => (fail = () => reject(new Error("run ended")))));
+    const live = detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } });
+    const row = (run: RunDetail) => (
+      <OperatorProvider operator={false} principal={OWNER}>
+        <RunEndsControls run={run} onChanged={() => {}} />
+      </OperatorProvider>
+    );
+    const view = render(row(live));
+    await pickEnds("1 more day");
+    view.rerender(row({ ...live, lost_at: new Date().toISOString() }));
+    await act(async () => {
+      fail();
+      await Promise.resolve();
+    });
+    view.rerender(row(live));
+    expect(screen.getByTestId("run-ends-pill")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-ends-failure")).toBeNull();
+  });
+
+  it("the line clears when the next pick starts, for the Ends menu", async () => {
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    renderRow(detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true } }));
+    await pickEnds("1 more day");
+    expect(await screen.findByTestId("run-ends-failure")).toBeInTheDocument();
+    let fail = () => {};
+    setRunEndAndWaitMock.mockReturnValueOnce(new Promise((_, reject) => (fail = () => reject(new Error("still no answer")))));
+    await pickEnds("1 more day");
+    expect(screen.queryByTestId("run-ends-failure")).toBeNull();
+    fail();
+    expect(await screen.findByTestId("run-ends-failure")).toHaveTextContent("Couldn't change this run's end: still no answer");
+  });
+
+  it("the line clears when the next pick starts, for the wait menu too", async () => {
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("runner offline"));
+    renderRow(detail({ wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } }));
+    const pick = async () => {
+      const user = await openMenu("run-waits-pill");
+      await user.click(await screen.findByRole("menuitem", { name: "Keep it for up to 24 hours" }));
+    };
+    await pick();
+    expect(await screen.findByTestId("run-ends-failure")).toBeInTheDocument();
+    let fail = () => {};
+    setRunEndAndWaitMock.mockReturnValueOnce(new Promise((_, reject) => (fail = () => reject(new Error("still offline")))));
+    await pick();
+    expect(screen.queryByTestId("run-ends-failure")).toBeNull();
+    fail();
+    expect(await screen.findByTestId("run-ends-failure")).toHaveTextContent("Couldn't change the wait: still offline");
+  });
+});
+
 describe("RunEndsControls — the Waits pill", () => {
   it("renders only when wait_budget_sec is a real number on the wire", () => {
     renderRow(detail({ wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } }));
@@ -312,5 +444,60 @@ describe("RunEndsControls — F16: a non-owner, non-operator viewer gets no acti
     await openMenu("run-ends-pill");
     expect(await screen.findByText(/Keeps going until you or an admin ends it/)).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Set an end…/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("RunEndsControls: a run that ends with its elevation", () => {
+  const capAt = () => new Date(NOW + 2 * 3600_000).toISOString();
+  const SENTENCE = /This run ends when your elevation ends, .+\. It can't be extended\./;
+  const extendNames = [/1 more day/, /1 more week/, /as far as allowed/i, /Change…/, /No end/];
+
+  it.each([
+    ["no end of its own", (cap: string) => ({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" as const })],
+    ["an end equal to the cap", (cap: string) => ({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" as const })],
+  ])("an elevation-capped run with %s: the pill shows the cap and its menu says why, with no extend", async (_n, shape) => {
+    const cap = capAt();
+    renderRow(detail({ ...shape(cap), run_limits: { user_changes_limits: true, allow_no_end: true, max_end_ahead_sec: 7 * 24 * 3600 } }));
+    expect(screen.getByTestId("run-ends-pill").textContent).toBe(`Ends: ${weekdayClock(cap)}`);
+    expect(screen.getByTestId("run-ends-pill").textContent).not.toMatch(/never/);
+    await openMenu("run-ends-pill");
+    expect(await screen.findByTestId("lock-reason")).toHaveTextContent(SENTENCE);
+    for (const name of extendNames) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+  });
+
+  it("an operator viewing another person's run reads 'the elevation' in the menu", async () => {
+    renderRow(detail({ created_by: "someone-else", lifetime_cap_at: capAt(), lifetime_cap_source: "elevation" }), () => {}, { operator: true });
+    await openMenu("run-ends-pill");
+    const why = await screen.findByTestId("lock-reason");
+    expect(why).toHaveTextContent(/^This run ends when the elevation ends, .+\. It can't be extended\.$/);
+  });
+
+  it("a viewer who cannot act sees the same pill as plain text", () => {
+    const cap = capAt();
+    renderRow(detail({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" }), () => {}, { principal: "someone-else" });
+    expect(screen.getByTestId("run-ends-pill").tagName).toBe("SPAN");
+    expect(screen.getByTestId("run-ends-pill").textContent).toBe(`Ends: ${weekdayClock(cap)}`);
+  });
+
+  it("a run whose own end is before the elevation's cap keeps the extend items", async () => {
+    renderRow(
+      detail({
+        ends_at: endsAt(),
+        lifetime_cap_at: new Date(NOW + 48 * 3600_000).toISOString(),
+        lifetime_cap_source: "elevation",
+        run_limits: { user_changes_limits: true, max_end_ahead_sec: 30 * 24 * 3600 },
+      }),
+    );
+    await openMenu("run-ends-pill");
+    expect(await screen.findByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
+    expect(screen.queryByText(SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it("a pool-capped run is unchanged", async () => {
+    const cap = capAt();
+    renderRow(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "pool", run_limits: { user_changes_limits: true } }));
+    await openMenu("run-ends-pill");
+    expect(await screen.findByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
+    expect(screen.queryByText(SENTENCE)).not.toBeInTheDocument();
   });
 });

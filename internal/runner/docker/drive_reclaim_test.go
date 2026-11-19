@@ -229,7 +229,7 @@ func TestReclaimDrive_RealDockerRefusesWhileAContainerMountsIt(t *testing.T) {
 
 	drive := dockerVolumeDrive()
 	drive.ObjectName = "wardyn-drive-reclaim-test-" + uuid.NewString()
-	if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
+	if _, err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
 		t.Fatalf("ensureDriveVolume: %v", err)
 	}
 	t.Cleanup(func() {

@@ -100,23 +100,25 @@ func (p *pairer) pair(c net.Conn) {
 	p.pending--
 	if !ok || p.closed {
 		p.mu.Unlock()
-		_ = c.Close()
+		// Log first: a dialer sees the close, and the line must already be written by then.
 		if !ok {
 			p.refused()
 		}
+		_ = c.Close()
 		return
 	}
 	if p.idle != nil {
 		_ = p.idle.Close()
 	}
+	// Announce before c can be taken: take reads idle under p.mu, so a host that used the guest finds the event
+	// already published, never one lost to a stop that closed the event hub first.
+	if p.connected != nil {
+		p.connected()
+	}
 	p.idle = c
 	close(p.gen)
 	p.gen = make(chan struct{})
-	cb := p.connected
 	p.mu.Unlock()
-	if cb != nil {
-		cb()
-	}
 }
 
 // refused logs a failed proof, within refusedLogEvery.

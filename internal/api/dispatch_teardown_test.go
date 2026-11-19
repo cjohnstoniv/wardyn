@@ -40,6 +40,48 @@ type dispatchTestStore struct {
 	failureHint string
 	grants      []types.CredentialGrant // what ListGrantsByRun returns
 	grantsErr   error                   // when set, ListGrantsByRun fails with it
+	// dbNow is the fake database's clock: what now() answers for RunEndsOpen and the forced claim's hold-off,
+	// and what DatabaseNow (store.DatabaseClock) answers. Nil is the real clock for those reads, and
+	// DatabaseNow then answers zero, so the server's own clock (Config.Now) stands in. endsErr, when set, fails
+	// RunEndsOpen; clockErr, when set, fails DatabaseNow.
+	dbNow    func() time.Time
+	endsErr  error
+	clockErr error
+}
+
+// clockNow is the fake database's now() (dbNow), or the real clock. The caller may hold s.mu.
+func (s *dispatchTestStore) clockNow() time.Time {
+	if s.dbNow != nil {
+		return s.dbNow()
+	}
+	return time.Now()
+}
+
+// DatabaseNow implements store.DatabaseClock over dbNow: clockErr, when set, fails the read; zero while dbNow is
+// nil, so Server.dbNow falls back to the server's clock, as it does for a store without the read.
+func (s *dispatchTestStore) DatabaseNow(context.Context) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.clockErr != nil {
+		return time.Time{}, s.clockErr
+	}
+	if s.dbNow == nil {
+		return time.Time{}, nil
+	}
+	return s.dbNow(), nil
+}
+
+// RunEndsOpen implements store.RunEndsReader over the fixture's run, as the database does: the run's end
+// and its end plus grace against the fake database's clock (dbNow), never the server's.
+func (s *dispatchTestStore) RunEndsOpen(_ context.Context, _ uuid.UUID, grace time.Duration) (bool, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.endsErr != nil {
+		return false, false, s.endsErr
+	}
+	now := s.clockNow()
+	end := s.run.EndsAt
+	return end == nil || end.After(now), end == nil || end.Add(grace).After(now), nil
 }
 
 func (s *dispatchTestStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
@@ -87,6 +129,9 @@ func (s *dispatchTestStore) SetRunImage(_ context.Context, _ uuid.UUID, image st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.run.Image = image
+	return nil
+}
+func (s *dispatchTestStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
 	return nil
 }
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
@@ -238,8 +283,8 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev.Action != "run.dispatch" || ev.Outcome != "failure" {
 		t.Errorf("teardown_error must be audited under the phase's action as a failure, got %s/%s", ev.Action, ev.Outcome)
 	}
-	if !strings.Contains(string(ev.Data), "daemon unreachable") {
-		t.Errorf("the teardown_error must carry the real error text, got %s", ev.Data)
+	if !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepStopSandbox+`"`) || strings.Contains(string(ev.Data), "daemon unreachable") {
+		t.Errorf("the teardown_error must name the step, never the error's text, got %s", ev.Data)
 	}
 	// HONESTY: never assert a containment step that was not observed.
 	for i := range audit.events {
@@ -276,23 +321,25 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev := findAudit(audit.events, run.ID, "run.exec", "failure"); ev == nil {
 		t.Fatal("no run.exec/failure event emitted")
 	}
-	// The teardown row shares the action and outcome; the Exec failure is the one with an error.
+	// The teardown row shares the action and outcome; the Exec failure is the one with an error. That row
+	// names the step, never the runner's text.
 	stamped := false
 	for _, e := range audit.events {
 		if e.Action == "run.exec" && e.Outcome == "failure" && strings.Contains(string(e.Data), `"reason":"agent_start"`) &&
-			strings.Contains(string(e.Data), "OCI runtime error") {
+			strings.Contains(string(e.Data), `"error":"`+auditStepStartAgentExec+`"`) &&
+			!strings.Contains(string(e.Data), "OCI runtime error") {
 			stamped = true
 		}
 	}
 	if !stamped {
-		t.Errorf("the Exec failure row must carry reason agent_start, got %s", auditDump(audit.events, run.ID))
+		t.Errorf("the Exec failure row must carry reason agent_start and the step, not the runner's text, got %s", auditDump(audit.events, run.ID))
 	}
 	ev := findTeardownError(audit.events, run.ID)
 	if ev == nil {
 		t.Fatalf("a failed teardown on the exec-failure path must be audited with teardown_error; the run is FAILED (terminal) so no boot reconciles the live sandbox — events=%s", auditDump(audit.events, run.ID))
 	}
-	if !strings.Contains(string(ev.Data), "no such container") {
-		t.Errorf("the teardown_error must carry the real error text, got %s", ev.Data)
+	if !strings.Contains(string(ev.Data), `"teardown_error":"`+auditStepStopSandbox+`"`) || strings.Contains(string(ev.Data), "no such container") {
+		t.Errorf("the teardown_error must name the step, never the error's text, got %s", ev.Data)
 	}
 }
 

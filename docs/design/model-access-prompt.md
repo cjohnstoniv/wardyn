@@ -185,7 +185,7 @@ re-reads `/setup/status` and only claims a capture when the server independently
 |---|---|
 | `CAPTURE_VERIFYING` | Checking with Wardyn that the session was stored… |
 | `CAPTURE_NOT_CORROBORATED` | The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again. If it keeps happening, the sandbox's report and the server disagree — check the run's audit trail. |
-| `CAPTURE_CHECK_UNREACHABLE` | Wardyn couldn't reach the server to verify this sign-in — try again. |
+| `CAPTURE_CHECK_UNREACHABLE` | Wardyn couldn't verify this sign-in with the server — try again. |
 
 A mismatch here does not refuse outright: the phase stays on `CAPTURE_VERIFYING` and hands off to a
 background watch (`watchForCapture`, bounded by `CAPTURE_WATCH_MAX_MS` = 45 min or

@@ -5,6 +5,7 @@
 - A unit admin is a person or an IdP group granted on one unit. They govern that unit and every unit below it, and nothing else.
 - It is a grant on a unit, not a fourth role: the session role stays `user`, `security_admin` or `admin` ([three roles](three-roles.md)).
 - A security admin is never narrowed by a grant. Super and security admins reach every unit, as before.
+- A grant does not let anyone decide a run's holds. That takes a rule in the unit's [deciders](deciders.md) naming `unit_admins`.
 - The audit contract is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `governance.unit_admin.grant` and `governance.unit_admin.revoke` rows.
 
 ## Who holds a grant
@@ -21,7 +22,7 @@
 
 | Route | Scope |
 |---|---|
-| `GET /governance` | the units of their subtrees, the memberships and grants on them, and `parent_walls` |
+| `GET /governance` | the units of their subtrees, the memberships and grants on them, `parent_walls`, and `unit_names`: the names of the units above |
 | `POST /governance/units` | `parent_id` in their units |
 | `PUT /governance/units/{id}` | the unit and any new parent in their units |
 | `DELETE /governance/units/{id}` | an empty unit strictly below their own; its grants go with it |
@@ -31,9 +32,29 @@
 | `DELETE /governance/memberships/{id}` | when the person keeps another membership in their units |
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
+| `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
+| `GET /audit` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows); it also serves the governance rows about their units |
+| `GET /governance/units/{id}/model-usage` | a unit in their units: the token usage of its runs and the runs of the units below it, up to 92 days (30 by default) |
+| `PUT /governance/units/{id}/deciders` | a unit strictly below one of theirs; always held ([deciders](deciders.md)) |
+| `/governance/requests` and the decisions | elevation requests in their units: decide them under an `elevation` rule that names `unit_admins` ([elevations](deciders.md#elevations)) |
 
-- Anything else is refused `403` `unit_scope_denied`: the promotion, the boundary, the restrictions and every other admin route.
+- Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
+  - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
 - A caller with no grant at all is refused the same reason with "this needs a unit admin or a security admin".
+
+## The unit view of audit rows
+
+Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; to keep a person out, remove their grant.
+
+- `GET /audit` also serves governance rows about their units, through a separate view.
+  - The rows are unit, membership, unit-admin, deciders, envelope and request writes that name one of their units. `units` keeps only theirs. Sign-ins, other rows with no run and `governance.change.*` rows are not served.
+  - `actor` is the person for a unit admin acting in their units, a person's own request or withdrawal of it, and the system. It is `security` for a security admin, `group` for a group decider, `unit_admin` for an admin of a unit above them, and empty when the grant was gone at approval.
+  - For a held change a peer unit admin approved, `actor` is the approver; the proposer's name is absent. `approver` and `proposed_by` are never served.
+- A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
+- Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class`, `exit_code` and `decision`. Each is a number, a code or a list of them; a value with a space is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.
+- A `target` filter needs a `run.`, `egress.` or `approval.` `action` or `action_prefix`, else `400` `audit_unit_target_filter`.
+- An `actor` filter reads run rows only: governance rows, the reader's own writes among them, drop out, since their actor is masked.
+- Their own runs' rows read as any owner's do. A run outside their subtrees answers a member's empty `200`. `GET /audit/export` serves them only the runs they created themselves, and a member's empty `200` for any other.
 
 ## Four-eyes
 
@@ -48,16 +69,22 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | moving a membership | the destination path narrows the source path, and the move activates or vacates no other legacy context | otherwise, for an approver who governs every unit involved |
 | renaming a unit | the rename changes no person's legacy context, and the unit ties in priority with no other group's unit | otherwise, for an approver who governs every unit it activates or vacates |
 | granting or revoking a unit admin | — | always |
+| setting a unit's deciders | — | always |
+| a write inside a platform envelope | the cases the [platform tenancy](platform-tenancy.md#what-applies-directly-and-what-is-held) table lists as applying directly | otherwise, including renaming a profile when the rename could change which profile a person is given |
+| a change to an envelope's root, or a grant or revoke on it | a narrowing edit, a lock added or a safe rename of the root, as for any unit | otherwise, for security only |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
-- A held change may be decided by a security admin, or by a unit admin who governs every unit it touches. For a grant that means strictly above the granted unit.
+- A held change may be decided by a security admin, or by a unit admin who governs every unit it touches.
+- For a grant, and for a change to a unit itself (its walls, locks, mode, name or parent), that means strictly above the unit. An admin granted on a unit never decides a change to that unit, and a move needs someone above the new parent too.
 - A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
-- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening.
+- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening. Nobody sets deciders on their own unit either, for the same reason. Nor do they decide a change to their own unit.
+- A platform that wants its admins to move faster inside walls security sets: [platform tenancy](platform-tenancy.md).
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 
 ## Locks
 
 - A unit's `locked_knobs`, and the boundary's, name knobs no unit below may change, a narrowing included.
+- `deciders` locks the unit's decider rules the same way: a write to a unit below the locker is `409`, and locking it over units that already state rules is `409`, listing them.
 - `desktop.paste_in`, `desktop.copy_out`, `desktop.upload` and `desktop.download` each lock one desktop direction at the locker's rule.
 - A write that changes a locked knob is `409` `unit_knob_locked`: "`<knob>` is locked by `<locker>`; ask `<contact>`".
 - Locking a knob a unit below sets to another value is the same `409`, listing those units. Their values are never cleared for you.

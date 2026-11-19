@@ -34,6 +34,7 @@ const (
 	errSetupRunnerdFail     = "wardyn-runnerd setup did not finish (%v); its message is above. Run `wardyn runner setup` again once it is fixed: a computer that registered is not registered again"
 	errSetupClaimLeft       = "this computer is registered but not claimed: %v; run `wardyn runner setup` again to finish (an unclaimed runner lapses %d hours after it registered)" // types.RunnerUnclaimedTTL
 	errSetupNotConnected    = "the runner did not connect within %s"
+	errSetupNotConfirmed    = "could not confirm that the runner connected: reading it from the organisation failed: %w"
 	errSetupDefaultNoPool   = "--default needs --pool"
 	errSetupClaimRegistered = "this computer's runner %s was registered before this setup and cannot be claimed: %v. If it is not yours, or was revoked, move %s out of the way and run `wardyn runner setup` again to register this computer afresh" // runner id, server error, state dir
 	errSetupTokenLeft       = "; the token minted for this setup expires %s if it was not used"                                                                                                                                                       // the mint answer's expires_at, local time

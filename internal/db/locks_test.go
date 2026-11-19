@@ -6,8 +6,13 @@ package db
 import (
 	"context"
 	"errors"
+	"net"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // testKey is a key of class whose object is unique to the test.
@@ -90,13 +95,13 @@ func requireNestingSemantics(t *testing.T, l Locker) {
 	}
 }
 
-// requireCredentialKeysAscend: several AWS SSO credential locks nest only in
-// ascending Obj, so two whole-person erases cannot each hold what the other
-// waits for; another class's second key still refuses.
-func requireCredentialKeysAscend(t *testing.T, l Locker) {
+// requireKeysAscend: several locks of class (AWS SSO credentials, a bulk
+// writer's run start locks) nest only in ascending Obj, so two holders cannot
+// each hold what the other waits for; another class's second key still refuses.
+func requireKeysAscend(t *testing.T, l Locker, class int32) {
 	t.Helper()
 	ctx := context.Background()
-	lo, hi := NewLockKey(AWSSSOCredentialLockClass, t.Name(), "a"), NewLockKey(AWSSSOCredentialLockClass, t.Name(), "b")
+	lo, hi := NewLockKey(class, t.Name(), "a"), NewLockKey(class, t.Name(), "b")
 	if lo.Obj > hi.Obj {
 		lo, hi = hi, lo
 	}
@@ -148,7 +153,8 @@ func TestLocalLocker_ReleaseEndsTheContext(t *testing.T) {
 func TestLocalLocker_Order(t *testing.T)   { requireOrderEnforced(t, NewLocalLocker()) }
 func TestLocalLocker_Nesting(t *testing.T) { requireNestingSemantics(t, NewLocalLocker()) }
 func TestLocalLocker_CredentialKeysAscend(t *testing.T) {
-	requireCredentialKeysAscend(t, NewLocalLocker())
+	requireKeysAscend(t, NewLocalLocker(), AWSSSOCredentialLockClass)
+	requireKeysAscend(t, NewLocalLocker(), RunStartLockClass)
 }
 func TestLocalLocker_Serializes(t *testing.T) {
 	requireSerializes(t, NewLocalLocker(), NewLocalLocker())
@@ -188,14 +194,15 @@ func requireSerializes(t *testing.T, a, b Locker) {
 
 // The order is pinned to the one documented in docs/design/0.8/0.8.6-ha.md §3
 // and OPERATIONS.md: run operation, Azure DevOps run-token mint/revoke, AWS SSO (person, then credential),
-// Azure DevOps sign-in, the organisation MCP server key, document locks (site config before capability
-// enforcement), the audit sweep last. Reordering the table inverts every
+// Azure DevOps sign-in, the gateway audience, the organisation MCP server key, document locks (site config before capability
+// enforcement), the audit sweep, then the audit checkpoint signer last. Reordering the table inverts every
 // nesting it names, and the nestings the daemon really makes (the credential
 // erase takes AWS SSO then the sign-in; a capture takes a credential lock then
 // the site-config lock) run in the api suites under this order's enforcement.
 func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	want := []int32{RunOpLockClass, ADORunTokenLockClass, AWSSSOLockClass, AWSSSOCredentialLockClass, ADOSignInLockClass,
-		ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass}
+		GatewayAudienceLockClass, ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass,
+		AuditCheckpointLockClass, RunStartLockClass}
 	if len(LockOrder) != len(want) {
 		t.Fatalf("LockOrder has %d classes, want %d", len(LockOrder), len(want))
 	}
@@ -206,7 +213,7 @@ func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	}
 	seen := map[int32]bool{}
 	for _, c := range []int32{LoginSupersedeLockClass, SecretRowLockClass, PushPathListLockClass, RunOutputLockClass, RecordingLockClass,
-		MemberDriveLockClass} {
+		MemberDriveLockClass, ApprovalRunCapLockClass, APITokenCapLockClass, SSHKeyCapLockClass, LaunchPresetLockClass} {
 		seen[c] = true
 	}
 	for _, c := range LockOrder {
@@ -287,5 +294,52 @@ func TestWithoutCancelUnlessLost_AlreadyLostIsEndedOnReturn(t *testing.T) {
 	}
 	if cause := context.Cause(fenced); !errors.Is(cause, ErrLockLost) {
 		t.Errorf("cause = %v, want ErrLockLost", cause)
+	}
+}
+
+// A lock connection's client dialer probes on the keepalive schedule, keeping the pool's connect timeout;
+// the pool's own config is left as it was.
+func TestLockConnConfig_KeepsAliveOnTheClient(t *testing.T) {
+	pool, err := pgx.ParseConfig("postgres://u@db.example:5432/x?connect_timeout=7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pgconn's own dialer is a net.Dialer's DialContext, the same method lockConnConfig's is, so their function
+	// pointers print alike: the pool's dialer is one that counts its calls instead, dialed on a cancelled context.
+	poolDials := 0
+	pool.DialFunc = func(context.Context, string, string) (net.Conn, error) {
+		poolDials++
+		return nil, errors.New("the pool's dialer")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := lockConnConfig(pool)
+	if cfg.DialFunc != nil {
+		_, _ = cfg.DialFunc(ctx, "tcp", "127.0.0.1:1")
+	}
+	if cfg.ConnectTimeout != 7*time.Second || cfg.DialFunc == nil || poolDials != 0 {
+		t.Errorf("connect timeout %s, dialer replaced %v; want the pool's 7s and a dialer of its own", cfg.ConnectTimeout, cfg.DialFunc != nil && poolDials == 0)
+	}
+	before := poolDials
+	_, _ = pool.DialFunc(ctx, "tcp", "127.0.0.1:1")
+	if poolDials != before+1 {
+		t.Error("the pool's own dialer was changed")
+	}
+}
+
+// Every keepalive setting is tried after connect, and one the server refuses is skipped: the rest are still
+// set and nothing fails.
+func TestSetLockKeepalives_ARefusedSettingIsSkipped(t *testing.T) {
+	var sent []string
+	setLockKeepalives(context.Background(), func(_ context.Context, sql string) error {
+		sent = append(sent, sql)
+		if strings.Contains(sql, "tcp_user_timeout") {
+			return errors.New(`unrecognized configuration parameter "tcp_user_timeout"`)
+		}
+		return nil
+	})
+	want := []string{"SET tcp_keepalives_idle = 30", "SET tcp_keepalives_interval = 10", "SET tcp_keepalives_count = 3", "SET tcp_user_timeout = 60000"}
+	if !slices.Equal(sent, want) {
+		t.Errorf("sent %v, want %v", sent, want)
 	}
 }

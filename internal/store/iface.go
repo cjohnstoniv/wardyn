@@ -40,6 +40,7 @@ type Store interface {
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
 	SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error
+	SetRunImageAdmission(ctx context.Context, id uuid.UUID, v *types.ImageAdmissionVerdict) error
 	SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
@@ -50,7 +51,9 @@ type Store interface {
 	CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error)
 	GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error)
 	ListPolicies(ctx context.Context) ([]types.RunPolicy, error)
-	UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
+	// UpdatePolicy writes only while updated_at equals seen, the updated_at the caller read
+	// (ErrPolicyStale otherwise), so a save from an older copy cannot undo a later one.
+	UpdatePolicy(ctx context.Context, id uuid.UUID, seen time.Time, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
 	DeletePolicy(ctx context.Context, id uuid.UUID) error
 
 	// Workspace.
@@ -104,7 +107,7 @@ type Store interface {
 	ListSources(ctx context.Context) ([]types.Source, error)
 	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
 	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 	ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error)
@@ -124,7 +127,7 @@ type Store interface {
 	FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error)
 	LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 
 	// CredentialGrant.
 	CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error)
@@ -141,7 +144,9 @@ type Store interface {
 	// AuditEvent.
 	QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error)
 	QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error)
-	LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error)
+	// LatestOrganisationAuditEvent is the newest row of action written by this organisation itself as
+	// actorType/actor, never a row a device forwarded (audit_latest_organisation.go).
+	LatestOrganisationAuditEvent(ctx context.Context, action string, actorType types.ActorType, actor string) (types.AuditEvent, error)
 
 	// SiteConfig.
 	GetSiteConfig(ctx context.Context) (types.SiteConfig, error)
@@ -288,6 +293,7 @@ type Store interface {
 	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
 	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
 	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
+	SetGovernanceChangeNote(ctx context.Context, id uuid.UUID, note types.ChangeNote) (types.GovernanceChange, error)
 	// DryRunGovernance runs fn on a transaction that is always rolled back.
 	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
 	// ListMembershipsFor returns EVERY membership matching a caller, each joined to its unit, in
@@ -377,10 +383,19 @@ type PG struct {
 	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
 
+	// DBNow, when set (tests only), is what DatabaseNow answers in place of the database's clock: an api
+	// test that moves its own clock to reach a run's end moves the decisions with it, and one that returns an
+	// error stands for a read that failed. Nil reads Postgres.
+	DBNow func() (time.Time, error)
+
 	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
 	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
 	// nowhere.
 	SIEM audit.Sink
+
+	// ModelUsageOff (WARDYN_MODEL_USAGE=off) makes a runner's replay acknowledge a model usage row and
+	// store nothing. Counting is on by default.
+	ModelUsageOff bool
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.
@@ -413,8 +428,9 @@ type ComponentStore interface {
 	CreateComponent(ctx context.Context, c types.Component) (types.Component, error)
 	// UpdateComponent replaces the name and definition of the row with c's id AND owner and moves
 	// its version by one. ErrNotFound when that owner has no such row; ErrConflict on a name the
-	// owner already uses.
-	UpdateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// owner already uses. With expected not 0 it writes only while the row is at that version, the
+	// one the caller read: ErrComponentStale otherwise, a row gone since included.
+	UpdateComponent(ctx context.Context, c types.Component, expected int) (types.Component, error)
 	// DeleteComponent removes owner's row and returns it, or ErrNotFound. Snapshots of it on
 	// runs already launched are kept.
 	DeleteComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)
@@ -503,6 +519,58 @@ type MemberDriveStore interface {
 // Compile-time assertion: PG satisfies MemberDriveStore.
 var _ MemberDriveStore = PG{}
 
+// KeptMachineStore persists kept machines (kept_machines.go) and lists the pools that hold a runner,
+// the read a kept machine's own-Mac check uses. Optional: callers type-assert it and refuse a kept
+// machine when it is absent.
+type KeptMachineStore interface {
+	// ListRunnerPoolsWithMember returns every pool, of any scope and state, that holds runnerID.
+	ListRunnerPoolsWithMember(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPool, error)
+	// CreateKeptMachine inserts m (creating, for run m.RunID) unless its owner keeps limit rows:
+	// ErrKeptMachineLimit, or ErrKeptMachineNameTaken.
+	CreateKeptMachine(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error)
+	// GetKeptMachine returns machine id whoever owns it (the admin routes), or ErrNotFound.
+	GetKeptMachine(ctx context.Context, id uuid.UUID) (types.KeptMachine, error)
+	// FindKeptMachineOf returns owner's machine whose id or name is ref, else ErrNotFound.
+	FindKeptMachineOf(ctx context.Context, owner, ref string) (types.KeptMachine, error)
+	// GetKeptMachineByRun returns the machine run runID has or last had, or ErrNotFound.
+	GetKeptMachineByRun(ctx context.Context, runID uuid.UUID) (types.KeptMachine, error)
+	// ListKeptMachinesOf returns owner's machines, tombstoned ones included.
+	ListKeptMachinesOf(ctx context.Context, owner string) ([]types.KeptMachine, error)
+	// ListKeptMachines returns one page of every person's machines that f matches, and the total.
+	ListKeptMachines(ctx context.Context, f KeptMachineFilter, p Page) ([]types.KeptMachine, int, error)
+	// BeginKeptMachineUse gives owner's machine to runID in one owner-bound compare-and-swap.
+	BeginKeptMachineUse(ctx context.Context, id uuid.UUID, owner string, runID uuid.UUID) (types.KeptMachine, error)
+	// RecordKeptMachineStop keeps the machine the reporting run holds; ErrNotFound when it does not.
+	RecordKeptMachineStop(ctx context.Context, st KeptMachineStop) (types.KeptMachine, error)
+	// DropUnstartedKeptMachine removes a creating machine of a run that never started.
+	DropUnstartedKeptMachine(ctx context.Context, id, runID uuid.UUID) error
+	// BeginKeptMachineDelete tombstones owner's kept machine (an empty owner means any owner).
+	BeginKeptMachineDelete(ctx context.Context, owner string, id uuid.UUID, by string) (KeptMachineDeletion, error)
+	// AbortKeptMachineDelete puts a machine back to kept while it carries started (never a kill's).
+	AbortKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// FinishKeptMachineDelete removes the row only while it carries started.
+	FinishKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// ListKeptMachineDeletes returns every tombstoned machine, for the reconnect and the sweep.
+	ListKeptMachineDeletes(ctx context.Context) ([]KeptMachineDeletion, error)
+	// ListExpiredKeptMachines returns the kept machines past expiry with no delete started or intended.
+	ListExpiredKeptMachines(ctx context.Context) ([]types.KeptMachine, error)
+	// KillRunMarkingKeptMachine claims a kill and, in the same transaction, writes its delete intent.
+	KillRunMarkingKeptMachine(ctx context.Context, runID uuid.UUID, fromState types.RunState, by, killer, exempt string) (bool, KeptMachineDeletion, error)
+	// SetKeptMachineDeleteIntent records, before a kill's claim, that the kill deletes runID's machine.
+	SetKeptMachineDeleteIntent(ctx context.Context, runID uuid.UUID, by, killer string) (KeptMachineDeletion, error)
+	// ClearKeptMachineDeleteIntent drops the intent set at at when its kill did not happen.
+	ClearKeptMachineDeleteIntent(ctx context.Context, id uuid.UUID, at time.Time) error
+	// ListKeptMachineDeleteIntents returns the intents no delete has started from, for reconcile.
+	ListKeptMachineDeleteIntents(ctx context.Context) ([]KeptMachineDeletion, error)
+	// BeginKeptMachineDeleteForKill tombstones the machine from its intent set at at.
+	BeginKeptMachineDeleteForKill(ctx context.Context, id uuid.UUID, at time.Time) (KeptMachineDeletion, error)
+	// CloseKeptMachinesOfRunner removes a revoked runner's machine rows and returns them.
+	CloseKeptMachinesOfRunner(ctx context.Context, runnerID uuid.UUID) ([]types.KeptMachine, error)
+}
+
+// Compile-time assertion: PG satisfies KeptMachineStore.
+var _ KeptMachineStore = PG{}
+
 // TemplateStore persists run templates (migration 0165_run_templates); bodies in
 // store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
 // caller that finds it absent answers 501 templates_unavailable rather than
@@ -544,10 +612,43 @@ type TemplateStore interface {
 	// TemplateGroupLabels returns the labels of those of groups that have one.
 	TemplateGroupLabels(ctx context.Context, groups []string) (map[string]string, error)
 	// EraseRunSetupsOf is the run_setups erasure scope: person's own templates
-	// (with their revisions) and grants go, and their name is blanked wherever
-	// it is the author of a shared template, a revision or a grant.
+	// (with their revisions), wall presets and grants go, and their name is
+	// blanked wherever it is the author of a shared template, a revision, a
+	// shared wall preset or a grant.
 	EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErased, error)
 }
 
 // Compile-time assertion: PG satisfies TemplateStore.
 var _ TemplateStore = PG{}
+
+// WallPresetStore persists wall presets (migration 0248_wall_presets); bodies in
+// store_wall_presets.go. Optional: a caller that finds it absent answers 501
+// wall_presets_unavailable. A preset borrows the run templates' authority, so a
+// store that keeps presets keeps templates too.
+//
+// The store does not authorise: the API checks types.TemplateAuthorize on the
+// preset's Owner() first. What the store holds is what must sit in the write's
+// own transaction, as for templates: a group write's template group-admin grant
+// re-read (TemplateGrantCheck), the audience limit (TemplateLimit, counted under
+// a named lock), the case-insensitive name per audience (ErrTemplateNameTaken),
+// and the version compare-and-set (*TemplateRevisionConflictError, whose
+// Current is the version).
+type WallPresetStore interface {
+	TemplateStore
+	// ListWallPresetsVisible returns every organisation preset, person's own,
+	// and the groups' presets, by name.
+	ListWallPresetsVisible(ctx context.Context, person string, groups []string) ([]types.WallPreset, error)
+	// GetWallPreset returns one preset; ErrNotFound when absent.
+	GetWallPreset(ctx context.Context, id uuid.UUID) (types.WallPreset, error)
+	// CreateWallPreset inserts p at version 1 under the uuid the caller chose,
+	// with p.UpdatedBy as its writer.
+	CreateWallPreset(ctx context.Context, p types.WallPreset, grant *TemplateGrantCheck) (types.WallPreset, error)
+	// UpdateWallPreset saves p's name, description and spec as the next version
+	// when the row is at expected; the scope and owner never change.
+	UpdateWallPreset(ctx context.Context, p types.WallPreset, expected int, grant *TemplateGrantCheck) (types.WallPreset, error)
+	// DeleteWallPreset removes the preset and returns the row it removed.
+	DeleteWallPreset(ctx context.Context, id uuid.UUID, grant *TemplateGrantCheck) (types.WallPreset, error)
+}
+
+// Compile-time assertion: PG satisfies WallPresetStore.
+var _ WallPresetStore = PG{}

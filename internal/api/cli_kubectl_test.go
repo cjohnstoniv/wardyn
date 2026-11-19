@@ -312,7 +312,7 @@ func TestKubectlCLI_DispatchStagesConfigNotToken(t *testing.T) {
 	if inj[0].Rule.Host != host || !inj[0].Rule.RequireTLS || inj[0].Rule.SecretName != kubectlTokenSecretName(f.id.String()) {
 		t.Errorf("rule = %+v", inj[0].Rule)
 	}
-	if g := plan.gate; g == nil || g.Host != host || g.Port != port || g.Write || len(g.Namespaces) != 2 || g.CAPEM != f.api.caPEM() {
+	if g := plan.gate; g == nil || g.Host != host || g.Port != port || g.Write || g.Restart || len(g.Namespaces) != 2 || g.CAPEM != f.api.caPEM() {
 		t.Errorf("door = %+v", plan.gate)
 	}
 	if want := host + ":" + strconv.Itoa(port); len(policy.AllowedDomains) != 1 || policy.AllowedDomains[0] != want {
@@ -350,6 +350,33 @@ func TestKubectlCLI_DispatchStagesConfigNotToken(t *testing.T) {
 	}
 	if len(f.st.grants) != 1 || json.Unmarshal(f.st.grants[0].Spec.Scope, &sc) != nil || !sc.Snapshot.authored() || sc.Snapshot.OwnerSubject != kubeOwner {
 		t.Errorf("grant = %+v", f.st.grants)
+	}
+}
+
+// A restart row dispatches a door that admits the restart and nothing a write
+// row does: Restart set, Write not. A row moved from restart to write is a
+// drift of its access.
+func TestKubectlRestartDispatchGrant(t *testing.T) {
+	f := newKubeFixture(t)
+	def := kubectlRowDef(f.api.srv.URL, f.api.caPEM(), "team-a", "team-b")
+	def.CLI.Kubectl.Access = types.ComponentAccessRestart
+	f.setRow(t, def)
+	f.st.attached[0].Definition = def
+	f.register(t, kubeRegistered)
+	_, plan, _, _, ok := f.dispatch("run-ca-cert")
+	if !ok || plan.gate == nil || !plan.gate.Restart || plan.gate.Write {
+		t.Fatalf("door = %+v ok=%v, want Restart true and Write false", plan.gate, ok)
+	}
+	var sc struct {
+		Snapshot kubectlGrantSnapshot `json:"snapshot"`
+	}
+	if len(f.st.grants) != 1 || json.Unmarshal(f.st.grants[0].Spec.Scope, &sc) != nil || sc.Snapshot.Access != types.ComponentAccessRestart {
+		t.Fatalf("grant = %+v", f.st.grants)
+	}
+	def.CLI.Kubectl.Access = types.ComponentAccessWrite
+	f.setRow(t, def)
+	if why, _, err := f.srv.kubectlCLIDrift(context.Background(), f.st.run.ID, sc.Snapshot); err != nil || why != "access" {
+		t.Errorf("restart moved to write: drift = %q, %v, want access", why, err)
 	}
 }
 
@@ -506,10 +533,11 @@ func TestKubectlCLI_SetupStatusFeature(t *testing.T) {
 // Review's credential for a kubectl row says which namespaces the cluster
 // account reaches and whether it may change them.
 func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
-	for access, want := range map[string]string{types.ComponentAccessRead: "read_only", types.ComponentAccessWrite: "read_write"} {
+	for access, want := range map[string]string{types.ComponentAccessRead: "read_only", types.ComponentAccessRestart: "restart", types.ComponentAccessWrite: "read_write"} {
 		id := uuid.New()
 		def := kubectlRowDef("https://k8s.example.com:6443", "", "team-a", "team-b")
 		def.CLI.Kubectl.Access = access
+		def.CLI.Kubectl.ApproveEach = access != types.ComponentAccessRead
 		comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{
 			ComponentID: &id, Name: "Cluster", Definition: def}}}}
 		req := createRunRequest{Agent: "claude-code", Task: "t"}
@@ -524,7 +552,7 @@ func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
 				cred = &got.Credentials[i]
 			}
 		}
-		if cred == nil || cred.Access != want || strings.Join(cred.Namespaces, ",") != "team-a,team-b" {
+		if cred == nil || cred.Access != want || strings.Join(cred.Namespaces, ",") != "team-a,team-b" || cred.ApproveEach != def.CLI.Kubectl.ApproveEach {
 			t.Errorf("%s: credential = %+v, want %s on team-a,team-b", access, cred, want)
 		}
 	}
@@ -603,5 +631,34 @@ func TestKubectlCLI_ResolveRefusesATokenPinnedElsewhere(t *testing.T) {
 	defer f.api.mu.Unlock()
 	if len(f.api.seen) != 0 {
 		t.Errorf("the API server saw %q", f.api.seen)
+	}
+}
+
+// An approve_each row dispatches a door that holds its writes, the snapshot records it, and
+// dropping it (or adding it) mid-run is a drift.
+func TestKubectlDriftApproveEachDropped(t *testing.T) {
+	f := newKubeFixture(t)
+	def := kubectlRowDef(f.api.srv.URL, f.api.caPEM(), "team-a", "team-b")
+	def.CLI.Kubectl.Access, def.CLI.Kubectl.ApproveEach = types.ComponentAccessWrite, true
+	f.setRow(t, def)
+	f.st.attached[0].Definition = def
+	f.register(t, kubeRegistered)
+	_, plan, _, _, ok := f.dispatch("run-ca-cert")
+	if !ok || plan.gate == nil || !plan.gate.ApproveEach || !plan.gate.Write {
+		t.Fatalf("door = %+v ok=%v, want ApproveEach and Write", plan.gate, ok)
+	}
+	var sc struct {
+		Snapshot kubectlGrantSnapshot `json:"snapshot"`
+	}
+	if len(f.st.grants) != 1 || json.Unmarshal(f.st.grants[0].Spec.Scope, &sc) != nil || !sc.Snapshot.ApproveEach {
+		t.Fatalf("grant = %+v", f.st.grants)
+	}
+	if why, _, err := f.srv.kubectlCLIDrift(context.Background(), f.st.run.ID, sc.Snapshot); err != nil || why != "" {
+		t.Fatalf("unchanged row: drift = %q, %v", why, err)
+	}
+	def.CLI.Kubectl.ApproveEach = false
+	f.setRow(t, def)
+	if why, _, err := f.srv.kubectlCLIDrift(context.Background(), f.st.run.ID, sc.Snapshot); err != nil || why != "approve_each" {
+		t.Errorf("approve_each dropped: drift = %q, %v, want approve_each", why, err)
 	}
 }

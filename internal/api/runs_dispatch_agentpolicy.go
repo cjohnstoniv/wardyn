@@ -63,18 +63,19 @@ func agentPolicyFailureHint(err error, level types.AutonomyLevel, hold, locked b
 // attendedToolRules are the tool rules Claude Code enforces itself in an
 // interactive run, through its managed settings: its own set when the run
 // carries one per harness, else the run's. Nil off the interactive lane, where
-// the gated lane's proxy enforces them, or nothing does.
+// the gated lane's proxy enforces them, or nothing does. An approve_each rule is
+// mapped first (mapAttendedApproveEach): Claude Code's settings cannot ask per call.
 func (p dispatchParams) attendedToolRules() []types.ToolRule {
 	if !p.Interactive {
 		return nil
 	}
 	if i := slices.IndexFunc(p.HarnessToolRules, func(h types.HarnessToolRules) bool { return h.Harness == claudeCodeHarness }); i >= 0 {
-		return p.HarnessToolRules[i].Rules
+		return mapAttendedApproveEach(p.HarnessToolRules[i].Rules, p.Components)
 	}
 	if len(p.HarnessToolRules) > 0 {
 		return nil
 	}
-	return p.Policy.ToolRules
+	return mapAttendedApproveEach(p.Policy.ToolRules, p.Components)
 }
 
 // holdLane is whether a run launches agent-run's hold lane: the one predicate
@@ -217,7 +218,9 @@ func agentPolicyDocument(agent string, level types.AutonomyLevel, harnesses []ty
 	if agent == claudeCodeHarness || slices.ContainsFunc(harnesses, func(h types.RunHarness) bool { return h.Harness == claudeCodeHarness }) {
 		withRules, err := agentpolicy.WithToolRules(d.content, attended)
 		if err != nil {
-			return agentPolicyDoc{}, agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings: " + err.Error())
+			// The error quotes the member's own tool names and a parser's text, so the refusal is a fixed sentence and
+			// agentPolicyAuditError logs the cause.
+			return agentPolicyDoc{}, fmt.Errorf("%w: %v", agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings"), err)
 		}
 		if !bytes.Equal(withRules, d.content) {
 			d.path, d.content, d.ok, d.harness = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true, claudeCodeHarness
@@ -265,6 +268,7 @@ type managedSettingsRun struct {
 	locked    bool
 	class     types.ConfinementClass
 	place     runPlacement
+	comps     runComponents
 }
 
 // managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
@@ -293,7 +297,7 @@ func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, f manage
 	hold := holdLane(interactive, req.ToolApprovals, req.TaskMode)
 	locked := f.locked
 	spec, harnessRules := applyHarnessToolRules(f.spec, req.Tools, toolLaneDefault(*req))
-	attended := dispatchParams{Interactive: interactive, Policy: spec, HarnessToolRules: harnessRules}.attendedToolRules()
+	attended := dispatchParams{Interactive: interactive, Policy: spec, HarnessToolRules: harnessRules, Components: f.comps.dispatch()}.attendedToolRules()
 	doc, err := agentPolicyDocument(req.Agent, f.level, f.harnesses, hold, locked, attended)
 	if err != nil || !doc.ok {
 		return nil

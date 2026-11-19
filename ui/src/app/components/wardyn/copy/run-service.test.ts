@@ -6,7 +6,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agoText, serviceBadge, serviceReviewLine, SERVICE_FORM, SERVICE_PANEL, SERVICE_PAUSE_WARNING } from "./run-service";
+import {
+  agoText, serviceBadge, serviceHealthRenews, serviceReviewLine, worseHealth, SERVICE_FORM, SERVICE_PANEL, SERVICE_PAUSE_WARNING,
+  SERVICE_STATUS_STALE_MS, SERVICE_SUPERVISOR_GRACE_MS,
+} from "./run-service";
 
 // The approved mocks (r15 T1-a, T1-b, T1-c): the strings here are the canon, spelled out so a reword fails.
 describe("service canon strings", () => {
@@ -25,6 +28,9 @@ describe("service canon strings", () => {
       SECONDS: "seconds",
       FAILURES_LABEL: "Unhealthy after",
       FAILED_CHECKS: "failed checks in a row",
+      PROBE_LABEL: "Also check it from Wardyn",
+      PROBE_HELP: "Every minute Wardyn asks the port itself instead of only trusting the sandbox's report. It reaches the port through the sandbox, so it is not a check from the network outside. The lease is renewed only while both say the service is healthy or starting.",
+      PROBE_NEEDS_PORT: "Name a port above to turn this on.",
     });
   });
 
@@ -89,6 +95,115 @@ describe("serviceBadge", () => {
 
   it("reads a health word it does not know as unknown, never healthy", () => {
     expect(serviceBadge({ state: "RUNNING", service: { restart: "never" }, service_status: { health: "weird" as "unknown", restarts: 0, observed_at: at } })?.word).toBe("Health unknown");
+  });
+});
+
+// Approved board PROBE-1 with the lead's and the joint verdict's wording: Wardyn's own check of the port.
+describe("Wardyn's check strings", () => {
+  it("New Run, the Review part, the rows, the findings, the notes, the lease and the footnote", () => {
+    expect(SERVICE_FORM.PROBE_LABEL).toBe("Also check it from Wardyn");
+    expect(SERVICE_FORM.PROBE_HELP).toBe(
+      "Every minute Wardyn asks the port itself instead of only trusting the sandbox's report. It reaches the port through the sandbox, so it is not a check from the network outside. The lease is renewed only while both say the service is healthy or starting.",
+    );
+    expect(SERVICE_FORM.PROBE_NEEDS_PORT).toBe("Name a port above to turn this on.");
+    const T = SERVICE_PANEL;
+    expect([T.SANDBOX_SAYS, T.PROBE]).toEqual(["Sandbox says", "Wardyn's check"]);
+    expect(T.PROBE_HTTP("/healthz", 503)).toBe("GET /healthz answered 503.");
+    expect(T.PROBE_TCP(8080)).toBe("Port 8080 accepted a connection.");
+    expect(T.PROBE_REFUSED(8080)).toBe("Port 8080 refused the connection.");
+    expect(T.PROBE_TIMEOUT).toBe("No answer within 5 s.");
+    expect(T.PROBE_BAD_ANSWER).toBe("The answer was not an HTTP status line Wardyn could read.");
+    expect(T.PROBE_FIRST_FAIL("GET /healthz answered 503.", 3)).toBe("The last check failed: GET /healthz answered 503. Unhealthy after 3 in a row.");
+    expect(T.PAUSED).toBe("Not checked while the run is paused.");
+    expect(T.PROBE_NONE_YET).toBe("No result of Wardyn's check has been received yet.");
+    expect(T.DISAGREE_PROBE_FAILS(8080)).toBe("The sandbox says the service is healthy, but Wardyn's check of port 8080 failed. The lease is not renewed while the two disagree.");
+    expect(T.DISAGREE_SANDBOX_FAILS(8080)).toBe("The sandbox says the service is unhealthy, but port 8080 answers Wardyn's check. The lease is not renewed while the two disagree.");
+    expect(T.LEASE_BOTH("Fri 14:20")).toBe("Renewed while both checks say healthy or starting · ends Fri 14:20 if renewal stops");
+    expect(T.LEASE_NOT_NOW("Fri 14:20")).toBe("Not renewed now · ends Fri 14:20");
+    expect(T.FOOTNOTE_PROBE).toBe(
+      "Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.",
+    );
+    const health = { path: "/healthz", interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const };
+    expect(serviceReviewLine({ restart: "on_failure", port: 8080, health })).toBe(
+      "Service · restarts when it fails · checks port 8080 /healthz every 15 s · Wardyn also checks it every minute",
+    );
+  });
+
+  it("the grace and staleness are Go's", () => {
+    const health = readFileSync(resolve(process.cwd(), "../internal/api/run_service_health.go"), "utf8");
+    const lease = readFileSync(resolve(process.cwd(), "../internal/api/run_service_lease.go"), "utf8");
+    expect(health).toMatch(/serviceSupervisorGrace = 10 \* time\.Minute/);
+    expect(health).toMatch(/serviceStatusRefresh = 5 \* time\.Minute/);
+    expect(lease).toMatch(/const serviceStatusStale = 3 \* serviceStatusRefresh/);
+    expect([SERVICE_SUPERVISOR_GRACE_MS, SERVICE_STATUS_STALE_MS]).toEqual([10 * 60_000, 15 * 60_000]);
+  });
+});
+
+describe("worseHealth: Go's WorseServiceHealth", () => {
+  it("is the worse of every pair, worst first: unhealthy, unknown, starting, healthy", () => {
+    const order = ["unhealthy", "unknown", "starting", "healthy"] as const;
+    order.forEach((a, i) => order.forEach((b, j) => expect(worseHealth(a, b)).toBe(order[Math.min(i, j)])));
+    expect(worseHealth("healthy", undefined)).toBe("healthy");
+    expect(worseHealth("weird", "healthy")).toBe("unknown");
+    expect(worseHealth("starting", "weird")).toBe("unknown");
+  });
+
+  it("the chip shows the worse of the sandbox's reading and Wardyn's check", () => {
+    const at = new Date().toISOString();
+    const chip = (health: "healthy" | "unhealthy", probe: "healthy" | "unhealthy" | "unknown") =>
+      serviceBadge({ state: "RUNNING", service: { restart: "on_failure" }, service_status: { health, restarts: 0, observed_at: at, probe: { health: probe, failures: 0, observed_at: at } } })?.word;
+    expect(chip("healthy", "unhealthy")).toBe("Unhealthy");
+    expect(chip("unhealthy", "healthy")).toBe("Unhealthy");
+    expect(chip("healthy", "unknown")).toBe("Health unknown");
+    expect(chip("healthy", "healthy")).toBe("Healthy");
+  });
+
+  it("counts a missing check reading only for a service that opted in: Starting inside the grace, unknown after it", () => {
+    const NOW = Date.now();
+    const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+    const probed = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const run = (service: typeof probed | { restart: "on_failure" }, startedAgo: number, withStatus = true) => ({
+      state: "RUNNING", service, created_at: at(startedAgo), admitted_at: at(startedAgo),
+      service_status: withStatus ? { health: "healthy" as const, restarts: 0, observed_at: at(0) } : undefined,
+    });
+    expect(serviceBadge(run(probed, 60_000), NOW)?.word).toBe("Starting");
+    expect(serviceBadge(run(probed, SERVICE_SUPERVISOR_GRACE_MS + 1000), NOW)?.word).toBe("Health unknown");
+    expect(serviceBadge(run(probed, SERVICE_SUPERVISOR_GRACE_MS + 1000, false), NOW)?.word).toBe("Health unknown");
+    expect(serviceBadge(run({ restart: "on_failure" }, SERVICE_SUPERVISOR_GRACE_MS + 1000), NOW)?.word).toBe("Healthy");
+  });
+});
+
+// The lease line's "Not renewed now" comes from this rule alone, Go's renewableServiceHealth over the served readings.
+describe("serviceHealthRenews", () => {
+  const NOW = Date.now();
+  const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+  const states = ["starting", "healthy", "unhealthy", "unknown"] as const;
+  const renews = (h: string) => h === "starting" || h === "healthy";
+  const run = (over: { probe?: boolean; status?: object; startedAgo?: number }) => ({
+    created_at: iso((over.startedAgo ?? 60_000) + 3_600_000),
+    admitted_at: iso(over.startedAgo ?? 60_000),
+    service: { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, ...(over.probe !== false && { probe: "control_plane" as const }) } },
+    service_status: over.status as Parameters<typeof serviceHealthRenews>[0]["service_status"],
+  });
+
+  it("needs both readings starting or healthy with the check on, and the sandbox's alone with it off", () => {
+    for (const sandbox of states)
+      for (const probe of states) {
+        const status = { health: sandbox, restarts: 0, observed_at: iso(0), probe: { health: probe, failures: 0, observed_at: iso(60_000) } };
+        expect(serviceHealthRenews(run({ status }), NOW)).toBe(renews(sandbox) && renews(probe));
+        expect(serviceHealthRenews(run({ status, probe: false }), NOW)).toBe(renews(sandbox));
+      }
+  });
+
+  it("reads a missing check as starting inside the grace and unknown after it, and a stale one as unknown", () => {
+    const sandbox = { health: "healthy", restarts: 0, observed_at: iso(0) };
+    expect(serviceHealthRenews(run({ status: sandbox }), NOW)).toBe(true);
+    expect(serviceHealthRenews(run({ status: sandbox, startedAgo: SERVICE_SUPERVISOR_GRACE_MS + 1000 }), NOW)).toBe(false);
+    expect(serviceHealthRenews(run({ status: undefined }), NOW)).toBe(true);
+    const stale = { ...sandbox, probe: { health: "healthy", failures: 0, observed_at: iso(SERVICE_STATUS_STALE_MS + 1000) } };
+    expect(serviceHealthRenews(run({ status: stale, startedAgo: 3_600_000 }), NOW)).toBe(false);
+    const atMark = { ...sandbox, probe: { health: "healthy", failures: 0, observed_at: iso(SERVICE_STATUS_STALE_MS) } };
+    expect(serviceHealthRenews(run({ status: atMark, startedAgo: 3_600_000 }), NOW)).toBe(true);
   });
 });
 

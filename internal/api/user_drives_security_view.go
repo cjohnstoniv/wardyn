@@ -13,7 +13,10 @@ import "github.com/cjohnstoniv/wardyn/internal/types"
 //
 // Withheld from a security admin: a drive's host_root and storage_class (the
 // host and the cluster), its owner subject and its delete tombstone, and the
-// two deployment facts about host roots and the runner target.
+// two deployment facts about host roots and the runner target. Shared: whether a
+// drive is a team drive, whether its group allocation lets members write it, whether its folder lives on one Docker host, and the
+// deployment's team_drives switch, which the console needs to show a drive as it
+// resolves.
 
 // securityAdminDrive copies the fields of a drive a security admin may read.
 func securityAdminDrive(d types.UserDrive) types.UserDrive {
@@ -29,6 +32,7 @@ func securityAdminDrive(d types.UserDrive) types.UserDrive {
 		CreatedAt:    d.CreatedAt,
 		UpdatedAt:    d.UpdatedAt,
 		CreatedBy:    d.CreatedBy,
+		Team:         d.Team,
 	}
 }
 
@@ -48,6 +52,7 @@ func securityAdminGrant(g types.UserDriveGrant) types.UserDriveGrant {
 		SizeMiBOverride:  g.SizeMiBOverride,
 		WritableOverride: writable,
 		HomeOverride:     g.HomeOverride,
+		MembersCanWrite:  g.MembersCanWrite,
 		Enabled:          g.Enabled,
 		CreatedAt:        g.CreatedAt,
 		CreatedBy:        g.CreatedBy,
@@ -61,10 +66,11 @@ func securityAdminDrivesView(in userDrivesResponse) userDrivesResponse {
 		Drives:     make([]types.UserDriveListItem, len(in.Drives)),
 		Grants:     make([]types.UserDriveGrant, len(in.Grants)),
 		Disabled:   in.Disabled,
+		TeamDrives: in.TeamDrives,
 		GrantTotal: in.GrantTotal,
 	}
 	for i, d := range in.Drives {
-		out.Drives[i] = types.UserDriveListItem{UserDrive: securityAdminDrive(d.UserDrive), GrantCount: d.GrantCount}
+		out.Drives[i] = types.UserDriveListItem{UserDrive: securityAdminDrive(d.UserDrive), GrantCount: d.GrantCount, SingleHost: d.SingleHost}
 	}
 	for i, g := range in.Grants {
 		out.Grants[i] = securityAdminGrant(g)

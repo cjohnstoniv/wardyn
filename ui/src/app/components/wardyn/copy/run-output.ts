@@ -60,9 +60,8 @@ export const RUN_OUTPUT = {
   interactiveLink: "Open the Recording tab →",
   notCapturedTitle: "Output isn't captured for Kubernetes runs yet",
   notCapturedDesc: "The run's recording has it.",
-  maskTitle: "Live output isn't shown on this server",
-  maskUnavailable:
-    "This server can't show the live output safely right now. It shows here once the run ends.",
+  maskTitle: "Output held back",
+  maskUnavailable: "This server can't confirm this run's secrets are masked right now, so it isn't showing the output.",
 } as const;
 
 // F2MULTI-3: the Agents panel and the output filter on a run with two or more agents.

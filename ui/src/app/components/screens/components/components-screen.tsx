@@ -36,7 +36,7 @@ import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { ComponentEditor } from "./component-editor";
 
 // What the row says about who may use it. Read per row, because the restriction
@@ -66,6 +66,7 @@ function AvailabilityChip({ id }: { id: string }) {
 export function ComponentsScreen() {
   const [rows, setRows] = React.useState<Component[]>([]);
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // null = closed; {component: null} = a new one.
   const [editing, setEditing] = React.useState<{ component: Component | null } | null>(null);
   // One row's "Available to" open at a time.
@@ -80,7 +81,10 @@ export function ComponentsScreen() {
         setRows(r);
         setStatus("ready");
       })
-      .catch((e) => setStatus(loadFailStatus(e)));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus(loadFailStatus(e));
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -128,7 +132,7 @@ export function ComponentsScreen() {
           <OperatorOnlyHint />
         </div>
       )}
-      {status === "error" && <ErrorState onRetry={load} />}
+      {status === "error" && <ErrorState message={loadMessage} onRetry={load} />}
       {empty && (
         <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
           <EmptyState
@@ -149,7 +153,9 @@ export function ComponentsScreen() {
                 <TableHead>{T.COL_REACHES}</TableHead>
                 <TableHead>{T.COL_SECRETS}</TableHead>
                 <TableHead>{T.COL_AVAILABLE}</TableHead>
-                <TableHead className="w-[1%]" />
+                <TableHead className="w-[1%]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -204,10 +210,16 @@ export function ComponentsScreen() {
       {editing && (
         <ComponentEditor
           component={editing.component}
-          onClose={() => setEditing(null)}
-          onSaved={(id, created) => {
+          onClose={() => {
+            setEditing(null);
+            // A save refused because the row changed is followed by a close: the next open reads the saved row.
+            load();
+          }}
+          onSaved={(id, created, warnings) => {
             setEditing(null);
             toast.success(T.SAVED_TOAST);
+            // The save stands; a warning tells the admin what to fix (a host that serves a model).
+            for (const warning of warnings) toast.warning(warning, { duration: 15000 });
             // A new component is available to nobody: open the control that fixes that.
             if (created) setOpenId(id);
             load();

@@ -16,6 +16,8 @@ import { LIMIT_FIELDS } from "./profile-overlay";
 const EXEMPT: Record<string, string> = {
   // The rubric has its own section (profile-rubric.tsx), and seedOverlayLimits moves it explicitly.
   autonomy_rubric: "own Autonomy rubric section; seeded separately",
+  // The console edits no confinement floor; seedOverlayLimits moves them whole.
+  confinement_floors: "no console row; seeded separately",
 };
 
 function repoRoot(): string {

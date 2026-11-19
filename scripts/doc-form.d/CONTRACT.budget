@@ -1,0 +1,2 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the new page, so growth fails.
+docs/RUNTIME-CONTRACT.md=2069 share=10 # 2069 measured (+5: the revive-after-reboot case names its job, go (docker)); earlier: 2064 measured: the runtime contract, one table per term group with a column per runtime, the swap proof and how to read a cell

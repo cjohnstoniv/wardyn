@@ -24,4 +24,19 @@ describe("TakeoverCard", () => {
     expect(within(card).getByText("The agent is stuck on a sign-in prompt.")).toBeInTheDocument();
     expect(within(card).queryByText("Pending")).not.toBeInTheDocument();
   });
+
+  it("offers no Take over on a background run, and keeps Decline", () => {
+    const item = {
+      id: "apr_t2",
+      run_id: "run_2",
+      kind: "human_takeover",
+      requested_scope: { reason: "Stuck." },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+    } as ApprovalRequest;
+    render(<TakeoverCard item={item} busy={false} onTakeOver={vi.fn()} onDecline={vi.fn()} canTakeOver={false} />);
+    const card = screen.getByTestId("takeover-card");
+    expect(within(card).queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Decline" })).toBeInTheDocument();
+  });
 });

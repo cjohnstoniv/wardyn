@@ -548,3 +548,11 @@ export const DRIVE_RUN = {
   RAIL_LABEL: "Drive",
   RAIL_VALUE: (name: string, mode: string) => `"${name}" · ${mode}`,
 } as const;
+
+// Not in the prompt doc (user-drives-copy.test.ts holds DRIVES to it): the team-drive switch could not be read, so a
+// drive the server marks as team shows no access, cleanup or allocation claim.
+export const DRIVES_TEAM_UNKNOWN = {
+  CELL: "Not shown",
+  NOTE: "Couldn't check whether team drives are on, so team drives show no access, cleanup or allocation details.",
+  RETRY: "Try again",
+} as const;

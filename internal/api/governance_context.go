@@ -27,10 +27,20 @@ import (
 // contextChoice is what a request says about its context: RunIn names one of the person's units to
 // run in (Nil: none), and OwningUnits are the units owning the run's workspaces, each pinning the
 // context to itself or a unit below it (none: no pin). A run can attach several workspaces, so it is a
-// list; every pin holds, in order.
+// list; every pin holds, in order. StrictPins are the pins with no ancestor mapping (a strict
+// workspace pin, an organisation component's pin): a candidate is kept only when its own unit is the
+// pin or below it. They are judged first, on the person's own units (strictPinCandidates).
 type contextChoice struct {
 	RunIn       uuid.UUID
 	OwningUnits []uuid.UUID
+	StrictPins  []contextPin
+}
+
+// contextPin is one strict pin: the pinned unit, and the organisation component's name when the pin
+// is a component's (empty for a strict workspace pin), for the refusal's text.
+type contextPin struct {
+	Unit      uuid.UUID `json:"unit_id"`
+	Component string    `json:"component,omitempty"`
 }
 
 // key is the choice as the per-request memo keys it: two choices in one request are two resolves.
@@ -39,6 +49,9 @@ func (c contextChoice) key() string {
 	b.WriteString(c.RunIn.String())
 	for _, o := range c.OwningUnits {
 		b.WriteString("/" + o.String())
+	}
+	for _, p := range c.StrictPins {
+		b.WriteString("/s:" + p.Unit.String())
 	}
 	return b.String()
 }
@@ -88,11 +101,11 @@ func (s *Server) contextChoiceForRequest(ctx context.Context, req createRunReque
 	if err != nil {
 		return contextChoice{}, err
 	}
-	owning, err := s.owningUnitFromRequest(ctx, req)
+	owning, strict, err := s.owningUnitFromRequest(ctx, req)
 	if err != nil {
 		return contextChoice{}, err
 	}
-	return contextChoice{RunIn: runIn, OwningUnits: owning}, nil
+	return contextChoice{RunIn: runIn, OwningUnits: owning, StrictPins: strict}, nil
 }
 
 // runInFromRequest is the unit the request names to run in: Nil for none, else the id it gives, else
@@ -146,25 +159,68 @@ func (s *Server) stampContextChoice(w http.ResponseWriter, r *http.Request, req 
 	return r.WithContext(withContextChoice(r.Context(), c)), true
 }
 
-// owningUnitFromRequest is the owning units of the request's attached workspaces, in request order:
-// each workspace's pin (workspaces.owning_unit_id), none for an unpinned one. pinCandidates applies
-// them (every pin holds, the deepest wins, DESIGN-TREE Q8). A store without workspaces has no pins.
-func (s *Server) owningUnitFromRequest(ctx context.Context, req createRunRequest) ([]uuid.UUID, error) {
-	ids := attachedWorkspaceIDs(req)
-	if len(ids) == 0 || s.cfg.Store == nil {
-		return nil, nil
+// owningUnitFromRequest is the request's pins, in request order: each attached workspace's pin
+// (workspaces.owning_unit_id), none for an unpinned one, plain or strict as the workspace says, then
+// each attached organisation component's pin (componentPins), always strict. pinCandidates applies the
+// plain ones (every pin holds, the deepest wins, DESIGN-TREE Q8), strictPinCandidates the strict ones.
+// A store without workspaces or components has no pins.
+func (s *Server) owningUnitFromRequest(ctx context.Context, req createRunRequest) (plain []uuid.UUID, strict []contextPin, err error) {
+	if s.cfg.Store == nil {
+		return nil, nil, nil
 	}
-	var pins []uuid.UUID
-	for _, id := range ids {
+	for _, id := range attachedWorkspaceIDs(req) {
 		ws, err := s.cfg.Store.GetWorkspace(ctx, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue // the launch refuses an unknown workspace on its own
 		}
 		if err != nil {
+			return nil, nil, err
+		}
+		switch {
+		case ws.OwningUnitID == nil:
+		case ws.OwningUnitStrict:
+			strict = append(strict, contextPin{Unit: *ws.OwningUnitID})
+		default:
+			plain = append(plain, *ws.OwningUnitID)
+		}
+	}
+	comps, err := s.componentPins(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return plain, append(strict, comps...), nil
+}
+
+// componentPins is the pins of the organisation components the request attaches by id. A pin counts
+// only for a caller the component is granted to: an ungranted caller gets the attach door's refusal
+// and never learns the pin's unit. An unknown id is skipped (the attach door refuses it); a read or
+// grant error is returned, never read as "no pin".
+func (s *Server) componentPins(ctx context.Context, req createRunRequest) ([]contextPin, error) {
+	cs, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	var pins []contextPin
+	for _, ref := range req.Components {
+		if ref.ID == nil {
+			continue
+		}
+		row, err := cs.GetComponent(ctx, *ref.ID, "")
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
 			return nil, err
 		}
-		if ws.OwningUnitID != nil {
-			pins = append(pins, *ws.OwningUnitID)
+		if row.OwningUnitID == nil {
+			continue
+		}
+		granted, err := s.capSeamAllowed(ctx, capComponent, ref.ID.String())
+		if err != nil {
+			return nil, err
+		}
+		if granted {
+			pins = append(pins, contextPin{Unit: *row.OwningUnitID, Component: row.Name})
 		}
 	}
 	return pins, nil
@@ -174,12 +230,15 @@ func (s *Server) owningUnitFromRequest(ctx context.Context, req createRunRequest
 // person is not a member of are refused alike, so the answer discloses nothing.
 var errUnitNotAContext = errors.New("api: the unit to run in is not one of the person's contexts")
 
-// errWorkspaceUnitNotYours is a workspace pin no context of the person's can satisfy: no unit of
-// theirs is the owning unit, above it or below it.
+// errWorkspaceUnitNotYours is a pin no context of the person's can satisfy: for a plain workspace pin,
+// no unit of theirs is the owning unit, above it or below it; for a strict pin (strict, or a
+// component's, named by component), none is the pinned unit or below it.
 type errWorkspaceUnitNotYours struct {
-	Unit    uuid.UUID
-	name    string
-	contact *policyref.Contact
+	Unit      uuid.UUID
+	name      string
+	contact   *policyref.Contact
+	strict    bool
+	component string
 }
 
 func (e *errWorkspaceUnitNotYours) Error() string {
@@ -189,6 +248,8 @@ func (e *errWorkspaceUnitNotYours) Error() string {
 const (
 	unitNotAContextMsg      = "The unit you asked to run in is not one of your units — name a unit you are a member of, or leave it out to run in your home unit"
 	workspaceUnitNotYoursFm = "This workspace belongs to the unit %q, and you are not a member of it or of a unit above or below it — ask its contact for access, or launch without the workspace"
+	workspaceUnitStrictFm   = "This workspace belongs to the unit %q, and only runs in that unit or a unit below it may use it — ask its contact for access, or launch without the workspace"
+	componentUnitPinnedFm   = "The component %q may be used only by runs in the unit %q or a unit below it — ask its contact for access, or launch without the component"
 )
 
 // contextRunRefusal maps a context choice the person cannot make to its 403, or nil for any other
@@ -199,8 +260,15 @@ func contextRunRefusal(err error) *runRefusal {
 	}
 	var notYours *errWorkspaceUnitNotYours
 	if errors.As(err, &notYours) {
-		return &runRefusal{status: http.StatusForbidden, body: errorBody{Error: fmt.Sprintf(workspaceUnitNotYoursFm, notYours.name),
-			Reason: reasonWorkspaceUnitNotYours, Policy: policyref.Layered(policyref.Project(policyref.SourceUnit, notYours.name, notYours.contact))}}
+		reason, text := reasonWorkspaceUnitNotYours, fmt.Sprintf(workspaceUnitNotYoursFm, notYours.name)
+		switch {
+		case notYours.component != "":
+			reason, text = reasonComponentUnitPinned, fmt.Sprintf(componentUnitPinnedFm, notYours.component, notYours.name)
+		case notYours.strict:
+			text = fmt.Sprintf(workspaceUnitStrictFm, notYours.name)
+		}
+		return &runRefusal{status: http.StatusForbidden, body: errorBody{Error: text,
+			Reason: reason, Policy: policyref.Layered(policyref.Project(policyref.SourceUnit, notYours.name, notYours.contact))}}
 	}
 	return nil
 }
@@ -265,7 +333,11 @@ func (s *Server) contextCeilingBelowRestrictions(ctx context.Context, q contextQ
 		return deployment, nil
 	}
 	p, err := s.composeContext(ctx, pick.unit)
-	return s.ceilingFromUnit(ctx, p, err, deployment)
+	c, err := s.ceilingFromUnit(ctx, p, err, deployment)
+	if err == nil && pick.row != nil {
+		c.ContextExpiresAt = pick.row.Membership.ExpiresAt
+	}
+	return c, err
 }
 
 // composeContext composes unit's path. A unit with no parent is its own path and costs no read.
@@ -374,28 +446,36 @@ func soundRow(m *store.MembershipMatch) bool {
 }
 
 // pickContext is §4.1 steps 3-5 over the active rows, in precedence order. The candidates are the
-// rows' units, or Default when there are none. Each workspace pin keeps the candidates on its path,
-// mapped to the deeper of the two, and drops the rest. Then RunIn picks (it must be a candidate),
+// rows' units, or Default when there are none; an elevation (a row with an end) is a candidate only when
+// RunIn names its unit, so a run never lands on one unasked. Each strict pin keeps the candidates at or below it,
+// then each plain workspace pin keeps the candidates on its path, mapped to the deeper of the two, and
+// drops the rest (pinnedCandidates). Then RunIn picks (it must be a candidate),
 // else the only candidate, else the precedence winner among home rows, else among all. sound
 // reports whether a hidden group membership could not have changed the answer (selectContext).
 func (s *Server) pickContext(ctx context.Context, active []store.MembershipMatch, choice contextChoice) (contextPick, bool, error) {
 	cands := make([]contextPick, 0, max(1, len(active)))
 	for i := range active {
+		if m := active[i].Membership; m.ExpiresAt != nil && m.UnitID != choice.RunIn {
+			continue
+		}
 		cands = append(cands, contextPick{unit: active[i].Unit, row: &active[i]})
 	}
 	if len(cands) == 0 {
 		cands = append(cands, contextPick{unit: types.GovernanceUnit{ID: store.DefaultUnitID, Kind: types.UnitKindDefault}})
 	}
-	if len(choice.OwningUnits) > 0 {
+	if len(choice.StrictPins) > 0 || len(choice.OwningUnits) > 0 {
 		var err error
-		if cands, err = s.pinCandidates(ctx, cands, choice.OwningUnits); err != nil {
+		if cands, err = s.pinnedCandidates(ctx, cands, choice); err != nil {
 			return contextPick{}, false, err
 		}
 	}
 	if choice.RunIn != uuid.Nil {
-		for _, c := range cands {
-			if c.unit.ID == choice.RunIn {
-				return c, soundRow(c.row), nil
+		// A permanent row in the unit first, then an elevation there.
+		for _, expiring := range []bool{false, true} {
+			for _, c := range cands {
+				if c.unit.ID == choice.RunIn && (c.row != nil && c.row.Membership.ExpiresAt != nil) == expiring {
+					return c, soundRow(c.row), nil
+				}
 			}
 		}
 		return contextPick{}, false, errUnitNotAContext
@@ -422,15 +502,48 @@ func distinctUnits(cands []contextPick) int {
 	return len(seen)
 }
 
-// pinCandidates is step 4 for each pin in order: a candidate on the pin's path maps to the deeper
-// of the two (an ancestor of the pin to the pin, the pin or a unit below it to itself), and an
-// off-path candidate drops out. The first pin that leaves none refuses.
-func (s *Server) pinCandidates(ctx context.Context, cands []contextPick, pins []uuid.UUID) ([]contextPick, error) {
+// pinnedCandidates is step 4 over the units read once: the strict pins first, on the person's own
+// units (strictPinCandidates), then the plain ones (pinCandidates). A plain pin only moves a candidate
+// deeper, so what it keeps stays at or below every strict pin; run the other way round, a plain pin
+// would map a parent-unit candidate down to a strict pin's unit and let it pass.
+func (s *Server) pinnedCandidates(ctx context.Context, cands []contextPick, choice contextChoice) ([]contextPick, error) {
 	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
 	if err != nil {
 		return nil, err
 	}
 	byID := unitsByID(rows)
+	if cands, err = strictPinCandidates(byID, cands, choice.StrictPins); err != nil {
+		return nil, err
+	}
+	return pinCandidates(byID, cands, choice.OwningUnits)
+}
+
+// strictPinCandidates keeps, for each strict pin in order, only the candidates whose own unit is the
+// pin or a unit below it, with no mapping. An unknown pin, or one that leaves none, refuses.
+func strictPinCandidates(byID map[uuid.UUID]types.GovernanceUnit, cands []contextPick, pins []contextPin) ([]contextPick, error) {
+	for _, p := range pins {
+		pin, ok := byID[p.Unit]
+		if !ok {
+			return nil, &errWorkspaceUnitNotYours{Unit: p.Unit, strict: true, component: p.Component}
+		}
+		var kept []contextPick
+		for _, c := range cands {
+			if onPath(byID, c.unit.ID, p.Unit) {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, &errWorkspaceUnitNotYours{Unit: p.Unit, name: pin.Name, contact: pin.Contact, strict: true, component: p.Component}
+		}
+		cands = kept
+	}
+	return cands, nil
+}
+
+// pinCandidates is step 4 for each pin in order: a candidate on the pin's path maps to the deeper
+// of the two (an ancestor of the pin to the pin, the pin or a unit below it to itself), and an
+// off-path candidate drops out. The first pin that leaves none refuses.
+func pinCandidates(byID map[uuid.UUID]types.GovernanceUnit, cands []contextPick, pins []uuid.UUID) ([]contextPick, error) {
 	for _, o := range pins {
 		pin, ok := byID[o]
 		if !ok {

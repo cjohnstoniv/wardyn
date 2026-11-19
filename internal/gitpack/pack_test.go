@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -774,6 +775,53 @@ func TestPackSettle_HistoryTheReceiverHoldsIntroducesNothing(t *testing.T) {
 			t.Errorf("asked about %v, want only %v: nothing above a new commit is held", asked, want)
 		}
 	})
+}
+
+// TestPackReaches_EachCommandOnlyItsOwnHistory: Bases is one answer for the whole
+// pack, so it cannot say which ref builds on which commit. Reaches answers per
+// command, from the commits the pack carries and the parents they name, and stops
+// where the pack does: a commit's history past one the pack lacks is not claimed.
+func TestPackReaches_EachCommandOnlyItsOwnHistory(t *testing.T) {
+	r := newRepo(t)
+	r.write("a.txt", "a\n", 0o644)
+	a := r.commit("a")
+	r.write("a.txt", "b\n", 0o644)
+	b := r.commit("b")
+	r.push("HEAD:refs/heads/main")
+	r.git("checkout", "-q", "--detach", a)
+	r.write("c.txt", "c\n", 0o644)
+	c := r.commit("c")
+	r.git("checkout", "-q", "--detach", b)
+	r.write("d.txt", "d\n", 0o644)
+	d := r.commit("d")
+	r.git("push", "-q", "--receive-pack="+r.script, r.remote, c+":refs/heads/c", d+":refs/heads/d")
+	body, err := os.ReadFile(r.bodyAt)
+	if err != nil {
+		t.Fatalf("read captured body: %v", err)
+	}
+	res, err := Inspect(body)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if want := slices.Sorted(slices.Values([]string{a, b})); !slices.Equal(res.Bases, want) {
+		t.Fatalf("Bases = %v, want both refs' parents %v", res.Bases, want)
+	}
+	want := map[string][]string{"refs/heads/c": {a, c}, "refs/heads/d": {b, d}}
+	named, whole := res.Reaches()
+	if !whole || len(named) != len(res.Commands) {
+		t.Fatalf("Reaches = %d sets, whole %v; want %d, whole", len(named), whole, len(res.Commands))
+	}
+	for i, cmd := range res.Commands {
+		if got := slices.Sorted(maps.Keys(named[i])); !slices.Equal(got, slices.Sorted(slices.Values(want[cmd.Ref]))) {
+			t.Errorf("%s reaches %v, want %v", cmd.Ref, got, want[cmd.Ref])
+		}
+	}
+	prev := maxAncestrySteps
+	t.Cleanup(func() { maxAncestrySteps = prev })
+	maxAncestrySteps = 1
+	if _, whole := res.Reaches(); whole {
+		t.Error("Reaches followed more parent edges than maxAncestrySteps and still said whole")
+	}
 }
 
 // TestPackChange_OpaqueIsEverythingButARegularFile: git checks out a mode it

@@ -44,15 +44,17 @@ import { HttpError } from "../../lib/api/core";
 import type { CredentialInventory } from "../../lib/api/credentials";
 import type { SetupStatus } from "../../lib/types";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { STALE_NOTE } from "../wardyn/states";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { INVENTORY, ERASE, ERASE_DATA, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
+import { STATES } from "../wardyn/states";
 
-function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
-  const { status = null, operator = true, securityOperator = true } = opts;
+function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean; path?: string } = {}) {
+  const { status = null, operator = true, securityOperator = true, path = "/" } = opts;
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <ModelAccessProvider status={status} onRefresh={() => {}}>
         <OperatorProvider operator={operator} securityOperator={securityOperator} operatorResolved principal="admin@corp.example">
           <CredentialsScreen />
@@ -104,6 +106,17 @@ describe("the inventory", () => {
     expect(screen.getByRole("button", { name: "Corp gateway · 1" })).toBeInTheDocument();
   });
 
+  // The shared table never wraps a cell. Left that way, an email plus an SSO subject id pushed the Erase column
+  // off the right edge of the table.
+  it("lets the person cell wrap and carry the full identity in its title, so Erase stays reachable", async () => {
+    listInventoryMock.mockResolvedValue(inventory([{ ...aliceRow, email: "alice.longname@subsidiary.contoso.com" }], { "corp-gw": 1 }));
+    renderScreen();
+    const cell = (await screen.findByText("alice.longname@subsidiary.contoso.com")).closest("td")!;
+    expect(cell.className).toContain("whitespace-normal");
+    expect(cell.className).not.toContain("whitespace-nowrap");
+    expect(cell).toHaveAttribute("title", "alice.longname@subsidiary.contoso.com sub-alice");
+  });
+
   it("no one has stored a credential yet", async () => {
     listInventoryMock.mockResolvedValue(inventory([], { "corp-gw": 0 }));
     renderScreen();
@@ -125,6 +138,21 @@ describe("the inventory", () => {
     expect(screen.getByText(INVENTORY.NO_META_TITLE)).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("reads the provider filter from the URL, so Back from a row lands on the same filtered list", async () => {
+    const bob = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", provider: "bedrock-prod", provider_name: "Bedrock (prod)" };
+    listInventoryMock.mockResolvedValue(inventory([aliceRow, bob], { "corp-gw": 1, "bedrock-prod": 1 }));
+    renderScreen({ path: "/?provider=bedrock-prod" });
+    expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
+    expect(screen.queryByText("alice@corp.example")).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listInventoryMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a read failure gets the generic error state, with Retry", async () => {
@@ -173,6 +201,7 @@ describe("the inventory", () => {
     renderScreen();
     await screen.findByText("alice@corp.example");
     expect(screen.getByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const cell = (email: string) => screen.getByText(email).closest("tr")!;
     expect(cell("alice@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_GROUP("eng-finance")}`);
     expect(cell("bob@corp.example")).toHaveTextContent(`default · ${KEY_DOMAINS.SOURCE_DEFAULT}`);
@@ -218,6 +247,33 @@ describe("erasing a listed person (design F-5)", () => {
     expect(eraseMock).toHaveBeenCalledWith("sub-alice");
     expect(await screen.findByText("Erased 4 credentials for alice@corp.example.")).toBeInTheDocument();
     expect(screen.getByText(ERASE.DONE_AUDIT)).toBeInTheDocument();
+  });
+
+  it("names the principals the credentials erase left alone", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 1, not_erased: { subjects: ["iss2|alice"], note: "not erased: erase by subject" } });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(await screen.findByText("Erased 1 credential for alice@corp.example.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Not erased: iss2|alice. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says when an Azure DevOps token the credentials erase tried to revoke may still work", async () => {
+    const detail = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked.";
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 1, tokens_revocation_failed: true, detail });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(await screen.findByText("Erased 1 credential for alice@corp.example.")).toBeInTheDocument();
+    expect(screen.getByText(detail)).toBeInTheDocument();
   });
 
   // #2499: Escape or an outside click while the erase runs must not hide the result the admin is waiting for.
@@ -295,13 +351,65 @@ async function openMenuItem(name: string) {
   await userEvent.click(await screen.findByRole("menuitem", { name }));
 }
 
+describe("after an erase the screen re-reads in place", () => {
+  const bobRow = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", provider: "other-gw", provider_name: "Other gateway" };
+
+  async function eraseAlice() {
+    eraseMock.mockResolvedValue({ count: 1 });
+    const aliceCell = (await screen.findByText("alice@corp.example")).closest("tr")!;
+    await userEvent.click(within(aliceCell).getByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await screen.findByText("Erased 1 credential for alice@corp.example.");
+    // The re-read happens when the dialog closes.
+    await userEvent.click(within(screen.getByRole("dialog")).getAllByRole("button", { name: ERASE.CLOSE })[0]);
+  }
+
+  it("falls back to All when the erased person held the last credential of the filtered provider", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Corp gateway · 1" }));
+    expect(screen.queryByText("bob@corp.example")).toBeNull();
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await eraseAlice();
+    expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: INVENTORY.FILTER_ALL }).className).toContain("border-primary");
+  });
+
+  it("a failed re-read keeps the list and shows the stale note, whose Retry reads again", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    listInventoryMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    await eraseAlice();
+    expect(await screen.findByRole("status")).toHaveTextContent(STALE_NOTE);
+    expect(screen.getByText("alice@corp.example")).toBeInTheDocument();
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText("alice@corp.example")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the minted-token section mounted instead of reloading it", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    await waitFor(() => expect(listMintedMock).toHaveBeenCalled());
+    const reads = listMintedMock.mock.calls.length;
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await eraseAlice();
+    await waitFor(() => expect(screen.queryByText("alice@corp.example")).toBeNull());
+    expect(listMintedMock).toHaveBeenCalledTimes(reads);
+  });
+});
+
 describe("erasing someone not listed (design F-5)", () => {
   it("by email or subject: Erase is enabled once something is typed, no second field", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockResolvedValue({ count: 1 });
     renderScreen({ securityOperator: false });
     await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
-    const confirmBtn = screen.getByRole("button", { name: ERASE_DATA.CONFIRM });
+    const confirmBtn = screen.getByRole("button", { name: ERASE.CONFIRM });
     expect(confirmBtn).toBeDisabled();
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "eli@example.com");
     expect(confirmBtn).toBeEnabled();
@@ -319,9 +427,9 @@ describe("erasing someone not listed (design F-5)", () => {
     renderScreen({ securityOperator: false });
     await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "former@example.com");
-    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
     expect(await screen.findByRole("alert")).toHaveTextContent(msg);
-    expect(screen.getByRole("button", { name: ERASE_DATA.CONFIRM })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ERASE.CONFIRM })).toBeInTheDocument();
   });
 });
 
@@ -442,7 +550,7 @@ describe("one erase dialog (#3054)", () => {
     expect(box(dialog, "Credentials")).toBeChecked();
     expect(within(dialog).getByText(ERASE.HINT)).toBeInTheDocument();
     await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "nobody.listed@corp.example");
-    await userEvent.click(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await userEvent.click(within(dialog).getByRole("button", { name: ERASE.CONFIRM }));
     expect(eraseMock).toHaveBeenCalledWith("nobody.listed@corp.example");
     expect(erasePersonMock).not.toHaveBeenCalled();
   });
@@ -562,8 +670,11 @@ describe("tokens an admin created for someone else (#1477)", () => {
     renderScreen();
     const sec = within(await section());
     await userEvent.click(await sec.findByRole("button", { name: "Revoke" }));
-    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke token" }));
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke token" }));
+    // The failure stays in the dialog with the server's sentence, not in a toast.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("boom");
+    expect(toastError).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(sec.getByText("dana@acme.io")).toBeInTheDocument();
   });

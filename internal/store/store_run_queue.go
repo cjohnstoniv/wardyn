@@ -110,7 +110,7 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	if err != nil {
 		return types.AgentRun{}, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if guarded {
 		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return types.AgentRun{}, err
@@ -146,9 +146,13 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	} else {
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
+	stampRunTimes(anchor, r, args)
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
+	}
+	if err := bindRunCreateKey(ctx, tx, created.ID); err != nil {
+		return types.AgentRun{}, err
 	}
 	if keep {
 		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {

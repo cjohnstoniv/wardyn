@@ -35,8 +35,9 @@ export function AddPersonDialog({ open, onOpenChange, onAdded }: { open: boolean
     setBusy(true);
     setError("");
     try {
-      await peopleApi.create(principal.trim(), email.trim());
-      toast.success(`${P.ADD}: ${email.trim() || principal.trim()}`);
+      const created = await peopleApi.create(principal.trim(), email.trim());
+      const who = email.trim() || principal.trim();
+      toast.success(created ? P.ADDED(who) : P.ALREADY_LISTED(who));
       onOpenChange(false);
       onAdded();
     } catch (err) {

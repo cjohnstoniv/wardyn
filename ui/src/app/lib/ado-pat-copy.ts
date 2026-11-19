@@ -84,6 +84,11 @@ export const ADO_PAT = {
   MEMBER_CONNECTED:
     "Tokens are created in your name, one per run, and revoked when it ends. Azure DevOps lists them under Personal access tokens as 'Wardyn run …'.",
   MEMBER_LAST_TOKEN: (created: string, revoked: string) => `Last token: created ${created}, revoked ${revoked}.`,
+  MEMBER_LAST_TOKEN_EXPIRED: (created: string, expired: string) => `Last token: created ${created}, expired ${expired}.`,
+  MEMBER_LAST_TOKEN_NOT_REVOKED: (created: string, expires: string) =>
+    `Last token: created ${created}. Wardyn couldn't revoke it, so it works until ${expires}; revoke it in Azure DevOps under Personal access tokens.`,
+  MEMBER_LAST_TOKEN_UNCONFIRMED: (created: string, expires: string) =>
+    `Last token: created ${created}. Its revoke isn't confirmed; it stops working by ${expires} at the latest.`,
   MEMBER_DISCONNECT: "Disconnect",
   DISCONNECT_TITLE: "Disconnect Azure DevOps?",
   DISCONNECT_BODY: "Disconnecting revokes the tokens of any of your runs in progress. They lose Azure DevOps access.",
@@ -135,7 +140,13 @@ export const ADO_PAT = {
   // and why it ended.
   RUN_TOKEN_LINE_NOTE: (created: string, expires: string, note: string) =>
     `Azure DevOps token: created ${created} · expires ${expires} (${note})`,
-  RUN_TOKEN_NOTE: { renewed: "renewed", access_added: "access added", expired: "expired" },
+  RUN_TOKEN_NOTE: {
+    renewed: "renewed",
+    access_added: "access added",
+    expired: "expired",
+    not_revoked: "not revoked",
+    revoke_pending: "revoke not confirmed",
+  },
   // The reasons the server writes (ado_run_pats.revoke_reason). "expired" is not
   // one: see RUN_TOKEN_NOTE.
   REVOKE_REASON: {
@@ -193,7 +204,8 @@ export const ADO_PAT = {
   OWN_REMOVE_CANCEL: "Cancel",
   OWN_REMOVE_PENDING: "Removing…",
   OWN_REMOVED_TOAST: (org: string) => `Your token for ${org} was removed from Wardyn. It isn't revoked in Azure DevOps.`,
-  OWN_REMOVE_FAILED_TOAST: (org: string) => `Couldn't remove your token for ${org}. It's still stored in Wardyn. Try again.`,
+  OWN_REMOVE_FAILED_TOAST: (org: string) =>
+    `Couldn't confirm your token for ${org} was removed from Wardyn. Reload the page to see whether it's still stored, then try again.`,
   OWN_SERVER_TITLE: "Azure DevOps Server",
   OWN_SERVER_NOTE: "Git only. Azure DevOps Server has no Entra sign-in.",
 

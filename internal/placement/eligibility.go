@@ -65,6 +65,9 @@ type LocalPlan struct {
 	// token is runner_resident only on a person's own runner. "" (unknown)
 	// refuses it.
 	OwnerKind types.RunnerOwnerKind
+	// RequireManagedDevice is the organisation's runners.require_managed_device: a plan judged at a
+	// personal runner is refused (managedDeviceRefusal). Off by default.
+	RequireManagedDevice bool
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -72,10 +75,23 @@ type Refusal struct {
 	Reason Reason
 	Field  string
 	Detail string
+	// named: Detail names what the run carries as the person knows it, so a person reads it without Field.
+	named bool
 }
 
-func (r *Refusal) Error() string                          { return r.Field + ": " + r.Detail }
-func refuse(reason Reason, field, detail string) *Refusal { return &Refusal{reason, field, detail} }
+func (r *Refusal) Error() string { return r.Field + ": " + r.Detail }
+func refuse(reason Reason, field, detail string) *Refusal {
+	return &Refusal{Reason: reason, Field: field, Detail: detail}
+}
+
+// Sentence is the refusal as a person reads it: the detail alone where it names what the run
+// carries, else the field and the detail (Error).
+func (r *Refusal) Sentence() string {
+	if r.named {
+		return r.Detail
+	}
+	return r.Error()
+}
 
 // LocalEligibility classifies the complete resolved plan with the canonical
 // table. It does not select placement. An org-held class is admitted only by a
@@ -85,6 +101,9 @@ func refuse(reason Reason, field, detail string) *Refusal { return &Refusal{reas
 func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 	if fields := Unclassified(); len(fields) != 0 {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementCredential, fields[0], "unclassified dispatch field")
+	}
+	if r := managedDeviceRefusal(p); r != nil {
+		return runner.SandboxSpec{}, r
 	}
 	if p.TrustedOutput {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementTrustedOutput, "trusted_output", "this operation requires the organisation's substrate")

@@ -51,11 +51,12 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
   const { intent } = draft;
   const attachments = pre?.attachments ?? [];
   const count = pre?.attachments ? attachments.length : (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0) + (intent.drives?.length ?? 0);
-  // The server's applied size when it sized one (0 means none); the request until it answers.
-  const mib = pre?.main_drive?.applied_mib || mainDriveMiB(intent);
-  const size = mib === undefined ? undefined : sizeWords(mib);
   // The same preflight answer the Files step reads: the run's pool says what its runners do with the size.
   const drive = readMainDrive(pre as FilesPreflight | null, intent.experience);
+  // The server's applied size when it sized one (0 means none); else the request, never above the cap it was told (A3.3).
+  const asked = mainDriveMiB(intent);
+  const mib = pre?.main_drive?.applied_mib || (asked !== undefined && drive.capMib !== undefined ? Math.min(asked, drive.capMib) : asked);
+  const size = mib === undefined ? undefined : sizeWords(mib);
   const enforcement = drive.facts && ENFORCEMENT[drive.facts.enforcement];
   const life = lifecycleOf(intent, drive);
   // Until a size is known, the names of what is attached; once it is, the sub-card below says it all (#3043).

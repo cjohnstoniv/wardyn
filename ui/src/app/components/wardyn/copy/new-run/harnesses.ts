@@ -52,3 +52,9 @@ export const NR_HARNESSES = {
   ADDED: "Harness added.",
   REMOVED: "Harness removed.",
 } as const;
+
+// Not in the canon doc (new-run-copy.test.ts holds NR_HARNESSES to it): the note when the server's harnesses could not be read.
+export const NR_HARNESSES_LOOKUP = {
+  UNREACHABLE: "Couldn't load the harnesses this server offers.",
+  RETRY: "Try again",
+} as const;

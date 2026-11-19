@@ -5,6 +5,7 @@
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, openNewRun, reviewRunDocument } from "./fixtures";
 import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
+import { ADO_CAPABILITIES } from "../src/app/lib/ado-capabilities";
 import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Locator, Page } from "@playwright/test";
@@ -22,6 +23,8 @@ const CEILING = [
   "code_read", "code_write", "pr", "policy_admin", "work_read", "work_write", "wiki_read",
   "build_read", "packaging_read", "project_read",
 ];
+// The rows the ceiling locks: every row it does not name, less pr's three parts, which its pr allows.
+const LOCKED_ROWS = ADO_CAPABILITIES.length - CEILING.length - 3;
 const ELEVEN_READS = [
   "code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read",
   "library_read", "packaging_read", "test_read", "project_read", "identity_read",
@@ -71,7 +74,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   const locked = capBox(dialog, "Manage service connections");
   await expect(locked).toBeDisabled();
   await expect(dialog.getByTitle(ADO_ACCESS.LOCKED).filter({ hasText: "Manage service connections" })).toBeVisible();
-  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(28 - CEILING.length);
+  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(LOCKED_ROWS);
   await expect(capBox(dialog, "Edit branch policies")).toBeEnabled();
 
   await dialog.getByLabel("Name", { exact: true }).fill(name);
@@ -176,5 +179,5 @@ test("a capability one organisation allows stays open and names who does not all
   // No organisation allows it: locked, and no hint.
   await expect(capBox(dialog, "Manage service connections")).toBeDisabled();
   await expect(dialog.getByTestId("ado-cap-hint-serviceendpoint_admin")).toHaveCount(0);
-  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(28 - CEILING.length);
+  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(LOCKED_ROWS);
 });

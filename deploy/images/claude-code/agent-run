@@ -785,7 +785,7 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 # reach each server only through the proxy's broker route.  Both autonomous lanes
 # load it with --mcp-config under --strict-mcp-config (beside the gate's file on
 # the hold lane), so a workspace .mcp.json adds no server.  It is not
-# /etc/claude-code/managed-mcp.json: Claude Code (2.1.231, pinned live) refuses
+# /etc/claude-code/managed-mcp.json: Claude Code (measured on 2.1.231) refuses
 # --strict-mcp-config while that file exists, so only an interactive run gets it.
 wardyn_mcp_config=()
 if [[ -r /etc/claude-code/wardyn-mcp.json ]]; then

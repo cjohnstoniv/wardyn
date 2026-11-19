@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -107,10 +107,11 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //
 //   - Lifecycle reaper: stop idle RUNNING sandboxes past their policy threshold.
 //     Disabled when no runner is wired (nothing to stop) or interval <= 0.
-//   - Groundtruth token rotator: keep a shared token file fresh so the
-//     eBPF/Tetragon ingest sidecar — which re-reads the file on a 401 — recovers
-//     when its ~1h token expires instead of going permanently blind. Off
-//     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured. Leader-elected
+//   - Groundtruth token rotator: keep a shared token file (or, on Kubernetes,
+//     the sensor's Secret) fresh so the eBPF/Tetragon ingest — which re-reads
+//     the file on a 401 — recovers when its ~1h token expires instead of going
+//     permanently blind. Off unless WARDYN_GROUNDTRUTH_TOKEN_FILE or
+//     WARDYN_GROUNDTRUTH_TOKEN_SECRET is configured (groundtruthTokenDelivery). Leader-elected
 //     across replicas (S2): a Postgres advisory lock acquired once, so at most
 //     one replica rewrites the shared file in the steady state; standbys retry
 //     on a backoff and take over automatically when the leader's session ends.
@@ -139,7 +140,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, gtWrite gtTokenWriter) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -176,6 +177,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				snapshotPane:    srv.SnapshotRunPane,
 				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
 				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
+				lockEnd:               srv.LockRunEnd,
+				fenceStarts:           srv.FenceRunStarts,
+				bringBack:             srv.BringComputerFolderBack,
+				holdPassed:            api.EndHoldPassed,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},
@@ -184,9 +189,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
 	}
 
-	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtFile) })
-		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
+	if gtWrite != nil {
+		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtWrite) })
+		slog.Info("wardynd: groundtruth token rotator started", slog.String("target", groundtruthTokenTarget()))
 	}
 
 	if approvalExpiry > 0 {
@@ -411,8 +416,10 @@ const forwarderJoinWait = 5 * time.Second
 // orgFederation is nil unless hybrid enrolment (issue #103) is on; when set,
 // it is joined (not merely cancelled) before this returns, so the process
 // never exits while its goroutine might still be logging or touching the
-// store.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) error {
+// store. cleanUpsBy is the deadline of the shutdown sequence's wait for the
+// secret store's clean-ups; a serve error returns before that wait, so it is
+// zero there.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) (cleanUpsBy time.Time, err error) {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -483,7 +490,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	case <-rootCtx.Done():
 		slog.Info("wardynd: shutdown signal received")
 	case err := <-errCh:
-		return fmt.Errorf("serve: %w", err)
+		return time.Time{}, fmt.Errorf("serve: %w", err)
 	}
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
@@ -493,7 +500,19 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	}
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
-	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)
+	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, secretstorepg.WaitForCleanUps, orgFederation)
+}
+
+// cleanUpWaitAfterServe is how long run's deferred CloseAfterCleanUps waits,
+// given the deadline of the shutdown sequence's own wait for the clean-ups.
+// Until that deadline after a shutdown: a clean-up started after that wait
+// looked is still waited for, on the same deadline. The whole budget when no
+// shutdown wait ran (a serve that failed at once), for the boot's Puts.
+func cleanUpWaitAfterServe(cleanUpsBy time.Time) time.Duration {
+	if cleanUpsBy.IsZero() {
+		return api.BackgroundShutdownBudget
+	}
+	return max(0, time.Until(cleanUpsBy))
 }
 
 // httpShutdowner is the *http.Server surface runShutdownSequence drives,
@@ -522,7 +541,7 @@ type backgroundServer interface {
 // fails and prove WaitBackground/FlushAuthFailedStreak still ran
 // (TestRunShutdownSequence*) — TestServeShutdownOrder used to pin the same
 // invariant by walking serveAndShutdown's AST for call order.
-func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, orgFederation *federation.Forwarder) error {
+func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, waitCleanUps func(context.Context) error, orgFederation *federation.Forwarder) (cleanUpsBy time.Time, err error) {
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
@@ -546,7 +565,30 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	// still live. WaitBackground carries its own bound (killCascadeTimeout plus
 	// a margin) and logs if it hits it, so this cannot turn an orderly stop
 	// into a hang.
+	//
+	// The secret store's clean-ups (removing a value a save replaced, or one
+	// whose row was not written) run detached from the save, so neither the
+	// drain nor WaitBackground waits for them. They are waited for beside
+	// WaitBackground, within its budget, so the grace period does not grow; one
+	// still running at the budget's end is cut, and the value it was removing
+	// stays for `wardynd -reconcile` to list. waitCleanUps is
+	// secretstorepg.WaitForCleanUps, passed in so a test can see it run.
+	cleanCtx, stopCleanWait := context.WithTimeout(context.Background(), api.BackgroundShutdownBudget)
+	defer stopCleanWait()
+	cleanUpsBy, _ = cleanCtx.Deadline()
+	cleaned := make(chan error, 1)
+	go func() { cleaned <- waitCleanUps(cleanCtx) }()
 	srv.WaitBackground()
+	cleanErr := <-cleaned
+	if cleanErr == nil {
+		// A clean-up a background save started after that wait found none running is waited for too, on the same
+		// deadline: run's deferred close waits no more after a shutdown, so it would be cut with budget left.
+		cleanErr = waitCleanUps(cleanCtx)
+	}
+	if cleanErr != nil {
+		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+			slog.Duration("budget", api.BackgroundShutdownBudget))
+	}
 
 	// The forwarder goroutine bootHybrid started on rootCtx is already
 	// stopping (it selects on the same rootCtx.Done() this function's own
@@ -570,7 +612,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	srv.FlushAuthFailedStreak()
 
 	if shutErr != nil {
-		return fmt.Errorf("shutdown: %w", shutErr)
+		return cleanUpsBy, fmt.Errorf("shutdown: %w", shutErr)
 	}
-	return nil
+	return cleanUpsBy, nil
 }

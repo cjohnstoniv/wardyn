@@ -27,6 +27,13 @@ import (
 // FlagBaseFile is prepare's and update-tools' install list (the runner setting macos_vm_base_file).
 const FlagBaseFile = "base-file"
 
+// FlagInspectionCA is the same jobs' path to this Mac's inspection CA certificate (the runner setting
+// macos_vm_inspection_ca), which stage 2 adds to the install list (WithInspectionCA).
+const FlagInspectionCA = "inspection-ca"
+
+// InspectionCAItem is the install list name of this Mac's inspection CA. A list may not use it.
+const InspectionCAItem = "wardyn-inspection-ca"
+
 // Base item kinds.
 const (
 	ItemKindPkg     = "pkg"
@@ -120,6 +127,34 @@ func LoadBaseList(path string) (BaseList, error) {
 	return l, nil
 }
 
+// WithInspectionCA is l with this Mac's inspection CA, the certificate at path, as its last item: a ca item
+// named InspectionCAItem, pinned to the file as it reads now. runnerd and the helper both add it this way, so
+// the list's digest is the same on both sides.
+func WithInspectionCA(l BaseList, path string) (BaseList, error) {
+	if _, _, err := readCA(path); err != nil {
+		return BaseList{}, fmt.Errorf("macvm: this Mac's inspection CA: %w", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return BaseList{}, fmt.Errorf("macvm: this Mac's inspection CA: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	l.Version = 1
+	l.Items = append(slices.Clone(l.Items), BaseItem{Kind: ItemKindCA, Name: InspectionCAItem, Path: path, SHA256: hex.EncodeToString(sum[:])})
+	return l, nil
+}
+
+// reservedItemFor says what an install list name Wardyn keeps for itself is for, or "" for any other name.
+func reservedItemFor(name string) string {
+	switch name {
+	case guestagent.AgentSigningItem:
+		return "the guest agent's signing certificate"
+	case InspectionCAItem:
+		return "this Mac's inspection CA"
+	}
+	return ""
+}
+
 // ParseBaseList parses an install list and checks every item, refusing an unknown field, kind or version.
 func ParseBaseList(b []byte) (BaseList, error) {
 	var l BaseList
@@ -148,6 +183,8 @@ func (it BaseItem) check() error {
 	switch {
 	case !guestagent.ItemNamePattern.MatchString(it.Name):
 		return errors.New("a name is lower-case letters, digits, '.', '_' and '-', at most 64")
+	case reservedItemFor(it.Name) != "":
+		return fmt.Errorf("the name %q is Wardyn's own, for %s", it.Name, reservedItemFor(it.Name))
 	case !filepath.IsAbs(it.Path):
 		return errors.New("path must be an absolute path on this Mac")
 	case !sha256Hex.MatchString(it.SHA256):
@@ -304,6 +341,12 @@ type GuestPosture struct {
 	MDM string `json:"mdm,omitempty"`
 	// OrgCA is ItemTrusted when every ca item reads trusted, else ItemNotTrusted; empty with no ca item.
 	OrgCA string `json:"org_ca,omitempty"`
+	// FullDiskAccess is "allowed" or "refused" for the guest agent, as the agent read it; empty when that
+	// read did not say, or when the agent that read it was replaced by a build whose signature may differ.
+	FullDiskAccess string `json:"full_disk_access,omitempty"`
+	// FileVault is guestagent.FileVaultOn or FileVaultOff as the agent read it; empty when that read did
+	// not say. The base is meant to keep it off.
+	FileVault string `json:"file_vault,omitempty"`
 }
 
 // GuestPosture values.
@@ -356,6 +399,18 @@ func readPosture(ctx context.Context, g ToolsGuest, items []ItemRecord) *GuestPo
 		if r.Kind == ItemKindCA {
 			if p.OrgCA = r.State; r.State != ItemTrusted {
 				break
+			}
+		}
+	}
+	if pg, ok := g.(interface {
+		Posture(ctx context.Context) (guestagent.ToolsPosture, error)
+	}); ok {
+		if tp, err := pg.Posture(ctx); err == nil {
+			if tp.FullDiskAccess == "allowed" || tp.FullDiskAccess == "refused" {
+				p.FullDiskAccess = tp.FullDiskAccess
+			}
+			if tp.FileVault == guestagent.FileVaultOn || tp.FileVault == guestagent.FileVaultOff {
+				p.FileVault = tp.FileVault
 			}
 		}
 	}
@@ -519,6 +574,8 @@ func verifyCA(ctx context.Context, g ToolsGuest, name string) (string, error) {
 
 // removeRotatedCAs removes from the System keychain, with its trust settings, each CA the base held that
 // the list no longer has (by fingerprint), and the stage directory of each item the list no longer names.
+// trustCA trusted in the admin domain, which delete-certificate -t does not reach, so the admin trust goes
+// first, by the certificate trustCA staged (still the old one: items are installed after this).
 func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []ItemRecord) error {
 	names, pins := map[string]bool{}, map[string]bool{}
 	for _, it := range l.Items {
@@ -526,8 +583,8 @@ func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []
 	}
 	for _, r := range previous {
 		if r.Kind == ItemKindCA && r.SHA1 != "" && !pins[r.SHA256] {
-			if err := runItem(ctx, g, "/usr/bin/security", "delete-certificate", "-t", "-Z", r.SHA1, guestagent.MacSystemKeychain); err != nil {
-				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run prepare --reprepare", r.Name, r.Fingerprint, err)
+			if err := untrustCA(ctx, g, guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert, r.SHA1); err != nil {
+				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run wardyn-runnerd macos-vm prepare --new-image", r.Name, r.Fingerprint, err)
 			}
 		}
 		if !names[r.Name] && r.Kind != ItemKindFile {
@@ -571,6 +628,22 @@ func pushSecret(ctx context.Context, g ToolsGuest, sf SecretFile, dest string) e
 		return fmt.Errorf("%s is mode %#o; a secret file is its owner's alone (chmod 600)", sf.Path, fi.Mode().Perm())
 	}
 	return pushItem(ctx, g, sf.Path, sf.SHA256, dest, 0o600)
+}
+
+// untrustCA removes cer's admin trust and then the certificate; a step that finds nothing to remove
+// has nothing to do.
+func untrustCA(ctx context.Context, g ToolsGuest, cer, sha1Hex string) error {
+	for _, args := range [][]string{guestagent.RemoveTrustArgs(cer), guestagent.DeleteCertArgs(sha1Hex)} {
+		argv := append([]string{"/usr/bin/security"}, args...)
+		out, exit, err := g.Run(ctx, argv)
+		if err != nil {
+			return err
+		}
+		if exit != 0 && !strings.Contains(strings.ToLower(out), "could not be found") {
+			return fmt.Errorf("security %s exited %d", args[0], exit)
+		}
+	}
+	return nil
 }
 
 // runItem runs one item form and fails on a non-zero exit, naming the command and not its output.

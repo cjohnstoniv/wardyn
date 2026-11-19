@@ -14,7 +14,7 @@ import { recordings, type DesktopPlayback } from "../../../lib/api/recordings";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";
-import { advance, gapAt, pct, replayActions, replayDuration, replayGaps } from "../../../lib/desktop-replay-timeline";
+import { advance, gapAt, pct, replayActions, replayDuration, replayGaps, seekKey } from "../../../lib/desktop-replay-timeline";
 import { decodeFrames, PlaybackSocket, ReplayFeed } from "../../../lib/desktop-replay-feed";
 import { Button } from "../../ui/button";
 import { RECORDING_REPLAY as C, gapDuration } from "../../wardyn/copy/recording-level";
@@ -163,7 +163,8 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
   };
   const seekTrack = (e: React.MouseEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    setMs(Math.round(((e.clientX - r.left) / r.width) * duration));
+    // The playhead's thumb overhangs the track by 6px, so a click on it can land outside the track: keep the seek on the timeline.
+    setMs(Math.min(Math.max(Math.round(((e.clientX - r.left) / r.width) * duration), 0), duration));
   };
 
   return (
@@ -178,7 +179,7 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
         </div>
         {stoppedMs !== undefined && (
           <p role="status" className="border-b border-border px-3.5 py-2 text-meta text-muted-foreground" data-testid="desktop-replay-stopped">
-            {C.STOPPED_AT(at(stoppedMs))}
+            {C.STOPPED_AT(at(stoppedMs), pb.stop_reason)}
           </p>
         )}
         <div className="relative p-3.5">
@@ -237,14 +238,35 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
               />
             ))}
             <span
-              className="absolute top-[11px] -ml-1.5 h-[22px] w-3 rounded-[3px] bg-foreground"
+              role="slider"
+              tabIndex={0}
+              aria-label={C.SEEK}
+              aria-valuemin={0}
+              aria-valuemax={duration}
+              aria-valuenow={ms}
+              aria-valuetext={at(ms)}
+              className="absolute top-[11px] -ml-1.5 h-[22px] w-3 rounded-[3px] bg-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               style={{ left: pct(ms, duration) }}
+              onKeyDown={(e) => {
+                const to = seekKey(e.key, ms, duration);
+                if (to === undefined) return;
+                e.preventDefault();
+                setMs(to);
+              }}
               data-testid="desktop-replay-playhead"
               data-ms={ms}
             />
           </div>
           <div className="flex items-center gap-3">
-            <Button size="sm" variant="ghost" aria-label={playing ? C.PAUSE : C.PLAY} onClick={() => setPlaying((p) => !p)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={playing ? C.PAUSE : C.PLAY}
+              onClick={() => {
+                if (!playing && ms >= duration) setMs(0); // Play at the end plays again from the start
+                setPlaying(!playing);
+              }}
+            >
               {playing ? <Pause className="size-4" aria-hidden /> : <Play className="size-4" aria-hidden />}
             </Button>
             <span className="font-mono text-meta" data-testid="desktop-replay-clock">

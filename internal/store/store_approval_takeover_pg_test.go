@@ -75,8 +75,9 @@ func TestPG_TakeoverTakesHandsBackAndRefusesTheRest(t *testing.T) {
 	open("with priya holding", ap.ID)
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	back, err := pg.HandBackApproval(ctx, ap.ID, "priya", at)
-	if err != nil || back.HandedBackAt == nil || !back.HandedBackAt.Equal(at) {
-		t.Fatalf("hand back: %+v, %v", back, err)
+	// Stored on the database's clock, so it is near `at` on this one host, not equal to it.
+	if err != nil || back.HandedBackAt == nil || back.HandedBackAt.Sub(at).Abs() > 5*time.Second {
+		t.Fatalf("hand back at %s: %+v, %v", at, back, err)
 	}
 	open("after the hand back")
 	if _, err := pg.HandBackApproval(ctx, ap.ID, "priya", at); !errors.Is(err, store.ErrAlreadyDecided) {

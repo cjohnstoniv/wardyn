@@ -309,6 +309,70 @@ func TestKillSignInRunAfterCapture_LostSwap(t *testing.T) {
 	})
 }
 
+// shutdownOnLostSwapStore cancels the daemon base context the moment a kill's swap loses, as a shutdown
+// landing in the middle of a slow pass does.
+type shutdownOnLostSwapStore struct {
+	*racingLaunchStore
+	shutdown context.CancelFunc
+}
+
+func (s *shutdownOnLostSwapStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	applied, err := s.racingLaunchStore.UpdateRunStateIf(ctx, id, from, to)
+	if to == types.RunKilled && !applied {
+		s.shutdown()
+	}
+	return applied, err
+}
+
+// TestKillSignInRunAfterCapture_ShutdownStopsTheRetries pins #3592: WaitBackground's budget covers one pass of the
+// kill's retry loop, so a shutdown that lands after a lost swap must stop the loop, not leave later passes to run
+// past the budget on a slow store. The pass under way finishes; no further pass starts, the stop is logged, and the
+// run is left to its idle cap.
+func TestKillSignInRunAfterCapture_ShutdownStopsTheRetries(t *testing.T) {
+	runID := uuid.New()
+	baseCtx, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
+	st := &shutdownOnLostSwapStore{
+		racingLaunchStore: &racingLaunchStore{
+			killableLoginRunStore: &killableLoginRunStore{
+				ssoLoginRunStore: ssoLoginRunStore{run: types.AgentRun{
+					ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent,
+					CreatedBy: "alice@example.com", UpdatedAt: time.Now().UTC(),
+				}},
+				state: types.RunStarting,
+			},
+			losses: 1,
+		},
+		shutdown: shutdown,
+	}
+	audit := &memAudit{}
+	cfg := baseTestConfig(newHarness(t), st)
+	cfg.Audit = audit
+	cfg.BaseCtx = baseCtx
+	srv := New(cfg)
+	srv.signInCaptureKillGrace = 0
+	var logged lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+	srv.WaitBackground()
+
+	if got := st.stateNow(); got == types.RunKilled {
+		t.Fatalf("sign-in run state = %s, want it left alone: a shutdown after the lost swap starts no further pass", got)
+	}
+	if rows := audit.find("run.kill"); len(rows) != 0 {
+		t.Errorf("run.kill rows = %d, want none", len(rows))
+	}
+	if !strings.Contains(logged.String(), "shutdown stopped ending a captured sign-in sandbox") {
+		t.Errorf("no shutdown-stop log; got:\n%s", logged.String())
+	}
+	if strings.Contains(logged.String(), "gave up ending a captured sign-in sandbox") {
+		t.Errorf("a shutdown stop was logged as running out of attempts; got:\n%s", logged.String())
+	}
+}
+
 // flakyGetRunStore fails its first GetRun with a plain store error, as a dropped pooled connection does, then
 // answers from the embedded store.
 type flakyGetRunStore struct {

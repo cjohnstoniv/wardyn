@@ -12,6 +12,7 @@
 # one test that panics, one package that fails to COMPILE, and two that fail with no test to name
 # (os.Exit in TestMain, a panic in init), and asserts the failing test's name,
 # the compiler's own error text and each package's cause all land on stderr.
+# A third module adds a test binary that exits inside a test, two tests with race reports and a panic with paused siblings.
 #
 # Daemon-free, network-free: no substrate beyond `go test` itself.
 set -euo pipefail
@@ -30,7 +31,7 @@ module reportfixture
 go 1.23
 EOF
 
-mkdir -p "$TMP/failpkg" "$TMP/testpanicpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
+mkdir -p "$TMP/failpkg" "$TMP/tailpkg" "$TMP/testpanicpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
 cat > "$TMP/testpanicpkg/p_test.go" <<'EOF'
 package testpanicpkg
 
@@ -47,6 +48,18 @@ import "testing"
 
 func TestNamedFailure(t *testing.T) {
 	t.Fatal("this test always fails")
+}
+EOF
+cat > "$TMP/tailpkg/t_test.go" <<'EOF'
+package tailpkg
+
+import "testing"
+
+func TestLongLog(t *testing.T) {
+	for i := 1; i <= 20; i++ {
+		t.Logf("tail line %02d", i)
+	}
+	t.Fatal("long log failure")
 }
 EOF
 cat > "$TMP/buildbrokenpkg/b_test.go" <<'EOF'
@@ -98,6 +111,18 @@ echo "$OUT" | grep "thisIdentifierDoesNotExist" >/dev/null \
   || fail "stderr must surface the compiler's own error text — got:
 $OUT"
 echo "ok  surfaces the compile error"
+
+# A failing test echoes its last 8 lines by default; WARDYN_TEST_REPORT_TAIL widens that, so a
+# suite whose cause sits further up (envbuild's build log) can still name it in the job log.
+echo "$OUT" | grep -F "tail line 20" >/dev/null && ! echo "$OUT" | grep -F "tail line 01" >/dev/null \
+  || fail "by default a failing test must echo only its last lines — got:
+$OUT"
+OUT_TAIL="$( (cd "$TMP" && WARDYN_TEST_REPORT_TAIL=30 ./scripts/test-report.sh fixture ./tailpkg/ 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when the suite has a failing test"
+echo "$OUT_TAIL" | grep -F "tail line 01" >/dev/null \
+  || fail "WARDYN_TEST_REPORT_TAIL=30 must echo the failing test's first log line too — got:
+$OUT_TAIL"
+echo "ok  WARDYN_TEST_REPORT_TAIL widens a failing test's echoed tail"
 
 for want in "mainexitpkg" "setup: cannot reach the fixture database" "initpanicpkg" "panic: fixture init exploded"; do
   echo "$OUT" | grep -F "$want" >/dev/null \
@@ -161,3 +186,137 @@ echo "$OUT2" | grep -F "panic: test timed out after 15s" >/dev/null \
   || fail "stderr must also surface the -timeout panic that killed the package, not just its named failure — got:
 $OUT2"
 echo "ok  names both the failing test and the -timeout panic in the same package"
+
+# A test binary that exits inside a test (the pool guard's os.Exit) after an earlier test
+# failed: the package must be listed outside any named test too, naming the test the exit
+# came in and echoing its cause, which sits above the stack the guard prints. And a failing
+# test's race report must reach the log whole, ahead of its last lines, cut at 200 lines.
+TMP3="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$TMP2" "$TMP3"' EXIT
+mkdir -p "$TMP3/scripts/lib" "$TMP3/exitpkg" "$TMP3/racepkg"
+cp "$ROOT/scripts/test-report.sh" "$TMP3/scripts/"
+cp "$ROOT/scripts/lib/e2e-quarantine.sh" "$TMP3/scripts/lib/"
+mkdir -p "$TMP3/test" && cp "$ROOT/test/go-quarantine.txt" "$TMP3/test/"
+cat > "$TMP3/go.mod" <<'EOF'
+module exitfixture
+
+go 1.23
+EOF
+cat > "$TMP3/exitpkg/e_test.go" <<'EOF'
+package exitpkg
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func TestAFails(t *testing.T) {
+	t.Fatal("this test always fails")
+}
+
+func TestBExits(t *testing.T) {
+	t.Log("about to take a second connection")
+	fmt.Fprintln(os.Stderr, "guard: nested acquire refused")
+	fmt.Fprintln(os.Stderr, "held at:")
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(os.Stderr, "\tframe %02d\n", i)
+	}
+	os.Exit(2)
+}
+
+func TestCNeverRuns(t *testing.T) {}
+EOF
+cat > "$TMP3/racepkg/r_test.go" <<'EOF'
+package racepkg
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+const sep = "=================="
+
+func TestRaces(t *testing.T) {
+	fmt.Fprintln(os.Stderr, sep)
+	fmt.Fprintln(os.Stderr, "WARNING: DATA RACE")
+	fmt.Fprintln(os.Stderr, "Write at 0x00c000012345 by goroutine 8:")
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(os.Stderr, "  racepkg.writer%02d()\n      /src/racepkg/w.go:%d +0x1d\n", i, i)
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Previous read at 0x00c000012345 by goroutine 7:")
+	fmt.Fprintln(os.Stderr, "  racepkg.reader()")
+	fmt.Fprintln(os.Stderr, "      /src/racepkg/r.go:9 +0x2e")
+	fmt.Fprintln(os.Stderr, sep)
+	for i := 1; i <= 12; i++ {
+		t.Logf("after the race %02d", i)
+	}
+	t.Error("race detected during execution of test")
+}
+
+func TestRaceTooLong(t *testing.T) {
+	fmt.Fprintln(os.Stderr, "WARNING: DATA RACE")
+	for i := 1; i <= 250; i++ {
+		fmt.Fprintf(os.Stderr, "  long frame %03d\n", i)
+	}
+	t.Error("race detected during execution of test")
+}
+EOF
+
+OUT3="$( (cd "$TMP3" && WARDYN_TEST_REPORT_COVER=0 WARDYN_TEST_REPORT_SKIP_FLOOR=1 ./scripts/test-report.sh fixture ./... 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when a test fails and a test binary exits inside a test"
+
+for want in "exitfixture/exitpkg TestAFails" "exitfixture/exitpkg (the test binary exited while TestBExits ran)"; do
+  echo "$OUT3" | grep -F "$want" >/dev/null \
+    || fail "stderr must name the failing test and the test the binary exited inside ($want) — got:
+$OUT3"
+done
+echo "$OUT3" | sed -n '/failed outside any named test:/,$p' | grep -F "guard: nested acquire refused" >/dev/null \
+  || fail "stderr must echo the exit's own cause under the package, beside its named failure — got:
+$OUT3"
+echo "ok  names a binary exit inside a test beside the package's named failure"
+
+for want in "Write at 0x00c000012345 by goroutine 8:" "racepkg.writer01()" "Previous read at 0x00c000012345 by goroutine 7:" \
+  "after the race 12" "long frame 199" "... 6 lines cut (the whole output is in test-output.json)" \
+  "... 45 lines cut (the whole output is in test-output.json)" "long frame 250"; do
+  echo "$OUT3" | grep -F "$want" >/dev/null \
+    || fail "a failing test's race report must reach the log ahead of its last lines ($want) — got:
+$OUT3"
+done
+for cut in "after the race 01" "long frame 200"; do
+  echo "$OUT3" | grep -F "$cut" >/dev/null \
+    && fail "a race report is echoed to its closing line and 200 lines at most, then the test's last lines ($cut must be cut) — got:
+$OUT3"
+done
+echo "ok  echoes a failing test's race report whole, cut at 200 lines"
+
+# A panic inside a test, while parallel siblings are paused: the siblings never ended, but the
+# panic belongs to a test that failed, so only that test is named and no exit is reported.
+mkdir -p "$TMP3/parpkg"
+cat > "$TMP3/parpkg/p_test.go" <<'EOF'
+package parpkg
+
+import "testing"
+
+func TestP1(t *testing.T) { t.Parallel() }
+func TestP2(t *testing.T) { t.Parallel() }
+func TestP3(t *testing.T) { t.Parallel() }
+
+func TestPanicsWithPausedSiblings(t *testing.T) {
+	var m map[string]int
+	m["x"] = 1
+}
+EOF
+OUT4="$( (cd "$TMP3" && WARDYN_TEST_REPORT_COVER=0 WARDYN_TEST_REPORT_SKIP_FLOOR=1 ./scripts/test-report.sh fixture ./parpkg 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when a test panics"
+echo "$OUT4" | grep -F "exitfixture/parpkg TestPanicsWithPausedSiblings" >/dev/null \
+  || fail "stderr must name the test that panicked — got:
+$OUT4"
+for bad in "exited while" "failed outside any named test" "TestP1"; do
+  echo "$OUT4" | grep -F "$bad" >/dev/null \
+    && fail "a panic in a test must not list its package outside any named test or name its paused siblings ($bad) — got:
+$OUT4"
+done
+echo "ok  a panic in a test is not reported as a binary exit because siblings are paused"

@@ -129,6 +129,29 @@ func TestMeetWallsOpenPolicyMeetsTheAllowlistAsTheAllowlist(t *testing.T) {
 	}
 }
 
+// An open policy reaches a name on 80 and 443 only, so a walls list naming another port or an IP literal
+// adds neither to it: each is kept only where the policy's own list names it. The write door refuses both
+// in a person's walls; the meet does not lean on that.
+func TestMeetWallsOpenPolicySeedsOnlyWhatOpenEgressReaches(t *testing.T) {
+	walls := types.PersonalWallsSpec{AllowedDomains: &[]string{"pypi.org", "b.example:8443", "10.0.0.5", "*.corp.example:443"}}.Overlay()
+	for _, tc := range []struct {
+		name string
+		own  []string
+		want []string
+	}{
+		{"an open policy with no list", nil, []string{"*.corp.example:443", "pypi.org"}},
+		{"an open policy naming the port and the literal", []string{"b.example:8443", "10.0.0.5"}, []string{"*.corp.example:443", "10.0.0.5", "b.example:8443", "pypi.org"}},
+	} {
+		got, err := composer.MeetWalls(types.RunPolicySpec{AllowAllEgress: true, AllowedDomains: tc.own}, walls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.AllowAllEgress || !slices.Equal(got.AllowedDomains, tc.want) {
+			t.Errorf("%s: open=%v allowed=%v, want closed with %v", tc.name, got.AllowAllEgress, got.AllowedDomains, tc.want)
+		}
+	}
+}
+
 // An empty allowlist is default-deny beyond what the run's setup adds later, not "no list".
 func TestMeetWallsEmptyAllowlistClosesAnOpenPolicy(t *testing.T) {
 	got, err := composer.MeetWalls(types.RunPolicySpec{AllowAllEgress: true}, types.PersonalWallsSpec{AllowedDomains: &[]string{}}.Overlay())

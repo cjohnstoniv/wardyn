@@ -19,19 +19,31 @@ import { asJson, errText, HttpError, throwIfPending, wfetch } from "./core";
 // What an upsert actually did — same 201-created/200-updated split
 // permissions.ts's GrantUpsert reports (access.go's handleUpsertRoleMapping
 // compares the returned row's id against the one it built).
+// DELETE /access/mappings/{id}: the mapping is gone. tokensRevocationFailed
+// (a 200 instead of the usual 204) says an old-role token may still work;
+// detail carries the remedy.
+export interface RoleMappingDeleted {
+  tokensRevocationFailed?: boolean;
+  detail?: string;
+}
+
 export interface RoleMappingUpsert {
   mapping: { id: string; value: string; role: string; created_by?: string; created_at?: string };
   created: boolean;
   // R1-F112: handleUpsertRoleMapping embeds this beside the RoleMapping row
   // (omitempty — absent when the write demoted nobody's outstanding token).
-  // DELETE carries the same count but rides no body (204), so there is
-  // nothing to surface on that side.
+  // DELETE carries the same count on the audit row only; its body, when it
+  // has one, is RoleMappingDeleted.
   tokensRevoked?: number;
   // F6 type-mirror gap: the INFORMATIONAL half of the same embed — how many
   // live frozen snapshots named this value BEFORE the edit acted, taken
   // before tokensRevoked's demotion runs. Omitempty; absent means zero
   // outstanding snapshots existed for this value at write time.
   staleTokenSnapshots?: number;
+  // The mapping IS saved, but at least one old-role token may still work: the
+  // revocation above did not reach every token. detail carries the remedy.
+  tokensRevocationFailed?: boolean;
+  detail?: string;
 }
 
 // Best-effort parse of a POST/DELETE 400 body as JSON — a plain
@@ -118,20 +130,35 @@ export const access = {
     if (!res.ok) await throwAccessWriteError(res);
     const created = res.status === 201;
     const body = await asJson<
-      RoleMappingUpsert["mapping"] & { tokens_revoked?: number; stale_token_snapshots?: number }
+      RoleMappingUpsert["mapping"] & {
+        tokens_revoked?: number;
+        stale_token_snapshots?: number;
+        tokens_revocation_failed?: boolean;
+        detail?: string;
+      }
     >(res);
-    const { tokens_revoked, stale_token_snapshots, ...mapping } = body;
-    return { mapping, created, tokensRevoked: tokens_revoked, staleTokenSnapshots: stale_token_snapshots };
+    const { tokens_revoked, stale_token_snapshots, tokens_revocation_failed, detail, ...mapping } = body;
+    return {
+      mapping,
+      created,
+      tokensRevoked: tokens_revoked,
+      staleTokenSnapshots: stale_token_snapshots,
+      tokensRevocationFailed: tokens_revocation_failed,
+      detail,
+    };
   },
 
   // DELETE /api/v1/access/mappings/{id}?acknowledge_access_change=true — the
   // ack rides the QUERY STRING here, not a JSON body (access.go's
   // handleDeleteRoleMapping reads r.URL.Query(), unlike the POST route).
-  async deleteMapping(id: string, acknowledgeAccessChange = false): Promise<void> {
+  async deleteMapping(id: string, acknowledgeAccessChange = false): Promise<RoleMappingDeleted> {
     const qs = acknowledgeAccessChange ? "?acknowledge_access_change=true" : "";
     const res = await wfetch(`/access/mappings/${encodeURIComponent(id)}${qs}`, { method: "DELETE" });
     await throwIfPending(res);
     if (!res.ok) await throwAccessWriteError(res);
+    if (res.status !== 200) return {};
+    const body = await asJson<{ tokens_revocation_failed?: boolean; detail?: string }>(res);
+    return { tokensRevocationFailed: body.tokens_revocation_failed, detail: body.detail };
   },
 
   // POST /api/v1/access/preview -> a 200 always (a preview failure is an

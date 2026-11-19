@@ -10,12 +10,15 @@
 
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
-  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
+  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (not required; a matrix job: `1/2`, `2/2`),
   - `macos` (not required) and `macos-xcode-27` (not required),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm-conformance` (not required), `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
+  - `conformance-k8s-agent-sandbox` (not required),
+  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
+  - A job marked not required is not a branch-protection context on main, and some unmarked jobs are not one either: the context list under "Repo settings (GitHub-side)" is the whole set. A release still needs the whole run green.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
   - Two more publish workflows are not part of this job list at all (see ["Container images"](#container-images) below):
@@ -107,17 +110,6 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
 - A release is a milestone that closed.
 - The steps below do not change; this is how the work reaches them.
 
-```mermaid
-flowchart LR
-  I[Issue on the milestone<br/>labelled approved] --> B[Branch from main<br/>kind/issue-slug]
-  B --> PR[Pull request into main<br/>one issue per PR]
-  PR --> R{Required CI<br/>+ review}
-  R -->|green| M[main]
-  M --> RP[Release PR<br/>CHANGELOG, versions, ROADMAP]
-  RP --> RB[release/X.Y<br/>cut or fast-forwarded]
-  RB --> T[Tag vX.Y.Z<br/>release.yml publishes]
-  M -.->|cherry-pick fixes only| RB
-```
 
 1. **Milestone.** Every planned change is an issue on the `X.Y.Z` milestone,
    filed before work starts and signed off with the `approved` label
@@ -425,7 +417,7 @@ crash or a usage limit resumes with the same command:
    consumers to check. Treat it as a failed release, not a cosmetic warning.
 
 6. **Publish the GitHub Release** for the tag, with that version's CHANGELOG section as the body. `release-assets` already made a draft, so edit it.
-   - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`).
+   - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`). Keep `auto`: from 0.10.0 on, `verify-release` fails a wrong pick.
    - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
@@ -504,7 +496,7 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
     "gates (licenses)", "gates (license-headers)",
     "notices",
-    "test-pg", "conformance", "conformance-k8s", "envbuild-integration",
+    "test-pg", "conformance", "conformance-k8s", "vm", "envbuild-integration",
     "helm", "helm-install-test",
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",

@@ -50,6 +50,23 @@ func (piiDetector) Scan(s Span, dst *[]Finding) {
 	}
 }
 
+// maskPII masks every piiRules match in a field path, a rule's validator deciding as it does in Scan.
+// The path is built from agent-controlled JSON keys, so a personal-data value used as a key would
+// otherwise ride into the content-free finding; Engine.sanitizeFieldPath runs it on every finding,
+// whether or not detect_pii is on.
+func maskPII(path string) string {
+	out := path
+	for _, rule := range piiRules {
+		out = rule.re.ReplaceAllStringFunc(out, func(m string) string {
+			if rule.validate != nil && !rule.validate(m) {
+				return m
+			}
+			return maskedPlaceholder
+		})
+	}
+	return out
+}
+
 // validLuhn reports whether s's digits pass the Luhn checksum (cuts credit-card false positives).
 func validLuhn(s string) bool {
 	sum, alt, n := 0, false, 0

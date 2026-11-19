@@ -112,11 +112,12 @@ var (
 )
 
 // pullsCapability is the pulls area: reading pull requests is CapCodeRead,
-// a merge or branch update CapRepoContentWriteREST, every other write CapPR.
+// a merge or branch update CapRepoContentWriteREST, every other write CapPRWrite, and a write under
+// reviews CapPRReview.
 // POSITIONAL: sub[1] is a pull request's number or the literal review-comment
 // collection, and nothing else.
 func pullsCapability(read bool, method string, sub []string) Capability {
-	c := CapPR
+	c := CapPRWrite
 	if read {
 		c = CapCodeRead
 	}
@@ -136,6 +137,8 @@ func pullsCapability(read bool, method string, sub []string) Capability {
 		}
 	case !read && slices.Contains(pullContentParts, sub[2]):
 		return CapRepoContentWriteREST
+	case !read && sub[2] == "reviews":
+		return CapPRReview
 	case read && slices.Contains(pullReadParts, sub[2]), !read && slices.Contains(pullWriteParts, sub[2]):
 		return c
 	}

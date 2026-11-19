@@ -138,6 +138,10 @@ func TestResolveADOInjection_AdvertisesTheStoredKeyLease(t *testing.T) {
 	if lease := adoTestNow.Add(storedKeyTTL).UnixMilli(); resp.ExpiresAt == 0 || resp.ExpiresAt > lease {
 		t.Fatalf("expires_at = %d, want at most now + storedKeyTTL (%d): the token's own hour outlives a deleted sign-in", resp.ExpiresAt, lease)
 	}
+	// The token's own expiry rides beside the lease, so the proxy never serves it past that as last-good.
+	if resp.CredentialExpiresAt < resp.ExpiresAt {
+		t.Fatalf("credential_expires_at = %d, want the token's own expiry, at or after the lease %d", resp.CredentialExpiresAt, resp.ExpiresAt)
+	}
 }
 
 // erasePerson drives DELETE /people/{principal}/credentials.

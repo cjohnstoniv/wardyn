@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The owner guard and the sign-in gate adapter: how a deactivated identity is refused when a
@@ -29,6 +30,26 @@ type identityGateStore interface {
 	GetIdentityByObject(ctx context.Context, issuer, tenantID, objectID string) (store.PrincipalIdentity, error)
 }
 
+// principalGroupsWriter is the store that keeps the record of each person's last sign-in through each
+// door (store.PG.PutPrincipalGroups): portal "" for an SSO sign-in, a portal's id for its token
+// exchange. A store without it keeps none.
+type principalGroupsWriter interface {
+	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error
+}
+
+// principalGroupsNarrower is the store that can narrow an existing record of a person's last token
+// exchange through a portal (store.PG.NarrowPrincipalGroups) for an exchange the portal refused.
+type principalGroupsNarrower interface {
+	NarrowPrincipalGroups(ctx context.Context, principal, portal string, groups []string, truncated bool, issuedAt time.Time) error
+}
+
+// The Postgres store keeps the record, so a deployment never issues a session or a portal token without
+// writing it.
+var (
+	_ principalGroupsWriter   = store.PG{}
+	_ principalGroupsNarrower = store.PG{}
+)
+
 type storeIdentityGate struct{ st identityGateStore }
 
 // NewIdentityGate is oidc.IdentityGate over the store's identity rows.
@@ -39,9 +60,10 @@ func (g storeIdentityGate) Refused(ctx context.Context, ref oidc.IdentityRef) (b
 }
 
 func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64, error) {
+	now := time.Now().UTC()
 	epoch, err := g.st.IssueLoginIdentity(ctx, store.LoginIdentity{
 		Principal: f.Sub, Issuer: f.Issuer, TenantID: f.TenantID, ObjectID: f.ObjectID, Email: f.Email,
-	}, time.Now().UTC())
+	}, now)
 	switch {
 	case errors.Is(err, store.ErrIdentityDeactivated):
 		return 0, oidc.ErrIdentityDeactivated
@@ -50,7 +72,19 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 	case errors.Is(err, store.ErrIdentityBindingMismatch):
 		return 0, fmt.Errorf("%w: %w", oidc.ErrIdentityBindingMismatch, err)
 	}
-	return epoch, err
+	if err != nil {
+		return epoch, err
+	}
+	// The sign-in's email and groups go on the record (portal "") before its session is issued, and a
+	// failed write refuses the sign-in: no session is issued with groups the record lacks, and the record
+	// is what a running run's owner is judged by where no session of theirs is at hand. No issue time is
+	// passed, so the record is stamped with the database's time, one clock for every server.
+	if pw, ok := g.st.(principalGroupsWriter); ok {
+		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, time.Time{}); err != nil {
+			return 0, err
+		}
+	}
+	return epoch, nil
 }
 
 func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (string, error) {
@@ -64,13 +98,17 @@ func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (str
 // ownerGuard is the guard for a write made for owner. The request's own authority epoch counts only
 // when the request is the owner's own, or is the sign-in being issued for them (no session yet, the
 // epoch from oidc.WithAuthorityEpoch): an admin writing for someone else carries an epoch that says
-// nothing about them.
+// nothing about them. A service identity's request writing for itself is held to the identity's row as
+// its token was admitted against it (store.IdentityGuard.ServiceSince).
 func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 	g := store.IdentityGuard{Principal: owner, Epoch: -1}
 	if e, ok := oidc.AuthorityEpochFromContext(ctx); ok {
 		if p := oidc.PrincipalFromContext(ctx); p == "" || p == owner {
 			g.Epoch = e
 		}
+	}
+	if name, since, ok := serviceAdmittedFromContext(ctx); ok && owner == types.ServicePrincipalPrefix+name {
+		g.ServiceSince = since
 	}
 	return g
 }
@@ -79,6 +117,16 @@ func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 // stale-epoch owner inside their own transaction (store.WithIdentityGuard).
 func guardOwner(ctx context.Context, owner string) context.Context {
 	return store.WithIdentityGuard(ctx, ownerGuard(ctx, owner))
+}
+
+// mintGuard is guardOwner for a new API token t, the self-service mint's and an invitation claim's: the
+// insert is also refused when a session cut or a revocation of t's owner drew a revocation sequence above
+// the one t records. The late session check before the insert reads cuts and token use does not, so a group
+// removal's cut that lands between the two would otherwise leave a live token holding the removed group.
+func mintGuard(ctx context.Context, t types.APIToken) context.Context {
+	g := ownerGuard(ctx, t.Principal)
+	g.CutAfter, g.Email = t.RevSeq, t.Email
+	return store.WithIdentityGuard(ctx, g)
 }
 
 type identitySharer interface {

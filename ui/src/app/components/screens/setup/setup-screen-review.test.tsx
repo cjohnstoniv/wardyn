@@ -13,6 +13,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 
 
 // api is mocked module-wide (by resolved path), which also covers the wizard's
@@ -106,6 +107,7 @@ vi.mock("../../wardyn/console-view", async (importOriginal) => ({
 
 
 import { SetupScreen, setupDismissed } from "./setup-screen";
+import { setExpectedPrincipal } from "../../../lib/api/core";
 import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
@@ -330,6 +332,35 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
   });
 
+  it("'Finish setup' re-reads the shell's setup status after the install records completion", async () => {
+    const order: string[] = [];
+    completeOnboardingMock.mockImplementationOnce(async () => {
+      order.push("complete");
+    });
+    const onRefresh = vi.fn(async () => {
+      order.push("refresh");
+    });
+    const onDone = vi.fn(() => {
+      order.push("done");
+    });
+    renderScreen(
+      <ModelAccessProvider status={null} onRefresh={onRefresh}>
+        <SetupScreen onDone={onDone} />
+      </ModelAccessProvider>,
+    );
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^Review/ }));
+    onRefresh.mockClear();
+    order.length = 0;
+    await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["complete", "refresh", "done"]);
+  });
+
   // M-6: Finish's "Switch to user view" finishes setup as "Finish setup" does,
   // or `/` keeps landing a single-operator install back in the funnel.
   async function switchToUserFromReview(access: ViewAccess) {
@@ -376,9 +407,23 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(completeOnboardingMock).not.toHaveBeenCalled();
   });
 
+  it("'Switch to user view': the switch after another person signed in still names the person who clicked", async () => {
+    // The server then refuses it rather than move the next person's session to the User view.
+    let marked!: () => void;
+    completeOnboardingMock.mockImplementationOnce(() => new Promise<void>((done) => (marked = done)));
+    setExpectedPrincipal("a@example.com");
+    await switchToUserFromReview("session-admin");
+    await waitFor(() => expect(completeOnboardingMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    marked();
+    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup", false, undefined, "a@example.com"));
+    setExpectedPrincipal("");
+  });
+
   it("'Switch to user view' for an SSO admin switches the session itself, with no second confirmation", async () => {
     await switchToUserFromReview("session-admin");
-    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup"));
+    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup", false, undefined, ""));
     expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
     expect(setupDismissed()).toBe(true);
     // The switch reloads the page; this tab never renders /setup itself.

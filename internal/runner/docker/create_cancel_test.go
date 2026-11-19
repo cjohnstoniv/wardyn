@@ -67,4 +67,8 @@ func TestCreateSandbox_CancelledMidCreateRollsBack(t *testing.T) {
 	if c := f.containers[proxyContainerName(spec.RunID)]; c == nil || !c.removed {
 		t.Errorf("the proxy sidecar survived the cancelled create (record: %+v)", c)
 	}
+	// The resolver volume was seeded before the agent create the cancel hit.
+	if _, ok := f.volumes[dnsVolumeName(spec.RunID)]; ok {
+		t.Error("the run's DNS volume survived the cancelled create")
+	}
 }

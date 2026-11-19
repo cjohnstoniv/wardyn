@@ -241,7 +241,7 @@ Service-specific negatives, all C2: `TestServiceIdentity_NeverOperatorNeverSecon
 > **The sponsor holds the service's reach.** Whoever holds a service token acts with the service's grants and ceiling, which may be wider than the sponsor's own. Rows name the service and sponsor, not the hand on the token ([D10](#11-owner-rulings-2026-10-10)). A sponsor granted `service_attach` also enters the service's sandbox and its connections.
 
 > [!WARNING]
-> **A sponsor disabled only at the identity provider is not seen.** Without SCIM or a session revoke, Wardyn sees no deactivation. The service's tokens work until expiry, at most `90d`, and its live runs continue in every case.
+> **A sponsor disabled only at the identity provider is not seen.** Without SCIM or a session revoke, Wardyn sees no deactivation. The service's tokens work until expiry, at most `90d`, and its live runs continue.
 
 > [!WARNING]
 > **A service token is a bearer.** It is not bound to a workload or network. Bounds: the allow-list, member reach, the required expiry, the sponsor check and revoke. Workload federation is the upgrade path, not built.
@@ -299,7 +299,7 @@ The owner accepted every recommendation except D11, amended, and re-ruled four r
 | D3 | Claiming never grants the `api_token` feature |
 | D4 | Only the sponsor mints service tokens |
 | D5 | Service-token expiry required: at most `90d`, or the deployment cap if lower |
-| D6 | Sponsor suspended or deactivated: service tokens refused at once; live runs continue |
+| Live runs when a service identity stops | **Amended (0.10.0).** Sponsor suspended or deactivated: service tokens refused at once, and the live runs end in the sponsor's SCIM suspension, as an admin suspend or retire ends them |
 | D7 | A sponsor change revokes every token of the identity |
 | D8 | New `service` audit actor type. Fallback to `system` with actor `service:<name>` only if C1 measures the constraint migration as too slow |
 | D9 | Fixed route allow-list; never an operator |

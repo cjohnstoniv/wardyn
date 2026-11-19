@@ -200,6 +200,59 @@ func TestPG_Revive_ARunWithoutComponentRowsRevivesAsBefore(t *testing.T) {
 	}
 }
 
+// A run frozen while it allowed all egress with no list of its own, and no boundary allowlist, is revived
+// after the boundary in hard_limits names one. The revive's seal meets the frozen policy with the boundary
+// as it stands, and reads an allow-all at the seal as a late widening: allow-all goes off and only the
+// run's own hosts inside the boundary's list are kept, here none. The revived proxy allows nothing.
+func TestPG_Revive_AnOpenRunUnderALaterBoundaryAllowlist(t *testing.T) {
+	const owner = "sub-pg-open-revive"
+	h, _ := newRunOwnerPGHarness(t)
+	ctx := t.Context()
+	pg := h.srv.cfg.Store.(store.PG)
+	run, err := pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunRunning, RunnerTarget: "docker", Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != types.RunRunning {
+		if ok, err := pg.UpdateRunStateIf(ctx, run.ID, run.State, types.RunRunning); err != nil || !ok {
+			t.Fatalf("UpdateRunStateIf: %v %v", ok, err)
+		}
+	}
+	if err := pg.SetSandboxRef(ctx, run.ID, "wardyn-agent-"+run.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostOutage, time.Now(), 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost: %v %v", ok, err)
+	}
+	frozen, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081",
+		Policy: types.RunPolicySpec{AllowAllEgress: true}, MITMCACertPEM: "ca-cert", MITMCAKeyPEM: "ca-key"}, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.cfg.RunConfigKey = make([]byte, 32)
+	if err := h.srv.storeRunProxyConfig(ctx, run.ID, frozen); err != nil {
+		t.Fatal(err)
+	}
+	rn := &pgReviveRunner{fakeRunner: &fakeRunner{}}
+	h.srv.cfg.Runner = rn
+	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
+	if _, err := pg.PutBoundary(ctx, types.BoundaryWrite{Mode: types.BoundaryHardLimits,
+		Spec: types.BoundarySpec{AllowedDomains: &[]string{"x.example"}}}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if code, reason := reviveReason(t, h, run, true); code != http.StatusOK || rn.replaced != 1 {
+		t.Fatalf("revive = %d %s (replaced %d), want 200", code, reason, rn.replaced)
+	}
+	cfg, err := proxy.LoadConfigBytes(rn.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policy.AllowAllEgress || len(cfg.Policy.AllowedDomains) != 0 {
+		t.Errorf("revived egress = open %v allowed %v, want closed with nothing allowed", cfg.Policy.AllowAllEgress, cfg.Policy.AllowedDomains)
+	}
+}
+
 // The whole path for a person's own component, through the real doors: the
 // gate admits it and writes the snapshot, dispatch intercepts its header host
 // on :443 under a per-run CA, a revive restores that from the stored config,

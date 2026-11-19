@@ -62,7 +62,7 @@ it("tells the other tabs of a deliberate sign-out once the server has answered i
 
 it("tells nobody of a logout the server never answered, though this tab still re-checks", async () => {
   fetchMock.mockRejectedValueOnce(new TypeError("offline"));
-  await expect(wfetch("/auth/logout", { method: "POST", endsSession: true })).rejects.toThrow("offline");
+  await expect(wfetch("/auth/logout", { method: "POST", endsSession: true })).rejects.toMatchObject({ status: 0 });
   expect(posted()).toEqual([]);
   expect(changed).toHaveBeenCalledTimes(1);
 });

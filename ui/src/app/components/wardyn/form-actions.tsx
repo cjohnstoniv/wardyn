@@ -6,6 +6,7 @@
 // The action bar of a long editor: Cancel and Save pinned to the bottom of the scrolling page, with how many
 // changes are waiting. Dialogs get the same pinning from DialogFooter; this is for editors that live in the
 // page. SectionAnchors is the matching row of jump links at the top of such an editor.
+import { useId } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
@@ -17,6 +18,9 @@ import { FORM_ACTIONS } from "./copy/form-actions";
  * far left, never next to the primary.
  */
 export const INLINE_ACTIONS = "flex flex-wrap items-center justify-end gap-2";
+/** A dialog footer that stays at the bottom of the dialog's scroll while its content scrolls (the dialog's own padding
+ *  is p-6, which the negative margins cover). */
+export const STICKY_FOOTER = "sticky bottom-0 z-10 -mx-6 -mb-6 mt-2 border-t border-border bg-background px-6 py-3";
 /** A destructive action's weight: outline with danger text. It always opens a confirm. */
 export const DANGER_OUTLINE = "border-danger text-danger hover:bg-danger/10 hover:text-danger";
 
@@ -38,6 +42,7 @@ export function FormActions({
   saveLabel = FORM_ACTIONS.SAVE,
   cancelLabel = FORM_ACTIONS.CANCEL,
   describedBy,
+  saveNote,
 }: {
   /** How many changes are waiting; the chip is hidden at 0. */
   changeCount: number;
@@ -52,7 +57,10 @@ export function FormActions({
   saveLabel?: string;
   cancelLabel?: string;
   describedBy?: string;
+  /** Why Save is unavailable: said beside it, and read with it. */
+  saveNote?: string;
 }) {
+  const noteId = useId();
   return (
     <div
       data-testid="form-actions"
@@ -69,10 +77,15 @@ export function FormActions({
       >
         {changeCount > 0 ? FORM_ACTIONS.UNSAVED(changeCount) : null}
       </span>
+      {saveNote && (
+        <span id={noteId} className="text-xs text-muted-foreground">
+          {saveNote}
+        </span>
+      )}
       <Button type="button" variant="ghost" onClick={onCancel} disabled={saving}>
         {cancelLabel}
       </Button>
-      <Button type={submit ? "submit" : "button"} onClick={submit ? undefined : onSave} disabled={saveDisabled || saving} aria-describedby={describedBy}>
+      <Button type={submit ? "submit" : "button"} onClick={submit ? undefined : onSave} disabled={saveDisabled || saving} aria-describedby={[describedBy, saveNote && noteId].filter(Boolean).join(" ") || undefined}>
         {saving ? <Loader2 className="size-4 animate-spin" /> : null}
         {saveLabel}
       </Button>

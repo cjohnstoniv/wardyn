@@ -25,17 +25,20 @@ export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
   desktop_signin_image_not_granted: "Sign-ins need the sign-in desktop image, which your access doesn't include.",
   desktop_signin_open: "A sign-in is already open on this run.",
   desktop_signin_not_open: "No sign-in is open on this run.",
+  desktop_signin_starting:
+    "This sign-in is still starting, so it can't be ended yet. Try again; this lasts at most 6 minutes after the sign-in began.",
   desktop_signin_not_holder: "Someone else began this sign-in, so you can't change it.",
   desktop_signin_pause_failed:
     "Wardyn couldn't confirm the agent had stopped, so the sign-in didn't start and the agent carries on. Try again in a moment.",
-  desktop_signin_start_failed: "The sign-in desktop didn't start, and the agent was resumed. Try again.",
+  desktop_signin_start_failed:
+    "The sign-in desktop didn't start. Wardyn resumes the agent, or ends the run if it can't.",
   desktop_signin_end_failed:
-    "Wardyn couldn't confirm the sign-in desktop closed. The agent stays stopped, and Wardyn keeps trying to close it.",
+    "Wardyn couldn't finish ending the sign-in: the desktop couldn't be confirmed closed, or the agent couldn't be resumed. The agent stays stopped, and Wardyn retries 3 times, then ends the run.",
   desktop_signin_site_invalid: "Enter the site's domain, such as example.com.",
   desktop_signin_share_failed: "That site's login couldn't be shared with the agent. Nothing was shared.",
   desktop_signin_unavailable: "Wardyn couldn't read or save this run's sign-in just now. Try again.",
   desktop_signin_resume_failed:
-    "Wardyn couldn't resume the agent after a sign-in, so it ended the run rather than leave it frozen. Start the run again.",
+    "Wardyn couldn't confirm a sign-in's desktop closed or couldn't resume the agent after it, so it ended the run rather than leave it frozen. Start the run again.",
 };
 
 /** The sentence for a sign-in reason, undefined for any other value. */

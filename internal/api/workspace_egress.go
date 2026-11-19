@@ -355,6 +355,30 @@ func runCloneEgress(ws types.Workspace, trusted []string) (kept, dropped []strin
 	return boundCloneHosts(workspaceCloneEgress(ws), ws, trusted)
 }
 
+// runSelectedCloneEgress is runCloneEgress for the repositories a run clones (cloned, runRepoLocators): a
+// clone host of ws is kept only where some repository the run clones needs it, so a workspace attached for
+// its folders alone (repos: []) adds no clone host. Every run door applies it (deriveRunEgress, the
+// preview, the autonomy posture), so they agree with dispatch, which clones cloned and nothing else. It
+// only ever narrows runCloneEgress; the workspace's own egress (unionWorkspaceEgress) is not touched.
+func runSelectedCloneEgress(ws types.Workspace, cloned, trusted []string) (kept, dropped []string) {
+	var need []string
+	for _, r := range cloned {
+		if strings.TrimSpace(r) != "" {
+			need = append(need, scanEgressDomains(repoCloneURL(r))...)
+		}
+	}
+	hosts := slices.DeleteFunc(workspaceCloneEgress(ws), func(h string) bool {
+		return !slices.ContainsFunc(need, func(n string) bool { return strings.EqualFold(n, h) })
+	})
+	return boundCloneHosts(hosts, ws, trusted)
+}
+
+// runRepoLocators is every repository a run clones: its legacy repo field and its spec's repositories,
+// the two dispatch clones from (buildRepoRecords).
+func runRepoLocators(spec types.RunPolicySpec, legacyRepo string) []string {
+	return append(repoLocatorsOf(spec.WorkspaceRepos), legacyRepo)
+}
+
 // boundCloneHosts is runCloneEgress's rule for clone hosts already derived from ws's repositories,
 // for the door that clones one of them (a scan run).
 func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept, dropped []string) {
@@ -577,7 +601,10 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) {
+			// A host in a spelling the proxy refuses in every request (step 0 denies each one) is not offered:
+			// the approved-egress write refuses it (proxy.ValidConfigHost).
+			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) ||
+				proxy.ValidConfigHost(host) != nil {
 				continue
 			}
 			// Policy allowed these hosts and the network lost the connection:

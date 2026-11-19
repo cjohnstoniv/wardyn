@@ -139,8 +139,9 @@ const driveReclaimTimeout = 30 * time.Second
 //	400  the request cannot name an object (a bad subject, a tier that has no
 //	     single object, a home the drive's template cannot derive)
 //	404  no such drive
-//	409  the substrate refused: the object is not this drive's, a reclaim is
-//	     already in flight, or a run still holds it
+//	409  one of the person's runs is starting, or the substrate refused: the
+//	     object is not this drive's, a reclaim is already in flight, or a run
+//	     still holds it
 //	422  this drive's backend allocates nothing this deployment may destroy
 //	501  the wired runner cannot reclaim at all
 //	500  anything else
@@ -219,6 +220,26 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		// blip to retry. Nothing is audited — no attempt reached the storage.
 		writeErrorReason(w, http.StatusNotImplemented, reasonUserDriveReclaimUnsupported, "this deployment's runner cannot reclaim drive storage; "+
 			"remove the object with the substrate command in docs/OPERATIONS.md instead")
+		return
+	}
+	// SECURITY: one of this person's runs still STARTING may have checked the object and not yet mounted it, or may
+	// make it again right after the reclaim, so the object counts as in use until that run leaves STARTING, as a
+	// member drive's delete counts it (deleteMemberDrive). Each runner also refuses, at the mount, an object that
+	// is no longer the one it checked. A store that cannot answer refuses the reclaim.
+	starting, err := true, error(nil)
+	if st, ok := s.cfg.Store.(interface {
+		MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error)
+	}); ok {
+		starting, err = st.MemberDriveOwnerStarting(r.Context(), homeSubject, watcherLeaseStaleAfter)
+	}
+	if err != nil {
+		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeFailed, false)
+		writeServerError(w, r, "read the person's starting runs", err)
+		return
+	}
+	if starting {
+		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
+		writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "reclaim refused: one of this person's runs is starting")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), driveReclaimTimeout)

@@ -92,7 +92,7 @@ first pass; a sandbox directory with no repository gets a new one with that
 branch checked out over the synced files, one with a repository gets it as
 refs/remotes/laptop/<branch>. --pull-commits brings the sandbox's commits
 since then back as a bundle and fetches them into the branch
-wardyn/sync-<run-id prefix> here, for you to review; your working tree and other
+wardyn/sync-<run-id> here, for you to review; your working tree and other
 branches are never touched. Both need the top of a git work tree, and both
 run git in the sandbox over an SSH exec channel.
 
@@ -121,11 +121,31 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	return cmd
 }
 
+// adoptTypedSyncState moves the sync state an earlier release saved under the run id as it was typed (upper
+// case, urn:uuid:, braces or no hyphens) to stateFile, the run's one name, when that name holds none. A sync
+// that found no state would send every file again, over what the sandbox changed since the last sync.
+func adoptTypedSyncState(typed, runID, stateFile string) {
+	if typed == runID {
+		return
+	}
+	old, err := foldersync.StatePath(typed)
+	if err != nil {
+		return
+	}
+	if _, err := os.Lstat(stateFile); errors.Is(err, os.ErrNotExist) {
+		_ = os.Rename(old, stateFile) // none saved under the typed id either is the usual case
+	}
+}
+
 func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFlags) error {
 	id, err := parseID("run", runID)
 	if err != nil {
 		return err
 	}
+	// One spelling of the run from here on (state file, gateway user, ProxyCommand, git branch), whichever
+	// form uuid.Parse accepted: an upper-case or urn:uuid: id names the same run as the console's.
+	typed := runID
+	runID = id.String()
 	if err := refusePlainHTTPGateway("sync", c.BaseURL); err != nil {
 		return err
 	}
@@ -144,6 +164,11 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	stateFile, err := foldersync.StatePath(runID)
+	if err != nil {
+		return err
+	}
+	adoptTypedSyncState(typed, runID, stateFile)
+	stateRoot, err := foldersync.StateRoot()
 	if err != nil {
 		return err
 	}
@@ -201,7 +226,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, Opts: foldersync.Options{
+	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, StateRoot: stateRoot, Opts: foldersync.Options{
 		Remote: remote, Pull: f.pull, MaxPullBytes: f.maxPullBytes, OrgDeny: rules.Deny,
 		PullDeletes: f.pullDeletes, MaxPullDeletes: f.maxPullDeletes, Notify: cmd.ErrOrStderr(),
 		Trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),
@@ -259,7 +284,12 @@ func portOr22(port string) string {
 }
 
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
+	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
+		if !first && ctx.Err() != nil {
+			return nil // --watch stopped between passes, as the wait below does
+		}
+		sess.report(syncPassReport{Started: true})
 		rep, err := sy.Pass(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -269,6 +299,10 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer,
 			return fmt.Errorf("sync: %w", err)
 		}
 		sess.report(syncPassReport{Complete: true, DeletedOnLaptop: len(rep.DeletedLocal)})
+		if rep.DurabilityWarning != "" && !warned {
+			warned = true
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", rep.DurabilityWarning)
+		}
 		if f.asJSON {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rep); err != nil {
 				return err
@@ -508,9 +542,12 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 // row and, for a run that holds its agent for this folder, takes a complete
 // pass as the first sync landing (or an error as it failing). It is the
 // client's own account; a gateway that predates it refuses it, which is ignored.
+// One with Started goes before each pass, so a session cut before the pass's
+// account records a failure; a gateway that predates Started ignores the field.
 const syncPassRequest = "wardyn-sync-pass"
 
 type syncPassReport struct {
+	Started         bool   `json:"started,omitempty"`
 	Complete        bool   `json:"complete"`
 	Error           string `json:"error,omitempty"`
 	DeletedOnLaptop int    `json:"deleted_on_laptop"`

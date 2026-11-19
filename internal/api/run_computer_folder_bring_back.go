@@ -43,9 +43,9 @@ func bringBackBy(ctx context.Context) (bringBackActor, bool) {
 // state, the pass's record (files, bytes, refused paths, any error), and whether the sandbox's
 // removal was confirmed. A pass can succeed while the teardown after it fails.
 type computerFolderBringBackView struct {
-	State          types.RunState          `json:"state"`
-	Back           *types.FolderPassRecord `json:"back,omitempty"`
-	SandboxRemoved bool                    `json:"sandbox_removed"`
+	State          types.RunState  `json:"state"`
+	Back           *folderPassView `json:"back,omitempty"`
+	SandboxRemoved bool            `json:"sandbox_removed"`
 }
 
 // handleBringComputerFolderBack serves POST /runs/{id}/computer-folder/bring-back. Only the run's
@@ -65,6 +65,16 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
+	rule, _, rerr := s.runDataOutRule(r.Context(), id)
+	if rerr != nil {
+		refuseDataOutUnreadable(r.Context(), w, id, rerr)
+		return
+	}
+	if rule != types.TransferAllowed {
+		s.auditDataOutDenied(r.Context(), id, actorType, principal, "computer_folder", rule)
+		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutFolderMsg)
+		return
+	}
 	folder, refusal := s.bringBackRefusal(r.Context(), run)
 	if refusal.write(s, w, r) {
 		return
@@ -75,8 +85,20 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, bringBackKey{}, bringBackActor{actorType, principal})
+	// The run's lock is held from the state write through the pass (lockRunEnd's reason), as an end hold for the
+	// dedicated budget; every hold taken is a refusal too.
+	b := endHoldDedicated
+	if run.MachineKind.IsMacOSVM() {
+		b += macOSVMTeardownBudget
+	}
+	ctx, unlock, err := s.holdRunEnd(ctx, id, b)
+	if err != nil {
+		writeLockRefused(w, r, err)
+		return
+	}
+	defer unlock()
 	// One winner against a kill or any other end: both move the run from RUNNING.
-	applied, err := s.casRunState(ctx, id, types.RunRunning, types.RunStopped)
+	applied, err := s.casRunStateHeld(ctx, id, types.RunRunning, types.RunStopped)
 	if err != nil {
 		writeServerError(w, r, "stop the run for its bring-back", err)
 		return
@@ -86,17 +108,17 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	data := map[string]any{"folder": folder.Name, "state": types.RunStopped}
-	s.recordAudit(ctx, s.auditEvent(&id, actorType, principal, "run.folder.finalize", id.String(), "success", mustJSON(data)))
+	s.recordAuditHeld(ctx, s.auditEvent(&id, actorType, principal, "run.folder.finalize", id.String(), "success", mustJSON(data)))
 	// Its error is already audited by the tail; what the person is told is read back below.
 	_ = s.finalizeRunEffects(ctx, id, run.SandboxRef, "run.folder.finalize", data, false, true)
 	view := computerFolderBringBackView{State: types.RunStopped}
 	// The tail clears the run's sandbox ref only once its StopSandbox succeeded.
-	if cur, err := s.cfg.Store.GetRun(ctx, id); err == nil {
+	if cur, err := s.getRunHeld(ctx, id); err == nil {
 		view.SandboxRemoved = cur.SandboxRef == ""
 	}
 	if st, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
-		if rec, err := st.RunLocalFolderStatus(ctx, id); err == nil {
-			view.Back = rec.Back
+		if rec, err := heldRead(ctx, func(ctx context.Context) (types.RunLocalFolderStatus, error) { return st.RunLocalFolderStatus(ctx, id) }); err == nil {
+			view.Back = newFolderPassView(rec.Back)
 		}
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -262,7 +284,5 @@ func (s *Server) sandboxExecOutput(ctx context.Context, ref string, argv ...stri
 	if sess.Stdout == nil || sess.Wait == nil {
 		return "", -1, errors.New("the exec has no output")
 	}
-	out, _ := io.ReadAll(io.LimitReader(sess.Stdout, 8<<10))
-	code, err := sess.Wait()
-	return string(out), code, err
+	return waitExecWithin(ctx, sess, 8<<10)
 }

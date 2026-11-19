@@ -190,6 +190,7 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		// A bound drive's runner is the run's (kindTargets holds the run to it).
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
+	p.RequireManagedDevice = requiresManagedDevice(sc)
 	// A bound folder's runner is the run's too (kindTargets holds the run to it).
 	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
 	if refusal != nil {
@@ -223,11 +224,12 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 			p.Spec.ProxyConfig.Policy.EligibleGrants[i].OwnerOnly = true
 		}
 	}
-	intents, upstreams, localModels, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
+	intents, upstreams, lanes, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
 	if refusal != nil {
 		return placement.LocalPlan{}, refusal
 	}
-	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams, p.Spec.ProxyConfig.LocalModels = intents, upstreams, localModels
+	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams, p.Spec.ProxyConfig.LocalModels = intents, upstreams, lanes.localModels
+	p.Spec.ProxyConfig.GatewayIdentity = localGatewayRoutes(lanes.gatewayRoutes, comps)
 	return p, nil
 }
 
@@ -393,7 +395,7 @@ func (s *Server) localEligibilityRefusal(r *http.Request, ceiling governanceCeil
 		f.decision = &d
 		return f
 	}
-	return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+	return runError(ref.Reason.Status(), string(ref.Reason), ref.Sentence())
 }
 
 // localGrantDelivery is how one grant of a local run is delivered: its OD-12

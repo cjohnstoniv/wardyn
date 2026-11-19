@@ -47,7 +47,7 @@ var perAreaCases = []perAreaCase{
 	{name: "almsearch undocumented resource POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/_apis/search/notaresource", `{}`), want: "unclassified_read"},
 	{name: "almsearch undocumented resource GET", req: onHost("almsearch.dev.azure.com", http.MethodGet, "/acme/_apis/search/status", ""), want: "unclassified_read"},
 	{name: "git push POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pushes", `{"refUpdates":[{"name":"refs/heads/wardyn/run1"}]}`), want: "code_write"},
-	{name: "pull request POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequests", `{}`), want: "pr"},
+	{name: "pull request POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequests", `{}`), want: "pr_create"},
 	{name: "pull request bypass PATCH", req: adoReq(http.MethodPatch, "/acme/proj/_apis/git/repositories/r1/pullrequests/7", `{"completionOptions":{"bypassPolicy":true}}`), want: "policy_bypass"},
 	{name: "repository DELETE", req: adoReq(http.MethodDelete, "/acme/proj/_apis/git/repositories/r1", ""), want: "repo_admin"},
 	{name: "git-over-HTTP is refused", req: adoReq(http.MethodGet, "/acme/proj/_git/r1/info/refs", ""), wantErr: true},

@@ -294,10 +294,10 @@ func TestTeardown_WaitPodsGoneTimeoutIsAnError(t *testing.T) {
 	}
 }
 
-// TestTeardown_UnresolvedRunIDLabel covers the fail-closed edge case: the
-// pod is found, but its wardyn.run-id label is missing (so the sibling
-// proxy/netpols/secret cannot be located) — teardown must surface this
-// honestly rather than report a false success.
+// TestTeardown_UnresolvedRunIDLabel covers the fail-closed edge case: a pod
+// is found under a ref that is not a wardyn agent pod name, so no run (and no
+// sibling proxy/netpols/secret) can be keyed from it — teardown must surface
+// this honestly rather than report a false success, and leave the pod alone.
 func TestTeardown_UnresolvedRunIDLabel(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	name := "wardyn-agent-orphan"
@@ -312,6 +312,62 @@ func TestTeardown_UnresolvedRunIDLabel(t *testing.T) {
 	err := d.StopSandbox(context.Background(), name)
 	if err == nil {
 		t.Fatal("StopSandbox on a label-less pod: want an error, got nil")
+	}
+}
+
+// TestTeardown_KeysOnTheRefNotTheLabel: the run torn down is the ref's, never the one its agent pod's
+// wardyn.run-id label names, which anyone who can patch the pod can change. A label naming another
+// live run leaves that run whole; any changed label still reclaims every object of the ref's run,
+// the relabelled pod by its name.
+func TestTeardown_KeysOnTheRefNotTheLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		relabel func(labels map[string]string, other uuid.UUID)
+	}{
+		{"label names another live run", func(l map[string]string, other uuid.UUID) { l[labelRun] = other.String() }},
+		{"label removed", func(l map[string]string, _ uuid.UUID) { delete(l, labelRun) }},
+		{"label unparseable", func(l map[string]string, _ uuid.UUID) { l[labelRun] = "not-a-run-id" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs := newTestDriver(t, Config{})
+			installProxyIPReactor(t, cs, "10.244.0.9")
+			installAgentRunningReactor(t, cs)
+			ctx := context.Background()
+			specA, specB := testSandboxSpec(), testSandboxSpec()
+			sbA, err := d.CreateSandbox(ctx, specA)
+			if err != nil {
+				t.Fatalf("CreateSandbox A: %v", err)
+			}
+			if _, err := d.CreateSandbox(ctx, specB); err != nil {
+				t.Fatalf("CreateSandbox B: %v", err)
+			}
+			before := runObjectCounts(t, cs, specB.RunID)
+			obj, err := cs.Tracker().Get(podsGVR, testNamespace, sbA.Ref)
+			if err != nil {
+				t.Fatalf("get A's agent pod: %v", err)
+			}
+			pod := obj.(*corev1.Pod).DeepCopy()
+			tc.relabel(pod.Labels, specB.RunID)
+			if err := cs.Tracker().Update(podsGVR, pod, testNamespace); err != nil {
+				t.Fatalf("relabel A's agent pod: %v", err)
+			}
+
+			if err := d.KillSandbox(ctx, sbA.Ref); err != nil {
+				t.Fatalf("KillSandbox A: %v", err)
+			}
+			assertRunObjectsGone(t, cs, specA.RunID)
+			if _, err := cs.Tracker().Get(podsGVR, testNamespace, sbA.Ref); !isNotFound(err) {
+				t.Errorf("A's relabelled agent pod is still there (get err %v)", err)
+			}
+			if after := runObjectCounts(t, cs, specB.RunID); after != before {
+				t.Errorf("stopping run A changed run B's objects: %+v, want %+v", after, before)
+			}
+			for _, name := range []string{agentPodName(specB.RunID), proxyPodName(specB.RunID)} {
+				if _, err := cs.Tracker().Get(podsGVR, testNamespace, name); err != nil {
+					t.Errorf("run B's pod %s: %v, want it kept", name, err)
+				}
+			}
+		})
 	}
 }
 

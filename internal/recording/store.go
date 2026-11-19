@@ -159,7 +159,7 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 	}
 	defer root.Close()
 	tmpName := stagingName(key)
-	tmp, err := root.OpenFile(tmpName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	tmp, err := createStaging(ctx, root, key, tmpName)
 	if err != nil {
 		return err
 	}
@@ -206,6 +206,22 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 	// The cast is stored once the rename returns. Some filesystems (FUSE, 9p, older CIFS) cannot fsync
 	// a directory and answer EINVAL or ENOTSUP; that must not turn a stored cast into an error.
 	return syncDirTolerant(dir)
+}
+
+// createStaging makes saveFile's staging file under key's run lock, after the erasure check, and
+// releases the lock before the body streams into it. A save that comes after an erasure then names no
+// new file of the run and reads none of its body, so a crash mid-upload cannot leave one; an erasure that
+// comes after the file is made finds it by name and removes it (removeRunFiles).
+func createStaging(ctx context.Context, root *os.Root, key, name string) (*os.File, error) {
+	lock, err := lockFSRun(ctx, root, key)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := checkFSErased(root, key); err != nil {
+		return nil, err
+	}
+	return root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 }
 
 // syncDir is the directory fsync saveFile makes after its rename; a variable so a test can answer
@@ -261,6 +277,15 @@ var syncFile = func(f *os.File) error { return f.Sync() }
 // cast may still be appended to and mtime keeps advancing — do not "improve"
 // this to birth time.
 func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
+	// Bounded, as PGStore.Sweep is: the caller sweeps synchronously, so a run lock held for good must not
+	// stall it. Timing out skips the rest of this sweep; the next one retries.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
 	ents, err := os.ReadDir(s.root)
 	if err != nil {
 		return 0, err
@@ -278,13 +303,50 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 		if ierr != nil || !info.ModTime().Before(cutoff) {
 			continue
 		}
-		if rerr := os.Remove(filepath.Join(s.root, name)); rerr != nil {
+		sweepAfterStat(name)
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		gone, rerr := sweepExpired(ctx, root, name, cutoff)
+		if rerr != nil {
 			errs = append(errs, rerr)
 			continue
 		}
-		removed++
+		if gone {
+			removed++
+		}
 	}
 	return removed, errors.Join(errs...)
+}
+
+// sweepAfterStat runs between Sweep's first stat of name and its removal; a variable so a test can
+// replace the cast in that window.
+var sweepAfterStat = func(string) {}
+
+// sweepExpired removes name if it is still older than cutoff. A cast or log is judged again under its
+// run's lock: a save replaces it (rename) or rewrites it (in place) under that lock, so the first stat
+// may be of the file the save has since replaced. A staging file is written outside the lock; one this
+// old is a save that died, and removing it is all there is to do.
+func sweepExpired(ctx context.Context, root *os.Root, name string, cutoff time.Time) (bool, error) {
+	if !strings.HasPrefix(name, tmpCastPrefix) {
+		lock, err := lockFSRun(ctx, root, strings.TrimSuffix(name, filepath.Ext(name)))
+		if err != nil {
+			return false, err
+		}
+		defer lock.Close()
+		info, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) || (err == nil && !info.ModTime().Before(cutoff)) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	if err := root.Remove(name); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RunDeleter durably fences a run before deleting all of its recordings.

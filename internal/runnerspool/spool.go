@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/ackcursor"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/filelock"
+	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 )
 
@@ -153,11 +154,27 @@ type Spool struct {
 	manifestWrites uint64
 }
 
-// queuedAppend is one appender's record and the channel its outcome is sent on.
+// queuedAppend is one appender's record, what kind of record it is, and the channel its outcome is sent on.
 type queuedAppend struct {
 	decision egress.DecisionLog
+	kind     appendKind
 	done     chan error
 }
+
+// appendKind is what a local producer's record may take, and what it means when it does not fit (commit).
+type appendKind uint8
+
+const (
+	// appendRefusable is Append's: a record of a request that was not sent. It stays out of the loss reserve,
+	// and one that does not fit is a refused admission, counted in Drops (replayed as builtin:spool-full).
+	appendRefusable appendKind = iota
+	// appendSent is AppendAdmitted's: a record of a request that was sent. It stays out of the loss reserve, and
+	// one that does not fit is lost, never counted as a refusal; its producer reports the loss.
+	appendSent
+	// appendLossRow is AppendLoss's: the producer's own report of what it lost, which may take the loss reserve.
+	// One that does not fit is not counted.
+	appendLossRow
+)
 
 // Open refuses unsafe or corrupt existing state. A missing directory starts a
 // new private stream; an existing stream never silently resets its cursor.
@@ -165,24 +182,10 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 	if runID == uuid.Nil {
 		return nil, errors.New("spool requires a run id")
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	st, err := os.Lstat(dir)
+	_, lerr := os.Lstat(dir)
+	root, lock, err := openLock(dir, errors.Is(lerr, os.ErrNotExist))
 	if err != nil {
 		return nil, err
-	}
-	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("spool directory must be private and not a symlink")
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	lock, err := root.OpenFile("lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		root.Close()
-		return nil, inDir(dir, err)
 	}
 	st, statErr := lock.Stat()
 	link, linkErr := root.Lstat("lock")
@@ -212,7 +215,8 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 				return e
 			}
 			// A crash inside the first manifest write leaves its temporary file, which writeBytes replaces.
-			names = slices.DeleteFunc(names, func(n string) bool { return n == "write.tmp" })
+			// A live-activity marker the daemon wrote into this directory before the manifest is not existing data.
+			names = slices.DeleteFunc(names, func(n string) bool { return n == "write.tmp" || runneractivity.IsMarker(n) })
 			if len(names) != 1 || names[0] != "lock" {
 				return errors.New("spool metadata missing beside existing data")
 			}
@@ -228,6 +232,59 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// afterOpenRoot runs between opening the spool directory and creating its lock; a test removes the
+// directory there, as a sync or backup tool would.
+var afterOpenRoot = func() {}
+
+// openLock opens the spool directory and its lock file. When this call made the directory and it is gone
+// before the lock is created, it makes the directory again, once: a stream that existed before this call
+// is never recreated, so erased evidence stays erased.
+func openLock(dir string, madeDir bool) (*os.Root, *os.File, error) {
+	for attempt := 0; ; attempt++ {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, nil, err
+		}
+		st, err := os.Lstat(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&0077 != 0 {
+			return nil, nil, errors.New("spool directory must be private and not a symlink")
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		afterOpenRoot()
+		lock, err := root.OpenFile("lock", os.O_CREATE|os.O_RDWR, 0600)
+		gone := dirChanged(root, dir)
+		if err == nil && !gone {
+			return root, lock, nil
+		}
+		if lock != nil {
+			lock.Close()
+		}
+		root.Close()
+		if err != nil && errors.Is(err, os.ErrNotExist) && madeDir && attempt == 0 {
+			continue
+		}
+		if gone {
+			return nil, nil, fmt.Errorf("spool directory %s was removed or replaced while it was opened", dir)
+		}
+		return nil, nil, inDir(dir, err)
+	}
+}
+
+// dirChanged reports whether dir no longer names the directory root holds.
+func dirChanged(root *os.Root, dir string) bool {
+	held, err := root.Stat(".")
+	if err != nil {
+		return true
+	}
+	now, err := os.Lstat(dir)
+	return err != nil || !os.SameFile(held, now)
 }
 
 // inDir puts dir in front of the name an os.Root error carries, which is relative to the spool, so the
@@ -322,21 +379,31 @@ func (s *Spool) writeManifest(m manifest) error {
 
 // Append commits before returning. An unreserved producer must refuse on any
 // error; the proxy separately reserves capacity before forwarding requests.
+// The record is one of a request that was not sent: one that does not fit is a
+// refused admission (Drops).
 func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision)
+	return s.append(ctx, decision, appendRefusable)
 }
 
-// AppendAdmitted finishes a request whose proxy already reserved capacity.
-// Overflow refuses new requests, never discards this previously admitted tail.
+// AppendAdmitted writes a record of a request that was sent. One that does not
+// fit is lost, and ErrFull says so: it is not a refused admission, so Drops does
+// not count it, and its producer must report the loss itself.
 func (s *Spool) AppendAdmitted(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision)
+	return s.append(ctx, decision, appendSent)
+}
+
+// AppendLoss writes the producer's own report of what it lost, the one local
+// record that may take the last record slot and LossReserveBytes. One that does
+// not fit is not counted.
+func (s *Spool) AppendLoss(ctx context.Context, decision egress.DecisionLog) error {
+	return s.append(ctx, decision, appendLossRow)
 }
 
 // append refuses only a record that does not fit. A refusal counted earlier
 // waits in Drops for replay to report it; it does not close a spool with room,
 // which a dropped runner link would otherwise keep closed until reconnect.
-func (s *Spool) append(ctx context.Context, decision egress.DecisionLog) error {
-	q := &queuedAppend{decision: decision, done: make(chan error, 1)}
+func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, kind appendKind) error {
+	q := &queuedAppend{decision: decision, kind: kind, done: make(chan error, 1)}
 	s.qmu.Lock()
 	s.queue = append(s.queue, q)
 	s.qmu.Unlock()
@@ -385,7 +452,16 @@ func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
 			errs[i] = err
 			continue
 		}
-		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes {
+		// Only a loss row takes the last record slot and LossReserveBytes, as a remote grant leaves them (grantRoom).
+		records, bytes := int64(MaxRecords-1), int64(MaxBytes-LossReserveBytes)
+		if q.kind == appendLossRow {
+			records, bytes = MaxRecords, MaxBytes
+		}
+		if m.Last-m.Ack.Seq >= records || m.Bytes+int64(len(b)) > bytes || len(b) > MaxRecordBytes {
+			if q.kind != appendRefusable {
+				errs[i] = ErrFull
+				continue
+			}
 			if m.Drops == ^uint64(0) {
 				errs[i] = errors.New("spool overflow counter exhausted")
 				continue

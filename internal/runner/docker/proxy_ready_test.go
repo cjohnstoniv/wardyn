@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -47,6 +49,9 @@ func TestCreateSandbox_ProxyNeverReadyFailsTheRun(t *testing.T) {
 	var notReady *proxyNotReadyError
 	if !errors.As(err, &notReady) {
 		t.Fatalf("CreateSandbox = %v; want a *proxyNotReadyError", err)
+	}
+	if !strings.HasPrefix(notReady.Error(), proxyNotReadyMessage+": ") {
+		t.Errorf("not-ready reason %q; want it named as running and not listening, with nothing it waits for", notReady.Error())
 	}
 	if _, made := f.createdAt[agentContainerName(runID)]; made {
 		t.Error("the agent must never be created behind a proxy that never became ready")
@@ -91,6 +96,45 @@ func TestReplaceProxy_WaitsForReady(t *testing.T) {
 	var notReady *proxyNotReadyError
 	if !errors.Is(err, runner.ErrProxyReplaceFailed) || !errors.As(err, &notReady) {
 		t.Fatalf("ReplaceProxy with a proxy that never signals = %v; want ErrProxyReplaceFailed wrapping *proxyNotReadyError", err)
+	}
+	if want := "; it may be waiting for its first run-token renewal with the organisation: "; !strings.Contains(err.Error(), want) {
+		t.Errorf("a replacement's not-ready reason %q; want it to name its first renewal (%q)", err.Error(), want)
+	}
+}
+
+// A runner's proxy that is running but not ready at the bound is named as maybe waiting for its decision
+// sink, never as exited.
+func TestCreateSandbox_RunnerProxyNeverReadyNamesTheDecisionSink(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	f.proxyNeverReady = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal",
+		RunnerID: "runner-1", DecisionSink: newFakeSink(), Evidence: &memEvidence{m: map[uuid.UUID][]byte{}}})
+	d.proxyReady = 200 * time.Millisecond
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	var notReady *proxyNotReadyError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("CreateSandbox = %v; want a *proxyNotReadyError", err)
+	}
+	if want := proxyNotReadyMessage + "; it may be waiting for wardyn-runnerd's decision sink: "; !strings.HasPrefix(notReady.Error(), want) {
+		t.Errorf("not-ready reason %q; want the prefix %q", notReady.Error(), want)
+	}
+}
+
+// The not-ready reason names what the proxy may be waiting for, by what the runner started it with.
+func TestProxyNotReadyErrorNamesWhatTheProxyWaitsFor(t *testing.T) {
+	for _, tc := range []struct {
+		sink, renew bool
+		want        string
+	}{
+		{false, false, "docker: the proxy is running but has not said it is listening: tail"},
+		{false, true, "docker: the proxy is running but has not said it is listening; it may be waiting for its first run-token renewal with the organisation: tail"},
+		{true, false, "docker: the proxy is running but has not said it is listening; it may be waiting for wardyn-runnerd's decision sink: tail"},
+		{true, true, "docker: the proxy is running but has not said it is listening; it may be waiting for its first run-token renewal with the organisation, or for wardyn-runnerd's decision sink: tail"},
+	} {
+		if got := (&proxyNotReadyError{tail: "tail", waits: proxyWaitsFor(tc.sink, tc.renew)}).Error(); got != tc.want {
+			t.Errorf("sink=%v renew=%v: %q, want %q", tc.sink, tc.renew, got, tc.want)
+		}
 	}
 }
 

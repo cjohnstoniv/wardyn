@@ -47,7 +47,7 @@ const (
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
 	ruleSourceMint        = "brokered:mint"
-	ruleSourceApprovals   = "brokered:approvals"
+	ruleSourceApprovals   = egress.RuleSourceApprovals
 	ruleSourceRecordings  = "brokered:recording"
 	ruleSourceScanResults = "brokered:scan-result"
 	// A tool call decided by the run's own tool_rules, with no human asked.
@@ -101,8 +101,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
 		p.handleBrokerSSOToken(w, r)
-	case p.vm && onVMNetLane(r.Context()) && r.Method == http.MethodPost && path == routeVMNetRefusals:
-		p.handleVMNetRefusal(w, r)
+	case strings.HasPrefix(path, routeVMNetPrefix):
+		p.handleVMNetReport(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):
@@ -212,6 +212,10 @@ type toolApprovalRequest struct {
 		Env  []string `json:"env,omitempty"`
 		// Reason is a human_takeover's only field: the agent's own words to the person.
 		Reason string `json:"reason,omitempty"`
+		// Input is the tool's whole input, which the gate sends beside the summary (never
+		// more than 32 KiB of it). Only an approve_each call reads it: it holds the
+		// arguments a person approves.
+		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"payload"`
 }
 
@@ -277,7 +281,7 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "tool approval needs a tool or a cmd", http.StatusBadRequest)
 		return
 	}
-	if handled := p.decideByToolRules(w, r, scope.Tool); handled {
+	if handled := p.decideByToolRules(w, r, scope.Tool, body.Payload.Input); handled {
 		return
 	}
 	fwd, err := json.Marshal(struct {
@@ -506,12 +510,13 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 // Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
 func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
 	return egress.Request{AuditReservation: spoolTicket(r.Context()),
-		RunID:  p.runID,
-		Host:   host,
-		Port:   port,
-		Method: strings.ToUpper(r.Method),
-		Path:   r.URL.Path,
-		Time:   p.now(),
+		RunID:   p.runID,
+		Host:    host,
+		Port:    port,
+		Method:  strings.ToUpper(r.Method),
+		Path:    r.URL.Path,
+		Time:    p.now(),
+		Relayed: p.relayLane(r.Context()),
 	}
 }
 
@@ -588,7 +593,12 @@ func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
+	respBody, readErr := readWholeAnswer(resp.Body)
+	if readErr != nil {
+		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
+		p.httpError(w, "control plane error", readErr, http.StatusBadGateway)
+		return
+	}
 	var approvalID *uuid.UUID
 	if idOf != nil {
 		approvalID = idOf(resp.StatusCode, respBody)
@@ -600,8 +610,9 @@ func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method
 		cause = orgRefusalReason(respBody)
 	}
 	// An ssh_key's private key stays in this proxy: its ssh agent signs with
-	// it, and a raw mint answer carrying one is withheld from the sandbox.
-	if ruleSource == ruleSourceMint && resp.StatusCode == http.StatusOK && isSSHKeyMintAnswer(respBody) {
+	// it, and a raw mint answer carrying one, or one this proxy cannot read
+	// as another kind, is withheld from the sandbox.
+	if ruleSource == ruleSourceMint && resp.StatusCode == http.StatusOK && mintAnswerWithheld(respBody) {
 		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
 		http.Error(w, sshKeyMintRefused, http.StatusForbidden)
 		return
@@ -623,6 +634,20 @@ func orgRefusalReason(body []byte) string {
 }
 
 var reasonToken = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// readWholeAnswer reads a control-plane answer whole, or returns no bytes at all. An answer cut short or
+// over the cap is never relayed in part: a mint's private key can come before the fields that would have
+// identified it as one, so nothing downstream ever sees a partial body.
+func readWholeAnswer(body io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(body, maxBrokeredBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxBrokeredBody {
+		return nil, fmt.Errorf("control-plane answer over %d bytes", maxBrokeredBody)
+	}
+	return b, nil
+}
 
 // approvalIDOn409 reads the approval id only out of a 409 (mint pending/denied).
 func approvalIDOn409(status int, body []byte) *uuid.UUID {

@@ -26,6 +26,7 @@ import type {
   RunPolicyView,
   RunResources,
 } from "../types";
+import type { ModelUsage } from "../types/model-usage";
 import type { ComponentRef } from "../types/components";
 import type { PolicyPreviewResult } from "../types/policy-preview";
 import type {
@@ -41,6 +42,7 @@ import type {
 } from "../types/new-run-contract";
 import {
   asJson,
+  errEnvelope,
   errText,
   HttpError,
   LAUNCH_DEADLINE_MS,
@@ -291,11 +293,29 @@ export const runs = {
     return body.ticket;
   },
 
+  // POST /api/v1/runs/{id}/desktop/watch-ticket — a single-use ticket that opens a background macOS VM run's built-in
+  // desktop, view only. It is spent at app "__desktop" like any desktop ticket; the server refuses it with the
+  // sentence the run's background_watch carried.
+  async watchTicket(runId: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/watch-ticket`, { method: "POST" });
+    const body = await asJson<{ ticket: string; expires_in_seconds: number }>(res);
+    return body.ticket;
+  },
+
+  // POST /api/v1/runs/{id}/desktop/window — opens a window onto a macOS VM run on the caller's own Mac. It answers once
+  // the window is up (the server waits up to 30 seconds for the Mac); a refusal carries its sentence. The run read's
+  // mac_window says the window is open after it.
+  async openMacWindow(runId: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/window`, { method: "POST", body: JSON.stringify({ trigger: "run_page" }) });
+    await asJson<unknown>(res);
+  },
+
   // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
   // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
   // inbound all answer the same 404.
-  async appTicket(runId: string, app: string): Promise<string> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/apps/${encodeURIComponent(app)}/ticket`, { method: "POST" });
+  // `person`, when given: the ticket follows a read and names the person the open began under.
+  async appTicket(runId: string, app: string, person?: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/apps/${encodeURIComponent(app)}/ticket`, { method: "POST", asPerson: person });
     const body = await asJson<{ ticket: string }>(res);
     return body.ticket;
   },
@@ -376,11 +396,13 @@ export const runs = {
     return asJson<{ id: string; title: string }>(res);
   },
 
-  // POST /api/v1/runs/{id}/kill  -> 202 Accepted
-  async killRun(id: string): Promise<void> {
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill`, { method: "POST" });
+  // POST /api/v1/runs/{id}/kill  -> 202 Accepted. notStarted asks ?not_started=true: the server ends the run only
+  // while it has not started, and refuses with 409 run_kill_started once it has. The refusal keeps its reason.
+  async killRun(id: string, opts?: { notStarted?: boolean }): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill${opts?.notStarted ? "?not_started=true" : ""}`, { method: "POST" });
     if (!res.ok) {
-      throw new HttpError(res.status, await errText(res));
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
     }
   },
 
@@ -407,8 +429,9 @@ export const runs = {
   // from the run's own stored config, with the owner's CURRENT profile denies
   // unioned over the frozen policy; a rebooted/outaged run's agent is started
   // again behind it. Authority is always the OWNER's, never the caller's.
-  async reviveRun(id: string): Promise<ReviveResult> {
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}/revive`, { method: "POST" });
+  // `person`, when given: the revive follows another write and names the person that began (core.ts WfetchInit.asPerson).
+  async reviveRun(id: string, person?: string): Promise<ReviveResult> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/revive`, { method: "POST", asPerson: person });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     // An older server answers null when the owner's ceiling added no host.
     const body = await asJson<ReviveResult>(res);
@@ -466,6 +489,19 @@ export const runs = {
     return asJson<RunResources>(res);
   },
 
+  // GET /api/v1/runs/{id}/model-usage — token counts the run proxy read off the
+  // provider's own answers. Stored rows, so a finished run answers too. The
+  // refusal keeps its reason: the console tells a server with no such route (a
+  // 404 with no envelope) from a run the caller may not read (a 404 with one).
+  async getModelUsage(runId: string): Promise<ModelUsage> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/model-usage`, { method: "GET" });
+    if (!res.ok) {
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
+    }
+    return asJson<ModelUsage>(res);
+  },
+
   // GET /api/v1/runs/{id}/attach/holder (renamed from attach-holder in 0.8 —
   // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,
   // for one minor) — who currently holds the run's shared tmux PTY.
@@ -515,9 +551,10 @@ export const runs = {
   // a per-run failure (including a rebooted run's own "revive it from the
   // run's page" 409) never aborts the rest — see AdminRestartResult.
   // timeoutMs is the caller's deadline for the whole batch: the default 60s bounds a hang, not a
-  // restart of several runs one after another.
-  async restartAdminRuns(runIds: string[], timeoutMs?: number): Promise<AdminRestartResponse> {
-    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) }, timeoutMs);
+  // restart of several runs one after another. `person`: every batch names the person the restart began under
+  // (core.ts WfetchInit.asPerson).
+  async restartAdminRuns(runIds: string[], timeoutMs?: number, person?: string): Promise<AdminRestartResponse> {
+    const res = await wfetch("/admin/runs/restart", { method: "POST", asPerson: person ?? true, body: JSON.stringify({ run_ids: runIds }) }, timeoutMs);
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AdminRestartResponse>(res);
   },

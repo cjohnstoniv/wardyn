@@ -87,10 +87,12 @@ type AccessCredential struct {
 	LifetimeSec int    `json:"lifetime_sec,omitempty"`
 	Renewed     bool   `json:"renewed,omitempty"`
 	AfterEnd    string `json:"after_end"`
-	// Namespaces and Access (read_only or read_write) say what a cluster
+	// Namespaces and Access (read_only, restart or read_write) say what a cluster
 	// account (kind kube_api) may reach; absent for every other kind.
 	Namespaces []string `json:"namespaces,omitempty"`
 	Access     string   `json:"access,omitempty"`
+	// ApproveEach says a person approves each of the account's writes, one exact request at a time.
+	ApproveEach bool `json:"approve_each,omitempty"`
 }
 
 // AccessUnlisted is the line for a host nothing lists: the effective

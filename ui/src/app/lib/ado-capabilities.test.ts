@@ -33,6 +33,9 @@ describe("ADO_CAPABILITIES — the console's copy of adoscope's grantable set", 
       "code_read",
       "code_write",
       "pr",
+      "pr_create",
+      "pr_vote",
+      "pr_complete",
       "policy_admin",
       "policy_bypass",
       "repo_admin",
@@ -75,6 +78,7 @@ describe("ADO_CAPABILITIES — the console's copy of adoscope's grantable set", 
 
   it("flags High risk and the eleven reads exactly as the approved mock does", () => {
     expect(ADO_CAPABILITIES.filter((c) => c.highRisk).map((c) => c.cap)).toEqual([
+      "pr_vote",
       "policy_admin",
       "policy_bypass",
       "repo_admin",

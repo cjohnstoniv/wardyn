@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { isKillStartedRefusal } from "./kill-started";
 import { policies } from "./policies";
 import { runs } from "./runs";
 import { secrets } from "./secrets";
@@ -36,6 +37,18 @@ describe("server-error passthrough (write/delete endpoints)", () => {
   it("killRun() surfaces the server's actual reason, not a generic string", async () => {
     fetchMock.mockResolvedValueOnce(errorResponse(409, "run is already terminal"));
     await expect(runs.killRun("run-1")).rejects.toMatchObject({ message: "run is already terminal" });
+  });
+
+  it("killRun() with notStarted asks ?not_started=true and keeps the refusal's reason; without it the URL is unchanged", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "run has started", reason: "run_kill_started" }), { status: 409, headers: { "Content-Type": "application/json" } }),
+    );
+    const refused = await runs.killRun("run-1", { notStarted: true }).catch((e: unknown) => e);
+    expect(isKillStartedRefusal(refused)).toBe(true);
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/runs\/run-1\/kill\?not_started=true$/);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await runs.killRun("run-1");
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/runs\/run-1\/kill$/);
   });
 
   it("deletePolicy() surfaces the server's actual reason on a non-404 failure", async () => {

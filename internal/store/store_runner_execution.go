@@ -47,7 +47,10 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 	if err != nil {
 		return out, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
+	defer rollbackRunWrite(ctx, tx)
+	if err := setRunWriteTimeout(ctx, tx); err != nil {
+		return out, err
+	}
 	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
 	if err != nil {
 		return out, err
@@ -77,7 +80,7 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 		if accepted {
 			return out, ErrRunnerExecutionRefused
 		}
-		return current, tx.Commit(ctx)
+		return current, commitRunWrite(ctx, tx)
 	}
 	if current.Generation != previous || (current.Generation != uuid.Nil && current.ExecID == "") {
 		return out, ErrRunnerExecutionRefused
@@ -94,7 +97,7 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 	if err != nil {
 		return out, err
 	}
-	return out, tx.Commit(ctx)
+	return out, commitRunWrite(ctx, tx)
 }
 
 // BindRunnerExecution accepts only H3's correlated Exec/Start result or its
@@ -113,7 +116,10 @@ func (s PG) BindRunnerExecution(ctx context.Context, runnerID, runID, generation
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
+	defer rollbackRunWrite(ctx, tx)
+	if err := setRunWriteTimeout(ctx, tx); err != nil {
+		return err
+	}
 	if _, err := runnerExecutionRun(ctx, tx, runnerID, runID); err != nil {
 		return err
 	}
@@ -124,7 +130,7 @@ func (s PG) BindRunnerExecution(ctx context.Context, runnerID, runID, generation
 	if tag.RowsAffected() != 1 {
 		return ErrRunnerExecutionRefused
 	}
-	return tx.Commit(ctx)
+	return commitRunWrite(ctx, tx)
 }
 
 // RunnerExecutionOf is the run's persisted execution intent, ErrNotFound while it has none. It is the

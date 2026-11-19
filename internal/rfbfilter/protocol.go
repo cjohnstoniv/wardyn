@@ -4,6 +4,7 @@
 package rfbfilter
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -136,8 +137,12 @@ func (p *parser) refused([]byte) error {
 
 func (p *parser) serverInit(b []byte) error {
 	if err := setBPP(p.s, b[4]); err != nil {
+		if named := p.recordedPixels(b[4:17]); named != nil {
+			return named // recorded: the refusal names the format, as every pixel format refused there does
+		}
 		return err
 	}
+	copy(p.s.pixels[:], b[4:17])
 	p.forward(b)
 	p.stream(u32(b[20:]), false, p.msgNext)
 	return nil
@@ -201,20 +206,24 @@ func (p *parser) serverMsg(b []byte) error {
 // Client-to-server message types the relay frames.
 func (p *parser) clientMsg(b []byte) error {
 	if p.s.rules.ViewOnly && (b[0] == 250 || b[0] == 251 || b[0] == 255) {
-		return fmt.Errorf("rfb relay: view only: client message type %d", b[0])
+		return &Refusal{Kind: refusedViewOnly, Err: fmt.Errorf("rfb relay: view only: client message type %d", b[0])}
 	}
 	switch b[0] {
 	case 0: // SetPixelFormat
 		return p.more(20, func(h []byte) error {
+			if err := p.recordedPixels(h[4:17]); err != nil {
+				return err
+			}
 			if err := setBPP(p.s, h[4]); err != nil {
 				return err
 			}
+			copy(p.s.pixels[:], h[4:17])
 			return p.fixed(h)
 		}, b)
 	case 2: // SetEncodings
 		return p.more(4, p.setEncodings, b)
 	case 3: // FramebufferUpdateRequest
-		return p.more(10, p.fixed, b)
+		return p.more(10, p.pixelsAsked, b)
 	case 4: // KeyEvent
 		return p.more(8, p.input(InputKey), b)
 	case 5: // PointerEvent
@@ -222,7 +231,7 @@ func (p *parser) clientMsg(b []byte) error {
 	case 6: // ClientCutText
 		return p.more(8, func(h []byte) error { return p.cutText(PasteIn, h) }, b)
 	case 150: // EnableContinuousUpdates
-		return p.more(10, p.fixed, b)
+		return p.more(10, p.pixelsAsked, b)
 	case 248: // ClientFence
 		return p.more(9, p.fence, b)
 	case 250: // xvp
@@ -243,6 +252,57 @@ func (p *parser) clientMsg(b []byte) error {
 func (p *parser) fence(h []byte) error {
 	p.trailer(h, int64(h[8]))
 	return nil
+}
+
+// playbackPixels is the pixel format a recording replays in (noVNC's playback, which decodes the pixels
+// as noVNC asks for them), and the one noVNC and the console's own viewer ask for: 32 bits per pixel,
+// depth 24, little-endian, true colour, a maximum of 255 for each colour and red, green and blue at shifts
+// 0, 8 and 16. It is the first 13 bytes of an RFB pixel format; the other 3 are padding.
+var playbackPixels = []byte{32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16}
+
+// recordedPixels refuses, under Rules.Recorded, a pixel format f other than playbackPixels: the recorder
+// frames 32-bit pixels only, and in any other size it would keep the bytes after a rectangle, a
+// ServerCutText among them, as pixels; in any other 32-bit layout the replay shows wrong colours.
+func (p *parser) recordedPixels(f []byte) error {
+	if p.s.rules.Recorded && !bytes.Equal(f, playbackPixels) {
+		e := &PixelFormatError{}
+		copy(e.Pixels[:], f)
+		return e
+	}
+	return nil
+}
+
+// PixelFormatError is the relay's refusal of a pixel format on a recorded desktop (Rules.Recorded). Pixels
+// is the refused format's 13 bytes: the browser's SetPixelFormat, or ServerInit's when the browser asked
+// for pixels in the desktop's own format or when its pixel size is one the relay does not take (setBPP).
+type PixelFormatError struct{ Pixels [13]byte }
+
+func (e *PixelFormatError) Error() string {
+	return "rfb relay: a recorded desktop takes one pixel format only: 32 bits per pixel, depth 24, little-endian true colour, a maximum of 255 and shifts 0, 8 and 16 for red, green and blue"
+}
+
+// Refused names the refused format in the words Error names the one a recorded desktop takes.
+func (e *PixelFormatError) Refused() string {
+	f := e.Pixels
+	order, colour := "little-endian", "true colour"
+	if f[2] != 0 {
+		order = "big-endian"
+	}
+	if f[3] == 0 {
+		colour = "colour map"
+	}
+	return fmt.Sprintf("%d bits per pixel, depth %d, %s %s, maxima of %d, %d and %d and shifts of %d, %d and %d for red, green and blue",
+		f[0], f[1], order, colour, u16(f[4:]), u16(f[6:]), u16(f[8:]), f[10], f[11], f[12])
+}
+
+// pixelsAsked forwards a FramebufferUpdateRequest or EnableContinuousUpdates, which ask the server for
+// pixels in the format in force: the browser's SetPixelFormat, or else ServerInit's, which
+// recordedPixels checks here.
+func (p *parser) pixelsAsked(b []byte) error {
+	if err := p.recordedPixels(p.s.pixels[:]); err != nil {
+		return err
+	}
+	return p.fixed(b)
 }
 
 // setEncodings keeps only the encodings whose rectangles the relay can frame,

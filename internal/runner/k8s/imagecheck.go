@@ -49,14 +49,14 @@ const imageCheckContainerName = "check"
 const imageCheckDetailMax = 200
 
 // PrewrappedCheckUnavailable implements runner.PrewrappedImageChecker: the check runs only on the control
-// plane's own substrate, and only where the boot canary proved NetworkPolicy enforced, since the check pod
+// plane's own substrate, and only where the canary's live verdict proves NetworkPolicy enforced, since the check pod
 // runs the image's own shell with nothing but a deny-all policy around it.
 func (d *Driver) PrewrappedCheckUnavailable() string {
 	switch {
 	case d.runnerMode():
 		return "a runner's Kubernetes substrate does not check images"
-	case !d.netPolEnforced:
-		return "this cluster's NetworkPolicy enforcement is not proven (the boot canary did not show it enforced)"
+	case !d.netPol.Load().enforced():
+		return "this cluster's NetworkPolicy enforcement is not proven (the egress canary does not show it enforced)"
 	}
 	return ""
 }

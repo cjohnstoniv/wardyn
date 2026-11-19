@@ -21,6 +21,8 @@ export const NEW_RUN_REASON = {
   WORKSPACE_PIN_CONFLICT: "workspace_pin_conflict",
   /** About the run's one image, shown in the Runner tab's Image section, not on a workspace. */
   IMAGE_CONFLICT: "image_conflict",
+  /** The org requires a member's image pinned by digest (images.require_digest); shown with the image. */
+  IMAGE_DIGEST_REQUIRED: "image_digest_required",
   ALLOWED_IMAGE_INVALID: "allowed_image_invalid",
   WORKSPACE_ADO_ORG_CONFLICT: "workspace_ado_org_conflict",
   RESOURCES_INVALID: "resources_invalid",
@@ -32,6 +34,20 @@ export const NEW_RUN_REASON = {
   WORKSPACE_REPO_UNKNOWN: "workspace_repo_unknown",
   RUN_REF_INVALID: "run_ref_invalid",
 } as const;
+
+/**
+ * The refusals of image signature checks (images.admission, internal/api/reasons.go): about the run's one image,
+ * so the console shows them with it, as it does image_digest_required.
+ */
+export const IMAGE_ADMISSION_REASONS = [
+  "image_admission_no_policy",
+  "image_signature_missing",
+  "image_signature_invalid",
+  "image_attestation_missing",
+  "image_admission_unavailable",
+] as const;
+
+export type ImageAdmissionReason = (typeof IMAGE_ADMISSION_REASONS)[number];
 
 export type NewRunReason = (typeof NEW_RUN_REASON)[keyof typeof NEW_RUN_REASON];
 
@@ -66,6 +82,7 @@ export const PLACEMENT_REASONS = [
   "runner_claim_mismatch",
   "runner_posture_unmet",
   "runner_trust_changed",
+  "runner_trust_required",
   "runner_keystore_unavailable",
   "runner_action_pending",
   "runner_recording_off",

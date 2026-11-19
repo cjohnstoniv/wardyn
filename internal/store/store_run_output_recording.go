@@ -225,6 +225,17 @@ func (s PG) ListPendingRecordingRunOutputs(ctx context.Context, staleAfter time.
 		})
 }
 
+// RunEndedBefore reports whether runID ended (its ended_at, else its last update) longer ago than age, by the
+// database's clock alone: the stamp and the compare come from one read, never from this process's clock. A run
+// that is not there answers false.
+func (s PG) RunEndedBefore(ctx context.Context, runID uuid.UUID, age time.Duration) (bool, error) {
+	var ended bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs
+		WHERE id = $1 AND COALESCE(ended_at, updated_at) < now() - make_interval(secs => $2))`,
+		runID, age.Seconds()).Scan(&ended)
+	return ended, err
+}
+
 // EraseRecordingRunOutputs — see RunOutputStore.
 func (s PG) EraseRecordingRunOutputs(ctx context.Context, runIDs []uuid.UUID) (int, error) {
 	if len(runIDs) == 0 {
@@ -238,7 +249,7 @@ func (s PG) EraseRecordingRunOutputs(ctx context.Context, runIDs []uuid.UUID) (i
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // no-op after commit
+	defer db.Rollback(ctx, tx) // no-op after commit
 	for _, id := range ids {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.RunOutputLockClass, runOutputLockKey(id)); err != nil {
 			return 0, err

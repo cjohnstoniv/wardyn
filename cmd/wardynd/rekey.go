@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -42,6 +43,10 @@ const rekeyConnectTimeout = 30 * time.Second
 // beforeLockedStagedKeyCheck runs just before the staged-key check under the
 // rekey lock; a test plants there the file a racing run would have left.
 var beforeLockedStagedKeyCheck = func() {}
+
+// rekeyStore is the transactional rewrap; a test wraps it to fail after a real
+// commit, which is what a COMMIT whose reply was lost looks like here.
+var rekeyStore = secretstorepg.Rekey
 
 // rotateAgeKeyMode is wardynd's `-rotate-age-key <path>` MAINTENANCE MODE: mint
 // a new age identity, rewrap every stored secret's data key from the old
@@ -163,10 +168,17 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 		return fmt.Errorf("stage the new key file: %w", err)
 	}
 
-	n, err := secretstorepg.Rekey(ctx, pool, oldID, newID, optionalIdentity(platform))
+	n, err := rekeyStore(ctx, pool, oldID, newID, optionalIdentity(platform))
 	if err != nil {
-		_ = os.Remove(staged) // nothing was committed; the staged key is dead
-		return err
+		// The staged key is kept on every error, never removed: a COMMIT whose
+		// reply was lost fails after the store moved to newID, and then this file
+		// is the only key that reads it. A row under its kek_id fingerprint proves
+		// the rotation landed; no such row proves nothing, so no text here ever
+		// says to discard the file.
+		return fmt.Errorf("%w — the new key is kept at %s: if the rotation landed, that file is the ONLY key that reads the store. "+
+			"If any row of secrets or principal_keys has a kek_id ending in %q, it landed: move the file into place as %s and set WARDYN_AGE_KEY to it. "+
+			"Otherwise, or if you cannot check, keep the file: move it aside under another name, keep it at mode 0600, and re-run; "+
+			"it decrypts nothing unless the store uses it (docs/operations/secrets-and-keys.md)", err, staged, ":"+kekFingerprint(newID), keyPath)
 	}
 	// Emitted here, between the commit and the file swap, because THIS is the
 	// point the database's truth changed: a swap failure below must still leave
@@ -265,17 +277,30 @@ func parseAgeKeyFileContent(path string, b []byte) (string, error) {
 
 // refuseStagedKey refuses a rotation while an earlier one's staged key, or its
 // temp file, is still on disk: that run may have committed and died before the
-// rename, so the file can be the only key that reads the store, and staging
-// over it (then removing it when the rekey fails) would destroy it.
+// rename, or lost its commit's reply, so the file can be the only key that
+// reads the store, and staging over it would destroy it.
 func refuseStagedKey(staged, keyPath string) error {
 	for _, p := range []string{staged, staged + ".tmp"} {
 		if _, err := os.Lstat(p); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("refusing to rotate: %s exists — an earlier -rotate-age-key may have rewrapped the store and stopped before replacing %s, "+
-				"which makes that file the ONLY key that reads it. If wardynd cannot open its secrets under the current key, move it into place as %s "+
-				"and set WARDYN_AGE_KEY to it; if it can, remove the file by hand. Then re-run (docs/operations/secrets-and-keys.md)", p, keyPath, keyPath)
+				"which makes that file the ONLY key that reads it. If any row of secrets or principal_keys has a kek_id ending in that key's fingerprint "+
+				"(docs/operations/secrets-and-keys.md shows how to read it), move it into place as %s and set WARDYN_AGE_KEY to it. "+
+				"Otherwise, or if you cannot check, keep the file: move it aside under another name, keep it at mode 0600, and re-run; "+
+				"it decrypts nothing unless the store uses it", p, keyPath, keyPath)
 		}
 	}
 	return nil
+}
+
+// kekFingerprint is what every local kek_id under id ends in after its ":"
+// (kek.NewLocalPurpose): the part of a row that names the age key wrapping it.
+func kekFingerprint(id *age.X25519Identity) string {
+	k, err := kek.NewLocalPurpose(id, kek.PurposeCred)
+	if err != nil {
+		return "(unavailable: " + err.Error() + ")"
+	}
+	_, fp, _ := strings.Cut(k.ID(), ":")
+	return fp
 }
 
 // writeKeyFile writes an age identity 0600 via a sibling temp + rename, so a

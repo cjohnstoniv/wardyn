@@ -162,11 +162,10 @@ const (
 	// sign in again; nothing Wardyn can do renews this credential, and Wardyn
 	// does not quietly bill a different model provider instead.
 	//
-	// The remedy names the person's own two doors: Getting started, and the
-	// sign-in banner the console shows on every page.
+	// The remedy names the one place the person reconnects: Your model connections, under Settings in the User view
+	// (the Admin view hides that card).
 	awsSSORefreshSpentSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
-		"and that session can no longer be renewed — sign in to AWS again from Getting started in the console, " +
-		"or from the sign-in banner the console shows on every page. " +
+		"and that session can no longer be renewed — sign in to AWS again in the console's User view, under Settings, in Your model connections. " +
 		"Wardyn does not substitute a different model provider."
 
 	// awsSSORefreshUnavailableSentence: the renewal could not be completed
@@ -242,6 +241,7 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 	if err := s.putOwned(ctx, scope.rowOwner(), func(ctx context.Context) error {
 		return st.Put(ctx, writeProbeSecretName, []byte("probe"))
 	}); err != nil {
+		s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", scope.rowOwner(), writeProbeSecretName)
 		return err
 	}
 	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
@@ -267,18 +267,31 @@ const awsSSOPersistBudget = 30 * time.Second
 // (secretstore.ErrRevisionChanged, never retried). The same holds for an erase
 // of the owner since that read (secretstore.ErrGenerationChanged).
 func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
+	// pctx is assigned once, from the parameter, so the secret-read audit guard can follow the re-read below to the
+	// caller's purpose. Only the write carries the compare-and-set's revision; a Get reads none.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()
+	storeCtx := pctx
 	if guarded {
-		ctx = secretstore.WithIfRevision(ctx, rev)
+		storeCtx = secretstore.WithIfRevision(pctx, rev)
 	}
+	lost := false
 	for attempts = 1; ; attempts++ {
-		err = s.storeAWSSSOBlob(ctx, scope, next)
+		err = s.storeAWSSSOBlob(storeCtx, scope, next)
+		// An earlier attempt whose reply was lost may have committed: the
+		// compare-and-set then refuses this renewal's own row, which is stored.
+		if lost && errors.Is(err, secretstore.ErrRevisionChanged) {
+			if stored, found, rerr := s.readAWSSSOBlob(pctx, scope); rerr == nil && found &&
+				stored.AccessToken == next.AccessToken && stored.RefreshToken == next.RefreshToken {
+				return attempts, nil
+			}
+		}
+		lost = lost || errors.Is(err, secretstore.ErrRowNotWritten)
 		if err == nil || secretstore.Superseded(err) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}
 		select {
-		case <-ctx.Done():
+		case <-pctx.Done():
 			return attempts, err
 		case <-time.After(awsSSOPersistRetryDelay):
 		}
@@ -644,7 +657,7 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 			slog.ErrorContext(ctx, "wardynd: the secret store refused a write; not renewing the AWS SSO credential", slog.Any("err", perr))
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
 			s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-				"provider": awsSSOProvider, "spent": false, "probe_error": perr.Error(),
+				"provider": awsSSOProvider, "spent": false, "probe_error": auditStepProbeSecretWrite, // the cause is logged above
 			})
 			return blob, awsSSORefreshStoreUnwritableSentence
 		}
@@ -715,7 +728,7 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 		// same thing.
 		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
 		outcome = "failure"
-		data["persist_error"] = perr.Error()
+		data["persist_error"] = auditStepPersistAWSSSO // the cause is logged below
 		data["persist_attempts"] = persistAttempts
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed",
 			slog.Any("err", perr))

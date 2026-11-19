@@ -34,6 +34,10 @@ var (
 	cliKubeSubdomainRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
 
+// ComponentAccessRestart is a kubectl row's access that reads like read and
+// admits the one change `kubectl rollout restart` sends, on a deployment.
+const ComponentAccessRestart = "restart"
+
 // CLIKubectlTokenPart ends the reserved name a kubectl row's registered
 // service-account token is stored under: wardyn-cli-<component id>-kubectl.
 const CLIKubectlTokenPart = "kubectl"
@@ -51,6 +55,13 @@ func CLIKubectlNamespace(ns string) bool { return cliKubeLabelRE.MatchString(ns)
 // it: an IP address or a lowercase DNS name.
 func CLIKubectlHost(h string) bool { return net.ParseIP(h) != nil || cliKubeSubdomainRE.MatchString(h) }
 
+// cliKubectlServerHost is CLIKubectlHost for a server a kubectl row names, which also writes no address in
+// a non-standard spelling (numericHost): the proxy refuses every request written that way, so the door
+// would never see one for its host.
+func cliKubectlServerHost(h string) bool {
+	return CLIKubectlHost(h) && (net.ParseIP(h) != nil || !numericHost(h))
+}
+
 func (k *CLIKubectl) validate() error {
 	u, err := url.Parse(k.Server)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" || (u.Path != "" && u.Path != "/") ||
@@ -61,8 +72,8 @@ func (k *CLIKubectl) validate() error {
 	if _, _, ok := k.HostPort(); !ok {
 		return fmt.Errorf("cli.kubectl.server: %q does not name a port between 1 and 65535", u.Port())
 	}
-	if h := u.Hostname(); !CLIKubectlHost(strings.ToLower(h)) {
-		return fmt.Errorf("cli.kubectl.server: %q is not a host name or an IP address", h)
+	if h := u.Hostname(); !cliKubectlServerHost(strings.ToLower(h)) {
+		return fmt.Errorf("cli.kubectl.server: %q is not a host name or an IP address in standard form", h)
 	}
 	if k.CAPEM != "" {
 		if len(k.CAPEM) > MaxCLIKubectlCABytes {
@@ -90,8 +101,11 @@ func (k *CLIKubectl) validate() error {
 			return fmt.Errorf("cli.kubectl.namespaces[%d]: %q is listed twice", i, ns)
 		}
 	}
-	if k.Access != ComponentAccessRead && k.Access != ComponentAccessWrite {
-		return fmt.Errorf("cli.kubectl.access: %q is not read or write", k.Access)
+	if k.Access != ComponentAccessRead && k.Access != ComponentAccessRestart && k.Access != ComponentAccessWrite {
+		return fmt.Errorf("cli.kubectl.access: %q is not read, restart or write", k.Access)
+	}
+	if k.ApproveEach && k.Access == ComponentAccessRead {
+		return errors.New("cli.kubectl.approve_each: holds writes, so it needs access restart or write")
 	}
 	return nil
 }

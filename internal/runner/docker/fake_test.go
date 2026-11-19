@@ -8,6 +8,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -76,6 +77,7 @@ const fakeJoinedNetIP = "172.30.0.9"
 type fakeExec struct {
 	cmd     []string
 	user    string
+	env     []string
 	running bool
 }
 
@@ -88,11 +90,17 @@ type createdContainer struct {
 	// connectedTo lists networks NetworkConnect attached this container to,
 	// in order.
 	connectedTo []string
-	state       *container.State
-	removed     bool
+	// cut lists networks NetworkDisconnect took the container off: an endpoint that is gone stays gone.
+	cut map[string]bool
+	// id, when set, is the id inspect reports for the container (the name's other face, as a daemon has two).
+	id      string
+	state   *container.State
+	removed bool
 	// forceRemoved records whether the removal asked for Force, which a
 	// container that may be running needs.
 	forceRemoved bool
+	// removedVolumes records whether the removal asked for the container's anonymous volumes to go.
+	removedVolumes bool
 }
 
 // fakeDocker is an in-memory dockerAPI for unit tests. It is concurrency-safe
@@ -115,6 +123,8 @@ type fakeDocker struct {
 	imageArch map[string]string
 	// imageMeta overlays RepoDigests, Os, Variant and Descriptor on the ImageInspect result per ref.
 	imageMeta map[string]image.InspectResponse
+	// imageIDs is the image ID ImageInspect reports per ref; absent = the ref itself.
+	imageIDs map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -131,6 +141,11 @@ type fakeDocker struct {
 	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
+
+	// disconnects records every NetworkDisconnect as network/container; failDisconnect names the networks
+	// whose disconnect fails outright.
+	disconnects    []string
+	failDisconnect map[string]bool
 
 	// stats is the canned ContainerStats body per container id; statsCalls records every read's options.
 	stats      map[string]container.StatsResponse
@@ -208,6 +223,9 @@ type fakeDocker struct {
 	// execExited is true ExecInspectRaw reports the process as finished.
 	execExitCode int
 	execExited   bool
+	// inspectHonorsCtx makes ExecInspectRaw fail on an ended context, as the real
+	// client does.
+	inspectHonorsCtx bool
 	// execUnstarted makes the next N ExecInspectRaw probes report an exec the
 	// daemon has created but not started: not running, a null exit code, no pid.
 	execUnstarted int
@@ -250,10 +268,19 @@ type fakeDocker struct {
 	// user drive's volume carries). Pre-seed an entry to model a volume that
 	// already exists.
 	volumes map[string]client.VolumeCreateOptions
+	// mountMakesVolumes, when set, makes a volume mount of a name this fake does not hold create that
+	// volume with the mount's labels, as a real daemon does; off, a test sees only what VolumeCreate made.
+	mountMakesVolumes bool
 	// volumeCreates counts VolumeCreate calls, so a test can prove the SECOND
 	// run against one drive creates nothing (idempotence is the contract, not
 	// merely the observable end state).
 	volumeCreates int
+	// createConflicts names containers whose create the daemon refuses as a name already in use, for a name
+	// taken between a driver's inspect and its create.
+	createConflicts map[string]bool
+	// apiVersion/apiVersionSet: see ClientVersion.
+	apiVersion    string
+	apiVersionSet bool
 	// failVolumeInspect makes VolumeInspect return a NON-not-found error — the
 	// "the daemon cannot say whether it exists" arm, which must fail closed
 	// rather than create over the top of it.
@@ -537,15 +564,32 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	defer f.mu.Unlock()
 	if f.images[imageID] {
 		m := f.imageMeta[imageID]
-		resp := image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+		resp := image.InspectResponse{ID: f.imageIDFor(imageID), Architecture: f.imageArch[imageID],
 			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}
 		if !f.legacyProxyImages[imageID] {
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
 			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
 		}
+		if vols := f.imageVolumes[imageID]; len(vols) > 0 {
+			if resp.Config == nil {
+				resp.Config = &dockerspec.DockerOCIImageConfig{}
+			}
+			resp.Config.Volumes = map[string]struct{}{}
+			for _, v := range vols {
+				resp.Config.Volumes[v] = struct{}{}
+			}
+		}
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
+}
+
+// imageIDFor is the image ID ref names now (f.mu held).
+func (f *fakeDocker) imageIDFor(ref string) string {
+	if id := f.imageIDs[ref]; id != "" {
+		return id
+	}
+	return ref
 }
 
 func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -612,9 +656,13 @@ func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ cli
 	if _, ok := f.networks[networkID]; !ok {
 		return client.NetworkInspectResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
+	opts := f.networks[networkID]
 	var res client.NetworkInspectResult
 	res.Network.Name = networkID
 	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
+	// What the create asked for, as a daemon reports it back.
+	res.Network.Internal, res.Network.Options = opts.Internal, opts.Options
+	res.Network.EnableIPv6 = opts.EnableIPv6 != nil && *opts.EnableIPv6
 	return res, nil
 }
 
@@ -647,6 +695,46 @@ func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts 
 	}
 	c.connectedTo = append(c.connectedTo, networkID)
 	return client.NetworkConnectResult{}, nil
+}
+
+// onNet says whether the container has an endpoint on the network now: its primary NetworkMode, an
+// explicit endpoint, or one NetworkConnect added, less what NetworkDisconnect took away.
+func (c *createdContainer) onNet(name string) bool {
+	if c.cut[name] {
+		return false
+	}
+	if c.host != nil && string(c.host.NetworkMode) == name {
+		return true
+	}
+	if c.net != nil {
+		if _, ok := c.net.EndpointsConfig[name]; ok {
+			return true
+		}
+	}
+	return slices.Contains(c.connectedTo, name)
+}
+
+// NetworkDisconnect takes the container off the network, and answers the daemon's "is not connected" for one
+// it is not on. A cut endpoint is not brought back by a start.
+func (f *fakeDocker) NetworkDisconnect(ctx context.Context, networkID string, opts client.NetworkDisconnectOptions) (client.NetworkDisconnectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disconnects = append(f.disconnects, networkID+"/"+opts.Container)
+	if f.failDisconnect[networkID] {
+		return client.NetworkDisconnectResult{}, errors.New("fake: disconnect: daemon busy")
+	}
+	c := f.containers[opts.Container]
+	if c == nil || c.removed {
+		return client.NetworkDisconnectResult{}, fakeNotFound{msg: "No such container: " + opts.Container}
+	}
+	if !c.onNet(networkID) {
+		return client.NetworkDisconnectResult{}, fmt.Errorf("container %s is not connected to network %s", opts.Container, networkID)
+	}
+	if c.cut == nil {
+		c.cut = map[string]bool{}
+	}
+	c.cut[networkID] = true
+	return client.NetworkDisconnectResult{}, nil
 }
 
 func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
@@ -709,6 +797,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
+	if f.createConflicts[name] {
+		return client.ContainerCreateResult{}, fakeConflict{msg: "Conflict. The container name \"/" + name + "\" is already in use"}
+	}
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
@@ -732,6 +823,17 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		}
 		cfg = &merged
 	}
+	if f.mountMakesVolumes && opts.HostConfig != nil {
+		for _, m := range opts.HostConfig.Mounts {
+			if _, held := f.volumes[m.Source]; m.Type == mount.TypeVolume && !held {
+				v := client.VolumeCreateOptions{Name: m.Source, Driver: driveVolumeDriver}
+				if m.VolumeOptions != nil {
+					v.Labels = m.VolumeOptions.Labels
+				}
+				f.volumes[m.Source] = v
+			}
+		}
+	}
 	c := &createdContainer{
 		name:  name,
 		cfg:   cfg,
@@ -754,6 +856,20 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	return client.ContainerCreateResult{ID: id, Warnings: f.createWarnings}, nil
 }
 
+// managedCopies is the CopyToContainer calls that are not a DNS seed's: the managed-file and secret deliveries
+// into an agent, which a test of those counts without the run's resolver seed (driver_dns.go).
+func (f *fakeDocker) managedCopies() []fakeCopy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []fakeCopy
+	for _, c := range f.copies {
+		if !strings.HasPrefix(c.id, dnsSeedPrefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // fakeCopy records one CopyToContainer: which container, where, the raw
 // archive bytes, and whether that container had already been started.
 type fakeCopy struct {
@@ -765,6 +881,9 @@ type fakeCopy struct {
 }
 
 func (f *fakeDocker) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if err := ctx.Err(); err != nil {
+		return client.CopyToContainerResult{}, err
+	}
 	body, err := io.ReadAll(opts.Content)
 	if err != nil {
 		return client.CopyToContainerResult{}, err
@@ -942,6 +1061,9 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		if name == "" || name == "none" || name == "host" || name == "bridge" || name == "default" {
 			return
 		}
+		if c.cut[name] {
+			return
+		}
 		if _, ok := nets[name]; !ok {
 			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr(ip), NetworkID: name}
 		}
@@ -974,7 +1096,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		// Real Docker reports the name with a leading slash; mirror that so
 		// name-based run-id recovery is exercised faithfully. (v29 inlined the
 		// old ContainerJSONBase fields onto InspectResponse.)
-		ID:              id,
+		ID:              cmp.Or(c.id, id),
 		Name:            "/" + c.name,
 		State:           c.state,
 		Config:          c.cfg,
@@ -1092,6 +1214,7 @@ func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client
 	}
 	c.removed = true
 	c.forceRemoved = opts.Force
+	c.removedVolumes = opts.RemoveVolumes
 	return client.ContainerRemoveResult{}, nil
 }
 
@@ -1142,7 +1265,7 @@ func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.Exec
 	if f.execCreateErr != nil {
 		return client.ExecCreateResult{}, f.execCreateErr
 	}
-	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, env: opts.Env, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd
@@ -1170,6 +1293,9 @@ func (f *fakeDocker) ExecInspectRaw(ctx context.Context, execID string) (execIns
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.execInspects++
+	if f.inspectHonorsCtx && ctx.Err() != nil {
+		return execInspect{}, ctx.Err()
+	}
 	if f.execGone != "" && execID == f.execGone {
 		return execInspect{}, fakeNotFound{msg: "no such exec: " + execID}
 	}
@@ -1254,7 +1380,8 @@ func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateO
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
 
-// VolumeRemove is ReclaimDrive's destroy call and nothing else's. It answers
+// VolumeRemove is the destroy call of its two callers: ReclaimDrive, and removeDNSVolume for a run's own
+// DNS volume. It answers
 // the two errors the real daemon answers and that the driver branches on: a
 // not-found for a name this fake does not hold, and a CONFLICT (the errdefs
 // shape a live daemon returns for "volume is in use") when volumeInUse names
@@ -1299,3 +1426,17 @@ type fakeAddr struct{}
 
 func (fakeAddr) Network() string { return "fake" }
 func (fakeAddr) String() string  { return "fake" }
+
+// apiVersion is what ClientVersion answers when apiVersionSet: "" is then the client before its first request.
+// Otherwise the answer is a current API.
+func (f *fakeDocker) ClientVersion() string {
+	if f.apiVersionSet {
+		return f.apiVersion
+	}
+	return "1.56"
+}
+
+// volumeOf is the volume a daemon holds for a create request, as an inspect reports it.
+func volumeOf(o client.VolumeCreateOptions) volume.Volume {
+	return volume.Volume{Name: o.Name, Driver: o.Driver, Labels: o.Labels, Options: o.DriverOpts}
+}

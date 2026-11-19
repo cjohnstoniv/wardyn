@@ -124,7 +124,8 @@ const runSecretSweepInterval = 15 * time.Minute
 // runSecretSweeper periodically evicts the plaintext masking corpus of runs
 // that have been terminal past api.RunSecretGrace, until ctx is cancelled. Same
 // goroutine shape as runApprovalSweeper; the first sweep runs after one tick.
-// Every replica runs it, so every replica records its ticks as run_secret.
+// Every replica runs it and records its attempts as run_secret; only the
+// sweeper leader's pass, which sweeps the committed rows, records a success.
 func runSecretSweeper(ctx context.Context, srv runSecretSweeperServer, interval time.Duration, ticks *sweephealth.Tracker) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

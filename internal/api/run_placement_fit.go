@@ -157,9 +157,12 @@ func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runne
 
 // unboundSize is the size the run gets with no runner source in the fold: what the deployment, the pool,
 // governance and its own ask give it. Its disk is 0 when nothing but a runner sizes the main drive. Only
-// a launch that waits (queued) has one.
+// a launch that waits (queued) has one. A workload's launch keeps it on its pin as well, waiting or not: the
+// pin's digest holds this size, never one a runner cut (launchPolicyDigest). The sources are placement's own
+// less the runners', so it refuses nothing placement let through.
 func (s *Server) unboundSize(ctx context.Context, in placementInput, pool types.RunnerPool, queued bool) (*types.RunnerAmounts, *runRefusal) {
-	if !queued {
+	pin := policyPinOf(ctx)
+	if !queued && pin == nil {
 		return nil, nil
 	}
 	limits, applied, refusal := s.runSize(ctx, in, &pool, nil)
@@ -170,8 +173,15 @@ func (s *Server) unboundSize(ctx context.Context, in placementInput, pool types.
 	if in.req.Resources != nil {
 		requestDisk = in.req.Resources.DiskMiB
 	}
-	return &types.RunnerAmounts{CPUMillis: int64(applied.CPUMillis.Applied), MemoryMiB: int64(applied.MemoryMiB.Applied),
-		DiskMiB: int64(mainDriveFor(in.policyDiskMiB, requestDisk, limits.DiskMiB).MiB)}, nil
+	u := types.RunnerAmounts{CPUMillis: int64(applied.CPUMillis.Applied), MemoryMiB: int64(applied.MemoryMiB.Applied),
+		DiskMiB: int64(mainDriveFor(in.policyDiskMiB, requestDisk, limits.DiskMiB).MiB)}
+	if pin != nil {
+		pin.size = u
+	}
+	if !queued {
+		return nil, nil
+	}
+	return &u, nil
 }
 
 // startSizeOn is the size a run of unbound size starts with on a runner with limits l: each amount cut

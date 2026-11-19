@@ -138,6 +138,13 @@ describe("toolRulesProblem — mirrors validateToolRules", () => {
     ).toMatch(/not an effect/);
   });
 
+  it("takes approve_each on one MCP tool's exact name and nowhere else", () => {
+    expect(toolRulesProblem([{ tool: "mcp__jira__delete_issue", effect: "approve_each" }])).toBeNull();
+    for (const tool of ["*", "Bash", "mcp__jira__*", "mcp__jira"]) {
+      expect(toolRulesProblem([{ tool, effect: "approve_each" }])).toMatch(/approve_each/);
+    }
+  });
+
   it("refuses more rules than the server accepts, and names the cap", () => {
     const many = Array.from({ length: MAX_TOOL_RULES + 1 }, (_, i) => ({
       tool: `T${i}`,

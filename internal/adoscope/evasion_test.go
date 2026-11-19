@@ -228,7 +228,7 @@ func TestEvasionMethodOverrideDowngrade(t *testing.T) {
 		{
 			name: "a POST overridden to DELETE",
 			req:  over(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequests/7", "DELETE", ""),
-			want: CapPR,
+			want: CapPRCreate,
 		},
 	})
 }
@@ -269,7 +269,7 @@ func TestEvasionResourceNamedRepository(t *testing.T) {
 		{
 			name: "the organisation-level pull-request route still classifies",
 			req:  adoReq(http.MethodPatch, "/acme/proj/_apis/git/pullrequests/5", `{}`),
-			want: CapPR,
+			want: CapPRCreate,
 		},
 	})
 }

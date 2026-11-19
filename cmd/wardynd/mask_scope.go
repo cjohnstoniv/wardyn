@@ -49,6 +49,16 @@ func (m *maskScope) uncovered(runID uuid.UUID) bool {
 	return held != nil && !(*held)(runID)
 }
 
+// covers reports whether runID's manifest is held complete here: uncovered's opposite for an armed
+// scope, but false when nothing can be confirmed, a nil scope or one not armed yet.
+func (m *maskScope) covers(runID uuid.UUID) bool {
+	if m == nil {
+		return false
+	}
+	held := m.held.Load()
+	return held != nil && (*held)(runID)
+}
+
 // withMaskScope is data with "mask_scope":"globals_only" added when data is
 // empty or a JSON object that does not carry the key at its top level (the
 // string anywhere deeper, in a value or a nested object, does not count). Any

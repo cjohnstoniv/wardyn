@@ -18,7 +18,7 @@ import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
 import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import type { MeDrive } from "../../../../../lib/api/me-drives";
-import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { NR_FILES, NR_FILES_LOOKUP } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
@@ -76,6 +76,8 @@ interface PickOption {
   othersSee?: boolean;
   /** The person's own drive: its row carries "Delete drive". */
   own?: boolean;
+  /** A disk kept on a Mac (backend mac_disk): its delete confirm says what an offline or unregistered Mac means. */
+  onMac?: boolean;
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
@@ -111,7 +113,7 @@ export interface UserDriveSeam {
   creating: boolean;
   setCreating: (creating: boolean) => void;
   /** The own drive whose "Delete drive" was pressed, and the button to return focus to. */
-  deleting: { drive: { id: string; name: string }; opener: HTMLElement } | null;
+  deleting: { drive: { id: string; name: string; onMac?: boolean }; opener: HTMLElement } | null;
   setDeleting: (d: UserDriveSeam["deleting"]) => void;
 }
 
@@ -125,6 +127,8 @@ export interface AddDialogProps {
   folderReason?: string;
   /** WARDYN_COMPUTER_FOLDERS: false shows "Your computer" as blocked by the organisation; undefined while unknown. */
   computerAllowed?: boolean;
+  /** The WARDYN_COMPUTER_FOLDERS read failed: set to the retry. "Your computer" stays open (the server enforces) beside a "couldn't check" note. */
+  computerLookupFailed?: () => void;
   /** Why no drive can be attached at all, from the catalogue. */
   driveReason?: string;
   /** The person may manage drives (Manage drives →). */
@@ -158,7 +162,7 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
     shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d), meta: driveMeta(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
-    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true,
+    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true, onMac: d.backend === "mac_disk",
   }));
 }
 
@@ -198,7 +202,7 @@ export function AddDialog(props: AddDialogProps) {
   );
 }
 
-function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
+function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, computerLookupFailed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const [creatingDrive, setCreatingDrive] = React.useState(false);
   const [deletingDrive, setDeletingDrive] = React.useState<UserDriveSeam["deleting"]>(null);
@@ -326,7 +330,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
             const info = KIND_INFO[kind];
             const reasonId = `nr-kind-reason-${kind}`;
             return (
-              <li key={kind} className="flex">
+              <React.Fragment key={kind}>
+              <li className="flex">
                 <button
                   type="button"
                   disabled={!!reason}
@@ -362,6 +367,15 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                   )}
                 </button>
               </li>
+              {kind === "computer" && computerLookupFailed && (
+                <li role="status" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {NR_FILES_LOOKUP.COMPUTER_UNCHECKED}
+                  <Button type="button" variant="outline" size="sm" onClick={computerLookupFailed}>
+                    {NR_FILES_LOOKUP.RETRY}
+                  </Button>
+                </li>
+              )}
+              </React.Fragment>
             );
           })}
         </ul>
@@ -450,7 +464,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          setDeletingDrive({ drive: { id: o.key, name: o.name }, opener: e.currentTarget });
+                          setDeletingDrive({ drive: { id: o.key, name: o.name, onMac: o.onMac }, opener: e.currentTarget });
                         }}
                       >
                         {NR_FILES.DELETE_DRIVE}

@@ -46,9 +46,9 @@ export function canonicalAuditAction(a: string): string {
   return LEGACY_AUDIT_ACTIONS[a] ?? a;
 }
 
-// An egress row replayed from a runner's offline spool (0.9, M-RN-3 RS7): the decision was made on the
-// runner while it was disconnected, so its own time is `observed_at` (spooled_at), not the arrival time the
-// chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
+// An egress row that came through a runner's spool (0.9, M-RN-3 RS7), which carries every decision, not only
+// those made while the runner was disconnected: its own time is `observed_at` (spooled_at), not the arrival
+// time the chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
 // (spool_full), not a policy decision. Both are absent on every other row.
 // A run ending, with the one fact a runner's revocation adds: the runner was revoked, and was connected or
 // not when it happened (the run.kill row's runner_online). Absent on every other ending.
@@ -90,8 +90,9 @@ export function egressFromAudit(events: AuditEvent[]): SpooledEgressDecision[] {
         // network fault, not a refusal: it reads "failed".
         decision: isNetworkFault(e) ? "failed" : map[action],
         bytes: num(d.bytes),
-        // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
-        // answers undefined for the other two actions and for an older trail.
+        // B3: egress.hold stamps one, and so does a deny row whose failed connection
+        // gave a once approval back (docs/AUDIT-ACTIONS.md); str() answers undefined
+        // otherwise and for an older trail.
         approval_id: str(d.approval_id),
         ...(d.spooled === true && str(d.observed_at) ? { spooled_at: str(d.observed_at) } : {}),
         ...(str(d.rule_source) === SPOOL_FULL_RULE ? { spool_full: true } : {}),
@@ -363,6 +364,15 @@ export type AuditListFilter = {
   /** A run's newest page instead of its oldest (`order=desc`), handed back oldest-first like any other read. */
   newest?: boolean;
 };
+
+// The call id a row was sent to the gateway under (data.gateway_call_id), on an egress.allow or egress.deny row only.
+// It is text the proxy wrote, so a value that is not a UUID is not returned, and callers render it only as text.
+const CALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function gatewayCallId(e: AuditEvent): string | null {
+  if (e.action !== "egress.allow" && e.action !== "egress.deny") return null;
+  const id = e.data?.gateway_call_id;
+  return typeof id === "string" && CALL_ID.test(id) ? id : null;
+}
 
 export const audit = {
   // GET /api/v1/audit?run_id=&action=|action_prefix=   (all optional;

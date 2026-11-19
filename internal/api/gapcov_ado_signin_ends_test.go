@@ -27,8 +27,8 @@ func (s *gapCovEndStore) BeginADOSignInEnd(_ context.Context, owner, reason stri
 	return s.beginErr
 }
 
-func (s *gapCovEndStore) FinishADOSignInEnd(_ context.Context, owner string) error {
-	s.finished = append(s.finished, owner)
+func (s *gapCovEndStore) FinishADOSignInEnd(_ context.Context, owner, reason string) error {
+	s.finished = append(s.finished, owner+" "+reason)
 	return s.finishErr
 }
 
@@ -48,8 +48,8 @@ func TestGapCovBeginADOSignInEndRecordsTheStartAndTheFinish(t *testing.T) {
 		t.Fatalf("after begin: begun %v finished %v, want only the start", st.begun, st.finished)
 	}
 	finish()
-	if len(st.finished) != 1 || st.finished[0] != "alice" {
-		t.Fatalf("after finish: finished %v, want alice", st.finished)
+	if len(st.finished) != 1 || st.finished[0] != "alice signed_out" {
+		t.Fatalf("after finish: finished %v, want alice with the begin's reason", st.finished)
 	}
 }
 

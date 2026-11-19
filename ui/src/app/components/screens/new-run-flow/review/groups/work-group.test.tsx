@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { limitsFor } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
 import { initialDraft } from "../../draft/run-intent";
 import { AttachmentRow, WorkGroup } from "./work-group";
@@ -71,5 +72,26 @@ describe("Review: the work group when the run keeps its work folder", () => {
     show(false);
     expect(screen.queryByText(NR_FILES.KEEP_LIFE)).toBeNull();
     expect(screen.getByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
+  });
+});
+
+// A3.3: Review shows the size the run gets, for a stored request above the pool's cap that nobody retyped.
+describe("Review: the work group for a stored main drive over the cap", () => {
+  const show = (pre: Parameters<typeof WorkGroup>[0]["pre"]) => {
+    const draft = initialDraft("alice");
+    draft.intent = { shape: "agent_task", experience: "interactive", no_repositories_or_drives: true, resources: { disk_mib: 32768 } };
+    render(<WorkGroup draft={draft} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+  };
+
+  it("reads the server's applied size, not the request", () => {
+    show({ ...SCENARIO_PREFLIGHT.member, main_drive: { applied_mib: 4096, basis: "pool", soft: false, clamped_by: "pool" } } as never);
+    expect(screen.getByText(/4 GiB/)).toBeInTheDocument();
+    expect(screen.queryByText(/32 GiB/)).toBeNull();
+  });
+
+  it("with no applied size yet, reads the request cut to the cap the answer carries", () => {
+    show({ ...SCENARIO_PREFLIGHT.member, main_drive: undefined, limits: limitsFor("interactive", 4096) } as never);
+    expect(screen.getByText(/4 GiB/)).toBeInTheDocument();
+    expect(screen.queryByText(/32 GiB/)).toBeNull();
   });
 });

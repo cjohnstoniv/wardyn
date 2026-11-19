@@ -41,8 +41,9 @@ const (
 // operatorOnly: an org component is admin-authored content that reaches hosts and
 // carries the operator's credential, the same tier as the other content writes.
 // Who may ATTACH one is a different question, answered per row by the permission
-// kind `component` (components_authz.go), not by this tier.
-func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
+// kind `component` (components_authz.go), not by this tier. An org component's unit pin is the
+// security tier's (component_owning_unit.go).
+func (s *Server) mountComponentRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/me/components", s.handleMyComponents)
 	r.Post("/me/components", s.handleSaveMyComponent)
 	r.Put("/me/components/{id}", s.handleUpdateMyComponent)
@@ -52,6 +53,7 @@ func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Put("/components/{id}", s.handlePutComponent)
 	operatorOnly.Delete("/components/{id}", s.handleDeleteComponent)
 	operatorOnly.Put("/components/{id}/kubectl-token", s.handlePutKubectlToken)
+	securityOps.Put("/components/{id}/owning-unit", s.handleSetComponentOwningUnit)
 }
 
 func (s *Server) componentStoreOr501(w http.ResponseWriter) (store.ComponentStore, bool) {
@@ -129,6 +131,9 @@ func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (r
 			return reasonComponentSecretMissing, fmt.Sprintf("definition.secrets[%d]: the organisation has no secret named %q; add it under Secrets first", i, sec.SecretName)
 		}
 	}
+	if m := c.Definition.MCP; c.Owner == "" && m != nil && m.GatewayAudience != "" {
+		return s.gatewayMCPAudienceRefusal(ctx, c)
+	}
 	return "", ""
 }
 
@@ -173,7 +178,31 @@ func (s *Server) auditComponent(r *http.Request, action string, c types.Componen
 // needs (componentSaveRequirements), read after the write so it reports what the
 // saver's namespace holds now.
 func (s *Server) componentSaved(r *http.Request, c types.Component) client.ComponentSaved {
-	return client.ComponentSaved{Component: c, Requirements: s.componentSaveRequirements(r, c)}
+	return client.ComponentSaved{Component: c, Requirements: s.componentSaveRequirements(r, c), Warnings: s.componentSaveWarnings(r, c)}
+}
+
+// componentSaveWarnings is what an organisation component's save still tells
+// its admin: each host that serves a model, with the run gate's own sentence
+// (the port does not count). The save stays 201 or 200, so existing saves keep
+// working, and people who attach the component are refused at run time. A
+// person's own component gets the sentence from the run gate when they use it.
+// Advisory and after the write: an unreadable site config warns of nothing.
+func (s *Server) componentSaveWarnings(r *http.Request, c types.Component) []string {
+	if c.Owner != "" {
+		return nil
+	}
+	sc, ok := s.siteConfigSnapshot(r.Context())
+	if !ok {
+		return nil
+	}
+	bounds := componentHostBounds{model: modelServingDestinations(sc), serving: s.modelServingHosts(sc)}
+	var out []string
+	for hi, h := range c.Definition.Hosts {
+		if problem := bounds.modelHostProblem(hi, h); problem != "" {
+			out = append(out, "definition."+problem+". People who attach this component are refused until you do.")
+		}
+	}
+	return out
 }
 
 // handleSaveMyComponent is POST /me/components: a new component of the caller's
@@ -270,12 +299,16 @@ func (s *Server) handleUpdateMyComponent(w http.ResponseWriter, r *http.Request)
 		saveRefusal(w, reason, msg)
 		return
 	}
-	s.updateComponent(w, r, cs, c)
+	s.updateComponent(w, r, cs, c, req.ExpectedVersion)
 }
 
+// componentStaleMsg answers a PUT whose expected_version the row no longer holds.
+const componentStaleMsg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again."
+
 // updateComponent is the write the two PUT routes share once a row is known to
-// exist and its new shape passed.
-func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs store.ComponentStore, c types.Component) {
+// exist and its new shape passed. expected is the version the caller read, 0
+// for none: the store writes only while the row still holds it.
+func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs store.ComponentStore, c types.Component, expected int) {
 	rows, err := cs.ListComponents(r.Context(), c.Owner)
 	if err != nil {
 		writeServerError(w, r, "list components", err)
@@ -285,8 +318,11 @@ func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs stor
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "a component with that name already exists")
 		return
 	}
-	updated, err := cs.UpdateComponent(r.Context(), c)
+	updated, err := cs.UpdateComponent(r.Context(), c, expected)
 	switch {
+	case errors.Is(err, store.ErrComponentStale):
+		writeErrorReason(w, http.StatusConflict, reasonComponentVersionConflict, componentStaleMsg)
+		return
 	case errors.Is(err, store.ErrConflict):
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "a component with that name already exists")
 		return
@@ -376,6 +412,11 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
+	var unlockAudience func()
+	if r, unlockAudience, ok = s.lockGatewayAudienceComponent(w, r, c); !ok {
+		return
+	}
+	defer unlockAudience()
 	if c.Definition.MCP != nil {
 		// The key check and the save run under one organisation-wide lock, so two saves of servers whose
 		// names give the same key cannot both pass the check.
@@ -400,6 +441,12 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 	old, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
+		// A save from an editor opened at another version would write back what was changed
+		// since, so it is refused before the write and before anything the write would purge.
+		if req.ExpectedVersion != 0 && old.Version != req.ExpectedVersion {
+			writeErrorReason(w, http.StatusConflict, reasonComponentVersionConflict, componentStaleMsg)
+			return
+		}
 		// A row whose AWS sign-ins would point somewhere it no longer names, or
 		// whose Azure sign-ins were captured for subscriptions it no longer pins,
 		// takes them with it, before the write.
@@ -410,7 +457,10 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		s.updateComponent(w, r, cs, c)
+		s.updateComponent(w, r, cs, c, req.ExpectedVersion)
+	case errors.Is(err, store.ErrNotFound) && req.ExpectedVersion != 0:
+		// The row the editor opened is gone: its save must not create it again.
+		notFoundIf(w, err, "component", reasonComponentNotFound)
 	case errors.Is(err, store.ErrNotFound):
 		s.createOrgComponent(w, r, cs, c)
 	default:

@@ -38,8 +38,8 @@ func saveBodyWith(scope, group, name, kind, intent string) string {
 // the registry (run-wide network, credential and access-rule parts) and are
 // exactly these.
 func TestTemplatePolicyKeysArePinned(t *testing.T) {
-	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "denied_domains", "eligible_grants",
-		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds", "recording"}
+	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "data_out", "denied_domains", "eligible_grants",
+		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "max_holds", "recording", "refuse_ip_literals"}
 	got := templatePolicyKeys()
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
@@ -108,6 +108,37 @@ func TestTemplateRevisionConflictChangesNothing(t *testing.T) {
 	// The old revision stays readable and unchanged.
 	if status, body := e.call(alice, http.MethodGet, path+"/revisions/1", ""); status != http.StatusOK || decodeTemplate(t, body).Name != "mine" {
 		t.Errorf("revision 1 = %d %s", status, body)
+	}
+}
+
+// A key written twice in a save request is refused and nothing is stored, as the import refuses the
+// same text: decoding into the typed request keeps only the last, at any depth, so the save would
+// keep the egress intent and drop the deny list written first.
+func TestTemplateSaveRefusesAKeyWrittenTwice(t *testing.T) {
+	e := newTemplateEnv(t)
+	alice := templateCookie(t, "alice", oidc.RoleUser, false, []string{}, false)
+	const denied = `{"inline_policy":{"denied_domains":["example.com"]}}`
+	doc := templateDocBody(`{"inline_policy":{"denied_domains":["example.com"],"denied_domains":[]}}`)
+	intentTwice := strings.TrimSuffix(templateDocBody(denied), "}") + `,"intent":` + templateIntentEgress + `}`
+	for key, req := range map[string]string{
+		"denied_domains": `{"scope":"person","name":"twice","document":` + doc + `}`,
+		"intent":         `{"scope":"person","name":"twice","document":` + intentTwice + `}`,
+		"document":       `{"scope":"person","name":"twice","document":` + templateDocBody(denied) + `,"document":` + templateDocBody(templateIntentEgress) + `}`,
+	} {
+		status, body := e.call(alice, http.MethodPost, "/api/v1/templates", req)
+		if want := `has the key \"` + key + `\" twice`; status != http.StatusBadRequest || !strings.Contains(body, want) {
+			t.Errorf("save with %s twice = %d %s, want 400 naming the repeated key", key, status, body)
+		}
+	}
+	e.ts.mu.Lock()
+	stored := len(e.ts.rows)
+	e.ts.mu.Unlock()
+	if stored != 0 {
+		t.Errorf("%d templates stored, want none", stored)
+	}
+	imp, _ := json.Marshal(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Source: doc})
+	if status, body := e.call(alice, http.MethodPost, "/api/v1/templates/import", string(imp)); status != http.StatusOK || !strings.Contains(body, `has the key \"denied_domains\" twice`) {
+		t.Errorf("import = %d %s, want the same key refused", status, body)
 	}
 }
 

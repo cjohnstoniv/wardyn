@@ -85,6 +85,8 @@ func (c CLISignInConfig) sessionIdle(st string) time.Duration {
 // one bucket per client address; a refresh spends one bucket per address and one per session.
 type cliSignInState struct {
 	cliPeerLimiter, cliRefreshPeerLimiter, cliRefreshSessionLimiter principalLimiter
+	// adminTokenPeerLimiter bounds failed admin bearer guesses per client address (admin_token_limiter.go).
+	adminTokenPeerLimiter principalLimiter
 }
 
 func newCLISignInState() cliSignInState {
@@ -92,6 +94,7 @@ func newCLISignInState() cliSignInState {
 		cliPeerLimiter:           principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 		cliRefreshPeerLimiter:    principalLimiter{rate: 60.0 / 3600, burst: 30, max: enrolLimiterMaxPeers},
 		cliRefreshSessionLimiter: principalLimiter{rate: 10.0 / 3600, burst: 10, max: enrolLimiterMaxPeers},
+		adminTokenPeerLimiter:    principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 	}
 }
 

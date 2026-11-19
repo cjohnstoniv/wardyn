@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -205,5 +206,69 @@ func TestPG_ConcurrentReplacesLeaveOneDrive(t *testing.T) {
 		if len(rows) != 1 {
 			t.Fatalf("trial %d: subject holds %d drives after two racing replaces, want 1", trial, len(rows))
 		}
+	}
+}
+
+// TestPG_ListUserDriveGrantsPage_EqualKeysCrossPageBoundaries: one subject's
+// grants of several drives at one priority are equal on tier, priority and
+// subject, so only the grant id orders them. Walked in pages of two, they
+// span page boundaries, and every grant must come back exactly once, in id
+// order, as the whole list has them. Catches an order with no unique last
+// key, under which each page's read may order the equal rows its own way and
+// repeat one grant on two pages while it skips another. Guarded by
+// WARDYN_TEST_PG.
+func TestPG_ListUserDriveGrantsPage_EqualKeysCrossPageBoundaries(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	uniq := uuid.NewString()[:8]
+	group := "grp-tie-" + uniq
+	var want []string
+	var grants []types.UserDriveGrant
+	for i := range 5 {
+		d := seedUserDrive(t, st, fmt.Sprintf("tie-%d-%s", i, uniq))
+		g := addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: group, DriveID: d.ID, Enabled: true, CreatedBy: "admin@example.com"})
+		grants = append(grants, g)
+		want = append(want, g.ID.String())
+	}
+	slices.Sort(want)
+	// Rewrite the rows newest id first, so the table holds them against id
+	// order and a read that leaves equal rows as stored returns them that way.
+	slices.SortFunc(grants, func(a, b types.UserDriveGrant) int { return strings.Compare(b.ID.String(), a.ID.String()) })
+	for _, g := range grants {
+		if _, err := st.AddUserDriveGrant(ctx, g, true); err != nil {
+			t.Fatalf("rewrite grant %s: %v", g.ID, err)
+		}
+	}
+
+	mine := func(gs []types.UserDriveGrant) []string {
+		var out []string
+		for _, g := range gs {
+			if g.Subject == group {
+				out = append(out, g.ID.String())
+			}
+		}
+		return out
+	}
+	all, err := st.ListUserDriveGrants(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mine(all); !slices.Equal(got, want) {
+		t.Errorf("whole list = %v, want the equal-key grants in id order %v", got, want)
+	}
+	var got []string
+	for offset := 0; ; offset += 2 {
+		page, err := st.ListUserDriveGrantsPage(ctx, store.Page{Limit: 2, Offset: offset})
+		if err != nil {
+			t.Fatalf("page at offset %d: %v", offset, err)
+		}
+		got = append(got, mine(page)...)
+		if len(page) < 2 {
+			break
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("paged walk = %v, want each equal-key grant once, in id order %v", got, want)
 	}
 }

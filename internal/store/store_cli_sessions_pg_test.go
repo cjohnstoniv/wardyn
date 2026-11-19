@@ -348,3 +348,70 @@ func TestPG_CLISession_RotateCarriesSessionIdentity(t *testing.T) {
 		}
 	})
 }
+
+// A rotation deletes the access token it replaces when an earlier refresh minted it, and keeps the session's
+// first token (whose creation is audited) as a revoked row: many refreshes leave two rows, not one per hour.
+func TestPG_CLISession_RotationDeletesRefreshMintedTokens(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	sess, first, _ := seedCLISession(t, st, "sub-a", "a@corp.example")
+	now := time.Now().UTC()
+	exp := now.Add(time.Hour)
+	for i := 0; i < 5; i++ {
+		snap, _ := st.GetCLISession(ctx, sess.ID)
+		tok := types.APIToken{ID: uuid.New(), Principal: "sub-a", Role: "admin", UserType: types.UserTypeStandard, Name: "CLI: laptop",
+			CreatedAt: now, ExpiresAt: &exp, Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID}
+		if _, err := st.RotateCLISession(ctx, sess.ID, snap.Generation, "wdc_"+uuid.NewString(), now, tok, "wdn_"+uuid.NewString()); err != nil {
+			t.Fatalf("rotate %d: %v", i, err)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM api_tokens WHERE cli_session_id = $1`, sess.ID); n != 2 {
+		t.Fatalf("%d token rows after 5 rotations, want 2", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM api_tokens WHERE id = $1 AND revoked_at IS NOT NULL`, first.ID); n != 1 {
+		t.Fatalf("the first token is kept revoked: %d rows, want 1", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM api_tokens WHERE cli_session_id = $1 AND revoked_at IS NULL`, sess.ID); n != 1 {
+		t.Fatalf("%d live token rows, want 1", n)
+	}
+}
+
+// Revoking a session's access token by id ends the session and revokes its other tokens; revoking its
+// cli_admin token does not end it; someone else's id ends nothing.
+func TestPG_CLISession_RevokeAccessTokenEndsSession(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	exp := now.Add(time.Hour)
+
+	sess, access, _ := seedCLISession(t, st, "sub-a", "a@corp.example")
+	admin, err := st.CreateCLIAdminToken(ctx, sess.ID, types.APIToken{ID: uuid.New(), Principal: "sub-a", Role: "admin", UserType: types.UserTypeStandard,
+		Name: "CLI admin", CreatedAt: now, ExpiresAt: &exp, Kind: types.APITokenKindCLIAdmin, CLISessionID: &sess.ID}, "wdn_"+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RevokeAPIToken(ctx, admin.ID, "sub-a", now); err != nil {
+		t.Fatalf("revoke admin token: %v", err)
+	}
+	if got, _ := st.GetCLISession(ctx, sess.ID); got.EndedAt != nil {
+		t.Fatalf("revoking the cli_admin token ended the session: %+v", got)
+	}
+	if _, err := st.RevokeAPIToken(ctx, access.ID, "sub-b", now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("someone else's revoke = %v, want ErrNotFound", err)
+	}
+	if got, _ := st.GetCLISession(ctx, sess.ID); got.EndedAt != nil {
+		t.Fatalf("someone else's revoke ended the session: %+v", got)
+	}
+	if _, err := st.RevokeAPIToken(ctx, access.ID, "sub-a", now); err != nil {
+		t.Fatalf("revoke access token: %v", err)
+	}
+	got, _ := st.GetCLISession(ctx, sess.ID)
+	if got.EndedAt == nil || got.EndReason != types.CLISessionEndRevoked {
+		t.Fatalf("session after its access token was revoked = %+v, want ended, reason revoked", got)
+	}
+	if _, err := st.RevokeAPIToken(ctx, access.ID, "sub-a", now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a second revoke = %v, want ErrNotFound", err)
+	}
+}

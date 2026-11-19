@@ -38,6 +38,12 @@ var strictRefusals bool
 // d.Reason unchanged either way, so a Hidden-effect door's true cause still
 // reaches the audit trail even while its response lies for privacy.
 func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision) bool {
+	return s.refuseOn(w, r, d, "")
+}
+
+// refuseOn is refuse naming the request field the refusal is about (errorBody.Field); "" names none. The field
+// rides the wire only, never the audit row.
+func (s *Server) refuseOn(w http.ResponseWriter, r *http.Request, d authz.Decision, field string) bool {
 	ref, ok := authz.Lookup(d.Reason)
 	if !ok {
 		// The SAME generic fallback writeServerError uses (#656 slice 3): this
@@ -61,7 +67,7 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	}
 	// The policy is attributed to the knob the door named (d.Knob), so one a lock fixes says locked.
 	// The tool rides as itself: it is the request's own tools[].id.
-	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policyref.Layered(policyref.AttributedTo(policy, d.Knob)), Tool: d.Detail["tool"]})
+	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policyref.Layered(policyref.AttributedTo(policy, d.Knob)), Tool: d.Detail["tool"], Field: field})
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

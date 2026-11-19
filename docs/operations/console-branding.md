@@ -75,7 +75,7 @@ Every save is audited as `branding.write` and a removal as `branding.delete` (se
   - (An MDM file re-applied at every boot does this on its own.)
 - While the file owns the logo the card shows where it comes from and offers no Remove logo: the next apply would put it back.
   - **Remove branding** stays, and its dialog says the logo returns once branding is set up again.
-  - Uploading a different logo in the console replaces it until then.
+  - A new upload is refused too. Take `logo_path` out first.
 - Taking `logo_path` out of the block, leaving `"branding": {}`, and applying removes a logo the file delivered; a logo someone uploaded is never touched.
   - Deleting the whole `branding` key changes nothing: a document that does not name `branding` leaves both the path and the logo as they are, as it does for the provider blocks.
 - Every apply that names `branding` records `branding_logo_path` (and `branding_logo_sha256` of the stored bytes) on `site_config.write`.

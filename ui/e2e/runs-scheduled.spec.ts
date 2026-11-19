@@ -52,8 +52,9 @@ test.describe("Runs list: scheduled runs", () => {
   test("a scheduled run reads Scheduled with starts {when}, and Cancel run asks before it kills", async ({ page }) => {
     await mockRunsList(page, [baseRun("s1", "Nightly dependency bump", { queue: queue("scheduled") })]);
     const kills: string[] = [];
-    await page.route("**/api/v1/runs/s1/kill", (route) => {
-      kills.push(route.request().method());
+    // The cancel of a run that has not started carries ?not_started=true, so the route matches the path with its query.
+    await page.route(/\/api\/v1\/runs\/s1\/kill(\?.*)?$/, (route) => {
+      kills.push(`${route.request().method()} ${new URL(route.request().url()).search}`);
       return route.fulfill({ status: 200, json: {} });
     });
     await gotoConsole(page);
@@ -64,8 +65,8 @@ test.describe("Runs list: scheduled runs", () => {
     await expect(row.getByText("Queued", { exact: true })).toHaveCount(0);
     await row.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }).click();
     expect(kills).toEqual([]);
-    await page.getByRole("button", { name: "Kill run" }).click();
-    await expect.poll(() => kills).toEqual(["POST"]);
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel run", exact: true }).click();
+    await expect.poll(() => kills).toEqual(["POST ?not_started=true"]);
   });
 
   test("a due run reads Waiting for sign-in with was due {when} and a Sign in button", async ({ page }) => {
@@ -74,7 +75,7 @@ test.describe("Runs list: scheduled runs", () => {
     const row = page.getByTestId("run-row");
     await expect(row.getByText("Waiting for sign-in", { exact: true })).toBeVisible();
     await expect(row.getByText(SCHEDULED_RUN.ROW_DUE("Wed 21 Oct, 02:00 (UTC)"), { exact: false })).toBeVisible();
-    await expect(row.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Sign in: Nightly dependency bump", exact: true })).toBeVisible();
   });
 
   test("a run that waited out its sign-in is Failed, with the board's sentence in place of its times", async ({ page }) => {

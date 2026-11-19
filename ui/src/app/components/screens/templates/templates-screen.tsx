@@ -32,7 +32,7 @@ import { Notice } from "../../wardyn/notice";
 import { PageContainer } from "../../wardyn/page-container";
 import { PageHeader } from "../../wardyn/page-header";
 import { Segmented } from "../../wardyn/segmented";
-import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, StaleNote, TableSkeleton } from "../../wardyn/states";
 import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
 import { RenameTemplateDialog } from "./rename-template-dialog";
 import { deleteBody } from "./template-display";
@@ -59,7 +59,7 @@ const KIND_OF: Record<Exclude<KindFilter, "all">, TemplateSummary["kind"]> = { t
 export function TemplatesScreen() {
   const admin = useConsoleMode() === "admin";
   const [data, setData] = React.useState<TemplateList | null>(null);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loadError, setLoadError] = React.useState<{ message?: string } | null>(null);
   const [scope, setScope] = React.useState<ScopeFilter>("all");
   const [kind, setKind] = React.useState<KindFilter>("all");
   const [query, setQuery] = React.useState("");
@@ -77,7 +77,7 @@ export function TemplatesScreen() {
         setData(list);
         setLoadError(null);
       })
-      .catch((e) => setLoadError(getErrorMessage(e)));
+      .catch((e) => setLoadError({ message: failureSentence(e) }));
   }, []);
   React.useEffect(load, [load]);
 
@@ -126,7 +126,7 @@ export function TemplatesScreen() {
   };
 
   let body: React.ReactNode;
-  if (loadError !== null) body = <ErrorState message={loadError} onRetry={load} />;
+  if (loadError && !data) body = <ErrorState message={loadError.message} onRetry={load} />;
   else if (!data) body = <TableSkeleton rows={4} cols={5} />;
   else if (rows.length === 0)
     body = (
@@ -154,7 +154,7 @@ export function TemplatesScreen() {
       // A table by role, not by element: the rows stay the grid cards that collapse below 760 px, where the
       // per-cell labels name each value and the header row is not shown.
       <div role="table" aria-label={T.LIST_ARIA}>
-        <div role="row" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 md:grid ${ROW_GRID}`}>
+        <div role="row" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 lg:grid ${ROW_GRID}`}>
           <span role="columnheader">{T.COL_NAME}</span>
           <span role="columnheader">{T.COL_AVAILABLE}</span>
           <span role="columnheader">{T.COL_OWNER}</span>
@@ -212,6 +212,7 @@ export function TemplatesScreen() {
       {data?.publish.groups_unverified && <Notice tone="warning">{T.GROUPS_UNVERIFIED}</Notice>}
 
       <section aria-label={T.LIST_ARIA} className="overflow-hidden rounded-xl border border-border bg-card">
+        {loadError && data && <StaleNote onRetry={load} />}
         {body}
       </section>
 

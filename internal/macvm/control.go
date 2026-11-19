@@ -33,7 +33,71 @@ const (
 	// OpDesktopPassword reads the run's VNC password (ControlReply.DesktopPassword), which runnerd
 	// sends in the guest agent's Init. Only a peer of the helper's own uid is answered.
 	OpDesktopPassword = "desktop_password"
+	// OpWindow draws a close-only window on the live VM and binds it to the connection: the reply
+	// {"ok":true} comes once the window is up, one window_closed event (Event.Detail is the reason, a
+	// WindowClosed* value) follows when it ends and the helper closes the connection. Closing the
+	// connection closes the window. Closing the window never stops the VM or the helper.
+	OpWindow = "window"
 )
+
+// Detail values of an EventWindow.
+const (
+	EventWindowOpen         = "open"
+	EventWindowClosedDetail = "closed"
+)
+
+// Reasons a window ends (Event.Detail of the EventWindowClosed event). A client that closes the
+// connection first gets no event: it knows why.
+const (
+	WindowClosedPerson     = "person"      // the person closed the window
+	WindowClosedHostLocked = "host_locked" // the Mac's screen locked, its lock can no longer be told, or its console session changed
+	WindowClosedRunEnded   = "run_ended"   // the VM stopped
+	WindowClosedFailed     = "failed"      // the console check could not be read, so the window closed
+)
+
+// WindowClosedConnection is the reason ControlClient.Window delivers when the connection ended with no
+// event (the helper went away). It is never sent on the wire.
+const WindowClosedConnection = "connection"
+
+// Codes of a refused window (ControlReply.Code), each with its sentence (ControlReply.Error). The
+// sentences are what the person reads; the codes are what a caller branches on.
+const (
+	WindowCodeNotRunning  = "window_not_running"
+	WindowCodeNotOwner    = "window_not_owner"
+	WindowCodeOpen        = "window_open"
+	WindowCodeNotAtMac    = "window_not_at_mac"
+	WindowCodeLockUnknown = "window_lock_unknown"
+	WindowCodeUnavailable = "window_unavailable"
+	WindowCodeBadRequest  = "window_bad_request"
+	WindowCodeFailed      = "window_failed"
+)
+
+const (
+	// WindowAlreadyOpenSentence is the one-window-per-run refusal. The helper, the runner and the
+	// control plane all use these words, so a person reads the same sentence from any of them.
+	WindowAlreadyOpenSentence = "This run's window is already open."
+	// WindowNotRunningSentence answers a window asked of a VM that is not running.
+	WindowNotRunningSentence = "The window can't open yet: this run's macOS VM isn't running."
+	// WindowNotOwnerSentence answers a window asked by a process that is not this helper's user.
+	WindowNotOwnerSentence = "window: the peer is not this helper's user"
+	// WindowNotAtMacSentence answers a screen that is locked or whose console is not this person's.
+	WindowNotAtMacSentence = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
+	// WindowUnreadableSentence answers a console check that could not be read; the window refuses.
+	WindowUnreadableSentence = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+	// WindowLockUnknownSentence answers a screen whose lock state can't be told; the window fails closed.
+	WindowLockUnknownSentence = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
+	// WindowUnavailableSentence answers a helper or VM that cannot draw a window.
+	WindowUnavailableSentence = "This Mac's Wardyn helper can't open a window onto this run's VM. Update Wardyn on this Mac."
+	// WindowBadRequestSentence answers a window request with no usable grant id.
+	WindowBadRequestSentence = "window: the request needs a grant id of letters, digits and . _ : - (at most 128)"
+	// WindowFailedSentence starts the sentence for a window that could not be made; the cause follows.
+	WindowFailedSentence = "The window didn't open: "
+)
+
+// WindowRefusal is a refused window: a ControlReply's Code and Error.
+type WindowRefusal struct{ Code, Sentence string }
+
+func (e *WindowRefusal) Error() string { return e.Sentence }
 
 // ControlRequest is one JSON line from runnerd to the helper.
 type ControlRequest struct {
@@ -41,12 +105,18 @@ type ControlRequest struct {
 	Proto     int    `json:"proto,omitempty"`
 	Graceful  bool   `json:"graceful,omitempty"`
 	TimeoutMS int64  `json:"timeout_ms,omitempty"`
+	// Grant and Title are OpWindow's. Grant names the open in helper.log (letters, digits and . _ : -,
+	// at most 128). Title is the window's title, trimmed to 200 characters; empty is a default title.
+	Grant string `json:"grant,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // ControlReply is one JSON line from the helper.
 type ControlReply struct {
-	OK     bool    `json:"ok"`
-	Error  string  `json:"error,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// Code names a refused OpWindow (a WindowCode* value); other refusals leave it out.
+	Code   string  `json:"code,omitempty"`
 	Proto  int     `json:"proto,omitempty"`
 	Status *Status `json:"status,omitempty"`
 	Event  *Event  `json:"event,omitempty"`
@@ -85,7 +155,10 @@ type Status struct {
 	// Listeners are the vsock ports the helper registered for this VM: a
 	// run's are 1024 and 1025 only; runnerd ends a run that shows another.
 	Listeners []uint32 `json:"vsock_listeners"`
-	Error     string   `json:"error,omitempty"`
+	// DesktopForcedViewOnly comes from the shim serving this boot (RFBShim.DesktopForcedViewOnly), never
+	// from run.json. An older helper leaves it out, which reads as not forced.
+	DesktopForcedViewOnly bool   `json:"desktop_forced_view_only,omitempty"`
+	Error                 string `json:"error,omitempty"`
 }
 
 // Event types.
@@ -93,6 +166,11 @@ const (
 	EventState      = "state"
 	EventNetwork    = "network"
 	EventGuestAgent = "guest_agent"
+	// EventWindow is published on the OpEvents stream when a run window opens or closes (Detail is
+	// EventWindowOpen or EventWindowClosedDetail), so runnerd can tell a window it did not ask for.
+	EventWindow = "window"
+	// EventWindowClosed ends an OpWindow connection; Detail is a WindowClosed* reason.
+	EventWindowClosed = "window_closed"
 )
 
 // Event is one line of the events stream.
@@ -101,6 +179,10 @@ type Event struct {
 	Type   string       `json:"type"`
 	State  MachineState `json:"state,omitempty"`
 	Detail string       `json:"detail,omitempty"`
+	// Grant and Reason are an EventWindow's: the grant id the window was opened with, and, when it closed,
+	// why (a WindowClosed* value).
+	Grant  string `json:"grant,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // ErrProto is returned by DialControl when the helper speaks another version.
@@ -232,6 +314,33 @@ func (cc *ControlClient) Events(ctx context.Context) (<-chan Event, error) {
 				return
 			}
 		}
+	}()
+	return ch, nil
+}
+
+// Window asks the helper for a close-only window on the run's VM. It returns once the window is up (a
+// *WindowRefusal when the helper refuses). The channel then delivers the reason the window ended (a
+// WindowClosed* value) and closes. Closing cc closes the window and ends the channel with
+// WindowClosedConnection. Like Events, it takes over the connection: use another client for requests.
+func (cc *ControlClient) Window(ctx context.Context, grant, title string) (<-chan string, error) {
+	r, err := cc.call(ctx, ControlRequest{Op: OpWindow, Grant: grant, Title: title}, nil)
+	if err != nil {
+		if r.Code != "" {
+			return nil, &WindowRefusal{Code: r.Code, Sentence: r.Error}
+		}
+		return nil, err
+	}
+	ch := make(chan string, 1)
+	go func() {
+		defer close(ch)
+		reason := WindowClosedConnection
+		if line, err := cc.rd.ReadBytes('\n'); err == nil {
+			var ev ControlReply
+			if json.Unmarshal(line, &ev) == nil && ev.Event != nil && ev.Event.Type == EventWindowClosed {
+				reason = ev.Event.Detail
+			}
+		}
+		ch <- reason
 	}()
 	return ch, nil
 }

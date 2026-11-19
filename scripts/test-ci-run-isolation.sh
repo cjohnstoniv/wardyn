@@ -271,6 +271,15 @@ fi
 if grep -o 'ARGV=.*' "$WCALLS" | grep -F 'wdn_ci-principal-token' >/dev/null; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
 if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(head -2 "$CALLS" | tr '\n' ' ')"; else ok "remote mode starts no stack"; fi
 
+# 4a''. WARDYN_CI_IDEMPOTENCY_KEY reaches the launch (not the preflight) as --idempotency-key; unset sends none.
+out="$(run_remote WARDYN_CI_IDEMPOTENCY_KEY=build-9-job-1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -- '--wait' "$WCALLS" | grep -- '--idempotency-key build-9-job-1' >/dev/null && ! grep -- '--dry-run' "$WCALLS" | grep -- '--idempotency-key' >/dev/null; then
+    ok "WARDYN_CI_IDEMPOTENCY_KEY is passed to the launch as --idempotency-key"
+else bad "WARDYN_CI_IDEMPOTENCY_KEY did not reach the launch alone (rc=$rc): $(grep -- '--wait\|--dry-run' "$WCALLS" | tr '\n' ' ')"; fi
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q -- '--idempotency-key' "$WCALLS"; then ok "no WARDYN_CI_IDEMPOTENCY_KEY sends no --idempotency-key"
+else bad "--idempotency-key was sent with the variable unset (rc=$rc)"; fi
+
 # 4a'. (#2185) a --wait that times out (124) does not stop the run: ci-run.sh must kill it, and still exit 124.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"live"}]}'
 printf 'timeout' > "$WSTUB/wait_mode"; printf ',"state":"RUNNING"' > "$WSTUB/run_state"

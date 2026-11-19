@@ -17,16 +17,16 @@ export interface RunGroup {
   runs: AgentRun[];
 }
 
-function keyFor(by: "workspace" | "title"): (run: AgentRun) => string {
-  return by === "workspace" ? (r) => repoLabel(r).text : rowHeadline;
+function keyFor(by: "workspace" | "title", names: Readonly<Record<string, string>>): (run: AgentRun) => string {
+  return by === "workspace" ? (r) => repoLabel(r, names).text : rowHeadline;
 }
 
 // Groups by first appearance (not sorted alphabetically) — the incoming list
 // is already the server's own order (needs first, then live, then ended by
 // recency; design.md §3.1), so the group that contains the most recently
 // active run keeps sorting first.
-export function groupRunsBy(runs: readonly AgentRun[], by: Exclude<RunsGroupBy, "sections">): RunGroup[] {
-  const key = keyFor(by);
+export function groupRunsBy(runs: readonly AgentRun[], by: Exclude<RunsGroupBy, "sections">, names: Readonly<Record<string, string>> = {}): RunGroup[] {
+  const key = keyFor(by, names);
   const order: string[] = [];
   const byKey = new Map<string, AgentRun[]>();
   for (const run of runs) {

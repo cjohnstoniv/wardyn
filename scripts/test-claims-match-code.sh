@@ -203,7 +203,7 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # release needs every grant since, whichever release candidates came between.
 # When a final release is cut, set it to the first migration after that release
 # (RELEASING.md, step 1); the next release's tables then go in a new bullet.
-UNRELEASED_FROM=0192 # v0.9.4, the last final release, ships migrations up to 0191
+UNRELEASED_FROM=0291 # v0.10.0, the last final release, ships migrations up to 0290
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }
@@ -227,7 +227,7 @@ for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
     new_tables="${new_tables} ${tbl}"
     grep -qF "\`${tbl}\`" <<<"${split_note}" \
       || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
-  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
+  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?([%0-9$a-z_]+\.)?[a-z_]+' "${f}" | awk '{t = $NF; sub(/.*\./, "", t); print tolower(t)}' | sort -u || true)"
 done
 pass "C8h the split-role upgrade note grants all ${checked} tables created since migration ${UNRELEASED_FROM}"
 

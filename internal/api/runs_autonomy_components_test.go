@@ -113,9 +113,15 @@ func profileCeiling(rubric *types.AutonomyRubric) governanceCeiling {
 	}
 }
 
-// sameOutcome compares what the caller can observe of two calls.
-func sameOutcome(t *testing.T, got, want componentCapResult) {
+// sameOutcome compares what the caller can observe of two calls, and that the
+// recorded posture marks a self-defined component exactly when the run carries
+// one (custom_component, which a run without one omits).
+func sameOutcome(t *testing.T, got, want componentCapResult, selfDefined bool) {
 	t.Helper()
+	if got.res.Posture.CustomComponent != selfDefined {
+		t.Errorf("posture custom_component = %v, want %v", got.res.Posture.CustomComponent, selfDefined)
+	}
+	got.res.Posture.CustomComponent = want.res.Posture.CustomComponent
 	g, _ := json.Marshal([]any{got.ok, got.res, got.warnings, got.req, got.ado, got.bedrock, got.code, got.body, got.written, got.denied})
 	w, _ := json.Marshal([]any{want.ok, want.res, want.warnings, want.req, want.ado, want.bedrock, want.code, want.body, want.written, want.denied})
 	if string(g) != string(w) {
@@ -140,7 +146,8 @@ func TestAutonomyComponentCapDefaultChangesNothing(t *testing.T) {
 				if !want.ok || want.written || want.res.Level != "" {
 					t.Fatalf("the baseline itself was capped: %+v", want)
 				}
-				sameOutcome(t, callComponentCap(t, governanceCeiling{}, comps, shape.body), want)
+				// No rubric and no cap that applies: nothing is graded, so no posture is recorded.
+				sameOutcome(t, callComponentCap(t, governanceCeiling{}, comps, shape.body), want, false)
 			})
 		}
 	}
@@ -151,8 +158,8 @@ func TestAutonomyComponentCapDefaultChangesNothing(t *testing.T) {
 		if want.res.Level != types.AutonomyL2 {
 			t.Fatalf("baseline level = %q, want L2", want.res.Level)
 		}
-		sameOutcome(t, callComponentCap(t, ceiling, selfComponent(""), body), want)
-		sameOutcome(t, callComponentCap(t, ceiling, runComponents{settings: types.ComponentSettings{AutonomyCap: types.AutonomyL0}}, body), want)
+		sameOutcome(t, callComponentCap(t, ceiling, selfComponent(""), body), want, true)
+		sameOutcome(t, callComponentCap(t, ceiling, runComponents{settings: types.ComponentSettings{AutonomyCap: types.AutonomyL0}}, body), want, false)
 	})
 }
 
@@ -175,7 +182,7 @@ func TestAutonomyComponentCapWithoutAProfile(t *testing.T) {
 					t.Errorf("resolution = %+v, want level %s bound by custom_component alone", got.res, capLevel)
 				}
 				// The posture is recorded although nothing graded the level on it.
-				if got.res.Posture != (types.AutonomyPosture{Egress: types.AutonomyEgressSealed, Secrets: types.AutonomySecretsNone, Confinement: types.CC2}) {
+				if got.res.Posture != (types.AutonomyPosture{Egress: types.AutonomyEgressSealed, Secrets: types.AutonomySecretsNone, Confinement: types.CC2, CustomComponent: true}) {
 					t.Errorf("posture = %+v, want the run's graded posture", got.res.Posture)
 				}
 				// No rubric graded this run, so dispatch is not held to a grade.
@@ -290,7 +297,7 @@ func TestAutonomyComponentCapFoldsWithARubric(t *testing.T) {
 		ceiling := profileCeiling(autonomyRubric(types.AutonomyL0))
 		want := callComponentCap(t, ceiling, runComponents{}, auto)
 		got := callComponentCap(t, ceiling, selfComponent(types.AutonomyL1), auto)
-		sameOutcome(t, got, want)
+		sameOutcome(t, got, want, true)
 		if got.body.Reason != "governance_unit" || !slices.Equal(got.res.BoundBy, rubricCauses) {
 			t.Errorf("got reason %q bound_by %v, want the profile's refusal unchanged", got.body.Reason, got.res.BoundBy)
 		}

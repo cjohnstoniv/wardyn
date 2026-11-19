@@ -7,14 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -350,5 +353,52 @@ func TestReconcileLeavesAnAlreadyHeldVerdictAlone(t *testing.T) {
 	}
 	if got := len(f.audit()) - before; got != 0 {
 		t.Errorf("second reconcile wrote %d audit rows, want none", got)
+	}
+}
+
+// TestBootHealEgressWriteFailureNamesItsClass: a boot re-apply the store fails leaves one failure row whose detail
+// is the class the store's sentinel tells apart, or "Store error" for any other failure, and never the store's
+// text, which only the server log keeps.
+func TestBootHealEgressWriteFailureNamesItsClass(t *testing.T) {
+	const host = "registry.npmjs.org"
+	raw := errors.New("write to db.internal:5432 refused")
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"the list at its cap or edited": {fmt.Errorf("add: %w", store.ErrConflict), writebackAuditEgressRefused},
+		"a workspace not there":         {fmt.Errorf("add: %w", store.ErrNotFound), writebackAuditWorkspaceGone},
+		"any other store failure":       {raw, writebackAuditStoreError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureSlog(t)
+			f := newScopeFixture(t)
+			f.seedWorkspace(t, nil, nil)
+			rcSeedDecided(f, host, types.ApprovalApproved, time.Now().UTC())
+			f.srv.cfg.Store = r3bEgressWriteErrStore{authzStore: f.store, err: c.err}
+
+			before := len(f.audit())
+			if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 0 {
+				t.Fatalf("reconcile = %d, %v; want 0, nil", n, err)
+			}
+			var fails []types.AuditEvent
+			for _, ev := range f.audit()[before:] {
+				if ev.Action == "workspace.egress.approve" && ev.Outcome == "failure" {
+					fails = append(fails, ev)
+				}
+			}
+			if len(fails) != 1 {
+				t.Fatalf("workspace.egress.approve failure rows = %d, want 1", len(fails))
+			}
+			if detail := r3bAuditDetail(t, fails[0]); detail != c.want {
+				t.Errorf("failure row detail = %q, want %q", detail, c.want)
+			}
+			if d := string(fails[0].Data); strings.Contains(d, "db.internal") || strings.Contains(d, "add: ") {
+				t.Errorf("failure row data = %s, want no store text", d)
+			}
+			if c.err == raw && !strings.Contains(logs.String(), "db.internal") {
+				t.Errorf("log = %q, want the store's error", logs.String())
+			}
+		})
 	}
 }

@@ -10,18 +10,18 @@
 
 | Field | What it holds |
 | --- | --- |
-| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery**. |
-|  | `proxy_header` is the header + format the proxy presents on the wire, so the sandbox never holds the credential (the proxy injects one credential header per host). |
-|  | A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials). |
-|  | At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list |
+| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery** (see below the table) |
 | `egress[]` | Where the system lives; why a host is reachable for a granted run instead of being hand-listed in every workspace |
 | `config{}` | Non-secret knobs, key-validated per closed kind (`github_app` ⇒ `app_id`/`installation_id`/`host`); an unknown key on a closed kind 400s by name |
 
+- `proxy_header` is the header + format the proxy presents on the wire, so the sandbox never holds the credential (the proxy injects one credential header per host).
+  - A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials).
+  - At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list.
 - The type also models `resident_file`/`resident_env` for the closed kinds whose own transport needs them.
 - An operator may not DECLARE one.
 - There's no generic lane that materializes a named secret into a sandbox path or env var, so a write naming one is refused.
 
-**Model access is not an integration (0.8).** The four AI kinds — `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` — left the closed set.
+**Model access is not an integration.** The four AI kinds — `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` — left the closed set.
 
 - A write naming one is refused as an unsupported kind (`validateIntegrationWrite`, [`internal/api/integrations_write.go`](../../internal/api/integrations_write.go)) — model access is set up under Settings → Model providers — and `default_for` is no longer a field at all.
 - The upgrade converted every stored AI row into a model provider and deleted it (migration `0100_model_provider_conversion`; see the [CHANGELOG](../../CHANGELOG.md)).
@@ -32,26 +32,22 @@
 | Kind | Note |
 | --- | --- |
 | `github_app`, `git_host` | Each has behavior in code (`capabilitiesFor`); a new one is a code change, and a write naming anything else 400s with the accepted list |
-| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" above |
-| Generic kinds (`"jira"`, `"artifactory"`, …) | A 0.5 carry-over — no longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by [`internal/api/integrations_run.go`](../../internal/api/integrations_run.go) |
-| `azure_openai` | Gone as a kind (also a 0.5 carry-over) |
-| `azure_foundry` | A model-provider kind, not an integration kind: each person's own Entra sign-in for one Azure Foundry resource. **Switched off in 0.8.6:** a provider write of this kind answers `400` "the azure_foundry kind is not available in this release". |
-|  | See "[Azure Foundry](#azure-foundry-azure_foundry)" below |
+| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Not integrations: see "Model access is not an integration" above |
+| Generic kinds (`"jira"`, `"artifactory"`, …) | No longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by [`internal/api/integrations_run.go`](../../internal/api/integrations_run.go) |
+| `azure_openai` | Gone as a kind |
+| `azure_foundry` | A model-provider kind, not an integration kind. **Switched off in 0.8.6:** a provider write of this kind answers `400` "the azure_foundry kind is not available in this release". See [Azure Foundry](#azure-foundry-azure_foundry) |
 
 ## Where it's configured
 
 - **Settings** (the Admin view's sidebar) is the one surface for these — a Model provider card, a radio group over concrete lanes; the standalone `/integrations` page is deleted.
-- **The Git host card retired in 0.7.2.**
-  - Its three git credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row they apply to, on the Workspace Providers screen (`/admin/providers`).
-  - Settings keeps a card in its place that summarizes the provider policy and links there.
-- The lanes are the same radio group over the same concrete lanes. What changed: "which git hosts this org clones from" and "how a run authenticates to them" stopped being two surfaces that could disagree.
-- A row's `lanes` list now says which of the three it permits at all (a lane a row does not permit drops its wiring, with a warning on the 201).
+- The three git credential lanes (GitHub App, PAT, SSH key) render INSIDE the provider row they apply to, on the Workspace Providers screen (`/admin/providers`). Settings keeps a card that summarizes the provider policy and links there.
+- A row's `lanes` list says which of the three it permits at all (a path a row does not permit drops its wiring, with a warning on the 201).
 - Rows are also DERIVED from what already exists (stored secret names, site config, setup status), so an operator who never opens Settings keeps identical run behavior.
 - Host proxy and Egress redirection are deliberately NOT here — that's network topology, configured under **Network** on the same `SiteConfig` document.
 
 ### Wardyn does not dial the provider
 
-- There is no "Test" action; `POST /api/v1/integrations/{id}/test` was removed in 0.5.
+- There is no "Test" action.
 - Settings states what is STORED and says so plainly: "Wardyn stores this, it doesn't dial the provider to check it."
 - A real run is the real test, and it fails loudly with an audit trail if the credential is wrong.
 
@@ -64,7 +60,7 @@ Configuring an integration grants nothing by itself.
 - A header-delivering integration authors one `api_key` grant per host through the ordinary proxy-side injection path.
   - **Except** on a host that serves a model (`modelServingHosts`, [`internal/api/llmcred.go`](../../internal/api/llmcred.go)): a model vendor's API, or any model provider row's own host.
   - That last case covers a custom endpoint, a route-through gateway, or a Bedrock row's regional hosts.
-- On a model-serving host the credential is skipped and audited (`run.requirement.skip`, reason `model_host`) instead: a model credential comes only from the run's model provider (0.8, #547).
+- On a model-serving host the credential is skipped and audited (`run.requirement.skip`, reason `model_host`) instead: a model credential comes only from the run's model provider.
   - An integration write that would present its credential on such a host is refused.
   - A `secret:<name>` requirement is skipped the same way, always — its grant was the agent's model host — so it grants nothing (`skipRequiredSecret`, [`internal/api/runs_create_requirements.go`](../../internal/api/runs_create_requirements.go)).
 - An operator with fifty integrations configured and a workspace that names none of them gets a run whose spec is byte-identical to having none.
@@ -89,7 +85,7 @@ That fold degrades silently by design.
 
 ## Model access comes from a model provider
 
-Since 0.8.2 a model run is credentialed by the model provider it chose (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../../internal/api/run_model_provider.go)) from its owner's own key, token or sign-in, or by nothing.
+A model run is credentialed by the model provider it chose (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../../internal/api/run_model_provider.go)) from its owner's own key, token or sign-in, or by nothing.
 
 - No integration folds, no managed or host-mounted subscription, no operator key and no boot-time Bedrock configuration serves it.
 - Dispatch drops every model credential its policy carries that the provider did not author (`dropLegacyModelInjections`, `resolveProviderLane`, [`internal/api/runs_dispatch_provider.go`](../../internal/api/runs_dispatch_provider.go)).
@@ -110,6 +106,24 @@ Since 0.8.2 a model run is credentialed by the model provider it chose (`enforce
 - The 0.8.2 upgrade converts a 0.7.x or 0.8.0 integration pin, an integration's `DefaultFor: agent_runs` mark and the agent roster's model credential fields into model providers and drops the AI integration rows (`0100_model_provider_conversion`, see [CHANGELOG](../../CHANGELOG.md)).
 - Record, verify and build sessions no longer mint an `api_key` grant from an operator secret either (`recordSessionModelAccess`, [`internal/api/record_model_provider.go`](../../internal/api/record_model_provider.go)).
 
+### The provider kinds
+
+- **API key** (`anthropic_api_key`, `openai_api_key`): each person stores their own key for the provider. The proxy adds it to the outgoing request, as `x-api-key` for `anthropic_api_key` and as `Authorization: Bearer` for `openai_api_key`; **never resident**.
+- **Claude subscription** (`anthropic_subscription`): each person signs in to the provider from Getting started.
+  - A short-lived sign-in sandbox runs `claude setup-token`. The captured token is stored age-encrypted in that person's own namespace and injected proxy-side as `Authorization: Bearer`.
+  - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
+  - It needs a Claude Code image pinned in `WARDYN_AGENT_IMAGES` (from a clone, `make agent-images-core` builds one). The one-line install's `agent-base` is not one.
+
+> [!WARNING]
+> - **Security note:** a `claude setup-token` is **long-lived (~1 year)** and does **not** auto-rotate — it sits age-encrypted at rest in the secret store, masked from all streams, host-pinned to `api.anthropic.com`, and never enters a run's sandbox. It exists only in the short-lived sign-in sandbox that captures it, which stops when idle.
+> - Protect `deploy/compose/.env` and the postgres volume, and revoke the token in the Anthropic console if a host is compromised.
+
+- **AWS Bedrock** is a provider of kind `bedrock_sso` (each person signs in with AWS; the region, model and base URL live on the provider record) or `bedrock_bearer`.
+  - With `bedrock_bearer`, each person stores a Bedrock bearer token, proxy-injected as `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**.
+  - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
+  - By default a `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [threat model §5.1a](../../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)).
+  - With `WARDYN_AWS_SIGV4_AT_PROXY` on and every AWS host the run needs able to be re-signed, the proxy signs instead: the sandbox gets a placeholder `credential_process` profile and neither session nor role credentials are resident. Turning the switch on alone does not make every host eligible; a run with an ineligible host keeps the default ([Credentials](../CREDENTIALS.md#a-cloud-credential-made-inside)).
+
 ## Azure Foundry (`azure_foundry`)
 
 > [!WARNING]
@@ -121,117 +135,9 @@ Since 0.8.2 a model run is credentialed by the model provider it chose (`enforce
 - The harness holds the inert `wardyn-proxy-injected` sentinel.
 - The proxy terminates TLS for the endpoint with the run's own certificate authority and attaches the person's token.
 - The control plane redeems that token for the provider's one audience (`resolveAzureFoundryInjection`, [`internal/api/injection_azure.go`](../../internal/api/injection_azure.go)).
+- Route `anthropic` serves the Messages harness (`claude-code`); route `openai_v1` serves `codex-cli`.
+- Until the kind ships, nothing else about it is documented.
 
-- **One row, one route, one audience.**
-  - Route `anthropic` serves the Messages harness (`claude-code`) and signs in for the Foundry audience.
-  - Route `openai_v1` serves `codex-cli` and signs in for the Cognitive Services audience.
-  - Each harness entry names its deployment (`model`).
-  - The Messages harness may name a second deployment for its small-model alias (`fast_model`).
-- **Admin prerequisite.** The sign-in is the console's own Entra login application, so the install needs Entra console login. Grant that application the delegated permission for the row's audience, with admin consent. Without it every sign-in fails with `consent_required`.
-- **What dispatch writes into the sandbox.** The env names the endpoint and the deployments. The Messages harness gets `CLAUDE_CODE_USE_FOUNDRY`, the `ANTHROPIC_FOUNDRY_*` variables and the `ANTHROPIC_DEFAULT_*_MODEL` variables, and never `ANTHROPIC_API_KEY`. Codex gets `WARDYN_CODEX_BASE_URL`, `WARDYN_CODEX_MODEL` and `CODEX_API_KEY`.
-- **What dispatch writes into the proxy.**
-  - The endpoint goes on the exact egress allowlist and is TLS-terminated.
-  - A route gate holds the token to that route's inference calls on the pinned deployments.
-  - The host is also marked as a model host, so the content scanner reads its dialect.
-  - `/anthropic/v1/messages` is scanned.
-  - `/openai/v1/responses` is reported as uninspected, which `require_inspectable_llm` refuses.
-  - The endpoint is never a gateway upstream, so the brokered `/wardyn/llm/*` routes never reach it.
-- **Two private-endpoint knobs.**
-  - The proxy's private-address guard refuses an endpoint that resolves to a private address.
-  - `internal_hosts` lifts the guard for that host.
-  - `upstream_proxy_no_proxy` is a separate setting.
-  - It matters only when a corporate proxy is configured, and it does not lift the guard.
-  - A provider write warns when the endpoint resolves privately with no `internal_hosts` entry.
-- **The requested model can still change.** A repo config or the interactive model picker can ask for a model other than the pinned deployment. The route gate refuses that request with `azure_route_refused`. The run's own `model` setting is only a default.
-- **When the sign-in ends mid-run.**
-  - A revoked refresh token holds the run's model request on a sign-in request (HTTP 423, `credential_reauth`).
-  - So does a Conditional Access policy that asks for the person.
-  - The hold ends when the person signs in to that provider again.
-  - A failure at boot fails the run with the remedy as its hint.
-- **Conditional Access.**
-  - Wardyn renews the sign-in from the control plane's address.
-  - A policy that needs the person's device or a fresh challenge cannot be satisfied there.
-  - The refusal names the class Entra reported: multi-factor authentication, device compliance, an approved client, or a blocked sign-in.
-  - No policy class is promised to work, and continuous access evaluation is not supported.
+## Who may use what
 
-## What New Run states
-
-- New Run reads these facts from the server and does not assert them. The steps are in [NEW-RUN.md](../NEW-RUN.md).
-
-**Model provider.** On Tools and access, each harness has a **Model provider** field, and the line under it says where that provider's credential lives:
-
-| Line | Meaning |
-| --- | --- |
-| "The proxy adds the provider's credential; the sandbox never holds it." | A key or token the proxy adds on the wire |
-| "In the sandbox, short-lived" | A Bedrock AWS sign-in, whose role credentials sign inside the run |
-
-- The server's default or only provider stands in until you choose. Where several serve the harness and none is the default, the field reads "Required before launch." and Review holds Launch.
-- Review dry-runs the exact body Launch would send. **Check again** refreshes it, and Launch needs an answer for the current draft that is under 60 seconds old.
-- A run with no harness makes no model call and shows no model provider.
-
-**Recording.** New Run does not state whether a run is recorded.
-
-- A stock Helm install leaves `persistence.enabled=false`, which renders `WARDYN_RECORDING_STORE=off` — the actual switch.
-- No run on that server produces a cast, and the Recordings screen then reads "Session recording is disabled on this deployment".
-- Recording is off only where `WARDYN_RECORDING_STORE=off`.
-- Turn it on with `persistence.enabled=true` (the `fs` store on the PVC) or `env.WARDYN_RECORDING_STORE=pg` (no PVC needed).
-- `WARDYN_RECORDING_DIR` only moves the `fs` store's path — it doesn't turn recording on or off.
-
-## Signing in for a CLI component
-
-The console has no door for an AWS or Azure CLI component's sign-in yet. Tools and access lists it under **Setup still needed** with no button; send each person to the route below.
-
-| Component | How a person signs in | Where it lands |
-| --- | --- | --- |
-| AWS CLI | `POST /api/v1/components/{id}/sign-in`, which starts a sign-in sandbox seeded with the component's portal, region, account and role | Their own namespace, as `wardyn-cli-<component id>-sso`, audited `cli.signin.capture` |
-| Azure CLI | Open `GET /api/v1/components-entra/signin?component=<id>` in the signed-in browser. It returns to `/?azure_cli_signin=connected&component=<id>`, or `/?azure_cli_signin_error=<code>&component=<id>` | Their own namespace, as `wardyn-cli-<component id>-entra`, audited `cli.signin.capture` |
-
-- Azure records a run's Azure CLI calls as the signed-in person's own: its Activity Log keeps the request id, the caller's address and the method, not which client sent them. Match them to a run with the run's egress decisions for `management.azure.com`.
-- A run's Azure CLI reaches Azure Resource Manager only. `az ad` commands (Microsoft Graph) and data-plane commands that sign in with `--auth-mode login` fail with `HTTP Error: 403`.
-- The Azure sign-in needs the console's Entra application to hold the delegated permission "Azure Service Management · user_impersonation" with admin consent.
-- Changing a component's pins, or deleting it, deletes everyone's sign-in for it. There is no per-person disconnect.
-
-## What an admin can put a fence around
-
-| Kind | Narrows or widens |
-| --- | --- |
-| Hosts a member may add or approve | Narrows |
-| Secrets a member may reference | Narrows |
-| Workspaces a member may launch against | Narrows |
-| Base images a member may name | **Widens** — a grant is what makes an image nameable at all |
-| Agents a member may run | Narrows |
-| Model providers a member may name | Narrows |
-| Git providers their work may come from | Narrows |
-| Stored policies a member may select | Narrows |
-| Organisation components a member may attach to a run | Narrows |
-| Whether they may add an **SSH key** or mint an **API token** at all (`feature`) | About the member rather than a run |
-
-- ([Capabilities: what one member, or one group, may do](../OPERATIONS.md#capabilities-what-one-member-or-one-group-may-do) has the kind table.)
-- Nine of the ten *narrow* — until you enforce one, members keep exactly the powers they had, and a deny bites even before you do.
-- Base images are the one that *widens*.
-
-A permission always bounds what the **member** chose and never what you pre-authorized.
-
-- Model providers are the one exception.
-- The answer to "can I fence a model provider" is the `model_provider` kind.
-- It bounds the provider a run names, the one its workspace pins, and the agent's default alike — because every model credential is the person's own.
-
-The assigned governance profile's egress still applies on top: its denied hosts are re-asserted at dispatch and withhold every credential lane that would reach one.
-
-- Governance profiles also carry the limits that are not choices at all: `max_concurrent_runs`, and the two launch modes a profile can refuse outright.
-- Like every profile field, they bind only the people a profile is assigned to.
-
-## Round-trip
-
-Profiles and their assignments live in Postgres, so `make reset` / `make reset-all` take them with the volume.
-
-1. Export: `wardyn governance get > governance.json` (`GET /api/v1/governance`) before a reset.
-2. Restore: `wardyn governance set governance.json` after — the same get-then-set shape `wardyn site-config get|set` and `wardyn drive get|set` already take (0.8, #1108).
-
-- `set` upserts every named profile **by name** (its unique handle) and every assignment by its own natural key (subject_type, subject).
-- A profile the file does not mention is left alone.
-- One present server-side but absent from the file is only removed with `--prune`.
-- `--prune` also removes an omitted assignment.
-- It removes assignments before profiles.
-- So a still-referenced profile never trips the delete-while-assigned refusal above.
-- `wardyn governance get > f && wardyn governance set f` is a no-op: unchanged rows are skipped rather than re-written, so a repeat `set` issues no writes and adds no audit rows.
+Which hosts, secrets, workspaces, images, agents, model providers, git providers, policies and components a member may name is a capability, not an integration setting: [Capabilities](capabilities.md#capabilities-what-one-member-or-one-group-may-do) has the kind table.

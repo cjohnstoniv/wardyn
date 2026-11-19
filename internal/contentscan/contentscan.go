@@ -223,6 +223,20 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		return nil, fmt.Errorf("contentscan: mode %q requires at least one detector", mode)
 	}
 
+	// The proxy does not re-run policy validation, so a format it cannot speak must fail here
+	// rather than quietly fall back to Wardyn's own.
+	presidioFormat := false
+	switch strings.ToLower(strings.TrimSpace(spec.DetectorSidecarFormat)) {
+	case "":
+	case types.DetectorSidecarFormatPresidio:
+		if spec.DetectorSidecarURL == "" {
+			return nil, fmt.Errorf("contentscan: detector_sidecar_format %q needs detector_sidecar_url", spec.DetectorSidecarFormat)
+		}
+		presidioFormat = true
+	default:
+		return nil, fmt.Errorf("contentscan: invalid detector_sidecar_format %q", spec.DetectorSidecarFormat)
+	}
+
 	// Filter ONCE and hold on the engine: used both to build the known-secret
 	// detector and to corpus-mask every finding's FieldPath centrally, so a
 	// corpus secret used as a JSON key is masked even with no corpus detector enabled.
@@ -249,7 +263,9 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		dets = append(dets, cd)
 	}
 	if spec.DetectorSidecarURL != "" {
-		dets = append(dets, newSidecarDetector(spec.DetectorSidecarURL, nil))
+		sc := newSidecarDetector(spec.DetectorSidecarURL, nil)
+		sc.presidio = presidioFormat
+		dets = append(dets, sc)
 	}
 	if len(dets) == 0 {
 		// Configured WITH a detector but nothing active (e.g. detect_secrets
@@ -281,6 +297,26 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 	}, nil
 }
 
+// NewSecretsOnlyEngine is NewEngine cut to one check: an exact match of the run's own
+// secret values (DetectSecrets). It is what a route whose gateway inspects prompts
+// still runs, since those values exist only in Wardyn's memory and no gateway can
+// look for them. The spec is rebuilt from the fields this check uses rather than
+// copied with the others cleared, so a detector added later stays off here.
+// (nil, nil) when spec has no DetectSecrets, or the corpus gives it nothing to match.
+func NewSecretsOnlyEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
+	if !spec.DetectSecrets {
+		return nil, nil
+	}
+	return NewEngine(types.LLMInspectionSpec{
+		Mode:                 spec.Mode,
+		DetectSecrets:        true,
+		MaxScanBytes:         spec.MaxScanBytes,
+		OnScannerError:       spec.OnScannerError,
+		BlockMinSeverity:     spec.BlockMinSeverity,
+		InspectForwardEgress: spec.InspectForwardEgress,
+	}, corpus)
+}
+
 // InspectForwardEgress reports whether the proxy should also scan the generic
 // plaintext-HTTP forward path (not just the LLM routes). Nil engine => false.
 func (e *Engine) InspectForwardEgress() bool {
@@ -296,12 +332,14 @@ func (e *Engine) Mode() Mode {
 }
 
 // sanitizeFieldPath is the single content-free guarantee for a Finding's
-// FieldPath: masks well-known secret FORMATS (maskFormats) and the
-// operator-declared corpus (maskCorpus) so NO detector can carry a raw
-// secret, used as an agent-controlled JSON key, into the append-only audit.
-// Both masks run on the whole path, BEFORE it is cut to length. Idempotent.
+// FieldPath: masks well-known secret FORMATS (maskFormats), the
+// operator-declared corpus (maskCorpus) and personal-data formats (maskPII)
+// so NO detector can carry a raw secret or PII value, used as an
+// agent-controlled JSON key, into the append-only audit. Every mask runs on
+// the whole path, BEFORE it is cut to length, and maskPII after maskCorpus so
+// a corpus value is masked whole. Idempotent.
 func (e *Engine) sanitizeFieldPath(path string) string {
-	return truncateFieldPath(maskCorpus(maskFormats(path), e.corpus))
+	return truncateFieldPath(maskPII(maskCorpus(maskFormats(path), e.corpus)))
 }
 
 // capFindings enforces the per-request findings cap on res, in place. vetted
@@ -379,9 +417,9 @@ func (e *Engine) ScanRequestContext(ctx context.Context, channel Channel, body [
 		return Result{Scanned: false}, body, nil
 	}
 	// CENTRAL content-free chokepoint: EVERY finding's FieldPath, whichever
-	// detector produced it, is masked here for well-known secret formats and
-	// the operator corpus, so a secret used as a JSON key never rides into
-	// the audit. Deferred so no return path can bypass it.
+	// detector produced it, is masked here for well-known secret formats, the
+	// operator corpus and PII formats, so a secret or PII value used as a JSON
+	// key never rides into the audit. Deferred so no return path can bypass it.
 	defer func() {
 		for i := range res.Findings {
 			res.Findings[i].FieldPath = e.sanitizeFieldPath(res.Findings[i].FieldPath)

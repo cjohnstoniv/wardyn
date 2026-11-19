@@ -131,7 +131,7 @@ func ssoDispatch(s *Server) (bedrockAuth, string) {
 	}
 	b := providerBedrockSettings(p)
 	env := bedrockBaseEnv(b.Region, providerModel(p, "claude-code"), b.BaseURL)
-	ba := s.bedrockSSOAuth(context.Background(), uuid.New(), blob, awsSSOTestScope(), env, []string{providerBedrockRuntimeHost(p)})
+	ba := s.bedrockSSOAuth(context.Background(), uuid.New(), blob, awsSSOTestScope(), env, []string{providerBedrockRuntimeHost(p)}, nil)
 	ba.ready = true
 	return ba, ""
 }
@@ -317,6 +317,7 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 // attempts' errors in the failure row.
 func TestAWSSSORefresh_TwoTransientFailures_AttemptsAndBothErrors(t *testing.T) {
 	s, audit, _ := ssoRefreshServer(t)
+	logs := captureSlog(t)
 	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, call int) {
 		w.WriteHeader(http.StatusBadRequest)
 		code := "slow_down"
@@ -351,8 +352,12 @@ func TestAWSSSORefresh_TwoTransientFailures_AttemptsAndBothErrors(t *testing.T) 
 	if data.Spent {
 		t.Error("two transient failures must not dead-mark the credential")
 	}
-	if !strings.Contains(data.Error, "slow_down") || !strings.Contains(data.Error, "internal_failure") {
-		t.Errorf("error = %q, want BOTH attempts' errors joined", data.Error)
+	// The row names the step and the server log keeps both attempts' errors joined.
+	if data.Error != auditStepAWSSSORedeem {
+		t.Errorf("error = %q, want the step %q", data.Error, auditStepAWSSSORedeem)
+	}
+	if got := logs.String(); !strings.Contains(got, "slow_down") || !strings.Contains(got, "internal_failure") {
+		t.Errorf("log = %q, want BOTH attempts' errors joined", got)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/sshsftp"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -164,7 +165,7 @@ func (s *Server) runSyncOpenView(runID uuid.UUID) runSyncView {
 // directory, and records one ssh.sync.transfer row when the channel ends. The
 // directory is a start point, not a boundary: sftp-server reaches whatever the
 // agent uid can.
-func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string, pass *sshSyncPass) {
+func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string, pass *sshSyncPass, dataOut types.TransferRule) {
 	direction := sshSyncDirection(env[sshSyncDirectionEnv])
 	dir, dirErr := sshSyncDir(env[sshSyncDirEnv])
 	// BaseCtx, not ctx: the client may close the channel the moment it sees the
@@ -193,10 +194,17 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	sandboxRef = run.SandboxRef
-	sess, reason, err := s.execSFTPServer(ctx, run, "-d", dir)
+	args := []string{"-d", dir}
+	if dataOut.DataOut() != types.TransferAllowed {
+		args = append(args, "-P", sftpServerDeny) // no file content leaves the run
+	}
+	sess, reason, err := s.execSFTPServer(ctx, run, true, args...)
 	if err != nil {
 		fail(err.Error(), reason)
 		return
+	}
+	if dataOut.DataOut() != types.TransferAllowed && sess.Stdout != nil {
+		sess.Stdout = s.sshSyncReplyGuard(runID, principal, channel, sess.Stdout, dataOut)
 	}
 	defer s.sshSyncOpened(runID, dir)()
 	pass.start(dir)
@@ -204,11 +212,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, ops, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	removes, renames := ops.counts()
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut, "remove_requests": removes, "rename_requests": renames}
-	outcome := "success"
-	if exit != 0 {
-		outcome = "failure"
-		extra["error"] = fmt.Sprintf("sftp-server exited %d", exit)
-	}
+	outcome := pass.outcome(bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra), extra) // a sync session keeps its rule: any nonzero exit, or a started pass the client never accounted for
 	record(outcome, extra)
 }
 
@@ -217,12 +221,16 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 // gateway cannot see in the sftp bytes. Its laptop deletes are summed into the
 // session's ssh.sync.transfer row, and a complete pass (or a failed one) is the
 // first sync of a run's local folder landing (or failing; run_local_folder.go).
+// A newer client also sends one with started before each pass: sftp has no end
+// marker, and a connection cut mid-pass can let sftp-server see a plain EOF and
+// exit 0, so only a start with no account after it tells the row the pass was cut.
 const sshSyncPassRequest = "wardyn-sync-pass"
 
 // maxSyncPassReport bounds one report's JSON.
 const maxSyncPassReport = 4096
 
 type sshSyncPassReport struct {
+	Started         bool   `json:"started"`
 	Complete        bool   `json:"complete"`
 	Error           string `json:"error"`
 	DeletedOnLaptop int    `json:"deleted_on_laptop"`
@@ -234,12 +242,27 @@ type sshSyncPass struct {
 	mu      sync.Mutex
 	dir     string
 	deletes int
+	open    bool // a start report with no account of that pass after it
 }
 
 func (p *sshSyncPass) start(dir string) {
 	p.mu.Lock()
 	p.dir = dir
 	p.mu.Unlock()
+}
+
+// outcome is the row's outcome given the client's reports: a success becomes a
+// failure when a pass the client started was never accounted for. A client that
+// sends no start report keeps the exit's outcome.
+func (p *sshSyncPass) outcome(outcome string, extra map[string]any) string {
+	p.mu.Lock()
+	open := p.open
+	p.mu.Unlock()
+	if outcome == "success" && open {
+		extra["error"] = "the session ended before its sync pass finished"
+		return "failure"
+	}
+	return outcome
 }
 
 func (p *sshSyncPass) laptopDeletes() int {
@@ -262,12 +285,13 @@ func (s *Server) sshSyncPassReported(ctx context.Context, runID uuid.UUID, princ
 	dir := pass.dir
 	if dir != "" {
 		pass.deletes = min(pass.deletes+r.DeletedOnLaptop, maxSyncEntriesReported)
+		pass.open = r.Started
 	}
 	pass.mu.Unlock()
 	if dir == "" {
 		return false
 	}
-	if r.Complete || r.Error != "" {
+	if !r.Started && (r.Complete || r.Error != "") {
 		s.localFolderPassed(ctx, runID, principal, dir, r.Complete, r.Error)
 	}
 	return true
@@ -283,20 +307,18 @@ const maxSyncEntriesReported = 1 << 30
 type sftpOpCounter struct {
 	ssh.Channel
 	mu      sync.Mutex
-	head    []byte // the current packet's first bytes, its length included, up to sftpPeek
-	left    uint32 // bytes of the current packet not yet seen after its length
+	f       sshsftp.Framer // the packet framing, read up to sftpPeek bytes of each packet
 	removes int
 	renames int
 }
 
 const (
-	sftpRemove     = 13
-	sftpRmdir      = 15
-	sftpRename     = 18
-	sftpExtended   = 200
-	sftpPosixMove  = "posix-rename@openssh.com"
-	sftpPeek       = 4 + 1 + 4 + 4 + len(sftpPosixMove) // length, type, request id, name length, name
-	sftpLengthSize = 4
+	sftpRemove    = 13
+	sftpRmdir     = 15
+	sftpRename    = 18
+	sftpExtended  = 200
+	sftpPosixMove = "posix-rename@openssh.com"
+	sftpPeek      = 4 + 1 + 4 + 4 + len(sftpPosixMove) // length, type, request id, name length, name
 )
 
 func (c *sftpOpCounter) Read(p []byte) (int, error) {
@@ -308,27 +330,11 @@ func (c *sftpOpCounter) Read(p []byte) (int, error) {
 }
 
 func (c *sftpOpCounter) feed(p []byte) {
-	for len(p) > 0 {
-		if len(c.head) < sftpLengthSize {
-			take := min(sftpLengthSize-len(c.head), len(p))
-			c.head, p = append(c.head, p[:take]...), p[take:]
-			if len(c.head) == sftpLengthSize {
-				if c.left = binary.BigEndian.Uint32(c.head); c.left == 0 {
-					c.head = c.head[:0]
-				}
-			}
-			continue
+	c.f.Feed(p, sftpPeek, func(_, head []byte, done bool) {
+		if done {
+			c.count(head[sshsftp.LengthSize:])
 		}
-		take := int(min(uint64(c.left), uint64(len(p))))
-		if room := sftpPeek - len(c.head); room > 0 {
-			c.head = append(c.head, p[:min(room, take)]...)
-		}
-		p, c.left = p[take:], c.left-uint32(take)
-		if c.left == 0 {
-			c.count(c.head[sftpLengthSize:])
-			c.head = c.head[:0]
-		}
-	}
+	})
 }
 
 func (c *sftpOpCounter) count(body []byte) {

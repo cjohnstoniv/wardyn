@@ -21,8 +21,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// Recorded identity and causal node association for a k8s runner's pods (design K1 §3.1,
-// R8-M1, r9 M1, Fable r9 L1, Codex R10-L1, owner #8).
+// Recorded identity and causal node association for a k8s runner's pods (section 3.1 of
+// design K1).
 //
 // The read contract: every read the evidence rests on (the before-list, the unbound pod read P0,
 // the first bound read P1, the after-list, anchor, closing, post-status, taint and acceptance lists)
@@ -30,7 +30,7 @@ import (
 // a lister or the fit advisory's cached node list, and each is sent only after its predecessor's
 // response arrived: these functions are synchronous and called in that order.
 
-// Bracket cadence while a pod is unbound (Fable r10 L1).
+// Bracket cadence while a pod is unbound.
 const (
 	bracketFastCadence = 5 * time.Second
 	bracketSlowCadence = 15 * time.Second
@@ -45,7 +45,7 @@ func (d *Driver) runLock(id uuid.UUID) func() {
 }
 
 // mutate loads the run's record, applies f, and saves when f reports a change. A failed save is
-// returned: nothing that depends on the change may follow it (Codex R8).
+// returned: nothing that depends on the change may follow it.
 func (d *Driver) mutate(runID uuid.UUID, f func(ev *runEvidence) (bool, error)) (*runEvidence, error) {
 	unlock := d.runLock(runID)
 	defer unlock()
@@ -260,7 +260,7 @@ func (d *Driver) nameList(ctx context.Context, runID uuid.UUID, component string
 	})
 }
 
-// closingList takes the pod's closing anchor (Codex R11-M1): a name-scoped list sent after
+// closingList takes the pod's closing anchor: a name-scoped list sent after
 // runnerd's own delete returned or after the first read showing a deletion mark, persisted before
 // any evidence is read.
 func (d *Driver) closingList(ctx context.Context, runID uuid.UUID, component string) (*runEvidence, error) {

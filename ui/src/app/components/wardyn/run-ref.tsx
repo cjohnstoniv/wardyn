@@ -61,6 +61,7 @@ export function RunRef({
       <button
         type="button"
         title={`${runId}\n${RUN_REF.CLICK_TO_COPY}`}
+        aria-label={`Copy run id ${shortRunId(runId)}`}
         className="inline-flex shrink-0 items-center gap-1 rounded-sm font-mono text-meta text-muted-foreground hover:text-foreground focus-visible:text-foreground"
         onClick={(e) => {
           e.stopPropagation();
@@ -69,10 +70,10 @@ export function RunRef({
       >
         {shortRunId(runId)}
         {copied && <Check className="size-3 text-success" aria-hidden />}
-        <span aria-live="polite" className="sr-only">
-          {copied ? RUN_REF.COPIED : ""}
-        </span>
       </button>
+      <span aria-live="polite" className="sr-only">
+        {copied ? RUN_REF.COPIED : ""}
+      </span>
     </span>
   );
 }

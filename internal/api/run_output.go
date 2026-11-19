@@ -158,6 +158,8 @@ func newExecOutputTail(max int, now func() time.Time) *execOutputTail {
 type execOutputTails struct {
 	mu sync.Mutex
 	m  map[uuid.UUID]*execOutputTail
+	// sweep is where the next pass of the two oldest-first output sweeps starts (run_output_final.go).
+	sweep outputSweepCursors
 }
 
 func (t *execOutputTails) pruneLocked(now time.Time, ttl time.Duration) {
@@ -191,21 +193,28 @@ func (s *Server) runOutputStore() store.RunOutputStore {
 // openExecOutput starts runID's tail and returns the writer dispatch hands the
 // runner (runner.SandboxSpec.ExecOutput), or nil when this run keeps none.
 func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer {
-	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(context.Background(), run) {
+	return s.openExecOutputOn(context.Background(), run, interactive)
+}
+
+// openExecOutputOn is openExecOutput with its capture check, its coverage check
+// and its pending row on ctx. A caller that holds the run's lock (the re-read at
+// a run's end) passes its bounded context, so none of the three outlasts it.
+func (s *Server) openExecOutputOn(ctx context.Context, run types.AgentRun, interactive bool) io.Writer {
+	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) {
 		return nil
 	}
 	runID := run.ID
 	// Door 3 of five (mask_manifest.go): the relay keeps nothing for a run whose
 	// masking corpus this server cannot prove whole, and its writer drops a
 	// chunk the moment that stops being true.
-	if !s.maskCovered(context.Background(), runID) {
-		s.refuseExecRelay(runID)
+	if !s.maskCovered(ctx, runID) {
+		s.refuseExecRelay(ctx, runID)
 		return nil
 	}
 	// The pending row is the durable record that a capture is owed. A failed
 	// insert is logged and does not fail the run: the final UPSERT still writes
 	// the row. A tombstone means the run's output was erased: keep nothing.
-	if s.owePendingOutput(runID) {
+	if s.owePendingOutput(ctx, runID) {
 		return nil
 	}
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
@@ -225,12 +234,12 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 
 // owePendingOutput records that runID's capture is owed and reports whether the
 // run's output was erased, in which case nothing is kept.
-func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
+func (s *Server) owePendingOutput(ctx context.Context, runID uuid.UUID) (erased bool) {
 	st := s.runOutputStore()
 	if st == nil {
 		return false
 	}
-	err := st.InsertPendingRunOutput(context.Background(), runID)
+	err := st.InsertPendingRunOutput(ctx, runID)
 	if errors.Is(err, store.ErrRunOutputErased) {
 		s.fenceRunOutput(runID)
 		return true
@@ -245,10 +254,10 @@ func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
 // the denial is audited, and the pending row still goes in, so a process that
 // dies before the run's finalisation leaves the sweeper a capture gap to write
 // with its reason, not a run that owes nothing.
-func (s *Server) refuseExecRelay(runID uuid.UUID) {
+func (s *Server) refuseExecRelay(ctx context.Context, runID uuid.UUID) {
 	slog.Warn("wardynd: the exec output relay is refused: the run's masking corpus is not provably whole", slog.String("run_id", runID.String()))
-	s.auditUncovered(context.Background(), runID, types.ActorSystem, "wardynd", "exec.relay")
-	s.owePendingOutput(runID)
+	s.auditUncovered(ctx, runID, types.ActorSystem, "wardynd", "exec.relay")
+	s.owePendingOutput(ctx, runID)
 }
 
 // releasedHoldback is what a masker's withheld bytes become once no more output
@@ -363,6 +372,9 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, s.isSecurityOperator(r.Context())) {
+		return
+	}
 	limit := s.cfg.RunOutputTailBytes
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -420,6 +432,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		if len(out) > limit {
 			out, truncated = out[len(out)-limit:], true
 		}
+		s.auditRunOutputRead(r, run, row.Source)
 		s.writeRunOutput(w, r, id, runOutputResponse{
 			Output: string(out), Truncated: truncated, Complete: true, Source: row.Source, Incomplete: row.Incomplete,
 			CaptureGap: row.CaptureGap, MaskScope: row.MaskScope, CapturedAt: row.CapturedAt,
@@ -439,7 +452,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	v, kept := s.readExecOutput(id, limit, run.State.IsTerminal())
 	// No tail in this process: the replica that holds it has been writing it to run_output_chunks.
-	if !kept && s.readSharedOutput(w, r, id, limit) {
+	if !kept && s.readSharedOutput(w, r, run, limit) {
 		return
 	}
 	if kept {
@@ -456,6 +469,25 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	s.refuseNoRunOutput(w, r, run, row, found, reader)
 }
+
+// auditRunOutputRead is an operator's read of another person's terminal text through a run's output: the
+// pane snapshot or the output recovered from the recording, which recordingReader alone is served. It is
+// audited as a replay of the recording is (recordingAuthorizer); the owner's own read, and the command output
+// of any run, write none.
+func (s *Server) auditRunOutputRead(r *http.Request, run types.AgentRun, source string) {
+	if source != paneSnapshotSource && source != recordingOutputSource {
+		return
+	}
+	if !s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r) {
+		return
+	}
+	actorType, actor := actorFromRequest(r)
+	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, auditRunOutputRead, run.ID.String(), "success",
+		mustJSON(map[string]string{"source": source})))
+}
+
+// auditRunOutputRead is the audit action of an operator reading another person's recording-derived output.
+const auditRunOutputRead = "run.output.read"
 
 // servesFinalRow reports whether a read serves runID's stored final row. A
 // recording that yielded nothing does not hide a tail this process holds: the
@@ -491,9 +523,16 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 	case !captureKnown:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"no output is kept for this run: the runner's capture capability could not be read")
-	case s.runOutputExpiredByRetention(run):
-		writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
-			"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
+	case s.cfg.RunOutputRetention > 0 && run.EndedAt != nil:
+		switch expired, err := s.runOutputExpiredNow(r.Context(), run); {
+		case err != nil:
+			writeServerError(w, r, "read the database's clock", err)
+		case expired:
+			writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
+				"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
+		default:
+			writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
+		}
 	default:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	}
@@ -626,8 +665,17 @@ func (s *Server) readStoredRunOutput(ctx context.Context, runID uuid.UUID) (stor
 	return st.GetRunOutput(ctx, runID)
 }
 
-// runOutputExpiredByRetention reports whether run ended longer ago than
-// WARDYN_RUN_OUTPUT_RETENTION_DAYS, so a missing row is a deleted one.
-func (s *Server) runOutputExpiredByRetention(run types.AgentRun) bool {
-	return s.cfg.RunOutputRetention > 0 && run.EndedAt != nil && s.cfg.Now().Sub(*run.EndedAt) > s.cfg.RunOutputRetention
+// runOutputExpiredNow reports whether run ended longer ago than WARDYN_RUN_OUTPUT_RETENTION_DAYS, so a missing row
+// is a deleted one. The window is counted on the database's clock (dbNow), which stamps ended_at, and that clock is
+// read only for an ended run with a window set. An error is that clock not answering; each caller says what it then
+// does.
+func (s *Server) runOutputExpiredNow(ctx context.Context, run types.AgentRun) (bool, error) {
+	if s.cfg.RunOutputRetention <= 0 || run.EndedAt == nil {
+		return false, nil
+	}
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return false, err
+	}
+	return now.Sub(*run.EndedAt) > s.cfg.RunOutputRetention, nil
 }

@@ -416,6 +416,27 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
     expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
     expect(getToken()).toBe("sometoken");
   });
+
+  it("a timeout shows the same reachability message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(Object.assign(new Error("timed out"), { name: "TimeoutError" })));
+    await submit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
+  });
+
+  // An answer with no sentence of its own is never a blank alert, a bare status text or a raw body.
+  it.each([
+    ["a 503 with a markup body", new Response("<html>busy</html>", { status: 503, statusText: "Service Unavailable" }), SIGNIN.CHECK_FAILED],
+    ["a 500 with an empty body", new Response("", { status: 500, statusText: "Internal Server Error" }), SIGNIN.CHECK_FAILED],
+    ["a 500 that names only its handler", new Response(JSON.stringify({ error: "list runs", reason: "internal_error" }), { status: 500 }), SIGNIN.CHECK_FAILED],
+    ["a 403 with an empty body and no status text", new Response("", { status: 403 }), SIGNIN.CHECK_FAILED_FINAL],
+    ["a 404 with a plain-text body", new Response("404 page not found", { status: 404, statusText: "Not Found" }), SIGNIN.CHECK_FAILED_FINAL],
+  ])("%s says the sign-in couldn't be checked", async (_name, res, sentence) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res));
+    await submit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(new RegExp(`^${sentence}$`));
+    expect(screen.queryByText(SIGNIN.UNREACHABLE_ERROR)).not.toBeInTheDocument();
+    expect(getToken()).toBe("sometoken");
+  });
 });
 
 // Re-fix: the OIDC callback redirects a user-actionable login
@@ -674,5 +695,52 @@ describe("SignIn — no env var names, no 'Please' (#457)", () => {
       expect(value).not.toMatch(/WARDYN_/);
       expect(value).not.toMatch(/Please/);
     }
+  });
+});
+
+// A failed token marks the field invalid and ties the hint and the error to it;
+// the card sits in a <main> landmark.
+describe("SignIn — the token field and the page landmark", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("wraps the card in a main landmark", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    await screen.findByLabelText(/admin token/i);
+    expect(screen.getByRole("main")).toContainElement(screen.getByRole("heading", { level: 1 }));
+  });
+
+  it("marks the token field invalid and describes it by the hint and the error after a rejected token", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 401, statusText: "Unauthorized" })),
+    );
+    renderSignIn();
+    const input = await screen.findByLabelText(/admin token/i);
+    expect(input).not.toHaveAttribute("aria-invalid");
+    expect(input).toHaveAccessibleDescription(SIGNIN.TOKEN_HINT);
+    await userEvent.type(input, "badtoken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByRole("alert");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    const ids = (input.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(ids).toContain(alert.id);
+    expect(input).toHaveAccessibleDescription(
+      new RegExp(`${SIGNIN.TOKEN_HINT.slice(0, 20)}.*rejected`, "is"),
+    );
+  });
+
+  it("does not mark the token field invalid when the failure is not about the token", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    renderSignIn();
+    const input = await screen.findByLabelText(/admin token/i);
+    await userEvent.type(input, "goodtoken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
+    expect(input).not.toHaveAttribute("aria-invalid");
+    expect((input.getAttribute("aria-describedby") ?? "").split(" ")).not.toContain(alert.id);
   });
 });

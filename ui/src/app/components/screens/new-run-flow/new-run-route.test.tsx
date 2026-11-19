@@ -165,6 +165,16 @@ describe("New Run route (U9)", () => {
     expect(await screen.findByText("/runs")).toBeInTheDocument();
   });
 
+  it("does not leave on an Escape typed in a text field", async () => {
+    show("/runs/new");
+    await screen.findByText("start");
+    const field = document.body.appendChild(document.createElement("input"));
+    fireEvent.keyDown(field, { key: "Escape" });
+    field.remove();
+    expect(screen.queryByText("/runs")).not.toBeInTheDocument();
+    expect(screen.getByText("start")).toBeInTheDocument();
+  });
+
   it("paints the console's loading mark while a step's chunk is in flight, not a blank page", async () => {
     const inFlight = React.lazy(() => new Promise<{ default: React.ComponentType<NewRunScreenProps> }>(() => undefined));
     show("/runs/new", unavailable, { ...probes, start: inFlight });

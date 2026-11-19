@@ -81,6 +81,9 @@ export function AdoOwnTokenDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        // A token still being stored keeps its dialog: closed and opened again, the answer would clear and close
+        // the new draft.
+        if (!next && busy) return;
         if (!next) reset();
         onOpenChange(next);
       }}
@@ -114,10 +117,16 @@ export function AdoOwnTokenDialog({
             autoComplete="off"
             className="font-mono"
             aria-invalid={!!tokenError}
+            aria-describedby={tokenError ? `${uid}-token-error` : undefined}
+            disabled={busy}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
-          {tokenError && <p className="text-meta text-danger">{tokenError}</p>}
+          {tokenError && (
+            <p id={`${uid}-token-error`} role="alert" className="text-meta text-danger">
+              {tokenError}
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <Label htmlFor={`${uid}-expires`} className="text-meta font-medium text-muted-foreground">
@@ -128,15 +137,22 @@ export function AdoOwnTokenDialog({
             type="date"
             className="max-w-[12rem]"
             aria-invalid={!!expiresError}
+            aria-describedby={expiresError ? `${uid}-expires-error` : undefined}
+            disabled={busy}
             value={expires}
             onChange={(e) => setExpires(e.target.value)}
           />
-          {expiresError && <p className="text-meta text-danger">{expiresError}</p>}
+          {expiresError && (
+            <p id={`${uid}-expires-error`} role="alert" className="text-meta text-danger">
+              {expiresError}
+            </p>
+          )}
         </div>
         <DialogFooter>
           <Button
             type="button"
             variant="outline"
+            disabled={busy}
             onClick={() => {
               reset();
               onOpenChange(false);

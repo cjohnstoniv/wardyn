@@ -444,13 +444,17 @@ func TestCeilingReassert_ADODenyOnOneHostWithdrawsTheWholeLane(t *testing.T) {
 		}
 		return out
 	}
+	// The run's policy lists every credential's host exactly, as the proxy needs to start with it.
+	policy := func() *types.RunPolicySpec {
+		return &types.RunPolicySpec{AllowedDomains: append(adoEntraHosts("contoso"), "open.example")}
+	}
 	srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
 	var llm llmTransport
 	var bedrock []string
 
 	injections := append(adoLane(), componentRule("open.example"))
 	c := dispatchCeiling{resolved: true, profile: "walled", deny: []string{"dev.azure.com"}}
-	srv.reassertCeilingDenies(context.Background(), run, &types.RunPolicySpec{}, &injections, c, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
+	srv.reassertCeilingDenies(context.Background(), run, policy(), &injections, c, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
 	for _, in := range injections {
 		if in.Rule.SecretName == types.ADOEntraAccessTokenSecret {
 			t.Errorf("the person's Azure DevOps credential survived on %s after a deny on dev.azure.com", in.Rule.Host)
@@ -466,7 +470,7 @@ func TestCeilingReassert_ADODenyOnOneHostWithdrawsTheWholeLane(t *testing.T) {
 	// Control: a deny on no host of the lane leaves the lane whole.
 	kept := adoLane()
 	other := dispatchCeiling{resolved: true, profile: "walled", deny: []string{"unrelated.example"}}
-	srv.reassertCeilingDenies(context.Background(), run, &types.RunPolicySpec{}, &kept, other, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
+	srv.reassertCeilingDenies(context.Background(), run, policy(), &kept, other, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
 	if len(kept) != len(adoEntraHosts("contoso")) {
 		t.Errorf("a deny on no lane host left %d of %d Azure DevOps injections", len(kept), len(adoEntraHosts("contoso")))
 	}

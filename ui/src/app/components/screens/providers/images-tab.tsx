@@ -20,6 +20,7 @@
 import * as React from "react";
 import { AlertTriangle, Container, Loader2 } from "lucide-react";
 import { baseImages } from "../../../lib/api/base-images";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { getErrorMessage, shortDate } from "../../../lib/format";
 import { AVAILABILITY, IMAGES, PREWRAPPED } from "../../../lib/availability-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
@@ -263,6 +264,7 @@ function AddImageDialog({
     }
     setSaving(true);
     setError(null);
+    const person = getExpectedPrincipal();
     let entry: BaseImageEntry;
     try {
       entry = await baseImages.add(ref.trim(), kind);
@@ -272,7 +274,7 @@ function AddImageDialog({
       return;
     }
     try {
-      await writeAvailability("image", entry.image, draft);
+      await writeAvailability("image", entry.image, draft, person);
       onOpenChange(false);
     } catch (e) {
       setPartial({ entry, message: getErrorMessage(e) });
@@ -357,10 +359,15 @@ function AddImageDialog({
                 onChange={(e) => setRef(e.target.value)}
                 disabled={saving}
                 aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "add-image-error" : undefined}
                 className="font-mono"
               />
             </Field>
-            {error && <p className="text-xs leading-snug text-danger">{error}</p>}
+            {error && (
+              <p id="add-image-error" role="alert" className="text-xs leading-snug text-danger">
+                {error}
+              </p>
+            )}
             <div className="border-t border-border pt-4">
               <AvailabilityDraft draft={draft} onChange={setDraft} disabled={saving} adminsOnly />
             </div>

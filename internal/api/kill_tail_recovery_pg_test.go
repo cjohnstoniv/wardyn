@@ -114,3 +114,48 @@ func TestPG_KillTailRecovery_OnARunner(t *testing.T) {
 		})
 	}
 }
+
+// The sweep's kill-tail recovery waits killTailRecoveryGrace from the KILLED transition on the database's clock
+// (Server.dbNow), the clock that stamped updated_at: a run just killed is left alone on a server 10 minutes ahead,
+// one killed 5 minutes past the grace is recovered on a server 10 minutes behind, and nothing is recovered while
+// the database's clock cannot be read. The margins (the grace, 60 s, and 5 minutes) cover the test host's clock
+// against Postgres's, which in CI share one kernel. Before, the server's clock decided the first two the other
+// way; the third catches the error arm falling through to a recovery.
+func TestPG_KillTailRecovery_TheGraceIsTheDatabasesClock(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		age       time.Duration // the KILLED transition's age on the database's clock
+		skew      time.Duration // this server's clock against the database's
+		clockErr  error         // fails every read of the database's clock
+		recovered bool
+	}{
+		{"just killed, server 10 minutes ahead", 0, 10 * time.Minute, nil, false},
+		{"5 minutes past the grace, server 10 minutes behind", killTailRecoveryGrace + 5*time.Minute, -10 * time.Minute, nil, true},
+		{"5 minutes past the grace, clock read fails", killTailRecoveryGrace + 5*time.Minute, 0, errClockRead, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAdmissionFixture(t)
+			audit := &syncAudit{}
+			f.srv.cfg.Audit, f.srv.cfg.Runner = audit, &unroutedKillRunner{fakeRunner: &fakeRunner{}}
+			f.srv.cfg.Broker = &killTailBroker{fakeBroker: &fakeBroker{}}
+			f.srv.cfg.Now = func() time.Time { return time.Now().Add(tc.skew) }
+			if tc.clockErr != nil {
+				failDBClock(t, f.srv, tc.clockErr)
+			}
+			if _, err := f.pool.Exec(f.ctx, `UPDATE agent_runs SET state = 'KILLED', ended_at = now(),
+				updated_at = now() - $2 * interval '1 second' WHERE id = $1`, f.run.ID, int(tc.age.Seconds())); err != nil {
+				t.Fatalf("age the killed run: %v", err)
+			}
+			if _, err := f.srv.SweepTerminalSandboxes(f.ctx); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			recovered := false
+			for _, row := range audit.eventsFor(f.run.ID, "run.kill") {
+				recovered = recovered || leaseAuditData(t, row)["reason"] == "sweep_recovered_kill_tail"
+			}
+			if recovered != tc.recovered {
+				t.Errorf("kill tail recovered = %v, want %v", recovered, tc.recovered)
+			}
+		})
+	}
+}

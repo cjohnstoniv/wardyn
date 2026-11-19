@@ -11,7 +11,7 @@
 // The policy preview is stubbed from the fixtures with an `access` block built from the body it was
 // sent, so the rows are those of the component the person just added.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, navToRoute, sidewaysScroll } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -97,6 +97,18 @@ test.describe("New Run, step 5: an MCP server that runs in the sandbox", () => {
     const dialog = page.getByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE });
     await expect(dialog.getByText(NR_TOOLS.MCP_LOCAL_SOON)).toBeVisible();
     await expect(dialog.getByRole("button", { name: NR_TOOLS.MCP_TAB_LOCAL })).toHaveCount(0);
+  });
+
+  test("with the switch on, nothing in the dialog scrolls sideways at 320, 375, 412 or 430 (D530)", async ({ page }) => {
+    await stub(page, true);
+    await openTools(page);
+    await press(page, NR_TOOLS.MCP_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE });
+    await expect(dialog.getByRole("button", { name: NR_TOOLS.MCP_TAB_LOCAL })).toBeVisible();
+    for (const width of [320, 375, 412, 430]) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect.poll(() => sidewaysScroll(dialog), { message: `${width}px` }).toEqual([]);
+    }
   });
 
   test("adds a server that runs in the sandbox, says where it runs and who can read its secret, and holds Review for Codex CLI", async ({ page }) => {

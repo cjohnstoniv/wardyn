@@ -10,10 +10,10 @@
 // than tool_rules' object rows, so each gets its own add/remove list rather
 // than tool_rules' named-vs-default split.
 //
-// The two reserved PushRulesSpec fields (deny_new_executables,
-// max_file_size_mib) are not on the wire type yet — its own Go doc comment
-// says so — so this editor never authors them. When they land, they get their
-// own mock round rather than a quiet addition here.
+// This editor authors deny_paths, require_review_paths, max_inspect_pack_mib
+// and hold_seconds only. Every other PushRulesSpec field (deny_new_executables,
+// max_file_size_mib, deny_all) is kept as stored: an edit here never drops a
+// rule the card does not show.
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { GrantSpec, PushRulesSpec, RunPolicySpec } from "../../lib/types";
@@ -134,6 +134,16 @@ export function nonGitHubPushRuleHosts(grants: readonly GrantSpec[] | undefined)
   return [...hosts].sort();
 }
 
+// The card's own copy: its header counts, and the read-only status a policy
+// with deny_all gets. The card has no deny_all toggle; it is set in the
+// policy document.
+export const PUSH_RULES_CARD = {
+  COUNTS: (denied: number, review: number) =>
+    `${denied} denied ${denied === 1 ? "path" : "paths"} · ${review} ${review === 1 ? "path" : "paths"} held for review`,
+  DENY_ALL_STATUS: "Every push is refused by this policy.",
+  DENY_ALL_WHERE: "This is push_rules.deny_all, changed in the policy document.",
+} as const;
+
 // The exact risk.go sentence (composer/risk.go), reused verbatim per the
 // packet's Strings table (PUSH_RULES.WARN_SSH_ONLY) rather than re-authored.
 export const PUSH_RULES_WARN_SSH_ONLY =
@@ -189,7 +199,12 @@ function withPushRules(
   hold: number,
 ): RunPolicySpec {
   const nonBlank = (list: readonly string[]) => list.filter((p) => p.trim() !== "");
-  const pr: PushRulesSpec = {};
+  // Start from what is stored, so a field this card does not edit survives.
+  const pr: PushRulesSpec = { ...spec.push_rules };
+  delete pr.deny_paths;
+  delete pr.require_review_paths;
+  delete pr.max_inspect_pack_mib;
+  delete pr.hold_seconds;
   const cleanDeny = nonBlank(deny);
   const cleanReview = nonBlank(review);
   if (cleanDeny.length) pr.deny_paths = cleanDeny;
@@ -406,11 +421,9 @@ export function PushRulesSection({
     <div className="rounded-lg border border-border p-3">
       <div className="mb-2 flex items-center gap-2">
         <SectionLabel>Push rules</SectionLabel>
-        {/* The mock's own header (packet script, "Try it") carries this exact
-            count next to the title in every one of its five scenarios. */}
-        <span className="text-xs text-muted-foreground">
-          {deny.length} deny · {review.length} held for review
-        </span>
+        {/* The counts next to the title read "N denied path(s) · N path(s) held for review". */}
+        {/* Under deny_all the counts read as "nothing is refused", so they are hidden. */}
+        {spec.push_rules?.deny_all !== true && <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>}
         <Chip tone="neutral" mono className="ml-auto">
           push_rules
         </Chip>
@@ -420,6 +433,12 @@ export function PushRulesSection({
         <span className="font-mono">git_push_any_branch</span>&apos;s WHERE.
       </p>
 
+      {spec.push_rules?.deny_all === true && (
+        <p role="status" className="mb-3 text-xs">
+          <span className="font-medium">{PUSH_RULES_CARD.DENY_ALL_STATUS}</span>{" "}
+          <span className="text-muted-foreground">{PUSH_RULES_CARD.DENY_ALL_WHERE}</span>
+        </p>
+      )}
       {sshWarn && (
         <p role="alert" className="mb-3 text-xs text-warning">
           {PUSH_RULES_WARN_SSH_ONLY}

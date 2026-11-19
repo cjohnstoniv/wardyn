@@ -55,8 +55,8 @@ const share = (v: Vals) => perRunShare({ cpu: Number(v.tc), mem: Number(v.tm), d
 
 const PAIRS: { total: FieldId; per: FieldId; reported: (a: RunnerAmounts) => number; unit: (n: number) => string }[] = [
   { total: "tc", per: "pc", reported: (a) => a.cpu_millis / 1000, unit: (n) => RES.CPUS(cpus(n * 1000)) },
-  { total: "tm", per: "pm", reported: (a) => a.memory_mib / 1024, unit: (n) => `${gb(n * 1024)} GB memory` },
-  { total: "td", per: "pd", reported: (a) => a.disk_mib / 1024, unit: (n) => `${gb(n * 1024)} GB disk` },
+  { total: "tm", per: "pm", reported: (a) => a.memory_mib / 1024, unit: (n) => `${gb(n * 1024)} GiB memory` },
+  { total: "td", per: "pd", reported: (a) => a.disk_mib / 1024, unit: (n) => `${gb(n * 1024)} GiB disk` },
 ];
 
 /** The amount each field will send, in the dialog's units: a field still showing what it loaded is its exact loaded value, not the rounded display. */
@@ -105,7 +105,7 @@ export interface LoadedLimits {
 }
 
 /**
- * What a save sends: the fields shown as one-decimal CPUs and GB, except that a field still showing what it
+ * What a save sends: the fields shown as one-decimal CPUs and GiB, except that a field still showing what it
  * loaded goes back exactly as loaded, so an unrelated edit never turns 1250 milli-CPU into 1300.
  */
 export function limitsToSave(v: Vals, loaded?: LoadedLimits | null): RunnerLimits {

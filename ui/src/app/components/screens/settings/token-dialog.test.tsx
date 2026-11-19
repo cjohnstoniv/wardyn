@@ -70,13 +70,13 @@ describe("TokenDialog inbound use (r15 T2-d)", () => {
     expect(within(group).getByRole("radio", { name: T.USE_API })).toBeChecked();
     expect(within(group).getByRole("radio", { name: T.USE_INBOUND })).not.toBeChecked();
     expect(screen.getByText(T.MINT_WARNING("billing"))).toBeInTheDocument();
-    expect(screen.queryByText(T.INBOUND_HELP)).toBeNull();
+    expect(screen.queryByText(T.INBOUND_HELP("billing"))).toBeNull();
   });
 
   it("swaps the warning for the inbound help and mints an inbound token", async () => {
     const { props } = mint();
     await user.click(screen.getByRole("radio", { name: T.USE_INBOUND }));
-    expect(screen.getByText(T.INBOUND_HELP)).toBeInTheDocument();
+    expect(screen.getByText(T.INBOUND_HELP("billing"))).toBeInTheDocument();
     expect(screen.queryByText(T.MINT_WARNING("billing"))).toBeNull();
     await user.click(screen.getByRole("button", { name: T.MINT_SUBMIT }));
     expect(props.submit).toHaveBeenCalledWith({ name: "billing-callers", ttl_seconds: 90 * 86400, kind: "inbound" });
@@ -132,6 +132,16 @@ describe("TokenDialog form", () => {
     expect(props.submit).toHaveBeenCalledWith({ name: "deploy", ttl_seconds: 90 * 86400 });
   });
 
+  it("lets a person's own API token run to a year or the server's limit, but not an inbound one", async () => {
+    mount({ kind: "mint", initialName: "" });
+    expect(screen.getByText(T.CLAIM_HINT_OPEN)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: T.EXPIRES_LABEL })).toHaveAccessibleDescription(T.CLAIM_HINT_OPEN);
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS, T.OPT_1_YEAR, T.OPT_LONGEST]);
+    await user.click(screen.getByRole("radio", { name: T.USE_INBOUND }));
+    expect(screen.getByText(T.INBOUND_HELP("you"))).toBeInTheDocument();
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS]);
+  });
+
   it("refuses an empty name before any request, in the field", async () => {
     const { props } = mount({ initialName: "  " });
     await claim();
@@ -150,13 +160,28 @@ describe("TokenDialog form", () => {
     expect(screen.getByRole("button", { name: T.CLAIM_SUBMIT })).toBeEnabled();
   });
 
-  it("says Wardyn isn't answering for a server error or a dropped connection", async () => {
-    const submit = vi.fn().mockRejectedValueOnce(new HttpError(500, "internal")).mockRejectedValueOnce(new TypeError("fetch failed"));
+  it("says Wardyn isn't answering for a dropped connection, and the deadline's own sentence for a timeout", async () => {
+    const submit = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new HttpError(0, "Could not reach the control plane."));
     mount({ submit });
     await claim();
     expect(await screen.findByRole("alert")).toHaveTextContent("Wardyn isn't answering. Try again.");
     await claim();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Wardyn isn't answering. Try again.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach the control plane.");
+  });
+
+  it.each([
+    ["a 500 with no sentence", Object.assign(new HttpError(500, "Internal Server Error"), { said: "" }), "Wardyn couldn't create the token. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't create the token."],
+    ["a 503 that names its cause", new HttpError(503, "Token store is restarting."), "Token store is restarting."],
+    ["a body that does not parse", new SyntaxError("Unexpected token"), "Wardyn's answer couldn't be read."],
+  ])("an answered failure, %s, says what failed", async (_name, error, text) => {
+    mount({ submit: vi.fn().mockRejectedValue(error) });
+    await claim();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByText(/isn't answering/)).toBeNull();
   });
 
   it("a stale answer leaves only Close and no warning", async () => {
@@ -235,6 +260,7 @@ describe("TokenDialog show-once", () => {
     await revealed({ submit: vi.fn(async () => token({ expires_at: undefined })) });
     const dl = screen.getByText(T.DETAIL_EXPIRES).parentElement!;
     expect(within(dl).getByText(T.NEVER)).toBeInTheDocument();
+    expect(screen.getByText(T.NEVER_NOTE)).toBeInTheDocument();
   });
 
   it("copies the token, says so, and then Done closes at once", async () => {

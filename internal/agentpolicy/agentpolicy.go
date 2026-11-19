@@ -7,7 +7,7 @@
 // and is PURE — no I/O, no server state.
 //
 // SECURITY invariant: each level's document is a FROZEN LITERAL, not a struct marshalled per call — byte
-// for byte the file exercised against the pinned CLI (CLAUDE_CODE_VERSION 2.1.231), and testdata/ holds
+// for byte the file exercised against the pinned CLI (CLAUDE_CODE_VERSION 2.1.312), and testdata/ holds
 // the same bytes so the golden test compares against evidence, not this file's own opinion. The one
 // generated part is an interactive run's tool rules (WithToolRules): permissions.allow/ask/deny arrays of
 // exact names written into a frozen document, plus allowManagedPermissionRulesOnly. A marshalled document
@@ -237,6 +237,9 @@ func permissionLists(rules []types.ToolRule) (map[string][]string, error) {
 			continue
 		}
 		key, ok := permissionKey[r.Effect]
+		if r.Effect == types.ToolApproveEach {
+			return nil, fmt.Errorf("tool rule %q: approve_each has no Claude Code permission list; dispatch maps it to allow or deny before the rules are written", r.Tool)
+		}
 		if !ok {
 			return nil, fmt.Errorf("tool rule %q: effect %q is not allow, hold or deny", r.Tool, r.Effect)
 		}

@@ -36,9 +36,12 @@ export interface CapabilityGrant {
 // GET /permissions — the admin screen's whole data need in one call.
 // `enforcement` is the per-kind switch map; an ABSENT key means "not enforced",
 // which is the zero-config default an upgraded 0.5 deployment carries.
+// `etag` is the response's ETag, which hashes `enforcement` alone (never the
+// grants): the If-Match a PUT /permissions/enforcement built from this map sends.
 export interface PermissionsSnapshot {
   grants: CapabilityGrant[];
   enforcement: Record<string, boolean>;
+  etag?: string | null;
 }
 
 // GET /me/capabilities — the member-safe twin: only what the CALLER holds.
@@ -76,4 +79,6 @@ export interface AvailabilityView {
   value: string;
   restricted: boolean;
   allowed_by: CapabilityGrant[];
+  // Images only, read-only: the registry-prefix allow rows that cover this value.
+  covered_by?: { prefix: string; who: { subject_type: CapabilitySubjectType; subject: string } }[];
 }

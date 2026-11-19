@@ -27,7 +27,7 @@ import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
-import { PageTabs } from "../../wardyn/page-tabs";
+import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
 import { MintTokenPanel } from "./mint-token-panel";
@@ -247,6 +247,7 @@ export function RunnersScreen() {
         <PageTabs
           className="mb-4"
           label={RUNNER_V6.TABS_LABEL}
+          idPrefix="runners"
           value={tab}
           onValueChange={(t) => go(t)}
           tabs={[
@@ -256,8 +257,10 @@ export function RunnersScreen() {
           ]}
         />
       )}
-      {body}
-      {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
+      <div {...pageTabPanelProps("runners", tab)}>
+        {body}
+        {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
+      </div>
       <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} maxBaseAgeDays={maxBaseAgeDays} />
       <RemoteRunnerDrawer
         runner={selectedRemote}

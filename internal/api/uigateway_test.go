@@ -271,7 +271,11 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 	})
 
 	h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
-		switch spec.Argv[0] {
+		relay := spec.Argv[0]
+		if len(spec.Argv) > 1 && spec.Argv[1] == "forward" {
+			relay = "socat" // a VM's relay: the guest agent's forward mode
+		}
+		switch relay {
 		case "sh": // the launcher probe
 			code := h.launcher
 			return &runner.ExecSession{Wait: func() (int, error) { return code, nil }}, nil
@@ -1358,7 +1362,7 @@ func TestUIGateway_ProbeNamesAnApplicationRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(env ...string) int {
-		cmd := osexec.Command(sh, "-c", uiLauncherScript(filepath.Join(dir, "no-launcher"), 3000, 1))
+		cmd := osexec.Command(sh, "-c", uiLauncherScriptFor("", filepath.Join(dir, "no-launcher"), 3000, 1))
 		cmd.Env = append(append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "WARDYN_APPLICATION_RUN="), env...)
 		var ee *osexec.ExitError
 		if err := cmd.Run(); errors.As(err, &ee) {
@@ -1408,7 +1412,7 @@ func TestUIGateway_LauncherTimeoutIs502(t *testing.T) {
 // interprets, and that the probe runs BEFORE any launch (an app already
 // listening must never be started twice).
 func TestUIGateway_LauncherScriptShape(t *testing.T) {
-	script := uiLauncherScript("/usr/local/bin/wardyn-ui-code", 8080, 0)
+	script := uiLauncherScriptFor("", "/usr/local/bin/wardyn-ui-code", 8080, 0)
 	probeAt := strings.Index(script, "socat")
 	launchAt := strings.Index(script, `"$b" >/dev/null`)
 	if probeAt < 0 || launchAt < 0 || probeAt > launchAt {
@@ -1438,7 +1442,7 @@ func TestUIGateway_SeededAppIsWaitedFor(t *testing.T) {
 	}
 	run := func(seedPolls int) int {
 		_ = os.Remove(filepath.Join(dir, "n"))
-		cmd := osexec.Command(sh, "-c", uiLauncherScript(filepath.Join(dir, "no-launcher"), 3000, seedPolls))
+		cmd := osexec.Command(sh, "-c", uiLauncherScriptFor("", filepath.Join(dir, "no-launcher"), 3000, seedPolls))
 		cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 		err := cmd.Run()
 		var ee *osexec.ExitError

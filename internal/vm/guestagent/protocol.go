@@ -19,6 +19,7 @@
 //	GET  /v1/agent                      ExecState of the latest detached exec
 //	POST /v1/agent/pause                AgentSignal: stop the latest detached exec's process group (SIGSTOP)
 //	POST /v1/agent/resume               AgentSignal: continue it (SIGCONT)
+//	POST /v1/scrub                      ScrubReport: a macOS guest removes what the run wrote (MacScrub)
 package guestagent
 
 import (
@@ -109,7 +110,31 @@ type InitResult struct {
 	// from a Linux guest, and from an agent that predates them.
 	KeychainTrust       string `json:"keychain_trust,omitempty"`
 	KeychainTrustReason string `json:"keychain_trust_reason,omitempty"`
+	// Scrub is a macOS guest's boot scrub, run before the agent served anything this boot; absent
+	// from a Linux guest, from an agent that predates it, and after an agent restart within a boot
+	// (the scrub runs only before this boot's Init).
+	Scrub *ScrubReport `json:"scrub,omitempty"`
 }
+
+// ScrubReport is what one scrub of a macOS guest did (MacScrub): POST /v1/scrub's answer at a
+// graceful stop, and InitResult.Scrub at boot. It carries counts and public certificate digests,
+// never a path's content. Its JSON is runner.KeptScrub's.
+type ScrubReport struct {
+	When    string         `json:"when"`    // ScrubAtStop or ScrubAtBoot
+	Outcome string         `json:"outcome"` // ScrubDone or ScrubFailed
+	Removed map[string]int `json:"removed,omitempty"`
+	// CAs are the SHA-256 fingerprints of the recorded run CAs the scrub asked macOS to remove.
+	CAs []string `json:"ca_sha256,omitempty"`
+}
+
+// ScrubReport.When and Outcome. ScrubFailed means something a run wrote may remain (a step's error, or
+// a run CA macOS would not remove); the next scrub tries again.
+const (
+	ScrubAtStop = "stop"
+	ScrubAtBoot = "boot"
+	ScrubDone   = "done"
+	ScrubFailed = "failed"
+)
 
 // AgentSignal is the body of POST /v1/agent/pause and /v1/agent/resume. Generation orders them
 // (PauseFence): the agent answers 409 to one the fence drops and signals nothing. An empty body, from

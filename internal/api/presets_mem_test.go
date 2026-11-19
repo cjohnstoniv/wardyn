@@ -121,6 +121,8 @@ func TestPresetWriteRefusals(t *testing.T) {
 	ok := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets"}
 	withTask := ok
 	withTask.Task = "baked in"
+	withCorrelation := ok
+	withCorrelation.CorrelationID = "baked-in"
 	noAgent := client.CreateRunRequest{Repo: "acme/widgets"}
 	badClass := ok
 	badClass.ConfinementClass = "CC9"
@@ -141,6 +143,7 @@ func TestPresetWriteRefusals(t *testing.T) {
 		{"description too long", "p", client.PresetRequest{Description: strings.Repeat("d", maxPresetDescriptionLen+1), Request: ok}, "description must be at most"},
 		{"description control char", "p", client.PresetRequest{Description: "a\x07b", Request: ok}, "no control characters"},
 		{"per-launch task baked in", "p", client.PresetRequest{Request: withTask}, "request.task is set per launch"},
+		{"per-launch correlation id baked in", "p", client.PresetRequest{Request: withCorrelation}, "request.correlation_id is set per launch"},
 		{"no agent", "p", client.PresetRequest{Request: noAgent}, "agent is required"},
 		{"unknown confinement class", "p", client.PresetRequest{Request: badClass}, "unknown confinement_class"},
 		{"invalid inline policy", "p", client.PresetRequest{Request: badPolicy}, "invalid inline_policy"},

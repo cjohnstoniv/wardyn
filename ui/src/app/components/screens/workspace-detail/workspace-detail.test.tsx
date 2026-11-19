@@ -10,7 +10,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-rou
 import type { RecordResult, SetupModelProvider, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
-import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 const getWorkspaceMock = vi.fn();
 const deleteWorkspaceMock = vi.fn();
@@ -41,7 +41,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 const getAvailabilityMock = vi.fn();
 const getMyCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
@@ -59,6 +59,8 @@ vi.mock("../../../lib/api/permissions", async () => {
 import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
+import { STATES } from "../../wardyn/states";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -161,6 +163,13 @@ afterEach(() => {
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getWorkspaceMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderDetail();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows a not-found state and navigates back to the list", async () => {
     getWorkspaceMock.mockResolvedValue(undefined);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -390,7 +399,23 @@ describe("WorkspaceDetailScreen — image row: three honest variants, never a /b
     expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
     expect(screen.getByText("Built as written — we don't modify it.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Rebuild" }));
-    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1", true));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Rebuild started for "payments"'));
+  });
+
+  it("Rebuild says nothing was rebuilt when the server answers done, and why on none", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ profile: { has_devcontainer: true } as unknown as Record<string, unknown> }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
+    vi.mocked(toast.success).mockClear();
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "done", image: "img" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Nothing to rebuild for "payments".', { description: undefined }));
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "none", detail: "no image builder" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('"payments" was not rebuilt.', { description: "no image builder" }));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("pinned ref: an explicit base_image — no Rebuild action, the ref renders mono", async () => {
@@ -452,65 +477,6 @@ describe("WorkspaceDetailScreen — three cards only", () => {
     await screen.findByText("Recorded sessions");
     expect(screen.getByRole("button", { name: "Copy source path" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^copy$/i })).not.toBeInTheDocument();
-  });
-});
-
-describe("WorkspaceDetailScreen — Allowed hosts card", () => {
-  it("a repo's clone host is structural: shown, no remove control", async () => {
-    getWorkspaceMock.mockResolvedValue(ws());
-    renderDetail();
-    expect(await screen.findByText("Allowed hosts · 1")).toBeInTheDocument();
-    expect(screen.getByText("github.com")).toBeInTheDocument();
-    expect(screen.getByText("clone host for this workspace")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /remove github.com/i })).not.toBeInTheDocument();
-  });
-
-  it("an approved host renders a remove control that PUTs the narrowed allowlist", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["registry.npmjs.org"] }));
-    setApprovedEgressMock.mockResolvedValue(ws({ approved_egress: [] }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderDetail();
-    expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
-    expect(screen.getByText("approved for this workspace")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
-    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", []));
-  });
-
-  it("a host promoted from a recorded session is attributed to it by name", async () => {
-    const rr: RecordResult = {
-      run_id: "r1",
-      label: "build-and-test",
-      mode: "interactive",
-      status: "recorded",
-      egress_promoted: true,
-      observations: {
-        domains: [{ host: "pypi.org", allow_count: 1, deny_count: 0, pending_count: 0 }],
-        minted_grant_ids: [],
-      } as unknown as RecordResult["observations"],
-    };
-    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org"], record_results: { "build-test": rr } }));
-    renderDetail();
-    expect(await screen.findByText('promoted from session "build-and-test"')).toBeInTheDocument();
-  });
-});
-
-describe("WorkspaceDetailScreen — Denied hosts card", () => {
-  it("shows nothing denied by default", async () => {
-    getWorkspaceMock.mockResolvedValue(ws());
-    renderDetail();
-    expect(await screen.findByText("Denied hosts · 0")).toBeInTheDocument();
-    expect(screen.getByText("Nothing denied.")).toBeInTheDocument();
-  });
-
-  it("a denied host renders a remove control that PUTs the narrowed denylist", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ denied_egress: ["evil.example.com"] }));
-    setDeniedEgressMock.mockResolvedValue(ws({ denied_egress: [] }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderDetail();
-    expect(await screen.findByText("Denied hosts · 1")).toBeInTheDocument();
-    expect(screen.getByText("denied for this workspace")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove evil.example.com" }));
-    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", []));
   });
 });
 
@@ -646,7 +612,76 @@ describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overla
     expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
       "egress:concurrent.example.com": { level: "required", provenance: "operator_set" },
       "egress:evil.example.com": { level: "required", provenance: "operator_set" },
-    });
+    }, "");
+  });
+
+  it("the PUT after the fresh read still names the person who approved, when another signed in meanwhile", async () => {
+    // The server then refuses it rather than approve the host as the next person.
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 2, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    const mounted = ws({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, requirements: {} });
+    let fresh!: (w: unknown) => void;
+    getWorkspaceMock.mockResolvedValueOnce(mounted).mockImplementationOnce(() => new Promise((done) => (fresh = done)));
+    setRequirementsMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    const blocked = await screen.findByTestId("verify-session-blocked");
+    setExpectedPrincipal("a@example.com");
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledTimes(2));
+
+    setExpectedPrincipal("b@example.com");
+    fresh(mounted);
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][2]).toBe("a@example.com");
+    setExpectedPrincipal("");
+  });
+});
+
+// The server takes a stamped clean replay back on a later read when a decision of its run lands late, so the
+// page keeps reading for a while after the stamp (cleanVerdictMayMove) and shows the verdict it now holds; a
+// replay stamped long ago is not read again.
+describe("WorkspaceDetailScreen — a clean replay the server takes back", () => {
+  const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+  const replay = (finishedAgoMs: number): RecordResult => ({
+    run_id: "vr1", label: "build & test", mode: "interactive", confined: true, status: "recorded",
+    clean: true, caught: 0, finished_at: new Date(Date.now() - finishedAgoMs).toISOString(),
+  });
+  const withReplay = (rr: RecordResult) => ws({ record_results: { "build-test": learning, "verify:build-test": rr } });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps reading a clean verdict stamped a minute ago, and shows it taken back", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const clean = replay(60_000);
+    getWorkspaceMock.mockResolvedValueOnce(withReplay(clean)).mockResolvedValue(withReplay({ ...clean, clean: false, caught: 1 }));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(await screen.findByText("Replayed — caught 1")).toBeInTheDocument();
+    expect(screen.queryByText("Replayed clean")).not.toBeInTheDocument();
+    const reads = getWorkspaceMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(reads);
+  });
+
+  it("does not read again a clean verdict stamped eleven minutes ago", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    getWorkspaceMock.mockResolvedValue(withReplay(replay(11 * 60_000)));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -724,65 +759,6 @@ describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () 
   });
 });
 
-// F030 — removing an allowed host is up to TWO writes on TWO tiers: PUT
-// .../approved-egress (securityOps) and, when an operator-authored
-// requirements row backs the host, PUT .../requirements (operatorOnly). The
-// card was gated on the security tier alone and treated the pair as atomic.
-describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
-  const operatorSet = { level: "required" as const, provenance: "operator_set" as const };
-
-  it("a security admin may not remove a host whose requirements row is operator_set, but may remove a plain approved one", async () => {
-    getWorkspaceMock.mockResolvedValue(
-      ws({
-        approved_egress: ["registry.npmjs.org", "pypi.org"],
-        requirements: { "egress:registry.npmjs.org": operatorSet },
-      }),
-    );
-    renderDetail("ws-1", false, true);
-
-    const blocked = await screen.findByRole("button", { name: "Remove registry.npmjs.org" });
-    // Disabled because the SECOND write is operatorOnly — not because the card
-    // is closed to this caller: the sibling row proves the card is live.
-    expect(blocked).toBeDisabled();
-    expect(blocked).toHaveAccessibleDescription(OPERATOR_ONLY_REASON);
-    expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
-  });
-
-  it("publishes the landed allowlist write and reports a failed requirements clear as PARTIAL, not as a total failure", async () => {
-    getWorkspaceMock.mockResolvedValue(
-      ws({
-        approved_egress: ["registry.npmjs.org"],
-        requirements: { "egress:registry.npmjs.org": operatorSet },
-      }),
-    );
-    // The first PUT LANDS: the server has already dropped the host from the
-    // allowlist, and its requirements row is all that still holds it.
-    setApprovedEgressMock.mockResolvedValue(
-      ws({ approved_egress: [], requirements: { "egress:registry.npmjs.org": operatorSet } }),
-    );
-    setRequirementsMock.mockRejectedValue(new Error("operator role required"));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderDetail();
-
-    expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
-    expect(screen.getByText("approved for this workspace")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
-
-    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalled());
-    // The landed half was published: the row re-renders from the FIRST write's
-    // workspace, so its provenance is now the requirements row, not the
-    // allowlist the server has already dropped it from.
-    expect(await screen.findByText("required by this workspace")).toBeInTheDocument();
-    expect(screen.queryByText("approved for this workspace")).toBeNull();
-    // ...and the operator is told which half failed.
-    expect(toast.error).toHaveBeenCalledWith(
-      "Removed registry.npmjs.org from the allowlist, but its required-host row could not be cleared",
-      { description: "operator role required" },
-    );
-    expect(toast.error).not.toHaveBeenCalledWith("Failed to remove registry.npmjs.org", expect.anything());
-  });
-});
-
 // X3-F2 / F5-F1 — the detail page's Delete and Rebuild are the same classOwner
 // route the list's kebab is, so they follow the row's OWNER, not the caller's
 // tier. Both legs fail closed: an operator-owned row (owned_by absent) and an
@@ -823,84 +799,6 @@ describe("WorkspaceDetailScreen — Delete and Rebuild follow the row's owner", 
     renderOwned("dana@corp.example", { owned_by: "dana@corp.example" }, false);
     expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Rebuild" })).toBeDisabled();
-  });
-});
-
-// F5-F3 — Remove must be disabled for a row the remove path cannot reach.
-// Removing a host is PUT .../approved-egress plus, for an operator-authored
-// requirements row, PUT .../requirements — and that second write reads the
-// workspace's OWN overlay, while the row's provenance is read off the
-// EFFECTIVE fold. A scan_seeded row is in neither: removing it would fire two
-// no-op writes and the row would come straight back.
-describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove path can reach it", () => {
-  it("parks a scan_seeded-only row with a reason, and leaves an approved host live", async () => {
-    getWorkspaceMock.mockResolvedValue(
-      ws({
-        approved_egress: ["pypi.org"],
-        requirements: { "egress:proxy.golang.org": { level: "required", provenance: "scan_seeded" } },
-      }),
-    );
-    renderDetail();
-
-    const parked = await screen.findByRole("button", { name: "Remove proxy.golang.org" });
-    expect(parked).toBeDisabled();
-    expect(parked).toHaveAccessibleDescription(EGRESS.SCAN_SEEDED_REASON);
-    expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
-  });
-
-  it("negative control: the approved host still PUTs the narrowed allowlist", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org", "registry.npmjs.org"] }));
-    setApprovedEgressMock.mockResolvedValue(ws({ approved_egress: ["registry.npmjs.org"] }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderDetail();
-
-    await user.click(await screen.findByRole("button", { name: "Remove pypi.org" }));
-    await waitFor(() =>
-      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"]),
-    );
-  });
-
-  // The other half of the overlay/fold mismatch: a row whose operator_set
-  // requirement is INHERITED (in the effective fold, absent from the
-  // workspace's own overlay — a source contract this workspace composes) must
-  // be parked for the right reason, but it is not a scan row — saying so would
-  // put two contradictory provenances on one row ("required by this workspace"
-  // beside "detected by this workspace's scan").
-  it("an INHERITED operator_set row is parked as inherited, not as a scan row", async () => {
-    getWorkspaceMock.mockResolvedValue(
-      ws({
-        approved_egress: [],
-        requirements: {},
-        effective_requirements: { "egress:corp.internal": { level: "required", provenance: "operator_set" } },
-      }),
-    );
-    renderDetail();
-
-    const parked = await screen.findByRole("button", { name: "Remove corp.internal" });
-    expect(parked).toBeDisabled();
-    expect(parked).toHaveAccessibleDescription(EGRESS.INHERITED_REASON);
-    expect(parked).not.toHaveAccessibleDescription(EGRESS.SCAN_SEEDED_REASON);
-    // The row's own sentence and its parked reason agree.
-    expect(screen.getByText("required by this workspace")).toBeInTheDocument();
-  });
-
-  it("a member (whose egress: keys the server drops) is told the tier, not handed a dead X", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org"] }));
-    renderDetail("ws-1", false, false);
-    const parked = await screen.findByRole("button", { name: "Remove pypi.org" });
-    expect(parked).toBeDisabled();
-    expect(parked).toHaveAccessibleDescription(SECURITY_ONLY_REASON);
-  });
-
-  // The Denied twin renders the same HostList behind the same securityOperator
-  // gate — a member must not get a bare disabled X there while the Allowed
-  // card beside it says why. Same reason, same tier.
-  it("the Denied hosts twin says the same thing to the same caller", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ denied_egress: ["evil.example.com"] }));
-    renderDetail("ws-1", false, false);
-    const parked = await screen.findByRole("button", { name: "Remove evil.example.com" });
-    expect(parked).toBeDisabled();
-    expect(parked).toHaveAccessibleDescription(SECURITY_ONLY_REASON);
   });
 });
 

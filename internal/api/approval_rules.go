@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -107,6 +108,9 @@ func validateApprovalRuleApprove(kinds []types.ApprovalKind, a types.ApprovalRul
 	for i, h := range a.Hosts {
 		if !hostrules.ValidApprovedHost(h) || slices.Contains(a.Hosts[:i], h) {
 			return fmt.Errorf("approve.hosts: %q is not an exact lower-case hostname (no wildcard, port or path, named once)", h)
+		}
+		if err := proxy.ValidConfigHost(h); err != nil {
+			return fmt.Errorf("approve.hosts: %w", err)
 		}
 	}
 	switch a.EgressScope {

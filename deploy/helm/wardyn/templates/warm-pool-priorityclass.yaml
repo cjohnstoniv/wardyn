@@ -1,0 +1,29 @@
+{{- /*
+The name of the PriorityClass the warm pool placeholders use: k8s.warmPoolPriorityClass.name when set, else
+"<fullname>-warm-placeholder". deployment.yaml renders it into WARDYN_K8S_WARM_PRIORITY_CLASS.
+*/ -}}
+{{- define "wardyn.warmPriorityClassName" -}}
+{{- if (.Values.k8s.warmPoolPriorityClass | default dict).name -}}
+{{- .Values.k8s.warmPoolPriorityClass.name -}}
+{{- else -}}
+{{- printf "%s-warm-placeholder" (include "wardyn.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.k8s.warmPools (not .Values.k8s.enabled) -}}
+{{- fail "wardyn: k8s.warmPools needs k8s.enabled=true: placeholders are pods the Kubernetes runner makes." -}}
+{{- end -}}
+{{- if and .Values.k8s.warmPools (not (.Values.k8s.warmPoolPriorityClass | default dict).create) (not (.Values.k8s.warmPoolPriorityClass | default dict).name) -}}
+{{- fail "wardyn: k8s.warmPools with warmPoolPriorityClass.create=false needs warmPoolPriorityClass.name: the placeholders need a PriorityClass that exists." -}}
+{{- end -}}
+{{- if and .Values.k8s.enabled .Values.k8s.warmPools ((.Values.k8s.warmPoolPriorityClass | default dict).create) }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "wardyn.warmPriorityClassName" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+value: -10
+preemptionPolicy: Never
+globalDefault: false
+description: "Wardyn warm pool placeholders: below every run, and never preempt one."
+{{- end }}

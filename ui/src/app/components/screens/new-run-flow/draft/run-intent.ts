@@ -31,6 +31,8 @@ export type RunIntent = Partial<Omit<CreateRunRequestFields, "title" | "descript
   drives?: DriveAttachment[];
   /** Overlay onto the caller's default policy. Never a whole policy. */
   inline_policy?: Partial<RunPolicySpec>;
+  /** The wall preset chosen for this launch (pkg/client.CreateRunRequest.WallPreset): a built-in's id or a stored preset's uuid. Chosen at each launch; never in a template. */
+  wall_preset?: string;
 };
 
 export type NewRunOrigin =
@@ -62,6 +64,25 @@ export interface GuidedFacts {
   refText: Record<string, string>;
   /** The Files step has already chosen the person's own drive for an Environment, so a later visit does not choose it again. */
   drivePreselected?: boolean;
+  /** A launch found the chosen wall preset missing (422 wall_preset_unknown): the choice stays, as an error, until another is picked. */
+  wallPresetGone?: { id: string; name: string };
+  /** The server's sentence for a window on the Mac it refused, which cleared the choice; until the person chooses again. */
+  windowCleared?: string;
+  /** The sentence for a keep or resume a server answer proved invalid, which cleared the choice; until the person chooses again. */
+  machineCleared?: string;
+  /** A Run in choice the units no longer offer: the notice saying where the run goes instead. */
+  runInCleared?: string;
+  /** The unit last picked under Run in, by id and the name it had then, so that notice can name it. */
+  runInPicked?: { unitId: string; name: string };
+  /**
+   * Agent text a switch to Interactive had no place for (no harness to start, a VM, Your own tools, another agent's
+   * own task), by the agent it belongs to; "" is a task written before any harness. Held here, never in the intent,
+   * because the server refuses it in each carrier Interactive has. A switch to Autonomous gives it back, and so does
+   * starting that harness.
+   */
+  heldText?: Record<string, string>;
+  /** The seed left a harness start, and its first message, out of a VM draft: a template saved from the draft has neither, and Save as template says so. */
+  startLeftOut?: boolean;
 }
 
 export interface DocDiagnostic {

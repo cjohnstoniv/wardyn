@@ -284,8 +284,9 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if err != nil {
 		return fmt.Errorf("db: begin audit chain canary: %w", err)
 	}
-	// Background context: a cancelled ctx must still roll the canary row back.
-	defer tx.Rollback(context.Background()) //nolint:errcheck // the canary is never committed
+	// On a bound of its own, not ctx's: an ended ctx must still roll the canary row back and keep the migration
+	// session, which the hardening restore runs on next.
+	defer Rollback(context.WithoutCancel(ctx), tx) // the canary is never committed
 
 	// Same bound and same lock the real writers take, so the canary queues behind a busy chain
 	// instead of waiting for a boot timeout.
@@ -319,8 +320,9 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(row_hash, ''), COALESCE(prev_hash, '')
 		  FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'wardynd', 'audit.chain.canary', 'audit_events', 'success', '', NULL)`).Scan(&rowHash, &prevHash); err != nil {
-		return fmt.Errorf("db: the audit chain canary could not append a row, so every audit write this process makes "+
-			"will fail the same way — the chain trigger is catalogued and enabled but not working: %w", err)
+		Rollback(context.WithoutCancel(ctx), tx)      // frees db's connection for the read below
+		pathless, _ := auditPathlessTriggers(ctx, db) // a failed read keeps the message that names the chain trigger
+		return auditCanaryAppendError(pathless, err)
 	}
 	if rowHash == "" {
 		return fmt.Errorf("db: the audit chain canary appended a row with NO row_hash: the %s trigger is present, "+
@@ -367,7 +369,7 @@ func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, erro
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path
+		Rollback(context.WithoutCancel(ctx), tx) // best-effort on the failure path
 		return nil, fmt.Errorf("pin read committed: %w", err)
 	}
 	return tx, nil
@@ -384,6 +386,18 @@ func auditCanaryTransient(ctx context.Context, what string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("db: audit chain canary: %s: %w", what, err)
+}
+
+// auditCanaryAppendError is the refusal when the canary's append fails. pathless is auditPathlessTriggers' list:
+// an operator's trigger among them is the likelier cause, so the message names it rather than blaming the chain.
+func auditCanaryAppendError(pathless []string, err error) error {
+	blame := "the chain trigger is catalogued and enabled but not working"
+	if len(pathless) > 0 {
+		blame = "look first at the trigger(s) Wardyn does not ship whose function sets no search_path (" + strings.Join(pathless, ", ") +
+			"): since migration 0285 that function runs with pg_catalog, pg_temp, so a name it leaves without a schema is not found"
+	}
+	return fmt.Errorf("db: the audit chain canary could not append a row, so every audit write this process makes "+
+		"will fail the same way — %s: %w", blame, err)
 }
 
 // auditAlwaysTriggers returns the audit_events triggers an operator has hardened
@@ -616,6 +630,16 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 		slog.ErrorContext(ctx, "db: trigger(s) on audit_events that Wardyn does not ship; they cannot rewrite a row on the way in (only a row-level BEFORE INSERT trigger can) but nothing else in the system reports them — confirm they are yours",
 			slog.Any("triggers", other))
 	}
+	pathless, err := auditPathlessTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+	if len(pathless) > 0 {
+		slog.WarnContext(ctx, "db: trigger(s) on audit_events or its bookkeeping tables that Wardyn does not ship run a function that sets no search_path; "+
+			"since migration 0285 that function runs with pg_catalog, pg_temp, so a name it leaves without a schema is not found and the audit write that fires it fails — "+
+			"name each table, sequence and function it uses with its schema, or give it its own search_path ending in pg_temp",
+			slog.Any("triggers", pathless))
+	}
 	reportTransactionIsolation(ctx, db)
 	if len(tamperCapable) > 0 {
 		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); "+
@@ -679,7 +703,7 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 	if err != nil {
 		return fmt.Errorf("db: begin tx to restore trigger %s: %w", trigger, err)
 	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path; ctx may already be dead
+	defer Rollback(context.WithoutCancel(ctx), tx) // best-effort on the failure path; ctx may already be dead
 	for _, name := range names {
 		data, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
@@ -690,6 +714,16 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 		}
 		slog.InfoContext(ctx, "db: replayed migration to restore an audit trigger",
 			slog.String("file", name), slog.String("trigger", trigger))
+	}
+	// Each of those files leaves the chain function with the install's schema on its search_path, which
+	// 0285_audit_functions_search_path took off so that a role that may CREATE there cannot put a
+	// function of its own in the way of a call the chain makes. A restore must not undo that.
+	if _, err := tx.Exec(ctx, `DO $$ BEGIN
+		EXECUTE pg_catalog.format('ALTER FUNCTION %I.audit_events_chain() SET search_path = pg_catalog, pg_temp',
+			(SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.oid = 'audit_events'::regclass));
+	END $$`); err != nil {
+		return fmt.Errorf("db: pin the search_path of the function behind trigger %s: %w", trigger, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("db: commit the replay that restores trigger %s: %w", trigger, err)

@@ -84,6 +84,7 @@ function LifetimeField({
           inputMode="numeric"
           disabled={disabled}
           aria-invalid={bad}
+          aria-describedby={bad ? `${id}-error` : hint ? `${id}-hint` : undefined}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -95,7 +96,17 @@ function LifetimeField({
         />
         <span className="text-body text-muted-foreground">{unit}</span>
       </div>
-      {bad ? <p className="mt-1 text-meta text-danger">{rangeError}</p> : hint && <p className="mt-1 text-meta text-muted-foreground">{hint}</p>}
+      {bad ? (
+        <p id={`${id}-error`} role="alert" className="mt-1 text-meta text-danger">
+          {rangeError}
+        </p>
+      ) : (
+        hint && (
+          <p id={`${id}-hint`} className="mt-1 text-meta text-muted-foreground">
+            {hint}
+          </p>
+        )
+      )}
     </div>
   );
 }

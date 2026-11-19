@@ -28,17 +28,28 @@
 //   k8s       acknowledged     "acknowledged" (warning strip + soft ring)
 //   k8s       unenforced       "unenforced"   (danger strip + warning ring + glyph)
 //   k8s       absent           "unknown"      (warning strip — could not confirm; ruling 2)
+//   k8s       refused          "refused"      (danger strip — a re-check showed it not enforced)
+//   k8s       not_proven       "not_proven"   (danger strip — three re-checks could not run)
 //
 // A runner that is neither "docker" nor "k8s" (the pre-mount default, an
 // older daemon, or any future substrate) resolves the same as Docker: silent.
 // That is deliberate — a posture warning must never be INVENTED ahead of a
 // real /healthz answer just because the field is momentarily empty.
+//
+// A verdict /healthz does carry is shown whatever `runner` says: on a Docker
+// (or any) control plane it is a connected Kubernetes runner's
+// (`network_policy_source: "runner"`), and it is just as real.
 import type { ConfinementPosture } from "../components/wardyn/operator-context";
 
 export function resolveConfinementPosture(runner: string, networkPolicy: string): ConfinementPosture {
-  if (runner !== "k8s") return "";
-  if (networkPolicy === "enforced" || networkPolicy === "acknowledged" || networkPolicy === "unenforced") {
+  if (
+    networkPolicy === "enforced" ||
+    networkPolicy === "acknowledged" ||
+    networkPolicy === "unenforced" ||
+    networkPolicy === "refused" ||
+    networkPolicy === "not_proven"
+  ) {
     return networkPolicy;
   }
-  return "unknown";
+  return runner === "k8s" ? "unknown" : "";
 }

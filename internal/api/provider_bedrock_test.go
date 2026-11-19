@@ -40,6 +40,9 @@ const (
 	brStartURL    = "https://acme.awsapps.com/start"
 	brModel       = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	brBaseURL     = "https://vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com"
+	// brSessionRegion is brSSOProvider's region and so the region brBlob's sessions are for, as a
+	// sign-in stores them: every door refuses a session for another region than its provider's.
+	brSessionRegion = "us-west-2"
 )
 
 func brBearerProvider() types.ModelProvider {
@@ -50,13 +53,13 @@ func brBearerProvider() types.ModelProvider {
 
 func brSSOProvider() types.ModelProvider {
 	return types.ModelProvider{ID: "bedrock-prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
-		Bedrock: &types.BedrockSettings{Region: "us-west-2", SSOStartURL: brStartURL,
+		Bedrock: &types.BedrockSettings{Region: brSessionRegion, SSOStartURL: brStartURL,
 			SSOAccountID: "123456789012", SSORoleName: "BedrockUser"},
 		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: brModel}}}
 }
 
 func brBlob(tok, account, role string, expires time.Time) []byte {
-	b, _ := json.Marshal(awsSSOBlob{AccessToken: tok, StartURL: brStartURL, Region: "us-east-1",
+	b, _ := json.Marshal(awsSSOBlob{AccessToken: tok, StartURL: brStartURL, Region: brSessionRegion,
 		AccountID: account, RoleName: role, ExpiresAt: expires, CapturedAt: time.Now()})
 	return b
 }
@@ -419,7 +422,7 @@ func brKeyScope(host, uid, owner string) json.RawMessage {
 }
 
 func TestProviderBedrockSSOSink(t *testing.T) {
-	const portal = "portal.sso.us-east-1.amazonaws.com"
+	const portal = "portal.sso.us-west-2.amazonaws.com"
 	t.Run("resolves the owner's own session", func(t *testing.T) {
 		h, st, _ := brAuthored(t, brSSOProvider())
 		code, body := resolveBR(t, h, st, portal)

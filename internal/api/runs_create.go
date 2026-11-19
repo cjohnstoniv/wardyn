@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -117,15 +119,19 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	}
 	all, lerr := s.listWorkspaces(ctx)
 	if lerr != nil {
-		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("list workspaces: %w", lerr))
+		return workspaceSeed{}, seedErr(http.StatusInternalServerError, reasonWorkspaceSourcesListUnavailable, workspaceListUnread(ctx, lerr))
 	}
 	sels := resolveWorkspaceSelections(*req)
 	var newMounts []types.WorkspaceMount
 	var newRepos []types.WorkspaceRepo
 	for _, id := range ids {
 		ws, gerr := s.cfg.Store.GetWorkspace(ctx, id)
-		if gerr != nil {
+		if errors.Is(gerr, store.ErrNotFound) {
 			return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("workspace %s: %w", id, gerr))
+		}
+		if gerr != nil {
+			// Any other read fault is the server's, not the caller's: the store's error goes to the log only.
+			return workspaceSeed{}, seedErr(http.StatusInternalServerError, reasonWorkspaceSeedUnreadable, errors.New(loggedMsg(ctx, "the workspace could not be read", gerr)))
 		}
 		seed.attached = append(seed.attached, ws)
 		sel := sels[id.String()]
@@ -391,7 +397,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	}
 	all, err := s.listWorkspaces(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
+		return http.StatusInternalServerError, reasonWorkspaceSourcesListUnavailable, workspaceListUnread(ctx, err)
 	}
 	// A source several workspaces carry is judged by one the caller may launch
 	// when there is one: another member onboarding it first refuses nobody.
@@ -573,18 +579,24 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// is before the cases below, so a BYOI wrap, a devcontainer build or a workspace base image still
 	// replaces the image entirely.
 	image = archImage(image, defaultImageKey(req, fact), s.runArch(ctx, run), s.cfg.AgentImageVariants)
+	conventional := image                 // what the run gets by convention, held to image admission under scope all
+	origin := types.ImageOriginConvention // where the image came from: the case below that chose it says
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
 	// silently clobbered back to FAILED (was: unconditional write), and audit.
-	buildFailed := func(auditData map[string]any) {
+	buildFailed := func(auditData map[string]any, cause ...string) {
 		// Bounded, and not on the build's context: a kill that stopped the build does not stop this.
 		ctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 		defer cancel()
-		// Surface the build failure under the FAILED badge, not only in the
-		// run.build audit row. The error text is already in auditData["error"].
+		// Surface the build failure under the FAILED badge. A caller whose row's "error" names the step
+		// passes cause, what the member reads beside the badge; else the row's own error is.
 		hint := "the run's sandbox image could not be built"
-		if e, ok := auditData["error"].(string); ok && e != "" {
+		e, _ := auditData["error"].(string)
+		if len(cause) > 0 {
+			e = cause[0]
+		}
+		if e != "" {
 			hint += ": " + e
 		}
 		s.failAndRevoke(ctx, runID, types.RunPending, hint)
@@ -597,8 +609,12 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	startBuild := func(fields map[string]any) (buildCtx context.Context, end func(), ok bool) {
 		buildCtx, end, live, err := s.trackRunBuild(ctx, runID)
 		if err != nil {
-			fields["error"] = err.Error()
-			buildFailed(fields)
+			if errors.Is(err, errRunUnreadBeforeBuild) {
+				fields["error"] = errRunUnreadBeforeBuild.Error() // the server's own sentence; trackRunBuild logged the store's error
+			} else {
+				fields["error"] = auditStep(ctx, auditStepTrackBuild, err, slog.String("run_id", runID.String()))
+			}
+			buildFailed(fields, err.Error())
 		}
 		return buildCtx, end, live
 	}
@@ -612,11 +628,11 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case pw != nil:
 		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
 		// (design final §3).
-		image, arches = pw.Image, pw.Check.AcceptedArches
+		image, arches, origin = cmp.Or(imagePin(run), pw.Image), pw.Check.AcceptedArches, imageOriginMember
 	case req.Image != "" && s.cfg.ImageBuilder == nil:
 		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
 		// builder nothing else may run it.
-		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()})
+		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()}, errPrewrappedNotRegistered.Error())
 		return "", nil, true
 	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
@@ -628,13 +644,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", nil, true
 		}
 		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
 		endBuild()
 		if berr != nil {
-			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
+			buildFailed(map[string]any{"byoi_base": req.Image, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
 			return "", nil, true
 		}
-		image = built.Ref
+		image, origin = built.Ref, imageOriginMember
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"byoi_base": req.Image, "image": built.Ref,
@@ -649,10 +665,10 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
 		endBuild()
 		if berr != nil {
-			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
+			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
 			return "", nil, true
 		}
-		image = built.Ref
+		image, origin = built.Ref, types.ImageOriginDevcontainer
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"devcontainer_repo": req.DevcontainerRepo, "image": built.Ref,
@@ -673,8 +689,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" && !prewrappedBase(b) &&
-			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
+		if b := imageWS.BaseImage; chosenBaseImageNeedsWrap(b) && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,
 				"error": "no image builder is wired, so the workspace's chosen base image cannot be wrapped with the " +
@@ -686,21 +701,30 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		if !ok {
 			return "", nil, true
 		}
-		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
+		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{Pinned: imagePin(run)})
 		endBuild()
 		if res.OK {
-			image, arches = res.Image, res.ImageArches
+			image, arches, origin = res.Image, res.ImageArches, imageOriginMember
+			if workspaceBaseImage(imageWS) == "" {
+				origin = types.ImageOriginWorkspace // built from the workspace itself, not a base image it names
+			}
 		} else if res.BaseErr != nil {
 			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
 			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
 			// run.build failure row, so only the run is failed here.
 			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 			defer cancel()
-			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
-			// run.build row carries it for the operator.
-			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
+			// The hint is the fixed sentence and the builder's error, as the launch builds' hint above is, since the
+			// run page and the CLI show the hint as the cause (allowlisted in server_error_driver_text_guard_test.go).
+			slog.ErrorContext(ctx, "wardynd: the run's sandbox image could not be built",
+				slog.String("run_id", runID.String()), slog.Any("err", res.BaseErr))
+			s.failAndRevoke(failCtx, runID, types.RunPending, "the run's sandbox image could not be built: "+res.BaseErr.Error())
 			return "", nil, true
 		}
+	}
+
+	if image, failed = s.admitResolvedImage(ctx, run, image, conventional, origin); failed {
+		return "", nil, true
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write
@@ -713,9 +737,36 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// them, so a run whose admission cannot be recorded fails rather than run unpinned.
 	if arches != nil {
 		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
-			buildFailed(map[string]any{"base_image": image, "error": "record the prewrapped image's architectures: " + err.Error()})
+			buildFailed(map[string]any{"base_image": image, "error": auditStep(ctx, auditStepPrewrapArches, err, slog.String("run_id", runID.String()))}, auditStepPrewrapArches)
 			return "", nil, true
 		}
 	}
 	return image, arches, false
+}
+
+// chosenBaseImageNeedsWrap is true when a workspace's base image is an explicit choice that only an image builder
+// can wrap with the agent runtime: not the recommended image, not a ready prewrapped image, and not blank.
+func chosenBaseImageNeedsWrap(b *types.WorkspaceBaseImage) bool {
+	return b != nil && b.Kind != "recommended" && !prewrappedBase(b) && strings.TrimSpace(b.Image) != ""
+}
+
+// admitResolvedImage holds the image resolveCreateRunImage chose to image admission by its origin: the convention
+// image is checked (scope all) and may come back as its pin; an image Wardyn built for the run records its
+// origin. failed is true when the run was failed (conventional names the convention image in the refusal).
+func (s *Server) admitResolvedImage(ctx context.Context, run types.AgentRun, image, conventional, origin string) (string, bool) {
+	switch origin {
+	case types.ImageOriginConvention:
+		admitted, refusal := s.conventionImageAdmission(ctx, run, image)
+		if refusal != nil {
+			s.failConventionImage(ctx, run.ID, conventional, refusal)
+			return "", true
+		}
+		return admitted, false
+	case types.ImageOriginDevcontainer, types.ImageOriginWorkspace:
+		if refusal := s.recordBuiltImageOrigin(ctx, run, origin); refusal != nil {
+			s.failConventionImage(ctx, run.ID, image, refusal)
+			return "", true
+		}
+	}
+	return image, false
 }

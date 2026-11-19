@@ -26,7 +26,7 @@ import (
 func TestModelProvidersGet(t *testing.T) {
 	srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{})
 	w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
-	want := `{"entra_login_configured":false,"kinds_available":["anthropic_api_key","anthropic_subscription","bedrock_bearer","bedrock_sso","custom_endpoint","local_model","openai_api_key"]}`
+	want := `{"entra_login_configured":false,"kinds_available":["anthropic_api_key","anthropic_subscription","bedrock_bearer","bedrock_sso","custom_endpoint","local_model","openai_api_key"],"gateway_identity_issuer":"spiffe://wardyn.local","gateway_jwks_path":"/.well-known/wardyn-experimental/gateway-jwks.json","gateway_identity_bedrock_sso":false}`
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want || w.Header().Get("ETag") == "" {
 		t.Fatalf("GET = %d %q etag=%q, want 200 %s with an ETag", w.Code, w.Body.String(), w.Header().Get("ETag"), want)
 	}
@@ -514,7 +514,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("model_providers =\n%+v\nwant\n%+v", got, want)
 	}
-	for _, leak := range []string{"awsapps.com", "123456789012", "BedrockUser", "/anthropic", "Authorization", `"uid"`} {
+	for _, leak := range []string{"awsapps.com", "123456789012", "BedrockUser", "/anthropic", "Authorization"} {
 		if strings.Contains(w.Body.String(), leak) {
 			t.Errorf("the member's /setup/status carries %q", leak)
 		}
@@ -525,6 +525,21 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		got := statusModelProviders(t, w.Body.Bytes())
 		if len(got) != 3 || !slices.Equal(got[0].Harnesses, []string{"claude-code", "codex-cli"}) {
 			t.Errorf("admin model_providers = %+v, want corp-gateway on both agents", got)
+		}
+	})
+
+	t.Run("every row carries its own uid for a member, which is the id the sign-in URL takes", func(t *testing.T) {
+		in := endpointProvider()
+		in.ID, in.UID = "corp-sso", "uid-corp-sso"
+		in.OIDC = &types.ProviderOIDC{Issuer: "https://sso.corp.example", ClientID: "wardyn"}
+		plain := endpointProvider()
+		plain.ID, plain.UID = "plain-gateway", "uid-plain"
+		withSignIn := site
+		withSignIn.ModelProviders = providerBlock(in, plain)
+		w := doSSO(t, modelProvidersStatusSrv(t, withSignIn, &capStore{}), http.MethodGet, "/api/v1/setup/status", member, "")
+		got := statusModelProviders(t, w.Body.Bytes())
+		if len(got) != 2 || got[0].UID != "uid-corp-sso" || got[0].SignIn != "oidc" || got[1].UID != "uid-plain" || got[1].SignIn != "" {
+			t.Errorf("model_providers = %+v; want each row to carry its uid and only the first to sign in", got)
 		}
 	})
 

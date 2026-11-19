@@ -89,7 +89,7 @@ func (s *Server) presetContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal, runShapeRefusal, serviceRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal,
+	runModeShapeRefusal, runShapeRefusal, serviceRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal, correlationIDRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -381,8 +381,8 @@ func agentOverridesShape(a client.AgentOverrides) *runRefusal {
 		}
 	}
 	for i, r := range a.ToolRules {
-		if !overrideText(r.Tool) || !types.ValidToolEffect(r.Effect) {
-			return overrideInvalid("agent.tool_rules[%d]: give a tool name and an effect of allow, hold or deny", i)
+		if !overrideText(r.Tool) || types.ValidToolRule(r) != nil {
+			return overrideInvalid("agent.tool_rules[%d]: give a tool name and an effect of allow, hold, approve_each or deny; approve_each only on one MCP tool's exact name", i)
 		}
 	}
 	return nil

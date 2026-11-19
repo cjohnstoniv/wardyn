@@ -67,7 +67,7 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { createRunWire: vi.fn() },
 }));
 
-import { ReviewStep, WorkspacesStep } from "./step-bodies";
+import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import { deriveReadiness } from "../../../lib/readiness";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -210,6 +210,39 @@ describe("step-bodies.tsx — smoke", () => {
     expect(await screen.findByText("demo-workspace")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^scan$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit workspace…/i })).not.toBeInTheDocument();
+  });
+
+  it("WorkspacesStep says the list failed to load, and Retry reloads it", async () => {
+    const user = userEvent.setup();
+    const onReload = vi.fn();
+    render(
+      <MemoryRouter>
+        <WorkspacesStep workspaces={[]} loading={false} error onReload={onReload} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Couldn't load workspaces.")).toBeInTheDocument();
+    expect(screen.queryByText("No workspaces onboarded yet.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("ReviewStep with the barrier ready and no model provider does not claim anything is missing from the barrier", () => {
+    const status = baseStatus();
+    const readiness = { ...deriveReadiness(status), ready: true, llmReady: false };
+    render(<ReviewStep status={status} readiness={readiness} onJump={vi.fn()} />);
+    expect(screen.getByText(/Runs can launch: the barrier is ready\. Agent runs also need a model provider/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not everything a first run needs/)).not.toBeInTheDocument();
+  });
+
+  it("DeploymentStep on an SSO install whose SSO side does not answer shows a warning chip, not a green SSO one", () => {
+    const status = baseStatus({ auth: { mode: "sso", local_loopback: false } as SetupStatus["auth"] });
+    render(
+      <MemoryRouter>
+        <DeploymentStep status={status} access={null} accessState="sso_unavailable" onReloadAccess={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("SSO · not answering")).toBeInTheDocument();
+    expect(screen.getByText("SSO isn't answering")).toBeInTheDocument();
   });
 
   // M-6 (QM-8/§4.8): Finish's own "Switch to user view" offer — a

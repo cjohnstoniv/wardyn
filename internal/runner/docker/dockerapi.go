@@ -25,6 +25,7 @@ import (
 type dockerAPI interface {
 	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
 	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error) // backs ProbeSubstrate: the daemon answers, nothing listed or created
+	ClientVersion() string                                                           // the API version this client talks (after Info), which DOCKER_API_VERSION can pin; gates a volume Subpath
 
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
@@ -35,6 +36,8 @@ type dockerAPI interface {
 
 	NetworkCreate(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error)
 	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
+	// NetworkDisconnect backs FenceProxy: it takes a contained run's agent off a network.
+	NetworkDisconnect(ctx context.Context, networkID string, options client.NetworkDisconnectOptions) (client.NetworkDisconnectResult, error)
 	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) // reads back the subnet the daemon picked for a per-run network
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
 	NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error) // only with Config.RunSubnetPool: the subnets in use, and the orphan network sweep
@@ -73,9 +76,10 @@ type dockerAPI interface {
 	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error) // honours attach-session PTY window-size changes
 
 	// VolumeInspect / VolumeCreate back MANAGED user drives: a per-person named volume, created on first
-	// use. VolumeRemove is reached from exactly ONE caller — ReclaimDrive, the operator's explicit verb.
-	// SECURITY/invariant: no teardown, sweep or run path may call it — a drive outlives every run that
-	// mounts it, so an automatic reclaim would be data loss, not cleanup.
+	// use. VolumeRemove is reached from exactly TWO callers: ReclaimDrive, the operator's explicit verb, and
+	// removeDNSVolume, which removes only the run's own resolver volume, wardyn-dns-<run-id>, by that exact name.
+	// SECURITY/invariant: no teardown, sweep or run path may remove a drive volume — a drive outlives every run
+	// that mounts it, so an automatic reclaim would be data loss, not cleanup.
 	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	VolumeCreate(ctx context.Context, options client.VolumeCreateOptions) (client.VolumeCreateResult, error)
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)

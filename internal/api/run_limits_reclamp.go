@@ -39,7 +39,10 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // the cut ends_at and end_tightened_at are written from it; the lease sweep reads them on the database's clock
+	if err != nil {
+		return err // a failed read changes nothing and is retried next tick
+	}
 	if err := s.reclampProfiledRuns(ctx, rc, capSec, now); err != nil {
 		return err
 	}

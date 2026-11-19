@@ -5,8 +5,9 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
@@ -14,12 +15,16 @@ import { shortTime } from "../../../../lib/format";
 import { whenText } from "../../../../lib/schedule";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
-import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { CANCEL_NOT_STARTED } from "../../../wardyn/copy/cancel-not-started";
+import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
+import { RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type LaunchedState } from "../new-run-route";
 import { LaunchedScreen } from "./launched-screen";
 import type { RunQueue } from "../../../../lib/types/runs";
 import type { LaunchedRun } from "./launched-model";
+import { STATES } from "../../../wardyn/states";
+import { HttpError } from "../../../../lib/api/core";
 
 const ID = "b2222222-2222-4222-8222-222222222222";
 const HOUR = 3_600_000;
@@ -38,6 +43,11 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
+function RunPage() {
+  const carried = (useLocation().state as { launchWarnings?: string[] } | null)?.launchWarnings ?? [];
+  return <><p>run page</p><p data-testid="carried">{JSON.stringify(carried)}</p></>;
+}
+
 function Typed() {
   const dispatch = useNewRunDispatch();
   const { launch } = useNewRunDraft();
@@ -53,7 +63,7 @@ function open(state?: LaunchedState) {
           <Typed />
           <Routes>
             <Route path="/runs/new" element={<LaunchedScreen location={{ screen: "launched", runId: ID }} go={go} startFromScratch={() => {}} />} />
-            <Route path="/runs/:id" element={<p>run page</p>} />
+            <Route path="/runs/:id" element={<RunPage />} />
           </Routes>
           <Where />
         </NewRunDraftProvider>
@@ -74,6 +84,27 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("Launched: while the run loads (UXR-48)", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRun.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    open();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("draws a placeholder for the badge and the title, then the run", async () => {
+    let settle!: (r: unknown) => void;
+    getRun.mockReturnValue(new Promise((r) => (settle = r)));
+    open();
+    const loading = await screen.findByTestId("launched-loading");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    await act(async () => settle(run()));
+    expect(await screen.findByRole("heading", { level: 1, name: "nightly build" })).toBeInTheDocument();
+    expect(screen.queryByTestId("launched-loading")).toBeNull();
+  });
 });
 
 describe("Launched: Waiting (U13)", () => {
@@ -108,9 +139,9 @@ describe("Launched: Waiting (U13)", () => {
     getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
     expect(killRun).not.toHaveBeenCalled();
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
   });
 });
@@ -127,6 +158,71 @@ describe("Launched: a scheduled run", () => {
     expect(screen.queryByText(NR_LAUNCH.POSITION)).not.toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).toBeInTheDocument();
+  });
+
+  it("Cancel run asks a plain cancel question, not the sandbox teardown one", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Cancel nightly build?" });
+    expect(confirm).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
+    await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true }));
+  });
+
+  // The run started after this screen last read it: the cancel asked the server to end it only while it had not
+  // started, the server refused, and the screen says it started rather than showing a failure.
+  it("says the run started, and shows no failure, when the server refuses the cancel because it has", async () => {
+    const info = vi.spyOn(toast, "info");
+    killRun.mockRejectedValue(new HttpError(409, "run has started", "run_kill_started"));
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Cancel nightly build?" });
+    const reads = getRun.mock.calls.length;
+    await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(info).toHaveBeenCalledWith(CANCEL_NOT_STARTED.STARTED("nightly build"), { description: CANCEL_NOT_STARTED.STARTED_NEXT }));
+    await waitFor(() => expect(getRun.mock.calls.length).toBeGreaterThan(reads));
+    expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // The screen reads again every few seconds while the run waits. A read that finds the run started while the
+  // confirm is open must not turn "Cancel nightly build?" into End run: the confirm keeps the question it opened with.
+  it("keeps the cancel question open, and sends the flag, when a read finds the run started under it", async () => {
+    vi.useFakeTimers();
+    getRun
+      .mockResolvedValueOnce(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }))
+      .mockResolvedValue(run({ state: "RUNNING" }));
+    open();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    fireEvent.click(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    expect(screen.getByRole("alertdialog", { name: "Cancel nightly build?" })).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    expect(getRun).toHaveBeenCalledTimes(2);
+    const confirm = screen.getByRole("alertdialog", { name: "Cancel nightly build?" });
+    expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
+    fireEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true });
+  });
+});
+
+// A run that waits for a pool slot keeps the End run confirm: only the states known to hold nothing changed.
+describe("Launched: a run waiting for a pool slot", () => {
+  it("still asks the End run question", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    expect(confirm).toHaveTextContent("tears down the sandbox");
   });
 });
 
@@ -151,6 +247,30 @@ describe("Launched: Starting", () => {
     expect(go).toHaveBeenCalledWith({ screen: "start" });
     await userEvent.click(link);
     expect(screen.getByText("run page")).toBeInTheDocument();
+  });
+});
+
+describe("Launched: a run its runners hold back", () => {
+  const named = "Every runner in CI jobs is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+  const held = (over: Partial<RunQueue> = {}) => queue({ reason: "runner_pool_runners_at_capacity", ...over });
+
+  it("says the limit the server named, and the run page carries no second copy of it", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: ["another run uses this folder", named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(created);
+    open({ created, owner: "alice" });
+    expect(await screen.findByText(named)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent(JSON.stringify(["another run uses this folder"]));
+  });
+
+  it("follows the wait when it has changed since the create: the read's words win and the stale copy is not carried", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: [named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "runner_pool_no_runner_free" }) }));
+    open({ created, owner: "alice" });
+    expect(await screen.findByText("None of your runners in CI jobs is online. This run starts when one is.")).toBeInTheDocument();
+    expect(screen.queryByText(named)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent("[]");
   });
 });
 
@@ -186,8 +306,8 @@ describe("Launched: reload and identity", () => {
     getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockResolvedValue(run({ state: "KILLED" }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });
@@ -210,10 +330,28 @@ describe("Launched: reload and identity", () => {
     expect(getRun).toHaveBeenCalledTimes(2);
   });
 
-  it("says so when the run cannot be found", async () => {
+  it("says the run was not found, with no retry, and a way back to Runs", async () => {
     getRun.mockResolvedValue(undefined);
     open();
-    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: RUN_NOT_FOUND.TITLE })).toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't answering/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again|retry/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: RUN_NOT_FOUND.CTA })).toHaveAttribute("href", "/runs");
+  });
+
+  it("keeps the run on screen and says it cannot refresh when a later read fails", async () => {
+    vi.useFakeTimers();
+    getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockRejectedValue(new Error("Failed to fetch"));
+    open();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(screen.queryByTestId("launched-stale")).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    expect(screen.getByTestId("launched-stale")).toHaveTextContent(NR_LAUNCH_STALE);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("nightly build");
   });
 });

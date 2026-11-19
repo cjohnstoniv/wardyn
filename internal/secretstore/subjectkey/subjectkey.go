@@ -33,6 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -210,7 +211,7 @@ func (m *Manager) create(ctx context.Context, owner, purpose, domain string) err
 	if err != nil {
 		return unavailable("begin a generation", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if _, err := tx.Exec(ctx,
 		`UPDATE principal_keys SET superseded_at=now() WHERE owner=$1 AND purpose=$2 AND domain <> $3 AND destroyed_at IS NULL AND superseded_at IS NULL`,
 		owner, purpose, domain); err != nil {
@@ -377,7 +378,7 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 	if err != nil {
 		return nil, unavailable("begin destroy", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// A generation already destroyed is tombstoned (the table's CHECK ties
 	// wrapped_key to destroyed_at), so only the live one is left to change.
 	rows, err := tx.Query(ctx,

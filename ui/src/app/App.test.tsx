@@ -9,13 +9,13 @@
 // rule (App.tsx's own comment on the component explains why). This suite
 // drives it directly with a stub RoleProvider rather than the whole App, since
 // App's own auth/health polling has nothing to do with this decision.
-import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from "vitest";
 import { act, render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import App, { FirstRunLanding } from "./App";
 import { roleCanReach } from "./components/wardyn/reauth-layer";
-import { SESSION_ENDED_REASON } from "./lib/api/core";
+import { notifyAuthChange, SESSION_ENDED_REASON } from "./lib/api/core";
 import { SESSION_ENDED } from "./lib/session-continuity-copy";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
@@ -165,6 +165,24 @@ function renderApp(initialPath = "/") {
   );
 }
 
+// After this tab's own sign-out the next sign-in loads a fresh page (App.tsx setReloadTo). The load is recorded here,
+// not made; reloadAsked waits for it and mounts the console again at that address, as the load would. Module state
+// survives that here, which a real load clears, so nothing asserted after it is helped by it.
+const realLocation = window.location;
+const assign = vi.fn();
+function recordLoads() {
+  assign.mockReset();
+  Object.defineProperty(window, "location", { value: { ...realLocation, assign }, configurable: true });
+}
+function restoreLocation() {
+  Object.defineProperty(window, "location", { value: realLocation, configurable: true });
+}
+async function reloadAsked(path = "/runs") {
+  await waitFor(() => expect(assign).toHaveBeenCalledWith(path));
+  cleanup();
+  renderApp(path);
+}
+
 describe("App — the sign-in screen's notice", () => {
   // ticket: H1, #483
   afterEach(() => {
@@ -228,10 +246,12 @@ function Where() {
 }
 
 describe("App — where a token sign-in lands (#2493)", () => {
+  beforeEach(recordLoads);
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionStorage.clear();
     cleanup();
+    restoreLocation();
   });
 
   function renderAt(initialPath: string) {
@@ -268,7 +288,7 @@ describe("App — where a token sign-in lands (#2493)", () => {
     expect(screen.getByTestId("where")).toHaveTextContent("/admin/settings?tab=people");
   });
 
-  it("after a deliberate sign-out the next person starts at /runs, not the last page", async () => {
+  it("after a deliberate sign-out the next person starts on a fresh page at /runs, not the last page", async () => {
     vi.stubGlobal("fetch", mockFetch({}).fetch);
     renderAt("/admin/settings");
     const user = userEvent.setup();
@@ -282,15 +302,18 @@ describe("App — where a token sign-in lands (#2493)", () => {
     setField(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await screen.findByText("runs screen stub");
-    expect(screen.getByTestId("where")).toHaveTextContent(/^\/runs$/);
+    // A fresh page: nothing the previous person's page started runs on into the next person's console.
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(screen.queryByText("admin settings screen stub")).toBeNull();
   });
 });
 
 describe("App — the nav badges across a sign-out (#2492)", () => {
+  beforeEach(recordLoads);
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
+    restoreLocation();
   });
 
   it("drops the previous person's counts, so the next sign-in's first paint shows none of them", async () => {
@@ -319,6 +342,7 @@ describe("App — the nav badges across a sign-out (#2492)", () => {
 
     setField(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await reloadAsked();
     await screen.findByRole("banner");
     await waitFor(() => expect(approvals()).toBeInTheDocument());
     expect(approvals()).not.toHaveTextContent("7");
@@ -347,6 +371,7 @@ describe("App — the nav badges across a sign-out (#2492)", () => {
     return async () => {
       setField(screen.getByLabelText("Admin token"), "any-token");
       await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await reloadAsked();
       await screen.findByRole("banner");
     };
   }
@@ -456,11 +481,13 @@ describe("roleCanReach — pure", () => {
 // failure does to the last good answer, and what happens to an answer that
 // arrives for a person who has since signed out.
 describe("App — the setup-status poll behind the model-access door", () => {
+  beforeEach(recordLoads);
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     window.history.pushState({}, "", "/");
     cleanup();
+    restoreLocation();
   });
 
   /** mockFetch, with /setup/status counted and — once `hold` is armed — held
@@ -586,12 +613,42 @@ describe("App — the setup-status poll behind the model-access door", () => {
     setField(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    // The next person's landing decision waits for THEIR OWN read: with the
-    // stale body stored, the landing would have routed off it already.
-    await waitFor(() => expect(statusCalls).toBe(2));
+    // The next person's console is a fresh page, which asks for its own status: this page asks nothing more for
+    // anyone and routes nowhere off the stale body.
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(statusCalls).toBe(1);
     expect(screen.queryByText("runs screen stub")).toBeNull();
-
     secondRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
+  });
+
+  it("a read that answers after an auth event on this page neither lands nor holds the landing: it is read again", async () => {
+    // The read is still out when an auth event (another tab's, a renewal) moves the generation on; its answer
+    // describes whoever was signed in when it started.
+    const landingRead = deferred<Response>();
+    const ownRead = deferred<void>();
+    let statusCalls = 0;
+    const base = mockFetch({}).fetch;
+    const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(url).includes("/setup/status")) return base(url, init);
+      statusCalls += 1;
+      return statusCalls === 1 ? landingRead.promise : ownRead.promise.then(() => jsonResponse(200, SETUP_STATUS_READY));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp();
+
+    const header = await screen.findByRole("banner");
+    await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+    expect(statusCalls).toBe(1);
+    act(() => notifyAuthChange());
+
+    await act(async () => {
+      landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
+    });
+    expect(screen.queryByText("runs screen stub")).toBeNull();
+    // Dropped, it asks again for the person signed in now.
+    await waitFor(() => expect(statusCalls).toBe(2));
+
+    ownRead.resolve();
     await screen.findByText("runs screen stub");
   });
 });
@@ -647,5 +704,25 @@ describe("App — an unknown address", () => {
     vi.stubGlobal("fetch", fetch);
     renderApp(path);
     expect(await screen.findByRole("region", { name: "Page not found" })).toHaveTextContent(`There's no page at ${path}.`);
+  });
+});
+
+// A 503 from /readyz is an answer (the store is down), not a lost connection, so the shell's band
+// must not call the control plane unreachable.
+describe("App — the control-plane band on a 503 /readyz", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("says the control plane is not available, never unreachable", async () => {
+    const base = mockFetch({}).fetch;
+    const fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) =>
+      String(url).includes("/readyz") ? Promise.resolve(jsonResponse(503, { status: "unavailable" })) : base(url, init),
+    );
+    vi.stubGlobal("fetch", fetch);
+    renderApp();
+    expect(await screen.findByText(/Control plane not available — showing the last data received\./)).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/i)).toBeNull();
   });
 });

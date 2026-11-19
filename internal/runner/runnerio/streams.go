@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -135,8 +137,25 @@ func (s *Server) serveSession(ctx context.Context, peer *runnerwire.Peer, id uin
 		_, _ = io.Copy(writerFunc(sess.Write), st)
 	}()
 	go func() {
-		_, err := io.Copy(st, readerFunc(sess.Read))
+		var readErr error
+		_, err := io.Copy(st, readerFunc(func(p []byte) (int, error) {
+			n, err := sess.Read(p)
+			if err != nil && err != io.EOF {
+				readErr = err
+			}
+			return n, err
+		}))
 		if err != nil {
+			// The peer sees only "serving it failed"; the cause (a guest exec that errored at once) stays here.
+			// A detach closes the session under this copy, so a closed pipe or connection is the ordinary end of
+			// the attach and not worth a warning; the stream is reset either way.
+			if !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+				side := "stream write"
+				if err == readErr {
+					side = "session read"
+				}
+				slog.Warn("runnerio: "+side+" failed, resetting its stream", slog.String("kind", kind), slog.String("ref", ref), slog.Any("err", err))
+			}
 			_ = st.Reset(runnerwire.ResetInternal)
 		} else {
 			_ = st.CloseWrite()

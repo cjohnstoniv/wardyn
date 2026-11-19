@@ -33,15 +33,18 @@ func TestProviderLiveness_CredentialClassification(t *testing.T) {
 	odd := key
 	odd.Kind = "a_kind_this_build_never_heard_of"
 	later, earlier := time.Now().Add(8*time.Hour), time.Now().Add(-time.Hour)
-	renewable := func(expires time.Time) []byte {
+	renewable := func(region string, expires time.Time) []byte {
 		b, _ := json.Marshal(awsSSOBlob{AccessToken: "sso-access-0123456789", RefreshToken: "sso-refresh-0123456789",
-			ClientID: "client", ClientSecret: "client-secret-0123456789", StartURL: brStartURL, Region: "us-east-1",
+			ClientID: "client", ClientSecret: "client-secret-0123456789", StartURL: brStartURL, Region: region,
 			AccountID: "123456789012", RoleName: "BedrockUser", ExpiresAt: expires, CapturedAt: time.Now().Add(-2 * time.Hour),
 			RegistrationExpiresAt: time.Now().Add(90 * 24 * time.Hour)})
 		return b
 	}
-	otherPortal, _ := json.Marshal(awsSSOBlob{AccessToken: "tok", StartURL: "https://other.awsapps.com/start", Region: "us-east-1",
+	otherPortal, _ := json.Marshal(awsSSOBlob{AccessToken: "tok", StartURL: "https://other.awsapps.com/start", Region: brSessionRegion,
 		AccountID: "123456789012", RoleName: "BedrockUser", ExpiresAt: later})
+	// A session for another region than the provider's, which no sign-in stores (a secret store
+	// restored apart from the database): its run would be refused at its first session resolve.
+	otherRegion := renewable("eu-central-1", later)
 	for _, tc := range []struct {
 		name       string
 		p          types.ModelProvider
@@ -77,9 +80,13 @@ func TestProviderLiveness_CredentialClassification(t *testing.T) {
 			own:   map[string][]byte{providerSSOPart: brBlob("tok", "123456789012", "BedrockUser", earlier)},
 			state: mpBRNotSignedIn, credential: true},
 		{name: "aws sign-in: lapsed, AWS spent the refresh token", p: sso, refresh: true, aws: "invalid_grant",
-			own: map[string][]byte{providerSSOPart: renewable(earlier)}, state: mpBRNotSignedIn, credential: true},
+			own: map[string][]byte{providerSSOPart: renewable(brSessionRegion, earlier)}, state: mpBRNotSignedIn, credential: true},
 		{name: "aws sign-in: lapsed, AWS did not answer the renewal", p: sso, refresh: true, aws: "slow_down",
-			own: map[string][]byte{providerSSOPart: renewable(earlier)}, state: mpBRRenewing},
+			own: map[string][]byte{providerSSOPart: renewable(brSessionRegion, earlier)}, state: mpBRRenewing},
+		{name: "aws sign-in: a session for another region", p: sso, own: map[string][]byte{providerSSOPart: otherRegion},
+			state: mpBRNotSignedIn, credential: true},
+		{name: "aws sign-in: lapsed, for another region, is refused before any renewal", p: sso, refresh: true, aws: "slow_down",
+			own: map[string][]byte{providerSSOPart: renewable("eu-central-1", earlier)}, state: mpBRNotSignedIn, credential: true},
 		{name: "aws sign-in: live", p: sso, own: map[string][]byte{providerSSOPart: brBlob("tok", "123456789012", "BedrockUser", later)}},
 		{name: "a kind with no arm", p: odd, state: fmt.Sprintf(mpRunStateNotServing, "claude-code")},
 	} {

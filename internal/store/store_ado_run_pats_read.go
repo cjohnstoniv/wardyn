@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,11 @@ type RunPATReader interface {
 	// LastRunPAT returns the newest token recorded for owner on
 	// providerRowID; found=false when there is none.
 	LastRunPAT(ctx context.Context, owner, providerRowID string) (p RunPAT, found bool, err error)
+	// ListRefusedRunPATs returns owner's tokens whose revoke Azure DevOps
+	// refused for good and whose valid_to is after now, oldest first: closed
+	// with an error by a revoke, not by expiry, so each may still work. Empty,
+	// never nil, when there is none.
+	ListRefusedRunPATs(ctx context.Context, owner string, now time.Time) ([]RunPAT, error)
 }
 
 var (
@@ -73,6 +79,47 @@ func (s PG) LastRunPAT(ctx context.Context, owner, providerRowID string) (RunPAT
 		return RunPAT{}, false, fmt.Errorf("store: last run pat: %w", err)
 	}
 	return p, true, nil
+}
+
+// runPATRevokeExpired is the revoke reason of a row closed because its
+// valid_to passed (api's adoPATRevokeExpired); such a row keeps the last
+// error of an earlier failed attempt but needs no revoke.
+const runPATRevokeExpired = "expired"
+
+// ListRefusedRunPATs — see RunPATReader. The owner index (0104) serves it.
+func (s PG) ListRefusedRunPATs(ctx context.Context, owner string, now time.Time) ([]RunPAT, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT `+runPATCols+` FROM ado_run_pats
+		WHERE owner = $1 AND revoked_at IS NOT NULL AND last_error <> '' AND revoke_reason <> $2 AND valid_to > $3
+		ORDER BY created_at, authorization_id`, owner, runPATRevokeExpired, now)
+	if err != nil {
+		return nil, fmt.Errorf("store: list refused run pats: %w", err)
+	}
+	defer rows.Close()
+	out := []RunPAT{}
+	for rows.Next() {
+		p, err := scanRunPAT(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan run pat: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list refused run pats: %w", err)
+	}
+	return out, nil
+}
+
+func (m *MemRunPATs) ListRefusedRunPATs(_ context.Context, owner string, now time.Time) ([]RunPAT, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []RunPAT{}
+	for _, r := range m.rows {
+		if r.Owner == owner && r.RevokedAt != nil && r.LastError != "" && r.RevokeReason != runPATRevokeExpired && r.ValidTo.After(now) {
+			out = append(out, r)
+		}
+	}
+	slices.SortStableFunc(out, compareRunPATAge)
+	return out, nil
 }
 
 func (m *MemRunPATs) ListRunPATs(_ context.Context, runID uuid.UUID) ([]RunPAT, error) {

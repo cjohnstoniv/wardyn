@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -44,7 +45,8 @@ import (
 //
 // The caller supplies BOTH identities: the daemon must be offline (its
 // in-memory Store still holds the old KEK), and the caller must persist
-// newID before a restart and emit the secret.rekey audit event.
+// newID before a restart and emit the secret.rekey audit event. It must keep
+// newID on an error too: after a COMMIT error, whether the rows moved is unknown.
 func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.Identity) (int, error) {
 	from, to := &Store{}, &Store{}
 	if err := from.setLocalKeys(oldID, platform); err != nil {
@@ -352,11 +354,18 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			return 0, 0, fmt.Errorf("pg secretstore: %s ABORTED in principal_keys (nothing committed — every secret is still readable with the OLD key): %w", op, perr)
 		}
 	}
+	// A COMMIT error does not prove a rollback: the reply can be lost after the
+	// server committed, so this error claims neither outcome.
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys, NOTHING committed — the old key still reads every secret): %w", op, n, pk, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys): %w — a commit whose reply is lost can still have landed: %w", op, n, pk, ErrCommitOutcomeUnknown, err)
 	}
 	return n, pk, nil
 }
+
+// ErrCommitOutcomeUnknown marks an error returned by a transaction's COMMIT.
+// It does not prove a rollback: a commit whose reply is lost can still have
+// landed. A maintenance mode records it as reason unknown, never as aborted.
+var ErrCommitOutcomeUnknown = errors.New("the commit returned an error, so whether it took effect is unknown")
 
 // rewrap moves one row's data key from the KEK source names for it to to.
 func rewrap(ctx context.Context, source func(envelope) (kek.KEK, error), to kek.KEK, e envelope) ([]byte, error) {
@@ -404,7 +413,7 @@ func beginReadCommitted(ctx context.Context, pool *pgxpool.Pool) (pgx.Tx, error)
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		_ = tx.Rollback(context.Background())
+		db.Rollback(ctx, tx)
 		return nil, fmt.Errorf("pin read committed: %w", err)
 	}
 	return tx, nil

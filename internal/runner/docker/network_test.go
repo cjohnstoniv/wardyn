@@ -26,6 +26,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"slices"
 	"strconv"
@@ -246,7 +249,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	d, runID, sb := createNetworkSandbox(t, ctx)
 
 	// Stand up a live in-segment peer (busybox httpd) on the per-run internal
-	// network, reachable by the alias "wardyn-egress-peer". This models the proxy
+	// network, under the alias "wardyn-egress-peer". This models the proxy
 	// as a reachable L4 endpoint on the agent's only network.
 	intNet := internalNetName(runID)
 	const peerAlias = "wardyn-egress-peer"
@@ -286,8 +289,24 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	if _, err := d.cli.ContainerStart(ctx, peerResp.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start egress peer: %v", err)
 	}
+	// The agent's only nameserver is its proxy (resolvConfMount), which does not answer for Docker's
+	// container aliases, so the agent probes the peer by its address on the per-run net, as it reaches
+	// its real proxy by the pinned address and never by a lookup.
+	peerInsp, err := d.cli.ContainerInspect(ctx, peerResp.ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect egress peer: %v", err)
+	}
+	var peerAddr string
+	if ns := peerInsp.Container.NetworkSettings; ns != nil {
+		if ep := ns.Networks[intNet]; ep != nil && ep.IPAddress.IsValid() {
+			peerAddr = ep.IPAddress.String()
+		}
+	}
+	if peerAddr == "" {
+		t.Fatalf("egress peer has no address on %s", intNet)
+	}
 	// Give httpd a moment to bind before the agent probes it.
-	waitListening(ctx, t, d, sb.Ref, peerAlias, 3128)
+	waitListening(ctx, t, d, sb.Ref, peerAddr, 3128)
 
 	// (1) Egress to the in-segment peer WORKS: a connect that completes the TCP
 	// handshake and gets an HTTP reply (404 is fine — busybox httpd has no
@@ -296,7 +315,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	// its own segment.
 	peer := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c",
-		"wget -q -T 5 -O - http://" + peerAlias + ":3128/ 2>&1; echo RC=$?",
+		"wget -q -T 5 -O - http://" + peerAddr + ":3128/ 2>&1; echo RC=$?",
 	})
 	low := strings.ToLower(peer)
 	if strings.Contains(low, "unreachable") || strings.Contains(low, "can't connect") || strings.Contains(low, "bad address") {
@@ -478,33 +497,229 @@ func TestL0_NoDNSExfil(t *testing.T) {
 		t.Fatalf("the agent must resolve and reach wardyn-proxy:3128 (its only egress path), got:\n%s", proxy)
 	}
 
-	// (2) An EXTERNAL name must not resolve. busybox nslookup exits non-zero when
-	// the resolver refuses or cannot answer; a resolved record means the query
-	// reached the host's resolvers and, with it, whatever the label carried.
+	// (2) The agent's only nameserver is its run proxy (the driver mounts a resolv.conf naming it), so a
+	// lookup goes to the proxy's port 53, not to Docker's embedded resolver. The proxy here is busybox httpd,
+	// which does not answer on 53, so the lookup fails by timing out; TestL0_DNSQueryIsRecorded runs the same
+	// path against the real proxy image and reads the row. Non-vacuous: the file must name the proxy's address,
+	// the one the agent's hosts file pins, so a sandbox that silently kept Docker's resolver cannot pass.
 	const exfilName = "wardyn-l0-dns-exfil-probe.example.com"
+	resolv := execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "cat /etc/resolv.conf"})
+	proxyIP := strings.TrimSpace(execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "awk '$2==\"wardyn-proxy\"{print $1}' /etc/hosts"}))
+	if proxyIP == "" || strings.TrimSpace(resolv) != "nameserver "+proxyIP {
+		t.Fatalf("the agent's /etc/resolv.conf is %q, want exactly %q (its run proxy and no other nameserver)", resolv, "nameserver "+proxyIP)
+	}
 	ext := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c", "nslookup -type=a " + exfilName + " 2>&1; echo RC=$?",
 	})
-	// Non-vacuous: the embedded resolver has to have ANSWERED for its refusal to
-	// mean anything. It names itself in the reply (Server: 127.0.0.11), so a
-	// sandbox where the query silently vanished — or where busybox nslookup
-	// simply never exits 0 — cannot pass the check below by accident. What the
-	// resolver answers with is SERVFAIL, not NXDOMAIN: it tried to forward
-	// upstream and had nowhere to send it, which is the L0 topology doing the
-	// work rather than a DNS policy.
-	if !strings.Contains(ext, "127.0.0.11") {
-		t.Fatalf("the external-name probe never reached the embedded resolver, so its failure "+
-			"proves nothing:\n%s", ext)
+	if !strings.Contains(ext, "RC=") || strings.Contains(ext, "127.0.0.11") {
+		t.Fatalf("the external-name probe printed no exit code, or still went to Docker's embedded resolver:\n%s", ext)
 	}
-	// Both probes' raw output, so `go test -v` is an evidence record of WHAT the
-	// sandbox saw (the resolver naming itself, the SERVFAIL, the proxy's reply)
-	// and not merely of the exit code. This finding is settled by observation.
-	t.Logf("proxy probe (the agent's only egress path):\n%s", proxy)
-	t.Logf("external-name probe (%s):\n%s", exfilName, ext)
-
 	if strings.Contains(ext, "RC=0") {
+		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox through its run proxy:\n%s", ext)
+	}
+
+	// (3) The escape this test was written for stays shut: the agent asking Docker's embedded resolver at
+	// 127.0.0.11 directly. It forwards what it cannot answer to the HOST's resolvers, which a gatewayless
+	// Internal=true network leaves it nowhere to send. busybox nslookup exits non-zero when the resolver
+	// refuses or cannot answer; a resolved record means the query reached the host's resolvers and, with it,
+	// whatever the label carried. Non-vacuous: the resolver has to have ANSWERED for its refusal to mean
+	// anything. It names itself in the reply (Server: 127.0.0.11), and what it answers with is SERVFAIL, not
+	// NXDOMAIN: it tried to forward upstream and had nowhere to send it, which is the L0 topology doing the
+	// work rather than a DNS policy.
+	direct := execInSandbox(ctx, t, d, sb.Ref, []string{
+		"sh", "-c", "nslookup -type=a " + exfilName + " 127.0.0.11 2>&1; echo RC=$?",
+	})
+	if !strings.Contains(direct, "127.0.0.11") {
+		t.Fatalf("the probe of Docker's embedded resolver never reached it, so its failure proves nothing:\n%s", direct)
+	}
+	// Raw output of each probe, so `go test -v` is an evidence record of WHAT the sandbox saw and not merely
+	// of the exit code. This finding is settled by observation.
+	t.Logf("proxy probe (the agent's only egress path):\n%s", proxy)
+	t.Logf("resolv.conf:\n%s", resolv)
+	t.Logf("external-name probe through the run proxy (%s):\n%s", exfilName, ext)
+	t.Logf("external-name probe at the embedded resolver (%s):\n%s", exfilName, direct)
+	if strings.Contains(direct, "RC=0") {
 		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox — "+
 			"Docker's embedded resolver forwarded the query to the host's resolvers, so the query "+
-			"label is a channel off the box:\n%s", ext)
+			"label is a channel off the box:\n%s", direct)
 	}
+}
+
+// TestL0_HostAddressUnreachable: a run's network has no address on the Docker host, so its agent
+// cannot reach a service the host serves on every address (a daemon bound to 0.0.0.0, a published
+// port). The same run shows the premise: a container on a network created the old way (Internal=true
+// alone) reaches that service at its bridge's host address. The run's real paths still work: the
+// agent reaches its proxy, and the proxy reaches the host over the control-plane network, the way a
+// runner's relay is reached (host.docker.internal is host-gateway there).
+//
+// The bridge's addresses are read from this host, so it needs the daemon on the machine running the
+// test, as in CI; elsewhere it skips, and the l0-docker suite's REQUIRE_ALL turns that skip red.
+func TestL0_HostAddressUnreachable(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
+		t.Skip("set WARDYN_TEST_DOCKER=1 to run the docker L0 network tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	// The host's service, on every IPv4 address of this host.
+	const marker = "wardyn-host-listener"
+	ln, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen on the host: %v", err)
+	}
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, marker)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+
+	// The run, with a proxy that listens on its port (busybox httpd), as TestL0_NoDNSExfil has it.
+	d, err := New(Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"httpd", "-f", "-p", "3128"}})
+	if err != nil {
+		t.Fatalf("docker.New: %v", err)
+	}
+	fetch := func(ref, host string) string {
+		return execInSandbox(ctx, t, d, ref, []string{"sh", "-c", "wget -q -T 5 -O - http://" + host + ":" + port + "/ 2>&1; echo RC=$?"})
+	}
+	ensureNetwork(t, d, d.cfg.InternalNetwork)
+	runID := uuid.New()
+	sb, err := d.CreateSandbox(ctx, runner.SandboxSpec{
+		RunID:            runID,
+		Image:            "busybox:latest",
+		ConfinementClass: types.CC1,
+		ProxyConfig:      runner.ProxyConfig{RunToken: "host-test", ControlPlaneURL: "http://127.0.0.1:0"},
+		Resources:        runner.Resources{CPUMillis: 500, MemoryMiB: 128},
+		Labels:           map[string]string{"wardyn.test": "network"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = d.KillSandbox(context.Background(), sb.Ref) })
+
+	// (1) Positive control: a network created the old way, and a container on it.
+	oldNet := "wardyn-test-old-shape-" + runID.String()
+	oldRes, err := d.cli.NetworkCreate(ctx, oldNet, client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: map[string]string{"wardyn.test": "network"}})
+	if err != nil {
+		t.Fatalf("create the old-shape network: %v", err)
+	}
+	oldProbe := "wardyn-test-old-shape-probe-" + runID.String()
+	probeRes, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     &container.Config{Image: "busybox:latest", Cmd: []string{"sleep", "300"}},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(oldNet)},
+		Name:       oldProbe,
+	})
+	if err != nil {
+		t.Fatalf("create the old-shape probe: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = d.cli.ContainerRemove(cctx, probeRes.ID, client.ContainerRemoveOptions{Force: true})
+		for range 20 {
+			if _, err := d.cli.NetworkRemove(cctx, oldRes.ID, client.NetworkRemoveOptions{}); err == nil || isNotFound(err) {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	if _, err := d.cli.ContainerStart(ctx, probeRes.ID, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start the old-shape probe: %v", err)
+	}
+	oldV4, _, found := hostBridgeAddrs(t, oldRes.ID)
+	if !found {
+		t.Skipf("no bridge br-%s on this host: the Docker daemon is not on the machine running the test", oldRes.ID[:12])
+	}
+	if len(oldV4) == 0 {
+		t.Fatalf("premise: the old-shape network's bridge br-%s has no IPv4 address on this host, so the old shape was not reachable here", oldRes.ID[:12])
+	}
+	old := fetch(oldProbe, oldV4[0].String())
+	if !strings.Contains(old, marker) {
+		t.Fatalf("positive control: a container on the old-shape network did not reach the host's service at %s:%s, so the check below would prove nothing:\n%s", oldV4[0], port, old)
+	}
+	t.Logf("old shape: a container on %s reached the host's service at its bridge address %s:%s", oldNet, oldV4[0], port)
+
+	// (2) The run's network: created isolated with IPv6 off, no host address on its bridge, and the
+	// address the bridge would otherwise hold does not reach the host's service.
+	insp, err := d.cli.NetworkInspect(ctx, internalNetName(runID), client.NetworkInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect the run's network: %v", err)
+	}
+	if problem := runNetworkShapeProblem(insp.Network); problem != "" {
+		t.Errorf("the run's network %s; want gateway mode isolated and IPv6 off", problem)
+	}
+	runV4, runV6, found := hostBridgeAddrs(t, insp.Network.ID)
+	if !found {
+		t.Fatalf("no bridge br-%s for the run's network on this host, though the old shape's was found", insp.Network.ID[:12])
+	}
+	if len(runV4) != 0 {
+		t.Errorf("the run's network's bridge has the host address(es) %v; want none", runV4)
+	}
+	var subnet netip.Prefix
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Subnet.Addr().Is4() {
+			subnet = c.Subnet
+		}
+	}
+	if !subnet.IsValid() {
+		t.Fatalf("the run's network has no IPv4 subnet: %+v", insp.Network.IPAM)
+	}
+	wouldBe := subnet.Masked().Addr().Next() // the address Docker gives the bridge on the old shape
+	got := fetch(sb.Ref, wouldBe.String())
+	if !strings.Contains(got, "RC=") {
+		t.Fatalf("the agent's probe of %s returned nothing:\n%s", wouldBe, got)
+	}
+	if strings.Contains(got, marker) {
+		t.Errorf("the agent reached the host's service at %s:%s on its own network:\n%s", wouldBe, port, got)
+	}
+	t.Logf("run network: the agent's probe of %s:%s got:\n%s", wouldBe, port, got)
+
+	// (3) No IPv6 path either: when the bridge holds an IPv6 address on the host, the agent must have
+	// no IPv6 address of its own to reach it from.
+	if len(runV6) != 0 {
+		agent6 := execInSandbox(ctx, t, d, sb.Ref, []string{"ip", "-6", "addr"})
+		for _, line := range strings.Split(agent6, "\n") {
+			if f := strings.Fields(line); len(f) > 1 && f[0] == "inet6" && f[1] != "::1/128" {
+				t.Errorf("the run's bridge holds %v on the host and the agent has the IPv6 address %s, a path to the host:\n%s", runV6, f[1], agent6)
+			}
+		}
+	}
+
+	// (4) The agent still reaches its proxy.
+	waitListening(ctx, t, d, sb.Ref, "wardyn-proxy", 3128)
+	px := execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "wget -q -T 5 -O - http://wardyn-proxy:3128/ 2>&1; echo RC=$?"})
+	if low := strings.ToLower(px); !strings.Contains(px, "RC=") || strings.Contains(low, "bad address") || strings.Contains(low, "unreachable") ||
+		strings.Contains(low, "refused") || strings.Contains(low, "can't connect") {
+		t.Errorf("the agent must reach wardyn-proxy:3128, its only egress path, got:\n%s", px)
+	}
+
+	// (5) The proxy still reaches the host over the control-plane network.
+	if up := fetch(proxyContainerName(runID), "host.docker.internal"); !strings.Contains(up, marker) {
+		t.Errorf("the proxy must reach the host's service at host.docker.internal:%s over the control-plane network, got:\n%s", port, up)
+	}
+}
+
+// hostBridgeAddrs reads this host's addresses on the bridge Docker made for network id
+// (br-<first 12 of the id>): its IPv4 addresses, its IPv6 ones, and whether the bridge is here at all.
+func hostBridgeAddrs(t *testing.T, id string) (v4, v6 []netip.Addr, found bool) {
+	t.Helper()
+	iface, err := net.InterfaceByName("br-" + id[:12])
+	if err != nil {
+		return nil, nil, false
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		t.Fatalf("addresses of %s: %v", iface.Name, err)
+	}
+	for _, a := range addrs {
+		p, err := netip.ParsePrefix(a.String())
+		if err != nil {
+			continue
+		}
+		if p.Addr().Is4() {
+			v4 = append(v4, p.Addr())
+		} else {
+			v6 = append(v6, p.Addr())
+		}
+	}
+	return v4, v6, true
 }

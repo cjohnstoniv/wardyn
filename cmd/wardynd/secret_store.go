@@ -322,12 +322,29 @@ func unconvertedSecretStore(pool *pgxpool.Pool, ageKey string, platform *age.X25
 	return s, id, nil
 }
 
-// ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
-// out when the age key they were written under was ephemeral and is gone. Its
+// ephemeralKeyRecoverySQL is the way out when the age key the local rows were
+// written under was ephemeral and is gone. In one transaction it deletes each
+// person's credential rows sealed under a principal key a local key wraps,
+// destroys those principal keys as subjectkey.Destroy does (wrapped_key and
+// handle cleared, the row kept so no version is reused), and deletes every row
+// sealed under a local key. Their destroyed_at is the epoch, not now: the audit
+// readers compare it with a row's time (store.AuditKeyDestroyedAt for a full
+// seal's subjects, SubjectKeyDestroyedSince for a field waiting to be sealed)
+// and read a later destruction as an erasure, and nobody was erased. It reaches exactly what LocalRows
+// counts, plus the credential rows under those keys: the boot guard counts a
+// live principal key under a local key, and the key-domain check refuses one no
+// configured key opens. Keys and rows under a key service or a declared key
+// domain, and generations already destroyed, are left as they are. Its
 // local/platform: rows under a separate WARDYN_PLATFORM_KEY_FILE key are still
 // recoverable with that file (docs/OPERATIONS.md says how to keep them). The
 // refusal below names it, and docs/OPERATIONS.md carries it verbatim.
-const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
+const ephemeralKeyRecoverySQL = "BEGIN; " +
+	"DELETE FROM secrets WHERE enc_version=3 AND (owned_by, kek_id) IN (SELECT owner, 'pk:v' || version FROM principal_keys " +
+	"WHERE purpose='cred' AND destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')); " +
+	"UPDATE principal_keys SET destroyed_at='epoch', wrapped_key=NULL, handle=NULL " +
+	"WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'); " +
+	"DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'; " +
+	"COMMIT;"
 
 // convertSecretStore readies the pg store's rows before anything reads them —
 // before loadOrCreateSecret above all, whose boot keys share the table. It
@@ -374,8 +391,9 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 		return nil
 	}
 	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
-	// An aborted conversion still opened the rows it returns: each is a read
-	// with outcome failure, since nothing it did was committed.
+	// A failed conversion still opened the rows it returns: each is a read with
+	// outcome failure, since the boot refuses to start. Only after a commit
+	// error can the conversion itself have landed (ErrCommitOutcomeUnknown).
 	for _, row := range converted {
 		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, err)
 	}

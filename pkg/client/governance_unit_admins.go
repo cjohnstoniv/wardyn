@@ -26,7 +26,8 @@ type GovernanceAdminSubject struct {
 }
 
 // GovernanceChangeApprover is one who could decide a held change: kind "security" (any security
-// admin) or "unit_admin" (the grant Name names, on UnitName; SubjectType says person or group).
+// admin), "unit_admin" (the grant Name names, on UnitName; SubjectType says person or group) or, for a
+// request, "group" (anyone in the group Name names).
 type GovernanceChangeApprover struct {
 	Kind        string                `json:"kind"`
 	Name        string                `json:"name,omitempty"`
@@ -56,6 +57,8 @@ func (c *Client) RevokeUnitAdmin(ctx context.Context, unitID, adminID uuid.UUID)
 type governanceRead struct {
 	GovernanceDocument
 	UnitAdmins []GovernanceUnitAdmin `json:"unit_admins"`
+	// Deciders shadows the document's map: the wire is a list (governanceDecidersView), folded by GetGovernance.
+	Deciders []unitDecidersRead `json:"deciders"`
 }
 
 // adminsByUnitName is grants as a document's admins: by unit name (the unit id when no unit of units
@@ -152,12 +155,14 @@ func (c *Client) applyUnitAdmins(ctx context.Context, plan adminPlan, admins map
 	return nil
 }
 
-// pruneUnitAdmins revokes every grant on the server the document's admins do not name. It stops at
-// the first revoke the server holds (recorded in res.Pending) and reports skipped.
-func (c *Client) pruneUnitAdmins(ctx context.Context, plan adminPlan, admins map[string][]GovernanceAdminSubject, res *GovernanceApplyResult) (skipped bool, err error) {
+// pruneUnitAdmins revokes every grant on the server the document's admins do not name, each with
+// underQuery (pruneAll). It stops at the first revoke the server holds (recorded in res.Pending) and
+// reports skipped.
+func (c *Client) pruneUnitAdmins(ctx context.Context, plan adminPlan, admins map[string][]GovernanceAdminSubject, underQuery string,
+	res *GovernanceApplyResult) (skipped bool, err error) {
 	for _, g := range unitAdminsToPrune(plan, admins) {
 		name := membershipUnitName(g.UnitID, nil, plan.currentIDToName)
-		pending, err := c.RevokeUnitAdmin(ctx, g.UnitID, g.ID)
+		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+g.UnitID.String()+"/admins/"+g.ID.String()+underQuery, nil, nil)
 		if err != nil {
 			err = fmt.Errorf("prune unit admin (%s %q) on %q: %w", g.SubjectType, g.Subject, name, err)
 		}

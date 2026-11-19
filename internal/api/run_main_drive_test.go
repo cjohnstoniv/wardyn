@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,5 +172,107 @@ func TestPreviewKeepsThePolicyCutWarning(t *testing.T) {
 	got := previewSafeWarnings([]string{warnDiskPolicyCut, "not on the list"})
 	if len(got) != 1 || got[0] != warnDiskPolicyCut {
 		t.Errorf("previewSafeWarnings = %v, want only %q", got, warnDiskPolicyCut)
+	}
+}
+
+// TestLinuxVMRunRefusesALimitItCannotEnforce: a Linux VM's disk and process count are not the
+// container's, so a size or limit the run's policy writes is refused even on a runner that caps
+// containers, and a requested (soft) size is disclosed instead of refused.
+func TestLinuxVMRunRefusesALimitItCannotEnforce(t *testing.T) {
+	unlimited := types.EffectiveLimit{Cap: types.LimitAmount{Unlimited: true}, Default: types.LimitAmount{Unlimited: true}}
+	for name, tc := range map[string]struct {
+		kind    string
+		res     types.ResourceLimits
+		request int
+		want    string // the refusal's reason; "" admits
+		warn    bool
+	}{
+		"a policy disk size":   {kind: "linux_vm", res: types.ResourceLimits{DiskMiB: 4096}, want: reasonMainDriveUnenforceable},
+		"a policy pids limit":  {kind: "linux_vm", res: types.ResourceLimits{PidsLimit: 256}, want: reasonRequestFieldUnavailable},
+		"a requested size":     {kind: "linux_vm", request: 2048, warn: true},
+		"nothing":              {kind: "linux_vm"},
+		"a container disk":     {kind: "container", res: types.ResourceLimits{DiskMiB: 4096}},
+		"a container pids cap": {kind: "container", res: types.ResourceLimits{PidsLimit: 256}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := &Server{cfg: Config{Runner: &fakeRunner{capsDisk: types.StorageEnforcementFilesystem}}}
+			rec := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
+			req := &createRunRequest{MachineKind: tc.kind}
+			if tc.request > 0 {
+				req.Resources = &client.RunResources{DiskMiB: tc.request}
+			}
+			f := &runFold{mode: foldPreflight, w: rec, r: r, req: req,
+				spec:  types.RunPolicySpec{Resources: &tc.res},
+				place: runPlacement{limits: types.EffectiveRunLimits{DiskMiB: unlimited}}}
+			if tc.res.PidsLimit > 0 {
+				f.place.applied.PidsLimit = &client.AppliedAmount{Requested: tc.res.PidsLimit, Applied: tc.res.PidsLimit}
+			}
+			ok := srv.stepMainDrive(f, &foldRecorder{})
+			if tc.want == "" {
+				if !ok || rec.Code != http.StatusOK {
+					t.Fatalf("stepMainDrive = %v, %d %s, want admitted", ok, rec.Code, rec.Body)
+				}
+			} else if ok || rec.Code != http.StatusUnprocessableEntity || errorReasonOf(rec.Body.String()) != tc.want {
+				t.Fatalf("stepMainDrive = %v, %d %s, want 422 %s", ok, rec.Code, rec.Body, tc.want)
+			}
+			if got := slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped); got != tc.warn {
+				t.Errorf("disclosure = %v, want %v (warns %v)", got, tc.warn, f.policyWarns)
+			}
+		})
+	}
+}
+
+// vmPidsStep folds req as a container run would be (the real composition: the clamp, the ceiling,
+// placement), then runs the main-drive step on it as a Linux VM run and returns its answer.
+func vmPidsStep(t *testing.T, st *memberBoundStore, req createRunRequest) (bool, *httptest.ResponseRecorder, runFold) {
+	t.Helper()
+	srv := resourceServer(t, st)
+	f := resourceFold(t, srv, sizeMemberCtx(), req)
+	f.req.MachineKind = string(types.MachineLinuxVM)
+	rec := httptest.NewRecorder()
+	f.w = rec
+	return srv.stepMainDrive(&f, &foldRecorder{}), rec, f
+}
+
+// TestLinuxVMPidsLimitRefusesOnlyAWrittenLimit: the clamp fills an unset process limit for a member,
+// and that filled number is not a limit anyone wrote. A limit the run's policy writes, or an outer
+// profile writes, is refused; a filled one is admitted and disclosed. Each member is under a profile:
+// the clamp runs on a stored policy only there (run_policy_resolution.go).
+func TestLinuxVMPidsLimitRefusesOnlyAWrittenLimit(t *testing.T) {
+	base := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	withPids := func(n int) types.RunPolicySpec {
+		p := base
+		p.Resources = &types.ResourceLimits{PidsLimit: n}
+		return p
+	}
+	id := uuid.New()
+	for name, tc := range map[string]struct {
+		profile *types.GovernanceUnit
+		policy  types.RunPolicySpec
+		want    string // the refusal's reason; "" admits
+	}{
+		"no pids field anywhere":      {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "open", Ceiling: base}, policy: base},
+		"an unset limit under a cap":  {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "sized", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}, Resources: &types.ResourceLimits{CPUMillis: 1000}}}, policy: base},
+		"an explicit inner limit":     {policy: withPids(256), want: reasonRequestFieldUnavailable},
+		"an explicit outer profile":   {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "tight", Ceiling: withPids(256)}, policy: base, want: reasonRequestFieldUnavailable},
+		"an inner limit over the cap": {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "tight", Ceiling: withPids(256)}, policy: withPids(4096), want: reasonRequestFieldUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := &memberBoundStore{profile: tc.profile, policy: types.RunPolicy{ID: id, Spec: tc.policy}}
+			ok, rec, f := vmPidsStep(t, st, createRunRequest{Agent: "claude-code", PolicyID: &id})
+			if tc.want == "" {
+				if !ok {
+					t.Fatalf("a filled process limit was refused: %d %s", rec.Code, rec.Body)
+				}
+				if !slices.Contains(f.policyWarns, warnLinuxVMPidsNotCapped) {
+					t.Errorf("a filled process limit was not disclosed: %v", f.policyWarns)
+				}
+				return
+			}
+			if ok || rec.Code != http.StatusUnprocessableEntity || errorReasonOf(rec.Body.String()) != tc.want {
+				t.Fatalf("stepMainDrive = %v, %d %s, want 422 %s", ok, rec.Code, rec.Body, tc.want)
+			}
+		})
 	}
 }

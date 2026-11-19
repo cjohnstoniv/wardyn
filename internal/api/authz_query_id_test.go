@@ -58,9 +58,11 @@ type queryIDRoute struct {
 // routeMatrix key unless the row is pinnedBy-only (the UI gateway enter lane is
 // served beside the chi router, not on it).
 var queryIDMatrix = map[string]queryIDRoute{
-	// The F4 row: never run for a member before this class existed.
+	// The F4 row: never run for a member before this class existed. With ?decidable_by=me the run is only a
+	// filter on what the caller decides (listDecidableByMe), so a foreign run is the same empty 200 an
+	// unknown one gets (TestDecidersNonDecider404Identical).
 	"GET /api/v1/approvals?run_id": {
-		entity: entityRun, readers: []string{"handleListApprovals"},
+		entity: entityRun, readers: []string{"handleListApprovals", "listDecidableByMe"},
 		foreign: 404, ownAdmitted: true, pinnedBy: "TestMemberApprovalListByRun",
 	},
 	// A collection endpoint: a foreign run collapses to the same empty 200 an
@@ -74,6 +76,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 	"GET /api/v1/audit/export?run_id": {
 		entity: entityRun, readers: []string{"auditScope"},
 		pinnedBy: "TestAuditMemberScope_QueryAndExportAgree",
+	},
+	// The signed receipt of a run is the security tier's: a member naming any run, theirs included, gets the
+	// router's constant 403 before the handler reads the id.
+	"GET /api/v1/audit/receipt?run_id": {
+		entity: entityRun, readers: []string{"parseReceiptRequest"},
+		foreign: 403, pinnedBy: "TestAuditReceipt_MemberRefused",
 	},
 	// ?owner= is admin-only: a member naming it at all gets a constant 403.
 	"GET /api/v1/secrets?owner": {
@@ -109,11 +117,23 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"handleListRunnerTokens"},
 		foreign: 403, pinnedBy: "TestRunnerTokensSecurityAdminRevokesButCannotMint",
 	},
+	// The kept-machine list across people is super-admin only (operatorOnly): a member naming any
+	// person's subject in ?owner= gets the router's 403 before the handler reads it.
+	"GET /api/v1/machines/kept?owner": {
+		entity: entityPrincipal, readers: []string{"handleListKeptMachines"},
+		foreign: 403,
+	},
 	// Internal (run token): the named approval is looked up among the CALLING
 	// run's approvals only, so another run's id is a mismatch, never a spend.
 	"GET /api/v1/internal/injection/{grantID}?approval": {
 		entity: entityApproval, readers: []string{"answerADOCapability"},
 		pinnedBy: "TestADOCapability_AnotherRunsApprovalIsRefused",
+	},
+	// A reviewed download releases only an approval of the run in the path: another run's approval, or one for
+	// another file or kind, is refused with nothing sent and nothing spent.
+	"GET /api/v1/runs/{id}/desktop/files/{name}?approval": {
+		entity: entityApproval, readers: []string{"serveReviewedDownload"},
+		pinnedBy: "TestDesktopReviewReleaseBoundToFileAndKind",
 	},
 	"GET /__wardyn/enter?run": {
 		entity: entityRun, readers: []string{"handleUIEnter"},
@@ -154,6 +174,26 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
 		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
 	},
+	// An apply is always the caller's own: a ?owner= naming anyone else is a 400 and nothing is written.
+	"PUT /api/v1/workloads/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"refuseForeignApplyOwner"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadApply_RefusesAnotherOwnersQuery",
+	},
+	// A preview is of the caller's own apply: a ?owner= naming anyone else is a 400, as the PUT's is.
+	"POST /api/v1/workloads/{name}/preview?owner": {
+		entity: entityPrincipal, readers: []string{"refuseForeignApplyOwner"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadApply_RefusesAnotherOwnersQuery",
+	},
+	// A pin is set only on the caller's own workload: a ?owner= naming anyone else, a sponsor or an
+	// operator included, is the same 404 as a missing workload, and nothing is written.
+	"PUT /api/v1/workloads/{name}/policy-pin?owner": {
+		entity: entityPrincipal, readers: []string{"setWorkloadPolicyPin"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange",
+	},
+	"DELETE /api/v1/workloads/{name}/policy-pin?owner": {
+		entity: entityPrincipal, readers: []string{"setWorkloadPolicyPin"},
+		ownAdmitted: true, pinnedBy: "TestPG_WorkloadPolicyPin_TheRouteIsTheOwnersAndRecordsEachChange",
+	},
 	// A restart launches as the owner, so only the owner, the sponsor or an operator reaches it: even a
 	// security_admin naming the service gets the 404, which a member gets a fortiori.
 	"POST /api/v1/workloads/{name}/restart?owner": {
@@ -185,8 +225,14 @@ var queryParamNotAnID = map[string]string{
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
 	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
+	"not_started":               "POST /runs/{id}/kill: true makes the kill end the path's already-authorised run only while it is QUEUED and refuse one that has started (run_kill_started); a flag, it names no entity",
+	"cut_in_flight":             "DELETE /admin/delegates/{id} (security tier): true or false, whether the revoke also cuts the gateway access of the runs the portal launched; names no row",
+	"approver":                  "GET /governance/changes: the word security narrows the list the caller may already read to the changes only a security admin may decide; it names no entity",
+	"under":                     "the four governance prune writes (a unit or membership delete, a deciders write, a grant revoke): a unit the write's own target must still be at or below, else 409; it only refuses, a unit admin's must be one they govern or it is the same 409, and it selects no entity",
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
+	"event":                     "GET /audit/receipt (security tier): an audit event id to receipt; a session below the security tier is refused before it is read, and an audit row is not one principal's entity",
+	"after_seq":                 "GET /audit/receipt and GET /audit/checkpoints (security tier): the seq a page of the signed chain continues after; a position in the deployment-wide log, not an entity",
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"order":                     "GET /audit: oldest-first or newest-first (order=desc) over a trail the caller's scope already bounds; it picks which end of that scoped trail is read and names no entity",
 	"until":                     "audit time filter; narrows an already-scoped feed",
@@ -233,6 +279,7 @@ var queryParamNotAnID = map[string]string{
 	// workspace or namespace — each is a closed enum or a value filter that
 	// only narrows what ?owner=/?view= (queryIDMatrix's own "GET
 	// /api/v1/runs?owner" row) already scoped the listing to.
+	"decidable_by":   "GET /approvals: only \"me\" is accepted, which lists the PENDING approvals the caller may decide now (mayDecide over the caller's own runs and the runs of units a deciders rule governs); a hold the caller may not decide is left out whether it exists or not, so it names no entity and tells no one of a request they cannot decide (TestDecidableByMeOnlyDecidable, TestDecidersNonDecider404Identical)",
 	"view":           "run/approval list scope switch (user|admin); the owner it resolves to is scoped separately (queryIDMatrix's ?owner row)",
 	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
@@ -242,6 +289,7 @@ var queryParamNotAnID = map[string]string{
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
+	"runner":         "GET /machines/kept (super admin only, operatorOnly): a runner id narrowing the deployment-wide kept-machine list that tier already reads whole; a runner is shared infrastructure, not a principal's entity, and a member gets the router's 403 before it is read",
 	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
 }
 
@@ -305,6 +353,18 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 		inner, ok := sel.X.(*ast.SelectorExpr)
 		return ok && inner.Sel.Name == "URL"
 	}
+	isParseQueryCall := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ParseQuery" {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "url"
+	}
 	out := map[string]map[string]bool{}
 	for _, f := range files {
 		for _, d := range f.Decls {
@@ -326,6 +386,12 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 						if id, ok := as.Lhs[i].(*ast.Ident); ok && isQueryCall(rhs) {
 							vals[id.Name] = true
 						}
+					}
+				}
+				// q, err := url.ParseQuery(r.URL.RawQuery): a strict parse that refuses what URL.Query drops.
+				if as, ok := n.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && len(as.Lhs) == 2 && isParseQueryCall(as.Rhs[0]) {
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						vals[id.Name] = true
 					}
 				}
 				return true

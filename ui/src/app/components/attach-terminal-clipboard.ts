@@ -69,6 +69,11 @@ export interface CopyGateOptions {
   onOffer(offer: CopyOffer | null): void;
   onNotice(message: string | null): void;
   now?: () => number;
+  /**
+   * True while the run's data_out rule keeps its content in: the gate offers nothing and the terminal's own
+   * copy is swallowed. A courtesy; the server's doors are the control.
+   */
+  keepsIn?: () => boolean;
 }
 
 export interface CopyGate {
@@ -228,6 +233,7 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   };
 
   function request(selection: string, text: string) {
+    if (opts.keepsIn?.()) return drop("data_out keeps content in", false);
     if (!isWriter()) return; // an observer never gets an offer
     const g = gesture;
     const live = !!g && !g.used && now() - g.at <= GESTURE_WINDOW_MS;
@@ -300,6 +306,19 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
       screen.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("mouseup", onUp, true);
     });
+  }
+
+  // The terminal's own copy of its selection (shift-drag, the browser's Copy) never goes through the OSC 52
+  // path above, so it is swallowed here, in the capture phase before xterm's own handler.
+  const keepsInEl = opts.keepsIn ? term.element : undefined;
+  if (keepsInEl) {
+    const onCopy = (e: Event) => {
+      if (!opts.keepsIn?.()) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    keepsInEl.addEventListener("copy", onCopy, true);
+    cleanups.push(() => keepsInEl.removeEventListener("copy", onCopy, true));
   }
 
   const reset = () => {

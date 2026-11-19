@@ -20,7 +20,7 @@ export const BOUNDARY = {
   ORG_BOUNDARY: "Your organisation's boundary",
   NOT_VISIBLE: "Not visible to Wardyn",
   RING_BOUNDARY_SUB: "Set here, by security admins",
-  RING_TEAMS: "Team walls",
+  RING_TEAMS: "Governance profiles",
   RING_TEAMS_SUB: "Each only narrows the one above.",
   RING_RESTRICTIONS: "Restrictions",
   RING_RESTRICTIONS_SUB: "Deny-only. Follow people into any team.",
@@ -41,7 +41,7 @@ export const BOUNDARY = {
   BLOCKED_HINT: "No run can reach these, whatever a team allows.",
   /** not on the boards: DESIGN-TREE §8 "UI lanes" names it for an empty boundary. */
   BLOCKED_EMPTY: "No hard limits yet. Add the first.",
-  FLOOR_LABEL: "Confinement floor",
+  FLOOR_LABEL: "Barrier floor",
   FLOOR_TAIL: (barrier: string) => `and up. No team can allow a run below ${barrier}.`,
   HARD_FOOT: "Anything not listed is left to the teams below. Your organisation's boundary may still block more.",
   ALWAYS_BLOCKED: "Always blocked by Wardyn, whatever this list says: cloud metadata and link-local addresses.",
@@ -81,10 +81,10 @@ export const BOUNDARY_DESKTOP = {
   NOW: "Now",
   ALLOWED: "Allowed",
   BLOCKED: "Blocked",
-  BELOW: "Teams below may only block more.",
+  BELOW: "Profiles below may only block more.",
   ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
-  LOCK_ROW: "Lock for teams below",
-  LOCK_GROUP: "Lock the group for teams below",
+  LOCK_ROW: "Lock for profiles below",
+  LOCK_GROUP: "Lock the group for profiles below",
   /** not on the boards: the dry run's row for the drafted locks. */
   LOCKS: "Desktop locks",
   /** not on the boards: no desktop setting is locked. */
@@ -142,7 +142,7 @@ export const BOUNDARY_DRY_RUN = {
   KNOB: {
     allowed_domains: "Allowed hosts",
     denied_domains: "Blocked hosts and ranges",
-    min_confinement_class: "Confinement floor",
+    min_confinement_class: "Barrier floor",
     eligible_grants: "Credentials",
     desktop: BOUNDARY_DESKTOP.TITLE,
     "limits.max_end_ahead_sec": "Longest run",

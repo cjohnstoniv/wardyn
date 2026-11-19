@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,6 +115,34 @@ func TestRecordingOutput_GapThenLateCommittedUpload(t *testing.T) {
 	}
 	if _, got := f.get(t); got.Output != "late marker\n" {
 		t.Fatalf("invalid replacement lost %q", got.Output)
+	}
+}
+
+// A later part that cannot be read fails the recovery as part 1's read error does: the source is unavailable, so
+// no shorter cast is stored as the run's output and the work stays pending for the sweep to read again.
+func TestRecordingOutput_ALaterPartReadErrorStaysPending(t *testing.T) {
+	f, rs := newRecordingOutputFixture(t)
+	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","part one marker\n"]`+"\n")
+	var part2 atomic.Bool
+	rs.open = func(ctx context.Context, key string) (io.ReadCloser, error) {
+		if strings.HasSuffix(key, recording.PartSuffix(2)) {
+			part2.Store(true)
+			return io.NopCloser(iotest.ErrReader(errors.New("part 2: input/output error"))), nil
+		}
+		return rs.Store.OpenCast(ctx, key)
+	}
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if !part2.Load() {
+		t.Fatal("the recovery never reached part 2")
+	}
+	if r, found := f.mem.row(f.run.ID); found {
+		t.Fatalf("row = %+v, want none: a recovery that failed on a later part stores nothing", r)
+	}
+	f.mem.mu.Lock()
+	p := f.mem.recording[f.run.ID]
+	f.mem.mu.Unlock()
+	if p.requested <= p.completed {
+		t.Fatalf("recording work %+v, want it still pending", p)
 	}
 }
 

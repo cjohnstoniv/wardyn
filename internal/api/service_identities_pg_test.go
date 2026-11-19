@@ -54,6 +54,15 @@ func (p *recordingIdentity) MintRunIdentity(ctx context.Context, runID uuid.UUID
 	return id, err
 }
 
+// MintWorkloadRunIdentity records a workload's run mint as MintRunIdentity records any other.
+func (p *recordingIdentity) MintWorkloadRunIdentity(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
+	id, err := p.Provider.(identity.WorkloadRunMinter).MintWorkloadRunIdentity(ctx, runID, w, humanSub, sponsor, audience, operatorOwned)
+	p.mu.Lock()
+	p.calls = append(p.calls, mintCall{humanSub: humanSub, sponsor: sponsor, operatorOwned: operatorOwned, token: id.Token})
+	p.mu.Unlock()
+	return id, err
+}
+
 func (p *recordingIdentity) last() mintCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -335,7 +344,8 @@ func TestServiceIdentity_AllowListRouteWalk(t *testing.T) {
 		"PUT /api/v1/model-providers/{id}/credential",
 	}
 	wantAllowed = append(wantAllowed, "DELETE /api/v1/workloads/{name}", "GET /api/v1/workloads", "GET /api/v1/workloads/{name}",
-		"POST /api/v1/workloads/{name}/restart", "PUT /api/v1/workloads/{name}")
+		"POST /api/v1/workloads/{name}/restart", "POST /api/v1/workloads/{name}/preview", "PUT /api/v1/workloads/{name}", "POST /api/v1/templates/import",
+		"PUT /api/v1/workloads/{name}/policy-pin", "DELETE /api/v1/workloads/{name}/policy-pin")
 	slices.Sort(wantAllowed)
 	if got := slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, wantAllowed) {
 		t.Errorf("the service allow-list = %v, want exactly %v", got, wantAllowed)

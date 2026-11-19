@@ -48,7 +48,9 @@ func decodeRunnerEventData[T any](data []byte) (T, error) {
 
 // PostureFromRunner stores a claimed runner's self-reported posture and, only
 // when it changed, writes runner.posture.record (design §7.4).
-func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) error {
+// session is the runner session the report came in on: a report from a superseded session writes
+// nothing (store.PG.RecordRunnerPostureFrom).
+func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
 	st, ok := s.cfg.Store.(store.RunnerStore)
 	if !ok {
 		return errRunnerIngestUnavailable
@@ -58,7 +60,7 @@ func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, ev r
 		!slices.Contains([]string{types.PostureEvidenceMDMFile, types.PostureEvidenceOSProbe}, p.Evidence) {
 		return errReportShape
 	}
-	changed, err := st.RecordRunnerPosture(ctx, runnerID, p, time.Now())
+	changed, err := st.RecordRunnerPostureFrom(ctx, runnerID, session, p, time.Now())
 	if err != nil || !changed {
 		return err
 	}

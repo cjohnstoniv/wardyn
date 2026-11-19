@@ -18,6 +18,9 @@ export const RUN_SSH = {
   COPY_CONFIG: "Copy ssh config",
   COPY_COMMAND: "Copy ssh command",
   COPY_CLI: "Copy CLI command",
+  VSCODE_WHY:
+    "Why: the sandbox may not reach VS Code's download site, so VS Code uploads its server through SSH.",
+  POPUP_BLOCKED: "Your browser blocked the new tab. Allow pop-ups for this site, then press Open desktop again.",
 } as const;
 
 // The Wardyn CLI lane and "Get the CLI" of "Attach from your terminal" (M-ATT-1,

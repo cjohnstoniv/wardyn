@@ -71,6 +71,12 @@ type runnerFile struct {
 	// MacOSVMBasesDir is the Mac's other macOS bases: a directory of <name>.json install lists, one per base,
 	// each derived from Standard (macvm.LoadBaseVariants); none when unset.
 	MacOSVMBasesDir string `json:"macos_vm_bases_dir,omitempty"`
+	// MacOSVMKeptDiskLimit is the disk, in whole GB as a string, this Mac's kept machines may take in all,
+	// each counted at its worst case; "0" keeps none, and unset is 110 (parseKeptDiskLimit).
+	MacOSVMKeptDiskLimit string `json:"macos_vm_kept_disk_limit_gb,omitempty"`
+	// MacOSVMInspectionCA turns this Mac's inspection CA on ("1"): the base's install list gains it, and once
+	// a base trusts it, it re-issues each macOS VM run's proxy CA. Off when unset, and off deletes it.
+	MacOSVMInspectionCA string `json:"macos_vm_inspection_ca,omitempty"`
 	// DriveRoot lists the folders a drive bound to this runner may mount from, with everything under each:
 	// a JSON array of absolute, cleaned folder paths (parseDriveRoots). None when unset, so no drive mounts here.
 	DriveRoot []string `json:"drive_root,omitempty"`
@@ -133,6 +139,10 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
 	// No flag or environment variable sets it, as macos_vm_base_file.
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
+	// No flag or environment variable sets it, as macos_vm_base_file. "0" is a value (off), not unset.
+	{name: macOSVMKeptDiskLimitKey, managed: "MacOSVMKeptDiskLimit", file: func(f *runnerFile) *string { return &f.MacOSVMKeptDiskLimit }},
+	// No flag or environment variable sets it, as macos_vm_base_file.
+	{name: "macos_vm_inspection_ca", managed: "MacOSVMInspectionCA", file: func(f *runnerFile) *string { return &f.MacOSVMInspectionCA }},
 	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
 	{name: "substrate", flag: "substrate", def: "docker", file: func(f *runnerFile) *string { return &f.Substrate }},
 }
@@ -144,6 +154,69 @@ var profileOnlyKeys = []struct{ managed, flag string }{
 	{managed: "MDMManaged"}, {managed: "DiskEncrypted"},
 	{managed: "MaxRuns", flag: "max-runs"}, {managed: "TotalCPU", flag: "total-cpu"}, {managed: "TotalMemoryGB", flag: "total-memory"},
 	{managed: "PerRunCPU", flag: "per-run-cpu"}, {managed: "PerRunMemoryGB", flag: "per-run-memory"},
+}
+
+// The disk this Mac's kept machines may take, in all (runner setting macos_vm_kept_disk_limit_gb): each
+// machine counts at its worst case, so the default holds two of them. Zero keeps no machines on this Mac.
+const (
+	macOSVMKeptDiskLimitKey       = "macos_vm_kept_disk_limit_gb"
+	macOSVMKeptDiskLimitDefaultGB = 110
+	// macOSVMKeptDiskLimitMaxGB keeps the byte count far from overflow; no Mac has a petabyte.
+	macOSVMKeptDiskLimitMaxGB = 1 << 20
+)
+
+// parseKeptDiskLimit is the setting's value as bytes: unset is the default, 0 is off, and anything but a
+// whole number of GB from 0 up is refused, naming the setting.
+func parseKeptDiskLimit(v string) (int64, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return macOSVMKeptDiskLimitDefaultGB << 30, nil
+	}
+	gb, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || gb < 0 || gb > macOSVMKeptDiskLimitMaxGB {
+		return 0, fmt.Errorf("%s: %q is not a whole number of GB from 0 to %d", macOSVMKeptDiskLimitKey, v, macOSVMKeptDiskLimitMaxGB)
+	}
+	return gb << 30, nil
+}
+
+// macOSVMSettings are the runner settings the macOS VM handle takes from the config serve (or a macos-vm
+// command) resolved, so the file that command was given is the one that counts and no default file is read
+// again behind it. "" is unset.
+type macOSVMSettings struct {
+	// keptLimit is macos_vm_kept_disk_limit_gb, baseFile macos_vm_base_file and basesDir macos_vm_bases_dir.
+	keptLimit, baseFile, basesDir string
+	// inspectionCA is macos_vm_inspection_ca, nil when the caller resolved no settings (setup's prepare), which
+	// then neither opens nor removes the CA. driveRoots is drive_root: the CA is not used under one.
+	inspectionCA *bool
+	driveRoots   []string
+	// inspectionCAUnknown is set when the value is neither on nor off. inspectionCA is then false, but the CA is
+	// removed only where a drive root is over it: with none, the key is kept (openInspectionCA).
+	inspectionCAUnknown *unknownCA
+}
+
+// unknownCA is a macos_vm_inspection_ca value macOSVMKnown refuses, and the source that gave it.
+type unknownCA struct{ value, source string }
+
+// macOSVMSettings is c's macOS VM settings.
+func (c runnerConfig) macOSVMSettings() macOSVMSettings {
+	ca := c.field("macos_vm_inspection_ca")
+	set := macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir"),
+		driveRoots: c.field("drive_root").List}
+	on := macOSVMOn(ca.Value)
+	set.inspectionCA = &on
+	if !macOSVMKnown(ca.Value) {
+		set.inspectionCAUnknown = &unknownCA{value: ca.Value, source: ca.Source}
+	}
+	return set
+}
+
+// macOSVMKnown is whether v is a spelling of on or off: empty (unset, so off), 0, 1, true, false, on, off, yes or no.
+func macOSVMKnown(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "1", "true", "false", "on", "off", "yes", "no":
+		return true
+	}
+	return false
 }
 
 // macOSVMOn reads the macos_vm setting.
@@ -512,6 +585,12 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if m := f.ProxyImageMirror; m != "" && strings.ContainsAny(path.Base(m), ":@") {
 		return errors.New("proxy_image_mirror: a repository without a tag or digest, such as registry.example/wardyn-proxy; the tag follows the organisation")
+	}
+	if _, err := parseKeptDiskLimit(f.MacOSVMKeptDiskLimit); err != nil {
+		return err
+	}
+	if !macOSVMKnown(f.MacOSVMInspectionCA) {
+		return fmt.Errorf("macos_vm_inspection_ca: %q is not 1, 0, true, false, on, off, yes or no", strings.TrimSpace(f.MacOSVMInspectionCA))
 	}
 	if _, err := parseRelayWant(f.RelayListen, f.RelayHostTarget); err != nil {
 		return fmt.Errorf("relay_listen / relay_host_target: %w", err)

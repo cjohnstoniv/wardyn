@@ -51,6 +51,11 @@ describe("GitHub CLI grant (capabilities, no permissions)", () => {
     expect(grantSentence("github_token", scope)).toBe("GitHub token · code read, pull requests · acme/api");
   });
 
+  it("names each pull request capability in words, not its wire name", () => {
+    const scope = { repos: ["acme/api"], api: true, capabilities: ["pr_write", "pr_review"] };
+    expect(grantSentence("github_token", scope)).toBe("GitHub token · open pull requests, review pull requests · acme/api");
+  });
+
   it("stays read-only when every capability reads", () => {
     expect(grantsWrite({ api: true, capabilities: ["code_read", "issues_read"] })).toBe(false);
     expect(grantsWrite({ api: true, capabilities: ["actions_execute"] })).toBe(true);

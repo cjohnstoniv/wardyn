@@ -205,9 +205,8 @@ func TestForwarder_CursorAdvancesInBatchesAndSurvivesRestart(t *testing.T) {
 func TestForwarder_OrgDownRowsAccrueAndLagGrows(t *testing.T) {
 	st, rec := &memStore{}, &memRecorder{}
 	st.add(3, true)
-	srv := httptest.NewServer(http.NotFoundHandler())
-	srv.Close() // connection refused from here on
-	f, _ := newTestForwarder(srv.URL, st, rec)
+	// Connection refused: nothing listens at port 1 (a closed test server's port could be taken by another process).
+	f, _ := newTestForwarder("http://127.0.0.1:1", st, rec)
 	ctx := context.Background()
 
 	var waits []time.Duration

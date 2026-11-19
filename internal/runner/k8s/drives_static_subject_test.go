@@ -60,7 +60,7 @@ func TestEnsureDrivePVC_StaticShareRefusesAnotherPrincipalsLabelledClaim(t *test
 			"app.kubernetes.io/managed-by": "corp-storage",
 			labelDriveSubject:              otherSubject,
 		})
-		err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive)
+		_, err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive)
 		if !errors.Is(err, errDriveClaimForeign) {
 			t.Fatalf("ensureDrivePVC over a static claim stamped %s=%q while this run's subject hashes to %q: "+
 				"err = %v, want errDriveClaimForeign. Wardyn MINTS a static claim's name, so one name can cover two "+
@@ -72,7 +72,7 @@ func TestEnsureDrivePVC_StaticShareRefusesAnotherPrincipalsLabelledClaim(t *test
 	t.Run("the member's own stamped claim still mounts", func(t *testing.T) {
 		drive := staticMount()
 		claim := adminClaim(map[string]string{labelDriveSubject: drive.SubjectHash})
-		if err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive); err != nil {
+		if _, err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive); err != nil {
 			t.Errorf("ensureDrivePVC over the member's OWN stamped share: %v, want it mounted", err)
 		}
 	})
@@ -83,7 +83,7 @@ func TestEnsureDrivePVC_StaticShareRefusesAnotherPrincipalsLabelledClaim(t *test
 		// share must still mount over it.
 		drive := staticMount()
 		claim := adminClaim(map[string]string{"app.kubernetes.io/managed-by": "corp-storage", "team": "eng"})
-		if err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive); err != nil {
+		if _, err := ensureDrivePVC(context.Background(), fake.NewClientset(claim), testNamespace, drive); err != nil {
 			t.Errorf("ensureDrivePVC over an administrator's unlabelled share: %v, want it mounted unchanged", err)
 		}
 	})

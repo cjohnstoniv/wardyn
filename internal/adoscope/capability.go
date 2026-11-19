@@ -39,9 +39,17 @@ const (
 	// move to the run's own branch namespace unless the run's policy sets
 	// git_push_any_branch; that rule is the run's, never a capability's.
 	CapCodeWrite Capability = "code_write"
-	// CapPR is creating, updating, reviewing or completing a pull request
-	// WITHOUT bypassing policy.
+	// CapPR is the pre-split name for CapPRCreate, CapPRVote and CapPRComplete together. Lists may still
+	// name it (ExpandPR reads it as all three); the classifier never returns it.
 	CapPR Capability = "pr"
+	// CapPRCreate is opening, updating, commenting on, labelling or abandoning a pull request.
+	CapPRCreate Capability = "pr_create"
+	// CapPRVote is anything a branch policy can count as a person's review: a vote, adding or removing a
+	// reviewer, a pull-request status, and resolving a comment thread.
+	CapPRVote Capability = "pr_vote"
+	// CapPRComplete is completing a pull request, or setting it to complete automatically, without
+	// bypassing a policy (that is CapPolicyBypass).
+	CapPRComplete Capability = "pr_complete"
 	// CapPolicyAdmin is editing the branch policies themselves.
 	CapPolicyAdmin Capability = "policy_admin"
 	// CapPolicyBypass is completing a pull request with
@@ -149,6 +157,7 @@ const (
 // ceiling, a profile or a scope request may name.
 var grantableCapabilities = map[Capability]bool{
 	CapCodeRead: true, CapCodeWrite: true, CapPR: true, CapPolicyAdmin: true,
+	CapPRCreate: true, CapPRVote: true, CapPRComplete: true,
 	CapPolicyBypass: true, CapRepoAdmin: true,
 	CapWorkRead: true, CapWorkWrite: true, CapWorkAdmin: true,
 	CapWikiRead: true, CapWikiWrite: true,
@@ -204,6 +213,9 @@ var labels = map[Capability]string{
 	CapCodeRead:             "Clone, fetch and browse repositories, commits, branches, pull requests and branch policies, and search code",
 	CapCodeWrite:            "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch",
 	CapPR:                   "Open, review and complete pull requests",
+	CapPRCreate:             "Open, update, comment on, label and abandon pull requests",
+	CapPRVote:               "Vote on pull requests, add or remove reviewers, post pull-request statuses and resolve comment threads",
+	CapPRComplete:           "Complete pull requests or set them to complete automatically, without bypassing a policy",
 	CapPolicyAdmin:          "Change the branch policies themselves",
 	CapPolicyBypass:         "Complete a pull request without its required reviewers or checks",
 	CapRepoAdmin:            "Create, rename and delete repositories",
@@ -249,6 +261,9 @@ var shortLabels = map[Capability]string{
 	CapCodeRead:             "Read code",
 	CapCodeWrite:            "Push to the run's own branch",
 	CapPR:                   "Contribute to pull requests",
+	CapPRCreate:             "Open & update pull requests",
+	CapPRVote:               "Vote on pull requests",
+	CapPRComplete:           "Complete pull requests",
 	CapPolicyAdmin:          "Edit branch policies",
 	CapPolicyBypass:         "Bypass policies when completing pull requests",
 	CapRepoAdmin:            "Create, rename and delete repositories",

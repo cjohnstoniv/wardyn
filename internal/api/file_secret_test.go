@@ -609,3 +609,31 @@ func TestReviveRun_AFileSecretIsNeitherReadNorDeliveredAgain(t *testing.T) {
 		t.Errorf("revive resolved the file again: %+v", ev)
 	}
 }
+
+// A delivered multi-line value is masked as a terminal prints it: a file's as
+// stored and without its trailing break as well, a variable's as stored, both
+// with CR LF line ends and each line alone.
+func TestSecretRenderings_MultilineValue(t *testing.T) {
+	val := []byte("-----BEGIN KEY-----\nabcdefghijklmnop\n-----END KEY-----\n")
+	for name, got := range map[string][][]byte{"file": fileSecretRenderings(val), "env": envSecretRenderings(val)} {
+		for _, want := range []string{
+			string(val),
+			"-----BEGIN KEY-----\r\nabcdefghijklmnop\r\n-----END KEY-----",
+			"abcdefghijklmnop",
+		} {
+			if !slices.ContainsFunc(got, func(b []byte) bool { return string(b) == want }) {
+				t.Errorf("%s renderings lack %q: %q", name, want, got)
+			}
+		}
+	}
+	trimmed := "-----BEGIN KEY-----\nabcdefghijklmnop\n-----END KEY-----"
+	if !slices.ContainsFunc(fileSecretRenderings(val), func(b []byte) bool { return string(b) == trimmed }) {
+		t.Errorf("a file's renderings lack the value without its trailing break")
+	}
+	if single := envSecretRenderings([]byte("sk-single-line-secret")); len(single) != 1 {
+		t.Errorf("a single-line variable has %d renderings, want 1", len(single))
+	}
+	if got := envSecretRenderings([]byte("sk-single-line-secret\n")); len(got) != 2 || string(got[1]) != "sk-single-line-secret" {
+		t.Errorf("a one-line variable with a trailing break has renderings %q, want it as stored and without the break", got)
+	}
+}

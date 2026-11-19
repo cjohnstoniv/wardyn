@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import golden from "./run-mode-refusals.golden.json";
-import { RUN_MODE_REASON, RUN_MODE_REFUSAL, RUN_MODE_REFUSAL_BY_KEY, startFolderSubpathOk } from "./run-mode-refusals";
+import { BACKGROUND_WATCH_REFUSAL, RUN_MODE_REASON, RUN_MODE_REFUSAL, RUN_MODE_REFUSAL_BY_KEY, startFolderSubpathOk } from "./run-mode-refusals";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -39,6 +39,16 @@ describe("run-mode reasons", () => {
     const goReasons = [...block.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
     expect(goReasons.length).toBeGreaterThanOrEqual(5);
     expect(new Set(Object.values(RUN_MODE_REASON))).toEqual(new Set(goReasons));
+  });
+});
+
+describe("background watch refusals", () => {
+  it("are the bytes and the reason of the server's backgroundWatchLimitRefusal", () => {
+    const go = readFileSync(join(root, "internal/api/run_background_watch_limit.go"), "utf8");
+    const reasons = readFileSync(join(root, "internal/api/reasons.go"), "utf8");
+    expect(go).toContain(JSON.stringify(BACKGROUND_WATCH_REFUSAL.SITE_OFF));
+    expect(go).toContain(JSON.stringify(BACKGROUND_WATCH_REFUSAL.PROFILE));
+    expect(reasons).toContain(`= "${BACKGROUND_WATCH_REFUSAL.SITE_OFF_REASON}"`);
   });
 });
 

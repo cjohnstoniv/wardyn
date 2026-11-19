@@ -80,6 +80,18 @@ export function isRecording(ws: Workspace): boolean {
   return Object.values(ws.record_results ?? {}).some((r) => r.status === "recording");
 }
 
+// A confined replay stamped clean can still be taken back: the server judges it again on a read of the
+// workspace when a decision of its run lands late (one held in another server's audit spool, or the proxy's
+// last reports). cleanVerdictMayMove is true while such a replay finished less than CLEAN_RECHECK_MS ago, so
+// the page keeps reading after isRecording turns false.
+export const CLEAN_RECHECK_MS = 10 * 60 * 1000;
+
+export function cleanVerdictMayMove(ws: Workspace, now: number): boolean {
+  return Object.values(ws.record_results ?? {}).some(
+    (r) => r.confined && r.status === "recorded" && r.clean === true && !!r.finished_at && now - Date.parse(r.finished_at) < CLEAN_RECHECK_MS,
+  );
+}
+
 // isPlumbingHost mirrors the hosts record.go's promoteSkipHosts / promotableRecordHosts refuse to
 // promote, so the review card never offers an Approve the server answers with a 422 for the whole
 // request: the LLM harness's own egress (any *.anthropic.com, api.openai.com), the git broker's managed

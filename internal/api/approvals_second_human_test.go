@@ -306,6 +306,7 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 func TestSecondHuman_FailsClosedWhenTheRunCannotBeRead(t *testing.T) {
 	const wantMsg = "could not be read to verify a second human decided it"
 	const localMsg = "cannot be enforced in local mode"
+	const presetMsg = "could not be read to check its network preset"
 
 	// unreadable is the two ways the run can be unavailable, which the code
 	// deliberately treats identically: a read error, and a backend with no run
@@ -341,8 +342,15 @@ func TestSecondHuman_FailsClosedWhenTheRunCannotBeRead(t *testing.T) {
 					t.Fatalf("%s: status = %d, want 503 — an unreadable run must never read as a pass; body=%s",
 						verb, w.Code, w.Body.String())
 				}
-				if !strings.Contains(w.Body.String(), wantMsg) {
-					t.Errorf("%s: body = %s, want the fail-closed message %q", verb, w.Body.String(), wantMsg)
+				// An approve reaches the network-preset check first, which reads the run too and refuses
+				// with its own 503; a deny skips that check and reaches this gate. Each verb pins the gate
+				// that answered it.
+				want := wantMsg
+				if verb == "approve" {
+					want = presetMsg
+				}
+				if !strings.Contains(w.Body.String(), want) {
+					t.Errorf("%s: body = %s, want the fail-closed message %q", verb, w.Body.String(), want)
 				}
 				// #656 M2: pin the LITERAL wire reason, not just the Go constant.
 				if !strings.Contains(w.Body.String(), `"reason":"run_unreadable"`) {

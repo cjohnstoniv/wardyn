@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -324,6 +325,11 @@ func TestSCIMSweeperPurgesOnceAcrossInstances(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic: %v\n%s", r, debug.Stack())
+				}
+			}()
 			if err := n.srv.SweepSCIMPurge(context.Background()); err != nil {
 				t.Errorf("sweep: %v", err)
 			}

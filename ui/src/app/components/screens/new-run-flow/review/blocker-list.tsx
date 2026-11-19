@@ -6,11 +6,13 @@
 // The one ordered blocker list. The container always exists: the held Launch
 // button is described by it, and it is the polite status region that says why.
 
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, Clock } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { cn } from "../../../ui/utils";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_RUN_IN } from "../../../wardyn/copy/new-run/run-in";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
+import type { ElevationOffer } from "../../../../lib/types/governance-requests";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { Blocker } from "./blockers";
@@ -22,6 +24,8 @@ export function BlockerList({
   go,
   onCheckAgain,
   onAdd,
+  onRequestElevation,
+  checking,
 }: {
   blockers: readonly Blocker[];
   go: (loc: NewRunLocation) => void;
@@ -29,9 +33,23 @@ export function BlockerList({
   onCheckAgain?: () => void;
   /** Opens the paste-once dialog for a missing secret, as Tools' Add does. */
   onAdd?: (item: SetupItem) => void;
+  /** Opens the elevation request for a unit the run was picked to run in and the person can only ask for. */
+  onRequestElevation?: (r: { unitId: string; offer: ElevationOffer }) => void;
+  /** The server's check is running: a stale result alone then says so, with no blocker count. */
+  checking?: boolean;
 }) {
   // A stale result blames no group, so its card is amber; any blocker that names something stays red.
   const stale = blockers.length > 0 && blockers.every((b) => b.kind === "stale");
+  if (stale && checking) {
+    return (
+      <section id={BLOCKERS_ID} role="status" className="rounded-lg border border-warning/25 bg-warning-subtle p-3 text-sm">
+        <p className="flex items-center gap-2 font-medium text-foreground">
+          <CircleAlert aria-hidden="true" className="size-4 shrink-0 text-warning" />
+          {NR_REVIEW.CHECKING}
+        </p>
+      </section>
+    );
+  }
   return (
     <section
       id={BLOCKERS_ID}
@@ -50,7 +68,7 @@ export function BlockerList({
           </p>
           <ul className="mt-2 flex flex-col gap-1 pl-6">
             {blockers.map((b) => (
-              <li key={b.id} className={b.addSecret && onAdd ? "flex flex-wrap items-center justify-between gap-2" : undefined}>
+              <li key={b.id} className={(b.addSecret && onAdd) || (b.requestElevation && onRequestElevation) ? "flex flex-wrap items-center justify-between gap-2" : undefined}>
                 {b.to ? (
                   <button id={`${b.id}-text`} type="button" className="text-left text-foreground underline underline-offset-2 hover:no-underline" onClick={() => b.to && go(b.to)}>
                     {b.text}
@@ -61,6 +79,12 @@ export function BlockerList({
                 {b.addSecret && onAdd && (
                   <Button type="button" variant="outline" size="sm" aria-describedby={`${b.id}-text`} onClick={() => b.addSecret && onAdd(b.addSecret)}>
                     {NR_TOOLS.SETUP_ADD}
+                  </Button>
+                )}
+                {b.requestElevation && onRequestElevation && (
+                  <Button type="button" variant="outline" size="sm" aria-describedby={`${b.id}-text`} onClick={() => b.requestElevation && onRequestElevation(b.requestElevation)}>
+                    <Clock aria-hidden="true" className="size-4" />
+                    {NR_RUN_IN.REQUEST_ELEVATION}
                   </Button>
                 )}
                 {b.hint && <p className="text-xs text-muted-foreground">{b.hint}</p>}

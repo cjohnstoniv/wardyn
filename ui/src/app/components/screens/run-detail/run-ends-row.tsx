@@ -60,6 +60,16 @@ export function keptUntilText(iso: string, now: number = Date.now()): string {
   return `${shortDate(iso)} ${shortTime(iso)}`;
 }
 
+/**
+ * The end of a run launched under an elevation, when that end is the elevation's: the cap's own time, for a run
+ * whose own end is absent or no earlier than it. A run whose own end comes first ends there, so it keeps its controls.
+ */
+export function elevationCapAt(run: RunDetail): string | undefined {
+  if (run.lifetime_cap_source !== "elevation" || !run.lifetime_cap_at) return undefined;
+  if (run.ends_at && Date.parse(run.ends_at) < Date.parse(run.lifetime_cap_at)) return undefined;
+  return run.lifetime_cap_at;
+}
+
 const PILL = "h-6 gap-1 rounded-full px-2.5 text-xs font-normal";
 const ITEM = "flex-col items-start gap-0.5";
 const LOCKED = "opacity-70";
@@ -89,6 +99,9 @@ function Item({ label, hint, current, onSelect }: { label: string; hint?: string
 export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
   const [changeOpen, setChangeOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // The last menu pick's failure, on its own line under the pills until the next pick: a toast alone was gone before
+  // it could be read, and the menus stay to try again.
+  const [failure, setFailure] = React.useState<string | null>(null);
   // handleSetRunEndAndWait's own exempt rule (run_end_wait.go): a super admin
   // is bounded only by the deployment ceiling REGARDLESS of what the run's
   // OWN captured run_limits say — an operator viewing a member's run (or
@@ -112,7 +125,16 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
   // would tell two different stories about the same run.
   // A QUEUED run has no end yet because it has not started (its start writes one), so "No end" would be
   // false and "Set an end" is refused; the controls wait for the start.
-  if (isTerminalRunState(run.state) || run.lost_at || run.state === "QUEUED") return null;
+  const hidden = isTerminalRunState(run.state) || !!run.lost_at || run.state === "QUEUED";
+  // The line goes with the controls: cleared each time they go or come back (a revived run), so neither a failure
+  // from before nor one from a pick that answered while they were gone comes back with them. The reset runs during
+  // render, so the stale line is never committed on the way back.
+  const [wasHidden, setWasHidden] = React.useState(hidden);
+  if (wasHidden !== hidden) {
+    setWasHidden(hidden);
+    setFailure(null);
+  }
+  if (hidden) return null;
 
   const canAct = operator || run.created_by === principal;
   const limits = run.run_limits;
@@ -134,6 +156,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
 
   const applyEndsAt = async (endsAt: string | null) => {
     setBusy(true);
+    setFailure(null);
     try {
       const res = await runsApi.setRunEndAndWait(run.id, { endsAt });
       if (res.capped.includes("ends_at") && res.ends_cap_loosened) {
@@ -143,7 +166,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
       }
       onChanged();
     } catch (err) {
-      toast.error("Couldn't change this run's end", { description: getErrorMessage(err) });
+      setFailure(`Couldn't change this run's end: ${getErrorMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -156,6 +179,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
 
   const setWaitHours = async (hours: number) => {
     setBusy(true);
+    setFailure(null);
     try {
       // No canon string covers a capped WAIT (only ENDS_CAPPED, for the end) —
       // the re-rendered pill already shows the actual value the server
@@ -164,7 +188,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
       await runsApi.setRunEndAndWait(run.id, { waitBudgetSec: Math.round(hours * 3600) });
       onChanged();
     } catch (err) {
-      toast.error("Couldn't change the wait", { description: getErrorMessage(err) });
+      setFailure(`Couldn't change the wait: ${getErrorMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -177,10 +201,28 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
     </>
   );
   const wait = run.wait_budget_sec;
+  const cap = elevationCapAt(run);
 
   return (
     <>
-      {run.ends_at ? (
+      {cap ? (
+        canAct ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+                {pill(RL.endsPill(weekdayClock(cap)))}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <Why text={RL.endsElevation(weekdayClock(cap), run.created_by === principal)} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span data-testid="run-ends-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground", PILL)}>
+            {RL.endsPill(weekdayClock(cap))}
+          </span>
+        )
+      ) : run.ends_at ? (
         canAct ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -248,11 +290,21 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
           </span>
         ))}
 
+      {/* basis-full: the header's facts row wraps, so the line takes its own row under the pills. */}
+      {failure !== null && (
+        <p role="alert" data-testid="run-ends-failure" className="basis-full rounded-md border border-danger/40 bg-danger-subtle px-2.5 py-2 text-xs text-danger">
+          {failure}
+        </p>
+      )}
       <ChangeEndDialog
         open={changeOpen}
         onOpenChange={setChangeOpen}
         run={run}
-        onChanged={onChanged}
+        onChanged={() => {
+          // A change saved in the dialog supersedes a menu pick's earlier failure.
+          setFailure(null);
+          onChanged();
+        }}
         maxDays={maxDays}
         allowNoEnd={allowNoEnd}
       />

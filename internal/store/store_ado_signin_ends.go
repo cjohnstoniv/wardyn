@@ -3,7 +3,8 @@
 
 // The Azure DevOps sign-in end counter (migration 0129): per person, how many times their
 // sign-in was disconnected or erased and whether one is running now, so a run token created
-// on any replica across one of those ends revokes itself. The row holds no secret.
+// on any replica across one of those ends revokes itself, and when their credentials were last erased
+// (migration 0287). The row holds no secret.
 package store
 
 import (
@@ -32,32 +33,39 @@ type ADOSignInEndState struct {
 type ADOSignInEndStore interface {
 	// BeginADOSignInEnd marks the start of an end of owner's sign-in.
 	BeginADOSignInEnd(ctx context.Context, owner, reason string) error
-	// FinishADOSignInEnd marks its finish.
-	FinishADOSignInEnd(ctx context.Context, owner string) error
+	// FinishADOSignInEnd marks its finish; reason is the one its begin gave.
+	FinishADOSignInEnd(ctx context.Context, owner, reason string) error
 	// ADOSignInEnds is owner's count now; a person with no row has gen 0.
 	ADOSignInEnds(ctx context.Context, owner string) (ADOSignInEndState, error)
 }
 
 var _ ADOSignInEndStore = PG{}
 
+// signInEndErase is the reason an erase of a person's credentials ends their sign-in with (api's
+// adoPATRevokeOffboarding). The begin and the finish of such an end set erased_at (migration 0287),
+// which no other end touches: DeleteErasedRefusedRunPATs reads it.
+const signInEndErase = "offboarding"
+
 // BeginADOSignInEnd — see ADOSignInEndStore.
 func (s PG) BeginADOSignInEnd(ctx context.Context, owner, reason string) error {
 	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO ado_signin_ends (owner, gen, active, reason) VALUES ($1, 1, 1, $2)
+		INSERT INTO ado_signin_ends (owner, gen, active, reason, erased_at)
+		VALUES ($1, 1, 1, $2, CASE WHEN $2::text = $4::text THEN now() END)
 		ON CONFLICT (owner) DO UPDATE SET gen = ado_signin_ends.gen + 1,
 			active = CASE WHEN ado_signin_ends.updated_at < now() - $3::interval THEN 1 ELSE ado_signin_ends.active + 1 END,
-			reason = EXCLUDED.reason, updated_at = now()`,
-		owner, reason, ADOSignInEndsStaleAfter.String()); err != nil {
+			reason = EXCLUDED.reason, updated_at = now(), erased_at = COALESCE(EXCLUDED.erased_at, ado_signin_ends.erased_at)`,
+		owner, reason, ADOSignInEndsStaleAfter.String(), signInEndErase); err != nil {
 		return fmt.Errorf("store: begin a sign-in end: %w", err)
 	}
 	return nil
 }
 
 // FinishADOSignInEnd — see ADOSignInEndStore.
-func (s PG) FinishADOSignInEnd(ctx context.Context, owner string) error {
+func (s PG) FinishADOSignInEnd(ctx context.Context, owner, reason string) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE ado_signin_ends SET gen = gen + 1, active = GREATEST(active - 1, 0), updated_at = now()
-		WHERE owner = $1`, owner); err != nil {
+		UPDATE ado_signin_ends SET gen = gen + 1, active = GREATEST(active - 1, 0), updated_at = now(),
+			erased_at = CASE WHEN $2::text = $3::text THEN now() ELSE erased_at END
+		WHERE owner = $1`, owner, reason, signInEndErase); err != nil {
 		return fmt.Errorf("store: finish a sign-in end: %w", err)
 	}
 	return nil

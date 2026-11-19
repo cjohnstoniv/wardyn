@@ -22,6 +22,11 @@ describe("Segmented", () => {
     expect(onChange).toHaveBeenCalledWith("storage");
   });
 
+  it("draws the keyboard focus outline inside its scrolling track", () => {
+    render(<Segmented value="git" options={OPTIONS} onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Git" }).className).toContain("focus-visible:outline-offset-[-2px]");
+  });
+
   it("a dirty option shows its chip without changing the option's accessible name", () => {
     render(<Segmented value="git" options={OPTIONS} onChange={() => {}} />);
     // Exact-name lookups of the tab keep working while its draft is dirty.

@@ -26,7 +26,7 @@ import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { Chip } from "../../wardyn/primitives";
 import { Segmented } from "../../wardyn/segmented";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
 import { AddPersonDialog } from "./add-person-dialog";
@@ -71,10 +71,15 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   const [rows, setRows] = React.useState<PersonSummary[]>([]);
   const [cursor, setCursor] = React.useState<string | undefined>(undefined);
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [search, setSearch] = React.useState("");
   const [q, setQ] = React.useState("");
   const [filter, setFilter] = React.useState<StateFilter>("all");
+  // Load more has its own state: a failed next page must not take the pages already read off the screen.
+  const [more, setMore] = React.useState<"idle" | "loading" | "failed">("idle");
   const seq = React.useRef(0);
+  // The search and state filter the rows on screen were read for.
+  const shown = React.useRef<string | undefined>(undefined);
 
   // The box debounces into q, so each keystroke is not a request.
   React.useEffect(() => {
@@ -85,9 +90,23 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   const load = React.useCallback(
     (after?: string) => {
       const mine = ++seq.current;
-      // A re-read keeps the rows on screen: swapping them for the skeleton unmounts the row that opened the
-      // drawer, and closing the drawer then has nowhere to put focus back.
-      if (!after) setStatus((s) => (s === "ready" ? s : "loading"));
+      if (!after) {
+        // A cursor belongs to the query that returned it: until this first page answers there is no next page,
+        // so Load more cannot send the old cursor with a new search or filter.
+        setCursor(undefined);
+        const query = `${filter}\n${q}`;
+        if (shown.current !== query) {
+          // Another search's or state's rows are not this one's: they go, and the table waits for its first page.
+          shown.current = query;
+          setRows([]);
+          setStatus("loading");
+        } else {
+          // A re-read of the same query keeps the rows on screen: swapping them for the skeleton unmounts the row
+          // that opened the drawer, and closing the drawer then has nowhere to put focus back.
+          setStatus((s) => (s === "ready" ? s : "loading"));
+        }
+      }
+      setMore(after ? "loading" : "idle");
       peopleApi
         .list({ limit: PAGE_SIZE, cursor: after, q: q || undefined, state: filter === "all" ? undefined : filter })
         .then((page) => {
@@ -95,9 +114,15 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
           setRows((prev) => (after ? [...prev, ...page.people] : page.people));
           setCursor(page.next_cursor || undefined);
           setStatus("ready");
+          setMore("idle");
         })
         .catch((e) => {
-          if (mine === seq.current) setStatus(loadFailStatus(e));
+          if (mine !== seq.current) return;
+          if (after) setMore("failed");
+          else {
+            setLoadMessage(failureSentence(e));
+            setStatus(loadFailStatus(e));
+          }
         });
     },
     [q, filter],
@@ -135,7 +160,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
       ) : status === "forbidden" ? (
         <p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
       ) : status === "error" ? (
-        <ErrorState onRetry={() => load()} />
+        <ErrorState as="h3" message={loadMessage} onRetry={() => load()} />
       ) : rows.length === 0 ? (
         // The unfiltered title is not "People": it would repeat the section label right above (#2902).
         <EmptyState
@@ -162,7 +187,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                 return (
                   <TableRow key={p.principal} className="cursor-pointer" onClick={() => onOpen(p)}>
                     <TableCell className="font-medium">
-                      <button type="button" className="text-left hover:underline" onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
+                      <button type="button" className="max-w-[16rem] truncate text-left hover:underline" title={p.email || p.principal} onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
                         {p.email || p.principal}
                       </button>
                     </TableCell>
@@ -173,7 +198,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                     <TableCell>
                       <Chip tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Chip>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-normal text-muted-foreground">
                       {P.HOLDS({ sessions: p.active_sessions, tokens: p.api_tokens, keys: p.ssh_keys, credentials: p.credentials, running: p.active_runs })}
                     </TableCell>
                   </TableRow>
@@ -182,9 +207,14 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
             </TableBody>
           </Table>
           {cursor && (
-            <div className="border-t border-border p-3">
-              <Button variant="outline" size="sm" onClick={() => load(cursor)}>
-                Load more
+            <div className="flex flex-wrap items-center gap-3 border-t border-border p-3">
+              {more === "failed" && (
+                <p role="alert" className="text-sm text-danger">
+                  {P.MORE_FAILED}
+                </p>
+              )}
+              <Button variant="outline" size="sm" disabled={more === "loading"} onClick={() => load(cursor)}>
+                {more === "loading" ? P.LOADING_MORE : more === "failed" ? P.MORE_RETRY : P.LOAD_MORE}
               </Button>
             </div>
           )}

@@ -34,6 +34,13 @@ type ModelProvidersRead struct {
 	ConnectedPeople      map[string]int      `json:"connected_people,omitempty"`
 	EntraLoginConfigured bool                `json:"entra_login_configured"`
 	KindsAvailable       []ModelProviderKind `json:"kinds_available"`
+	// GatewayIdentityIssuer is the iss of every gateway token, and GatewayJWKSPath the key set's path under
+	// this deployment's origin, base path included: what an admin tells a gateway.
+	GatewayIdentityIssuer string `json:"gateway_identity_issuer,omitempty"`
+	GatewayJWKSPath       string `json:"gateway_jwks_path"`
+	// GatewayIdentityBedrockSSO says whether a bedrock_sso provider can send run identity on this install:
+	// true only while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY), which that needs.
+	GatewayIdentityBedrockSSO bool `json:"gateway_identity_bedrock_sso"`
 }
 
 // Empty reports whether p carries no provider — the shape a PUT uses to CLEAR the block, normalized back
@@ -42,7 +49,7 @@ func (p *ModelProviders) Empty() bool {
 	return p == nil || len(p.Providers) == 0
 }
 
-// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso,entra}.
+// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso,entra,oidc}.
 const ModelProviderSecretPrefix = "wardyn-provider-"
 
 // ModelProviderKind is what kind of credential each person brings to a provider, and so which dispatch
@@ -118,14 +125,92 @@ type ModelProvider struct {
 	Bedrock *BedrockSettings    `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
 	Azure   *AzureSettings      `json:"azure,omitempty"`   // endpoint and route for azure_foundry
 	Local   *LocalModelSettings `json:"local,omitempty"`   // model allowlist and request bounds for local_model
+	// OIDC makes each person sign in to the endpoint's own authority instead of pasting a token;
+	// custom_endpoint only. Absent keeps the pasted token.
+	OIDC *ProviderOIDC `json:"oidc,omitempty"`
+	// ExtraHeaders are non-secret headers the run proxy sets on every request to this provider's gateway, after
+	// the credential (custom_endpoint only; none by default). For a gateway that routes on a header, such as
+	// Portkey's x-portkey-provider. The name and value rules refuse anything that could carry a credential or
+	// change the request's framing; a change removes every person's stored credential, as a base_url change does.
+	ExtraHeaders []ProviderHeader `json:"extra_headers,omitempty"`
+	// GatewayIdentity turns on a signed token, naming the person, the run and the runner, on each model call
+	// to this provider's gateway. Absent is off, and off changes nothing a run sends.
+	GatewayIdentity *ModelProviderGatewayIdentity `json:"gateway_identity,omitempty"`
 	// Harnesses are the harnesses this provider serves, with per-pairing settings.
 	Harnesses []ProviderHarness `json:"harnesses,omitempty"`
+}
+
+// ProviderHeader is one extra header of a custom_endpoint provider.
+type ProviderHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Serves reports whether harness is enabled for this provider; says nothing about Disabled.
 func (p ModelProvider) Serves(harness string) bool {
 	return slices.ContainsFunc(p.Harnesses, func(h ProviderHarness) bool { return h.Harness == harness })
 }
+
+// ModelProviderGatewayIdentity is a provider's opt-in to run identity. Audience is the token's aud: the value
+// this provider's gateway looks for, and no other destination's. TokenLifetimeSeconds is how long each token
+// works: absent (0) is GatewayTokenLifetimeMax, and a set value runs from GatewayTokenLifetimeMin to
+// GatewayTokenLifetimeMax. It is not part of the route sealed into a run, so a change applies to the next token.
+// Inspection is who checks the prompts sent to this gateway: "" is Wardyn, with the run's policy, and
+// GatewayInspectionGateway leaves them to the gateway, except the exact match of the run's own secret
+// values, which only Wardyn can run. It is part of the sealed route, so a change refuses the next token.
+type ModelProviderGatewayIdentity struct {
+	Audience             string `json:"audience"`
+	TokenLifetimeSeconds int    `json:"token_lifetime_seconds,omitempty"`
+	Inspection           string `json:"inspection,omitempty"`
+}
+
+// GatewayInspectionGateway is ModelProviderGatewayIdentity.Inspection when the gateway checks prompts itself.
+const GatewayInspectionGateway = "gateway"
+
+// The bounds of ModelProviderGatewayIdentity.TokenLifetimeSeconds.
+const (
+	GatewayTokenLifetimeMin = 60
+	GatewayTokenLifetimeMax = 600
+)
+
+// The two ways a sign-in to a custom endpoint's authority is tied to the person who made it.
+const (
+	// OIDCBindingConsole requires the identity token's issuer to be the one the console signs people in
+	// with, and the person it names to be the signed-in one. The default.
+	OIDCBindingConsole = "console"
+	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject and
+	// stores the sign-in under whoever made it. An admin's choice, audited when set.
+	OIDCBindingNone = "none"
+)
+
+// ProviderOIDC is a custom_endpoint's sign-in: where each person signs in and as which client. PKCE
+// (S256), openid and offline_access are always on and are not settings.
+type ProviderOIDC struct {
+	// Issuer is required: discovery and the identity token's verification both come from it.
+	Issuer string `json:"issuer"`
+	// AuthorizeURL and TokenURL override what discovery names.
+	AuthorizeURL string `json:"authorize_url,omitempty"`
+	TokenURL     string `json:"token_url,omitempty"`
+	ClientID     string `json:"client_id"`
+	// ClientSecretRef names an operator secret holding the client's secret; empty is a public client.
+	ClientSecretRef string `json:"client_secret_ref,omitempty"`
+	// Scopes are asked for beside openid and offline_access.
+	Scopes []string `json:"scopes"`
+	// IdentityBinding is OIDCBindingConsole (also "") or OIDCBindingNone.
+	IdentityBinding string `json:"identity_binding,omitempty"`
+}
+
+// Binding is IdentityBinding with the default filled in.
+func (o *ProviderOIDC) Binding() string {
+	if o == nil || o.IdentityBinding == "" {
+		return OIDCBindingConsole
+	}
+	return o.IdentityBinding
+}
+
+// Unbound reports whether a person's sign-in on this row is stored without being tied to their console
+// sign-in, which a Review line says as "not bound to your sign-in".
+func (o *ProviderOIDC) Unbound() bool { return o != nil && o.Binding() == OIDCBindingNone }
 
 // ProviderAuth is how a custom endpoint expects each person's token: header and value format ("Bearer %s").
 type ProviderAuth struct {
@@ -225,8 +310,8 @@ type ProviderHarness struct {
 	// Model: model id this harness uses on this provider; admin-set, no member override. Required
 	// (an inference profile) on a Bedrock kind.
 	Model string `json:"model,omitempty"`
-	// FastModel is the deployment the Messages harness uses for its small-model alias; azure_foundry only,
-	// on that harness only. Unset means Model.
+	// FastModel is the model the Messages harness uses for its small-model alias; azure_foundry and
+	// custom_endpoint only, on that harness only. Unset means Model on azure_foundry, and no alias on custom_endpoint.
 	FastModel string `json:"fast_model,omitempty"`
 	Path      string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
 	// AuthHeader and AuthFormat override the provider's Auth for this harness alone (custom_endpoint only).

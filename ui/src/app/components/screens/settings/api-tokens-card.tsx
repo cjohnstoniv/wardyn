@@ -5,8 +5,9 @@
 
 // Your account: "Your API tokens" (r15 T2-d). A person mints, lists and revokes their own tokens here, through the
 // shared token dialog, whose Use choice makes one for the Wardyn API or for calling inbound ports. The card
-// renders nothing where there is no person (the admin token, local mode) and where the api_token feature is not
-// granted: the server's wall is the same check.
+// renders nothing where there is no person (the admin token, local mode). Without the api_token feature it hides
+// Mint, the server's wall at mint, and keeps any tokens listed with Revoke: listing and revoking a person's own
+// tokens need no feature. With neither the feature nor a token to list, it renders nothing.
 import * as React from "react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
@@ -31,7 +32,7 @@ import { MINTED } from "../../wardyn/copy/credentials";
 import { inWords, OWN_TOKENS as O, SERVICES as T } from "../../wardyn/copy/service-tokens";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { TokenDialog } from "./token-dialog";
 
 type Load = "loading" | "ready" | "error" | "hidden";
@@ -40,6 +41,7 @@ const isLive = (t: ApiToken) => !t.revoked_at && !(t.expires_at && Date.parse(t.
 
 export function ApiTokensCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [rows, setRows] = React.useState<ApiToken[]>([]);
   const [minting, setMinting] = React.useState(false);
   const [revoking, setRevoking] = React.useState<ApiToken | null>(null);
@@ -57,7 +59,10 @@ export function ApiTokensCard() {
         setRows(r);
         setState("ready");
       })
-      .catch((e: unknown) => setState(e instanceof HttpError && (e.reason === "needs_sso" || e.reason === "api_token_no_human") ? "hidden" : "error"));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(e instanceof HttpError && (e.reason === "needs_sso" || e.reason === "api_token_no_human") ? "hidden" : "error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -76,7 +81,7 @@ export function ApiTokensCard() {
     }
   };
 
-  if (state === "hidden" || !granted) return null;
+  if (state === "hidden" || (!granted && state === "ready" && rows.length === 0)) return null;
 
   const focusCard = (selector: string) => {
     const el = card.current?.querySelector<HTMLElement>(selector) ?? card.current?.querySelector<HTMLElement>("h3 button");
@@ -99,6 +104,7 @@ export function ApiTokensCard() {
         <div role="group" aria-label={O.LOAD_ERROR_LABEL}>
           <ErrorState
             as="h4"
+            message={loadMessage}
             onRetry={() => {
               setState("loading");
               load();
@@ -107,11 +113,13 @@ export function ApiTokensCard() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" size="sm" data-mint="own" onClick={() => setMinting(true)}>
-              {T.MINT}
-            </Button>
-          </div>
+          {granted && (
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" size="sm" data-mint="own" onClick={() => setMinting(true)}>
+                {T.MINT}
+              </Button>
+            </div>
+          )}
           {rows.length === 0 ? (
             <p className="text-body text-muted-foreground">{T.NO_TOKENS}</p>
           ) : (
@@ -121,7 +129,9 @@ export function ApiTokensCard() {
                   <TableHead>{T.COL_TOKEN}</TableHead>
                   <TableHead>{T.COL_EXPIRES}</TableHead>
                   <TableHead>{T.COL_LAST_USED}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -134,7 +144,7 @@ export function ApiTokensCard() {
         </div>
       )}
 
-      {minting && (
+      {minting && granted && (
         <TokenDialog
           kind="mint"
           initialName=""

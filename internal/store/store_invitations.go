@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -84,7 +85,7 @@ func (s PG) CreateInvitation(ctx context.Context, inv types.Invitation, maxPendi
 	if err != nil {
 		return types.Invitation{}, fmt.Errorf("store: create invitation: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	// Serialises creates for one target, so two at the cap cannot both pass the count.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('person_invitations:' || $1, 0))`, inv.Target); err != nil {
 		return types.Invitation{}, fmt.Errorf("store: create invitation: %w", err)
@@ -144,10 +145,8 @@ func (s PG) RevokeInvitation(ctx context.Context, id uuid.UUID, by string, now t
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "never existed" from "no longer pending" so the caller can answer 404 for both
 		// without a second read of its own.
-		if _, gerr := s.GetInvitation(ctx, id, ""); gerr == nil {
-			return types.Invitation{}, ErrInvitationNotPending
-		}
-		return types.Invitation{}, ErrNotFound
+		_, gerr := s.GetInvitation(ctx, id, "")
+		return types.Invitation{}, missReadErr(gerr, ErrInvitationNotPending, "invitation after a revoke missed")
 	}
 	out.State = types.InvitationRevoked
 	return out, err
@@ -166,7 +165,7 @@ func (s PG) ClaimInvitation(ctx context.Context, c InvitationClaim) (InvitationC
 	if err != nil {
 		return InvitationClaimed{}, fmt.Errorf("store: claim invitation: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer db.Rollback(ctx, tx)
 	if guarded {
 		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return InvitationClaimed{}, err

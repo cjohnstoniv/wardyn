@@ -67,6 +67,9 @@ type serveOptions struct {
 	localModelPorts string
 	// macOSVM is the macos_vm setting: macOS VM sandboxes on a Mac (off by default).
 	macOSVM bool
+	// macOSVMSettings are the macOS VM settings as resolved from the file serve was given (--config), the
+	// profile and the rest.
+	macOSVMSettings macOSVMSettings
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -289,6 +292,7 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
 	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
 	o.macOSVM = macOSVMOn(c.get("macos_vm"))
+	o.macOSVMSettings = c.macOSVMSettings()
 	o.driveRoots = c.field("drive_root").List
 	o.substrate = c.get("substrate")
 }

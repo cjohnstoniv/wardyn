@@ -564,6 +564,16 @@ describe("health.health() — presents the console's credential", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["a 503 answer", () => Promise.resolve(new Response("", { status: 503 })), { failedStatus: 503 }],
+    ["a 2xx body that does not parse", () => Promise.resolve(new Response("<html>", { status: 200 })), { failedStatus: 200 }],
+    ["no answer", () => Promise.reject(new TypeError("Failed to fetch")), {}],
+    ["a body read that breaks off", () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new TypeError("network error")) } as unknown as Response), {}],
+  ])("tells %s apart", async (_name, answer, want) => {
+    fetchMock.mockImplementation(answer);
+    expect(await health.health()).toEqual(want);
+  });
+
   it("sends the admin token and the cookie", async () => {
     setToken("t-admin");
     await health.health();

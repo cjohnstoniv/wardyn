@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import golden from "./workspace-refusals.golden.json";
 import {
+  IMAGE_ADMISSION_REASONS,
   NEW_RUN_REASON,
   PLACEMENT_REASONS,
   WORKSPACE_REFUSAL,
@@ -55,10 +56,18 @@ describe("reasons", () => {
     expect(new Set(Object.values(NEW_RUN_REASON))).toEqual(new Set(goReasons));
   });
 
+  it("the image signature reasons are the Go constants of internal/api/reasons.go", () => {
+    const go = readFileSync(join(root, "internal/api/reasons.go"), "utf8");
+    const block = /Image admission's refusals[\s\S]*?\n\)/.exec(go)?.[0] ?? "";
+    const goReasons = [...block.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(new Set(IMAGE_ADMISSION_REASONS)).toEqual(new Set(goReasons));
+    expect(goReasons).toHaveLength(5);
+  });
+
   it("the placement reasons are the Go closed set", () => {
     const go = readFileSync(join(root, "internal/placement/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(30);
+    expect(goReasons).toHaveLength(31);
     expect(new Set(PLACEMENT_REASONS)).toEqual(new Set(goReasons));
   });
 });

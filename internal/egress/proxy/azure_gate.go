@@ -18,7 +18,6 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +124,7 @@ func newAzureGates(cfgs []AzureGateConfig) *azureGates {
 	return g
 }
 
-func azureHostKey(host string) string { return strings.ToLower(strings.TrimSuffix(host, ".")) }
+func azureHostKey(host string) string { return hostKey(host) }
 
 func (g *azureGates) forHost(host string) []*azureGate {
 	if g == nil {
@@ -256,9 +255,7 @@ func (p *Proxy) refuseAzure(w http.ResponseWriter, r *http.Request, host string,
 }
 
 func writeAzureJSON(w http.ResponseWriter, status int, code, detail string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"wardyn": code, "detail": detail})
+	writeJSONStatus(w, status, "application/json", map[string]string{"wardyn": code, "detail": detail})
 }
 
 // refuseAzurePlain refuses, on the plain forward lane, every request to a host the run's Azure gate

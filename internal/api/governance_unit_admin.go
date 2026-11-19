@@ -78,7 +78,7 @@ func (s *Server) handleGrantUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == govQueue {
-		s.holdUnitAdmin(w, r, "create", p)
+		s.holdUnitAdmin(w, r, "create", p, nil)
 		return
 	}
 	var saved types.GovernanceUnitAdmin
@@ -115,6 +115,10 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUnitsInScope(w, r, "governance.unit_admin", true, unit) {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
@@ -129,12 +133,15 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == govQueue {
-		s.holdUnitAdmin(w, r, "delete", unitAdminPayload{ID: cur.ID, UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject})
+		s.holdUnitAdmin(w, r, "delete", unitAdminPayload{ID: cur.ID, UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject}, under)
 		return
 	}
 	var removed types.GovernanceUnitAdmin
 	err = s.writeGovernance(r.Context(), func(q store.Querier) (err error) {
 		if err := lockUnitAdminKey(r.Context(), q, unitAdminPayload{UnitID: cur.UnitID, SubjectType: cur.SubjectType, Subject: cur.Subject}); err != nil {
+			return err
+		}
+		if err := s.requireUnderQ(r.Context(), q, under, unit); err != nil {
 			return err
 		}
 		removed, err = store.RevokeUnitAdminQ(r.Context(), q, unit, id)
@@ -199,8 +206,10 @@ type unitAdminDiffView struct {
 	Subject     string                      `json:"subject"`
 }
 
-// holdUnitAdmin stores a grant (op create) or revoke (op delete) as a pending change.
-func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string, p unitAdminPayload) {
+// holdUnitAdmin stores a grant (op create) or revoke (op delete) as a pending change. A prune's under on
+// a revoke is checked here; the base then holds the unit's chain (underBase), so a later move makes the
+// change stale.
+func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string, p unitAdminPayload, under *uuid.UUID) {
 	ctx := r.Context()
 	var base any
 	var cur *types.GovernanceUnitAdmin
@@ -210,11 +219,18 @@ func (s *Server) holdUnitAdmin(w http.ResponseWriter, r *http.Request, op string
 		if err != nil {
 			return err
 		}
+		chain, err := s.underChainQ(ctx, q, under, p.UnitID)
+		if err != nil {
+			return err
+		}
 		unitName = row.Name
 		base, cur, err = unitAdminState(ctx, q, p, false)
+		base = underBase(base, chain)
 		return err
 	})
 	switch {
+	case answerNotUnder(w, err):
+		return
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance unit not found")
 		return
@@ -257,8 +273,8 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 	if err != nil {
 		return govApplied{}, err
 	}
-	if computeETag(base) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
+	if err := heldBaseStale(ctx, q, ch, base, p.UnitID); err != nil {
+		return govApplied{}, err
 	}
 	_, approver := actorFromRequest(r)
 	if ch.Op == "delete" {
@@ -335,7 +351,8 @@ func (s *Server) auditUnitScope(ctx context.Context, unit uuid.UUID, strict bool
 // unitChangeScope is the units a held change of a unit kind touches, which an approving unit admin
 // must govern (strict: strictly above), from the change's key, payload and stored diff. ok is false
 // for a change only a security admin may decide: a promotion, a unit with no parent, a payload that
-// does not decode.
+// does not decode. A unit's own update (its walls, locks, mode, name or parent) is strict: only someone
+// above the unit, and above every other unit it touches, decides it.
 func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok bool) {
 	var diff governanceDiffBody
 	if json.Unmarshal(ch.Diff, &diff) != nil {
@@ -361,13 +378,13 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 				units = append(units, a.UnitID)
 			}
 			if sameJSON(before.ParentID, after.ParentID) {
-				return units, false, true
+				return units, true, true
 			}
 		}
 		if after.ParentID == nil {
 			return nil, false, false
 		}
-		return append(units, *after.ParentID), false, true
+		return append(units, *after.ParentID), ch.Op == "update", true
 	case govKindMembership:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		if !keyed || ch.Op == "promote" {
@@ -388,6 +405,9 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 	case govKindUnitAdmin:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		return []uuid.UUID{unit}, true, keyed
+	case govKindUnitDeciders:
+		unit, err := uuid.Parse(ch.TargetKey)
+		return []uuid.UUID{unit}, true, err == nil
 	}
 	return nil, false, false
 }
@@ -400,7 +420,7 @@ func unitChangeApprover(ch types.GovernanceChange) govApprover {
 	if !ok {
 		return securityApprover
 	}
-	return unitScopeApprover(strict, units...)
+	return envelopeRootApprover(ch, unitScopeApprover(strict, units...)) // an envelope's root is security's
 }
 
 // changeApprover is one who may decide a held change: any security admin, or a unit admin grant (a
@@ -459,15 +479,22 @@ func (s *Server) approversFor(ctx context.Context, units []uuid.UUID, strict boo
 	return out
 }
 
-// changeApprovers is approversFor a held change: unit kinds by the units they touch, every other kind
-// a security admin decides (or, for an operator-tier kind, a super admin: none is listed then).
+// changeApprovers is approversFor a held change: unit kinds by the units they touch, a request kind by
+// its unit's rule (requestApprovers), every other kind a security admin decides (or, for an
+// operator-tier kind, a super admin: none is listed then).
 func (s *Server) changeApprovers(ctx context.Context, ch types.GovernanceChange) []changeApprover {
 	kind, ok := governanceChangeKinds[ch.TargetKind]
 	if !ok {
 		return nil
 	}
 	if units, strict, ok := unitChangeScope(ch); ok {
+		if s.envelopeSecurityOnly(ctx, ch) {
+			return []changeApprover{{Kind: "security"}}
+		}
 		return s.approversFor(ctx, units, strict, ch.ProposedBy, ch.ProposedByEmail)
+	}
+	if name, ok := requestKindOf(ch.TargetKind); ok {
+		return s.requestApprovers(ctx, ch, governanceRequestKinds[name].decider)
 	}
 	if kind.forChange(ch).approver.reason == securityApprover.reason {
 		return []changeApprover{{Kind: "security"}}

@@ -49,6 +49,14 @@ describe("mapRunMode vs the server's run-mode refusals", () => {
     expect([...background.matchAll(/pol\.(\w+)/g)].map((m) => m[1])).toEqual(["AutoStopAfterSec", "UIApps"]);
     expect(mapRunMode(body(policy({ auto_stop_after_sec: 600 })))).toBeNull();
     expect(mapRunMode(body(policy({ ui_apps: [{ name: "app", port: 8080 }] })))).toBeNull();
+    // An inbound app is the one gateway door a background task keeps: only an app that is not inbound is refused.
+    expect(background).toContain("!a.Inbound");
+    const inbound = { name: "api", port: 8080, inbound: true };
+    expect(mapRunMode(body(policy({ ui_apps: [inbound] })))).not.toBeNull();
+    expect(mapRunMode({ task: "make serve", interactive: false, task_mode: "exec", ...policy({ ui_apps: [inbound] }) })).toEqual({
+      mode_contract: "0.9", experience: "background", workload: { kind: "command", command: "make serve" },
+    });
+    expect(mapRunMode(body(policy({ ui_apps: [inbound, { name: "app", port: 8081 }] })))).toBeNull();
     // An interactive environment keeps its idle stop and its gateway.
     const interactive = { agent: "claude-code", task: "", interactive: true, interactive_start: "agent" } as const;
     expect(mapRunMode({ ...interactive, ...policy({ auto_stop_after_sec: 600 }) })).not.toBeNull();

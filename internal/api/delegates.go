@@ -55,6 +55,9 @@ type registerDelegateRequest struct {
 	Name        string `json:"name"`
 	IdPClientID string `json:"idp_client_id"`
 	Group       string `json:"group"`
+	// RunInUnder pins the portal to a governance unit, by id or exact name (run_portal_unit.go). Empty
+	// is unpinned. It is set here only: changing it means registering a new portal.
+	RunInUnder string `json:"run_in_under"`
 }
 
 // handleRegisterDelegate is POST /api/v1/admin/delegates: register one portal
@@ -64,7 +67,7 @@ type registerDelegateRequest struct {
 // (types.CanonicalGroupSubject), so it matches the exact string a person's
 // token produces. The portal's IdP client id may not be this deployment's own,
 // in any case or as its App ID URI: a subject token issued to Wardyn would then
-// pass the audience check for it.
+// pass the audience check for it. run_in_under, when given, must name an existing unit.
 func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) {
 	ds, ok := s.delegateStoreOr501(w)
 	if !ok {
@@ -93,17 +96,24 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateGroupInvalid, "group: required, printable ASCII")
 		return
 	}
+	pin, ok := s.resolvePortalUnit(w, r, req.RunInUnder)
+	if !ok {
+		return
+	}
 	raw := newBearer(delegateCredentialPrefix)
 	d, err := ds.CreateDelegate(r.Context(), types.Delegate{
-		ID: uuid.New(), Name: name, IdPClientID: clientID, Group: group, RegisteredBy: principalFromRequest(r),
+		ID: uuid.New(), Name: name, IdPClientID: clientID, Group: group, RegisteredBy: principalFromRequest(r), RunInUnder: pin,
 	}, raw)
 	if err != nil {
 		writeServerError(w, r, "register delegate", err)
 		return
 	}
+	created := map[string]any{"name": d.Name, "idp_client_id": d.IdPClientID, "group": d.Group}
+	if d.RunInUnder != nil {
+		created["run_in_under"] = d.RunInUnder.String()
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"delegate.create", d.ID.String(), "success",
-		mustJSON(map[string]any{"name": d.Name, "idp_client_id": d.IdPClientID, "group": d.Group})))
+		"delegate.create", d.ID.String(), "success", mustJSON(created)))
 	d.Credential = raw
 	writeJSON(w, http.StatusCreated, d)
 }
@@ -135,8 +145,10 @@ func (s *Server) handleListDelegates(w http.ResponseWriter, r *http.Request) {
 
 // handleRevokeDelegate is DELETE /api/v1/admin/delegates/{id}: the portal can
 // no longer exchange, and every delegated token it holds answers 401 on its
-// next request. Runs it launched keep running — they are the person's runs
-// (owner decision Q6). Already revoked is 404 and writes no second row.
+// next request. Runs it launched keep running — they are the person's runs.
+// With ?cut_in_flight=true (off by default) those runs also get no more
+// gateway tokens (gatewayMintVia); on a portal already revoked it stamps the
+// cut alone. Already revoked, or already cut, is 404 and writes no second row.
 func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 	ds, ok := s.delegateStoreOr501(w)
 	if !ok {
@@ -146,7 +158,11 @@ func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := ds.RevokeDelegate(r.Context(), id, s.cfg.Now().UTC())
+	cut, ok := cutInFlightOf(w, r)
+	if !ok {
+		return
+	}
+	d, inFlight, err := ds.RevokeDelegate(r.Context(), id, s.cfg.Now().UTC(), cut)
 	if notFoundIf(w, err, "delegate", reasonDelegateNotFound) {
 		return
 	}
@@ -155,6 +171,6 @@ func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"delegate.revoke", d.ID.String(), "success", mustJSON(map[string]any{"name": d.Name})))
+		"delegate.revoke", d.ID.String(), "success", mustJSON(revokeAuditData(d, cut, inFlight))))
 	w.WriteHeader(http.StatusNoContent)
 }

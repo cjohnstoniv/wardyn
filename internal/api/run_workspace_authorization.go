@@ -98,8 +98,7 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	if refusal != nil {
 		return workspaceSeed{}, refusal
 	}
-	seededImageOwner := seed.imageOwner
-	if refusal := s.seededImageRefusal(r, seededImageOwner, req.Image); refusal != nil {
+	if refusal := s.seededImageRefusal(r, seed, req.Image); refusal != nil {
 		return workspaceSeed{}, refusal
 	}
 	if msg, reason := s.validateImageBuildRequest(ctx, *req); msg != "" {

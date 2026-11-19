@@ -6,11 +6,14 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request) {
@@ -54,12 +57,19 @@ func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string, resolve
 		}
 	}
 	if err == nil && refusal == "" {
-		count, err = s.cfg.Store.DeleteSSHKeys(ctx, principal)
+		// A suspension tail leaves the keys the database stamped after its bound once the person is active
+		// again (withSuspensionBound): a key added after a reactivation is not its to delete.
+		b, bounded := suspensionBound(ctx)
+		if sb, can := s.cfg.Store.(store.SuspensionBounds); bounded && can {
+			count, err = sb.DeleteSSHKeysUpTo(ctx, b.id, principal, b.at)
+		} else {
+			count, err = s.cfg.Store.DeleteSSHKeys(ctx, principal)
+		}
 	}
 	data := map[string]any{"scope": scope, "count": count}
 	outcome := "success"
 	if err != nil {
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStep(ctx, auditStepDeleteSSHKeys, err, slog.String("principal", principal), slog.String("scope", scope))
 	}
 	if refusal != "" {
 		outcome, data["reason"] = "failure", refusal

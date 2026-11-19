@@ -22,6 +22,7 @@ import { firstInvalidStep, localIssues } from "./lenses/local-issues";
 import { NEW_RUN_STEPS, type NewRunStep } from "./lenses/step-issues";
 import { usePendingLaunch, type PendingLaunch } from "./launch/use-launch-run";
 import { seedLoaders } from "./steps/shape/seed-loaders";
+import { KeptMachinesProvider } from "./steps/run/kept-machines-provider";
 import { MacOSOfferProvider } from "./steps/run/macos-offer-provider";
 import { AnnounceContext } from "./steps/step-shell";
 
@@ -205,6 +206,8 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || modalLayerOpen()) return;
+      // Escape in a text field is that field's own (closing an autofill list, clearing a search), not a request to leave.
+      if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
       requestLeave(() => void navigate("/runs"));
     };
     window.addEventListener("keydown", onKey);
@@ -252,9 +255,11 @@ export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }
       <PendingLaunchContext.Provider value={pending}>
         <AnnounceContext.Provider value={setMessage}>
           <MacOSOfferProvider>
-            <React.Suspense fallback={<RouteFallback />}>
-              <NewRunFlow loaders={loaders} screens={screens} />
-            </React.Suspense>
+            <KeptMachinesProvider>
+              <React.Suspense fallback={<RouteFallback />}>
+                <NewRunFlow loaders={loaders} screens={screens} />
+              </React.Suspense>
+            </KeptMachinesProvider>
           </MacOSOfferProvider>
           <div role="status" aria-live="polite" className="sr-only">{message}</div>
         </AnnounceContext.Provider>

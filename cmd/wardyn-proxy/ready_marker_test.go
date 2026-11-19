@@ -5,7 +5,16 @@ package main
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -72,10 +81,9 @@ func TestMain_LogsListeningOnlyAfterTheFirstRenew(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok2", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)})
 	}))
 	t.Cleanup(cp.Close)
-	pin := strings.Repeat("ab", 32)
 	cfg, err := json.Marshal(&proxy.Config{
 		RunID: uuid.New(), ControlPlaneURL: cp.URL, RunToken: "tok", Listen: "127.0.0.1:0", SelfLapse: true,
-		DecisionSink: &proxy.DecisionSinkConfig{URL: "tls://127.0.0.1:1", SPKISHA256: pin, Key: pin},
+		DecisionSink: grantingSink(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -149,4 +157,50 @@ func TestMain_LogsListeningOnlyAfterTheFirstRenew(t *testing.T) {
 			t.Fatal("the proxy never logged that it is listening once its first renew landed")
 		}
 	}
+}
+
+// grantingSink stands in for wardyn-runnerd's decision sink: it accepts each session and grants it credit at
+// once, as a proxy with a runner sink listens only once it holds a grant.
+func grantingSink(t *testing.T) *proxy.DecisionSinkConfig {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: k}},
+		NextProtos: []string{proxy.SinkALPN}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if _, err := proxy.ReadSinkFrame(c); err != nil {
+					return
+				}
+				if proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameAccept, Gen: 1}) != nil ||
+					proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameGrant, Gen: 1, Through: 100, Bytes: 1 << 30}) != nil {
+					return
+				}
+				_, _ = io.Copy(io.Discard, c) // the test sends no request, so no record needs an ack
+			}()
+		}
+	}()
+	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	return &proxy.DecisionSinkConfig{URL: "tls://" + ln.Addr().String(), SPKISHA256: hex.EncodeToString(sum[:]), Key: strings.Repeat("ab", 32)}
 }

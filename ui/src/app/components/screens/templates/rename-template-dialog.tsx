@@ -8,7 +8,7 @@
 // (template_revision_conflict). A refusal keeps the typed name and the dialog, so the edit is applied
 // again, not retyped, once the list has reloaded.
 import * as React from "react";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../lib/template-refusals";
 import type { TemplateSummary } from "../../../lib/types/templates";
@@ -53,6 +53,8 @@ export function RenameTemplateDialog({
     inFlight.current = true;
     setBusy(true);
     setError(null);
+    // Read before the revision read: the save names this person, not whoever signs in while that read is out.
+    const person = getExpectedPrincipal();
     try {
       const seen = await templatesApi.getRevision(template.id, template.revision);
       // A document that carries its own name must agree with the request's, or the server refuses the save.
@@ -65,7 +67,7 @@ export function RenameTemplateDialog({
         description: seen.description,
         document,
         expected_revision: template.revision,
-      });
+      }, person);
       onRenamed(saved.name);
     } catch (err) {
       setError(getErrorMessage(err));

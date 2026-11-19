@@ -33,6 +33,9 @@ deploy/images/aws-sso/awscliv2-bin
 .env
 .env.local
 .env.*.local
+# A rewrite stopped between mktemp and mv leaves .env.XXXXXX beside the env file.
+.env.*
+!.env.example
 
 # Development
 .idea/
@@ -73,6 +76,7 @@ test/reports/go/
 test/reports/ui/
 test/reports/e2e/
 test/reports/coverage/
+ui/test/reports/
 
 # Seeded e2e backend artifacts (scripts/e2e-backend.sh): built binaries, logs,
 # and the wardynd recording-store scratch dir.

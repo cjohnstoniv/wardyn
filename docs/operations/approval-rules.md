@@ -40,10 +40,17 @@ The dry run writes nothing, not even an audit row.
 ```
 
 - `match` is AND across fields and OR within one, and names at least one repo or preset. A repo matches the run's repo, case-folded. A preset matches its name and version both, so editing the preset stops the match until the rule is rewritten.
-- `capabilities_within` matches only when the run's recorded GitHub or Azure DevOps capability list is non-empty and inside it.
+- `capabilities_within` matches only when the run's recorded GitHub or Azure DevOps capability list is non-empty and inside it. `pr` in the list means its parts (`pr_create`, `pr_vote` and `pr_complete` on Azure DevOps; `pr_write` and `pr_review` on GitHub), on the rule and on the run.
 - `approve.tools` and `approve.hosts` are exact: no `*`, no glob, no port. `egress_scope` is `once` or `run`, never `until` or `always`.
 - A host the Wardyn boundary does not allow in `hard_limits` is refused at write, `409 approval_rule_host`, and again when a rule decides.
 - A rule only approves. A deny already wins before an approval row exists: `tool_rules` deny, `policy:denied` and `always_deny` raise nothing.
+  - A person's deny for a host holds for the run, across a replaced proxy: a rule leaves a later approval for that host `PENDING` for a person (`approval.policy.skip`, `approval_rule_host_denied`), and it expires as any other.
+  - A `once` deny or a lapsed `until` deny does not stop a rule.
+  - A person's later allow that replaces the standing decision undoes the deny: `run`, `always` or an unexpired `until`. A `once` allow releases that one connection, and the deny stands.
+  - A person's deny covers its run. A new run starts without it, so a rule may approve the same host there.
+  - To close a host, an admin removes it from `approve.hosts`, which is live at the next raise, on a running run too, or denies it by policy. `denied_domains` reaches runs started after it, since a proxy keeps the policy it started with.
+  - A profile, boundary or restriction deny also reaches a standing run when its proxy is replaced.
+  - A host a rule already approved at `run` stays open on that run until its proxy raises again, as a replaced proxy does. Removing it from `approve.hosts` does not recall it.
 
 ## What bounds a rule
 

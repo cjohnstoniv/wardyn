@@ -192,6 +192,7 @@ func TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant(t 
 	}
 	assertMountSet(t, agent.host.Mounts, []mountSummary{
 		{Target: "/home/agent/work", Source: project, ReadOnly: false},
+		resolverSummary(spec.RunID),
 	})
 }
 

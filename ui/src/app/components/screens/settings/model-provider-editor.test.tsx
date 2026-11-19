@@ -8,11 +8,12 @@
 // lib/model-providers-copy.ts (itself pinned to
 // docs/design/model-providers-canon.md by model-providers-copy.test.ts).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { T } from "../../../lib/integrations";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
@@ -329,13 +330,14 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(screen.getByText(E.MODEL_HINT_BEDROCK)).toBeInTheDocument();
   });
 
-  it("How people sign in flips to Bearer: the IDC-only fields drop, Region stays, the provides line becomes a key line", async () => {
+  it("How people sign in flips to Bearer: the IDC-only fields and heading drop, the region is labelled for AWS, the provides line becomes a key line", async () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
     await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
 
     expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
-    expect(screen.getByLabelText(E.REGION)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.REGION_BEARER)).toBeInTheDocument();
+    expect(screen.queryByText(E.IDC_GROUP)).toBeNull();
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
     expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
     expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toBeNull();
@@ -390,7 +392,7 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(within(dialog()).getByText(MODEL_PROVIDERS.KIND.bedrock_bearer)).toBeInTheDocument();
     expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByLabelText(E.REGION)).toHaveValue("us-east-1");
+    expect(screen.getByLabelText(E.REGION_BEARER)).toHaveValue("us-east-1");
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
   });
 });
@@ -555,6 +557,34 @@ describe("E6 — save refused", () => {
     expect(assign).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: the editor is read-only until the reload answers, and a second click sends nothing", async () => {
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
+    let answer: (me: { principal: string }) => void = () => {};
+    whoamiMock.mockReturnValue(new Promise((done) => (answer = done)));
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    const discard = await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD });
+    await user.click(discard);
+    expect(screen.getByLabelText(E.BASE_URL)).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.SAVE })).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.REMOVE })).toBeDisabled();
+    await user.click(discard);
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    await act(async () => answer({ principal: "alice" }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload on a new provider: who it is available to is read-only too", async () => {
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockReturnValue(new Promise(() => {}));
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(screen.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.SAVE })).toBeDisabled();
   });
 });
 
@@ -756,5 +786,52 @@ describe("the draft rules", () => {
     expect(
       addressChanged(BEDROCK, { ...BEDROCK, bedrock: { ...BEDROCK.bedrock, sso_account_id: "999988887777" } }),
     ).toBe(false);
+  });
+});
+
+describe("extra headers in the editor", () => {
+  const HEADER_BODY =
+    'invalid model providers: model_providers: "corp-gateway": extra_headers: "X-Portkey-Api-Key" is this provider\'s own credential header';
+  const WITH_HEADER: ModelProvider = { ...CORP, extra_headers: [{ name: "X-Portkey-Provider", value: "anthropic" }] };
+
+  it("a refused save shows the server's sentence verbatim in the refusal box, and the fields keep what was typed", async () => {
+    putMock.mockRejectedValue(new HttpError(400, HEADER_BODY));
+    const { onSaved, user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.custom_endpoint }));
+    setField(screen.getByLabelText(E.BASE_URL), "https://gateway.corp.example");
+    setField(screen.getAllByLabelText(E.PATH)[0], "/anthropic");
+    setField(screen.getAllByLabelText(E.PATH)[1], "/v1");
+    await user.click(screen.getByRole("button", { name: E.HEADERS_ADD }));
+    setField(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER), "x-portkey-api-key");
+    setField(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER), "team");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+
+    const note = await screen.findByRole("alert");
+    expect(within(note).getByText(PROVIDERS.SAVE_REFUSED_TITLE_ONE)).toBeInTheDocument();
+    expect(note.querySelector("p")?.textContent).toBe(HEADER_BODY);
+    expect(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER)).toHaveValue("x-portkey-api-key");
+    expect(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER)).toHaveValue("team");
+    expect(screen.getByLabelText(E.BASE_URL)).toHaveValue("https://gateway.corp.example");
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("a changed header on a provider people have connected to asks the address confirm; Cancel writes nothing", async () => {
+    const { user } = renderEditor({ editing: WITH_HEADER, list: list([WITH_HEADER], { "corp-gateway": 12 }) });
+    const value = screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER);
+    await user.clear(value);
+    setField(value, "openai");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(within(alert()).getByText(E.ADDRESS_TITLE(WITH_HEADER.name!))).toBeInTheDocument();
+    expect(within(alert()).getByText(E.ADDRESS_BODY(12))).toBeInTheDocument();
+    await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("a save with no header edit asks nothing and keeps the stored rows", async () => {
+    const { onSaved, user } = renderEditor({ editing: WITH_HEADER, list: list([WITH_HEADER], { "corp-gateway": 12 }) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(putBody().providers[0].extra_headers).toEqual([{ name: "X-Portkey-Provider", value: "anthropic" }]);
   });
 });

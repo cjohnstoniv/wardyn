@@ -18,19 +18,23 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
+import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
-import { keptUntilText, weekdayClock } from "./run-ends-row";
+import { elevationCapAt, keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 import { reviveWithToasts } from "../runs/revive-run";
+import { ElevationRequestDialog } from "../elevation/elevation-request-dialog";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
 function endsWarningStageNow(run: RunDetail): RL.EndsWarningStage | null {
-  const approxLeaseMs = run.ends_at ? Date.parse(run.ends_at) - Date.parse(run.created_at) : 0;
-  return RL.endsWarningStage(run.ends_at, Date.now(), approxLeaseMs);
+  const end = elevationCapAt(run) ?? run.ends_at;
+  const approxLeaseMs = end ? Date.parse(end) - Date.parse(run.created_at) : 0;
+  return RL.endsWarningStage(end, Date.now(), approxLeaseMs);
 }
 
 // Claude Code continues its conversation on revive; every other harness
@@ -94,15 +98,23 @@ export function RunLifetimeBanner({
   containmentPending?: boolean;
 }) {
   const [action, setAction] = React.useState<Action>(null);
+  // The last action's failure, under the banner until the next action: a toast alone was gone before it could be
+  // read, and the banner's buttons stay to try again.
+  const [failure, setFailure] = React.useState<string | null>(null);
   // The stage and end it was dismissed at: a later stage or an extended end warns again.
   const [dismissed, setDismissed] = React.useState<string | null>(null);
   const [changeOpen, setChangeOpen] = React.useState(false);
+  // UXR-15: End run asks first, through the same confirm as the header's Kill.
+  const [confirmEnd, setConfirmEnd] = React.useState(false);
+  const [requestOpen, setRequestOpen] = React.useState(false);
   const operator = useOperator();
   const principal = usePrincipal();
   // F16 (PR #1317 review): every action here is owner-or-super-admin on the
   // server (run_revive.go, run_pause.go, run_end_wait.go) — a security admin
   // looking at a foreign run must not be offered a button that always 403s.
   const canAct = operator || run.created_by === principal;
+  // A request for elevation is made for whoever sends it, so only the run's owner is offered one for this run.
+  const isOwner = run.created_by === principal;
   // R2-3 (PR #1317 round-2 review): the SAME formula run-ends-row.tsx's own
   // Change…/Set an end… gate uses — Change end… (and its dialog's No end
   // option) needs the captured user_changes_limits gate too, not just
@@ -114,8 +126,9 @@ export function RunLifetimeBanner({
 
   const revive = async () => {
     setAction("revive");
+    setFailure(null);
     try {
-      if (await reviveWithToasts(run.id, "Couldn't revive this run")) onChanged();
+      if (await reviveWithToasts(run.id, "Couldn't revive this run", undefined, setFailure)) onChanged();
     } finally {
       setAction(null);
     }
@@ -123,12 +136,13 @@ export function RunLifetimeBanner({
 
   const extend = async (ms: number) => {
     setAction("extend");
+    setFailure(null);
     try {
       const base = run.ends_at && Date.parse(run.ends_at) > Date.now() ? Date.parse(run.ends_at) : Date.now();
       await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(base + ms).toISOString() });
       onChanged();
     } catch (err) {
-      toast.error("Couldn't extend this run", { description: getErrorMessage(err) });
+      setFailure(`Couldn't extend this run: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -141,15 +155,18 @@ export function RunLifetimeBanner({
   // warning banner's own "Extend 1 day" always offers).
   const extendAndRevive = async () => {
     setAction("revive");
+    // The revive waits on the end change: it goes out as the person who clicked, never as whoever signs in meanwhile.
+    const person = getExpectedPrincipal();
+    setFailure(null);
     try {
       const defaultMs = (run.run_limits?.default_end_sec ?? 24 * 60 * 60) * 1000;
       try {
         await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(Date.now() + defaultMs).toISOString() });
       } catch (err) {
-        toast.error("Couldn't extend and revive this run", { description: getErrorMessage(err) });
+        setFailure(`Couldn't extend and revive this run: ${getErrorMessage(err)}`);
         return;
       }
-      await reviveWithToasts(run.id, "Couldn't extend and revive this run");
+      await reviveWithToasts(run.id, "Couldn't extend and revive this run", person, setFailure);
       // The end has moved whatever the revive did, so the page re-reads either way.
       onChanged();
     } finally {
@@ -159,11 +176,13 @@ export function RunLifetimeBanner({
 
   const endRun = async () => {
     setAction("endRun");
+    setFailure(null);
     try {
       await runsApi.killRun(run.id);
+      toast.success(RL.ENDING(RL.toastRunName(run)));
       onChanged();
     } catch (err) {
-      toast.error(`Failed to end ${run.id}`, { description: getErrorMessage(err) });
+      setFailure(`${RL.COULDNT_END(RL.toastRunName(run))}: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -171,11 +190,12 @@ export function RunLifetimeBanner({
 
   const resume = async () => {
     setAction("resume");
+    setFailure(null);
     try {
       await runsApi.resumeRun(run.id);
       onChanged();
     } catch (err) {
-      toast.error("Couldn't resume this run", { description: getErrorMessage(err) });
+      setFailure(`Couldn't resume this run: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -235,7 +255,7 @@ export function RunLifetimeBanner({
                   </Button>
                 </>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -280,7 +300,7 @@ export function RunLifetimeBanner({
                   </Button>
                 </>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -313,7 +333,7 @@ export function RunLifetimeBanner({
                   {RL.ENDED_EXTEND_AND_REVIVE}
                 </Button>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -377,7 +397,21 @@ export function RunLifetimeBanner({
 
     // ---- Ending soon: the 24h/1h/10m warning (design.md §2.3) ----
     const stage = endsWarningStageNow(run);
-    if (stage && dismissed !== `${stage}@${run.ends_at}`) {
+    const cap = elevationCapAt(run);
+    const end = cap ?? run.ends_at;
+    if (stage && dismissed !== `${stage}@${end}`) {
+      // An elevation's end cannot be moved, so its warning offers Dismiss alone.
+      if (cap) {
+        return (
+          <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={RL.warnBodyElevation(weekdayClock(cap), isOwner)}>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDismissed(`${stage}@${cap}`)}>
+                {RL.WARN_DISMISS}
+              </Button>
+            </div>
+          </Banner>
+        );
+      }
       return (
         <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={run.ends_at ? RL.warnBody(weekdayClock(run.ends_at)) : undefined}>
           <div className="mt-2.5 flex flex-wrap gap-2">
@@ -412,11 +446,40 @@ export function RunLifetimeBanner({
   // Without this guard, a KILLED run that was lost or lease-ended kept
   // showing Revive/Extend/End run forever after End run, and every
   // lease-ended run the grace eventually stops did the same.
+  // The one terminal run that still speaks: the server killed it at its elevation's end, so a new request is the way on.
+  if (run.state === "KILLED" && run.status_reason === "max_lifetime_reached" && run.lifetime_cap_source === "elevation") {
+    return (
+      <>
+        <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={isOwner ? RL.ELEVATION_ENDED_TITLE : RL.ELEVATION_ENDED_TITLE_OTHER} body={RL.ELEVATION_ENDED_BODY}>
+          {isOwner && (
+            <div className="mt-2.5">
+              <Button size="sm" onClick={() => setRequestOpen(true)}>
+                {RL.REQUEST_ELEVATION}
+              </Button>
+            </div>
+          )}
+        </Banner>
+        {isOwner && <ElevationRequestDialog open={requestOpen} onOpenChange={setRequestOpen} unitId={run.unit_id} />}
+      </>
+    );
+  }
   if (isTerminalRunState(run.state)) return null;
 
   return (
     <>
       {renderPrimary()}
+      {failure !== null && (
+        <p role="alert" data-testid="run-lifetime-failure" className="mx-4 mt-2 shrink-0 rounded-md border border-danger/40 bg-danger-subtle px-2.5 py-2 text-xs text-danger">
+          {failure}
+        </p>
+      )}
+      <KillRunDialog
+        runId={confirmEnd ? run.id : null}
+        title={run.title?.trim() || run.task}
+        onOpenChange={(o) => !o && setConfirmEnd(false)}
+        onConfirm={() => void endRun()}
+        bothWaysFolder={run.computer_folder?.direction === "both"}
+      />
       {run.end_tightened_at && run.ends_at && (
         <p data-testid="run-lifetime-tightened" className="mx-4 mt-2 shrink-0 rounded-md border border-warning/30 bg-warning-subtle px-2.5 py-2 text-xs text-warning">
           {RL.endsTightened(weekdayClock(run.ends_at))}
@@ -426,7 +489,11 @@ export function RunLifetimeBanner({
         open={changeOpen}
         onOpenChange={setChangeOpen}
         run={run}
-        onChanged={onChanged}
+        onChanged={() => {
+          // A change saved in the dialog supersedes a banner action's earlier failure.
+          setFailure(null);
+          onChanged();
+        }}
         maxDays={limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined}
         allowNoEnd={allowNoEnd}
       />

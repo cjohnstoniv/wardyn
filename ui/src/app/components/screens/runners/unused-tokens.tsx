@@ -36,7 +36,9 @@ export function UnusedTokens({ tokens, onChanged }: { tokens: RunnerRegistration
               <TableHead>{RUNNERS.COL_FOR}</TableHead>
               <TableHead>{RUNNERS.COL_CREATED_BY}</TableHead>
               <TableHead>{RUNNERS.COL_EXPIRES}</TableHead>
-              <TableHead className="w-24" />
+              <TableHead className="w-24">
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -143,3 +143,20 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		})
 	}
 }
+
+// PreflightResult decodes a part of the preflight reply, so its tags must be a subset of the server's
+// preflightResponse, options included; the policy preview carries the allowed-models pair the same way.
+func TestPreflightResult_TagsAreTheServers(t *testing.T) {
+	server := serverJSONTags(t, "internal/api/preflight.go", "preflightResponse")
+	for _, tag := range clientJSONTags(t, client.PreflightResult{}) {
+		if !slices.Contains(server, tag) {
+			t.Errorf("client.PreflightResult tag %q is not on internal/api/preflight.go's preflightResponse %v", tag, server)
+		}
+	}
+	preview := serverJSONTags(t, "internal/api/policy_preview_facts.go", "policyPreviewResponse")
+	for _, tag := range []string{"allowed_models,omitempty", "allowed_models_unit,omitempty"} {
+		if !slices.Contains(server, tag) || !slices.Contains(preview, tag) || !slices.Contains(clientJSONTags(t, client.PreflightResult{}), tag) {
+			t.Errorf("%q is not on the client's PreflightResult and both server replies", tag)
+		}
+	}
+}

@@ -59,6 +59,21 @@
     "runner",
     "scm_provider"
   ],
+  "with_image_admission_scope": [
+    "age_key",
+    "agent_image",
+    "artifact_repo",
+    "claude_signin_image",
+    "env_builder",
+    "host_proxy",
+    "image_admission_scope",
+    "llm_provider",
+    "permissions_posture",
+    "platform_split",
+    "runner",
+    "scm_provider",
+    "site_config"
+  ],
   "with_k8s_runner": [
     "age_key",
     "agent_image",

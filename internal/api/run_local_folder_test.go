@@ -265,6 +265,49 @@ func TestSSHSyncPassReported(t *testing.T) {
 	}
 }
 
+// A start report opens a pass until the client's account of it; a success row
+// with a pass still open is a failure, and a failure keeps its own error.
+func TestSSHSyncPassStartOpensAPass(t *testing.T) {
+	s, ls, _, run, _ := localFolderFixture(t)
+	took := func(pass *sshSyncPass, v map[string]any) bool {
+		b, _ := json.Marshal(v)
+		return s.sshSyncPassReported(context.Background(), run.ID, "alice@example.com", pass, ssh.Marshal(struct{ Report string }{string(b)}))
+	}
+	const unfinished = "the session ended before its sync pass finished"
+	early := &sshSyncPass{}
+	if took(early, map[string]any{"started": true}) || early.outcome("success", map[string]any{}) != "success" {
+		t.Error("a start before the sync started was taken")
+	}
+	pass := &sshSyncPass{}
+	pass.start("/home/agent/work")
+	if pass.outcome("success", map[string]any{}) != "success" {
+		t.Error("a session with no reports lost its success")
+	}
+	if !took(pass, map[string]any{"started": true, "complete": true}) {
+		t.Fatal("a start report on a started sync was refused")
+	}
+	if ls.seed.SeededAt != nil || ls.seed.Error != "" {
+		t.Errorf("a start report reached the first-sync seed: %+v", ls.seed)
+	}
+	extra := map[string]any{}
+	if got := pass.outcome("success", extra); got != "failure" || extra["error"] != unfinished {
+		t.Errorf("open pass: %s, error %v; want failure, %q", got, extra["error"], unfinished)
+	}
+	extra = map[string]any{"error": "sftp-server exited 137"}
+	if got := pass.outcome("failure", extra); got != "failure" || extra["error"] != "sftp-server exited 137" {
+		t.Errorf("open pass on a failure: %s, error %v; want its own error kept", got, extra["error"])
+	}
+	for _, end := range []map[string]any{{"complete": true}, {"error": "disk full"}} {
+		if !took(pass, map[string]any{"started": true}) || !took(pass, end) {
+			t.Fatalf("refused a start or %v", end)
+		}
+		extra := map[string]any{}
+		if got := pass.outcome("success", extra); got != "success" || extra["error"] != nil {
+			t.Errorf("after %v: %s, error %v; want success", end, got, extra["error"])
+		}
+	}
+}
+
 func TestSFTPOpCounter_ReadsTheFraming(t *testing.T) {
 	packet := func(typ byte, body string) []byte {
 		b := make([]byte, 4, 64)

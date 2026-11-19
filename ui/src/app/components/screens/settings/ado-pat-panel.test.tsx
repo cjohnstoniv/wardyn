@@ -7,7 +7,7 @@
 // one (#1428, #1430): mock states 4, 8b, 9, 10 and 11, through the card's own
 // shell so the deep link and the collapse behave as they do for the sign-in lane.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -24,8 +24,13 @@ vi.mock("../../../lib/hooks/use-ado-connect", () => ({
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastWarning = vi.fn();
 vi.mock("sonner", () => ({
-  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) },
+  toast: {
+    success: (...a: unknown[]) => toastSuccess(...a),
+    error: (...a: unknown[]) => toastError(...a),
+    warning: (...a: unknown[]) => toastWarning(...a),
+  },
 }));
 
 const disconnectMock = vi.fn();
@@ -45,6 +50,13 @@ vi.mock("../../../lib/api/ado-pat", async () => {
 });
 
 import { AdoConnectionCard } from "./ado-connection";
+import { shortTime } from "../../../lib/format";
+
+// Clock times follow the reader's locale (lib/format.ts shortTime), so the expected text is built the same way.
+const hm = (s: string) => {
+  const [h, m] = s.split(":").map(Number);
+  return shortTime(new Date(2000, 8, 29, h, m).toISOString());
+};
 
 const ORG = "https://dev.azure.com/wardyn-live-test";
 const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
@@ -79,6 +91,7 @@ beforeEach(() => {
   removeMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
+  toastWarning.mockReset();
 });
 
 describe("a row that creates a token for each run", () => {
@@ -96,16 +109,16 @@ describe("a row that creates a token for each run", () => {
   });
 
   it("4c: connected says how the tokens are made and names the last one", async () => {
-    renderCard({ ...minted, state: "live", source: "org", last_token: { created_at: at(9, 2), revoked_at: at(9, 41) } });
+    renderCard({ ...minted, state: "live", source: "org", last_token: { created_at: at(9, 2), valid_to: at(17, 2), revoked_at: at(9, 41) } });
     expect(screen.getByText(ADO_PAT.CHIP_CONNECTED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(ADO_PAT.MEMBER_CONNECTED)).toBeInTheDocument();
-    expect(screen.getByText("Last token: created 09:02, revoked 09:41.")).toBeInTheDocument();
+    expect(screen.getByText(`Last token: created ${hm("09:02")}, revoked ${hm("09:41")}.`)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
   });
 
   it("4d: Disconnect asks first, says what it revokes, and only then disconnects", async () => {
-    disconnectMock.mockResolvedValue(undefined);
+    disconnectMock.mockResolvedValue({});
     const onChanged = renderCard({ ...minted, state: "live", source: "org" });
     await expandCard("Azure DevOps");
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
@@ -116,6 +129,17 @@ describe("a row that creates a token for each run", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
     await waitFor(() => expect(disconnectMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("4d: a disconnect that could not confirm every revoke says so until dismissed", async () => {
+    disconnectMock.mockResolvedValue({ tokensRevocationFailed: true, detail: "remedy" });
+    const onChanged = renderCard({ ...minted, state: "live", source: "org" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith("remedy", { duration: Infinity }));
+    expect(onChanged).toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it("4d: Cancel leaves the connection alone", async () => {
@@ -246,14 +270,16 @@ describe("a row where each person adds their own token", () => {
 
   it("11: another account's token is refused under the Token field, never naming the account", async () => {
     const dialog = await refuse("ado_own_pat_identity_mismatch");
-    expect(await within(dialog).findByText(ADO_PAT.OWN_MISMATCH)).toBeInTheDocument();
+    expect(await within(dialog).findByText(ADO_PAT.OWN_MISMATCH)).toHaveAttribute("role", "alert");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveAccessibleDescription(ADO_PAT.OWN_MISMATCH);
   });
 
   it("11: an expiry past the administrator's limit is refused under Expires on", async () => {
     const dialog = await refuse("ado_own_pat_expiry_too_long");
-    expect(await within(dialog).findByText(ADO_PAT.OWN_TOO_LONG(30))).toBeInTheDocument();
+    expect(await within(dialog).findByText(ADO_PAT.OWN_TOO_LONG(30))).toHaveAttribute("role", "alert");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveAccessibleDescription(ADO_PAT.OWN_TOO_LONG(30));
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).not.toHaveAttribute("aria-invalid", "true");
   });
 
@@ -275,6 +301,26 @@ describe("a row where each person adds their own token", () => {
     dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveValue("");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveValue("");
+  });
+
+  it("a token still being stored keeps its dialog and its fields: Escape and Cancel do nothing until the answer", async () => {
+    let answer: (() => void) | undefined;
+    storeMock.mockImplementation(() => new Promise<void>((done) => (answer = done)));
+    const onChanged = renderCard({ ...own, state: "not_configured" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2000-10-27");
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }));
+    expect(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_CANCEL })).toBeDisabled();
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveValue("pasted-secret");
+    await act(async () => answer?.());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   it("10: expiring counts the days and offers Replace token", async () => {

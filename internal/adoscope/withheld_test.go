@@ -43,7 +43,7 @@ func TestClassifyWithheldBodyAsksOnlyWhereTheBodyDecides(t *testing.T) {
 		{withheld(http.MethodPut, "dev.azure.com", "/acme/proj/_apis/wiki/wikis/w/attachments"), CapWikiWrite},
 		{withheld(http.MethodPut, "pkgs.dev.azure.com", "/acme/_packaging/feed/npm/registry/pkg"), CapPackagingWrite},
 		{withheld(http.MethodPatch, "dev.azure.com", "/acme/proj/_apis/wit/workitems/1"), CapWorkWrite},
-		{withheld(http.MethodDelete, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/pullrequests/5"), CapPR},
+		{withheld(http.MethodDelete, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/pullrequests/5"), CapPRCreate},
 		{withheld(http.MethodGet, "dev.azure.com", "/acme/_apis/projects"), CapProjectRead},
 	} {
 		got, err := Classify(tc.req)

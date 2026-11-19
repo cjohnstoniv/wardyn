@@ -4,14 +4,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -156,6 +159,32 @@ func TestGovCovSameGovernanceHuman(t *testing.T) {
 			ch := types.GovernanceChange{ProposedBy: c.proposedBy, ProposedByEmail: c.proposedMail}
 			if got := sameGovernanceHuman(ch, c.principal, c.email); got != c.want {
 				t.Errorf("sameGovernanceHuman = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Ownership, unlike the same-human refusal, follows a mailbox only when sign-in vouches for it.
+func TestGovCovOwnsGovernanceChange(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		trusted                  bool
+		proposedBy, proposedMail string
+		principal, email         string
+		want                     bool
+	}{
+		{"the same principal owns it", false, "sub-a", "alice@corp.example", "sub-a", "other@corp.example", true},
+		{"an unvouched mailbox under another principal does not", false, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", false},
+		{"a vouched mailbox under another principal does", true, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", true},
+		{"two different people do not, vouched or not", true, "sub-a", "alice@corp.example", "sub-b", "bob@corp.example", false},
+		{"empty mailboxes never match, vouched or not", true, "sub-a", "", "sub-b", "", false},
+		{"empty principals never match", false, "", "alice@corp.example", "", "bob@corp.example", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := govCovServer(t, &govCovStore{}, func(cfg *Config) { cfg.AllowEmailMappings = c.trusted })
+			ch := types.GovernanceChange{ProposedBy: c.proposedBy, ProposedByEmail: c.proposedMail}
+			if got := s.ownsGovernanceChange(ch, c.principal, c.email); got != c.want {
+				t.Errorf("ownsGovernanceChange = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -538,6 +567,82 @@ func TestGovCovRecheckApprover(t *testing.T) {
 	})
 }
 
+func TestGovCovRecheckLiveToken(t *testing.T) {
+	tokenID := uuid.MustParse("cccccccc-0000-0000-0000-000000000003")
+	s, h := govCovServer(t, &govCovStore{})
+	session := govCovHumanReq(http.MethodPost, "/x", "sub-alice", "alice@corp.example", oidc.RoleUser)
+	tokenReq := session.WithContext(withAPITokenID(session.Context(), tokenID))
+
+	t.Run("a session caller has no token to read", func(t *testing.T) {
+		q := &govCovQuerier{}
+		tok, err := s.recheckLiveToken(session.Context(), q)
+		if tok != nil || err != nil || len(q.seen) != 0 {
+			t.Errorf("recheck = %v, %v after %v, want nil, nil and no statement", tok, err, q.seen)
+		}
+	})
+
+	t.Run("a token that is gone is the auth lane's 401", func(t *testing.T) {
+		q := &govCovQuerier{}
+		_, err := s.recheckLiveToken(tokenReq.Context(), q)
+		var refusal *govRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("recheck = %v, want a refusal", err)
+		}
+		w := httptest.NewRecorder()
+		refusal.write(w, tokenReq)
+		if w.Code != http.StatusUnauthorized || errorReason(w) != reasonInvalidAdminToken {
+			t.Errorf("refusal = %d %q, want 401 %q", w.Code, errorReason(w), reasonInvalidAdminToken)
+		}
+		if len(q.seen) != 1 || !strings.Contains(q.seen[0], "api_tokens") {
+			t.Errorf("statements = %v, want the one token read", q.seen)
+		}
+		if len(govCovAudits(h, "auth.fail")) == 0 {
+			t.Errorf("a gone token was not audited as an auth failure: %v", govCovAuditActions(h))
+		}
+	})
+
+	t.Run("a failing token read is the store error, never a pass", func(t *testing.T) {
+		boom := errors.New("pg: down")
+		q := &govCovQuerier{rowErr: func(string) error { return boom }}
+		tok, err := s.recheckLiveToken(tokenReq.Context(), q)
+		var refusal *govRefusal
+		if tok != nil || err == nil || errors.As(err, &refusal) || !errors.Is(err, boom) {
+			t.Errorf("recheck = %v, %v, want no token and the store error itself", tok, err)
+		}
+	})
+}
+
+// A proposer outside the change's approver set may withdraw it, and a token-authenticated one is held
+// to a live token inside the decision: a token revoked after the request was authenticated is refused
+// 401 invalid_admin_token, and the change stays pending.
+func TestGovCovWithdrawByRevokedTokenIsRefused(t *testing.T) {
+	st := &govCovStore{}
+	s, h := govCovServer(t, st)
+	ch := govCovGrantDelete(s, "sub-alice", "alice@corp.example")
+	st.got = ch
+	q := &govCovQuerier{} // every token read finds no live row
+	st.decideFn = govCovDecideThrough(q, ch, ch)
+
+	r := govCovHumanReq(http.MethodPost, govCovChangesPath+"/"+ch.ID.String()+"/reject", "sub-alice", "alice@corp.example", oidc.RoleUser)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", ch.ID.String())
+	ctx := withAPITokenID(context.WithValue(r.Context(), chi.RouteCtxKey, rctx), uuid.MustParse("cccccccc-0000-0000-0000-000000000003"))
+	w := httptest.NewRecorder()
+	s.decideGovernanceChange(w, r.WithContext(ctx), false)
+
+	if w.Code != http.StatusUnauthorized || errorReason(w) != reasonInvalidAdminToken {
+		t.Fatalf("withdraw with a revoked token = %d %q (%s), want 401 %q", w.Code, errorReason(w), w.Body.String(), reasonInvalidAdminToken)
+	}
+	if len(q.seen) != 1 || !strings.Contains(q.seen[0], "api_tokens") || len(q.writes()) != 0 {
+		t.Errorf("statements = %v, want only the token read and no write", q.seen)
+	}
+	for _, a := range govCovAuditActions(h) {
+		if a == "governance.change.reject" {
+			t.Errorf("a refused withdrawal audited %s", a)
+		}
+	}
+}
+
 func TestGovCovDenyApproverAndRefusalError(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	ref := s.denyApprover(govKind{approver: operatorApprover})
@@ -582,5 +687,42 @@ func TestGovCovListChangesSaysWhenTheStoreHitItsCap(t *testing.T) {
 	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
 	if w.Header().Get("X-Wardyn-Truncated") != "" {
 		t.Errorf("a short read set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+}
+
+// The pending queue is cut after the caller's filter, never before it: an older change the caller may see,
+// behind more than the bound of newer ones they may not, is listed, and a list of exactly the bound they
+// may see is complete. A history read the store cut still says so, whatever the caller may see of it.
+func TestGovCovListChangesCutsThePendingQueueAfterTheFilter(t *testing.T) {
+	hidden := make([]types.GovernanceChange, store.MaxGovernanceChangeList+1)
+	for i := range hidden {
+		hidden[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: "no_such_kind"} // no caller may see it
+	}
+	older := types.GovernanceChange{ID: uuid.New(), TargetKind: govKindUnit}
+	st := &govCovStore{changes: append(slices.Clone(hidden), older)}
+	s, _ := govCovServer(t, st)
+	w := do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	var got []types.GovernanceChange
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 1 || got[0].ID != older.ID {
+		t.Errorf("the older visible change behind %d hidden ones: got %d rows (err %v), want it alone", len(hidden), len(got), err)
+	}
+	if w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("a pending queue that holds every change the caller may see set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+
+	visible := make([]types.GovernanceChange, store.MaxGovernanceChangeList)
+	for i := range visible {
+		visible[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindUnit}
+	}
+	st.changes = append(slices.Clone(visible), hidden...)
+	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != store.MaxGovernanceChangeList || w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("exactly the bound visible: %d rows, X-Wardyn-Truncated %q (err %v), want %d and unset", len(got), w.Header().Get("X-Wardyn-Truncated"), err, store.MaxGovernanceChangeList)
+	}
+
+	st.changes = append(slices.Clone(hidden), older)
+	w = do(t, s, http.MethodGet, govCovChangesPath+"?state=applied", adminToken, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 0 || w.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Errorf("a history read past the bound: %d rows, X-Wardyn-Truncated %q (err %v), want none listed and true", len(got), w.Header().Get("X-Wardyn-Truncated"), err)
 	}
 }

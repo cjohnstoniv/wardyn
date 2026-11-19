@@ -42,5 +42,6 @@ export async function downloadPartition(name: string, form: PartitionExportForm)
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Next tick: a revoke right after the click can cancel the download before the browser has the file.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

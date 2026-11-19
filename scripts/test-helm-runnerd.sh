@@ -50,7 +50,7 @@ want='[{"from":[{"namespaceSelector":{"matchExpressions":[{"key":"kubernetes.io/
 [ "$ingress" = "$want" ] || die "runnerd ingress is not exactly proxy pods of the runs namespace on relay and sink: $ingress"
 [ "$(grep -c 'namespaceSelector: {}' <<<"$out")" = 1 ] || die "a namespaceSelector: {} peer other than DNS rendered"
 val "$out" 'select(.kind == "NetworkPolicy") | .spec.egress[] | select(.ports[0].port == 443 and .to[0].ipBlock) | .to[0].ipBlock.except | join(",")' \
-  | grep -x '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16' >/dev/null \
+  | grep -x '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,168.63.129.16/32' >/dev/null \
   || die "the default organisation egress no longer excludes the private ranges pods use"
 grep -q 'cidr: 203.0.113.0/24' <<<"$(render --set 'egress.orgCIDRs[0]=203.0.113.0/24')" || die "egress.orgCIDRs did not render"
 ok "NetworkPolicy: proxy-only ingress, DNS the only cluster-wide peer, private ranges excluded"
@@ -107,6 +107,11 @@ refused "extraRunsNamespaces repeats itself" "must be unique" -f "$VALUES" --set
 refused "extraRunsNamespaces holds an empty name" "is not a namespace name" -f "$VALUES" --set extraRunsNamespaces[0]=
 refused "workloads.namespaces repeats itself" "workloads.namespaces must be unique" -f "$VALUES" --set workloads.namespaces[0]=t --set workloads.namespaces[1]=t
 refused "workloads.namespaces holds an empty name" "is not a namespace name" -f "$VALUES" --set workloads.namespaces[0]=
+refused "apiServer.ports empty" "apiServer.ports must list" -f "$VALUES" --set-json 'apiServer.ports=[]'
+refused "apiServer.ports holds an empty entry" "apiServer.ports must list" -f "$VALUES" --set 'apiServer.ports={}'
+refused "apiServer.ports holds a blank entry" "apiServer.ports must list" -f "$VALUES" --set 'apiServer.ports={443, }'
+refused "apiServer.ports holds a word YAML reads as null" "apiServer.ports must list" -f "$VALUES" --set-string 'apiServer.ports[0]=null'
+refused "relay.servicePort empty" "relay.servicePort must be a port number" -f "$VALUES" --set relay.servicePort=
 
 # RBAC parity with the control-plane chart.
 server="$(helm template w deploy/helm/wardyn -n wardyn \

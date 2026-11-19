@@ -588,15 +588,19 @@ func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserD
 
 // ListUserDriveGrants returns every grant in the order the resolver itself
 // would rank them (tier, then priority, then subject) so the console's table
-// reads top-down as the precedence rule, not insertion order.
+// reads top-down as the precedence rule, not insertion order. The grant id
+// comes last, because one subject may hold several drives at one priority.
 func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error) {
 	return collect(ctx, s.Pool, "list", "user drive grants", userDriveGrantList, nil, scanUserDriveGrant)
 }
 
 // userDriveGrantList is the grant read WITHOUT its window, written once so the
-// whole-list and paged forms cannot drift into two different orders.
+// whole-list and paged forms cannot drift into two different orders. The id is
+// the last key so the order is total: rows equal on the rest would otherwise
+// come back in any order, and one read per offset could repeat a grant on two
+// pages and skip another.
 const userDriveGrantList = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
-		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
+		ORDER BY ` + subjectTierOrder + `, priority DESC, subject, id`
 
 // ListUserDriveGrantsPage is ListUserDriveGrants bounded to one window. The
 // LIMIT changes the plan, not just the size: this ORDER BY has no serving

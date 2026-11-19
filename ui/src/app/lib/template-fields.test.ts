@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(23);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(26);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -75,10 +75,13 @@ describe("template field registry", () => {
 
   it("excludes the secret-bearing, retired and launch-only fields and nothing else", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
+      "correlation_id",
       "description",
+      "desktop_window",
       "integration_id",
       "keep_work_folder",
       "local_folder",
+      "machine",
       "machine_kind",
       "macos_base",
       "max_wait_sec",
@@ -90,6 +93,7 @@ describe("template field registry", () => {
       "start_at",
       "start_time_zone",
       "title",
+      "wall_preset",
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
@@ -102,6 +106,10 @@ describe("template field registry", () => {
       "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
       "RunLocalFolder.runner_id",
+      "RunMachine.fresh",
+      "RunMachine.keep",
+      "RunMachine.name",
+      "RunMachine.resume",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });

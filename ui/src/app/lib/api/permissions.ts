@@ -85,22 +85,25 @@ export interface GrantUpsert {
 export const permissions = {
   // GET /api/v1/permissions -> {grants, enforcement}. A nil Go slice/map
   // encodes as null, so both halves are coerced here and every caller can map
-  // over grants / index enforcement without a guard.
+  // over grants / index enforcement without a guard. The ETag is kept for
+  // putEnforcement's If-Match.
   async getPermissions(): Promise<PermissionsSnapshot> {
     const res = await wfetch("/permissions", { method: "GET" });
     const body = await asJson<Partial<PermissionsSnapshot>>(res);
     return {
       grants: unwrapList<CapabilityGrant>(body.grants),
       enforcement: body.enforcement ?? {},
+      etag: res.headers.get("ETag"),
     };
   },
 
   // POST /api/v1/permissions/grants -> the stored row. 201 = created,
   // 200 = an existing (subject_type, subject, capability, value) had its
-  // effect updated in place.
-  async upsertGrant(input: CapabilityGrantInput): Promise<GrantUpsert> {
+  // effect updated in place. `person`: a later step of a save of several
+  // requests names the person it began under (core.ts WfetchInit.asPerson).
+  async upsertGrant(input: CapabilityGrantInput, person?: string): Promise<GrantUpsert> {
     const res = await wfetch("/permissions/grants", {
-      method: "POST", asPerson: true,
+      method: "POST", asPerson: person ?? true,
       body: JSON.stringify(input),
     });
     const updated = res.status === 200;
@@ -118,15 +121,22 @@ export const permissions = {
     }
   },
 
-  // PUT /api/v1/permissions/enforcement -> the saved map. FULL REPLACE: a key
-  // omitted from the body is a real "stop enforcing that kind", so callers
-  // must send the whole map, never a patch.
-  async putEnforcement(enforcement: Record<string, boolean>): Promise<Record<string, boolean>> {
+  // PUT /api/v1/permissions/enforcement -> the saved map and its new ETag.
+  // FULL REPLACE: a key omitted from the body is a real "stop enforcing that
+  // kind", so callers must send the whole map, never a patch, together with
+  // the ETag of the map they built it from. A map changed since then is a 412
+  // (HttpError), so a stale page can never switch someone else's kind back.
+  async putEnforcement(
+    enforcement: Record<string, boolean>,
+    etag: string | null | undefined,
+  ): Promise<{ enforcement: Record<string, boolean>; etag: string | null }> {
     const res = await wfetch("/permissions/enforcement", {
       method: "PUT", asPerson: true,
+      headers: etag ? { "If-Match": etag } : {},
       body: JSON.stringify(enforcement),
     });
-    return (await asJson<Record<string, boolean> | null>(res)) ?? {};
+    const saved = (await asJson<Record<string, boolean> | null>(res)) ?? {};
+    return { enforcement: saved, etag: res.headers.get("ETag") };
   },
 
   // GET /api/v1/permissions/availability/{kind}/{value} -> one resource's
@@ -146,9 +156,9 @@ export const permissions = {
   // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
   // flipped. Turning "Only…" on with nobody already listed is refused (400);
   // the server's message is surfaced verbatim by the caller, never reworded.
-  async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
+  async putAvailability(kind: string, value: string, restricted: boolean, person?: string): Promise<AvailabilityView> {
     const res = await wfetch(availabilityPath(kind, value), {
-      method: "PUT", asPerson: true,
+      method: "PUT", asPerson: person ?? true,
       body: JSON.stringify({ restricted }),
     });
     return asJson<AvailabilityView>(res);

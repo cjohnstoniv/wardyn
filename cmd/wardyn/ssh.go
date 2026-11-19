@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
@@ -274,7 +275,7 @@ func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, ad
 			// editor writes the command into ~/.wardyn/ssh_config, so unlike exec
 			// and forward it outlives this invocation.
 			return sshAccess{}, fmt.Errorf("editor: this deployment advertises a ProxyCommand:\n  %s\n"+
-				"run again with --advertised-proxy to write it into %s, where VS Code and any `ssh wardyn-<short-id>` "+
+				"run again with --advertised-proxy to write it into %s, where VS Code and any `ssh wardyn-<run-id>` "+
 				"run it on this computer on every connection until you remove the block", gw.proxy, wardynSSHConfig)
 		}
 		return sshAccess{}, fmt.Errorf("%s: this deployment advertises a ProxyCommand, which would run on this computer:\n  %s\n"+
@@ -298,7 +299,7 @@ func sshConfigBlock(gw sshGateway, runID, identity string) string {
 		port = "22"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Host wardyn-%s\n  HostName %s\n  Port %s\n  User %s\n", shortRunID(runID), gw.host, port, runID)
+	fmt.Fprintf(&b, "Host %s\n  HostName %s\n  Port %s\n  User %s\n", sshHostAlias(runID), gw.host, port, runID)
 	if gw.proxy != "" {
 		fmt.Fprintf(&b, "  ProxyCommand %s\n", gw.proxy)
 	}
@@ -371,14 +372,15 @@ func runSSHBinary(ctx context.Context, args []string) error {
 	return nil
 }
 
-// shortRunID mirrors the console's Host-block label (run-detail-ssh.tsx):
-// the "run_" prefix stripped, then the first 8 characters.
-func shortRunID(runID string) string {
-	id := strings.TrimPrefix(runID, "run_")
-	if len(id) > 8 {
-		id = id[:8]
+// sshHostAlias is the Host name a run is saved under in ssh_config, the console's Host-block label
+// (run-detail-ssh.tsx) too: "wardyn-" and the run's whole id in its canonical form, whichever UUID form
+// was typed. Every run has its own, so saving one run's block never replaces another's and a saved
+// connection never retargets.
+func sshHostAlias(runID string) string {
+	if id, err := uuid.Parse(runID); err == nil {
+		runID = id.String()
 	}
-	return id
+	return "wardyn-" + runID
 }
 
 // bracketedHostPort matches a bracketed IPv6 literal with an optional port,

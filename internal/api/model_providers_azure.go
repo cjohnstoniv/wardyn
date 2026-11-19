@@ -42,7 +42,7 @@ const (
 const (
 	mp400AzureGate     = "model_providers: %q: the azure_foundry kind is not available in this release"
 	mp400AzureUnused   = "model_providers: %q: azure applies only to the azure_foundry kind"
-	mp400AzureFastKind = "model_providers: %q: fast_model applies only to the azure_foundry kind"
+	mp400AzureFastKind = "model_providers: %q: fast_model applies only to the azure_foundry and custom_endpoint kinds"
 	mp400AzureNeed     = "model_providers: %q: an azure_foundry provider needs azure.endpoint and azure.route"
 	mp400AzureOther    = "model_providers: %q: an azure_foundry provider's address is azure.endpoint — base_url, bedrock and auth do not apply"
 	mp400AzureEndpoint = "model_providers: %q: azure.endpoint %q must be https://<host> — no path, port, userinfo, query or fragment, and a lower-case host with no trailing dot"
@@ -153,8 +153,16 @@ func validateProviderAzure(mp types.ModelProvider, env providerWriteEnv) error {
 		if mp.Azure != nil {
 			return fmt.Errorf(mp400AzureUnused, mp.ID)
 		}
-		if slices.ContainsFunc(mp.Harnesses, func(h types.ProviderHarness) bool { return h.FastModel != "" }) {
-			return fmt.Errorf(mp400AzureFastKind, mp.ID)
+		for _, h := range mp.Harnesses {
+			switch {
+			case h.FastModel == "":
+			case mp.Kind != types.ModelProviderCustomEndpoint:
+				return fmt.Errorf(mp400AzureFastKind, mp.ID)
+			default:
+				if err := validateFastModel(mp, h); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
@@ -218,6 +226,14 @@ func validateAzureHarness(mp types.ModelProvider, h types.ProviderHarness) error
 	switch {
 	case h.Model == "":
 		return atField("harnesses."+h.Harness+".model", fmt.Errorf(mp400AzureModelNeed, mp.ID, h.Harness))
+	}
+	return validateFastModel(mp, h)
+}
+
+// validateFastModel holds fast_model to the Messages harness and the model-id pattern, on azure_foundry and
+// custom_endpoint alike. An unset one passes.
+func validateFastModel(mp types.ModelProvider, h types.ProviderHarness) error {
+	switch {
 	case h.FastModel != "" && h.Harness != azureMessagesHarness:
 		return atField("harnesses."+h.Harness+".fast_model", fmt.Errorf(mp400AzureFastModel, mp.ID, h.Harness))
 	case h.FastModel != "" && !modelIDPattern.MatchString(h.FastModel):

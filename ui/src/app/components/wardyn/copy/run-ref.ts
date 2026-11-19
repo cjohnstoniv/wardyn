@@ -10,5 +10,4 @@ export const RUN_REF = {
   /** The lead word when the page does not know the run's title: the id stands alone after it. */
   ID_ONLY: "Run",
   /** The kill question when no title is known; it names the short id, never the long one. */
-  killRun: (shortId: string) => `Kill run ${shortId}?`,
 } as const;

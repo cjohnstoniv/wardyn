@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as RL from "../../wardyn/copy/run-lifetime";
+import { setExpectedPrincipal } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AdminOlderLimitsCard } from "./admin-older-limits-card";
 
@@ -78,7 +79,7 @@ describe("AdminOlderLimitsCard", () => {
     renderCard();
     await screen.findByText("Older limits · 1");
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
-    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"], 210_000));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"], 210_000, ""));
     expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
     // Re-lists after a restart (best-effort refresh).
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
@@ -200,6 +201,32 @@ describe("AdminOlderLimitsCard", () => {
     await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(30));
     expect(restartAdminRunsMock.mock.calls.every(([batch]) => batch.length === 5)).toBe(true);
     expect(restartAdminRunsMock.mock.calls.every(([batch, timeoutMs]) => timeoutMs === batch.length * 210_000)).toBe(true);
+  });
+
+  it("a batch after another person signed in still names the person who started the restart", async () => {
+    // The server then refuses that batch rather than restart those runs as the next person.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const ids = Array.from({ length: 6 }, (_, i) => `r${i}`);
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: ids.map((id) => ({ run_id: id, created_by: "u1", state: "RUNNING", proxy_release: "0.6" })),
+    });
+    let first!: (v: { results: { run_id: string; ok: boolean }[] }) => void;
+    restartAdminRunsMock
+      .mockImplementationOnce(() => new Promise((done) => (first = done)))
+      .mockImplementation(async (batch: string[]) => ({ results: batch.map((run_id) => ({ run_id, ok: true })) }));
+    renderCard();
+    await screen.findByText("Older limits · 6");
+    setExpectedPrincipal("a@example.com");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    first({ results: ids.slice(0, 5).map((run_id) => ({ run_id, ok: true })) });
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(2));
+    expect(restartAdminRunsMock.mock.calls.map((c) => c[2])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
   });
 
   it("keeps the first batch's results when a later batch fails, and refreshes the listing", async () => {

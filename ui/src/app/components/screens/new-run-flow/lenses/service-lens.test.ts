@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunService } from "../../../../lib/types/runs";
 import type { RunIntent } from "../draft/run-intent";
-import { keepRunning, serviceIssues, serviceProblems, serviceWire, setHealth, setPort } from "./service-lens";
+import { keepRunning, serviceIssues, serviceProblems, serviceWire, setHealth, setPort, setProbe } from "./service-lens";
 
 const SCRIPT: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "./serve" } };
 const health = { path: "/ready", interval_sec: 30, failure_threshold: 5 };
@@ -82,5 +82,23 @@ describe("serviceIssues", () => {
     expect(serviceIssues(bad).map((i) => [i.home, i.code])).toEqual([["run", "service_port_invalid"], ["run", "service_path_invalid"]]);
     expect(serviceIssues({ ...bad, experience: "interactive" })).toEqual([]);
     expect(serviceIssues(setHealth(withService(svc()), { path: "/ok" }))).toEqual([]);
+  });
+});
+
+describe("setProbe", () => {
+  it("turns Wardyn's check on and off inside the health check, and off leaves no field", () => {
+    const on = setProbe(withService(svc()), true);
+    expect(on.service?.health).toEqual({ ...health, probe: "control_plane" });
+    const off = setProbe(on, false);
+    expect(off.service?.health).toEqual(health);
+    expect(off.service?.health && "probe" in off.service.health).toBe(false);
+  });
+
+  it("does nothing without a health check, and rides out of the request with it while no port is named", () => {
+    const bare = withService({ restart: "on_failure" });
+    expect(setProbe(bare, true)).toBe(bare);
+    const on = setProbe(withService(svc()), true);
+    expect(serviceWire(setPort(on, 0).service!)).toEqual({ restart: "on_failure" });
+    expect(serviceWire(on.service!).health?.probe).toBe("control_plane");
   });
 });

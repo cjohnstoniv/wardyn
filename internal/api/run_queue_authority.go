@@ -52,12 +52,24 @@ type queueAuthority struct {
 	// audit rows' via; the start never reads the token's ten-minute expiry.
 	Delegate *uuid.UUID `json:"delegate,omitempty"`
 	Grant    *uuid.UUID `json:"grant,omitempty"`
+	// Actor is the agent the portal named on that token; the start's rows replay it beside the portal.
+	Actor *types.DelegationActor `json:"actor,omitempty"`
 	// Device is the laptop that submitted the launch, which carries no person: the start replays the fold
 	// as that device, so the rules a device keeps at the create door hold when the run is promoted.
 	Device *uuid.UUID `json:"device,omitempty"`
 	// BreakGlass is the reason an admin-token launch carried as a break-glass run, so the start
 	// resolves as the break-glass run it was tagged at launch.
 	BreakGlass string `json:"break_glass_reason,omitempty"`
+	// WorkloadOwner and WorkloadName are the workload the launch was for, so the start mints the run
+	// under that workload's SPIFFE ID as an unqueued launch would (withLaunchWorkload); empty otherwise.
+	WorkloadOwner string `json:"workload_owner,omitempty"`
+	WorkloadName  string `json:"workload_name,omitempty"`
+	// Binding is the namespace binding a custom resource's launch was authorised under: the start holds
+	// only while that binding exists (store.QueueStart.Binding).
+	Binding *uuid.UUID `json:"binding,omitempty"`
+	// PolicyPin is the workload's policy pin the launch carried (policyPinOf): the start holds the replayed
+	// fold to it, as the create was held.
+	PolicyPin string `json:"policy_pin,omitempty"`
 }
 
 // captureQueueAuthority reads the launch's identity off the request context.
@@ -75,12 +87,20 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Service, a.Sponsor = name, sponsor
 	}
 	if via, ok := audit.DelegationFrom(ctx); ok {
-		a.Delegate, a.Grant = &via.Delegate, &via.Grant
+		a.Delegate, a.Grant, a.Actor = &via.Delegate, &via.Grant, via.Actor
 	}
 	if d, ok := deviceFromContext(ctx); ok {
 		a.Device = &d.ID
 	}
 	a.BreakGlass = breakGlassReason(ctx)
+	w := launchWorkloadFrom(ctx)
+	a.WorkloadOwner, a.WorkloadName = w.Owner, w.Name
+	if b, ok := launchBindingFrom(ctx); ok {
+		a.Binding = &b
+	}
+	if p := policyPinOf(ctx); p != nil {
+		a.PolicyPin = p.want
+	}
 	return a
 }
 
@@ -105,6 +125,9 @@ func (a queueAuthority) context(ctx context.Context) context.Context {
 	if a.BreakGlass != "" {
 		ctx = context.WithValue(ctx, breakGlassKey{}, a.BreakGlass)
 	}
+	if a.PolicyPin != "" {
+		ctx, _ = withPolicyPin(ctx, a.PolicyPin)
+	}
 	return ctx
 }
 
@@ -113,7 +136,7 @@ func (a queueAuthority) via() (types.DelegationVia, bool) {
 	if a.Delegate == nil || a.Grant == nil {
 		return types.DelegationVia{}, false
 	}
-	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant}, true
+	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant, Actor: a.Actor}, true
 }
 
 // identityBlocker is the store's one-statement identity read (store.PG.IdentityBlocked): it needs no

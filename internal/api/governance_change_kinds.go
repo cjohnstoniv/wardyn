@@ -92,13 +92,17 @@ type heldUnitWrite struct {
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
-// UPDATE of an existing profile can be exempt, and only by one of two proofs:
+// UPDATE of an existing profile can be exempt, and only by one of three proofs:
 //
 //   - metadata only: every stored field other than the name is equal to the current row, including the
 //     base, the overlay and the overlay limits;
 //   - narrowing: the new effective profile is Leq the current effective one (composer.Leq, which
 //     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
-//     (memberCapOf).
+//     (memberCapOf);
+//   - envelope: a unit admin's edit strictly inside an envelope, within its root's walls (envelopeExempt).
+//
+// A re-parent that takes the unit out from under a lock its old parents hold is held too (a lock
+// removed from above, reparentDropsLocks), whichever proof would otherwise admit it.
 //
 // A write that changes the contact is held even when Leq holds: a contact is who a refused person is
 // told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
@@ -107,7 +111,7 @@ type heldUnitWrite struct {
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
-	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) {
+	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) || s.reparentDropsLocks(all, cur, p) {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
@@ -118,6 +122,9 @@ func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit
 	}
 	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.ParentID, p.ParentID) &&
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
+		return true
+	}
+	if s.envelopeExempt(ctx, all, p, res) {
 		return true
 	}
 	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)
@@ -349,6 +356,7 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	if posture := s.rubricPostureAdvisory(r.Context(), h.res); posture != "" {
 		p.notes = append(p.notes, posture)
 	}
+	p.notes = append(p.notes, s.governanceADOCeilingWarnings(r.Context(), h.res)...)
 	s.proposeGovernanceChange(w, r, p)
 }
 
@@ -367,8 +375,10 @@ func (s *Server) renameShift(ctx context.Context, id uuid.UUID, name string) (sh
 }
 
 // holdUnitDelete stores a profile delete as a pending change, after a dry run of the delete has
-// shown the store would accept it (so the refusals are the direct delete's own).
-func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// shown the store would accept it (so the refusals are the direct delete's own). A prune's under is
+// checked on the same locked read; the base then holds the unit's chain, so a later move makes the
+// change stale.
+func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	var all []types.GovernanceUnit
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
@@ -379,9 +389,12 @@ func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.
 		if all, err = store.ListGovernanceUnitsQ(ctx, q); err != nil {
 			return err
 		}
+		if err := s.requireUnderQ(ctx, q, under, id); err != nil {
+			return err
+		}
 		return store.DeleteGovernanceUnitQ(ctx, q, id)
 	})
-	if s.writeUnitDeleteError(w, r, err) {
+	if answerNotUnder(w, err) || s.writeUnitDeleteError(w, r, err) {
 		return
 	}
 	cur := unitsByID(all)[id]
@@ -425,6 +438,7 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 			return types.GovernanceUnit{}, err
 		}
 		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
+		err = s.checkDeciderLockWrite(ctx, q, err, p, all)
 		effective = res
 		if err != nil {
 			return p, err
@@ -709,7 +723,9 @@ func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceC
 
 // holdMembershipDelete stores an assignment delete as a pending change. keepsIn is, for a unit admin's
 // delete, the units they are granted that the subject keeps another membership below (heldBelongsStale).
-func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID) {
+// A prune's under is checked on the unit chain the base is computed from, so a later move makes the
+// change stale.
+func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
 	var activates []unitActivation
@@ -721,10 +737,13 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil {
 			return err
 		}
+		if err := s.requireUnderChainQ(ctx, q, under, st.chain); err != nil {
+			return err
+		}
 		activates, err = deleteActivationsQ(ctx, q, row)
 		return err
 	})
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
+	if answerNotUnder(w, err) || notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
 		return
 	}
 	if err != nil || st.current == nil {

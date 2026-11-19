@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// ServiceProbeControlPlane is ServiceHealth.Probe's one value besides off: wardynd checks the service's port itself,
+// through the sandbox's exec path, beside the supervisor's own check.
+const ServiceProbeControlPlane = "control_plane"
+
 // ServiceRestart is what the supervisor does when a service's command exits with an error.
 type ServiceRestart string
 
@@ -45,6 +49,13 @@ type ServiceHealth struct {
 	Path             string `json:"path,omitempty"`
 	IntervalSec      int    `json:"interval_sec"`
 	FailureThreshold int    `json:"failure_threshold"` // consecutive failures before the service reads unhealthy
+	// Probe is "" (off, the default) or ServiceProbeControlPlane. It is frozen with the spec at create, like the rest.
+	Probe string `json:"probe,omitempty"`
+}
+
+// ControlPlaneProbe reports whether wardynd checks the service's port itself (ServiceHealth.Probe). Nil is no service.
+func (s *RunService) ControlPlaneProbe() bool {
+	return s != nil && s.Health != nil && s.Health.Probe == ServiceProbeControlPlane
 }
 
 // ServiceHealthState is the health wardynd last observed for a service.
@@ -75,7 +86,63 @@ type RunServiceStatus struct {
 	Restarts     int       `json:"restarts"`
 	LastExitCode *int      `json:"last_exit_code,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"` // wardynd's clock, never the sandbox's
+	// Probe is wardynd's own check of the port, present only when the spec opted in (ServiceHealth.Probe) and the
+	// check has run.
+	Probe *RunServiceProbe `json:"probe,omitempty"`
 }
+
+// RunServiceProbe is the last result of wardynd's own check of a service's port.
+type RunServiceProbe struct {
+	Health ServiceHealthState `json:"health"`
+	// Reason is closed: refused | timeout | bad_status | bad_answer | not_run, and on the wire paused and unreachable
+	// (as RunServiceStatus.Reason). A failure below the threshold keeps the last health and names its finding here.
+	Reason     string    `json:"reason,omitempty"`
+	HTTPStatus int       `json:"http_status,omitempty"` // the status line's code, when the check read one
+	Failures   int       `json:"failures"`              // consecutive failed checks
+	ObservedAt time.Time `json:"observed_at"`           // wardynd's clock
+}
+
+// serviceHealthRank orders the states worst first; a value outside the four ranks as unknown.
+func serviceHealthRank(s ServiceHealthState) int {
+	switch s {
+	case ServiceHealthUnhealthy:
+		return 0
+	case ServiceHealthStarting:
+		return 2
+	case ServiceHealthHealthy:
+		return 3
+	}
+	return 1
+}
+
+// WorseServiceHealth is the worse of two readings, worst first: unhealthy, unknown, starting, healthy. A value
+// outside the four reads unknown.
+func WorseServiceHealth(a, b ServiceHealthState) ServiceHealthState {
+	if serviceHealthRank(b) < serviceHealthRank(a) {
+		a = b
+	}
+	if !a.Valid() {
+		return ServiceHealthUnknown
+	}
+	return a
+}
+
+// CombinedHealth is the health a service is shown with: the sandbox's reading, or the worse of it and wardynd's
+// own check when that has a reading.
+func (st RunServiceStatus) CombinedHealth() ServiceHealthState {
+	if st.Probe == nil {
+		return st.Health
+	}
+	return WorseServiceHealth(st.Health, st.Probe.Health)
+}
+
+// ServiceFieldError is a ValidateRunService refusal that names the request field it is about.
+type ServiceFieldError struct {
+	Field string
+	Msg   string
+}
+
+func (e *ServiceFieldError) Error() string { return e.Msg }
 
 // ValidateRunService validates s in place and fills its defaults: restart on_failure, and a health check's
 // interval and threshold. A nil s is no service. Whether the run's shape may carry a service is the caller's call.
@@ -102,6 +169,11 @@ func ValidateRunService(s *RunService) error {
 	}
 	if h.Path != "" && !serviceHealthPathRE.MatchString(h.Path) {
 		return fmt.Errorf("service.health.path: must start with / and be at most 256 URL characters")
+	}
+	switch h.Probe {
+	case "", ServiceProbeControlPlane:
+	default:
+		return &ServiceFieldError{Field: "service.health.probe", Msg: fmt.Sprintf("service.health.probe: invalid %q", h.Probe)}
 	}
 	if h.IntervalSec == 0 {
 		h.IntervalSec = DefaultServiceHealthIntervalSec

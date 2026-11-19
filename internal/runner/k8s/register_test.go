@@ -6,8 +6,10 @@
 package k8s
 
 import (
+	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -142,5 +144,39 @@ func TestResolveNamespace(t *testing.T) {
 	}
 	if got := resolveNamespace(""); got != "default" {
 		t.Errorf("resolveNamespace(\"\") without a serviceaccount projection = %q, want default", got)
+	}
+}
+
+// TestControlPlanePeerFromEnv: both settings give the peer, neither gives none, and a half-set or malformed
+// pair refuses boot with the one error text.
+func TestControlPlanePeerFromEnv(t *testing.T) {
+	const nsKey, labelsKey = "WARDYN_K8S_CONTROL_PLANE_NAMESPACE", "WARDYN_K8S_CONTROL_PLANE_POD_LABELS"
+	read := func(ns, labels string) (*ControlPlanePeer, error) {
+		t.Setenv(nsKey, ns)
+		t.Setenv(labelsKey, labels)
+		return controlPlanePeerFromEnv()
+	}
+
+	peer, err := read("wardyn-system", "app.kubernetes.io/name=wardyn,app.kubernetes.io/component=control-plane")
+	if err != nil || peer == nil || peer.Namespace != "wardyn-system" ||
+		!maps.Equal(peer.PodLabels, map[string]string{"app.kubernetes.io/name": "wardyn", "app.kubernetes.io/component": "control-plane"}) {
+		t.Errorf("both set: peer %+v, err %v", peer, err)
+	}
+	if peer, err := read("", ""); peer != nil || err != nil {
+		t.Errorf("neither set: peer %+v, err %v, want nil and no error", peer, err)
+	}
+	for name, tc := range map[string][2]string{
+		"namespace alone":      {"wardyn-system", ""},
+		"labels alone":         {"", "a=b"},
+		"a label with no =":    {"wardyn-system", "a=b,c"},
+		"a key with a space":   {"wardyn-system", "a b=c"},
+		"a 64 character value": {"wardyn-system", "a=" + strings.Repeat("x", 64)},
+	} {
+		if peer, err := read(tc[0], tc[1]); err == nil || peer != nil || !strings.Contains(err.Error(), "are set together or not at all") {
+			t.Errorf("%s: peer %+v, err %v, want a refusal", name, peer, err)
+		}
+	}
+	if peer, err := read("wardyn-system", "a="+strings.Repeat("x", 63)); err != nil || peer == nil {
+		t.Errorf("a 63 character value: peer %+v, err %v, want it accepted", peer, err)
 	}
 }

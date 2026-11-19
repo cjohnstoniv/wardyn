@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import type { ProfileProposal, RiskItem, RunPolicy, RunPolicySpec } from "../../lib/types";
 import { firstUseLabel } from "../../lib/types";
+import { getExpectedPrincipal } from "../../lib/api/core";
 import { policies as api } from "../../lib/api/policies";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage } from "../../lib/format";
@@ -72,18 +73,30 @@ export function ProfileReview({
   const [proposal, setProposal] = React.useState<ProfileProposal | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saveOpen, setSaveOpen] = React.useState(false);
+  // The run the status and proposal belong to. Shown for another run, the sheet is loading from its first frame;
+  // closing (no run) keeps what is shown while the sheet slides out.
+  const [loadedFor, setLoadedFor] = React.useState<string | null>(null);
+  const shown = runId && runId !== loadedFor ? "loading" : status;
 
+  // This sheet stays mounted while the run it shows changes. Only the newest synthesis may land: a slower answer for
+  // the run shown before would replace the proposal under review, and with it the policy Save policy creates.
+  const asked = React.useRef(0);
   const load = React.useCallback(() => {
     if (!runId) return;
+    const mine = ++asked.current;
     setStatus("loading");
     setProposal(null);
+    setLoadedFor(runId);
     runsApi
       .profileRun(runId)
       .then((p) => {
+        if (mine !== asked.current) return;
         setProposal(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => {
+        if (mine === asked.current) setStatus("error");
+      });
   }, [runId]);
 
   React.useEffect(() => {
@@ -95,10 +108,9 @@ export function ProfileReview({
       <Sheet open={!!runId} onOpenChange={(o) => !o && onClose()}>
         <SheetContent
           className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]"
-          style={{ maxWidth: "98vw" }}
         >
-          <SheetHeader className="border-b border-border p-5">
-            <SheetTitle className="flex items-center gap-2">
+          <SheetHeader className="border-b border-border p-5 pr-10">
+            <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
               <Sparkles className="size-4 text-primary" />
               Synthesized profile
             </SheetTitle>
@@ -109,11 +121,11 @@ export function ProfileReview({
             {runId && <Mono className="text-foreground">{runId}</Mono>}
           </SheetHeader>
 
-          {status === "loading" ? (
+          {shown === "loading" ? (
             <div className="p-5">
               <TableSkeleton rows={5} cols={3} />
             </div>
-          ) : status === "error" ? (
+          ) : shown === "error" ? (
             <div className="p-5">
               <ErrorState
                 message="Couldn't synthesize a profile for this run."
@@ -187,7 +199,7 @@ function ProfileBody({
         />
         <Summary label="Repo" value={<Mono className="text-foreground">{run.repo || "—"}</Mono>} />
         <Summary
-          label="Confinement"
+          label="Barrier floor"
           value={<ConfinementChip value={inline_policy.min_confinement_class} />}
         />
         <Summary
@@ -460,10 +472,11 @@ function SavePolicyDialog({
       return;
     }
     setSaving(true);
+    const person = getExpectedPrincipal();
     try {
       const created = await api.createPolicy(name.trim(), spec);
       try {
-        await writeAvailability("policy", created.id, audience);
+        await writeAvailability("policy", created.id, audience, person);
       } catch (e) {
         setPartial({ policy: created, message: getErrorMessage(e) });
         setSaving(false);
@@ -472,7 +485,7 @@ function SavePolicyDialog({
       toast.success(`Saved policy “${name.trim()}”`);
       onSaved();
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to save policy.");
+      setError(getErrorMessage(e, "Failed to save policy."));
       setSaving(false);
     }
   };

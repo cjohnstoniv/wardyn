@@ -42,7 +42,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
-	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // also registers the "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -58,6 +58,18 @@ const (
 	secretUISessionKey = "wardyn-ui-session-key" // UI-sandbox relay cookie HMAC key (32 bytes)
 	secretRunConfigKey = "wardyn-run-config-key" // seals each run's stored proxy config (32 bytes, #1176)
 )
+
+// secretGatewayIdentityKey holds the keys that sign an AI gateway's run identity
+// token (internal/gatewayidentity): the current key and the previous one's public half.
+const secretGatewayIdentityKey = "wardyn-gateway-identity-key"
+
+// secretGatewayClientCA holds the CA that signs a run's AI gateway client certificate
+// (internal/gatewayidentity's Authority): its key, its certificate and the previous certificate.
+const secretGatewayClientCA = "wardyn-gateway-client-ca"
+
+// secretAuditReceiptKey holds the Ed25519 key that signs audit checkpoints (internal/auditsign): the current
+// key and every previous one's public half.
+const secretAuditReceiptKey = "wardyn-audit-receipt-key"
 
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
 // api package's groundtruthAudience (kept in sync as a literal because that
@@ -99,6 +111,7 @@ func main() {
 //nolint:funlen // Deliberate: see the doc comment above — one linear ordered boot sequence kept in one scope on purpose, each phase already extracted into its own helper.
 func run() error {
 	f := parseBootFlags()
+	modelUsageOff := modelUsageOffFromEnv(os.Getenv("WARDYN_MODEL_USAGE"))
 
 	// -gen-age-key: EARLY EXIT before validateConfig / any DB or pool work, so it
 	// needs no DSN. Mirrors the -print-groundtruth-token early-exit pattern.
@@ -112,8 +125,8 @@ func run() error {
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
 	// -migrate-secrets / -reconcile (store mode) are early exits for the same
-	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
-	if ran, err := maintenanceMode(f); ran {
+	// reason; maintenance runs the gateway identity rotation, then maintenanceMode dispatches all three.
+	if ran, err := f.maintenance(); ran {
 		return err
 	}
 
@@ -180,6 +193,11 @@ func run() error {
 	if err := installBootTransport(http.DefaultTransport, trustedCAPool, f); err != nil {
 		return err
 	}
+	// After the transport, which image admission's registry client copies (image_admission.go).
+	imageAdmission, err := newImageAdmitter(os.Getenv)
+	if err != nil {
+		return err
+	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
 	// milliseconds instead of after a 30s connect budget.)
 
@@ -192,7 +210,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	// After the secret store's clean-ups: a boot step that fails right after a Put
+	// (a boot key, a device credential) exits here, and pool.Close alone would cut a
+	// clean-up that has not taken its connection. Once the shutdown sequence has
+	// waited for them, this waits only until that wait's deadline (cleanUpWaitAfterServe).
+	var cleanUpsBy time.Time
+	defer func() { secretstorepg.CloseAfterCleanUps(pool, cleanUpWaitAfterServe(cleanUpsBy)) }()
 
 	// One instance per database, enforced at RUNTIME — the Helm chart's
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
@@ -303,14 +326,7 @@ func run() error {
 	// otherwise github_token grants fail closed at mint with a clear error.
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
-	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg).WithTrustDomain(*f.trustDomain)
-	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
-	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
-	// double-writing the primary store. Guarded: a typed-nil Fanout would be a
-	// non-nil interface that panics on Emit.
-	if fan != nil {
-		brk = brk.WithSIEM(fan)
-	}
+	brk := buildBroker(pool, secrets, maskedRec, idp, gh, maskReg, *f.trustDomain, fan)
 	// The rows the database writes itself (a key destroy here, the retention rows below) go to the
 	// same sinks after their commit.
 	siem := siemSink(fan)
@@ -338,15 +354,11 @@ func run() error {
 	// fail-closed confinement pins. The pg-backed RefStore makes the
 	// orchestrator's ref->substrate routing (and thus the kill switch) durable
 	// across control-plane restarts.
-	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
-	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
-	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
-		return err
-	}
-	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
+	run, runnerTarget, err := buildRunner(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err
 	}
+	defer closeRunner(run) // after the server drains, before the pool closes
 
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
@@ -366,6 +378,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	gtWrite, gtK8sSensor, err := groundtruthTokenDelivery(feats.hop)
+	if err != nil {
+		return err
+	}
 	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 	f.cliSignIn.warnWithoutSSO(feats.authn != nil)
@@ -381,6 +397,7 @@ func run() error {
 	// WARDYN_ORG_URL is unset.
 	st := store.NewPG(pool)
 	st.SIEM = siem
+	st.ModelUsageOff = modelUsageOff
 	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, bootKeys, st, maskedRec)
 	if err != nil {
 		return err
@@ -388,13 +405,23 @@ func run() error {
 	holder := sweeperHolder()
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
+	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
+	// Nil unless WARDYN_AUDIT_SINKS has an otlp_metrics block; started after the workers below.
+	otlpMetrics := newOTLPMetrics(*f.auditSinks)
+	gatewayClientCA := bootKeys.gatewayClientCA()
+	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	srv := api.New(api.Config{
-		SweeperLease: leader,
-		SweepHealth:  ticks,
-		Store:        st,
-		Identity:     idp,
-		Approvals:    approvals,
-		Broker:       brk,
+		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
+		SweeperLease:         leader,
+		SweepHealth:          ticks,
+		Store:                st,
+		Identity:             idp,
+		// Reads its row on first use, so an install with identity off has no key
+		// and takes no query per anonymous JWKS request past one each 30 seconds.
+		GatewayIdentity: bootKeys.gatewayIdentity(),
+		GatewayClientCA: gatewayClientCA,
+		Approvals:       approvals,
+		Broker:          brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
@@ -406,42 +433,49 @@ func run() error {
 		GitHubRulesets: gh,
 		GitHubBranches: gh,
 		Audit:          maskedRec,
+		AuditStrict:    strictAuditRecorder(*f.auditStrict, pool, fan, maskReg, sealSrc, maskScopes),
 		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
 		},
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:          auditSpool,
-		AuditDrainRecorder:  auditDrainRec,
-		AuditSinkDrops:      sinkDropsReporter(fan),
-		AuditDelivery:       auditDeliveryReporter(*f.auditSinks, st),
-		AuditCoalesceWindow: *f.auditCoalesceWindow,
-		Runner:              run,
-		AdminToken:          *f.adminToken,
-		LocalMode:           lm.enabled,
-		MemberMode:          *f.memberMode,
-		SSOOnly:             *f.ssoOnly,
-		GovernAdminRuns:     *f.governAdminRuns,
-		LocalOperator:       lm.operator,
-		TrustDomain:         *f.trustDomain,
-		DefaultPolicy:       knobs.defaultPolicy,
-		TrustedCAPEM:        trustedCAPEM,
-		EgressPortRule:      egressPortRule(*f.egressPortRule),
-		DesktopSignins:      *f.desktopSignins == "on",
-		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
-		CLIArtifactBase:     knobs.cliArtifactBase,
-		OrgCAFingerprints:   knobs.orgCAFingerprints,
-		RunnerTarget:        runnerTarget,
-		RunnerOrgURL:        *f.runnerOrgURL,
-		TrustedProxies:      knobs.trustedProxies,
-		ProxyImage:          *f.proxyImage,
-		ProxyImageByArch:    proxyImageByArch,
-		UIDir:               *f.uiDir,
-		ControlPlaneURL:     *f.controlURL,
-		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
-		RecordingStore:      feats.recStore,
-		OIDC:                feats.authn,
+		AuditSpool:           auditSpool,
+		AuditDrainRecorder:   auditDrainRec,
+		AuditSinkDrops:       sinkDropsReporter(fan),
+		ForgetRunCorrelation: forgetRunCorrelation(fan),
+		AuditDelivery:        auditDeliveryReporter(*f.auditSinks, st),
+		AuditCoalesceWindow:  *f.auditCoalesceWindow,
+		Runner:               run,
+		AdminToken:           *f.adminToken,
+		LocalMode:            lm.enabled,
+		MemberMode:           *f.memberMode,
+		SSOOnly:              *f.ssoOnly,
+		GovernAdminRuns:      *f.governAdminRuns,
+		LocalOperator:        lm.operator,
+		TrustDomain:          *f.trustDomain,
+		DefaultPolicy:        knobs.defaultPolicy,
+		TrustedCAPEM:         trustedCAPEM,
+		EgressPortRule:       egressPortRule(*f.egressPortRule),
+		ModelUsageOff:        modelUsageOff,
+		DesktopSignins:       *f.desktopSignins == "on",
+		StartAfterReadback:   *f.startAfterReadback == "on",
+		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
+		CLIArtifactBase:      knobs.cliArtifactBase,
+		OrgCAFingerprints:    knobs.orgCAFingerprints,
+		RunnerTarget:         runnerTarget,
+		RunnerOrgURL:         *f.runnerOrgURL,
+		TrustedProxies:       knobs.trustedProxies,
+		ProxyImage:           *f.proxyImage,
+		ProxyImageByArch:     proxyImageByArch,
+		UIDir:                *f.uiDir,
+		ControlPlaneURL:      *f.controlURL,
+		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
+		RecordingStore:       feats.recStore,
+		OIDC:                 feats.authn,
+
+		// The OTLP metrics push's failure count; nil (no series) with the push off.
+		OTLPPushConfig: api.OTLPPushConfig{OTLPMetricsPushFailures: otlpMetricsFailures(otlpMetrics)},
 
 		// The runner stream's anonymous in-flight bound per client address.
 		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
@@ -500,6 +534,7 @@ func run() error {
 		ADOEntraByRow:                 adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		AzureFoundryEntra:             azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		AzureCLIEntra:                 azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
+		EndpointOIDC:                  endpointOIDCFromFlags(f), // endpoint_oidc_source.go
 		ADOLoginFacts:                 adoLoginFactsFromFlags(f),
 		Components:                    componentsInfo(f, runnerTarget, feats.recStore),
 		RecordingSelection:            *f.recordingSel,
@@ -550,8 +585,9 @@ func run() error {
 		CLISignIn:            f.cliSignIn.config(*f.oidcRedirectURL),
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.
-		SSHMaxConnections:         *f.sshMaxConns,
-		SSHMaxHandshakesPerSource: *f.sshPerSource,
+		SSHMaxConnections:             *f.sshMaxConns,
+		SSHMaxHandshakesPerSource:     *f.sshPerSource,
+		SSHMaxConnectionsPerPrincipal: *f.sshPerPrincipal,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
@@ -567,7 +603,11 @@ func run() error {
 		RunConfigKey:     feats.runConfigKey,
 		// Admits every run unless a WARDYN_HOST_* limit is set.
 		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
-		MaxConcurrentRuns:  *f.hostCapacity.maxConcurrentRuns,
+		AuditReceiptConfig: api.AuditReceiptConfig{AuditReceiptKeys: receiptKeys, AuditCheckpointStatus: checkpointStatus,
+			AuditCheckpointInterval: *f.auditCheckpointInterval},
+		MaxConcurrentRuns: *f.hostCapacity.maxConcurrentRuns,
+		// Set with WARDYN_GROUNDTRUTH_TOKEN_SECRET: dispatch records the CC2/CC3 sensor gap.
+		GroundtruthSensorConfig: api.GroundtruthSensorConfig{GroundtruthK8sSensor: gtK8sSensor},
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -605,7 +645,9 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
+	// OTLP metrics, off unless the sinks config has an otlp_metrics block; on every replica.
+	startOTLPMetrics(rootCtx, otlpMetrics, srv.MetricsText)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
@@ -618,7 +660,8 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	cleanUpsBy, err = serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	return err
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
@@ -870,6 +913,25 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 		slog.String("app_key_secret", secretGitHubAppKey),
 	)
 	return gh
+}
+
+// closeRunner stops the runner's background work, such as the k8s canary re-check loop, when the
+// runner holds any (an io.Closer: the orchestrator). A nil runner ("none") has none.
+func closeRunner(run runner.Runner) {
+	if c, ok := run.(io.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+// buildRunner sets the runner's default sandbox and proxy limits and its request ratio from the flags,
+// then builds the configured substrate (boot, from run).
+func buildRunner(f *bootFlags, pg store.PG, driveHostRoots []string) (runner.Runner, string, error) {
+	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
+	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
+	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
+		return nil, "", err
+	}
+	return buildRunnerFromFlags(f, pg, driveHostRoots)
 }
 
 // flagEnv/flagBool/flagDuration/flagIntEnv/splitCSV are shared with

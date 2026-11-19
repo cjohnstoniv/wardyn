@@ -9,12 +9,13 @@
 // the same twin of the server's policy check as the Go side (tool-effect.ts).
 
 import reasons from "../../../../../lib/access-reasons.golden.json";
+import { canApproveEach } from "../../../../../lib/types/policy";
 import { effectiveToolEffect, type ToolEffect } from "../../../../../lib/tool-effect";
 import type { AccessFacts, EffectOption, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 
 const SENTENCES = new Map(reasons.map((r) => [r.key, r.text]));
-const RANK: Record<ToolEffect, number> = { allow: 0, hold: 1, deny: 2 };
-export const EFFECTS: readonly ToolEffect[] = ["allow", "hold", "deny"];
+const RANK: Record<ToolEffect, number> = { allow: 0, hold: 1, approve_each: 2, deny: 3 };
+export const EFFECTS: readonly ToolEffect[] = ["allow", "hold", "approve_each", "deny"];
 
 interface ReasonVars {
   harness?: string;
@@ -30,7 +31,7 @@ export function reasonText(code: string | undefined, vars: ReasonVars = {}): str
   const raw = code ? SENTENCES.get(code) : undefined;
   if (!raw) return undefined;
   return raw
-    .replace("{asks first for|blocks}", vars.policy === "deny" ? "blocks" : "asks first for")
+    .replace("{asks first for|blocks}", vars.policy === "deny" ? "blocks" : vars.policy === "approve_each" ? "asks for approval of each call to" : "asks first for")
     .replace("{harness}", vars.harness ?? "this harness")
     .replace("{tool}", vars.tool ?? "this tool")
     .replace("its MCP tools", vars.remote ? "its remote MCP tools" : "its MCP tools");
@@ -47,7 +48,9 @@ const laneDefault = (fact: ToolPolicyFact): ToolEffect => (fact.lane === "ungate
 const unnamedToolEffect = (fact: ToolPolicyFact): ToolEffect =>
   fact.lane !== "attended"
     ? laneDefault(fact)
-    : EFFECTS.find((e) => fact.rule_effects.find((o) => o.effect === e)?.reason !== "policy_stricter_tool") ?? laneDefault(fact);
+    : EFFECTS.filter((e) => e !== "approve_each" || fact.rule_effects.some((o) => o.effect === e)).find(
+        (e) => fact.rule_effects.find((o) => o.effect === e)?.reason !== "policy_stricter_tool",
+      ) ?? laneDefault(fact);
 
 export interface ChoiceState {
   effect: ToolEffect;
@@ -56,8 +59,9 @@ export interface ChoiceState {
   reason?: string;
 }
 
+// A server older than approve_each sends three options: the fourth is then not offered at all, never greyed without a reason.
 const fromFact = (options: readonly EffectOption[]): EffectOption[] =>
-  EFFECTS.map((effect) => options.find((o) => o.effect === effect) ?? { effect, available: false });
+  EFFECTS.filter((e) => e !== "approve_each" || options.some((o) => o.effect === e)).map((effect) => options.find((o) => o.effect === effect) ?? { effect, available: false });
 
 /** The default's three options as the server offers them, each greyed with its sentence. */
 export function defaultChoices(fact: ToolPolicyFact, harnessName: string, remote?: boolean): ChoiceState[] {
@@ -86,7 +90,9 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
     // What the harness cannot honour comes first; the policy's strictness is the reason only for what it could.
     // The server grades policy_stricter_tool against the policy's "*"; a named tool is graded against its own rule here.
     const harnessRefusal = !o.available && o.reason !== "policy_stricter_tool" ? o.reason : undefined;
-    const code = builtinOnly ? "harness_no_block_builtin" : harnessRefusal ?? (RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined);
+    // Approve each call names one MCP tool: for any other name the server's own sentence says so.
+    const notMCP = effect === "approve_each" && !canApproveEach(tool);
+    const code = builtinOnly ? "harness_no_block_builtin" : notMCP ? "approve_each_default" : harnessRefusal ?? (RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined);
     return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy, remote }) };
   });
 }

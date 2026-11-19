@@ -12,6 +12,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
 import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
+import { shortTime } from "../../../lib/format";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { gitRowInvalid } from "./display";
 import { AdoConvertedRow, AdoRowsContext } from "./ado-token-mode";
@@ -136,10 +137,10 @@ describe("state 2: check organisation settings", () => {
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
     const card = await screen.findByTestId("ado-org-check");
     expect(within(card).getByText(ADO_PAT.CHECK_TITLE)).toBeInTheDocument();
-    expect(within(card).getByText(ADO_PAT.CHECK_CHIP("09:12"))).toBeInTheDocument();
+    expect(within(card).getByText(ADO_PAT.CHECK_CHIP(shortTime(at(9, 12))))).toBeInTheDocument();
     expect(within(card).getByText(ADO_PAT.CHECK_PERMS_OK)).toBeInTheDocument();
     expect(within(card).getByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).toBeInTheDocument();
-    expect(screen.getByText(ADO_PAT.CHECK_LAST("09:12"))).toBeInTheDocument();
+    expect(screen.getByText(ADO_PAT.CHECK_LAST(shortTime(at(9, 12))))).toBeInTheDocument();
     expect(orgCheckMock).toHaveBeenCalledTimes(1);
     expect(orgCheckMock).toHaveBeenCalledWith("ado");
   });
@@ -166,7 +167,7 @@ describe("state 2: check organisation settings", () => {
     expect(within(card).queryByText(ADO_PAT.CHECK_LIFESPAN_OFF)).not.toBeInTheDocument();
     expect(within(card).queryByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).not.toBeInTheDocument();
     // The card's chip is neutral, not the warning tone.
-    expect(within(card).getByText(ADO_PAT.CHECK_CHIP("09:12")).className).not.toMatch(/warning/);
+    expect(within(card).getByText(ADO_PAT.CHECK_CHIP(shortTime(at(9, 12)))).className).not.toMatch(/warning/);
   });
 
   it("says nothing before any check has run (the server keeps no last answer to read)", () => {
@@ -184,7 +185,8 @@ describe("state 3: setup errors", () => {
     const field = screen.getByLabelText(ADO_PAT.TOKEN_LIFE_LABEL);
     await userEvent.clear(field);
     await userEvent.type(field, "400");
-    expect(screen.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toBeInTheDocument();
+    expect(screen.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toHaveAttribute("role", "alert");
+    expect(field).toHaveAccessibleDescription(ADO_PAT.TOKEN_LIFE_RANGE);
     expect(screen.queryByText(ADO_PAT.TOKEN_LIFE_HINT)).not.toBeInTheDocument();
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(gitRowInvalid(latest!)).toBe(true);

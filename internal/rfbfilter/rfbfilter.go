@@ -5,7 +5,7 @@
 // WebSocket. It sits between the browser and the sandbox's websockify, decodes
 // the WebSocket frames, follows the RFB stream inside them, drops a cut-text
 // message whose direction the run's policy blocks, and reports every cut text
-// by direction, size and SHA-256. It never keeps, logs or reports the text.
+// by direction and size. It never keeps, logs or reports the text.
 //
 // It fails closed: anything it cannot follow (a text frame, a WebSocket
 // extension, a security type that encrypts the stream, an encoding or message
@@ -21,12 +21,9 @@ package rfbfilter
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"sync"
 	"time"
@@ -44,8 +41,10 @@ const (
 
 // Rules says which clipboard directions the relay lets through. ViewOnly also keeps every
 // input message from the desktop: keys and pointer moves are dropped, paste in is blocked
-// whatever PasteIn says, and any other control message ends the connection.
-type Rules struct{ PasteIn, CopyOut, ViewOnly bool }
+// whatever PasteIn says, and any other control message ends the connection. Recorded says the
+// desktop's side is recorded, by a recorder that frames 32-bit pixels only and a replay that reads
+// one layout of them, so pixels in any other format are never asked for (recordedPixels).
+type Rules struct{ PasteIn, CopyOut, ViewOnly, Recorded bool }
 
 func (r Rules) allows(d Direction) bool {
 	if d == PasteIn {
@@ -66,12 +65,44 @@ type Event struct {
 	Input     string
 	Direction Direction
 	Bytes     int64
-	SHA256    string
 	Allowed   bool
 }
 
 // ErrNotRFB is the server's first data frame not opening with an RFB ProtocolVersion.
 var ErrNotRFB = errors.New("rfb relay: the desktop socket does not speak RFB")
+
+// Refusal is a refused function's error for what the relay refused, a pixel format aside (PixelFormatError):
+// Kind says what in fixed words, which never quote the stream, so a stored recording can carry them, while
+// Error is the operator log's text, which can name bytes the browser or the desktop chose. ErrNotRFB and the
+// browser's bytes held too long or too many are not one: they come before the relay has read RFB from the desktop.
+// A recording has a frame then only when the desktop sent its handshake ahead of the browser, since the recorder
+// reads the desktop's bytes before the relay does and also reads a handshake sent in one base64 text frame, which
+// the relay answers with ErrNotRFB.
+type Refusal struct {
+	Kind string
+	Err  error
+}
+
+func (e *Refusal) Error() string { return e.Err.Error() }
+func (e *Refusal) Unwrap() error { return e.Err }
+
+// What a Refusal says the relay refused, by whether the desktop sent it (refuse's fromServer).
+var (
+	refusedFrame   = map[bool]string{false: "a WebSocket frame from the browser that it cannot read", true: "a WebSocket frame from the desktop that it cannot read"}
+	refusedSetup   = map[bool]string{false: "the browser's connection setup, which it cannot follow", true: "the desktop's connection setup, which it cannot follow"}
+	refusedMessage = map[bool]string{false: "a message from the browser that it cannot follow", true: "a message from the desktop that it cannot follow"}
+)
+
+const refusedViewOnly = "a control message from the browser on a view-only desktop"
+
+// refuse is err as a Refusal of the kind kinds names for its sender, unless err names what it refused itself.
+func refuse(err error, kinds map[bool]string, fromServer bool) error {
+	switch err.(type) {
+	case *PixelFormatError, *Refusal:
+		return err
+	}
+	return &Refusal{Kind: kinds[fromServer], Err: err}
+}
 
 // Sink receives the relayed bytes after the filter, as WebSocket frames: toBrowser is the
 // server's side as the browser gets it, otherwise the browser's side as the server gets it.
@@ -139,7 +170,8 @@ func (c *Conn) Read(p []byte) (int, error) {
 	for len(c.rout) == 0 {
 		n, err := c.backend.Read(c.rbuf[:])
 		if n > 0 {
-			out, ferr := c.filter(&c.rin, c.rbuf[:n], true)
+			out, events, ferr := c.filter(&c.rin, c.rbuf[:n], true)
+			c.report(events, ferr == nil)
 			if ferr != nil {
 				c.backend.Close()
 				return 0, ferr
@@ -223,18 +255,21 @@ func (c *Conn) forward(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	out, err := c.filter(&c.win, p, false)
+	out, events, err := c.filter(&c.win, p, false)
 	if err != nil {
+		c.report(events, false)
 		c.backend.Close()
 		return err
 	}
 	if len(out) == 0 {
+		c.report(events, true)
 		return nil
 	}
 	if c.sink != nil {
 		c.sink(false, out)
 	}
 	_, err = c.backend.Write(out)
+	c.report(events, err == nil)
 	return err
 }
 
@@ -246,6 +281,10 @@ func (c *Conn) holdExpired() {
 		_ = c.fail(fmt.Errorf("rfb relay: the desktop did not speak within %s of the browser", holdFor))
 	}
 }
+
+// Refuse ends the stream for what a door refused in front of the filter (ClientFrames), as the filter ends it
+// for its own refusals: refused gets err, unless the filter refused first, and the backend closes.
+func (c *Conn) Refuse(err error) { _ = c.fail(err) }
 
 // fail reports err (once) and closes the backend, which ends both directions.
 func (c *Conn) fail(err error) error {
@@ -264,18 +303,27 @@ func (c *Conn) Close() error {
 	return c.backend.Close()
 }
 
-func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, error) {
+// filter filters in and returns the events it saw, which the caller reports once it knows whether the
+// bytes went on (report).
+func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, []Event, error) {
 	var events []Event
 	c.mu.Lock()
 	out, err := c.filterLocked(pending, in, fromServer, &events)
 	c.mu.Unlock()
-	for _, ev := range events {
-		c.audit(ev)
-	}
 	if err != nil {
 		c.once.Do(func() { c.refused(err) })
 	}
-	return out, err
+	return out, events, err
+}
+
+// report audits events once their bytes have gone on (sent), and otherwise only the refusals among them:
+// a cut text allowed through whose bytes were then refused or not written was never relayed.
+func (c *Conn) report(events []Event, sent bool) {
+	for _, ev := range events {
+		if sent || !ev.Allowed {
+			c.audit(ev)
+		}
+	}
 }
 
 func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events *[]Event) ([]byte, error) {
@@ -284,7 +332,7 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 	for {
 		f, n, err := readFrame(*pending)
 		if err != nil {
-			return nil, err
+			return nil, refuse(err, refusedFrame, fromServer)
 		}
 		if n == 0 {
 			return out, nil
@@ -301,7 +349,7 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 			c.mode = rfbMode
 		}
 		if f.opcode() == 1 {
-			return nil, errors.New("rfb relay: a text frame on an RFB socket")
+			return nil, refuse(errors.New("rfb relay: a text frame on an RFB socket"), refusedFrame, fromServer)
 		}
 		p := c.client
 		if fromServer {
@@ -309,7 +357,11 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 		}
 		filtered, err := p.feed(f.payload, events)
 		if err != nil {
-			return nil, err
+			kinds := refusedSetup
+			if p.ready {
+				kinds = refusedMessage
+			}
+			return nil, refuse(err, kinds, fromServer)
 		}
 		if len(filtered) == 0 && f.b0 == 0x82 {
 			continue // a whole binary message that was all a dropped cut text
@@ -416,6 +468,7 @@ type session struct {
 	version int             // 33, 37 or 38 once the browser has chosen
 	secType byte            // 1 (None) or 2 (VNC auth) once known
 	bpp     int             // bytes per pixel: ServerInit's, then SetPixelFormat's
+	pixels  [13]byte        // the pixel format in force: ServerInit's, then each SetPixelFormat that passed
 	dropped map[string]bool // the input kinds a view-only relay has reported
 }
 
@@ -433,12 +486,12 @@ type parser struct {
 
 	pass   int64 // payload bytes still to stream
 	drop   bool  // the payload being streamed is dropped
-	sum    hash.Hash
 	cut    *Event
 	then   func()
 	rects  int // rectangles left in a FramebufferUpdate
 	out    []byte
 	events *[]Event
+	ready  bool // the connection setup is over: msgNext has run
 }
 
 func (p *parser) expect(n int, next step) { p.want, p.next = n, next }
@@ -451,7 +504,7 @@ func (p *parser) more(n int, next step, have []byte) error {
 
 func (p *parser) forward(b []byte) { p.out = append(p.out, b...) }
 
-func (p *parser) msgNext() { p.expect(1, p.msg) }
+func (p *parser) msgNext() { p.ready = true; p.expect(1, p.msg) }
 
 func (p *parser) stream(n int64, drop bool, then func()) {
 	p.pass, p.drop, p.then = n, drop, then
@@ -462,9 +515,8 @@ func (p *parser) stream(n int64, drop bool, then func()) {
 
 func (p *parser) endPass() {
 	if p.cut != nil {
-		p.cut.SHA256 = hex.EncodeToString(p.sum.Sum(nil))
 		*p.events = append(*p.events, *p.cut)
-		p.cut, p.sum = nil, nil
+		p.cut = nil
 	}
 	then := p.then
 	p.then = nil
@@ -476,9 +528,6 @@ func (p *parser) feed(in []byte, events *[]Event) ([]byte, error) {
 	for len(in) > 0 {
 		if p.pass > 0 {
 			n := int(min(p.pass, int64(len(in))))
-			if p.sum != nil {
-				p.sum.Write(in[:n])
-			}
 			if !p.drop {
 				p.forward(in[:n])
 			}
@@ -504,7 +553,7 @@ func (p *parser) feed(in []byte, events *[]Event) ([]byte, error) {
 }
 
 // cutText streams one cut text: through when its direction is allowed, dropped
-// with its header when not, hashed either way.
+// with its header when not, sized either way.
 func (p *parser) cutText(d Direction, hdr []byte) error {
 	size := int64(int32(binary.BigEndian.Uint32(hdr[4:])))
 	if size < 0 {
@@ -514,7 +563,7 @@ func (p *parser) cutText(d Direction, hdr []byte) error {
 	if allowed {
 		p.forward(hdr)
 	}
-	p.cut, p.sum = &Event{Direction: d, Bytes: size, Allowed: allowed}, sha256.New()
+	p.cut = &Event{Direction: d, Bytes: size, Allowed: allowed}
 	p.stream(size, !allowed, p.msgNext)
 	return nil
 }

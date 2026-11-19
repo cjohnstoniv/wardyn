@@ -11,27 +11,10 @@
 | Control plane | `cmd/wardynd`, `internal/api`, `internal/store` | The REST API, the policy engine, the approval state machine, the token broker, audit ingest and the sweeps | Carries a sandbox's outbound traffic: the proxy does |
 | Governance | `internal/authz`, [`internal/api/governance.go#governanceCeiling`](../internal/api/governance.go), [`internal/api/run_fold.go#Server.foldRunRequest`](../internal/api/run_fold.go) | Who may do what, and the ceiling every run is folded under | Lets a request widen its ceiling: each fold only narrows |
 | Runners | `internal/runner/orchestrator`, `internal/runner/remote`, `internal/runnerwire`, `cmd/wardyn-runnerd` | Placing a run on a substrate, its lifecycle, and the session to an organisation or laptop runner | Schedules, resolves a ceiling, brokers a credential or writes audit: the organisation does |
-| Substrates | `internal/runner/docker`, `internal/runner/k8s`, `internal/runner/localtmux`, `internal/vm`, `internal/macvm` | Isolating one run: create, exec, attach, stop | Decides policy |
+| Substrates | `internal/runner/docker`, `internal/runner/k8s`, `internal/runner/localtmux`, `internal/vm` | Isolating one run: create, exec, attach, stop | Decides policy |
 | Proxy | `cmd/wardyn-proxy`, `internal/egress/proxy` | Default-deny egress, first-use approval, decision logs and proxy-side credential injection | Is shared between runs: one proxy sits beside each run |
 | Broker and identity | `internal/broker`, `internal/identity`, `internal/secretstore` | Minting a credential for a run, run identity and the secret store | Hands the sandbox an `api_key` value: it stays at the proxy |
 | Audit and recording | `internal/audit`, `internal/recording` | The append-only audit chain and session recordings | Erases a row: only a partition drop removes one |
-
-Each box below is a row of the table above.
-
-```mermaid
-flowchart TD
-  CP["Control plane<br/>API, governance, sweeps"]
-  RN["Runners<br/>placement and lifecycle"]
-  SUB["Substrates<br/>Docker, Kubernetes, tmux,<br/>Linux VM, macOS VM"]
-  PX["Proxy<br/>one beside each run"]
-  BR["Broker and identity"]
-  AU["Audit and recording"]
-  CP -->|"places a run"| RN
-  RN -->|"isolates it in"| SUB
-  SUB -->|"egress only through"| PX
-  CP --> BR
-  CP --> AU
-```
 
 ## Extension points
 

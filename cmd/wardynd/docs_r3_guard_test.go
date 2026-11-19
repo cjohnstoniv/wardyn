@@ -82,8 +82,11 @@ func TestMigrationFailureIsDocumentedAsHalfApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
+	// "down" must be a whole word of the name, a word being a run of letters: "teardown" is not a down
+	// migration, and "down2", "x down" and "downgrade" are.
 	for _, e := range entries {
-		if strings.Contains(strings.ToLower(e.Name()), "down") {
+		words := strings.FieldsFunc(strings.ToLower(e.Name()), func(r rune) bool { return r < 'a' || r > 'z' })
+		if slices.Contains(words, "down") || slices.Contains(words, "downgrade") {
 			t.Errorf("a down migration exists (%s) — the runbook says the dump is the only rollback", e.Name())
 		}
 	}
@@ -794,6 +797,9 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 // audit action literal sitting in the same function.
 var llmScanAuditKey = regexp.MustCompile(`"([a-z][a-z_]*)":`)
 
+// llmScanAuditSetKey pulls a key ScanAudit adds to its fields map after the literal.
+var llmScanAuditSetKey = regexp.MustCompile(`fields\["([a-z][a-z_]*)"\] =`)
+
 // maxAuditFindingsConst pins the llm.scan.* doc row's truncation-bound prose
 // to the const it names, rather than a hand-typed number that can drift.
 var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\d+)`)
@@ -818,13 +824,13 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 			t.Fatal("direct and replay scan audit paths must use the shared builder")
 		}
 	}
-	mapStart := strings.Index(body, "json.Marshal(map[string]any{")
-	if mapStart < 0 {
-		t.Fatalf("ScanAudit's map[string]any literal not found — the guard's anchor moved")
+	mapStart := strings.Index(body, "fields := map[string]any{")
+	if mapStart < 0 || !strings.Contains(body, "json.Marshal(fields)") {
+		t.Fatalf("ScanAudit's fields map[string]any literal, marshalled as the row's data, not found — the guard's anchor moved")
 	}
-	mapEnd := strings.Index(body[mapStart:], "})")
+	mapEnd := strings.Index(body[mapStart:], "\n\t}")
 	if mapEnd < 0 {
-		t.Fatalf("ScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no closing '}' — the guard's anchor moved")
 	}
 	mapLiteral := body[mapStart : mapStart+mapEnd]
 
@@ -832,6 +838,8 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatalf("ScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
 	}
+	// A key set only on some scans (deferred_to) is written into fields after the literal.
+	matches = append(matches, llmScanAuditSetKey.FindAllStringSubmatch(body, -1)...)
 	seen := map[string]bool{}
 	var keys []string
 	for _, m := range matches {
@@ -948,9 +956,11 @@ func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) 
 //     ACTUALLY resolves to (0251.0376.0.1 is 169.254.0.1, link-local — not
 //     127.0.0.1, which the merged text claimed and which glibc, the repo's own
 //     ipguard table and the guard itself all contradict);
-//   - the QUALIFIER on bound (3), so the unhedged "is still denied at the
-//     literal-IP guard" promise cannot return unnoticed: the guard covers the
-//     spellings it PARSES, and the residual it does not cover is stated.
+//   - bound (3)'s "in every literal spelling", which holds only because step 0
+//     also refuses every spelling it cannot read as one standard address and
+//     every non-ASCII host, so that arm and the doc fail together; the
+//     residual it does not cover (embedded-v4 prefixes it does not know) is
+//     stated.
 func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 	// (1) The premise: step 0 is literalIPGuard and its non-canonical arm covers
 	// both axes.
@@ -975,6 +985,7 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 	for _, want := range []string{
 		"func nonCanonicalLiteralIP(", "nonCanonicalLiteralIP(host)",
 		"func nonCanonicalIPv4(", "func zonedIPv6Literal(",
+		"nonASCIIHost(host)", "nonStandardIPSpelling(host)",
 	} {
 		if !strings.Contains(lig, want) {
 			t.Fatalf("literal_ip_guard.go no longer contains %q — the non-canonical coverage the doc claims has changed shape", want)
@@ -999,10 +1010,11 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 		"fe80::1%eth0",
 		"fe80::1%25eth0",
 		"`nonCanonicalLiteralIP`",
-		"Deny only: a spelling the",
-		// Bound (3) is qualified, and the residual is named rather than implied.
-		"**in every literal spelling that guard parses**",
-		"**Residual, stated rather than hedged:**",
+		"Deny only: such a spelling inherits no `allowed_domains` grant",
+		// Bound (3) holds for every spelling, by the refusal of the ones the guard
+		// cannot read, and the residual is named rather than implied.
+		"**in every literal spelling** (see below)",
+		"**Residual, stated rather than hedged:** the guard refuses every ASCII spelling it cannot read as one standard address, and every non-ASCII host",
 		"::127.0.0.1",
 		// The IPv4-compatible form is stated as CLOSED, by the arm that closes it.
 		"`v4CompatibleEmbeddedV4`",
@@ -1020,21 +1032,26 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 		"so it is not denied at step 0",
 		"(`VetHost`, step 4) still binds it",
 	)
-	// §4.2's FIRST statement of the same bound must carry the same qualifier and
-	// cite the file the guard actually lives in (it moved out of proxy.go).
+	// Section 4.2's first statement of the same bound must state it as bound (3)
+	// does, in every literal spelling, and cite the file the guard lives in (it
+	// moved out of proxy.go).
 	s42 := doc[strings.Index(doc, "### 4.2 The unconditional IP guard"):]
 	if i := strings.Index(s42, "\n### "); i > 0 {
 		s42 = s42[:i]
 	}
 	for _, want := range []string{
 		"internal/egress/proxy/literal_ip_guard.go",
-		"in every spelling that guard parses",
+		"in every literal spelling, among them",
 	} {
 		if !strings.Contains(s42, want) {
-			t.Fatalf("THREAT-MODEL.md §4.2's opening statement of the literal-IP bound is missing %q — "+
-				"the section bound (3) forwards the reader to must not restate the promise unqualified, "+
-				"nor cite proxy.go for a guard that lives in literal_ip_guard.go", want)
+			t.Fatalf("THREAT-MODEL.md section 4.2's opening statement of the literal-IP bound is missing %q: "+
+				"it must state the bound as bound (3) does, unqualified, "+
+				"and cite literal_ip_guard.go, where the guard lives, not proxy.go", want)
 		}
+	}
+	if strings.Contains(s42, "in every spelling that guard parses") {
+		t.Fatal("THREAT-MODEL.md section 4.2 still qualifies the literal-IP bound as \"in every spelling that guard parses\"; " +
+			"bound (3) states it in every literal spelling, and the two statements must agree")
 	}
 }
 

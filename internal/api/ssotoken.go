@@ -362,7 +362,9 @@ func (s *Server) readSignInRunToEnd(ctx context.Context, runID uuid.UUID) (types
 // BaseCtx (cancelled on shutdown before WaitBackground), so an orderly stop
 // neither waits out the grace nor adds to a WaitGroup already being waited
 // on. A shutdown inside the grace skips the kill; the run's idle cap and
-// ReconcileOnBoot still end it. The run is re-read after the grace: the
+// ReconcileOnBoot still end it. A shutdown during the retries lets the pass
+// under way finish and starts no further one, so the loop never outlives
+// backgroundShutdownBudget. The run is re-read after the grace: the
 // console's own killRun or the banner door may have ended it already, and a
 // terminal run is left alone (a re-kill would re-run the teardown and write a
 // second run.kill row). A lost CAS to a forward transition (the launch still
@@ -390,6 +392,14 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 		// now holds, as supersedeOneLoginRun does. Only a lost CAS repeats, so
 		// the extra reads are cheap; the cascade itself runs once.
 		for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
+			// A pass already under way finishes (backgroundShutdownBudget is one pass),
+			// but a shutdown stops the loop between passes: a second and third pass
+			// started after it would run past the budget on a slow store.
+			if s.cfg.BaseCtx.Err() != nil {
+				slog.WarnContext(detached, "wardynd: shutdown stopped ending a captured sign-in sandbox; its idle cap ends it",
+					slog.String("run_id", runID.String()), slog.Int("attempt", attempt))
+				return
+			}
 			run, err := s.readSignInRunToEnd(detached, runID)
 			if err != nil {
 				slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
@@ -405,11 +415,13 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 				slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
 					slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
 			}
-			if applied || kerr != nil {
+			// A kill whose claim failed (its wait for the run's start fence can spend the cascade's context) is
+			// tried again from a fresh read, as a lost swap is.
+			if applied {
 				return
 			}
 		}
-		slog.WarnContext(detached, "wardynd: gave up ending a captured sign-in sandbox after repeated state changes",
+		slog.WarnContext(detached, "wardynd: gave up ending a captured sign-in sandbox after repeated state changes or failed kills",
 			slog.String("run_id", runID.String()), slog.Int("attempts", supersedeCASAttempts))
 	})
 }

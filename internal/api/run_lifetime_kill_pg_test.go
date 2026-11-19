@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +74,8 @@ func newLifetimeFixture(t *testing.T) *lifetimeFixture {
 		now:   time.Now().UTC().Truncate(time.Second),
 	}
 	f.srv = h.srv
+	st.DBNow = func() (time.Time, error) { return f.now, nil } // the lease sweep decides on the database's clock; this fixture moves it with f.now
+	f.st = st
 	f.srv.cfg.Store = st
 	f.srv.cfg.Runner = f.rn
 	f.srv.cfg.Broker = f.brk
@@ -274,7 +277,7 @@ func TestLease_AKilledRunIsNotKilledTwice(t *testing.T) {
 	if ok, err := f.st.UpdateRunStateIf(context.Background(), run.ID, types.RunRunning, types.RunCompleted); err != nil || !ok {
 		t.Fatalf("complete the run: %v %v", ok, err)
 	}
-	f.srv.killRunAtLifetime(context.Background(), run, types.RunEndEndReached)
+	f.srv.killRunAtLifetime(context.Background(), run, types.RunEndEndReached, f.now)
 	got := f.get(t, run.ID)
 	if got.State != types.RunCompleted || got.StatusDetail != "" || f.rn.killCount() != 0 || f.idp.count() != 0 {
 		t.Fatalf("state=%s detail=%q kills=%d revokes=%d; want a completed run untouched", got.State, got.StatusDetail, f.rn.killCount(), f.idp.count())
@@ -447,4 +450,80 @@ func TestLease_KillAtTheCapOfAPoolNamesThePool(t *testing.T) {
 	if data := leaseAuditData(t, kills[0]); data["source"] != "Night shift" {
 		t.Errorf("run.kill source = %v, want the pool's name", data["source"])
 	}
+}
+
+// The lease sweep ends a background run on the database's clock (store.PG's DatabaseNow, which this fixture
+// moves with f.now), and the kill's compare-and-set takes the same instant, so this server's clock changes
+// nothing: a run 1 minute past its end is killed and one 1 minute inside it is left alone, whatever the server's
+// clock reads. Before, both read the server's clock.
+func TestPG_LeaseRun_TheEndIsTheDatabasesClock(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		endIn  time.Duration
+		killed bool
+	}{{"1 min inside its end", time.Minute, false}, {"1 min past its end", -time.Minute, true}} {
+		for _, skew := range oneClockSkews {
+			t.Run(fmt.Sprintf("%s, server %v", c.name, skew), func(t *testing.T) {
+				f := newLifetimeFixture(t)
+				run := f.run(t, types.ExperienceBackground, dur(c.endIn), nil)
+				f.srv.cfg.Now = func() time.Time { return f.now.Add(skew) }
+				f.srv.leaseRun(context.Background(), f.st, run)
+				if got := f.get(t, run.ID); (got.State == types.RunKilled) != c.killed {
+					t.Errorf("state = %s, want killed = %v", got.State, c.killed)
+				}
+			})
+		}
+	}
+}
+
+// A direct run created on a replica whose clock is 2 minutes off the database's ends on the database's clock
+// exactly at created_at plus its seconds: the lease sweep, reading the database's now (store.PG's DatabaseNow,
+// moved here), leaves it a minute before and kills it a minute after, for the replica ahead and behind. Before,
+// ends_at was the replica's created time plus the seconds, so the kill came 2 minutes early or late.
+func TestPG_DirectRunEnd_IsCreatedPlusItsSeconds(t *testing.T) {
+	for _, skew := range []time.Duration{2 * time.Minute, -2 * time.Minute} {
+		for _, c := range []struct {
+			name   string
+			at     time.Duration // the database's time, from created_at
+			killed bool
+		}{{"a minute before", time.Hour - time.Minute, false}, {"a minute after", time.Hour + time.Minute, true}} {
+			t.Run(fmt.Sprintf("%s, replica clock %v", c.name, skew), func(t *testing.T) {
+				f := newLifetimeFixture(t)
+				pg := f.st
+				pg.Now = func() time.Time { return time.Now().Add(skew) }
+				f.st, f.srv.cfg.Store = pg, pg
+				replicaNow := pg.Now().UTC()
+				end := replicaNow.Add(time.Hour)
+				run, err := pg.CreateRun(context.Background(), types.AgentRun{
+					ID: uuid.New(), CreatedAt: replicaNow, UpdatedAt: replicaNow, CreatedBy: "life@example.com",
+					Agent: "claude-code", Task: "lifetime", ConfinementClass: types.CC2, State: types.RunRunning,
+					RunnerTarget: "docker", SandboxRef: "wardyn-agent-" + uuid.NewString()[:8], Experience: types.ExperienceBackground,
+					EndsAt: &end,
+				})
+				if err != nil {
+					t.Fatalf("create run: %v", err)
+				}
+				var dbNow time.Time
+				if err := pg.Pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+					t.Fatal(err)
+				}
+				if d := run.CreatedAt.Sub(dbNow); d > 5*time.Second || d < -5*time.Second {
+					t.Fatalf("created_at %v is %v off the database's clock %v; want it on that clock, not the replica's", run.CreatedAt, d, dbNow)
+				}
+				if !spanFromAPI(run.CreatedAt, run.EndsAt, time.Hour) {
+					t.Fatalf("ends_at %v, want 1 h after created_at %v", run.EndsAt, run.CreatedAt)
+				}
+				moveDBClock(t, f.srv, func() time.Time { return run.CreatedAt.Add(c.at) })
+				f.srv.leaseRun(context.Background(), f.srv.cfg.Store.(store.PG), run)
+				if got := f.get(t, run.ID); (got.State == types.RunKilled) != c.killed {
+					t.Errorf("state = %s, want killed = %v", got.State, c.killed)
+				}
+			})
+		}
+	}
+}
+
+// spanFromAPI reports whether at is span after from, to within two microseconds of column rounding.
+func spanFromAPI(from time.Time, at *time.Time, span time.Duration) bool {
+	return at != nil && (at.Sub(from)-span).Abs() <= 2*time.Microsecond
 }

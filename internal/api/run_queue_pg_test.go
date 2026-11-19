@@ -251,7 +251,18 @@ func TestPG_QueuedLaunchSaysItsManagedSettingsAreUndelivered(t *testing.T) {
 	pool := e.cappedPool("Plain", 1)
 	e.occupy(pool)
 	e.runner.noManagedFiles = true
-	out := e.queuedLaunch(nil, pool, `,"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]`)
+	// The harness entry endBody writes, with approvals on hold: a second "tools" key is refused as a repeated key.
+	const harness, held = `"tools":[{"id":"claude-code","kind":"harness"}]`, `"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]`
+	body := endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`)
+	if !strings.Contains(body, harness) {
+		t.Fatalf("endBody no longer writes %s; this test cannot put its tool on hold:\n%s", harness, body)
+	}
+	w := e.admin(http.MethodPost, "/api/v1/runs", strings.Replace(body, harness, held, 1))
+	var out queuedLaunchAnswer
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if w.Code != http.StatusCreated || out.State != types.RunQueued {
+		t.Fatalf("launch into a full pool = %d %s; want 201 QUEUED", w.Code, w.Body)
+	}
 	const want = "managed settings for tool approvals on hold are not delivered"
 	if all := strings.Join(out.Warnings, "\n"); !strings.Contains(all, want) {
 		t.Errorf("the queued 201 does not say %q; warnings were:\n%s", want, all)
@@ -399,5 +410,29 @@ func TestPG_QueueStartRecordsTheServiceAdvisory(t *testing.T) {
 	}
 	if !slices.Equal(data.Warnings, want) {
 		t.Errorf("run.queue.start warnings = %q, want %q", data.Warnings, want)
+	}
+}
+
+// A run that waited in the queue starts with the token stamp of its mint, not of its enqueue: a stale
+// stamp makes a runner refuse the run's lease and lets the lapsed-token sweep end it.
+func TestPG_QueueStartStampsTheMintedToken(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, ``)
+	e.exec(`UPDATE agent_runs SET token_renewed_at = now() - interval '2 hours' WHERE id = $1`, waiting.ID)
+	e.free(occupant)
+	e.waitStarted(waiting.ID)
+	var ageSec float64
+	var jti string
+	if err := e.poolEnv.pool.QueryRow(context.Background(),
+		`SELECT EXTRACT(EPOCH FROM now() - token_renewed_at)::float8, COALESCE(token_jti, '') FROM agent_runs WHERE id = $1`, waiting.ID).Scan(&ageSec, &jti); err != nil {
+		t.Fatal(err)
+	}
+	if ageSec > 60 {
+		t.Errorf("the started run's token stamp is %.0fs old, want a fresh one", ageSec)
+	}
+	if jti == "" {
+		t.Error("the started run recorded no token id")
 	}
 }

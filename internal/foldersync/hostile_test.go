@@ -175,7 +175,8 @@ func pipeSyncer(t *testing.T, pull bool) (sy *Syncer, box, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Syncer{Client: c, Root: lroot, State: st, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	stateDir := t.TempDir()
+	return &Syncer{Client: c, Root: lroot, State: st, StateFile: filepath.Join(stateDir, "state.json"), StateRoot: stateDir,
 		Opts: Options{Remote: box, Pull: pull, MaxPullBytes: DefaultMaxPullBytes}}, box, root
 }
 

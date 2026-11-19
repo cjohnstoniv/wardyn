@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +57,7 @@ func TestRotator_SeedsFileImmediately(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotator(ctx, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotator(ctx, m, fileTokenWriter(path)); close(done) }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -117,7 +119,7 @@ func TestRotatorLeader_StandbySkipsRotation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, fileTokenWriter(path)); close(done) }()
 
 	// Give the standby loop a moment to attempt (and lose) the lock at least
 	// once before cancelling.
@@ -147,7 +149,7 @@ func TestRotatorLeader_AcquiresRunsThenReleasesOnce(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, fileTokenWriter(path)); close(done) }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -165,4 +167,56 @@ func TestRotatorLeader_AcquiresRunsThenReleasesOnce(t *testing.T) {
 	if _, releases := lock.snapshot(); releases != 1 {
 		t.Errorf("release() called %d times, want exactly 1", releases)
 	}
+}
+
+// A write that fails the same way every minute (a Secret that was never created) logs one ERROR, not one a
+// minute, and says so when it recovers.
+func TestRotator_RepeatedWriteFailureLogsOnce(t *testing.T) {
+	waits, fire := stubRotateAfter(t)
+	var mu sync.Mutex
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&mu, &buf}, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	writes := 0
+	write := func(context.Context, string) error {
+		writes++
+		if writes <= 3 {
+			return errors.New(`secrets "gt" not found`)
+		}
+		return nil
+	}
+	m := &fakeGTMinter{token: "tok", expiry: time.Now().Add(time.Hour)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { runGroundtruthTokenRotator(ctx, m, write); close(done) }()
+	for range 3 { // three failures, then the write that works
+		nextWait(t, waits)
+		fire <- time.Now()
+	}
+	nextWait(t, waits)
+	cancel()
+	<-done
+
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	if got := strings.Count(out, "write failed"); got != 1 {
+		t.Errorf("%d write-failed lines for 3 identical failures, want 1:\n%s", got, out)
+	}
+	if !strings.Contains(out, "write recovered") {
+		t.Errorf("no recovery line:\n%s", out)
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	b  *strings.Builder
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
 }

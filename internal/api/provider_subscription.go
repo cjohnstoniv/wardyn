@@ -44,7 +44,7 @@ const (
 	mpSubNoStore      = "this install has no secret store to hold your Claude sign-in"
 	mpSubNotPerson    = "the admin token is a shared credential rather than a person, so it has no Claude sign-in of its own"
 	mpSubNoImage      = "the Claude sign-in image it needs is not built on this install"
-	mpRunRemedySignIn = "connect it from Getting started in the console, or from the banner the console shows on every page."
+	mpRunRemedySignIn = "connect it in the console's User view, under Settings, in Your model connections."
 	mpRunRemedyPerson = "sign in to the console, or use your own wdn_ API token."
 	mpSubReadFailed   = "Wardyn couldn't read your Claude sign-in for model provider %s just now — nothing was started. Try again in a moment."
 
@@ -153,6 +153,10 @@ type providerGrantSnapshot struct {
 	// Harness is the harness the grant serves; "" on a grant authored before
 	// the harness set, which served the run's own agent.
 	Harness string `json:"harness,omitempty"`
+	// AddressDigest is providerAddressDigest of a row that signs people in, as it stood at dispatch: the
+	// resolve refuses when the live row's digest differs, so an edit of the endpoint or its authority
+	// never carries a run's sign-in to the new address. Empty on every other grant.
+	AddressDigest string `json:"address_digest,omitempty"`
 }
 
 // authorProviderSubscriptionInjection authors the per-person subscription
@@ -301,7 +305,8 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	s.stampCredentialUse(ctx, claims.Sub, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
-		ExpiresAt: s.subscriptionLease(minted, tok),
+		ExpiresAt:           s.subscriptionLease(minted, tok),
+		CredentialExpiresAt: credentialExpiry(tok.ExpiresAt),
 	})
 	return true
 }
@@ -344,7 +349,7 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the "+g.source+" credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": g.source + " inject grant: " + err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "Record " + g.source + " inject grant"})))
 		return injections, false
 	}
 	if rule, err := injectionRuleFromScope(raw); err == nil {

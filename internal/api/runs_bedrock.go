@@ -60,7 +60,9 @@ func mavenProxyOpts(proxyURL string) string {
 // store, an unresolvable secret, a non-http URL, or a URL the SIDECAR itself
 // would refuse (from EITHER source) all return ("", <reason>) — the caller
 // audits the reason and dispatches with direct egress instead of failing the
-// run. A resolved, loadable http URL returns (url, "").
+// run. A resolved, loadable http URL returns (url, ""). The one exception is a
+// URL refused for its host's spelling alone (loadableUpstreamProxyURL), which
+// returns (url, <reason>): it is delivered, and the run does not start.
 //
 // Scheme is restricted to http for BOTH sources because the sidecar's own
 // config validation (parseUpstreamProxy, internal/egress/proxy/upstream.go)
@@ -118,12 +120,25 @@ func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, ge
 // ValidNoProxyEntry pattern (site_config_noproxy.go) applied to the value
 // beside the list, and it is what keeps the authority half from drifting away
 // from the sidecar again.
+//
+// A URL refused for its host's spelling alone, such as http://010.0.0.1:3128,
+// stored before the write refused it or held in a secret, is the exception: it
+// names a real proxy, so dropping it would send the run's egress around the
+// proxy the operator named. It is delivered with its reason, the proxy's config
+// load refuses it and names the entry, and the run does not start.
 func loadableUpstreamProxyURL(raw string) (proxyURL, failReason string) {
+	if proxy.UpstreamProxyURLHostRefused(raw) {
+		return raw, upstreamURLHostRefused
+	}
 	if err := proxy.ValidUpstreamProxyURL(raw); err != nil {
 		return "", "unloadable-upstream-url"
 	}
 	return raw, ""
 }
+
+// upstreamURLHostRefused is the resolve reason of a URL refused for its host's spelling alone, which is
+// delivered so the run stops (loadableUpstreamProxyURL).
+const upstreamURLHostRefused = "upstream-url-host-refused"
 
 // normalizedHTTPProxyURL trims raw and reports (trimmed, true) when it parses
 // as an http-scheme URL, else ("", false). Shared by both resolveUpstreamProxyURL
@@ -220,6 +235,9 @@ type bedrockAuth struct {
 	sigv4Hosts []string
 	// sigv4Why is why the lane is not re-signed (the zero value when it is), for its audit row.
 	sigv4Why awsSigV4Why
+	// sigv4Gateway is the gateway a re-signed lane's calls go to, signed for its Bedrock host
+	// (bedrockSSOGatewayOf); nil when the provider sends no run identity or the lane is not re-signed.
+	sigv4Gateway *proxy.AWSSigV4Gateway
 	// residentGrant is the grant the boundary's eligible grants judge a resident captured session
 	// by (awsSSOResidentGrant); nil on every other lane.
 	residentGrant *types.GrantSpec
@@ -559,8 +577,11 @@ func (s *Server) stageAWSSSOFiles(env map[string]string, config string, blob aws
 // Phase B), the SSO egress hosts, and the blob's secrets masked. env is the
 // shared Bedrock env (bedrockBaseEnv) and hosts the Bedrock egress hosts; both
 // are extended. sso is the scope the blob was read in, and runID the run being
-// dispatched. The caller stamps readiness.
-func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string) bedrockAuth {
+// dispatched. gw is the provider's gateway when it sends run identity: the lane is then judged with
+// the gateway's signing host in the gateway's place, as the proxy signs it. The caller stamps readiness.
+func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string,
+	gw *proxy.AWSSigV4Gateway,
+) bedrockAuth {
 	// Phase B: with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
 	// carries an inert placeholder and the real access token is injected
 	// on the wire at portal.sso by the proxy. The switch is read ONCE,
@@ -581,8 +602,11 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	}
 	// Re-signing: the placeholder profile and no route to the sign-in hosts; the proxy alone
 	// redeems the session (runs_dispatch_aws_sigv4.go).
-	sigv4Hosts, sigv4Why := s.awsSigV4Lane(hosts)
+	sigv4Hosts, sigv4Why := s.awsSigV4Lane(gatewaySignedHosts(hosts, gw))
 	sigv4 := sigv4Why.Code == ""
+	if !sigv4 {
+		gw = nil
+	}
 	switch {
 	case maskErr == nil && sigv4:
 		stageAWSSigV4Files(env, "")
@@ -597,7 +621,7 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	// compares must be the one this run will actually present.
 	auth := bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
-		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, sigv4Why: sigv4Why, maskErr: maskErr}
+		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, sigv4Why: sigv4Why, sigv4Gateway: gw, maskErr: maskErr}
 	if !proxyInjected {
 		auth.residentGrant = s.awsSSOResidentGrant(blob.Region)
 	}

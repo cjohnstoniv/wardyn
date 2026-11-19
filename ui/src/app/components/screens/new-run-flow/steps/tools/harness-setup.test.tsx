@@ -137,6 +137,33 @@ describe("HarnessSetup", () => {
       expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "bedrock-sso" } }));
     });
 
+    it("offers Sign in again on a stored endpoint sign-in, because the server says the row signs people in, not its kind", async () => {
+      const sso = { id: "corp-sso", name: "Corp SSO", kind: "custom_endpoint", harnesses: ["claude-code"], host: "llm.contoso.example", sign_in: "oidc" };
+      h.providers = [...MODEL_PROVIDERS, sso];
+      h.access = [{ provider: "corp-sso", state: "live" }];
+      show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "corp-sso" }] });
+      await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN }));
+      expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "corp-sso" } }));
+    });
+
+    it("offers Sign in to {name} on an endpoint sign-in the person has not made, and it opens that provider's door", async () => {
+      const sso = { id: "corp-sso", name: "Corp SSO", kind: "custom_endpoint", harnesses: ["claude-code"], host: "llm.contoso.example", sign_in: "oidc" };
+      h.providers = [...MODEL_PROVIDERS, sso];
+      h.access = [{ provider: "corp-sso", state: "not_configured" }];
+      show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "corp-sso" }] });
+      await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO("Corp SSO") }));
+      expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "corp-sso" } }));
+      expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN })).toBeNull();
+    });
+
+    it("gives an ordinary endpoint no sign-in button when its token is stored", () => {
+      const plain = { id: "corp-gw", name: "Corp gateway", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.example" };
+      h.providers = [...MODEL_PROVIDERS, plain];
+      h.access = [{ provider: "corp-gw", state: "live" }];
+      show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "corp-gw" }] });
+      expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
+    });
+
     it("is the control Setup still needed's Choose focuses", async () => {
       const item = { id: "llm_access:claude-code", kind: "llm_access", label: "Choose a model provider", required_by: "claude-code", status: "missing", fix: { action: "choose_model_provider", tool: "claude-code" } } as const;
       render(

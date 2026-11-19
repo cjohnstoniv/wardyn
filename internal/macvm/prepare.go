@@ -56,8 +56,8 @@ type PrepareEvent struct {
 	// once per stage-2 boot.
 	ToolsDial string `json:"tools_dial,omitempty"`
 	// ToolsDialAt is when the dial was reported, in Unix nanoseconds, set by
-	// emit: the log is appended to by every prepare, and `macos-vm status`
-	// orders this dial against a run boot's by it.
+	// emit, UpdateTools and DeriveBase: a log is appended to by every job, and
+	// `macos-vm status` orders this dial against a run boot's by it.
 	ToolsDialAt int64 `json:"tools_dial_at,omitempty"`
 	// Retry marks a download event for a range that failed and is fetched
 	// again; Bytes is that range's start.

@@ -12,7 +12,10 @@ import { MemoryRouter } from "react-router-dom";
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
-vi.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) } }));
+const toastWarning = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a), warning: (...a: unknown[]) => toastWarning(...a) },
+}));
 
 const listMock = vi.fn();
 const putMock = vi.fn();
@@ -41,6 +44,7 @@ import type { Component } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ComponentsScreen } from "./components-screen";
 import { aheadByHours } from "../../../lib/test-clock";
+import { STATES } from "../../wardyn/states";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -87,6 +91,7 @@ function renderScreen() {
 beforeEach(() => {
   toastSuccess.mockClear();
   toastError.mockClear();
+  toastWarning.mockClear();
   listMock.mockReset().mockResolvedValue([comp()]);
   putMock.mockReset();
   removeMock.mockReset();
@@ -136,6 +141,13 @@ describe("catalog", () => {
     expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add component" })).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("any other failure offers Retry", async () => {
@@ -188,6 +200,26 @@ describe("editor", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("a save that answers a warning still saves, then shows the warning", async () => {
+    const warning = 'definition.hosts[0]: "api.openai.com" serves a model on this deployment; the port does not count.';
+    putMock.mockResolvedValue({ ...comp({ name: "Payments v2" }), requirements: [], warnings: [warning] });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(warning, expect.anything()));
+    expect(toastSuccess).toHaveBeenCalledWith("Component saved.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a save with no warning shows none", async () => {
+    putMock.mockResolvedValue({ ...comp({ name: "Payments v2" }), requirements: [] });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Component saved."));
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
   it("Save waits for a name", async () => {
     const dialog = await openNew();
     expect(within(dialog).getByRole("button", { name: "Save component" })).toBeDisabled();
@@ -210,6 +242,24 @@ describe("editor", () => {
     expect(putMock.mock.calls[0][1].definition.secrets).toEqual([
       { secret_name: "pay-key", delivery: { mode: "header", host: "api.pay.example" } },
     ]);
+  });
+
+  it("an edit names the version it opened; a row saved since is refused, and closing reads the list again", async () => {
+    const msg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
+    putMock.mockRejectedValue(new HttpError(409, msg, "component_version_conflict"));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.clear(within(dialog).getByLabelText("Name"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Payments v2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save component" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(msg);
+    expect(putMock.mock.calls[0][1].expected_version).toBe(1);
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Payments v2");
+    listMock.mockResolvedValue([comp({ name: "Payments (renamed)", version: 2 })]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Payments (renamed)")).toBeInTheDocument();
   });
 
   it("a refusal shows the server's sentence as sent and keeps the dialog", async () => {

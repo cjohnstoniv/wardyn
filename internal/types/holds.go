@@ -5,7 +5,7 @@ package types
 
 import "time"
 
-// The three hold windows approval.Hold ports from ui/src/app/lib/types/
+// The hold windows approval.Hold ports from ui/src/app/lib/types/
 // approvals.ts's now-retired isHeld — see that function's own history (#725/
 // F1, #509, #181) for why each window is what it is. Exported here, the one
 // package both internal/approval and internal/egress/proxy already import,
@@ -27,4 +27,8 @@ const (
 	// (maxHoldTimeout) — the conservative bound isHeld used when no client
 	// surface reads a run's own resolved push_rules.hold_seconds.
 	HoldWindowPush = 600 * time.Second
+	// HoldWindowMCPCall is the ceiling on how long the proxy holds one MCP call open for a
+	// person's yes (an approve_each rule). It stays under Claude Code's 300 s idle timer for a
+	// network server and above the windows the proxy picks per harness.
+	HoldWindowMCPCall = 300 * time.Second
 )

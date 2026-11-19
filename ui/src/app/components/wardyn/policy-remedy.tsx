@@ -16,6 +16,7 @@ import { cn } from "../ui/utils";
 import type { PolicyRef } from "../../lib/api/health";
 import { POLICY_REMEDY } from "../../lib/governance-copy";
 import { WHY_CARD } from "../../lib/why-card-copy";
+import { WALL_PRESETS } from "./copy/wall-presets";
 import { useOwnerName } from "../../lib/use-owner-name";
 import { usePrincipal } from "./operator-context";
 
@@ -55,6 +56,8 @@ export const personalOwn = (policy: PolicyRef, principal: string): boolean => !p
 function setByLabel(policy: PolicyRef, principal: string, ownerName: string): string | null {
   if (!policy.layer) return null;
   if (policy.layer === "personal") return personalOwn(policy, principal) ? WHY_CARD.PERSONAL : WHY_CARD.PERSONAL_OTHER(ownerName);
+  // A wall preset's name is absent for a personal preset its reader does not own.
+  if (policy.layer === "wall_preset") return policy.name ? WALL_PRESETS.WHY_SET_BY(policy.name) : WALL_PRESETS.WHY_SET_BY_PERSONAL;
   if (policy.overridden) return WHY_CARD.RUN_POLICY;
   if (policy.layer === "deployment") return WHY_CARD.BOUNDARY;
   return policy.name ? WHY_CARD.TEAM(policy.name) : WHY_CARD.TEAM_FALLBACK;
@@ -75,17 +78,19 @@ export interface PolicyRemedyProps {
 
 export function PolicyRemedy({ policy, className, enforced, canChange, copyable, line }: PolicyRemedyProps) {
   const principal = usePrincipal();
-  const ownerName = useOwnerName(policy?.owner, policy?.layer === "personal" && !!policy && !personalOwn(policy, principal));
+  const ownerLayer = policy?.layer === "personal" || policy?.layer === "wall_preset";
+  const ownerName = useOwnerName(policy?.owner, ownerLayer && !!policy && !personalOwn(policy, principal));
   const [copied, setCopied] = React.useState(false);
   const resetTimer = React.useRef<number>(undefined);
   React.useEffect(() => () => window.clearTimeout(resetTimer.current), []);
   if (!policy) return null;
   // Nobody to ask for a limit the person set themselves: the Can change row says where to change it.
+  const preset = policy.layer === "wall_preset";
   const personal = policy.layer === "personal";
   const href = safeRequestHref(policy.request_url);
   const mail = policy.email ? safeRequestHref(`mailto:${policy.email}`) : "";
   let action: React.ReactNode = null;
-  if (personal) {
+  if (personal || preset) {
     action = null;
   } else if (href) {
     action = (
@@ -121,8 +126,11 @@ export function PolicyRemedy({ policy, className, enforced, canChange, copyable,
     );
   }
   const setBy = setByLabel(policy, principal, ownerName);
-  const changeBy = personal ? (personalOwn(policy, principal) ? WHY_CARD.CAN_CHANGE_PERSONAL : WHY_CARD.CAN_CHANGE_NOT_HERE) : canChange;
-  const rows: Array<[string, React.ReactNode]> = [[WHY_CARD.OWNER, (policy.layer === "personal" ? ownerName : policy.owner) || WHY_CARD.NOT_LISTED]];
+  const changeBy = preset
+    ? (personalOwn(policy, principal) ? WALL_PRESETS.WHY_CAN_CHANGE_OWN : WALL_PRESETS.WHY_CAN_CHANGE_OTHER)
+    : personal ? (personalOwn(policy, principal) ? WHY_CARD.CAN_CHANGE_PERSONAL : WHY_CARD.CAN_CHANGE_NOT_HERE) : canChange;
+  // A wall preset's owner row is whoever chose it at launch: the run's owner, not the preset's author.
+  const rows: Array<[string, React.ReactNode]> = [[preset ? WALL_PRESETS.WHY_CHOSEN_BY : WHY_CARD.OWNER, (ownerLayer ? ownerName : policy.owner) || WHY_CARD.NOT_LISTED]];
   if (setBy) rows.unshift([WHY_CARD.SET_BY, setBy]);
   if (enforced) rows.push([WHY_CARD.ENFORCED, enforced]);
   if (changeBy) rows.push([WHY_CARD.CAN_CHANGE, changeBy]);

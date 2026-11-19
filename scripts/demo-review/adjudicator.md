@@ -16,5 +16,5 @@ spot explicitly, and never tell a persona its flaw.
 
 ## Revisions
 
-- 2026-08-24: split out of protocol.md's lane table (Fable review: the table lived
+- 2026-08-24: split out of protocol.md's lane table (the table lived
   in the file every viewer reads, so the personas were being told their flaws).

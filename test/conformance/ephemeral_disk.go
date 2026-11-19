@@ -83,8 +83,8 @@ var ephemeralFillTargets = []ephemeralFillTarget{
 //	    it never completes, because the pod carrying it is killed.
 //
 // IT NEVER WRITES UNDER $HOME, and that was finding 2. The agent pod runs as uid
-// 1000 with no HOME in its env and no passwd entry for that uid, so runc's
-// fallback answers HOME=/ — which is root:root 0755 in busybox. Every fill
+// 1000 with no HOME in its env, and in an image with no passwd entry for that
+// uid runc's fallback answers HOME=/ — which is root:root 0755 in busybox. Every fill
 // therefore died with `dd: can't open '//wardyn-ephemeral-fill': Permission
 // denied` and exit 1: not the coded 90, so the IMAGE skip never fired, nothing
 // was written, and the case burned the whole eviction budget before reporting

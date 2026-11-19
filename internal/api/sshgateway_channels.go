@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // sshDisplaceGrace is how long a displaced SSH client gets to accept the
@@ -101,6 +102,19 @@ func sshIsSandboxLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// sshRelayArgv is the in-sandbox command that copies its stdio to the sandbox's own
+// 127.0.0.1:<port>: socat in a container, the guest agent's own forward mode in a VM, which has no
+// socat. Callers have already validated the destination and the port.
+func sshRelayArgv(kind types.MachineKind, port int) []string {
+	switch kind {
+	case types.MachineLinuxVM:
+		return guestagent.ForwardArgv(guestagent.LinuxAgentPath, port)
+	case types.MachineMacOSVM:
+		return guestagent.ForwardArgv(guestagent.MacAgentBinaryPath, port)
+	}
+	return []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", port)}
+}
+
 // sshExecStreamErrorMessage maps an ExecStream launch failure to the message
 // a client sees: the shared "unsupported substrate" wording on
 // ErrExecStreamUnsupported, the raw error otherwise.
@@ -148,67 +162,28 @@ func clampExitCode(code int) int {
 	return code
 }
 
-// drainExecStderr starts copying sess.Stderr to the channel's own extended-
-// data stderr stream IMMEDIATELY — before the caller ever touches Stdout.
-//
-// HARD CONTRACT (runner.ExecSession's doc): Stdout/Stderr are UNBUFFERED
-// io.Pipes fed by ONE demux goroutine; a single undrained stderr byte blocks
-// that goroutine, Stdout, AND Wait. Every ExecStream consumer in this file —
-// exec, sftp, direct-tcpip/socat — MUST start this before the first Stdout
-// read. sftp-server's error path writes stderr before any stdout, which is
-// exactly where a missing drain would hang silently.
-func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
-	if sess.Stderr == nil {
-		return
-	}
-	go func() {
-		_, _ = io.Copy(channel.Stderr(), sess.Stderr)
-	}()
-}
-
 // sshBridgeExecSession bridges channel<->sess for the lifetime of one
 // ExecStream session: drains stderr first (see drainExecStderr), pumps
-// channel->Stdin and Stdout->channel concurrently, and on Stdout EOF calls
-// Wait for the exit code and (when sendExit) reports it via "exit-status".
-// ExecSession is documented as a plain, partial-fake-friendly struct (any
-// func/stream field may be nil), so every access here is guarded.
+// channel->Stdin and Stdout->channel concurrently, and on Stdout EOF waits for
+// stderr to end too (at most execStderrTailGraceNS), so all of it is on the
+// channel before Wait, the "exit-status" report (when sendExit) and the Close;
+// it does not wait when the copy ended on a channel write error.
 //
-// CLOSES channel itself before returning (deferred, so every path — including
-// a nil Stdout — takes it): sending exit-status is not enough on its own. A
-// real ssh client's Session.Wait() blocks for the channel to close, not just
-// for exit-status to arrive, and for a "session" channel the OUTER
-// handleSSHSessionChannel's own deferred Close cannot be trusted to run this
-// promptly — its request loop keeps serving window-change concurrently with
-// this bridge, so it is still blocked reading reqs while THIS function would
-// otherwise sit idle waiting for the client to hang up first. Neither side
-// would ever close, and the exchange deadlocks (caught live by
-// TestSSHGateway_ExecExitCode: the fix is this Close, not a client-side
-// workaround). direct-tcpip's caller closes independently too (its own defer,
-// for its own early-Accept-failure path) — a second Close here is a
-// documented-safe no-op (ssh.Channel.Close on an already-closed channel just
-// returns an error, never panics).
-//
-// Also keeps runID's idle clock reset for the life of the stream (TouchRun +
-// attachKeepalive, cancelled when this function returns) — a long scp, a
-// held -L tunnel, or a slow `ssh run 'make build'` must not be reaped by
-// auto_stop mid-flight, same as bridgeSSHShell's own (separate) keepalive
-// for the interactive shell path.
-//
-// Returns the exit code (1 when Wait is absent or errors — clampExitCode's
-// same fold) and the bytes copied each way: bytesOut is Stdout->channel, what
-// ssh.sftp.transfer's and ssh.forward's "bytes" audit field means — the
-// direction that matters for a download/forward is what came OUT of the
-// sandbox — and bytesIn is channel->Stdin, what the sandbox received.
+// CLOSES channel itself before returning (deferred, so every path takes it):
+// exit-status alone is not enough. A real ssh client's Session.Wait() blocks
+// for the channel to close, and the OUTER handleSSHSessionChannel Close cannot
+// be trusted to run promptly, so neither side would close and the exchange
+// deadlocks (TestSSHGateway_ExecExitCode); direct-tcpip's own Close is a no-op.
+// Also keeps runID's idle clock reset (TouchRun + attachKeepalive), so a long
+// scp, -L tunnel or slow command is not reaped by auto_stop. Returns the exit
+// code (1 when Wait is absent or errors) and the bytes copied each way.
 func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesIn, bytesOut int64) {
 	defer channel.Close()
-	drainExecStderr(channel, sess)
+	stderrDone := drainExecStderr(channel, sess)
 
-	// The io.Copy off sess.Stdout below reads a docker exec pipe that no ctx
-	// can reach — a disconnected client (or a closed channel) would otherwise
-	// park this goroutine until the in-sandbox command exits, holding one of
-	// the run's four channel slots AND keeping the keepalive below touching
-	// the run so the idle reaper never fires. Close the session when ctx dies;
-	// Close is idempotent on both drivers.
+	// The Stdout copy below reads a pipe no ctx can reach: a disconnected client (or closed channel) would park this
+	// goroutine holding a channel slot and the keepalive, so the idle reaper never fires. Close the session when ctx
+	// dies; Close is idempotent.
 	stopOnCtx := context.AfterFunc(ctx, func() {
 		if sess.Close != nil {
 			_ = sess.Close()
@@ -224,17 +199,28 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
-			// Bytes a person sends are presence (run_pause.go).
+			// The bytes a person sends are presence (run_pause.go); `in` counts the bytes written to the sandbox's stdin, and is read atomically, off this goroutine, because this copy may still be running when Stdout ends.
 			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
-			// Counted as written to the sandbox, off this goroutine: it may still
-			// be mid-copy when Stdout ends, so the total is read atomically.
 			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
-			_ = sess.Stdin.Close() // half-close only: Stdout/Stderr may still be flowing
+			// Half-close only (Stdout/Stderr may still flow), and not on a cut: its Close ends stdin, and a half-close first could let the process end cleanly.
+			if ctx.Err() == nil {
+				_ = sess.Stdin.Close()
+			}
 		}()
 	}
 
+	toChannel := firstWriteErrWriter{w: channel}
 	if sess.Stdout != nil {
-		bytesOut, _ = io.Copy(channel, sess.Stdout)
+		bytesOut, _ = io.Copy(&toChannel, sess.Stdout)
+	}
+
+	// A channel that refused a write carries no stderr either, so only a copy that ended on the sandbox's side waits for it.
+	if toChannel.err == nil {
+		select {
+		case <-stderrDone:
+		case <-ctx.Done():
+		case <-time.After(time.Duration(execStderrTailGraceNS.Load())):
+		}
 	}
 
 	exitCode = 1
@@ -281,8 +267,8 @@ type sshSessionGate struct {
 // shared is set — one a sync-only channel (admitted past the shared cap, see
 // sshOpenSlot) may not make: that one is audited once, answered with the cap
 // text and closed, which frees the sync slot it was holding.
-func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
-	if g.started {
+func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string) bool {
+	if g.started || g.s.sshDataOutRefused(g, path) {
 		_ = req.Reply(false, nil)
 		return false
 	}
@@ -309,11 +295,11 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 	}
 	switch m.Subsystem {
 	case "sftp":
-		if g.mayDispatch(req, true) {
+		if g.mayDispatch(req, true, "sftp") {
 			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
 		}
 	case sshSyncSubsystem:
-		if !g.mayDispatch(req, false) {
+		if !g.mayDispatch(req, false, "") {
 			return nil
 		}
 		if !g.slot.toSync() {
@@ -327,7 +313,7 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
-		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass) }
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass, g.slot.dataOut) }
 	default:
 		_ = req.Reply(false, nil)
 	}
@@ -350,8 +336,8 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// stream ends (client closed the channel) as well as when the parent
 	// connection ctx dies — the bridge's AfterFunc closes its exec session on
 	// either, so a parked io.Copy can never outlive its channel.
-	chCtx, chCancel := context.WithCancel(ctx)
-	defer chCancel()
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(nil)
 	// Backstop only: the client-disconnects-first path (reqs closes with no
 	// shell/exec/subsystem ever dispatched, or a still-running bridge is
 	// interrupted). The COMPLETION path closes channel itself, from inside the
@@ -426,7 +412,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "") {
 				continue
 			}
 			gate.started = true
@@ -438,7 +424,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "exec") {
 				continue
 			}
 			var m sshExecReqMsg
@@ -490,8 +476,9 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// connection died). A bridge parked on a quiet exec would wait for the
 	// in-sandbox command forever; cancel the channel-scoped ctx so its
 	// AfterFunc closes the session and the bridge returns. A normally-finished
-	// bridge already closed the channel itself, making this a no-op.
-	chCancel()
+	// bridge already closed the channel itself, making this a no-op. The cause
+	// is the client's close (sshClientClosedFirst) unless chCtx already ended.
+	chCancel(errSSHChannelClosed)
 	if bridgeDone != nil {
 		<-bridgeDone
 	}
@@ -595,7 +582,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 				}
 				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
 				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": err.Error(), "promotion": true})))
+					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, err), "promotion": true})))
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
 				cancel()
 				return
@@ -661,7 +648,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	attachErr := s.establishExec(pumpCtx, run, holder)
 	if attachErr != nil {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachErr.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)})))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
 		}
@@ -861,8 +848,8 @@ func (p *sshPumpState) applyResize(cols, rows uint16) bool {
 // runs it by a relative path (Mutagen's agent) finds it (#3549). The cd's stdout
 // is discarded too: a relative HOME that CDPATH resolves, or HOME of "-", makes
 // cd print a directory line ahead of the command's output, which sshd's
-// chdir never does.
-const sshExecFromHome = `[ -n "${HOME:-}" ] && cd "$HOME" >/dev/null 2>&1; exec /bin/sh -c "$1"`
+// chdir never does. runner.ExecCAWait first holds the command until the run's CA files exist.
+const sshExecFromHome = runner.ExecCAWait + `[ -n "${HOME:-}" ] && cd "$HOME" >/dev/null 2>&1; exec /bin/sh -c "$1"`
 
 // sshExecArgv is the argv one exec channel's command runs as.
 func sshExecArgv(command string) []string {
@@ -885,13 +872,13 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshExecArgv(command),
 		Env:  env,
 	})
 	if err != nil {
-		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
-			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": err.Error()})))
+		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": sshStartError(ctx, runID, auditStepSSHExec, err)})))
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
@@ -916,7 +903,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 }
 
 // handleSSHDirectTCPIP implements `-L` local forwarding: ExecStream of `socat
-// - TCP:127.0.0.1:<port>` inside the sandbox's OWN network namespace (the
+// - TCP:127.0.0.1:<port>` (a VM: the guest agent's forward mode) inside the sandbox's OWN network namespace (the
 // sandbox cannot create egress — L0 structural confinement, invariant 3, is
 // unaffected by this), so the only reachable destination is EVER the
 // sandbox's own loopback regardless of what host the client asked to
@@ -943,14 +930,27 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		_ = newCh.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+	// A macOS VM's loopback also holds Screen Sharing: the desktop door, which the window's session and
+	// recording accounting covers. It needs the run's machine kind, so it follows the fresh read.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(int(m.DestPort)) {
+		_ = newCh.Reject(ssh.Prohibited, "forwarding to a macOS VM's Screen Sharing ports (5900-5909) is not allowed — open the run's window instead")
+		return
+	}
 
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", m.DestPort)},
+	// The forward's own context, as a session channel's chCtx: the client's close of this channel ends it with the
+	// client's cause, so the bridge closes the relay then, not when the connection ends. A relay parked writing to
+	// an unread pipe (a k8s or VM exec whose channel refused a write) has no other way to reach its Wait.
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(errSSHChannelClosed)
+	ctx = chCtx
+
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
+		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {
-		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 			fmt.Sprintf("127.0.0.1:%d", m.DestPort), "failure",
-			mustJSON(map[string]any{"port": m.DestPort, "error": err.Error()})))
+			mustJSON(map[string]any{"port": m.DestPort, "error": sshStartError(ctx, runID, auditStepSSHForward, err)})))
 		_ = newCh.Reject(ssh.ConnectionFailed, sshExecStreamErrorMessage(err))
 		return
 	}
@@ -963,15 +963,22 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 	defer channel.Close()
-	go ssh.DiscardRequests(reqs)
+	// The requests end at the client's CHANNEL_CLOSE or the connection's end, never at its EOF: a half-closed
+	// forward still gets its reply.
+	go func() {
+		ssh.DiscardRequests(reqs)
+		chCancel(errSSHChannelClosed)
+	}()
 
-	_, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
+	var end bridgeEnd
+	exit, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noteBridgeEnd(ctx, sess, &end), false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its
 	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
 	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
+	extra := map[string]any{"port": m.DestPort, "bytes": bytesOut}
+	outcome := bridgeOutcome(exit, end, "the forward relay", extra)
 	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
-		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
-		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
+		fmt.Sprintf("127.0.0.1:%d", m.DestPort), outcome, mustJSON(extra)))
 }

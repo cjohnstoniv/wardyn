@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -103,8 +104,11 @@ func repoDevcontainerImageCaveats(ws types.Workspace, fellBack bool) []string {
 // present" as a cache MISS so resolveWorkspaceImage falls through to a
 // rebuild. A Runner that cannot answer (unwired, or a substrate with no
 // local cache notion) is treated as "unknown" — fail-open, matching
-// resolveWorkspaceImage's posture everywhere else.
+// resolveWorkspaceImage's posture everywhere else. A run launch holds ref
+// first (runner.HoldImage), so a refresh cannot reclaim it between this check
+// and the sandbox's creation.
 func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
+	runner.HoldImage(ctx, ref)
 	ic, ok := s.cfg.Runner.(runner.ImageChecker)
 	if !ok {
 		return true
@@ -124,7 +128,9 @@ func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
 // ref is empty (nothing built yet), ref == next (the cache actually hit —
 // never happens at a call site that reached a build, but cheap to guard), or
 // the wired Runner doesn't implement the optional runner.ImageRemover
-// capability (k8s: the kubelet pulls fresh, nothing local to reclaim). Errors
+// capability (the daemon's Orchestrator does, and removes nothing when no
+// local substrate keeps images). A ref a run launch holds is kept: the launch
+// selected it and has not created its sandbox yet. Errors
 // are logged, never surfaced: the NEW image already built/is already in use;
 // failing to reclaim the old one is a disk-usage regret, not a launch blocker.
 func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
@@ -135,7 +141,12 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 	if !ok {
 		return
 	}
-	if err := ir.ImageRemove(ctx, ref); err != nil {
+	held, err := runner.RemoveUnlessHeld(ctx, ref, ir.ImageRemove)
+	if held {
+		slog.InfoContext(ctx, "wardynd: kept a superseded workspace image a run launch is using", slog.String("image", ref))
+		return
+	}
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not reclaim superseded workspace image",
 			slog.String("image", ref), slog.Any("err", err))
 	}
@@ -183,6 +194,9 @@ type imageResolveOpts struct {
 	// ReclaimLoser removes a build's own tag when its swap is lost, and reports the loss as not
 	// OK. The build door sets it; a run launch keeps its image, which its run is about to start.
 	ReclaimLoser bool
+	// Pinned is the ref image admission pinned the run's member image to (imagePin): a chosen base image is
+	// run as it, or wrapped FROM it, and a stored wrap serves the run only when built FROM its digest.
+	Pinned string
 }
 
 // observedRef is the ref the swap compares against: what the requester saw (a refresh) or
@@ -222,7 +236,9 @@ func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) image
 	pw, refusal := s.prewrappedRunImage(ctx, ref)
 	switch {
 	case refusal != nil && refusal.err != nil:
-		return imageResolveResult{BaseErr: refusal.err}
+		// The store's text stays in the log: BaseErr reaches the member's failure hint.
+		slog.ErrorContext(ctx, "wardynd: a workspace's prewrapped base image could not be read", slog.String("ref", ref), slog.Any("err", refusal.err))
+		return imageResolveResult{BaseErr: errors.New("the prewrapped base image could not be read")}
 	case refusal != nil:
 		return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
 	case pw == nil:
@@ -255,7 +271,11 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
 	if prewrappedBase(primary.BaseImage) {
-		return s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
+		res := s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
+		if res.OK && opts.Pinned != "" {
+			res.Image = opts.Pinned
+		}
+		return res
 	}
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {
@@ -283,7 +303,8 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 		// to a different base ref) always busts the cache instead of reading a
 		// stale image built for a different source.
 		byoiHash := byoiCacheKey(b.Kind, b.Image)
-		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) &&
+			s.wrapBuiltFromPin(ctx, primary, opts.Pinned) {
 			hit := map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": primary.ImageRef, "cache_hit": true}
 			s.addCacheHitFields(ctx, primary, hit)
 			buildAudit("success", hit)
@@ -300,7 +321,7 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		reason := reasonFor(byoiHash)
 		announce()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink, opts.Refresh)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, cmp.Or(opts.Pinned, b.Image), outTag, logSink, opts.Refresh)
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
 			return imageResolveResult{BaseErr: berr}
@@ -427,14 +448,18 @@ func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, prima
 	return commit(rec, map[string]any{"source": "generated-devcontainer"})
 }
 
-// commitImage swaps the built image in and audits the build a success. A refresh that could not
-// write its swap changed nothing, so it is a failure and keeps no tag.
+// refreshNotRecordedMsg is a refresh's failure when its image built but the workspace could not be pointed at it.
+const refreshNotRecordedMsg = "Could not record the refreshed image"
+
+// commitImage swaps the built image in and audits the build a success. A refresh whose swap write
+// failed is a failure, and keeps its tag: the write may have landed with only its reply lost, and
+// the workspace would then name an image removed here.
 func (s *Server) commitImage(ctx context.Context, primary types.Workspace, opts imageResolveOpts, rec *types.ImageBuild,
 	extra map[string]any, buildAudit func(string, map[string]any)) imageResolveResult {
 	superseded, werr := s.commitBuiltImage(ctx, primary, opts.observedRef(primary), rec, extra, opts.ReclaimLoser)
 	if werr != nil && opts.Refresh {
-		s.removeStaleImage(ctx, rec.Image.Ref, "")
-		extra["error"] = "could not record the refreshed image: " + werr.Error()
+		// The wizard reads this back (buildFailureDetail); commitBuiltImage already logged the cause beside cache_warn.
+		extra["error"] = refreshNotRecordedMsg
 		buildAudit("failure", extra)
 		return imageResolveResult{}
 	}
@@ -457,6 +482,7 @@ func (s *Server) commitImage(ctx context.Context, primary types.Workspace, opts 
 // swap — and only that tag, since the winner may own the old one; a run launch keeps it, its
 // run is about to start it.
 func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, observed string, rec *types.ImageBuild, extra map[string]any, reclaimLoser bool) (superseded bool, err error) {
+	runner.HoldImage(ctx, rec.Image.Ref) // a launch's new image is held before the swap lets a refresh supersede it
 	addBuildRecordFields(extra, rec)
 	if s.cfg.Store == nil {
 		s.removeStaleImage(ctx, observed, rec.Image.Ref)
@@ -465,7 +491,7 @@ func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, 
 	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, observed, rec.Image.Ref, rec.CacheKey, rec)
 	switch {
 	case err != nil:
-		extra["cache_warn"] = err.Error()
+		extra["cache_warn"] = auditStep(ctx, auditStepRecordImage, err, slog.String("workspace_id", primary.ID.String()))
 		return false, err
 	case !applied:
 		extra["cache_warn"] = "superseded"

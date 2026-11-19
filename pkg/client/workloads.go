@@ -254,11 +254,15 @@ type Workload struct {
 	// Digest is the hex SHA-256 over the intent, run_in and restart_key; an apply of the same digest changes
 	// nothing. It is withheld from a reader who sees the intent with its host axis withheld.
 	Digest string `json:"digest,omitempty"`
+	// PolicyPin is the launch policy digest every launch of the workload must resolve to (PinWorkloadPolicy),
+	// empty when it has none. It is withheld where Digest is.
+	PolicyPin string `json:"policy_pin,omitempty"`
 	// Generation counts spec changes; CurrentGeneration is the one the current run was launched from.
 	Generation        int64      `json:"generation"`
 	CurrentGeneration int64      `json:"current_generation"`
 	RunID             *uuid.UUID `json:"run_id,omitempty"`
-	// State is the current run's state, with its service health when it has one.
+	// State is the current run's state, with its service health when it has one: the worse of the sandbox's reading and
+	// Wardyn's own check, for a service that opted in to it.
 	State       string           `json:"state,omitempty"`
 	LastRefusal *WorkloadRefusal `json:"last_refusal,omitempty"`
 	// CanRestart is whether the caller who read this may restart it: the owner, the current sponsor of a
@@ -272,7 +276,7 @@ type Workload struct {
 // WorkloadEvent is one row of a workload's history: a workload.* audit row without its actor and hashes.
 type WorkloadEvent struct {
 	Time time.Time `json:"time"`
-	// Action is apply, launch, replace, launch_refused, restart or delete.
+	// Action is apply, launch, replace, launch_refused, restart, delete or policy_pin.set.
 	Action     string `json:"action"`
 	Generation int64  `json:"generation,omitempty"`
 	// RunID is the run a launch started, or the run that replaced another.
@@ -354,15 +358,23 @@ func (c *Client) GetWorkload(ctx context.Context, name, owner string) (Workload,
 	return out, err
 }
 
-// WorkloadHistory reads the workload's audit rows, newest first. GET /api/v1/workloads/{name}/history.
-func (c *Client) WorkloadHistory(ctx context.Context, name, owner string, opts ...ListOpts) ([]WorkloadEvent, error) {
-	var out []WorkloadEvent
+// WorkloadHistoryPage is WorkloadHistory plus the server's X-Wardyn-Truncated signal: truncated=true
+// means a further page exists.
+func (c *Client) WorkloadHistoryPage(ctx context.Context, name, owner string, opts ...ListOpts) (events []WorkloadEvent, truncated bool, err error) {
 	path := "/api/v1/workloads/" + url.PathEscape(name) + "/history"
 	if owner != "" {
 		path += "?owner=" + url.QueryEscape(owner)
 	}
-	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
-	return out, err
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &events, &hdr)
+	return events, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
+// WorkloadHistory reads the workload's audit rows, newest first. GET /api/v1/workloads/{name}/history.
+// Prefer WorkloadHistoryPage, which also returns the server's truncation signal.
+func (c *Client) WorkloadHistory(ctx context.Context, name, owner string, opts ...ListOpts) ([]WorkloadEvent, error) {
+	events, _, err := c.WorkloadHistoryPage(ctx, name, owner, opts...)
+	return events, err
 }
 
 // DeleteWorkload ends the workload's run and deletes it. DELETE /api/v1/workloads/{name}.
@@ -370,8 +382,11 @@ func (c *Client) DeleteWorkload(ctx context.Context, name, owner string) error {
 	return c.do(ctx, http.MethodDelete, workloadPath(name, owner), nil, nil)
 }
 
-// RestartWorkload starts a fresh run of the stored spec and then ends the old one.
-// POST /api/v1/workloads/{name}/restart.
+// RestartWorkload asks for a fresh run of the stored spec; the answer's Launch.State says what happened.
+// WorkloadLaunched: the new run (Launch.RunID) started and the old one is ended. WorkloadRefused: the old
+// run keeps running, and Launch.Reason and Launch.Message say why. WorkloadNoLaunch: no run started; a
+// person's workload restarted by someone else is recorded and starts at the owner's next apply, and
+// Launch.Message says so. POST /api/v1/workloads/{name}/restart.
 func (c *Client) RestartWorkload(ctx context.Context, name, owner string) (WorkloadApplyResult, error) {
 	var out WorkloadApplyResult
 	path := "/api/v1/workloads/" + url.PathEscape(name) + "/restart"
@@ -379,6 +394,28 @@ func (c *Client) RestartWorkload(ctx context.Context, name, owner string) (Workl
 		path += "?owner=" + url.QueryEscape(owner)
 	}
 	err := c.do(ctx, http.MethodPost, path, nil, &out)
+	return out, err
+}
+
+// WorkloadPolicyPinRequest is the body of PUT /api/v1/workloads/{name}/policy-pin.
+type WorkloadPolicyPinRequest struct {
+	// Digest is a launch policy digest, 64 lowercase hex characters, as WorkloadPreviewLaunch.PolicyDigest reads.
+	Digest string `json:"digest"`
+}
+
+// PinWorkloadPolicy pins the caller's own workload to digest: a later launch of it whose policy resolves to
+// another digest is refused (workload_policy_pin_mismatch) before any run starts, and the current run keeps
+// running. PUT /api/v1/workloads/{name}/policy-pin.
+func (c *Client) PinWorkloadPolicy(ctx context.Context, name, digest string) (Workload, error) {
+	var out Workload
+	err := c.do(ctx, http.MethodPut, workloadPath(name, "")+"/policy-pin", WorkloadPolicyPinRequest{Digest: digest}, &out)
+	return out, err
+}
+
+// UnpinWorkloadPolicy clears the caller's own workload's pin. DELETE /api/v1/workloads/{name}/policy-pin.
+func (c *Client) UnpinWorkloadPolicy(ctx context.Context, name string) (Workload, error) {
+	var out Workload
+	err := c.do(ctx, http.MethodDelete, workloadPath(name, "")+"/policy-pin", nil, &out)
 	return out, err
 }
 
@@ -409,4 +446,73 @@ func (c *Client) ListWorkloadBindings(ctx context.Context, opts ...ListOpts) ([]
 // DELETE /api/v1/workload-bindings/{id}.
 func (c *Client) DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/workload-bindings/"+id.String(), nil, nil)
+}
+
+// WorkloadChange is one field an apply would change, at its RFC 6901 path over the workload document
+// (`/description`, `/run_in`, `/restart_key`, `/intent/...`). Op is add, remove or change. From is absent
+// for an add and To for a remove. An array is one change at its own path.
+type WorkloadChange struct {
+	Path string          `json:"path"`
+	Op   string          `json:"op"`
+	From json.RawMessage `json:"from,omitempty"`
+	To   json.RawMessage `json:"to,omitempty"`
+}
+
+// WorkloadPreviewRefusal is the refusal an apply would meet from the store: the status and reason the PUT
+// would answer with.
+type WorkloadPreviewRefusal struct {
+	Status int    `json:"status"`
+	Reason string `json:"reason"`
+	Error  string `json:"error"`
+}
+
+// The launch states of a WorkloadPreview.
+const (
+	WorkloadPreviewWouldLaunch = "would_launch"
+	WorkloadPreviewNoLaunch    = "none"
+	WorkloadPreviewWouldRefuse = "would_refuse"
+)
+
+// WorkloadPreviewLaunch is whether an apply would start a run. A run starts when the workload is new or
+// changed, or when its spec's last launch was refused.
+type WorkloadPreviewLaunch struct {
+	// State is would_launch, none or would_refuse.
+	State   string `json:"state"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	// Replaces is the current run, which ends once the new one runs.
+	Replaces *uuid.UUID `json:"replaces,omitempty"`
+	// Preflight is the launch's dry run, with State would_launch.
+	Preflight *PreflightResult `json:"preflight,omitempty"`
+	// PolicyDigest is the launch policy digest the launch resolves to, what PinWorkloadPolicy takes; empty
+	// when the preview refuses the launch before its policy is fully resolved.
+	PolicyDigest string `json:"policy_digest,omitempty"`
+}
+
+// WorkloadPreview is the answer of POST /api/v1/workloads/{name}/preview: what the same body to PUT
+// would do. It stores nothing.
+type WorkloadPreview struct {
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+	// Op is create, update or none. A description-only change is none, with the change listed.
+	Op string `json:"op"`
+	// Outcome is what the PUT would answer; empty when a Refusal stops it.
+	Outcome WorkloadOutcome `json:"outcome,omitempty"`
+	// Refusal is the store's own 409 or 422, carried here so Changes still show.
+	Refusal *WorkloadPreviewRefusal `json:"refusal,omitempty"`
+	// Changes is never null.
+	Changes      []WorkloadChange      `json:"changes"`
+	Stored       *WorkloadDocument     `json:"stored,omitempty"`
+	Proposed     WorkloadDocument      `json:"proposed"`
+	StoredDigest string                `json:"stored_digest,omitempty"`
+	Digest       string                `json:"digest"`
+	Launch       WorkloadPreviewLaunch `json:"launch"`
+}
+
+// PreviewWorkload asks what ApplyWorkload would do with req, for the caller, and stores nothing.
+// POST /api/v1/workloads/{name}/preview. A refusal the store would make is in the answer, not an error.
+func (c *Client) PreviewWorkload(ctx context.Context, name string, req WorkloadApplyRequest) (WorkloadPreview, error) {
+	var out WorkloadPreview
+	err := c.do(ctx, http.MethodPost, workloadPath(name, "")+"/preview", req, &out)
+	return out, err
 }

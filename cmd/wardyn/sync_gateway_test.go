@@ -79,6 +79,12 @@ func (s *syncStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit
 	return nil, nil
 }
 
+// QueryAuditEvents answers the run's recorded policy, which sets no data_out rule: the gateway reads it once
+// per connection.
+func (s *syncStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: json.RawMessage(`{}`)}}, nil
+}
+
 type syncAudit struct {
 	mu sync.Mutex
 	ev []types.AuditEvent
@@ -383,12 +389,13 @@ func newSyncRig(t *testing.T) *syncRig {
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx"}
 	st := &syncStore{run: run, key: map[string]types.SSHPublicKey{}}
 	st.register(run.CreatedBy, signer.PublicKey())
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	// The rig binds port 0 itself and serves the gateway on that listener, so the port is never free for
+	// another process to take between a pick and the gateway's bind.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
+	addr := ln.Addr().String()
 	sandbox := t.TempDir()
 	audit := &syncAudit{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -399,15 +406,7 @@ func newSyncRig(t *testing.T) *syncRig {
 		Store: st, Audit: audit, Runner: rn, BaseCtx: ctx,
 		SSHListenAddr: addr, SSHAdvertiseAddr: addr, SSHHostKey: hostPriv,
 	})
-	go func() { _ = srv.ServeSSHGateway(ctx) }()
-	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			_ = c.Close()
-			break
-		} else if time.Now().After(deadline) {
-			t.Fatalf("gateway never listened: %v", err)
-		}
-	}
+	go func() { _ = srv.ServeSSHGatewayOn(ctx, ln) }()
 	host, port := splitHostPort(addr)
 	return &syncRig{t: t, gw: sshGateway{host: host, port: port, fingerprint: ssh.FingerprintSHA256(hostSigner.PublicKey())},
 		runID: run.ID.String(), signer: signer, sandbox: sandbox, audit: audit, st: st, rn: rn}
@@ -456,7 +455,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*foldersync.Syncer, *syncSes
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = lroot.Close() })
-	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile}, sess, root
+	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile, StateRoot: filepath.Dir(stateFile)}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {

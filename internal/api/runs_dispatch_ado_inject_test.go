@@ -7,13 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +45,23 @@ func (s *adoTestStore) CreateGrant(_ context.Context, g types.CredentialGrant) (
 	return g, nil
 }
 
+// adoTestStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (*adoTestStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*adoTestStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*adoTestStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*adoTestStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (*adoTestStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 func (s *adoTestStore) ListGrantsByRun(_ context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,6 +83,12 @@ func (s *adoTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 func (s *adoTestStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, _, to types.RunState) (bool, error) {
 	s.failTo = append(s.failTo, to)
 	return false, nil
+}
+
+// GetRun answers a bare run, with no restrictions: a credential resolve reads the run for the
+// restrictions it captured (the capability cap), and these fixtures keep no run row.
+func (s *adoTestStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{ID: id}, nil
 }
 
 const (
@@ -116,7 +137,7 @@ func TestResolveADOEntraRun_Golden(t *testing.T) {
 		tenantID: adoTestTenant, clientID: adoTestClient,
 		tokenMode: types.ADOTokenModeBearer, credentialSource: types.CredentialSourcePerUser,
 		caps:     []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
-		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPRCreate, adoscope.CapPRVote, adoscope.CapPRComplete},
 		patHours: types.ADOPATMaxHoursDefault,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -449,17 +470,11 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 		t.Fatal("authoring refused")
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: lane.mitmHosts,
 		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
-	}, port)
+	}, 0)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
 	}
@@ -467,22 +482,17 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigBytes: %v", err)
 	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Listen = "127.0.0.1:0"
 	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
 	if err != nil {
 		t.Fatalf("the sidecar did not boot over this lane's own authored config: %v", err)
 	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(sctx)
-	})
+	addr := serveTestSidecar(t, psrv)
 	if resolves != len(adoContosoHosts) {
 		t.Fatalf("boot resolved %d injections, want %d", resolves, len(adoContosoHosts))
 	}
 
-	proxyURL, _ := url.Parse("http://" + cfg.Listen)
+	proxyURL, _ := url.Parse("http://" + addr)
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	var resp *http.Response
 	for i := 0; i < 50; i++ { // wait for the listener
@@ -518,7 +528,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 
 	// Absolute-form https:// on the same lane: the transport is not cleartext,
 	// so require_tls does not refuse it, and the lane never runs the REST gate.
-	assertADOPlainLaneRefused(t, cfg.Listen, seen)
+	assertADOPlainLaneRefused(t, addr, seen)
 }
 
 // The wired source on a deployment with no Entra row is indistinguishable from

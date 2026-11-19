@@ -6,13 +6,13 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -31,20 +31,14 @@ import (
 // asked not to record and marked policy_off, unless the organisation keeps no recordings at all, which
 // stays org_off whatever the level: WARDYN_RECORDING_STORE=off is the hard off.
 //
-// A macOS VM is a target that does not record: it is asked not to, and marked runner_declined, unless a
-// requirement or a floor (types.RecordingChoice.Floor) asks for a recording, which holds it here as
-// create refused it.
+// A macOS VM's runner keeps no recording of its own, so it is asked not to record, and the organisation
+// records the run instead: the console and SSH terminal sessions it opens (newSessionRecorder), the
+// desktop while someone watches it at Screen and actions, and a task run's agent output
+// (recordMacOSAgent). The run is marked recorded here; a task run's mark is settled once its output tail
+// is open, from the cast that tail did or did not get.
 func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, choice types.RecordingChoice) bool {
 	orgOn := s.cfg.RecordingStore != nil
 	macOS := run.MachineKind.IsMacOSVM()
-	if orgOn && macOS {
-		if msg, held := s.macOSVMRecordingHold(ctx, run, choice); held {
-			s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-				run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(placement.ReasonPlacementCapability)})))
-			return false
-		}
-	}
 	if run.RecordingLevel = choice.Resolve(); run.RecordingLevel == types.RecordingOff {
 		// Required (the organisation's or the pool's) is read only for a run that would go unrecorded.
 		if _, choice.Required, _ = s.recordingRequired(ctx, *run); choice.Required {
@@ -69,41 +63,82 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 	// A target whose facts cannot be read now is not marked: only a known non-recording runner is.
 	records, known := s.targetRecords(ctx, *run)
 	if macOS {
-		records, known = false, true
+		records, known = true, true
 	}
 	run.NotRecorded = types.NotRecordedFor(orgOn, records || !known)
 	if run.NotRecorded == "" {
 		return true
 	}
+	return s.keepOrHoldNotRecorded(ctx, run, "", "")
+}
+
+// keepOrHoldNotRecorded is a run that will not be recorded, run.NotRecorded saying why: it is stored and
+// the run starts, unless the organisation or the run's pool requires recording (a setting that cannot be
+// read counts as required), which fails the run with a run.create failure row. msg, when set, is the
+// sentence for a requirement that was read; else the reason's own. declined, when set, is why the run's agent
+// output cast was declined at dispatch: a run that starts anyway gets its failure row (keepRunNotRecorded), and one
+// whose row the audit recorder will not accept is stopped (macOSAgentDeclineUnrecordedMsg), never started with the
+// decline unsaid.
+func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun, msg, declined string) bool {
 	if pool, required, readErr := s.recordingRequired(ctx, *run); required {
-		reason, msg := recordingHold(run.NotRecorded == types.NotRecordedOrgOff, pool, readErr)
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
+		reason, held := recordingHold(run.NotRecorded == types.NotRecordedOrgOff, pool, readErr)
+		if msg != "" && readErr == nil {
+			held = msg
+		}
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, held)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
 		return false
 	}
-	s.keepRunNotRecorded(ctx, *run)
+	if !s.keepRunNotRecorded(ctx, *run, declined) {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, macOSAgentDeclineUnrecordedMsg)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"reason": "decline_not_recorded"})))
+		return false
+	}
 	return true
 }
 
 // recordingChoice is what applyRunRecording resolves the run's level from: its policy's level (already
 // raised to its ceiling's), its ceiling, and the organisation's level. A member's run with no stored
 // policy runs their inline policy (or the ceiling itself). An organisation document that cannot be read
-// is taken as terminal, locked: the run is recorded at least as it was before levels.
-func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) types.RecordingChoice {
+// is taken as terminal, locked: the run is recorded at least as it was before levels. wallsFloor is the
+// run owner's walls' recording floor (wallsRecordingFloor), applied after the organisation's default.
+func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error, wallsFloor types.RecordingLevel) types.RecordingChoice {
 	org := site.Recording
 	if siteErr != nil {
 		org = &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}
 	}
-	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org}
+	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org, WallsFloor: wallsFloor}
 	if c.recordingBound {
 		choice.Ceiling, choice.CeilingBy = c.recording, c.profile
 	}
 	return choice
 }
 
-// keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit.
-func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
+// applyDispatchRecording is applyRunRecording over recordingChoice with the run owner's walls' recording
+// floor read in. Walls that cannot be read refuse the run (false, the run failed): it is never recorded
+// at a lower level than they ask.
+func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) bool {
+	floor, err := s.wallsRecordingFloor(ctx, *run)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for the recording floor; the run is refused",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls could not be read, so the run's recording level cannot be set; walls that cannot be read refuse the run")
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
+		return false
+	}
+	return s.applyRunRecording(ctx, run, spec, recordingChoice(*run, policy, c, site, siteErr, floor))
+}
+
+// keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit. declined,
+// when set, is the reason the run's agent output cast was declined at dispatch: it goes in a
+// session.recording.write failure row, the one declineAgentOutput writes for a later decline, through the
+// durable path (recordStreamAuditDurably), so Audit says why. It reports false only for a row the recorder
+// would not accept, durably or into its spool: there is nothing to retry the row from at dispatch, so the
+// caller stops the run.
+func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun, declined string) bool {
 	st, ok := s.cfg.Store.(interface {
 		SetRunNotRecorded(context.Context, uuid.UUID, types.RunNotRecorded) error
 	})
@@ -112,6 +147,16 @@ func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
 			slog.WarnContext(ctx, "wardynd: keep why a run is not recorded", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
+	if declined == "" {
+		return true
+	}
+	key := recording.CastKey(run.ID.String(), agentCastSession)
+	if !s.recordStreamAuditDurably(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
+		key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": declined}))) {
+		slog.ErrorContext(ctx, "wardynd: record why a run's agent output is not recorded; the run is stopped", slog.String("run_id", run.ID.String()), slog.String("reason", declined))
+		return false
+	}
+	return true
 }
 
 // keepRunRecordingOff stores an off decision, the level and policy_off in one write, and reports
@@ -248,7 +293,15 @@ func (s *Server) refuseRecordingWithoutStore(w http.ResponseWriter, rec types.Re
 // nothing in wardyn-rec, so a cast for its run can only come from the sandbox; the mark stays. Only a
 // self-hosted runner can be that old, and one whose facts cannot be read now is refused too: the mark
 // is cleared only on the runner's own word.
+//
+// A macOS VM run is refused first, whatever its level or mark: the organisation records it (its
+// terminal sessions, its agent's output, its watched desktop), so a cast under its key can only come
+// from the guest. Later, a recorded macOS run (no mark) would pass the mark test below.
 func (s *Server) refuseDeclinedUpload(w http.ResponseWriter, run types.AgentRun) bool {
+	if run.MachineKind.IsMacOSVM() {
+		writeErrorReason(w, http.StatusConflict, reasonRecordingOff, "a macOS VM run is recorded by the organisation, not uploaded")
+		return true
+	}
 	// A run whose level resolved to off asked its runner to record nothing: a cast can only come
 	// from the sandbox, and whatever the runner's age it is not kept. The level is read as well as the
 	// mark, so a row whose mark is missing still refuses.
@@ -304,77 +357,64 @@ func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records
 	return false, true
 }
 
-// macOSVMUnrecordedNotice is the notice of a macOS VM run that starts unrecorded (MAC-U01), at Review and
-// in the 201's warnings.
-const macOSVMUnrecordedNotice = "A macOS VM run isn't recorded in this release, so this run starts unrecorded. The audit log still shows what happened."
+// The notices of a macOS VM run, at Review and in the 201's warnings, by the level dispatch will resolve:
+// at Screen and actions its desktop is recorded while someone watches it, unmasked, and it gets no window
+// on the Mac; at Terminal its desktop is not recorded. Its terminal sessions and a task run's agent output
+// are recorded and masked at either. The agent's output is named only where it is kept: not for an interactive
+// run (it has no agent exec) or where the output tail is off (openExecOutput), which leaves a task run with no
+// agent output cast.
+const (
+	macOSVMScreenNotice                = "This run's desktop is recorded while someone watches it from the run page. The screen recording isn't masked: anything the desktop shows, a secret included, is kept. A window on your Mac isn't recorded, so this run can't open one. Terminal sessions are recorded and masked."
+	macOSVMTerminalNotice              = "At the Terminal level this run's desktop isn't recorded. Terminal sessions and the agent's output are recorded and masked."
+	macOSVMTerminalNoticeNoAgentOutput = "At the Terminal level this run's desktop isn't recorded. Terminal sessions are recorded and masked."
+)
 
-// macOSVMRecordingRefusal is the sentence for a macOS VM run that something requires recording for
-// (MAC-U02 to U04): the cause, then the way out.
-func macOSVMRecordingRefusal(choice types.RecordingChoice) string {
-	const tail = ", and a macOS VM run isn't recorded in this release. Choose a container or a Linux VM for this run."
-	switch choice.FloorSource() {
-	case types.RecordingFloorRequired:
-		return "Recording is required" + tail
-	case types.RecordingFloorOrgLocked:
-		return fmt.Sprintf("Your organisation's recording level, %s, is locked%s", recordingLevelLabel(choice.Org.OrgLevel()), tail)
+// macOSVMRecordingNotice is a macOS VM run's recording notice at create and Review, by the level its
+// dispatch will resolve (createRecordingChoice): none at off. Nothing about recording refuses a macOS VM run
+// here; the caller skips it where the organisation keeps no recordings. noAgentOutput is set for a run that
+// keeps no agent output cast (an interactive run, or a task run with the output tail off).
+func macOSVMRecordingNotice(level types.RecordingLevel, noAgentOutput bool) string {
+	switch level {
+	case types.RecordingScreenActions:
+		return macOSVMScreenNotice
+	case types.RecordingTerminal:
+		if noAgentOutput {
+			return macOSVMTerminalNoticeNoAgentOutput
+		}
+		return macOSVMTerminalNotice
 	}
-	if choice.CeilingBy == "" {
-		return fmt.Sprintf("Your organisation's default policy sets recording to %s%s", recordingLevelLabel(choice.Ceiling), tail)
-	}
-	return fmt.Sprintf("Your governance profile %s sets recording to %s%s", choice.CeilingBy, recordingLevelLabel(choice.Ceiling), tail)
+	return ""
 }
 
-// recordingLevelLabel is a level as the console words it (RECORDING_LEVEL).
-func recordingLevelLabel(l types.RecordingLevel) string {
-	if l == types.RecordingScreenActions {
-		return "Screen and actions"
+// createRecordingChoice is, at create and Review, the choice dispatch resolves the run's level from
+// (recordingChoice): the request's policy level, the caller's ceiling, the organisation's level, the
+// organisation's or the pool's requirement, and the caller's walls' floor (wallsRecordingFloor). A read
+// that fails is a server error.
+func (s *Server) createRecordingChoice(ctx context.Context, r *http.Request, policy types.RecordingLevel, place runPlacement,
+	ceiling governanceCeiling, memberAuthored bool) (types.RecordingChoice, *runRefusal) {
+	choice := types.RecordingChoice{Policy: policy}
+	if s.cfg.Store == nil {
+		return choice, nil
 	}
-	return "Terminal"
-}
-
-// macOSVMRecordingHold is the sentence a macOS VM run is held with at dispatch when a requirement or a
-// floor asks to record it, as create refused it, and whether it is held. A requirement that cannot be
-// read holds it too: it is not started unrecorded under one it could not rule out.
-func (s *Server) macOSVMRecordingHold(ctx context.Context, run *types.AgentRun, choice types.RecordingChoice) (string, bool) {
-	_, required, readErr := s.recordingRequired(ctx, *run)
-	choice.Required = required
-	switch {
-	case readErr != nil:
-		return runnerpool.RecordingSettingUnreadableMsg(), true
-	case choice.FloorSource() != "":
-		return macOSVMRecordingRefusal(choice), true
-	}
-	return "", false
-}
-
-// macOSVMRecordingGate is a macOS VM run's recording at create and Review: the refusal when recording is
-// required, the organisation's level is locked above off, or the caller's ceiling sets a level, else the
-// notice that it starts unrecorded. A deployment that keeps no recordings has nothing to say.
-func (s *Server) macOSVMRecordingGate(ctx context.Context, place runPlacement, ceiling governanceCeiling) (notice string, refusal *runRefusal) {
-	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
-		return "", nil
-	}
-	choice := types.RecordingChoice{}
 	if ps, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
 		org, err := ps.GetRunnerPoolOrgDefaults(ctx)
 		if err != nil {
-			return "", runServerError("read runner pool defaults", err)
+			return choice, runServerError("read runner pool defaults", err)
 		}
 		choice.Required = org.Recording == types.RecordingRequired || (place.pooled && place.row.Recording == types.RecordingRequired)
 	}
 	site, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return "", runServerError("read site config", err)
+		return choice, runServerError("read site config", err)
 	}
 	choice.Org = site.Recording
 	if !ceiling.Operator {
+		choice.MemberAuthored = memberAuthored
 		choice.Ceiling = ceiling.Spec.Recording
-		if ceiling.Unit != nil {
-			choice.CeilingBy = ceiling.Unit.Name
-		}
 	}
-	if choice.FloorSource() != "" {
-		return "", placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMRecordingRefusal(choice))
+	_, principal := actorFromRequest(r)
+	if choice.WallsFloor, err = s.wallsRecordingFloor(ctx, types.AgentRun{CreatedBy: principal}); err != nil {
+		return choice, runServerError("read your walls", err)
 	}
-	return macOSVMUnrecordedNotice, nil
+	return choice, nil
 }

@@ -6,8 +6,9 @@
 // Your account > Signed-in CLIs (boards MATT3-*): one row per computer, a Sign out that asks first and ends that
 // one session, the file-store note, the admin step-up chip, the empty state with the command, and the card
 // absent where CLI sign-in is not served.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -72,6 +73,7 @@ describe("the card", () => {
     for (const col of ["Computer", "Store", "Signed in", "Last used", "Ends", "Idle end"]) {
       expect(within(table).getByRole("columnheader", { name: col })).toBeVisible();
     }
+    expect(within(table).getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const mbp = row("s1");
     expect(mbp.getByText("mbp-dev")).toBeVisible();
     expect(mbp.getByText(T.CHIP)).toBeVisible();
@@ -100,6 +102,62 @@ describe("the card", () => {
     expect(row("s1").getByText("Admin access, ends in 42 min")).toBeVisible();
   });
 
+  it("still drops the admin step-up when the clock was set back while its timer was out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() })];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText(/^Admin access/)).toBeVisible();
+      vi.setSystemTime(Date.now() - 5_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(row("s1").queryByText(/^Admin access/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts the admin step-up's minutes down as they pass", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() })];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText("Admin access, ends in 2 min")).toBeVisible();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      expect(row("s1").getByText("Admin access, ends in 1 min")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the admin step-up at the moment it ends, and shows none that has already ended", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      live = [
+        session("s1", "mbp-dev", { admin_expires_at: new Date(Date.now() + 90_000).toISOString() }),
+        session("s2", "wsl-dev", { admin_expires_at: new Date(Date.now() - 1_000).toISOString() }),
+      ];
+      render(<SignedInClisCard />);
+      await openCard();
+      expect(row("s1").getByText("Admin access, ends in 2 min")).toBeVisible();
+      expect(row("s2").queryByText(/^Admin access/)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+      expect(row("s1").queryByText(/^Admin access/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stays when empty, says so and shows the command for this console's address", async () => {
     live = [];
     render(<SignedInClisCard />);
@@ -120,6 +178,23 @@ describe("the card", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    render(<SignedInClisCard />);
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    route = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    render(<SignedInClisCard />);
+    await openCard();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("offers a retry on any other failure", async () => {

@@ -607,3 +607,72 @@ func TestUpsertUserDriveGrant_AuditsRemovedDrives(t *testing.T) {
 		t.Fatalf("%d %s, events %+v; want a drive.grant.write row naming %s", w.Code, w.Body, audit.events, lost)
 	}
 }
+
+// TestDriveGuestPaths_MacOSRunShowsTheGuestPath: a macOS VM run's run.create row
+// and mount map give a drive at /Users/agent/..., a container run's keep
+// /home/agent/..., and the target the overlap checks read is the container path
+// either way.
+func TestDriveGuestPaths_MacOSRunShowsTheGuestPath(t *testing.T) {
+	ds := newDriveSet()
+	id := ds.team.Drive.ID.String()
+	srv, _ := multiDriveServer(ds.personal, ds.team)
+	macReq := drivesRequest(id)
+	macReq.MachineKind = string(types.MachineMacOSVM)
+	if got, ref := authorizeDrives(srv, driveMemberCtx([]string{"eng"}, false), macReq); ref != nil || len(got) != 1 ||
+		got[0].target != runner.DrivesRoot+"/team-data" || got[0].shownTarget() != "/Users/agent/drives/team-data" {
+		t.Errorf("macOS run drives = %+v (%+v), want the container target and the guest's shown one", got, ref)
+	}
+	for _, c := range []struct {
+		macOS bool
+		want  string
+	}{{true, "/Users/agent/drives/team-data"}, {false, "/home/agent/drives/team-data"}} {
+		d := runDrive{resolved: types.ResolvedDrive{Drive: ds.team.Drive, Writable: true}, target: runner.DrivesRoot + "/team-data", id: id, macOS: c.macOS}
+		data := map[string]any{}
+		stampDriveAudit(data, []runDrive{d}, false, uuid.Nil)
+		if got := string(mustJSON(data)); !strings.Contains(got, `"target":"`+c.want+`"`) {
+			t.Errorf("macOS %v: run.create drives = %s, want target %s", c.macOS, got, c.want)
+		}
+		req := drivesRequest(id)
+		if c.macOS {
+			req.MachineKind = string(types.MachineMacOSVM)
+		}
+		facts, _, ref := (&Server{}).runAttachments(req, types.RunPolicySpec{}, nil, workspaceSourceIndex{}, workspaceSeed{}, driveTargets([]runDrive{d}))
+		if ref != nil || len(facts) != 1 || facts[0].Target != c.want {
+			t.Errorf("macOS %v: mount map = %+v (%+v), want target %s", c.macOS, facts, ref, c.want)
+		}
+		if d.target != runner.DrivesRoot+"/team-data" {
+			t.Errorf("macOS %v: stored target = %q, want the container path", c.macOS, d.target)
+		}
+	}
+	// A folder inside the drive's container path still overlaps it on a macOS VM run.
+	home := folderWS("home", "/srv/home")
+	spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/home", Target: runner.DrivesRoot + "/team-data/inner"}}}
+	drive := driveTargets([]runDrive{{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data", id: id, macOS: true}})
+	_, _, ref := (&Server{}).runAttachments(createRunRequest{MachineKind: string(types.MachineMacOSVM)}, spec, []types.Workspace{home},
+		indexWorkspacesBySource([]types.Workspace{home}), workspaceSeed{attached: []types.Workspace{home}}, drive)
+	if ref == nil {
+		t.Errorf("a folder inside a drive on a macOS VM run was not refused as overlapping")
+	}
+}
+
+// TestDriveGuestPaths_MountAuditRowNamesTheGuestPath: run.drive.mount gives a
+// macOS VM run's drive at /Users/agent/..., a container run's at /home/agent/...,
+// and leaves the mount's own target alone.
+func TestDriveGuestPaths_MountAuditRowNamesTheGuestPath(t *testing.T) {
+	for kind, want := range map[types.MachineKind]string{
+		types.MachineMacOSVM:   "/Users/agent/drives/x",
+		types.MachineContainer: "/home/agent/drives/x",
+		types.MachineLinuxVM:   "/home/agent/drives/x",
+	} {
+		rec := &recRecorder{}
+		srv := New(Config{BaseCtx: testBaseCtx(t), Audit: rec, LocalMode: true})
+		mounts := []types.DriveMount{{DriveID: uuid.New(), Backend: types.DriveBackendMacDisk, ObjectName: "x", Target: runner.DrivesRoot + "/x"}}
+		srv.auditDriveMount(context.Background(), uuid.New(), "sub-alice", kind, mounts)
+		if got := driveAuditData(t, rec, "run.drive.mount")["target"]; got != want {
+			t.Errorf("%s: run.drive.mount target = %v, want %s", kind, got, want)
+		}
+		if mounts[0].Target != runner.DrivesRoot+"/x" {
+			t.Errorf("%s: the mount's target changed to %q", kind, mounts[0].Target)
+		}
+	}
+}

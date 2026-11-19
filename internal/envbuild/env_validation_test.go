@@ -6,6 +6,7 @@
 package envbuild
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -54,7 +55,15 @@ func TestEnvFloat_UnsetValidInvalid(t *testing.T) {
 		t.Fatalf("valid: got (%v, %v), want (1.5, nil)", f, err)
 	}
 
-	for _, bad := range []string{"1.5cpus", "-2", "two", "1,5"} {
+	// Zero in any spelling is unset; a nonzero value that underflows float64 is not.
+	for _, zero := range []string{"0", "0.0", "-0", "0e-350", "0x0p-2000"} {
+		t.Setenv(key, zero)
+		if f, err := envFloat(key); f != 0 || err != nil {
+			t.Fatalf("zero %q: got (%v, %v), want (0, nil)", zero, f, err)
+		}
+	}
+
+	for _, bad := range []string{"1.5cpus", "-2", "two", "1,5", "NaN", "Inf", "-Inf", "1e-350", "2e-324", "0.001e-400", "0x1p-2000"} {
 		t.Setenv(key, bad)
 		f, err := envFloat(key)
 		if err == nil {
@@ -113,12 +122,18 @@ func TestHardenedHostConfig_ValidEnvApplied(t *testing.T) {
 // own so none of them can be the one that still swallows bad input.
 func TestHardenedHostConfig_InvalidEnvIsLoud(t *testing.T) {
 	for _, tc := range []struct{ key, val string }{
-		{envBuildMemoryMB, "512m"},  // unit suffix: the plausible operator typo
-		{envBuildMemoryMB, "-512"},  // negative
-		{envBuildCPUs, "two"},       //
-		{envBuildCPUs, "-1"},        //
-		{envMaxContextMB, "1024MB"}, // would silently disable the layer cap
-		{envMaxContextMB, "1_024"},  //
+		{envBuildMemoryMB, "512m"},           // unit suffix: the plausible operator typo
+		{envBuildMemoryMB, "-512"},           // negative
+		{envBuildCPUs, "two"},                //
+		{envBuildCPUs, "-1"},                 //
+		{envMaxContextMB, "1024MB"},          // would silently disable the layer cap
+		{envMaxContextMB, "1_024"},           //
+		{envBuildMemoryMB, "17592186044416"}, // 2^44 MiB wraps to 0 bytes, which Docker reads as no limit
+		{envBuildMemoryMB, "8796093022208"},  // 2^43 MiB wraps negative
+		{envMaxContextMB, "17592186044416"},  // would omit the layer cap
+		{envBuildCPUs, "1e-10"},              // under one nano-CPU converts to 0, no limit
+		{envBuildCPUs, "1e-350"},             // underflows float64 to 0, which would read as unset
+		{envBuildCPUs, "NaN"},
 	} {
 		t.Run(tc.key+"="+tc.val, func(t *testing.T) {
 			t.Setenv(tc.key, tc.val)
@@ -153,5 +168,21 @@ func TestBuild_InvalidCapEnvAbortsBeforeContainerCreate(t *testing.T) {
 	}
 	if f.createCalled != 0 {
 		t.Fatalf("build container was created (%d times) despite an unresolvable cap", f.createCalled)
+	}
+}
+
+// The largest MiB count that fits in int64 bytes and the smallest nano-CPU count are the edges of what the
+// caps accept; each converts exactly, not to a wrapped or truncated value.
+func TestHardenedHostConfig_CapEdgesConvertExactly(t *testing.T) {
+	t.Setenv(envBuildMemoryMB, "8796093022207")
+	t.Setenv(envMaxContextMB, "8796093022207")
+	t.Setenv(envBuildCPUs, "1e-9")
+	b := newPushBuilder(t, newFakeEnvbuilderDocker())
+	hc, err := b.hardenedHostConfig()
+	if err != nil {
+		t.Fatalf("edge values must be accepted: %v", err)
+	}
+	if hc.Memory != 8796093022207<<20 || hc.NanoCPUs != 1 || hc.StorageOpt["size"] != strconv.FormatInt(8796093022207<<20, 10) {
+		t.Errorf("Memory=%d NanoCPUs=%d StorageOpt=%v, want exact conversions", hc.Memory, hc.NanoCPUs, hc.StorageOpt)
 	}
 }

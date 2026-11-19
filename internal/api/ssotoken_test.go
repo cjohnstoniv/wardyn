@@ -39,6 +39,26 @@ func (s ssoLoginRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 	return s.run, nil
 }
 
+// ssoLoginRunStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (ssoLoginRunStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (ssoLoginRunStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (ssoLoginRunStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (ssoLoginRunStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (ssoLoginRunStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+func (ssoLoginRunStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
+}
+
 func (s ssoLoginRunStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	if s.siteCfg.ModelProviders == nil {
 		return uploadSite(defaultUploadProvider()), nil

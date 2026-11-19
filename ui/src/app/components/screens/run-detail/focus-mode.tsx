@@ -34,6 +34,8 @@ import { cn } from "../../ui/utils";
 import { ConfinementChip } from "../../wardyn/primitives";
 import { RUN_PLACEMENT, runnerLabel } from "../../wardyn/copy/runners";
 import { Kbd, MOD } from "../../wardyn/kbd";
+import { TERMINAL } from "../../wardyn/copy/terminal";
+import { isEscapeChord } from "../../../../desktop/keysym";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
@@ -69,15 +71,33 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   // defending against a transition this codebase's own widgets don't produce.
   const dock = dockSelection && dockable.includes(dockSelection) ? dockSelection : null;
 
+  // The terminal pane. Keys typed while focus is inside it belong to the PTY, so the handler below leaves the plain ones
+  // alone there; the reserved chord and the Exit focus button are how a person leaves.
+  const terminalRef = React.useRef<HTMLDivElement>(null);
+
+  // The control that opened focus mode unmounts with the cockpit, leaving focus on nothing. Land it on Exit focus,
+  // the one control that is always there and always safe to press.
+  const exitRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    exitRef.current?.focus();
+  }, []);
+
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // WCAG 2.1.2 — no keyboard trap. Capture phase, so it runs before xterm's
-      // textarea swallows the key and sends it to the PTY as literal input;
-      // that costs a vim user their Escape while focus mode is on, which is the
-      // same trade AttachTerminal's fullscreen already makes (and the strip
-      // says so). In NATIVE fullscreen the browser exits first and this never
-      // fires, so the two do not fight.
+      const inTerminal = e.target instanceof Node && !!terminalRef.current?.contains(e.target);
+      // Ctrl+Shift+Backspace — the chord the terminal and the desktop already teach as "leave" (TERMINAL.ESCAPE_CHORD),
+      // so here it leaves focus mode, from the terminal too. Capture phase, so it runs before xterm's textarea
+      // sends the key to the PTY and before the terminal's own handler merely blurs.
+      if (isEscapeChord(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        onExit();
+        return;
+      }
+      // WCAG 2.1.2 — no keyboard trap. Escape leaves focus mode from the console's own chrome; with the terminal
+      // focused it is the program's key (vim's insert mode), and the chord above or the button leaves instead.
       if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (inTerminal) return;
         // F1-F3: a Radix dialog/alertdialog (the Deny confirm, the take-over
         // confirm) registers its OWN Escape-dismiss as a capture-phase
         // document listener too — stopPropagation on either side never
@@ -91,10 +111,10 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
         onExit();
         return;
       }
-      // ⌘\ / Ctrl+\ — the board's dock shortcut. ponytail: Ctrl+\ is SIGQUIT in
-      // a PTY, so focus mode costs you that one key too; the dock is also a
-      // plain button, so nothing depends on the shortcut.
+      // ⌘\ / Ctrl+\ — the board's dock shortcut. Ctrl+\ is SIGQUIT in a PTY, so with the terminal focused it goes to
+      // the PTY; the dock is also a plain button, and ⌘\ stays free on a Mac.
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        if (inTerminal && e.ctrlKey) return;
         e.preventDefault();
         e.stopPropagation();
         setDockSelection(dock ? null : first);
@@ -112,7 +132,7 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
       <div className="relative min-h-0 flex-1">
         {/* Full-bleed: the padding only keeps the session clear of the HUD pill
             above it and the dock rail beside it. */}
-        <div className="flex h-full min-h-0 flex-col py-3 pl-4 pr-[4.75rem] pt-16">
+        <div ref={terminalRef} className="flex h-full min-h-0 flex-col py-3 pl-4 pr-[4.75rem] pt-16">
           {/* Focus mode IS the session, so a throw in the hero must not escape
               to app-shell's boundary and take the whole main region with it. */}
           <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={ctx.run.id}>
@@ -122,6 +142,7 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
 
         <div className={cn("absolute left-4 top-3 flex items-center gap-3 rounded-xl px-3 py-1.5", GLASS)}>
           <button
+            ref={exitRef}
             type="button"
             onClick={onExit}
             className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border px-2 text-xs font-medium text-foreground hover:bg-accent"
@@ -177,8 +198,9 @@ function Dock({
           )}
         >
           {/* Same slot the canvas mounts its tiles through: one throwing dock
-              widget degrades to a card inside the dock, not a blanked screen. */}
-          <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+              widget degrades to a card inside the dock, not a blanked screen.
+              Keyed by widget so switching widgets clears the last one's error. */}
+          <WidgetSlot key={open} region={def.label} resetKey={ctx.run.id}>
             {def.component(ctx)}
           </WidgetSlot>
         </section>
@@ -288,7 +310,7 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
           {RUN_COCKPIT.shortcutDock}
         </span>
         <span className="flex items-center gap-1.5">
-          <Kbd keys={["Esc"]} />
+          <Kbd keys={[TERMINAL.ESCAPE_CHORD]} />
           {RUN_COCKPIT.shortcutExitFocus}
         </span>
       </span>

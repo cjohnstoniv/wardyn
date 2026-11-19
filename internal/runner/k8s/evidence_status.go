@@ -35,7 +35,7 @@ func podGCMarked(pod *corev1.Pod) bool {
 }
 
 // containerStatuses is every init and main container status; ephemeral containers are never
-// evidence inputs (Fable r10 L2).
+// evidence inputs.
 func containerStatuses(pod *corev1.Pod) []corev1.ContainerStatus {
 	return slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses)
 }
@@ -72,8 +72,8 @@ func unstartedArm(pod *corev1.Pod, clean func(container string) bool) (arm strin
 	return "", nil
 }
 
-// neverInitialized reports the never-initialized arm's status conditions alone (Fable r10 H1, r11
-// L3): Failed, deleting, not by the pod GC, Initialized=False present, a status for every spec
+// neverInitialized reports the never-initialized arm's status conditions alone: Failed,
+// deleting, not by the pod GC, Initialized=False present, a status for every spec
 // container, every main container waiting with no baseline or latch, and every init container
 // waiting with none or terminated. The node binding is checked separately.
 func neverInitialized(pod *corev1.Pod, clean func(string) bool) (terminatedInits []string, ok bool) {

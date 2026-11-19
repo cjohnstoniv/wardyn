@@ -7,6 +7,7 @@ import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixt
 import type { Page } from "@playwright/test";
 import { GOVERNANCE as GOV, PERM, PREVIEW } from "../src/app/lib/governance-copy";
 import { aheadByHours } from "../src/app/lib/test-clock";
+import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { SESSION_EXPIRES_HEADER } from "../src/app/lib/api/session-activity";
 
 // Screens that must not act on an answer, or fail to act on a refusal, that no longer belongs to what is on
@@ -173,48 +174,43 @@ test.describe("Session expiry: answers are ordered by when their request started
   });
 });
 
-test.describe("Admin settings: an older read cannot overwrite the newer one", () => {
-  test("the Host card keeps saying the proxy is in use after an older Re-check lands late", async ({ page }) => {
-    // The console holds every route behind its own first /setup/status, so the Settings screen is only ever
-    // mounted once that read has landed. Holding that read (as this pin once did) just delays the whole page and
-    // never reaches the screen's own reads. The race the screen guards is two of ITS loads in flight at once,
-    // which Re-check makes: the first Re-check's site-config answer is held and reads "no proxy", the second
-    // answers at once with the proxy, and the held one lands last.
+test.describe("Admin settings: a Re-check in flight is the only read of the Host card", () => {
+  test("the Host card's Re-check waits and cannot be doubled, and the card keeps saying the proxy is in use", async ({ page }) => {
+    // The console holds every route behind its own first /setup/status, so holding that read just delays the whole
+    // page. The Host card's own Re-check is the read worth holding: while it is out the button is disabled and says
+    // "Re-checking…", so a second site-config read cannot start behind it (UXA-34), and the old answer stays on screen
+    // until the held one lands.
     let counting = false;
     let reads = 0;
-    let secondAsked!: () => void;
-    const secondRead = new Promise<void>((resolve) => (secondAsked = resolve));
-    let releaseOlder!: () => void;
-    const olderHeld = new Promise<void>((resolve) => (releaseOlder = resolve));
-    let olderLanded = false;
+    let releaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => (releaseHeld = resolve));
+    let heldLanded = false;
     const proxied = { upstream_proxy_url: "http://proxy.corp.example:3128" };
     await page.route("**/api/v1/site-config", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       if (!counting) return route.fulfill({ json: proxied });
       reads += 1;
-      if (reads === 2) secondAsked();
-      if (reads !== 1) return route.fulfill({ json: proxied });
-      await olderHeld;
-      await route.fulfill({ json: {} });
-      olderLanded = true;
+      await held;
+      await route.fulfill({ json: proxied });
+      heldLanded = true;
     });
     await page.goto("/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
     await expandCard(page, "Host");
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
     // The shell's no-barrier notice also carries a Re-check; this pin is about the Host card's own.
-    const recheck = page.getByTestId("host-footer").getByRole("button", { name: "Re-check" });
-    await expect(recheck).toHaveCount(1);
+    const footer = page.getByTestId("host-footer");
+    await expect(footer.getByRole("button", { name: HOST_CARD.RECHECK })).toHaveCount(1);
     counting = true;
-    await recheck.click();
+    await footer.getByRole("button", { name: HOST_CARD.RECHECK }).click();
     await expect.poll(() => reads).toBe(1);
-    await recheck.click();
-    await secondRead;
+    await expect(footer.getByRole("button", { name: HOST_CARD.RECHECKING })).toBeDisabled();
     await nextFrames(page);
+    expect(reads).toBe(1);
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
-    releaseOlder();
-    await expect.poll(() => olderLanded).toBe(true);
-    await nextFrames(page);
+    releaseHeld();
+    await expect.poll(() => heldLanded).toBe(true);
+    await expect(footer.getByText(HOST_CARD.CHECKED_JUST_NOW)).toBeVisible();
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
   });
 });

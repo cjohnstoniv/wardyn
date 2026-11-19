@@ -143,7 +143,7 @@ func TestPrepDialGuest(t *testing.T) {
 }
 
 func TestDialGuestOnlyInPrep(t *testing.T) {
-	rl, err := New(Config{Proxy: "127.0.0.1:1"})
+	rl, err := New(Config{Proxy: "127.0.0.1:1", Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestPrepDNSIsRefusedAndRunDNSIsUnchanged(t *testing.T) {
 	}
 	prep := newPrepRelay(t, io.Discard)
 	pg := vmnettest.Attach(t, prep.Serve)
-	run, err := New(Config{Proxy: "127.0.0.1:1"})
+	run, err := New(Config{Proxy: "127.0.0.1:1", Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}

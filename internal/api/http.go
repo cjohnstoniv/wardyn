@@ -642,11 +642,15 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingBearerToken, "missing bearer token")
 			return
 		}
+		if !s.admitAdminTokenGuess(w, r) {
+			return
+		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
 			s.auditAuthFailed(r, "invalid_admin_token")
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 			return
 		}
+		s.refundAdminTokenGuess(r)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -654,7 +658,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // auditAuthFailed emits auth.fail (actor system) for an authentication
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
-// "invalid_admin_token"); it is overridden by a more specific
+// "invalid_admin_token", "admin_token_rate_limited"); it is overridden by a more specific
 // oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session"/
 // "revoked_session"/"session_revocation_unavailable")
 // when a session cookie was ALSO presented and rejected on this same
@@ -893,7 +897,7 @@ func (s *Server) releaseIdentityExpired(runID uuid.UUID) {
 
 // internalAuth verifies a per-run token via identity.Provider.Verify with the
 // "wardyn-internal" audience and stashes the resulting claims on the context.
-// Any verification error fails closed with 401 (revoked/expired tokens too).
+// Any verification error fails closed with 401 (revoked/expired tokens too), but for verifyRunToken's one door.
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
@@ -907,21 +911,15 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunToken, "missing run token")
 			return
 		}
-		claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
+		claims, err := s.verifyRunToken(r, tok) // Verify, and a revoked token's one door for a run that is over
 		if err != nil {
-			// Do not leak the verification reason (revoked vs expired vs forged)
-			// to the caller. The audit row is equally coarse — one reason for the
-			// whole verify failure — so the trail records THAT a run token was
-			// refused without telling a brute-forcer which half it got wrong.
-			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
-			s.auditRunIdentityExpired(r, err)
-			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
+			s.refuseRunToken(w, r, err) // 401, or a retryable 503 (decision_door_lost.go)
 			return
 		}
 		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		run, ok := s.refuseTerminalRun(w, r, claims)
-		if !ok || s.refuseRelayBinding(w, r, claims, run) {
+		run, ok := s.refuseTerminalRun(s.decisionGate(w, r, claims), r, claims)
+		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(contextWithLiveRun(r.Context(), run)))
@@ -969,7 +967,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 }
 
 func contextWithClaims(ctx context.Context, c *identity.Claims) context.Context {
-	return context.WithValue(ctx, claimsCtxKey{}, c)
+	return context.WithValue(audit.WithPolicyToken(ctx, c.RunID, c.JTI), claimsCtxKey{}, c) // rows it records carry the token's policy generation
 }
 
 // claimsFromContext returns the verified run claims placed by internalAuth.

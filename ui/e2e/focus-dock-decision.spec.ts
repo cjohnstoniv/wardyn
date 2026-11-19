@@ -55,6 +55,27 @@ test("with the Egress panel open at 1440, Approve and Deny are visible and not c
   await expectUncovered(page, "Deny");
 });
 
+test("Tab and Shift+Tab in focus mode never reach the run header or tabs it covers", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await holdRun();
+  await gotoConsole(page);
+  await page.goto(`/runs/${id}`);
+  const enter = page.getByRole("button", { name: RUN_COCKPIT.enterFocus });
+  await enter.click();
+  const exit = page.getByRole("button", { name: RUN_COCKPIT.exitFocus });
+  await expect(exit).toBeFocused();
+  await expect(page.locator("#main-content")).toHaveAttribute("inert", "");
+  const outsideMain = () => page.evaluate(() => !document.getElementById("main-content")!.contains(document.activeElement));
+  for (const key of ["Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    expect(await outsideMain()).toBe(true);
+  }
+  await exit.focus();
+  await page.keyboard.press("Enter");
+  await expect(enter).toBeFocused();
+  await expect(page.locator("#main-content")).not.toHaveAttribute("inert");
+});
+
 test("at 390 the dock starts closed, the title is whole, and 1 held is on one line", async ({ page }) => {
   const id = await holdRun();
   await gotoConsole(page); // the sidebar is a drawer at phone width, so land first and narrow after

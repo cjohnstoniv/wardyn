@@ -58,6 +58,8 @@
 #             install, not only when the CLI happened to land               (F153)
 #   T24 PASS  a compose too old for `up --wait` says nothing probed wardynd and
 #             names the log command, instead of asserting health it never saw (F231)
+#   T25 PASS  an upgrade never writes .env through a leftover 0644 or symlinked
+#             .env.tmp: .env ends 0600 and the link target stays empty
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -305,7 +307,7 @@ else fail "${t}" ".env is ${mode} after the run; chmod calls the stub swallowed:
 #
 # Each row also asserts the mode: the fixture is a pre-`umask 077` install's
 # 0644 .env, and install.sh has no chmod left, so 600 can only come from the
-# `.env.tmp` + `mv` rewrite being born under the umask.
+# mktemp + `mv` rewrite being born under the umask.
 t5_case() { # LABEL EXISTING-VALUE EXPECT(remint|keep)
   local label="$1" existing="$2" expect="$3" t d tok mode
   t="T5/${label} upgrade re-mints WARDYN_ADMIN_TOKEN=${existing}"
@@ -827,6 +829,37 @@ if run_install "${d}/bin" "${d}/home"; then
     fail "${t}" "warned about a missing probe on a compose that ran one: $(grep 'nothing here probed' "${d}/home/install.out")"
   else pass "${t}"; fi
 else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+# ── T25: the rewrite temp is fresh, never a leftover or a planted path ─────
+# The upgrade rewrote .env through the fixed name .env.tmp. `>` keeps an
+# existing file's mode and follows a symlink, so a 0644 .env.tmp left behind
+# became a 0644 .env (and stayed that way when every later key was appended),
+# and a symlinked .env.tmp wrote the store key and admin token to its target.
+# The fixture's .env holds none of the version keys, so every env_set appends:
+# no later rewrite can restore 0600 behind the assertion's back.
+t25_case() { # LABEL PLANT(file|symlink)
+  local label="$1" plant="$2" t d w mode left
+  t="T25${label} an upgrade over a ${plant} .env.tmp leaves .env 0600 and writes nothing through it"
+  d="${WORK}/t25${label}"; upgrade_fixture "${d}" 'WARDYN_UP_PORT=8080'
+  w="${d}/home/.wardyn"
+  /bin/chmod 644 "${w}/.env"
+  : > "${d}/elsewhere"; /bin/chmod 644 "${d}/elsewhere"
+  if [ "${plant}" = symlink ]; then ln -s "${d}/elsewhere" "${w}/.env.tmp"
+  else : > "${w}/.env.tmp"; /bin/chmod 644 "${w}/.env.tmp"; fi
+  if ! ( umask 022; run_install "${d}/bin" "${d}/home" ); then
+    fail "${t}" "install.sh exited non-zero — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; return
+  fi
+  mode="$(stat -c '%a' "${w}/.env" 2>/dev/null || echo '?')"
+  left="$(find "${w}" -maxdepth 1 -name '.env.?*' ! -name .env.tmp | tr '\n' ' ')"
+  if [ -L "${w}/.env" ] || [ "${mode}" != 600 ]; then fail "${t}" ".env is $(ls -l "${w}/.env")"
+  elif [ -s "${d}/elsewhere" ] || [ -s "${w}/.env.tmp" ]; then fail "${t}" "the store key was written through the planted .env.tmp"
+  elif [ -n "${left}" ]; then fail "${t}" "a rewrite temp was left behind: ${left}"
+  elif [ "$(env_val "${w}/.env" WARDYN_WARDYND_IMAGE)" != "ghcr.io/cjohnstoniv/wardynd:0.6.6" ]; then
+    fail "${t}" "the upgrade did not pin the new image: $(env_val "${w}/.env" WARDYN_WARDYND_IMAGE)"
+  else pass "${t}"; fi
+}
+t25_case a file
+t25_case b symlink
 
 echo
 echo "passed=${#PASSED[@]} failed=${#FAILED[@]} skipped=${#SKIPPED[@]}"

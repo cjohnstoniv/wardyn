@@ -193,11 +193,32 @@ func TestRenameMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := withoutTreeFields(rekey(decodeAny(t, string(mustReadFile(t, "testdata/rename/corpus.origin.json"))), m))
+	addAdditiveWarnings(t, want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the branch's governance surface differs from the origin corpus re-keyed by testdata/rename/map.json\n got: %s\nwant: %s",
 			mustJSONString(t, got), mustJSONString(t, want))
 	}
 	_ = ctx
+}
+
+// additiveSinceRecording is what a step's warnings gained after the corpus was recorded. The corpus stays
+// the record of what 0.9 answered, so an entry here is appended to the expected warnings, word for word;
+// anything else that differs, this sentence included, still fails.
+var additiveSinceRecording = []struct{ step, warning string }{
+	{"create standalone", "this profile leaves limits.local_self_defined_components off — members under it cannot start a local run with a component they define themselves. Leaving it off is fine if that is intended; to allow such runs, set it to true in this standalone profile's own limits (an overlay cannot turn it on)"},
+}
+
+func addAdditiveWarnings(t *testing.T, want any) {
+	t.Helper()
+	steps := want.(map[string]any)["steps"].([]any)
+	for _, add := range additiveSinceRecording {
+		i := slices.IndexFunc(steps, func(s any) bool { return s.(map[string]any)["step"] == add.step })
+		if i < 0 {
+			t.Fatalf("no step %q in the corpus", add.step)
+		}
+		body := steps[i].(map[string]any)["body"].(map[string]any)
+		body["warnings"] = append(body["warnings"].([]any), add.warning)
+	}
 }
 
 // treeFields are what the unit tree (unit-tree migration) and its unit admins and locks (migration 0228) added to
@@ -208,10 +229,11 @@ var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth"
 // treeAPIFields are the top-level keys the unit tree's API (lane TREE-API brief §8 and §10) added to
 // a step's body, left out per step because a unit's own "effective" is renamed surface: check's
 // contexts, dormant and effective, and the read's boundary. A unit's people (§10) is in treeFields.
+// The read's envelopes came later still, with the platform envelopes (governance_envelope.go).
 var treeAPIFields = map[string][]string{
 	"check":        {"contexts", "dormant", "effective"},
 	"check nobody": {"contexts", "dormant", "effective"},
-	"read":         {"boundary"},
+	"read":         {"boundary", "envelopes"},
 }
 
 func withoutTreeFields(v any) any {

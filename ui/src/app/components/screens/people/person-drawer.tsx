@@ -16,7 +16,7 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
-import { STATES } from "../../wardyn/states";
+import { answeredSentence, STATES } from "../../wardyn/states";
 import { roleLabel } from "./people-format";
 import { Button } from "../../ui/button";
 import {
@@ -64,6 +64,7 @@ export function PersonDrawer({
   // A swallowed rejection left the section showing the server's count with no names under it, which
   // reads as "no tokens" — so the read carries its own state and Retry refetches.
   const [tokenState, setTokenState] = React.useState<"loading" | "error" | "ready">("loading");
+  const [tokenError, setTokenError] = React.useState<unknown>(null);
   // Retry bumps this rather than calling the API again: the effect below owns the fetch (and its
   // live guard), so there is one read path for the drawer.
   const [attempt, setAttempt] = React.useState(0);
@@ -84,7 +85,11 @@ export function PersonDrawer({
         setTokens(t.filter(isActiveToken));
         setTokenState("ready");
       })
-      .catch(() => live && setTokenState("error"));
+      .catch((e: unknown) => {
+        if (!live) return;
+        setTokenError(e);
+        setTokenState("error");
+      });
     return () => {
       live = false;
     };
@@ -92,16 +97,28 @@ export function PersonDrawer({
 
   if (!person) return null;
   const label = person.email || person.principal;
-  const message: Record<Action, { confirm: string; run: () => Promise<unknown>; button: string }> = {
-    sign_out: { confirm: P.SIGN_OUT_CONFIRM(label), run: () => peopleApi.signOutEverywhere(person.principal), button: P.SIGN_OUT },
-    ssh: { confirm: P.SSH_REMOVE_CONFIRM(label), run: () => peopleApi.removeSSHKeys(person.principal), button: P.SSH_REMOVE },
+  const message: Record<Action, { title: string; confirm: string; run: () => Promise<unknown>; button: string; done: (result: unknown) => string }> = {
+    sign_out: {
+      title: P.SIGN_OUT_TITLE,
+      confirm: P.SIGN_OUT_CONFIRM(label),
+      run: () => peopleApi.signOutEverywhere(person.principal),
+      button: P.SIGN_OUT,
+      done: () => P.SIGN_OUT_DONE(label),
+    },
+    ssh: {
+      title: P.SSH_REMOVE_TITLE,
+      confirm: P.SSH_REMOVE_CONFIRM(label),
+      run: () => peopleApi.removeSSHKeys(person.principal),
+      button: P.SSH_REMOVE,
+      done: (n) => P.SSH_REMOVE_DONE(Number(n), label),
+    },
   };
 
   const run = async (action: Action) => {
     setBusy(true);
     try {
-      await message[action].run();
-      toast.success(`${message[action].button}: ${label}`);
+      const result = await message[action].run();
+      toast.success(message[action].done(result));
       setConfirm(null);
       onChanged();
     } catch (e) {
@@ -116,7 +133,7 @@ export function PersonDrawer({
       <Sheet open onOpenChange={(o) => !o && onClose()}>
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[480px]">
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle>
+            <SheetTitle className="break-words">
               {label}
               {person.role ? ` · ${roleLabel(person.role)}` : ""}
             </SheetTitle>
@@ -136,7 +153,7 @@ export function PersonDrawer({
                   Same sentence that screen's own failed read already shows. */}
               {tokenState === "error" && (
                 <div role="status" className="flex flex-wrap items-center gap-2">
-                  <p className="text-meta text-muted-foreground">{STATES.ERROR_DEFAULT}</p>
+                  <p className="text-meta text-muted-foreground">{answeredSentence(tokenError, P.TOKENS_LOAD_FAILED) ?? STATES.ERROR_DEFAULT}</p>
                   <Button size="sm" variant="outline" onClick={() => setAttempt((n) => n + 1)}>
                     <RotateCw className="size-3.5" />
                     {STATES.RETRY}
@@ -154,6 +171,9 @@ export function PersonDrawer({
                 </ul>
               )}
             </Section>
+            <p className="border-b border-border py-2 text-meta text-muted-foreground">
+              {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
+            </p>
             <Section label={P.SSH} value={person.ssh_keys}>
               <Button size="sm" variant="outline" disabled={person.ssh_keys === 0} onClick={() => setConfirm("ssh")}>
                 {P.SSH_REMOVE}
@@ -185,7 +205,7 @@ export function PersonDrawer({
           {confirm && (
             <>
               <AlertDialogHeader>
-                <AlertDialogTitle>{message[confirm].button}</AlertDialogTitle>
+                <AlertDialogTitle>{message[confirm].title}</AlertDialogTitle>
                 <AlertDialogDescription>{message[confirm].confirm}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

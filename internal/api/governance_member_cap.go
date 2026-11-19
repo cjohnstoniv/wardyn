@@ -44,6 +44,9 @@ func authoredAfter(base types.ResourceLimits, row types.GovernanceUnit, res comp
 	if v := row.Overlay.Resources.PidsLimit; v != nil && *v > 0 {
 		base.PidsLimit = res.Ceiling.Resources.PidsLimit
 	}
+	if v := row.Overlay.Resources.DiskMiB; v != nil && *v > 0 {
+		base.DiskMiB = res.Ceiling.Resources.DiskMiB
+	}
 	return base
 }
 

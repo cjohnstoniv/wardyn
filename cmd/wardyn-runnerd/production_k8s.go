@@ -113,6 +113,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		c.ControlPlaneRelay = relay.Ensure
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: ownNS, PodLabels: env.podSelector, RelayPort: env.relayPort, SinkPort: env.sink}
 		c.TrustedCAPEM = opts.trustedCA
+		c.UpstreamProxyURL = opts.upstreamProxy
 		c.Arch = opts.arch
 		c.MaxPodLifetime = opts.maxPodLifetime
 		c.Evidence = ev
@@ -135,7 +136,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	// The WardynWorkload watcher: nil unless the chart lists workload namespaces (design T3 §2.5).
 	workloads, err := newClusterWorkloadWatcher(ctx, env.workloadNamespaces)
 	if err != nil {
-		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
+		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close(), drv.Close())
 	}
 	started := func(ctx context.Context, m *offline.Manager) error {
 		ev.m = m
@@ -168,14 +169,15 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		arch:           opts.arch,
 		options:        offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
 		started:        started,
-		closeAlso:      sink.Close,
+		closeAlso:      func() error { return errors.Join(drv.Close(), sink.Close()) }, // drv.Close stops the canary re-check loop
 		linuxVM:        linuxVM,
 		report:         connectReport{log: opts.offline},
 		runsNamespaces: opts.runsNamespaces,
 		workloadStatus: workloads.statusFunc(),
+		netPolWatch:    drv.OnNetPolChange,
 	})
 	if err != nil {
-		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
+		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close(), drv.Close())
 	}
 	rt = workloads.attach(rt)
 	checks := errors.Join(

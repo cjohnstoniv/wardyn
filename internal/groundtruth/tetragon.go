@@ -29,11 +29,14 @@ import (
 
 // TetragonEvent is one line of the Tetragon JSON export; exactly one
 // event-kind field is set. process_exec and process_kprobe are mapped; the
-// kprobe handler multiplexes file-writes and network connects by function
-// name + argument shape. Other kinds are ignored (ok=false).
+// kprobe handler maps file-writes and network connects by the hooked
+// function and its arguments, and drops a probe from any other hook. Other
+// kinds are ignored (ok=false).
 type TetragonEvent struct {
 	ProcessExec   *TetragonProcessExec   `json:"process_exec,omitempty"`
 	ProcessKprobe *TetragonProcessKprobe `json:"process_kprobe,omitempty"`
+	// NodeName is the node the Tetragon agent runs on (top level of each export line).
+	NodeName string `json:"node_name,omitempty"`
 }
 
 // TetragonProcessExec carries a process execve.
@@ -49,16 +52,21 @@ type TetragonProcessKprobe struct {
 	Process      *TetragonProcess `json:"process,omitempty"`
 	FunctionName string           `json:"function_name,omitempty"`
 	Args         []TetragonArg    `json:"args,omitempty"`
+	// Return is the hooked function's return value, present when the policy
+	// asks for it (return: true).
+	Return *TetragonArg `json:"return,omitempty"`
 }
 
 // TetragonArg is one kprobe argument: path-bearing shapes (file_arg.path,
-// path_arg.path, string_arg) and the socket shape (sock_arg) used for
-// connect detection.
+// path_arg.path, string_arg), the socket shape (sock_arg) used for connect
+// detection, and an int (int_arg): a file-permission hook's access mask, or a
+// return value.
 type TetragonArg struct {
 	FileArg   *TetragonFileArg `json:"file_arg,omitempty"`
 	PathArg   *TetragonFileArg `json:"path_arg,omitempty"`
 	StringArg string           `json:"string_arg,omitempty"`
 	SockArg   *TetragonSockArg `json:"sock_arg,omitempty"`
+	IntArg    *int32           `json:"int_arg,omitempty"`
 }
 
 // TetragonFileArg carries a path-bearing argument.
@@ -80,6 +88,22 @@ type TetragonProcess struct {
 	Arguments string `json:"arguments,omitempty"`
 	CgroupID  uint64 `json:"cgroup_id,string,omitempty"`
 	Docker    string `json:"docker,omitempty"` // container id (truncated)
+	// Pod is set on Kubernetes nodes: the pod and container the process runs in.
+	Pod *TetragonPod `json:"pod,omitempty"`
+}
+
+// TetragonPod is the Kubernetes pod block of a process descriptor. Only the
+// immutable identity is read; pod labels are mutable and never a key.
+type TetragonPod struct {
+	Namespace string                `json:"namespace,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Container *TetragonPodContainer `json:"container,omitempty"`
+}
+
+// TetragonPodContainer names the container inside the pod.
+type TetragonPodContainer struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // ── Mapper ──────────────────────────────────────────────────────────────────
@@ -89,6 +113,8 @@ type TetragonProcess struct {
 // Safe for concurrent use when the Correlator is.
 type Mapper struct {
 	corr Correlator
+	// node stamps events whose export line carries no node_name.
+	node string
 }
 
 // NewMapper builds a Mapper over a Correlator. A nil Correlator treats every
@@ -98,9 +124,17 @@ func NewMapper(corr Correlator) *Mapper {
 	return &Mapper{corr: corr}
 }
 
+// WithNode sets the node recorded on events whose export line has no
+// node_name, and returns m. Call it before the Mapper is shared.
+func (m *Mapper) WithNode(node string) *Mapper {
+	m.node = node
+	return m
+}
+
 // Map converts ev into an AuditEvent. ok is false for an unrecorded event
-// kind or a non-sensitive file write (filtered noise). When ok is true, the
-// event has Action with the kernel. prefix and Data with stream="ebpf".
+// kind, a probe from a hook it does not map, or a non-sensitive file write
+// (filtered noise). When ok is true, the event has Action with the kernel.
+// prefix and Data with stream="ebpf".
 //
 // Events that can't be bound to a run are still returned (ok=true) with
 // RunID nil and correlation="unmapped" — blindness must be visible, never a
@@ -108,9 +142,9 @@ func NewMapper(corr Correlator) *Mapper {
 func (m *Mapper) Map(ev TetragonEvent) (types.AuditEvent, bool) {
 	switch {
 	case ev.ProcessExec != nil:
-		return m.mapExec(ev.ProcessExec)
+		return m.mapExec(ev.ProcessExec, m.nodeOf(ev))
 	case ev.ProcessKprobe != nil:
-		return m.mapKprobe(ev.ProcessKprobe)
+		return m.mapKprobe(ev.ProcessKprobe, m.nodeOf(ev))
 	default:
 		return types.AuditEvent{}, false
 	}
@@ -126,47 +160,76 @@ func (m *Mapper) MapLine(line []byte) (types.AuditEvent, bool) {
 	return m.Map(ev)
 }
 
-func (m *Mapper) mapExec(e *TetragonProcessExec) (types.AuditEvent, bool) {
+// nodeOf is the node an event is stamped with: the Mapper's own node when it is
+// set, else the line's node_name. The sensor's heartbeat is keyed by the same
+// node, so events and beats join on one value even when Tetragon's node_name is
+// its hostname rather than the Kubernetes node name.
+func (m *Mapper) nodeOf(ev TetragonEvent) string {
+	if m.node != "" {
+		return m.node
+	}
+	return ev.NodeName
+}
+
+func (m *Mapper) mapExec(e *TetragonProcessExec, node string) (types.AuditEvent, bool) {
 	p := e.Process
 	if p == nil {
 		return types.AuditEvent{}, false
 	}
 	runID, correlation := m.correlate(p)
-	argv := buildArgv(p)
+	// argv carries the binary only. The raw arguments travel whole in
+	// Arguments: splitting them here would cut a secret containing a space
+	// into words the control plane's masking no longer matches, so it masks
+	// them first and splits them after (MaskData).
+	var argv []string
+	if p.Binary != "" {
+		argv = []string{p.Binary}
+	}
 	loader := IsDynamicLinker(p.Binary)
-	// ld-linux hides the real program in argv[1]; if argv[0] is itself a
-	// loader (invoked by basename), flag that too.
-	if !loader && len(argv) > 0 {
-		loader = IsDynamicLinker(argv[0])
+	// ld-linux hides the real program in argv[1]; with no binary field argv[0]
+	// is the first argument, and a loader there (invoked by basename) is
+	// flagged too.
+	if p.Binary == "" {
+		if args := strings.Fields(p.Arguments); len(args) > 0 {
+			loader = IsDynamicLinker(args[0])
+		}
 	}
 	data := EventData{
 		Stream:      Stream,
 		Subtype:     SubtypeProcessExec,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Argv:        argv,
+		Arguments:   p.Arguments,
 		Loader:      loader,
 		Correlation: correlation,
 	}
 	return auditFor(runID, ActionProcessExec, p.Binary, "success", data), true
 }
 
-// mapKprobe multiplexes a process_kprobe into a connect or file-write audit
-// event. A connect kprobe is recognised by function name or by carrying a
-// sock_arg; everything else is a file write.
-func (m *Mapper) mapKprobe(e *TetragonProcessKprobe) (types.AuditEvent, bool) {
+// mapKprobe maps a process_kprobe from a hook whose meaning it knows: a
+// connect hook to a connect, the file-permission hook to a file write. A probe
+// from any other hook is dropped, never guessed at: an operator's own policy
+// may hook reads, opens or receives, and a socket or a path alone does not say
+// which.
+func (m *Mapper) mapKprobe(e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
 	p := e.Process
 	if p == nil {
 		return types.AuditEvent{}, false
 	}
-	if sock := kprobeSock(e); sock != nil || isConnectKprobe(e.FunctionName) {
-		return m.mapConnect(p, sock)
+	switch {
+	case isConnectKprobe(e.FunctionName):
+		return m.mapConnect(p, kprobeSock(e), node)
+	case strings.TrimSpace(e.FunctionName) == filePermissionKprobe:
+		return m.mapFileWrite(p, e, node)
 	}
-	return m.mapFileWrite(p, e)
+	return types.AuditEvent{}, false
 }
 
 // mapConnect emits a kernel.network.connect from a connect kprobe's sock_arg.
-func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.AuditEvent, bool) {
+func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg, node string) (types.AuditEvent, bool) {
 	runID, correlation := m.correlate(p)
 	ip, port := connectDst(sock)
 	dst := ""
@@ -188,14 +251,21 @@ func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.Au
 		Subtype:     SubtypeNetworkConnect,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Dst:         dst,
 		Correlation: correlation,
 	}
 	return auditFor(runID, ActionNetworkConnect, dst, outcome, data), true
 }
 
-// mapFileWrite emits a kernel.file.write for a sensitive-path kprobe.
-func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe) (types.AuditEvent, bool) {
+// mapFileWrite emits a kernel.file.write for a write the kernel let through to
+// a sensitive path. A read, a refused write, or a probe without the access mask
+// or the return value is dropped: a pathname alone is no evidence of a write.
+func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
+	if !permittedWrite(e) {
+		return types.AuditEvent{}, false
+	}
 	path := kprobePath(e)
 	if !IsSensitivePath(path) {
 		// Non-sensitive write: filtered noise, not recorded.
@@ -207,6 +277,8 @@ func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe) (typ
 		Subtype:     SubtypeFileWrite,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Path:        path,
 		Correlation: correlation,
 	}
@@ -228,6 +300,29 @@ func isConnectKprobe(fn string) bool {
 	return connectKprobes[strings.TrimSpace(fn)]
 }
 
+// filePermissionKprobe is the file-write hook, security_file_permission(file,
+// mask), as the shipped policy hooks it
+// (deploy/compose/tetragon-policies/wardyn-groundtruth.yaml): the file, the
+// access mask, and the return value.
+const filePermissionKprobe = "security_file_permission"
+
+// mayWrite is the kernel's MAY_WRITE bit in an access mask.
+const mayWrite = 2
+
+// permittedWrite reports whether a file-permission probe is a write the kernel
+// allowed: its access mask (the first int argument) has MAY_WRITE, and the hook
+// returned 0.
+func permittedWrite(e *TetragonProcessKprobe) bool {
+	var mask *int32
+	for i := range e.Args {
+		if e.Args[i].IntArg != nil {
+			mask = e.Args[i].IntArg
+			break
+		}
+	}
+	return mask != nil && *mask&mayWrite != 0 && e.Return != nil && e.Return.IntArg != nil && *e.Return.IntArg == 0
+}
+
 // kprobeSock returns the first sock_arg in a kprobe event, or nil.
 func kprobeSock(e *TetragonProcessKprobe) *TetragonSockArg {
 	for i := range e.Args {
@@ -238,11 +333,22 @@ func kprobeSock(e *TetragonProcessKprobe) *TetragonSockArg {
 	return nil
 }
 
-// correlate resolves a process to a run id via container-id correlation.
+// correlate resolves a process to a run id: by pod when the event carries a
+// pod block and the Correlator is a PodCorrelator, then by container id.
 // Returns (nil, unmapped) if it doesn't resolve or no Correlator is wired.
 func (m *Mapper) correlate(p *TetragonProcess) (*uuid.UUID, Correlation) {
 	if m.corr == nil {
 		return nil, CorrelationUnmapped
+	}
+	if pc, ok := m.corr.(PodCorrelator); ok && p != nil && p.Pod != nil {
+		container := ""
+		if p.Pod.Container != nil {
+			container = p.Pod.Container.Name
+		}
+		if id, ok := pc.RunForPod(p.Pod.Namespace, p.Pod.Name, container); ok {
+			rid := id
+			return &rid, CorrelationMapped
+		}
 	}
 	if cid := containerID(p); cid != "" {
 		if id, ok := m.corr.RunForContainer(cid); ok {
@@ -268,32 +374,19 @@ func auditFor(runID *uuid.UUID, action, target, outcome string, data EventData) 
 	}
 }
 
+// podOf is the "namespace/name" of the event's pod, or "" off Kubernetes.
+func podOf(p *TetragonProcess) string {
+	if p == nil || p.Pod == nil || p.Pod.Name == "" {
+		return ""
+	}
+	return p.Pod.Namespace + "/" + p.Pod.Name
+}
+
 func containerID(p *TetragonProcess) string {
 	if p == nil {
 		return ""
 	}
 	return p.Docker
-}
-
-// buildArgv splits binary + arguments into an argv slice. Tetragon emits
-// arguments as a single space-separated string; a simple whitespace split is
-// fine since exact tokenisation of quoted args isn't load-bearing (the raw
-// binary is the authoritative field).
-func buildArgv(p *TetragonProcess) []string {
-	if p == nil {
-		return nil
-	}
-	argv := []string{}
-	if p.Binary != "" {
-		argv = append(argv, p.Binary)
-	}
-	if args := strings.Fields(p.Arguments); len(args) > 0 {
-		argv = append(argv, args...)
-	}
-	if len(argv) == 0 {
-		return nil
-	}
-	return argv
 }
 
 // connectDst extracts ip+port from a connect kprobe's sock_arg. A nil sock

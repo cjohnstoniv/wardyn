@@ -82,6 +82,8 @@ export interface ApiToken {
   disposition?: TokenDisposition;
   /** The service identity an admin linked this token to; set with `disposition` on a token that was moved. */
   service_identity?: string;
+  /** A live token in the admin-minted inventory that authentication refuses for its owner: it authenticates nothing now. */
+  owner_refused?: boolean;
   /** An inbound token: it calls the inbound ports that name its owner, never the Wardyn API. */
   inbound?: boolean;
   token?: string;

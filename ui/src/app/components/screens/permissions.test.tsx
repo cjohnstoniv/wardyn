@@ -52,9 +52,11 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
+import { CHANGE_NOTE } from "../wardyn/copy/change-note";
 import { aheadByHours } from "../../lib/test-clock";
 import { setField } from "../../../test/set-field";
 import { expectActionBar } from "../../../test/action-bar";
+import { STATES } from "../wardyn/states";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -89,11 +91,13 @@ beforeEach(() => {
 });
 
 describe("PermissionsScreen — the add-a-grant row", () => {
-  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
-  it("sizes the Who and effect columns to their content at lg", async () => {
+  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line. The
+  // breakpoint is a viewport query, and the sidebar takes 228px of it, so the four columns wait for xl.
+  it("sizes the Who and effect columns to their content at xl, not lg", async () => {
     const { container } = renderScreen();
     await screen.findByText(PERM.DEFAULT_POSTURE);
-    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr_auto]"]')).not.toBeNull();
+    expect(container.querySelector('[class~="xl:grid-cols-[auto_1fr_1fr_auto]"]')).not.toBeNull();
+    expect(container.querySelector('[class*="lg:grid-cols-"]')).toBeNull();
   });
 });
 
@@ -242,7 +246,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
         person("gone@corp.example", { deactivated_at: "2026-10-01T00:00:00Z" }),
       ],
     });
-    putEnforcementMock.mockResolvedValue({ egress_host: true });
+    putEnforcementMock.mockResolvedValue({ enforcement: { egress_host: true }, etag: null });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 
@@ -260,8 +264,34 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await waitFor(() =>
       expect(putEnforcementMock).toHaveBeenCalledWith(
         Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "egress_host"])),
+        undefined,
       ),
     );
+  });
+
+  // Two admins load the same map. A turns egress_host on; this page, still holding the old map, turns
+  // feature on. Its PUT carries the old ETag, the server answers 412, and the page reloads, so confirming
+  // again writes feature on beside A's egress_host instead of switching it back off.
+  it("sends the loaded map's ETag, and a 412 reloads so the retry keeps the other admin's switch", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {}, etag: '"e1"' });
+    putEnforcementMock.mockRejectedValueOnce(new HttpError(412, "stale", "capability_enforcement_stale"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.feature.unenforced);
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: { egress_host: true }, etag: '"e2"' });
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.feature.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    const stale = Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "feature"]));
+    await waitFor(() => expect(putEnforcementMock).toHaveBeenCalledWith(stale, '"e1"'));
+    await screen.findByText(KIND.egress_host.enforced);
+    putEnforcementMock.mockResolvedValue({ enforcement: { egress_host: true, feature: true }, etag: '"e3"' });
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    const merged = Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "feature" || k === "egress_host"]));
+    await waitFor(() => expect(putEnforcementMock).toHaveBeenLastCalledWith(merged, '"e2"'));
   });
 
   it("turning a kind on with nothing granted repeats the lockout warning in the dialog", async () => {
@@ -337,6 +367,13 @@ describe("PermissionsScreen — a snapshot that never arrived", () => {
     }
     // ...and it must not claim the zero-config posture either.
     expect(screen.queryByText(PERM.DEFAULT_POSTURE)).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getPermissionsMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findAllByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("retrying after a failure renders the kinds from the snapshot that arrives", async () => {
@@ -751,6 +788,7 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(toastError).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(getPermissionsMock).toHaveBeenCalled());
@@ -783,6 +821,7 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByText(PERM.DUPLICATE)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -885,6 +924,7 @@ describe("PermissionsScreen, who may define their own components", () => {
     renderScreen();
     await user.click(await screen.findByRole("switch", { name: SWITCH }));
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(toastError).not.toHaveBeenCalled();
     expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
   });

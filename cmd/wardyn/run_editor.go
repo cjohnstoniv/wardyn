@@ -33,13 +33,13 @@ func runEditorCmd(client clientFn) *cobra.Command {
 (WARDYN_SSH_LISTEN), with your registered SSH key.
 
 Writes the run's Host block to ~/.wardyn/ssh_config, a file Wardyn owns, then
-runs: code --remote ssh-remote+wardyn-<short-id> <dir>. VS Code reads your
+runs: code --remote ssh-remote+wardyn-<run-id> <dir>. VS Code reads your
 ~/.ssh/config, so that file needs one line, "Include ~/.wardyn/ssh_config", at
 the top; this command asks before adding it and, if you decline, prints the
 line and stops. The Host block has the same HostName, Port, User and
 ProxyCommand as 'wardyn run ssh --config', plus your key. A ProxyCommand the
 deployment advertises is written only with --advertised-proxy, and then stays in
-~/.wardyn/ssh_config: VS Code and any 'ssh wardyn-<short-id>' run it on this
+~/.wardyn/ssh_config: VS Code and any 'ssh wardyn-<run-id>' run it on this
 computer on every connection until you remove the block.
 
 VS Code needs "remote.SSH.localServerDownload": "always" in its settings (the
@@ -75,12 +75,12 @@ key is made by 'wardyn ssh-key ensure', never by this command.
 			if !included {
 				return nil
 			}
-			c := exec.CommandContext(cmd.Context(), "code", "--remote", "ssh-remote+wardyn-"+shortRunID(args[0]), dir)
+			c := exec.CommandContext(cmd.Context(), "code", "--remote", "ssh-remote+"+sshHostAlias(args[0]), dir)
 			c.Env = cliutil.ScrubChildEnv(os.Environ())
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
 			if err := c.Run(); err != nil {
 				if errors.Is(err, exec.ErrNotFound) {
-					return fmt.Errorf("editor: `code` is not on your PATH; in VS Code, Remote-SSH: Connect to Host, then wardyn-%s", shortRunID(args[0]))
+					return fmt.Errorf("editor: `code` is not on your PATH; in VS Code, Remote-SSH: Connect to Host, then %s", sshHostAlias(args[0]))
 				}
 				return fmt.Errorf("editor: code: %w", err)
 			}
@@ -88,7 +88,7 @@ key is made by 'wardyn ssh-key ensure', never by this command.
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "/home/agent/work", "folder in the sandbox to open")
-	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "write the ProxyCommand this deployment advertises into the Host block; it stays in ~/.wardyn/ssh_config and VS Code (or any ssh wardyn-<short-id>) runs it on this computer on every connection until you remove the block")
+	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "write the ProxyCommand this deployment advertises into the Host block; it stays in ~/.wardyn/ssh_config and VS Code (or any ssh wardyn-<run-id>) runs it on this computer on every connection until you remove the block")
 	return cmd
 }
 

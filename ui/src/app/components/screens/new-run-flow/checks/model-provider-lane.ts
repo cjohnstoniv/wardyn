@@ -17,8 +17,8 @@
 // never named, and nothing rendered either sentence: a disabled or
 // wholly-ungranted default fell through to R6's shape (no preselection,
 // Launch waits) with no line naming WHY. The owner approved drawing both
-// (docs/design/542-rail-gaps-mock/canon.md, same day), but Opus review round
-// 2 found R5b undrawable from here: setupModelProviderState's capVisible
+// (docs/design/542-rail-gaps-mock/canon.md, same day), but R5b is undrawable
+// from here: setupModelProviderState's capVisible
 // (internal/api/provider_access.go) already narrows `model_providers` to
 // providers THIS PERSON is granted before the wire, so an ungranted provider
 // never reaches this module at all, and the server's own chooseModelProvider
@@ -51,30 +51,30 @@ export function providerConnected(state: string): boolean {
   return state === "live" || state === "expiring";
 }
 
-function isSignInKind(kind: string): boolean {
-  return kind === "bedrock_sso" || kind === "anthropic_subscription";
+function isSignInKind(kind: string, oidc = false): boolean {
+  return oidc || kind === "bedrock_sso" || kind === "anthropic_subscription";
 }
 
 /** The word RAIL_PROVIDER.OPTION fills "your {what}" with, per kind. */
-export function providerWhatWord(kind: string): string {
+export function providerWhatWord(kind: string, oidc = false): string {
   if (kind === "bedrock_sso") return "AWS sign-in";
-  if (kind === "anthropic_subscription") return "sign-in";
+  if (kind === "anthropic_subscription" || oidc) return "sign-in";
   if (isTokenKind(kind)) return "token";
   return "key";
 }
 
 /** The trailing state word ("added"/"not available"/"signed in"/"not signed
  *  in"), keyed on the SAME kind-vocabulary as providerWhatWord. */
-export function providerStateWord(kind: string, state: string): string {
+export function providerStateWord(kind: string, state: string, oidc = false): string {
   const connected = providerConnected(state);
-  if (isSignInKind(kind)) return connected ? "signed in" : "not signed in";
+  if (isSignInKind(kind, oidc)) return connected ? "signed in" : "not signed in";
   return connected ? "added" : "not available";
 }
 
 /** RAIL_PROVIDER.OPTION for one candidate, given this person's access rows. */
 export function providerOptionLabel(p: SetupModelProvider, access: SetupProviderAccess[] | undefined): string {
   const state = accessStateFor(access, p.id);
-  return RAIL_PROVIDER.OPTION(p.name ?? p.id, providerWhatWord(p.kind), providerStateWord(p.kind, state));
+  return RAIL_PROVIDER.OPTION(p.name ?? p.id, providerWhatWord(p.kind, p.sign_in === "oidc"), providerStateWord(p.kind, state, p.sign_in === "oidc"));
 }
 
 /** The admin's roster default for `agent`, among candidates this person may
@@ -167,7 +167,7 @@ export function providerGate(
  *
  * `previousId` is kept ONLY when it is either the person's OWN prior pick
  * (`previousExplicit`) or there is nothing that could outrank it (no pin, and
- * the agent's own default isn't disabled) — Opus review round 2: keeping ANY
+ * the agent's own default isn't disabled): keeping ANY
  * still-serving previousId unconditionally, before ever looking at the pin,
  * let an AUTOMATIC pick (this function's own earlier R1/R2 adoption) outlive
  * a pin that arrived later — the workspace attaching or finishing its load

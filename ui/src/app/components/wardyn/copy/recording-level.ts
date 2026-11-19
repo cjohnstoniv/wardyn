@@ -25,7 +25,10 @@ export const RECORDING_LEVEL = {
   KEYSTROKES: "Keystrokes",
   KEYSTROKES_VALUE: "Never recorded",
   KEYSTROKES_NOTE: "Not a setting. No wall, team or run can turn it on.",
-  BELOW: "Teams below may record more, never less.",
+  BELOW: "Profiles and policies below may record more, never less.",
+  // A profile ceiling only: what a level does to a macOS VM run (no level refuses one at create; a required recording that can't be made stops it at start).
+  MACOS_VM_CEILING:
+    "Choosing a recording level doesn't by itself rule out macOS VMs. At Terminal a macOS VM's desktop isn't recorded; at Screen and actions it is, unmasked, while someone watches. A task run's agent output is recorded when output capture is on; if recording is required and that can't be done, the run doesn't start.",
   LOCKED: "Locked",
   // M7-States 3, with the organisation in the walls' place (the walls are not on this release).
   MINIMUM_ABOVE: (who: string, level: string, lower: string[]) =>
@@ -45,10 +48,38 @@ export const RECORDING_STRIP = {
   ON: (level: string) => `Recording · ${level}`,
   TERMINAL_ONLY: "Recording · Terminal only",
   TERMINAL_ONLY_NOTE: "The screen is not recorded.",
+  // At Screen and actions, on a run that has a screen: what the screen recording keeps.
+  SCREEN_NOTE: "The screen is kept while someone watches it. It isn't masked.",
+  // A macOS VM run marked runner_declined: only its agent's output went unrecorded; the level's own lines still hold.
+  AGENT_NOT_RECORDED: "The agent's output isn't recorded.",
   OFF: "Recording off",
   OFF_NOTE: "Nothing is captured. The audit log still shows what happened.",
   UNAVAILABLE: "Recording unavailable",
 } as const;
+
+// The desktop tile's line at Screen and actions, and what it says while the agent is paused for a sign-in
+// (no frames are kept then).
+export const RECORDING_DESKTOP = {
+  WATCHED: "Recorded while you watch; not masked",
+  PAUSED: "Recording paused while you sign in.",
+} as const;
+
+// The player's footer on a macOS VM run: its recordings are the organisation's, not its runner's.
+export const RECORDING_FOOTER_MACOS = "Recorded at this run's recording level.";
+
+// One line under the session picker for each way the picked recording is not whole.
+export const RECORDING_COMPLETENESS = {
+  READ_ERROR: "The runner's copy ended early; the rest of the output is missing.",
+  MASK_GAP: "Some output was left out because Wardyn couldn't check it for secrets.",
+  TRUNCATED: (limit: string) => `Only the first ${limit} was kept.`,
+  GAP_BYTES: "The start of the output is missing; the runner had already discarded it.",
+  UNKNOWN: "Wardyn couldn't confirm this copy is complete.",
+} as const;
+
+/** Whether the run's screen is being recorded: Screen and actions, and not marked unrecorded (on a macOS VM run the runner_declined mark is about the agent's output only). */
+export function desktopRecordedAt(run: { recording_level?: RecordingLevel; not_recorded?: string; machine_kind?: string }): boolean {
+  return run.recording_level === "screen_actions" && (!run.not_recorded || (run.machine_kind === "macos_vm" && run.not_recorded === "runner_declined"));
+}
 
 export const RECORDING_REPLAY = {
   SCREEN: "Screen and actions",
@@ -60,7 +91,8 @@ export const RECORDING_REPLAY = {
     `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no screen frames were kept. The action log kept going. The gap is marked in the audit log.`,
   GAP: (d: string) => `Gap ${d}`,
   // Pending the owner's approval of the copy: the recording hit its size cap or the stream stopped being followable.
-  STOPPED_AT: (time: string) => `Screen recording stopped at ${time}; the action log continues.`,
+  // The reason, when the recording carries one, is Wardyn's own sentence (Go: stopRefusedRecording's, in fixed words).
+  STOPPED_AT: (time: string, reason?: string) => `Screen recording stopped at ${time}; the action log continues.${reason ? ` ${reason}.` : ""}`,
   KEYSTROKES: "Keystrokes are never recorded.",
   LOG_TITLE: "Tamper-evident log",
   GAP_START: "Gap start",
@@ -106,9 +138,13 @@ export const RECORDING_REPLAY = {
   ACT_UPLOAD_TRIED: "tried to upload a file to the desktop",
   ACT_DOWNLOAD: "downloaded a file from the desktop",
   ACT_DOWNLOAD_TRIED: "tried to download a file from the desktop",
+  // Not on the boards: a reviewed download's ask, which moves no file.
+  ACT_REVIEW_ASKED: "asked to download a file from the desktop",
+  ACT_REVIEW_ASK_TRIED: "tried to ask to download a file from the desktop",
   // Not on the boards: the controls' names, and the chain check's other answers.
   PLAY: "Play",
   PAUSE: "Pause",
+  SEEK: "Playback position",
   CHAIN_CHECKING: "Checking the chain…",
   CHAIN_BROKEN: "Chain broken",
   CHAIN_BROKEN_BODY: (seq: number, reason: string) => `Entry ${seq.toLocaleString("en-US")} does not verify: ${reason}.`,

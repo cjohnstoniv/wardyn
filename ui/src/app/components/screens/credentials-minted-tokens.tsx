@@ -23,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { buttonVariants, Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Chip } from "../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { DISPOSITION, MINTED } from "../wardyn/copy/credentials";
 import { inWords } from "../wardyn/copy/service-tokens";
 import { Checkbox } from "../ui/checkbox";
@@ -35,6 +35,9 @@ const personOf = (t: AdminMintedToken) => t.email || t.principal;
 // console does not know shows as written in a neutral chip; a row with none (a daemon that predates the
 // field) shows nothing.
 const isExpired = (t: AdminMintedToken) => !t.revoked_at && !!t.expires_at && Date.parse(t.expires_at) <= Date.now();
+// Unrevoked, but authentication refuses it for its owner. The server sets owner_refused from the same check
+// authentication runs; revoke and expiry alone do not say whether a token works.
+const ownerRefused = (t: AdminMintedToken) => !t.revoked_at && !!t.owner_refused;
 
 function StateCell({ t }: { t: AdminMintedToken }) {
   if (!t.disposition) return null;
@@ -44,6 +47,14 @@ function StateCell({ t }: { t: AdminMintedToken }) {
       <>
         <Chip tone="neutral" dot>{MINTED.EXPIRED}</Chip>
         <span className="mt-1 block text-xs text-muted-foreground">{MINTED.EXPIRED_SUB}</span>
+      </>
+    );
+  }
+  if (ownerRefused(t)) {
+    return (
+      <>
+        <Chip tone="neutral" dot>{MINTED.OWNER_REFUSED}</Chip>
+        <span className="mt-1 block text-xs text-muted-foreground">{MINTED.OWNER_REFUSED_SUB}</span>
       </>
     );
   }
@@ -66,9 +77,12 @@ function StateCell({ t }: { t: AdminMintedToken }) {
 export function AdminMintedTokens() {
   const [tokens, setTokens] = React.useState<AdminMintedToken[] | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [failMessage, setFailMessage] = React.useState<string | undefined>();
   const [includeRevoked, setIncludeRevoked] = React.useState(false);
   const [target, setTarget] = React.useState<AdminMintedToken | null>(null);
   const [revoking, setRevoking] = React.useState(false);
+  // A failed revoke keeps its dialog open with the server's sentence, and Revoke tries again.
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
   // A ref as well as the state: two clicks in one tick must revoke once.
   const inFlight = React.useRef(false);
 
@@ -81,29 +95,29 @@ export function AdminMintedTokens() {
     credentialsApi
       .listAdminMintedTokens(includeRevoked)
       .then((rows) => { if (mine === newest.current) setTokens(rows); })
-      .catch(() => { if (mine === newest.current) setFailed(true); });
+      .catch((e) => { if (mine === newest.current) { setFailMessage(failureSentence(e)); setFailed(true); } });
   }, [includeRevoked]);
   React.useEffect(load, [load]);
 
   const live = tokens ? tokens.filter((t) => !t.revoked_at) : [];
   // The rows the toggle brings: the server lists revoked tokens and expired ones minted for others only when asked.
   const toggleShown = tokens ? tokens.filter((t) => t.revoked_at || isExpired(t)).length : 0;
-  // "Still work" counts what authenticates: an expired token is listed, but is not one of them.
-  const working = live.filter((t) => !isExpired(t)).length;
+  // "Still work" counts what authenticates: an expired token, or one refused for its owner, is listed, but is not one of them.
+  const working = live.filter((t) => !isExpired(t) && !ownerRefused(t)).length;
   const shown = includeRevoked ? (tokens ?? []) : live;
 
   const revoke = async () => {
     if (!target || inFlight.current) return;
     inFlight.current = true;
     setRevoking(true);
+    setRevokeError(null);
     try {
       await credentialsApi.revokeToken(target.id);
       setTarget(null);
       toast.success(MINTED.REVOKED_TOAST);
       load();
     } catch (e) {
-      setTarget(null);
-      toast.error(getErrorMessage(e));
+      setRevokeError(getErrorMessage(e));
     } finally {
       inFlight.current = false;
       setRevoking(false);
@@ -134,7 +148,7 @@ export function AdminMintedTokens() {
         </div>
 
         {failed ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={failMessage} onRetry={load} />
         ) : !tokens ? (
           <TableSkeleton rows={2} cols={5} />
         ) : shown.length === 0 ? (
@@ -165,7 +179,9 @@ export function AdminMintedTokens() {
                     <TableHead>{MINTED.COL_CREATED_BY}</TableHead>
                     <TableHead>{MINTED.COL_ADDED}</TableHead>
                     <TableHead>{MINTED.COL_LAST_USED}</TableHead>
-                    <TableHead />
+                    <TableHead>
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -188,7 +204,14 @@ export function AdminMintedTokens() {
                       </TableCell>
                       <TableCell>
                         {!t.revoked_at && (
-                          <Button size="sm" variant="outline" onClick={() => setTarget(t)}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setRevokeError(null);
+                              setTarget(t);
+                            }}
+                          >
                             {MINTED.REVOKE}
                           </Button>
                         )}
@@ -215,6 +238,11 @@ export function AdminMintedTokens() {
             <AlertDialogTitle>{target ? MINTED.REVOKE_TITLE(target.name, personOf(target)) : ""}</AlertDialogTitle>
             <AlertDialogDescription>{target ? MINTED.REVOKE_BODY(personOf(target)) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
+          {revokeError !== null && (
+            <p role="alert" className="text-body text-danger">
+              {revokeError}
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={revoking}>{MINTED.REVOKE_CANCEL}</AlertDialogCancel>
             <AlertDialogAction

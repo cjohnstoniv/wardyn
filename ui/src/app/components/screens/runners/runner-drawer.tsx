@@ -106,7 +106,7 @@ export function RunnerDrawer({
           }}
         >
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle className="pr-8">
+            <SheetTitle>
               <span ref={titleRef} tabIndex={-1} className="outline-none">
                 {runner.name}
               </span>

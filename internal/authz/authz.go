@@ -223,7 +223,7 @@ var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channe
 // reason or a marker. user_view is a marker present only when true (renamed in 0.8 from
 // member_mode); device_channel is a sibling of the ingest marker device_origin, never that key.
 func Datum(d Decision, p Principal, method string) map[string]any {
-	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
+	m := make(map[string]any, len(d.Detail))
 	for k, v := range d.Detail {
 		if !slices.Contains(reservedDatumKeys, k) {
 			m[k] = v

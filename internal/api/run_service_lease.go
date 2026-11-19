@@ -57,7 +57,8 @@ func renewalHealth(run types.AgentRun, now time.Time) types.ServiceHealthState {
 // that serves a run (projectStatusDetailFor): a paused run's last read (reason paused), and one older than
 // serviceStatusStale (reason unreachable: the health sweep skips a run whose runner is offline, so nothing
 // rewrites it), is unknown, never the health it last had. observed_at is kept, so the reader still sees
-// when it was last checked; the stored row is not changed.
+// when it was last checked; the stored row is not changed. Wardyn's own check (probe) is projected the same way,
+// on its own observed_at.
 func projectServiceHealth(runs []types.AgentRun, now time.Time) {
 	for i := range runs {
 		st := runs[i].ServiceStatus
@@ -65,17 +66,36 @@ func projectServiceHealth(runs []types.AgentRun, now time.Time) {
 			continue
 		}
 		derived := *st
-		switch {
-		case runs[i].PausedAt != nil:
-			derived.Reason = "paused"
-		case now.Sub(st.ObservedAt) > serviceStatusStale:
-			derived.Reason = "unreachable"
-		default:
+		reason := projectedServiceReason(runs[i].PausedAt, st.ObservedAt, now)
+		probeReason := ""
+		if st.Probe != nil {
+			probeReason = projectedServiceReason(runs[i].PausedAt, st.Probe.ObservedAt, now)
+		}
+		if reason == "" && probeReason == "" {
 			continue
 		}
-		derived.Health = types.ServiceHealthUnknown
+		if reason != "" {
+			derived.Health, derived.Reason = types.ServiceHealthUnknown, reason
+		}
+		if probeReason != "" {
+			probe := *st.Probe
+			probe.Health, probe.Reason = types.ServiceHealthUnknown, probeReason
+			derived.Probe = &probe
+		}
 		runs[i].ServiceStatus = &derived
 	}
+}
+
+// projectedServiceReason is the reason a reading observed at observedAt is served unknown with at now: paused
+// for a paused run, unreachable once older than serviceStatusStale, "" while it stands as stored.
+func projectedServiceReason(pausedAt *time.Time, observedAt, now time.Time) string {
+	switch {
+	case pausedAt != nil:
+		return "paused"
+	case now.Sub(observedAt) > serviceStatusStale:
+		return "unreachable"
+	}
+	return ""
 }
 
 // serviceRenewal is one renewal planServiceRenewal decided on.
@@ -88,15 +108,16 @@ type serviceRenewal struct {
 
 // planServiceRenewal is the end a service run's lease is renewed to now, or false for none.
 // boundarySec is the boundary's end maximum in seconds, 0 for none. A run with no lease
-// unit has no end to renew; health is renewalHealth's, so a stale observation renews nothing.
+// unit has no end to renew; health is renewableServiceHealth's, so a stale observation renews
+// nothing, and with Wardyn's own check on, both readings must be starting or healthy.
 func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (serviceRenewal, bool) {
 	if run.Service == nil || run.LifetimeCapAt == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
 		return serviceRenewal{}, false
 	}
-	health := renewalHealth(run, now)
-	if health != types.ServiceHealthStarting && health != types.ServiceHealthHealthy {
+	if !renewableServiceHealth(run, now) {
 		return serviceRenewal{}, false
 	}
+	health := renewalHealth(run, now)
 	profile := cmp.Or(run.RunLimits.MaxEndAheadSec, run.RunLimits.DefaultEndSec)
 	if profile == 0 {
 		return serviceRenewal{}, false
@@ -119,14 +140,14 @@ func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (ser
 }
 
 // serviceRenewsLater is whether a service run planServiceRenewal declined now is one it will renew
-// when its half-life opens: capped, starting or healthy, with a lease unit, and an end short of the
+// when its half-life opens: capped, starting or healthy (renewableServiceHealth), with a lease unit, and an end short of the
 // target the lifetime cap allows (the cap's second, as planServiceRenewal truncates it). An uncapped
 // service never renews, so it gets the normal run.ending_soon warnings.
 func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 	if run.Service == nil || run.LifetimeCapAt == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
 		return false
 	}
-	if h := renewalHealth(run, now); h != types.ServiceHealthStarting && h != types.ServiceHealthHealthy {
+	if !renewableServiceHealth(run, now) {
 		return false
 	}
 	if cmp.Or(run.RunLimits.MaxEndAheadSec, run.RunLimits.DefaultEndSec) == 0 {

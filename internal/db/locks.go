@@ -33,9 +33,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"log/slog"
+	"net"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,13 +63,18 @@ const (
 	// lock: obj = the secret-store namespace the credentials live in.
 	AWSSSOLockClass int32 = 0x57415753 // ASCII "WAWS"
 	// AWSSSOCredentialLockClass is one AWS SSO credential's renewal
-	// single-flight: obj = the namespace and the credential's secret name. The
-	// one class several keys of which may be held at once, taken in ascending
-	// Obj (the whole-person erase takes every credential's).
+	// single-flight: obj = the namespace and the credential's secret name. One
+	// of the two classes several keys of which may be held at once (manyKeys),
+	// taken in ascending Obj (the whole-person erase takes every credential's).
 	AWSSSOCredentialLockClass int32 = 0x57415343 // ASCII "WASC"
 	// ADOSignInLockClass is the Entra sign-in refresh single-flight (Azure
 	// DevOps and Azure AI Foundry): obj = person and provider row.
 	ADOSignInLockClass int32 = 0x5741444F // ASCII "WADO"
+	// GatewayAudienceLockClass serializes every writer of a gateway identity
+	// audience (a model provider save with identity, an organisation MCP server
+	// save with an audience) across its audience check and write: the two
+	// live in two tables, so no row lock spans them.
+	GatewayAudienceLockClass int32 = 0x57474155 // ASCII "WGAU"
 	// ComponentKeyLockClass serializes organisation MCP server saves across
 	// their server-key check and write, so two names that give one key cannot
 	// both be saved.
@@ -79,6 +88,17 @@ const (
 	// AuditSweepLockClass admits one audit-chain verify sweep at a time. It is
 	// taken last and only ever tried, never waited for.
 	AuditSweepLockClass int32 = 0x57415357 // ASCII "WASW"
+	// AuditCheckpointLockClass admits one audit checkpoint signer at a time
+	// across replicas. It is only ever tried, never waited for, and the signer
+	// holds no other lock.
+	AuditCheckpointLockClass int32 = 0x5741434B // ASCII "WACK"
+	// RunStartLockClass fences one run's command starts against the writes that
+	// end it: a start holds it from its last read of the run until the runner
+	// has started the command, and each terminal or kept-mark writer holds it
+	// around its state write alone. obj = the run id. Taken last, under any
+	// other lock, and nothing is taken while it is held; a bulk writer takes
+	// several keys at once, in ascending Obj.
+	RunStartLockClass int32 = 0x57525354 // ASCII "WRST"
 )
 
 // LockOrder is the one documented order. A lock may be taken while holding
@@ -88,19 +108,24 @@ const (
 //	run operation, then the Azure DevOps run-token mint/revoke, then the AWS
 //	SSO person lock, then the AWS SSO credential locks (in ascending Obj), then
 //	the Azure DevOps sign-in refresh (the order the credential erase takes
-//	them), then the organisation MCP server key lock (held
-//	around a component save's row lock), then the document locks, and the
-//	audit sweep last.
+//	them), then the gateway audience lock (held around a provider save's
+//	document lock and a component save's key and row locks), then the
+//	organisation MCP server key lock (held around a component save's row
+//	lock), then the document locks, then the audit sweep, and the audit
+//	checkpoint signer, then a run's start lock last.
 var LockOrder = []int32{
 	RunOpLockClass,
 	ADORunTokenLockClass,
 	AWSSSOLockClass,
 	AWSSSOCredentialLockClass,
 	ADOSignInLockClass,
+	GatewayAudienceLockClass,
 	ComponentKeyLockClass,
 	SiteConfigLockClass,
 	CapEnforcementLockClass,
 	AuditSweepLockClass,
+	AuditCheckpointLockClass,
+	RunStartLockClass,
 }
 
 // Lock failures. A refusal (ErrLockBusy, ErrLockNoCapacity, ErrLockUnavailable)
@@ -214,11 +239,17 @@ func checkLockOrder(held []LockKey, k LockKey) (reentrant bool, err error) {
 	}
 	for _, h := range held {
 		r := lockRank(h.Class)
-		if r > rank || r == rank && (k.Class != AWSSSOCredentialLockClass || h.Obj >= k.Obj) {
+		if r > rank || r == rank && (!manyKeys(k.Class) || h.Obj >= k.Obj) {
 			return false, fmt.Errorf("%w: %v taken while holding %v", ErrLockOrder, k, h)
 		}
 	}
 	return false, nil
+}
+
+// manyKeys reports whether several keys of class may be held at once (in
+// ascending Obj).
+func manyKeys(class int32) bool {
+	return class == AWSSSOCredentialLockClass || class == RunStartLockClass
 }
 
 func withHolds(ctx context.Context, h *holds) context.Context {
@@ -248,6 +279,65 @@ func WithoutCancelUnlessLost(ctx context.Context) (_ context.Context, release co
 	return out, func() { stop(); cancel(context.Canceled) }
 }
 
+// LockHoldLimit is how long a run's lock may be held before the watchdog logs and counts the hold
+// (LongLockHolds). It is past the longest hold the daemon is built to take: a dedicated end hold
+// (3 min), a macOS VM's stop on top of it (90 s), and a pass back still running past both (up to
+// 2 min). The watchdog never frees a hold or cancels its work: every call a holder makes has a bound
+// of its own, so a hold past this limit is a call without one, and freeing the lock under it would
+// let a second holder act while the first one's work may still land. A variable only so a test can
+// shorten it.
+var LockHoldLimit = 10 * time.Minute
+
+// longLockHolds counts the holds of a run's lock that ran past LockHoldLimit.
+var longLockHolds atomic.Uint64
+
+// LongLockHolds is how many holds of a run's lock have run past LockHoldLimit since the process
+// started (the /metrics series wardyn_lock_holds_over_limit_total).
+func LongLockHolds() uint64 { return longLockHolds.Load() }
+
+// watchHold starts the watchdog on a new hold of k and returns its stop, which the hold's release
+// calls. Only a run's lock is watched: a holder keeps it across many runtime and store calls. A
+// start keeps the run's start lock (RunStartLockClass) across its last read of the run and one
+// runtime call, each cut at a bound that also ends the hold, so that lock is not watched.
+// Past LockHoldLimit the watchdog counts the hold once and logs it with the functions that took it;
+// at release it logs how long such a hold lasted. It frees nothing and cancels nothing.
+func watchHold(k LockKey) (stop func()) {
+	if k.Class != RunOpLockClass {
+		return func() {}
+	}
+	start, limit := time.Now(), LockHoldLimit
+	pcs := make([]uintptr, 12)
+	pcs = pcs[:runtime.Callers(3, pcs)]
+	var over atomic.Bool
+	t := time.AfterFunc(limit, func() {
+		over.Store(true)
+		longLockHolds.Add(1)
+		slog.Warn("db: a run's lock has been held past its limit; the watchdog does not free it, and the holder keeps it until its work returns",
+			slog.String("lock", k.String()), slog.Duration("limit", limit), slog.String("taken_by", callerNames(pcs)))
+	})
+	return func() {
+		if !t.Stop() && over.Load() {
+			slog.Warn("db: a run's lock held past its limit was released",
+				slog.String("lock", k.String()), slog.Duration("held", time.Since(start)))
+		}
+	}
+}
+
+// callerNames is pcs as "fn <- fn <- ...", innermost first, without the runtime's own frames.
+func callerNames(pcs []uintptr) string {
+	var names []string
+	frames := runtime.CallersFrames(pcs)
+	for {
+		f, more := frames.Next()
+		if f.Function != "" && !strings.HasPrefix(f.Function, "runtime.") {
+			names = append(names, f.Function)
+		}
+		if !more {
+			return strings.Join(names, " <- ")
+		}
+	}
+}
+
 // PGLocker is the Postgres-backed Locker.
 type PGLocker struct {
 	cfg *pgx.ConnConfig
@@ -269,8 +359,48 @@ func LockerFor(pool *pgxpool.Pool) *PGLocker {
 
 // NewPGLocker is a locker of its own with size connection slots (tests).
 func NewPGLocker(pool *pgxpool.Pool, size int) *PGLocker {
-	return &PGLocker{cfg: pool.Config().ConnConfig.Copy(), sem: make(chan struct{}, size)}
+	return &PGLocker{cfg: lockConnConfig(pool.Config().ConnConfig), sem: make(chan struct{}, size)}
 }
+
+// Keepalives on a lock connection free a session lock whose holder vanished without closing its socket
+// (a lost host, a partition) in about a minute, not after the operating system's default of about 2 hours
+// 11 minutes. The server gives up on a silent client after 30 s idle and 3 probes 10 s apart, and at 60 s
+// once data it sent stays unacknowledged (tcp_user_timeout, PostgreSQL 12 and later): the lock is free on
+// the server within about 60 s. They need a dead peer: a slow but live holder or server still acknowledges
+// at the TCP layer, so no lock is lost to slowness. The old holder learns of the loss first, within about
+// 4 s: its watcher's check (watch) has a 3 s deadline every LockWatchInterval, and ends the hold's
+// context with ErrLockLost. The client's dialer probes on the server's schedule too.
+var lockKeepalives = []struct{ name, value string }{
+	{"tcp_keepalives_idle", "30"}, {"tcp_keepalives_interval", "10"}, {"tcp_keepalives_count", "3"}, {"tcp_user_timeout", "60000"},
+}
+
+// lockConnConfig is the pool's connection settings with the client's TCP keepalives on lockKeepalives'
+// schedule; the pool's own settings are left as they are.
+func lockConnConfig(pool *pgx.ConnConfig) *pgx.ConnConfig {
+	cfg := pool.Copy()
+	dialer := &net.Dialer{Timeout: cfg.ConnectTimeout, KeepAliveConfig: net.KeepAliveConfig{
+		Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3,
+	}}
+	cfg.DialFunc = dialer.DialContext
+	return cfg
+}
+
+// setLockKeepalives sets lockKeepalives on a new lock connection, each by its own SET after connect rather
+// than in the startup packet, where a parameter the server does not know fails the connection. A setting
+// the server refuses (a managed service, an older release) is logged once per process and skipped: it
+// never fails the lock or boot.
+func setLockKeepalives(ctx context.Context, exec func(context.Context, string) error) {
+	for _, p := range lockKeepalives {
+		if err := exec(ctx, "SET "+p.name+" = "+p.value); err != nil {
+			if _, warned := keepaliveRefused.LoadOrStore(p.name, true); !warned {
+				slog.WarnContext(ctx, "db: the server refused a lock connection's keepalive setting; a lost holder's lock may outlive it longer",
+					slog.String("setting", p.name), slog.Any("err", err))
+			}
+		}
+	}
+}
+
+var keepaliveRefused sync.Map // setting name -> true, once logged
 
 // lockConn is one dedicated connection and the locks it holds.
 type lockConn struct {
@@ -449,6 +579,7 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 		free()
 		return ctx, nil, false, fmt.Errorf("%w: connect: %w", ErrLockUnavailable, err)
 	}
+	setLockKeepalives(dctx, func(ctx context.Context, sql string) error { _, err := conn.Exec(ctx, sql); return err })
 	lc := &lockConn{conn: conn}
 	lc.lost, lc.lose = context.WithCancelCause(context.Background())
 	lc.mu.Lock()
@@ -466,9 +597,11 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 	hctx, hcancel := context.WithCancelCause(withHolds(ctx, &holds{keys: []LockKey{k}, conn: lc}))
 	stop := make(chan struct{})
 	go lc.watch(hcancel, stop, LockWatchInterval)
+	endWatch := watchHold(k)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
+			endWatch()
 			close(stop)
 			lc.close()
 			free()
@@ -641,9 +774,11 @@ func (l *LocalLocker) lock(ctx context.Context, k LockKey, wait time.Duration, t
 	// Cancelled at release, as the PG locker's is: a caller that keeps using
 	// the context after unlocking must fail here, in a test, as it would there.
 	hctx, hcancel := context.WithCancelCause(withHolds(ctx, &holds{keys: append(slices.Clone(held), k)}))
+	endWatch := watchHold(k)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
+			endWatch()
 			<-e.ch
 			l.drop(k, e)
 			hcancel(context.Canceled)

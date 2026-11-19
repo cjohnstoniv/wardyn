@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -118,7 +119,11 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		returned = true
 		mu.Unlock()
 	}()
-	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st)
+	// The runner marks a VM guest's flow that came in on its relay listener; the mark counts only for a
+	// VM run, whose runner is the one internalAuth bound this call to.
+	liveRun, live := liveRunFromContext(r.Context())
+	guestRelayed := live && liveRun.MachineKind.IsVM() && r.Header.Get(proxy.ViaOrgRelayedHeader) == "1"
+	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st, guestRelayed)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
 	if dest.broker {
 		gen.engine.ServeBroker(cw, out)
@@ -138,7 +143,19 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 	for range 2 {
 		g, routes, err := s.viaOrgEngine(r.Context(), run, claims.RunID)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+			// A refusal the run remembers was logged as an error when its build failed: once per run for each setting.
+			level := slog.LevelError
+			if errors.As(err, new(viaOrgRefusalRemembered)) {
+				level = slog.LevelDebug
+			}
+			slog.Log(r.Context(), level, "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+			// The site's upstream proxy host in a refused spelling is permanent, so it is not answered as a retry. The
+			// answer names no host: the organisation's network configuration is never sent to a person's runner.
+			if errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonViaOrgUpstreamProxyRefused, "the organisation's egress for this run cannot be built: "+
+					"the site's upstream proxy URL writes its host in a spelling the proxy refuses in every request, so it stays refused until an operator rewrites the URL")
+				return nil, nil, "", false
+			}
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "the organisation's egress for this run could not be built; retry")
 			return nil, nil, "", false
 		}
@@ -238,9 +255,14 @@ func viaOrgRest(u *url.URL) (rest, escaped string, ok bool) {
 }
 
 // viaOrgEngineRequest is the request the engine sees: the sandbox's own path, method, headers (its
-// Authorization restored) and body, with the run token and the forwarding headers gone.
-func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDestination, st *viaOrgStream) *http.Request {
-	out := r.Clone(r.Context())
+// Authorization restored) and body, with the run token and the forwarding headers gone. A relayed
+// guest flow rides the engine's relay lane, so its decision rows are not the run's activity.
+func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDestination, st *viaOrgStream, relayed bool) *http.Request {
+	ctx := r.Context()
+	if relayed {
+		ctx = proxy.WithRelayLane(ctx)
+	}
+	out := r.Clone(ctx)
 	out.URL.Path, out.URL.RawPath, out.URL.Host, out.URL.Scheme = rest, restEsc, "", ""
 	out.RequestURI = ""
 	out.Host = dest.host
@@ -250,6 +272,8 @@ func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDesti
 	}
 	out.Header.Del(proxy.ViaOrgAuthorizationHeader)
 	out.Header.Del(proxy.ViaOrgAuthorityHeader)
+	out.Header.Del(proxy.ViaOrgRelayedHeader)
+	out.Header.Del(proxy.DecisionRelayedHeader)
 	if r.Body != nil && r.Body != http.NoBody {
 		out.Body = &viaOrgCountingBody{ReadCloser: r.Body, st: st}
 	}
@@ -263,13 +287,31 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 	writeErrorReason(w, reason.Status(), string(reason), "via_org: "+detail)
 }
 
-// viaOrgEngine is the run's engine, built once from its stored config and grants, and the routes
-// the run was dispatched with.
+// viaOrgEngine is the run's engine, built from its stored config and grants, and the routes
+// the run was dispatched with. The engine is kept while the run's policy generation slot stays the one it was
+// built at: every revive, on any replica, moves the slot in the write that stores its config, so a newer slot
+// retires the engine (viaOrgRun.retireStale) and the next one is built from the config as it stands now. A
+// build refused for the site's upstream proxy host is remembered for the setting it read, so the run's later
+// requests neither build it again nor audit its resolve again; a rewrite of the setting is read on the next
+// request. Any other build failure is tried again each time.
 func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
+	// Read outside run.mu, so the run's requests do not queue on it, and before the config: an advance stores its
+	// config in the same write as its slot, so a config read after this slot is at least as new as it.
+	slot, err := s.viaOrgPolicySlot(ctx, runID)
+	if err != nil {
+		return nil, nil, err
+	}
 	run.mu.Lock()
 	defer run.mu.Unlock()
-	if run.engine != nil {
+	if run.engine != nil && !viaOrgSlotNewer(slot, run.slot) {
 		return run.engine, run.routes, nil
+	}
+	if gen := run.retireStale(); gen != nil {
+		s.goBackground(func() { closeViaOrgGen(run.id, gen) })
+	}
+	setting, named := s.viaOrgUpstreamSetting(ctx)
+	if refused, ok := run.upstreamRefused[setting]; named && ok {
+		return nil, nil, viaOrgRefusalRemembered{refused}
 	}
 	cfg, err := s.viaOrgEngineConfig(ctx, runID)
 	if err != nil {
@@ -282,14 +324,77 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
 	})
 	if err != nil {
+		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+			// The build read the setting itself, after this one: a refusal is remembered only when both
+			// reads agree, so none is held for a setting that was rewritten while it was built.
+			if after, ok := s.viaOrgUpstreamSetting(ctx); ok && after == setting {
+				if run.upstreamRefused == nil {
+					run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
+				}
+				run.upstreamRefused[setting] = err
+			}
+		}
 		return nil, nil, err
 	}
 	if run.isClosed() { // ended while it was built: releaseViaOrgRun will not see it
 		_ = engine.Close(ctx)
 		return nil, nil, errors.New("via_org: the run's egress closed")
 	}
-	run.engine, run.routes = &viaOrgGen{engine: engine}, routes
+	run.engine, run.routes, run.slot = &viaOrgGen{engine: engine}, routes, slot
+	run.smu.Lock()
+	run.idleSince = time.Now() // a fresh engine is not idle: it has the whole timeout to admit its stream
+	run.smu.Unlock()
 	return run.engine, routes, nil
+}
+
+// viaOrgPolicySlot reads the run's newest policy generation slot (store.NewestPolicySlot). A store without
+// generations answers the zero slot, which never moves.
+// ponytail: one primary-key read of agent_runs per admit; carry the slot on GetRun's row if via_org load shows it.
+func (s *Server) viaOrgPolicySlot(ctx context.Context, runID uuid.UUID) (store.PolicySlot, error) {
+	gs, ok := s.cfg.Store.(store.RunPolicyGenerations)
+	if !ok {
+		return store.PolicySlot{}, nil
+	}
+	st, _, err := gs.RunPolicyState(ctx, runID)
+	if err != nil {
+		return store.PolicySlot{}, fmt.Errorf("read the run's policy generation: %w", err)
+	}
+	return store.NewestPolicySlot(st), nil
+}
+
+// viaOrgSlotNewer reports whether slot a is later than b. A slot only moves forward: an advance takes the next
+// number, and an abandon marks the newest number abandoned. So a slot read before a newer engine was built is
+// not newer than that engine's, and keeps it.
+func viaOrgSlotNewer(a, b store.PolicySlot) bool {
+	return a.Generation > b.Generation || (a.Generation == b.Generation && a.Abandoned && !b.Abandoned)
+}
+
+// viaOrgRefusalRemembered is a build's refusal answered again from the run's state, with no build.
+type viaOrgRefusalRemembered struct{ error }
+
+func (e viaOrgRefusalRemembered) Unwrap() error { return e.error }
+
+// viaOrgUpstreamSetting is the site's upstream proxy setting as an engine build reads it, named without a
+// secret's value: the URL as written, or the secret ref and its row's revision.
+type viaOrgUpstreamSetting struct{ url, secretRef, revision string }
+
+// viaOrgUpstreamSetting reads the site's upstream proxy setting. named is false when it cannot be named
+// without reading a secret (the site config does not read, or the secret's store keeps no revision), and a
+// refusal is then not remembered.
+func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstreamSetting, named bool) {
+	sc, err := s.siteConfigForDispatch(ctx)
+	if err != nil {
+		return setting, false
+	}
+	setting.url, setting.secretRef = sc.UpstreamProxyURL, sc.UpstreamProxySecretRef
+	if setting.secretRef != "" && s.cfg.Secrets != nil {
+		rev, ok, err := secretstore.RevisionOf(ctx, s.cfg.Secrets.For(""), setting.secretRef)
+		if err != nil || !ok {
+			return setting, false
+		}
+		setting.revision = rev
+	}
+	return setting, true
 }
 
 // viaOrgEngineConfig reduces the run's stored config to its via_org grants (design §7.3): each
@@ -352,14 +457,20 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	cfg.KubeAPI = nil
 	cfg.ResidentMints = nil // the runner answers these; the organisation holds none of their values
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
-	cfg.DecisionSpoolDir, cfg.LLMUpstreams, cfg.LocalModels = "", nil, nil
+	cfg.DecisionSpoolDir, cfg.LLMUpstreams, cfg.LLMHeaders, cfg.LocalModels = "", nil, nil, nil
+	cfg.GatewayIdentity = nil // a person's runner never carries one; the org side never sends one
 	// The k8s runner's own sidecar settings: the org engine never lapses with a runner's renew,
 	// streams no decision to runnerd, and is not inside the runner's cluster. No writer stores them on
 	// a via_org run today; cleared so one never reaches the org side.
 	cfg.SelfLapse, cfg.DecisionSink, cfg.HardDeny = false, nil, nil
 	cfg.InternalHosts = viaOrgInternalHosts(proxyInternalHosts(sc.InternalHosts), hosts)
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
-	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil)
+	// The org-side engine does chain through the organisation's upstream, so only No network has no hop here.
+	noHop := ""
+	if cfg.NoNetwork {
+		noHop = upstreamNoHopNoNetwork
+	}
+	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil, noHop)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	return cfg, nil
 }

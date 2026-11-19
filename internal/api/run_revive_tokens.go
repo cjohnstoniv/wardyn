@@ -20,8 +20,8 @@ import (
 // even reached, so there is nothing to revoke, and a provider without
 // single-jti revocation is not held back.
 //
-// CALLER MUST wait until ReplaceProxy has returned before calling this (F4,
-// Fable review): calling it any earlier — before the claim, before
+// CALLER MUST wait until ReplaceProxy has returned before calling this:
+// calling it any earlier — before the claim, before
 // EnsureProxyImage, before ReplaceProxy — can revoke a LIVE run's still-
 // serving old proxy's only token when the replace never even starts (a
 // refused claim, an image pull failure). That proxy would then be unable to
@@ -46,7 +46,7 @@ func (s *Server) revokeRetiringToken(ctx context.Context, retiring string, runID
 }
 
 // renewedTokens is the ids the run's last token renewal recorded: the minted token, and the one it
-// presented, which the proxy keeps when the lease send behind a renewal fails.
+// presented, which the proxy keeps only when the renewal's answer never reaches it.
 type renewedTokens struct{ jti, prev string }
 
 func (t renewedTokens) ids() []string { return []string{t.jti, t.prev} }

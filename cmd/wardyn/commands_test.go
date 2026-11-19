@@ -639,14 +639,15 @@ func TestRunCmd_WaitFailedPropagatesAgentExitCode(t *testing.T) {
 func TestRunFailureReason(t *testing.T) {
 	runID := uuid.New()
 
-	// A dispatch failure (e.g. an unpullable image from an unknown --agent) records
+	// A run with no failure_hint (an older server) falls back to the audit rows: a
+	// dispatch failure (e.g. an unpullable image from an unknown --agent) records
 	// outcome "failure" with a human error in Data — the reason otherwise buried in
 	// `audit --json` and invisible on run get/--wait.
 	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
 		{Action: "run.exec", Outcome: "success", Data: json.RawMessage(`{}`)},
 		{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)},
 	})
-	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), runID)
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed})
 	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
 		t.Errorf("runFailureReason = %q, want %q", got, want)
 	}
@@ -657,8 +658,39 @@ func TestRunFailureReason(t *testing.T) {
 	srv2 := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
 		{Action: "run.complete", Outcome: "failure", Data: json.RawMessage(`{"exit_code":3,"state":"FAILED"}`)},
 	})
-	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), runID); got != "" {
+	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed}); got != "" {
 		t.Errorf("runFailureReason on a plain exit = %q, want empty", got)
+	}
+}
+
+// The audit row of a sandbox-create failure names only the step ("Create sandbox");
+// the cause is the run's failure_hint. The reason printed is the hint, whether the
+// polled run already carried it or only a re-read does (the FAILED state commits
+// just before the hint is stamped).
+func TestRunFailureReason_TakesTheCauseFromTheRunHint(t *testing.T) {
+	runID := uuid.New()
+	const hint = "the sandbox could not be created: pull ghcr.io/x/agent-oracle:latest: not found"
+	for name, polled := range map[string]string{"hint on the polled run": hint, "hint stamped after the poll": ""} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/runs/" + runID.String():
+					_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: hint})
+				case "/api/v1/audit":
+					_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+						{Action: "run.create", Outcome: "failure", Data: json.RawMessage(`{"error":"Create sandbox"}`)},
+					})
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: polled})
+			if got != hint {
+				t.Errorf("runFailureReason = %q, want the run's hint %q, not the audit row's step", got, hint)
+			}
+		})
 	}
 }
 
@@ -938,6 +970,136 @@ func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
 	}
 	if got := q.Get("run_id"); got != runID.String() {
 		t.Errorf("run_id query = %q, want %s", got, runID)
+	}
+}
+
+// TestApprovalGetShowsMCPCall: `approval get` prints the tool, the server and the call's arguments for an MCP
+// call row, and every digit of every number survives: adjacent integers past 2^53 and a decimal a float64
+// cannot keep. A server that sends call_text is read as sent; an older one gets the same text made from the
+// raw scope, never through a float.
+func TestApprovalGetShowsMCPCall(t *testing.T) {
+	args := json.RawMessage(`{"ids":[9007199254740993,9007199254740995],"price":1.0000000000000001}`)
+	scope := types.MCPCallScope{Tool: "mcp__jira__delete_issue", MCPServer: "jira", MCPHost: "jira.example.com", Arguments: args}
+	key, err := scope.ComputeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.CallSHA256 = key
+	raw, _ := json.Marshal(scope)
+	runID, id := uuid.New(), uuid.New()
+	for name, text := range map[string]*types.MCPCallText{"server text": types.MCPCallTextOf(raw), "older server": nil} {
+		t.Run(name, func(t *testing.T) {
+			srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+				{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw, CallText: text},
+			})
+			out := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+			root.SetOut(out)
+			root.SetErr(&strings.Builder{})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("approval get: %v", err)
+			}
+			got := out.String()
+			for _, want := range []string{"TOOL:", "mcp__jira__delete_issue", "SERVER:", "jira.example.com", "ARGUMENTS:", "9007199254740993", "9007199254740995", "1.0000000000000001"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("output lacks %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestApprovalGetNamesTheRawMCPTool: Claude Code shows every rune outside [A-Za-z0-9_-] as "_", so the
+// tools delete.issue and delete_issue of one server share the display name mcp__jira__delete_issue, and the
+// call key binds the raw name. `approval get` prints the raw name on its own line, so two such calls read
+// differently.
+func TestApprovalGetNamesTheRawMCPTool(t *testing.T) {
+	runID := uuid.New()
+	get := func(rawTool, mcpTool string) string {
+		scope := types.MCPCallScope{Tool: "mcp__jira__delete_issue", MCPServer: "jira", MCPTool: mcpTool, Arguments: json.RawMessage(`{"id":1}`)}
+		key, err := types.MCPCallKey("jira", rawTool, scope.Arguments, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope.CallSHA256 = key
+		raw, _ := json.Marshal(scope)
+		id := uuid.New()
+		srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+			{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw},
+		})
+		out := &strings.Builder{}
+		root := rootCmd()
+		root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+		root.SetOut(out)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("approval get: %v", err)
+		}
+		return out.String()
+	}
+	dotted, underscored := get("delete.issue", "delete.issue"), get("delete_issue", "")
+	if !strings.Contains(dotted, "\nSERVER TOOL: \"delete.issue\"\n") {
+		t.Errorf("dotted call output lacks its raw tool line:\n%s", dotted)
+	}
+	if !strings.Contains(underscored, "\nSERVER TOOL: \"delete_issue\"\n") {
+		t.Errorf("underscored call output lacks its raw tool line (the display name less its prefix):\n%s", underscored)
+	}
+	// The key lines differ only through the raw tool and the key itself; the raw lines must differ.
+	line := func(out string) string {
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, "SERVER TOOL:") {
+				return l
+			}
+		}
+		return ""
+	}
+	if line(dotted) == "" || line(dotted) == line(underscored) {
+		t.Errorf("two different tools read the same: %q and %q", line(dotted), line(underscored))
+	}
+}
+
+// TestApprovalGetEscapesMCPTerminalControls: the raw tool name comes from the remote server and the arguments
+// from the agent, so `approval get` must not let either clear the screen, start a line of its own or reorder
+// text. The names print quoted with every control and non-ASCII rune escaped; a bidi control inside an
+// argument string prints as its \u escape, which means the same string.
+func TestApprovalGetEscapesMCPTerminalControls(t *testing.T) {
+	runID, id := uuid.New(), uuid.New()
+	hostile := "x\x1b[2J\r\nTOOL:      forged\u202eevil"
+	args := json.RawMessage(`{"note":"a\u202eb\u001b[2Jc"}`)
+	scope := types.MCPCallScope{Tool: "mcp__jira__x", MCPServer: "jira", MCPTool: hostile, Arguments: args}
+	key, err := scope.ComputeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.CallSHA256 = key
+	raw, _ := json.Marshal(scope)
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw},
+	})
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approval get: %v", err)
+	}
+	got := out.String()
+	for _, bad := range []string{"\x1b", "\r", "\u202e"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("output holds the raw control %q:\n%q", bad, got)
+		}
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "TOOL:      forged") {
+			t.Errorf("the tool name started a line of its own: %q", line)
+		}
+	}
+	for _, want := range []string{`\x1b[2J\r\nTOOL:      forged\u202eevil"`, `a\u202eb`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks the escaped form %s:\n%s", want, got)
+		}
 	}
 }
 
@@ -1602,8 +1764,8 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 
 	dir := t.TempDir()
 	file := dir + "/policy.json"
-	// A bare spec (no top-level "name"); --name must supply it.
-	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
+	// No top-level "name": --name must supply it. updated_at is the version the file was read at.
+	writeFile(t, file, `{"updated_at":"2026-11-13T03:00:00.123456Z","spec":{"min_confinement_class":"CC1"}}`)
 
 	polID := uuid.New()
 	root := rootCmd()
@@ -1624,6 +1786,9 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	if body["name"] != "renamed" {
 		t.Errorf("name = %v, want renamed (the --name override)", body["name"])
 	}
+	if body["expected_updated_at"] != "2026-11-13T03:00:00.123456Z" {
+		t.Errorf("expected_updated_at = %v, want the file's updated_at", body["expected_updated_at"])
+	}
 	// N1: pins the verb word itself — an id given must say "updated", never
 	// "created", independent of what the HTTP method/path assertions above
 	// already catch (those alone left `verb = "created"` on the id-given path
@@ -1633,6 +1798,28 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "created policy") {
 		t.Errorf("output = %q, must not say \"created policy\" when a policy-id was given", out.String())
+	}
+}
+
+// A replace from a file with no updated_at is refused before any request, so it cannot undo a save it
+// never saw; --overwrite reads the stored policy's updated_at and sends that instead.
+func TestPolicySetCmd_WithIDNeedsUpdatedAtOrOverwrite(t *testing.T) {
+	file := t.TempDir() + "/policy.json"
+	writeFile(t, file, `{"name":"x","spec":{"min_confinement_class":"CC1"}}`)
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: id, Name: "x", UpdatedAt: time.Date(2026, 11, 13, 3, 0, 0, 123456000, time.UTC)})
+	err := execCmd(t, "policy", "set", id.String(), "-f", file, "--url", srv.URL, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "--overwrite") || srv.last().method != "" {
+		t.Fatalf("err = %v, last request %q: want a local refusal naming --overwrite and no request", err, srv.last().method)
+	}
+	if err := execCmd(t, "policy", "set", id.String(), "-f", file, "--overwrite", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("--overwrite: %v", err)
+	}
+	got := srv.last()
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if got.method != http.MethodPut || body["expected_updated_at"] != "2026-11-13T03:00:00.123456Z" {
+		t.Errorf("--overwrite sent %s with expected_updated_at %v, want a PUT naming the stored updated_at", got.method, body["expected_updated_at"])
 	}
 }
 
@@ -2218,6 +2405,56 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	}
 }
 
+// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped within one second, more than a page and
+// all within logTailMargin, against a server that applies since and offset as the real one does.
+// Each poll pages on by offset under one filter, so every event prints once; restarting from since
+// alone re-read the first page and stopped there.
+func TestLogsCmd_PagesADenseTrailByOffset(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	all := make([]types.AuditEvent, 0, 2501)
+	for range 2500 {
+		all = append(all, types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.decision", Outcome: "success"})
+	}
+	all = append(all, types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.complete", Outcome: "success"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+			return
+		}
+		var since time.Time
+		if v := r.URL.Query().Get("since"); v != "" {
+			since, _ = time.Parse(time.RFC3339, v)
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		var match []types.AuditEvent
+		for _, e := range all {
+			if !e.Time.Before(since) {
+				match = append(match, e)
+			}
+		}
+		page := match[min(offset, len(match)):]
+		if len(page) > 1000 {
+			page = page[:1000]
+			w.Header().Set("X-Wardyn-Truncated", "true")
+		}
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	t.Cleanup(srv.Close)
+	for _, follow := range []string{"--follow=false", "--follow=true"} {
+		out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+			root.SetArgs([]string{"run", "logs", runID.String(), follow, "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", follow, err)
+		}
+		if n, c := strings.Count(out, "egress.decision"), strings.Count(out, "run.complete"); n != 2500 || c != 1 {
+			t.Errorf("%s: printed %d of the 2500 events and run.complete %d times, want each once", follow, n, c)
+		}
+	}
+}
+
 // TestLogsCmd_FollowDrainsAuditsAfterTerminal: the completion watcher flips the
 // run terminal BEFORE run.complete is written, and the revoke/teardown audits
 // land after that again. Returning on the first terminal read dropped exactly
@@ -2366,7 +2603,7 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	srv := cappedAuditServer(t, runID, []types.RunState{types.RunFailed}, 1200,
 		types.AuditEvent{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)})
 
-	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), runID)
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed})
 	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
 		t.Errorf("runFailureReason = %q, want %q — the failure event sat past the audit page cap", got, want)
 	}

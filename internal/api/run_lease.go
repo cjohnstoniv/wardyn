@@ -73,9 +73,12 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun) {
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // every decision below is about times the database stamped or compares
+	if err != nil {
+		return // nothing is killed, ended, stopped, warned or renewed; the next sweep reads the clock again
+	}
 	if reason, due := lifetimeEndDue(run, now); due {
-		s.killRunAtLifetime(ctx, run, reason)
+		s.killRunAtLifetime(ctx, run, reason, now)
 		return
 	}
 	run, renewing := s.renewServiceLease(ctx, leaser, run, now)
@@ -108,11 +111,14 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// The stop is decided from that re-read: an end moved before it (the
 		// end edit writes under this lock too) keeps the agent running.
 		// It never waits: a run whose lock is held is skipped and retried next
-		// pass. The expiry teardown above stays outside this, so a run cannot
-		// dodge it by being revived again and again. The busy mark covers the
+		// pass. The expiry teardown above is retried the same way, and a run
+		// cannot dodge it by being revived again and again: a revive is refused
+		// a claim past the expiry (reviveExpiryDue), and a hold past
+		// keptEndHoldOffLimit is cut by forceKeptStop. The busy mark covers the
 		// instant between a revive's mark and its lock.
 		ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 		if !ok {
+			s.forceUnkeptHeld(ctx, leaser, run)
 			return
 		}
 		defer unlock()
@@ -134,18 +140,18 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if ended {
 			_, err = s.endSandbox(ctx, run)
 		} else {
-			err = s.stopLostSandbox(ctx, run, now)
+			err = s.stopLostSandbox(ctx, run)
 		}
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			// The substrate cannot keep a sandbox, for good: tear the run down
 			// as the first pass would have.
 			if ended {
 				s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", map[string]any{
-					"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
+					"kept": false, "end_error": auditEndError(ctx, run.ID, auditStepEndSandbox, err), "ended_at": run.LostAt,
 				})
 			} else {
 				s.stopKeptRun(ctx, leaser, run, types.RunFailed, "run.lost", map[string]any{
-					"kept": false, "lost_error": err.Error(), "reason": string(run.LostReason),
+					"kept": false, "lost_error": auditEndError(ctx, run.ID, auditStepStopLost, err), "reason": string(run.LostReason),
 				})
 			}
 			return
@@ -214,7 +220,7 @@ func lifetimeStatusDetail(reason types.RunEndReason) string { return "lifetime: 
 // and broker credentials revoked. A sandbox on an offline self-hosted runner
 // is a pending kill, applied when the runner reconnects; the run is KILLED at
 // the org at once either way.
-func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason) {
+func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason, now time.Time) {
 	updater, ok := s.cfg.Store.(runStateDetailUpdater)
 	if !ok {
 		return
@@ -222,7 +228,9 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	// Once claimed, the teardown must finish whatever the sweep's own bound says.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) {
+		return updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), now)
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -252,7 +260,7 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 // unresolved for the re-assert to retry (#1060), never a teardown on the same
 // failing daemon.
 func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) {
-	applied, err := leaser.MarkRunEnded(ctx, run.ID, now)
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) { return leaser.MarkRunEnded(ctx, run.ID, now) })
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run ended failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -269,7 +277,14 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
-	if s.endKeepsRun(run) {
+	// A target known not to keep an ended sandbox is not asked to; the run is stopped instead. Known
+	// here means an online runner or a local executor: for an offline runner the facts are unknown,
+	// and its substrate answers the end itself (ErrEndUnsupported once the runner said it cannot keep).
+	keeps, known := s.endKeepsRunTarget(ctx, run)
+	if known && !keeps && s.endKeepsRun(run) {
+		data["end_error"] = runner.ErrEndUnsupported.Error()
+	}
+	if keeps || !known {
 		wipeFailed, err := s.endSandbox(ctx, run)
 		if !errors.Is(err, runner.ErrEndUnsupported) {
 			// Cancel/revoke only once the run is sure to be kept: on
@@ -294,17 +309,17 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 				run.ID.String(), outcome, mustJSON(data)))
 			return
 		}
-		data["end_error"] = err.Error()
+		data["end_error"] = auditEndError(ctx, run.ID, auditStepEndSandbox, err)
 	}
 	data["kept"] = false
 	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
 }
 
-// endKeepsRun is whether endRun tries to keep run past its end, its files kept
-// for the grace: the runner can end a sandbox, there is a grace, and the run
-// has a sandbox. A router whose substrate for the run cannot keep one answers
-// only at the end itself (runner.ErrEndUnsupported); a warning ahead of the end
-// asks endKeepsRunTarget.
+// endKeepsRun is whether endRun may keep run past its end, its files kept for
+// the grace: the runner can end a sandbox, there is a grace, and the run has a
+// sandbox. A router whose target for the run cannot keep one is told apart by
+// endKeepsRunTarget, which endRun and the warning ahead of the end ask; when no
+// fact settles it, the end itself answers (runner.ErrEndUnsupported).
 func (s *Server) endKeepsRun(run types.AgentRun) bool {
 	_, canKeep := s.cfg.Runner.(runner.SandboxEnder)
 	return canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != ""
@@ -354,11 +369,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 	if !ok {
 		return "", runner.ErrEndUnsupported
 	}
-	err = ender.EndSandbox(ctx, run.SandboxRef)
-	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-		return err.Error(), nil
-	}
-	return "", err
+	return runner.SplitAWSCacheWipe(ender.EndSandbox(ctx, run.SandboxRef))
 }
 
 // noteContainmentFailure records that a kept run's stop failed with err
@@ -366,7 +377,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 // re-assert, and true means this process had not yet seen the failure, so the
 // caller audits it. A failed write is retried by the next pass's re-assert.
 func (s *Server) noteContainmentFailure(ctx context.Context, leaser store.RunLeaser, runID uuid.UUID, err error) bool {
-	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error(), s.cfg.Now()); serr != nil {
+	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error()); serr != nil {
 		slog.WarnContext(ctx, "wardynd: recording a kept run's unresolved containment failed",
 			slog.String("run_id", runID.String()), slog.Any("err", serr))
 	}
@@ -396,7 +407,7 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 		if s.noteContainmentFailure(ctx, leaser, run.ID, err) {
-			data["containment"], data["error"] = "unresolved", err.Error()
+			data["containment"], data["error"] = "unresolved", auditStepContainStop
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert",
 				run.ID.String(), "failure", mustJSON(data)))
 		}
@@ -433,8 +444,33 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // predicate, so a concurrent kill's outcome is still preserved. Metrics counts
 // this transition itself, mirroring casRunState, since it no longer routes
 // through it.
+//
+// It holds the run's lock across the transition and the tail as an end hold (tryHoldRunEnd), or does nothing: a run
+// whose lock is held, or whose server has every end hold taken,
+// publishes no end through it and starts no pass, and the next pass retries. A busy refusal (a lock found held or
+// every end hold taken, not a lock that could not be asked) keptEndHoldOffLimit past the run's due end is cut by
+// forceKeptStop instead, which takes the
+// same terminal claim without the lock and runs the tail with no pass back.
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
-	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	b := endHoldSweep
+	if run.MachineKind.IsMacOSVM() {
+		b += macOSVMTeardownBudget
+	}
+	lctx, unlock, ok, held := s.tryHoldRunEnd(ctx, run.ID, b)
+	if !ok {
+		if held {
+			s.forceKeptStop(ctx, leaser, run, terminal, action, data)
+		}
+		return
+	}
+	defer unlock()
+	ctx = lctx
+	// Bounded, and settled like a held state write: a dispatch that resumes the run's kept machine stops it on a
+	// context with no deadline.
+	applied, err := heldWrite(ctx, func(ctx context.Context) (bool, error) {
+		return leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	})
+	applied, err = s.settleRunWrite(ctx, run.ID, types.RunRunning, terminal, applied, err)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -459,7 +495,7 @@ func (s *Server) revokeRunBroker(ctx context.Context, runID uuid.UUID) {
 	}
 	if err := s.cfg.Broker.RevokeRun(ctx, runID); err != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(map[string]any{"broker_error": err.Error()})))
+			runID.String(), "failure", mustJSON(map[string]any{"broker_error": auditStep(ctx, auditStepRevokeBroker, err, slog.String("run_id", runID.String()))})))
 	}
 }
 

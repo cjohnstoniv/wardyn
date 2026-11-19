@@ -25,17 +25,17 @@ const localAWSCLIRefusal = "This run uses the AWS CLI, which a run on your own r
 // secret value: owner namespace proof is the own List, not fallback Get.
 // upstreams is the LLMUpstreams table dispatch would author for every harness's
 // provider lane (providerKeyLaneFor), so create judges it as dispatch does, and localModels is its
-// LocalModels table for a local_model lane (addLocalModel).
+// LocalModels table for a local_model lane (addLocalModel), and the run identity routes of those
+// providers (addGatewayRoute), both on lanes.
 func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, spec types.RunPolicySpec,
 	comps runComponents, workspaces []types.Workspace, sc types.SiteConfig,
-) (_ []placement.CredentialIntent, upstreams map[string]string, localModels map[string]types.LocalModelSettings, _ *runRefusal) {
+) (_ []placement.CredentialIntent, upstreams map[string]string, lanes providerDispatch, _ *runRefusal) {
 	if comps.awsCLI() != nil {
-		return nil, nil, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localAWSCLIRefusal)
+		return nil, nil, providerDispatch{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localAWSCLIRefusal)
 	}
 	_, actor := actorFromRequest(r)
 	owner := runIdentitySubject(r.Context(), actor)
 	var out []placement.CredentialIntent
-	var lanes providerDispatch // the local model lanes' route-gate settings, as dispatch authors them
 	providerLane := func(choice runProviderChoice, agent string) *runRefusal {
 		intents, ok, err := s.localProviderIntent(r, owner, choice.provider)
 		if err != nil {
@@ -52,15 +52,16 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 			upstreams[l.vendorHost] = l.upstream
 			lanes.addLocalModel(l)
 		}
+		lanes.addGatewayRoute(choice.provider) // a route no address can hold is dispatch's refusal
 		return nil
 	}
 	choice, ref := s.authorizeRunModelProvider(r, req, workspaces, true)
 	if ref != nil {
-		return nil, nil, nil, ref
+		return nil, nil, providerDispatch{}, ref
 	}
 	if choice.chosen {
 		if ref := providerLane(choice, req.Agent); ref != nil {
-			return nil, nil, nil, ref
+			return nil, nil, providerDispatch{}, ref
 		}
 	}
 	// Every other harness's provider, picked as judgeHarnessProviders picks it. A
@@ -77,7 +78,7 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 			continue
 		}
 		if ref := providerLane(hc, h.Harness); ref != nil {
-			return nil, nil, nil, ref
+			return nil, nil, providerDispatch{}, ref
 		}
 	}
 	// The one lane dispatch would author, from the same inputs: one intent, and
@@ -86,12 +87,12 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 	if on {
 		origin, err := s.localADOOrigin(r.Context(), lane.owner, lane)
 		if err != nil {
-			return nil, nil, nil, ownershipUnreadable()
+			return nil, nil, providerDispatch{}, ownershipUnreadable()
 		}
 		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + lane.rowID + "]", Origin: origin})
 	}
 	out = append(out, s.localRedirectIntents(r, spec, sc, resolvedLaneHosts(lane, on))...)
-	return out, upstreams, lanes.localModels, nil
+	return out, upstreams, lanes, nil
 }
 
 // localProviderIntent is every credential the chosen provider's dispatch arm
@@ -116,6 +117,9 @@ func (s *Server) localProviderIntent(r *http.Request, owner string, p types.Mode
 		field = "ProxyConfig.AzureGates[model_provider:" + p.ID + "]"
 	default:
 		return nil, false, nil
+	}
+	if p.OIDC != nil { // a custom endpoint that signs people in holds no key: its credential is the sign-in
+		part = providerOIDCPart
 	}
 	own := false
 	if p.UID != "" {

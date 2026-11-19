@@ -23,11 +23,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
 	recordingsPath = "/api/v1/internal/recordings/"
 	decisionsPath  = "/api/v1/internal/decisions"
+	renewPath      = "/api/v1/internal/token/renew"
 )
 
 func main() {
@@ -50,6 +52,16 @@ func main() {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 			fmt.Printf("hopfake: decision %s\n", bytes.TrimSpace(body))
 			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if r.URL.Path == renewPath && r.Method == http.MethodPost {
+			// wardynd's renewal answer, handing back the token it was asked with: a replacement proxy
+			// serves only after a renewal answers 200 (proxy.FirstRenewGateEnv).
+			fmt.Printf("hopfake: renew tls=%t\n", r.TLS != nil)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"token":      strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+				"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			})
 			return
 		}
 		if r.URL.Path != grantPath {

@@ -9,7 +9,7 @@
 // allows, so the types admit no wider one. The admin token, local mode and a service identity are no
 // person: GET answers 400 walls_need_person, and a store that keeps no personal settings 501
 // walls_unavailable; the card is absent for both.
-import type { ConfinementClass, DesktopControls, FirstUseMode, GrantSpec } from "../types";
+import type { ConfinementClass, DesktopControls, FirstUseMode, GrantSpec, RecordingLevel, ToolRule } from "../types";
 import { asJson, asNoContent, HttpError, wfetch } from "./core";
 
 /** A credential kept out of every run: a grant of this kind (scope-less) or of this kind and scope. */
@@ -27,6 +27,23 @@ export interface PersonalWallsSpec {
   /** "blocked" only. */
   desktop?: DesktopControls;
   withheld_grants?: WithheldGrant[];
+  /** A subset of the run's own list; at least one entry when present. */
+  azure_devops_capabilities?: string[];
+  github_capabilities?: string[];
+  /** Rules added to the run's: "hold" or "deny" only. */
+  tool_rules?: ToolRule[];
+  push_rules?: PersonalWallsPushRules;
+  /** A floor: "terminal" or "screen_actions" (off is no floor). */
+  recording?: RecordingLevel;
+  /** A cap on idle seconds before a sandbox is stopped; above zero. */
+  auto_stop_after_sec?: number;
+}
+
+/** Mirrors Go's types.PersonalWallsPushRules: paths added to the run's push deny list, and refusing every push. */
+export interface PersonalWallsPushRules {
+  deny_paths?: string[];
+  /** true only: refuses every push. */
+  deny_all?: boolean;
 }
 
 /** Mirrors Go's types.PersonalWalls. */

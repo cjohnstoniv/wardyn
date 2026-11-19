@@ -125,6 +125,36 @@ describe("LoginSandboxNote — the waiting sign-in strip", () => {
     expect(strip.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // The Open button for IAM Identity Center's regional sign-in page, a link with no user_code=: it
+  // shows only when the server's read answers waiting for that pane. The answer here
+  // is the server's own for that pane, from the shared cases its parser is pinned on.
+  it("shows the Open button for the sign-in page link IAM Identity Center sends, with the pane's code", async () => {
+    const answer = answerOf("the sign-in page link AWS IAM Identity Center sends");
+    getMock.mockResolvedValue(answer);
+    view(mine());
+    await tick(0);
+    expect(answer.verification_url).toMatch(/^https:\/\/us-east-1\.signin\.aws\/platform\/authorize\?/);
+    const open = screen.getByRole("link", { name: RUN_SIGN_IN.OPEN });
+    expect(open).toHaveAttribute("href", answer.verification_url);
+    expect(open).toHaveAttribute("target", "_blank");
+    expect(open).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByLabelText(RUN_SIGN_IN.CODE_LABEL)).toHaveTextContent("ABCD-EFGH");
+    expect(screen.getByRole("status")).toHaveTextContent("Opens us-east-1.signin.aws");
+  });
+
+  // Both parsers take an `xn--` label that is not valid punycode, which the
+  // browser's URL parser refuses: that link gets no button and no host line,
+  // and the strip still shows the code rather than the page failing to render.
+  it("shows no Open button for a waiting link the browser cannot parse, and still shows the code", async () => {
+    getMock.mockResolvedValue({ state: "waiting", verification_url: "https://xn--a.awsapps.com/start/#/device?user_code=ABCD-EFGH", user_code: "ABCD-EFGH" });
+    view(mine());
+    await tick(0);
+    expect(screen.getByRole("status")).toHaveTextContent(RUN_SIGN_IN.TITLE);
+    expect(screen.getByLabelText(RUN_SIGN_IN.CODE_LABEL)).toHaveTextContent("ABCD-EFGH");
+    expect(screen.queryByRole("link", { name: RUN_SIGN_IN.OPEN })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).not.toHaveTextContent("Opens");
+  });
+
   // The grace is counted from when reading began (ad3ea0338), not from the run's creation, so a run
   // created an hour ago is still read for the grace once it is on the page.
   it("a first not_waiting answer adds nothing; an old run is read for the grace from read start, then not again", async () => {

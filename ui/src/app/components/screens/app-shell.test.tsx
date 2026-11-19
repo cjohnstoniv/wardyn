@@ -95,12 +95,12 @@ describe("AppShell (control plane unreachable)", () => {
 
   it("stays silent while the daemon answers", () => {
     renderShell(false);
-    expect(screen.queryByText(/Control plane unreachable/)).toBeNull();
+    expect(screen.queryByText(/Control plane not available/)).toBeNull();
   });
 
   it("banners the outage", () => {
     renderShell(true);
-    expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
+    expect(screen.getByText(/Control plane not available/)).toBeInTheDocument();
   });
 });
 
@@ -623,6 +623,54 @@ describe("SidebarNav (member role)", () => {
     renderMobileNav("user");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
     expect(screen.getByRole("link", { name: /^Settings/ })).toHaveAttribute("href", "/account");
+  });
+
+  // A custom trust domain has no break opportunity, so in the 178px panel it grew a sideways scrollbar.
+  it("lets a long custom trust domain break inside the sidebar panel", async () => {
+    const user = userEvent.setup();
+    const LONG = "spiffe.platform-prod.eu-west.contoso-internal.example.com";
+    render(
+      <MemoryRouter>
+        <MobileNav
+          pendingApprovals={0}
+          attentionCount={0}
+          meta={{
+            trustDomain: LONG,
+            identityProvider: "spiffe",
+            principal: "u@example.test",
+            identityRevision: 0,
+            authGeneration: 0,
+            email: "",
+            name: "",
+            method: "sso",
+            resolved: true,
+            identityResolved: true,
+            operator: true,
+            securityOperator: true,
+            userViewSuperAdmin: false,
+            role: "admin",
+            sessionExpiresAt: null,
+            memberLocalDirRoot: null,
+            userDrive: null,
+            userDriveDeniedByUnit: "",
+            userDriveUnavailable: "",
+            userViewPreselectType: "",
+            userViewDropped: null,
+            userViewTypes: [],
+            memberMode: false,
+            memberModeNoCredential: false,
+            memberPreviewAvailable: false,
+            runner: "",
+            networkPolicy: "",
+            sso: false,
+          }}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const domain = await screen.findByText(LONG);
+    expect(domain.className).toContain("break-all");
+    expect(domain.className).toContain("min-w-0");
   });
 
   // #460 review (M13) — `role`'s own fail-open default is "admin"

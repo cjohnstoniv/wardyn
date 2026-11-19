@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -157,7 +159,7 @@ func TestInternalApprovalAnswersOmitTheDecider(t *testing.T) {
 	tok := h.mintRunToken(t, runID)
 
 	allowed := map[string]bool{"id": true, "kind": true, "state": true, "decision_scope": true,
-		"decision_expires_at": true, "expires_at": true, "held": true, "held_until": true}
+		"decision_expires_at": true, "expires_at": true, "held": true, "held_until": true, "handed_back_at": true}
 	for name, w := range map[string]*httptest.ResponseRecorder{
 		"get":    do(t, h.srv, http.MethodGet, "/api/v1/internal/approvals/"+id.String(), tok, ""),
 		"expire": do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals/"+id.String()+"/expire", tok, ""),
@@ -177,5 +179,47 @@ func TestInternalApprovalAnswersOmitTheDecider(t *testing.T) {
 		if got := decodeState(t, w.Body.Bytes()); got != types.ApprovalApproved {
 			t.Errorf("%s: state = %s, want APPROVED", name, got)
 		}
+	}
+}
+
+// TestInternalApprovalTellsTheSandboxAboutAHandBack: `wardyn needs-you` (cmd/wardyn-toolgate/needs_you.go,
+// takeoverRow) returns only on APPROVED with handed_back_at set, so the internal read the proxy relays
+// verbatim carries it once a takeover is handed back, and never the holder or the decider.
+func TestInternalApprovalTellsTheSandboxAboutAHandBack(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	id := seedApproval(h, runID, types.ApprovalHumanTakeover)
+	tok := h.mintRunToken(t, runID)
+	read := func(step string) (row struct {
+		State        string     `json:"state"`
+		HandedBackAt *time.Time `json:"handed_back_at"`
+	}) {
+		t.Helper()
+		w := do(t, h.srv, http.MethodGet, "/api/v1/internal/approvals/"+id.String(), tok, "")
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &row) != nil {
+			t.Fatalf("%s: GET = %d %s", step, w.Code, w.Body.String())
+		}
+		for _, secret := range []string{"holder@example.com", "takeover_holder", "decided_by"} {
+			if strings.Contains(w.Body.String(), secret) {
+				t.Errorf("%s: the sandbox's answer carries %q: %s", step, secret, w.Body.String())
+			}
+		}
+		return row
+	}
+	if row := read("pending"); row.State != "PENDING" || row.HandedBackAt != nil {
+		t.Errorf("pending = %+v, want PENDING with no handed_back_at", row)
+	}
+	decided := time.Now().UTC().Add(-time.Minute)
+	ap := h.approvals.byID[id]
+	ap.State, ap.DecidedBy, ap.DecidedAt, ap.TakeoverHolder = types.ApprovalApproved, "holder@example.com", &decided, "holder@example.com"
+	h.approvals.byID[id] = ap
+	if row := read("held"); row.State != "APPROVED" || row.HandedBackAt != nil {
+		t.Errorf("held = %+v, want APPROVED with no handed_back_at (the command keeps waiting)", row)
+	}
+	back := time.Now().UTC().Truncate(time.Second)
+	ap.HandedBackAt = &back
+	h.approvals.byID[id] = ap
+	if row := read("handed back"); row.State != "APPROVED" || row.HandedBackAt == nil || !row.HandedBackAt.Equal(back) {
+		t.Errorf("handed back = %+v, want APPROVED with handed_back_at %s (the command returns)", row, back)
 	}
 }

@@ -18,6 +18,8 @@ type scrubbedWriter struct {
 	http.ResponseWriter
 	m  secretmask.Masker
 	mw *secretmask.MaskingWriter
+	// cutHeaders is a gateway identity route's answer: see maskValuesCut.
+	cutHeaders bool
 }
 
 // scrubbed wraps w when Config.ScrubResponses is set; done flushes what the
@@ -38,6 +40,10 @@ func (p *Proxy) scrubbed(w http.ResponseWriter) (out http.ResponseWriter, done f
 func (s *scrubbedWriter) WriteHeader(code int) {
 	h := s.ResponseWriter.Header()
 	for _, vs := range h {
+		if s.cutHeaders {
+			s.maskValuesCut(vs)
+			continue
+		}
 		for i, v := range vs {
 			vs[i] = string(s.m.Mask([]byte(v)))
 		}

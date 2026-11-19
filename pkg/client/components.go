@@ -20,6 +20,10 @@ import (
 type ComponentRequest struct {
 	Name       string              `json:"name"`
 	Definition ComponentDefinition `json:"definition"`
+	// ExpectedVersion is the version the caller read, on a PUT: the row is replaced only while it is
+	// still at that version, else 409 component_version_conflict and nothing changes. 0 replaces
+	// whatever version is stored.
+	ExpectedVersion int `json:"expected_version,omitempty"`
 }
 
 // ComponentRequirement is one thing a saved component still needs before a run
@@ -33,9 +37,12 @@ type ComponentRequirement struct {
 }
 
 // ComponentSaved answers a component save: the stored row, and what it still needs.
+// Warnings is advisory text for the saver and never refuses a save: today, an
+// organisation component with a host that serves a model.
 type ComponentSaved struct {
 	Component
 	Requirements []ComponentRequirement `json:"requirements"`
+	Warnings     []string               `json:"warnings,omitempty"`
 }
 
 // ComponentSecretView is one secret an organisation component carries, as a
@@ -60,6 +67,10 @@ type OrgComponentView struct {
 	Category string   `json:"category"`
 	CLI      *CLIView `json:"cli,omitempty"`
 	MCP      *MCPView `json:"mcp,omitempty"`
+	// OwningUnitID is the unit the component is pinned to: only a run in that unit or a unit below it
+	// may attach it. OwningUnitName is the unit's name.
+	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
+	OwningUnitName string     `json:"owning_unit_name,omitempty"`
 }
 
 // CLIView is the non-secret face of a CLI row: its kind and what it pins.
@@ -84,6 +95,8 @@ type CLIView struct {
 
 // MCPView is the non-secret face of an MCP server row.
 type MCPView struct {
+	// URL is a remote server's origin (scheme, host and port); the path and query, where a key can
+	// be written, are not shown. A local server has none.
 	URL       string `json:"url"`
 	Transport string `json:"transport"`
 }
@@ -142,8 +155,9 @@ func (c *Client) SaveMyComponent(ctx context.Context, req ComponentRequest) (Com
 }
 
 // UpdateMyComponent replaces the name and definition of one of the caller's
-// saved components and moves its version. 404 for an id that is not theirs.
-// PUT /api/v1/me/components/{id}.
+// saved components and moves its version. 404 for an id that is not theirs; 409
+// component_version_conflict when req.ExpectedVersion is set and the row has
+// moved past it. PUT /api/v1/me/components/{id}.
 func (c *Client) UpdateMyComponent(ctx context.Context, id uuid.UUID, req ComponentRequest) (ComponentSaved, error) {
 	var out ComponentSaved
 	err := c.do(ctx, http.MethodPut, "/api/v1/me/components/"+id.String(), req, &out)
@@ -167,7 +181,9 @@ func (c *Client) ListComponents(ctx context.Context) ([]Component, error) {
 
 // PutComponent creates the organisation component with this id, or replaces it.
 // A new component is attachable by nobody until an admin names who may use it
-// under /api/v1/permissions. Admin only. PUT /api/v1/components/{id}.
+// under /api/v1/permissions. With req.ExpectedVersion set it only replaces: 409
+// component_version_conflict when the row has moved past it, 404 when it is
+// gone. Admin only. PUT /api/v1/components/{id}.
 func (c *Client) PutComponent(ctx context.Context, id uuid.UUID, req ComponentRequest) (ComponentSaved, error) {
 	var out ComponentSaved
 	err := c.do(ctx, http.MethodPut, "/api/v1/components/"+id.String(), req, &out)

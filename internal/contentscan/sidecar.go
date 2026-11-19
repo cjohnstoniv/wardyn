@@ -24,6 +24,8 @@ import (
 type sidecarDetector struct {
 	url    string
 	client *http.Client
+	// presidio sends and reads Presidio's /analyze format instead of Wardyn's own.
+	presidio bool
 }
 
 func newSidecarDetector(url string, client *http.Client) *sidecarDetector {
@@ -70,6 +72,9 @@ func (d *sidecarDetector) Scan(s Span, dst *[]Finding) {
 // letting the Engine mark Result.Skipped/"sidecar_error" so ShouldBlock can
 // honor OnScannerError. The traffic path never blocks on this error directly.
 func (d *sidecarDetector) scanReport(ctx context.Context, s Span, dst *[]Finding) error {
+	if d.presidio {
+		return d.scanPresidio(ctx, s, dst)
+	}
 	body, err := json.Marshal(sidecarRequest{Text: s.Text, FieldPath: s.FieldPath})
 	if err != nil {
 		return fmt.Errorf("sidecar: marshal request: %w", err)
@@ -89,8 +94,28 @@ func (d *sidecarDetector) scanReport(ctx context.Context, s Span, dst *[]Finding
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sidecar: non-200 status %d", resp.StatusCode)
 	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("sidecar: read response: %w", err)
+	}
+	// A reply is one JSON object with a findings field. null, {} or an {"error":...} body would
+	// decode to no findings and read as a clean scan, and a second document after the first was
+	// never read, so each is a sidecar error. {"findings":null} names the field (a Go sidecar's
+	// empty slice encodes to it) and is a clean reply. The field is found as the decoder below
+	// finds it, in any letter case, so a detector that writes "Findings" keeps reporting.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return fmt.Errorf("sidecar: decode response: %w", err)
+	}
+	named := false
+	for k := range top {
+		named = named || strings.EqualFold(k, "findings")
+	}
+	if !named {
+		return fmt.Errorf("sidecar: reply has no findings field")
+	}
 	var sr sidecarResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&sr); err != nil {
+	if err := json.Unmarshal(raw, &sr); err != nil {
 		return fmt.Errorf("sidecar: decode response: %w", err)
 	}
 	path := maskFormats(s.FieldPath)

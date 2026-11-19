@@ -170,6 +170,22 @@ it("drops a late answer for a body that is no longer the draft's", async () => {
   expect(result.current.preflightRead).toBeNull();
 });
 
+it("asks the server again when an answer ages out, only for a screen that opts in", async () => {
+  renderHook(useIntentChecks, { initialProps: params({ recheckOnExpiry: true }) });
+  await tick();
+  expect(preflight).toHaveBeenCalledTimes(1);
+  await tick(PREFLIGHT_FRESH_MS + 1);
+  await tick(10);
+  expect(preflight).toHaveBeenCalledTimes(2);
+});
+
+it("does not re-ask when an answer ages out on a screen that did not opt in", async () => {
+  renderHook(useIntentChecks, { initialProps: params() });
+  await tick();
+  await tick(PREFLIGHT_FRESH_MS + 1);
+  expect(preflight).toHaveBeenCalledTimes(1);
+});
+
 it("an answer is fresh for under a minute, then the gate shuts without a new read", async () => {
   const { result } = renderHook(useIntentChecks, { initialProps: params() });
   await tick();

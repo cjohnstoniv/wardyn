@@ -8,7 +8,7 @@
 // policyToolEffect (internal/api/run_harness_tool_rules.go); both are pinned to
 // tool-effect.golden.json, which TestToolEffectGolden writes.
 
-export type ToolEffect = "allow" | "hold" | "deny";
+export type ToolEffect = "allow" | "hold" | "approve_each" | "deny";
 
 export interface ToolRuleLike {
   tool: string;

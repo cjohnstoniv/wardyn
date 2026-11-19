@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,55 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		}
 		if gotMedia != wantMedia {
 			t.Errorf("%s: CSP media-src = %q, want exactly %q", path, gotMedia, wantMedia)
+		}
+	}
+}
+
+// TestSecurityHeadersBrowserPolicies pins the headers beyond the CSP segments
+// above: form-action is not covered by default-src, so it is named; the
+// opener and permissions policies are on every response; HSTS follows the TLS
+// posture (OIDCSecureCookies) and is never sent on the plain-http default.
+func TestSecurityHeadersBrowserPolicies(t *testing.T) {
+	serve := func(secure bool) http.Header {
+		s := &Server{cfg: Config{OIDCSecureCookies: secure}}
+		w := httptest.NewRecorder()
+		s.securityHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+			ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return w.Header()
+	}
+	for _, secure := range []bool{false, true} {
+		h := serve(secure)
+		// Not set: same-origin would sever window.opener for the provider sign-in popup and the
+		// session-lapse sign-in. Add it only with a two-origin browser test of both.
+		if got := h.Get("Cross-Origin-Opener-Policy"); got != "" {
+			t.Errorf("secure=%v: Cross-Origin-Opener-Policy = %q, want none", secure, got)
+		}
+		if got := h.Get("Permissions-Policy"); got != "camera=(), microphone=(), geolocation=(), payment=(), usb=()" {
+			t.Errorf("secure=%v: Permissions-Policy = %q", secure, got)
+		}
+		if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'; connect-src ") {
+			t.Errorf("secure=%v: CSP %q lacks form-action 'self' with the gateway off", secure, csp)
+		}
+	}
+	if got := serve(false).Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("plain http: Strict-Transport-Security = %q, want none", got)
+	}
+	if got := serve(true).Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Errorf("TLS: Strict-Transport-Security = %q, want max-age=31536000", got)
+	}
+}
+
+// TestCSPUIFormSrc: the form-action entry is the gateway origin of the bind
+// entry, scheme and host only, with host mode's wildcard label kept.
+func TestCSPUIFormSrc(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                      "",
+		" https://ui.example.com/__wardyn/bind": " https://ui.example.com",
+		" https://*.ui.example.com/__wardyn/bind":   " https://*.ui.example.com",
+		" http://127.0.0.1:8081/base/__wardyn/bind": " http://127.0.0.1:8081",
+	} {
+		if got := cspUIFormSrc(in); got != want {
+			t.Errorf("cspUIFormSrc(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

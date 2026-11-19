@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -504,4 +505,40 @@ func TestLaunchRecordRun_ChoosesAModelProvider(t *testing.T) {
 			t.Error("a refused record launch reached the runner")
 		}
 	})
+}
+
+// TestProviderDispatch_EndpointFastModel: a custom endpoint's claude-code
+// fast_model sets the haiku tier variable; a row without it sends exactly what
+// it sent before the field existed.
+func TestProviderDispatch_EndpointFastModel(t *testing.T) {
+	envForModel := func(model, fast string) map[string]string {
+		p := mpKeyProvider("corp-gw", "uid-gw", types.ModelProviderCustomEndpoint,
+			types.ProviderHarness{Harness: "claude-code", Model: model, FastModel: fast})
+		p.BaseURL, p.Auth = "https://gw.corp.example", &types.ProviderAuth{Header: "Authorization", Format: "Bearer %s"}
+		st := &bearerGuardStore{
+			run:  types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner, ModelProviderID: p.ID},
+			site: types.SiteConfig{ModelProviders: providerBlock(p)},
+		}
+		h := mpHarness(t, st, p)
+		_, env, _, ok := mpDispatch(t, h, st, &types.RunPolicySpec{}, nil)
+		if !ok {
+			t.Fatalf("dispatch refused the row (fast=%q)", fast)
+		}
+		return env
+	}
+	envFor := func(fast string) map[string]string { return envForModel("gw-main", fast) }
+	unset, set := envFor(""), envFor("gw-fast")
+	if _, pinned := unset["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; pinned {
+		t.Errorf("env = %v, want no haiku variable without fast_model", unset)
+	}
+	if set["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "gw-fast" || set["ANTHROPIC_MODEL"] != "gw-main" {
+		t.Errorf("env = %v, want the haiku variable gw-fast and the main model gw-main", set)
+	}
+	delete(set, "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+	if !maps.Equal(set, unset) {
+		t.Errorf("env with fast_model minus the haiku variable = %v, want the unset env %v", set, unset)
+	}
+	if noModel := envForModel("", "gw-fast"); noModel["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "gw-fast" {
+		t.Errorf("env = %v, want the haiku variable gw-fast with fast_model and no model", noModel)
+	}
 }

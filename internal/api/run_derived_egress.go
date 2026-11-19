@@ -28,7 +28,8 @@ const (
 
 // deriveRunEgress widens spec with the hosts dispatch adds from the
 // deterministic, operator-trusted sources, never the model: each referenced
-// workspace's registries and permanent denies, its clone hosts, the
+// workspace's registries and permanent denies, the clone hosts of the
+// repositories the run clones from it (runSelectedCloneEgress), the
 // site-config SCM hosts when the run declares a repository, and the extra hosts
 // each git_pat or ssh_key grant's lane needs (grantLaneEgress). It reads
 // nothing but its arguments, so the dry doors and create call it alike and
@@ -47,7 +48,7 @@ func deriveRunEgress(spec *types.RunPolicySpec, wsRefs []types.Workspace, legacy
 	out := []derivedEgress{{kind: derivedWorkspace, added: unionWorkspaceEgress(spec, wsRefs)}}
 	var clone []string
 	for _, ws := range wsRefs {
-		kept, _ := runCloneEgress(ws, trusted)
+		kept, _ := runSelectedCloneEgress(ws, runRepoLocators(*spec, legacyRepo), trusted)
 		clone = append(clone, unionAllowedDomains(spec, kept)...)
 	}
 	out = append(out, derivedEgress{kind: derivedWorkspaceClone, added: clone})

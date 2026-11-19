@@ -13,7 +13,16 @@ const answer = (status: number) => vi.spyOn(globalThis, "fetch").mockResolvedVal
 describe("adoPat.disconnect", () => {
   it("resolves on 204", async () => {
     answer(204);
-    await expect(adoPat.disconnect()).resolves.toBeUndefined();
+    await expect(adoPat.disconnect()).resolves.toEqual({});
+  });
+  it("carries a 200's word that a token it tried to revoke may still work", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tokens_revocation_failed: true, detail: "remedy" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(adoPat.disconnect()).resolves.toEqual({ tokensRevocationFailed: true, detail: "remedy" });
   });
   it("is an error on 404: a daemon without the route must not look like a disconnect that worked", async () => {
     answer(404);

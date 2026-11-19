@@ -316,8 +316,8 @@ test("A1 — the panel and its templates", async () => {
   await act(page, page.getByTestId("policy-template-registries"));
 
   // The helper rail documents every key with its legal values (FIELD_HELP). The
-  // docs-reference footer is a unique anchor to ring.
-  const railFooter = dlg.getByText("Full reference: docs/POLICIES.md");
+  // "Fields" heading is a unique anchor to ring.
+  const railFooter = dlg.getByText("Fields", { exact: true });
   await centerInFrame(railFooter);
   await spotlight(page, railFooter);
   await caption(page, "And every field is documented right here — what it does, and the values it takes.");

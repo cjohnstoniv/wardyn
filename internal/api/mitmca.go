@@ -27,6 +27,9 @@ const mitmCATTL = 365 * 24 * time.Hour
 // revive can hand the same CA to a new proxy; no container holds it at rest
 // (THREAT-MODEL residual 59). A per-run CA bounds blast radius regardless: a
 // leaked CA can forge certs for the duration of one run, not the whole fleet.
+// On a Mac with macos_vm_inspection_ca on, the runner re-issues this CA under
+// the Mac's own, limited to the hosts the run's proxy terminates; see the macOS
+// VM inspection CA residual.
 func generateRunCA(now time.Time) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

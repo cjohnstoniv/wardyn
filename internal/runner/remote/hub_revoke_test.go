@@ -250,6 +250,9 @@ func TestHubInactiveOwnerEndsTheSessionUntilReactivated(t *testing.T) {
 		t.Fatalf("connection while the owner is deactivated: %v, admissions=%d", err, admitted.Load())
 	}
 	inactive.Store(false)
+	// The GOAWAY can land while the recheck still holds the session's slot, and a reconnect then is refused;
+	// a runner's Run retries such a refusal after its reconnect delay, this test does not.
+	serving.Wait()
 	again := make(chan *runnerwire.Peer, 1)
 	connect(again)
 	awaitValue(t, ctx, again)

@@ -42,6 +42,10 @@ func (q queueWriteStore) StalePromotedRuns(context.Context, time.Duration) ([]ty
 	return []types.AgentRun{q.run}, nil
 }
 
+func (q queueWriteStore) FailStalePromotedRun(context.Context, uuid.UUID, time.Duration) (bool, error) {
+	return false, q.write("fail")
+}
+
 func (q queueWriteStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
 	return false, q.write("fail")
 }
@@ -70,7 +74,7 @@ func TestSweepRunQueueReturnsAFailedWrite(t *testing.T) {
 	for _, tc := range []struct{ failing, want string }{
 		{"", ""},
 		{"end", "write end failed"},
-		{"fail", "the transition did not apply"},
+		{"fail", "write fail failed"},
 		{"promote", "write promote failed"},
 	} {
 		t.Run("failing "+tc.failing, func(t *testing.T) {

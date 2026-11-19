@@ -8,15 +8,16 @@ export const PEOPLE_STEP = {
   SINGLE_USER_CHIP: "Single-user",
   MULTI_USER_CHIP: "Multi-user",
   SINGLE_USER_LEDE_LOCAL:
-    "One admin credential — no sign-in at all — anyone who reaches this console on this machine is the admin. No per-person identity.",
+    "No sign-in: anyone who can reach this console on this machine is the admin. There is no per-person identity.",
   SINGLE_USER_LEDE_TOKEN:
     "One admin credential — the token the installer printed. No per-person identity.",
   SINGLE_USER_BODY:
     "Just you. Whoever holds the admin token (or reaches a local-mode console) is the admin; runs, policies, secrets and approvals are all yours. There is no member role until people sign in as themselves.",
   SINGLE_USER_SSO_NOTE_PREFIX:
-    "To add people, configure SSO: each person gets their own identity and an admin or member role, and members get their own Getting Started. The recipe is in ",
-  SINGLE_USER_SSO_NOTE_DOC: "docs/OPERATIONS.md",
-  SINGLE_USER_SSO_NOTE_SUFFIX: ', "Second user, same host".',
+    "To add people, configure SSO: each person gets their own identity and an admin or member role, and members get their own Getting Started. The steps are in the ",
+  SINGLE_USER_SSO_NOTE_DOC: "operations guide",
+  SINGLE_USER_SSO_NOTE_URL: "https://github.com/cjohnstoniv/wardyn/blob/main/docs/OPERATIONS.md#second-user-same-host",
+  SINGLE_USER_SSO_NOTE_SUFFIX: ' under "Second user, same host".',
   MULTI_USER_LEDE: "People sign in with SSO; each is an admin or a member, per your role map.",
   // The PREFIX/SUFFIX pair must name all three sources a role can come from —
   // WARDYN_OIDC_ROLE_MAP, the operator allowlist, AND a console row (the
@@ -28,6 +29,7 @@ export const PEOPLE_STEP = {
   MULTI_USER_ROLES_VAR: "WARDYN_OIDC_ROLE_MAP",
   MULTI_USER_ROLES_SUFFIX: ", console rows added here, or the operator allowlist.",
   MULTI_USER_SSO_CHIP: "SSO",
+  MULTI_USER_SSO_DOWN_CHIP: "SSO · not answering",
   MULTI_USER_ADMINS_LABEL: "Admins",
   MULTI_USER_ADMINS_BODY: " set the ceiling — policies, secrets, workspaces, site configuration.",
   MULTI_USER_MEMBERS_LABEL: "Members",
@@ -49,9 +51,15 @@ export const PEOPLE_STEP = {
 export const SETUP = {
   FINISH_TITLE: "Finish",
   FINISH_SWITCH: "Switch to user view",
+  FINISH_SWITCH_NOTE:
+    "Finishing in the user view takes you to your own Getting started, where you connect your model credential and start a first run.",
 } as const;
 
 export const SITE = {
+  // The Host proxy editor stays disabled until the first site-config read lands; these say why.
+  PROXY_LOADING: "Loading the saved proxy settings…",
+  PROXY_LOAD_FAILED: "Couldn't load the saved proxy settings. Retry to edit them.",
+  PROXY_RETRY: "Try again",
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
   // start).

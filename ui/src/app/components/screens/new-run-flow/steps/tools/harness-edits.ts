@@ -11,7 +11,8 @@ import type { ToolRule } from "../../../../../lib/types/policy";
 import { withKeys } from "../../lenses/lens-keys";
 import type { RunIntent } from "../../draft/run-intent";
 
-type Effect = ToolRule["effect"];
+// A harness default is allow, hold or deny; approve_each is a rule for one MCP tool.
+type Effect = Exclude<ToolRule["effect"], "approve_each">;
 
 /** Personal edits on one included tool; an emptied rule list is dropped, never sent as []. */
 function editTool(intent: RunIntent, toolId: string, edit: (t: NonNullable<RunIntent["tools"]>[number]) => NonNullable<RunIntent["tools"]>[number]): RunIntent {

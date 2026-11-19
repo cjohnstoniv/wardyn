@@ -132,6 +132,7 @@ func TestActorTypeValues(t *testing.T) {
 		{"human", ActorHuman, "human"},
 		{"agent", ActorAgent, "agent"},
 		{"system", ActorSystem, "system"},
+		{"service", ActorService, "service"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,6 +140,20 @@ func TestActorTypeValues(t *testing.T) {
 				t.Errorf("ActorType %s = %q, want %q", tc.name, string(tc.got), tc.want)
 			}
 		})
+	}
+}
+
+// TestActorTypeValid pins the stored actor set (audit_events' actor_type CHECK): all four kinds, nothing else.
+func TestActorTypeValid(t *testing.T) {
+	for _, a := range []ActorType{ActorHuman, ActorAgent, ActorSystem, ActorService} {
+		if !a.Valid() {
+			t.Errorf("ActorType %q is refused, want accepted", a)
+		}
+	}
+	for _, a := range []ActorType{"", "device", "Service", "service:ci-bot", " human"} {
+		if a.Valid() {
+			t.Errorf("ActorType %q is accepted, want refused", a)
+		}
 	}
 }
 
@@ -741,13 +756,13 @@ func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
 	full := GovernanceLimits{
 		DenyTaskModeExec: true, DenyInteractive: true, DenyUIApps: true, DenyUserDrive: true,
 		MaxConcurrentRuns: 3, MaxEphemeralDiskMiB: 2048, MaxDriveSizeMiB: 10240,
-		DenyPlacements: []Placement{PlacementLocal}, DenyMemberDrives: true,
+		DenyPlacements: []Placement{PlacementLocal}, DenyMemberDrives: true, DenyKeptMachines: true, DenyBackgroundDesktopWatch: true,
 	}
 	b, err := json.Marshal(full)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"max_ephemeral_disk_mib":2048`, `"max_drive_size_mib":10240`, `"deny_placements":["local"]`, `"deny_member_drives":true`} {
+	for _, key := range []string{`"max_ephemeral_disk_mib":2048`, `"max_drive_size_mib":10240`, `"deny_placements":["local"]`, `"deny_member_drives":true`, `"deny_kept_machines":true`, `"deny_background_desktop_watch":true`} {
 		if !bytes.Contains(b, []byte(key)) {
 			t.Errorf("wire = %s, want %s — the console mirrors these json tags by hand "+
 				"(ui/src/app/lib/api/governance.ts), so a renamed tag is a runtime-only break", b, key)

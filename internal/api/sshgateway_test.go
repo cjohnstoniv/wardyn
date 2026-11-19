@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +52,22 @@ type sshMemStore struct {
 	profiles []types.GovernanceUnit
 	// profilesErr, when set, is ListGovernanceUnits' answer instead.
 	profilesErr error
+	// policy is the run policy QueryAuditEvents answers as the run's recorded envelope (the zero value has no
+	// data_out rule); policyErr fails the read, and noPolicy answers no envelope at all (data_out_test.go).
+	policy    types.RunPolicySpec
+	policyErr error
+	noPolicy  bool
+}
+
+// QueryAuditEvents answers the run's run.policy.resolve envelope, which the gateway reads for its data_out rule.
+func (s *sshMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.policyErr != nil || s.noPolicy {
+		return nil, s.policyErr
+	}
+	data, _ := json.Marshal(s.policy)
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
 func newSSHMemStore() *sshMemStore {
@@ -140,6 +157,14 @@ func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal str
 	}
 	delete(s.keys, fingerprint)
 	return nil
+}
+
+// sshMemStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (*sshMemStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*sshMemStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
 }
 
 // GetCapabilityEnforcement and ListCapabilityGrantsFor are the two reads
@@ -280,6 +305,9 @@ func fakeEchoExecSession() *runner.ExecSession {
 		Stdout: stdoutR,
 		Stderr: stderrR,
 		Wait:   func() (int, error) { return 0, nil },
+		// Close ends the relay, as every substrate's does: a bridge whose client closed the channel before its EOF
+		// reached Stdin would otherwise park on Stdout.
+		Close: func() error { _ = stdinR.Close(); _ = stdoutR.Close(); _ = stderrR.Close(); return nil },
 	}
 }
 
@@ -372,16 +400,13 @@ func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configur
 		t.Fatalf("host signer: %v", err)
 	}
 
-	// Ask the OS for a free port, release it, then bind the SAME address —
-	// the standard Go test idiom for "know the port before the real listener
-	// exists"; a collision in that window is not realistic for a
-	// single-process test run.
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	// The harness binds port 0 itself and serves the gateway on that listener, so the port is never free
+	// for another process to take between a pick and the gateway's bind.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("probe free port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
+	addr := ln.Addr().String()
 
 	audit := &sshTestRecorder{}
 	cfg := Config{
@@ -408,30 +433,12 @@ func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configur
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		if err := srv.ServeSSHGateway(ctx); err != nil {
+		if err := srv.ServeSSHGatewayOn(ctx, ln); err != nil {
 			t.Logf("ssh gateway stopped: %v", err)
 		}
 	}()
-	waitForListener(t, addr)
 
 	return &sshTestHarness{srv: srv, addr: addr, hostPub: signer.PublicKey(), audit: audit}
-}
-
-// waitForListener polls addr until something accepts a TCP connection —
-// ServeSSHGateway's net.Listen happens in the goroutine above with no
-// separate readiness signal, so a short poll stands in for one.
-func waitForListener(t *testing.T, addr string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("ssh gateway never started listening on %s", addr)
 }
 
 // waitForAudit polls audit for a matching event for up to a second. A
@@ -967,6 +974,237 @@ func TestSSHGateway_StderrDrainedBeforeStdout(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("no output observed — the stderr-first write may have wedged the stream")
+	}
+}
+
+// eventChannel is the part of ssh.Channel the exec bridge touches, recording
+// the order of what the bridge does to it: each stderr write, the exit-status
+// request and the Close.
+type eventChannel struct {
+	ssh.Channel
+	mu     sync.Mutex
+	events []string
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newEventChannel() *eventChannel { return &eventChannel{closed: make(chan struct{})} }
+
+func (c *eventChannel) record(e string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, e)
+}
+
+func (c *eventChannel) Write(p []byte) (int, error) { return len(p), nil }
+func (c *eventChannel) Stderr() io.ReadWriter       { return eventChannelErr{c} }
+func (c *eventChannel) SendRequest(name string, _ bool, _ []byte) (bool, error) {
+	c.record(name)
+	return true, nil
+}
+func (c *eventChannel) Close() error {
+	c.once.Do(func() { c.record("close"); close(c.closed) })
+	return nil
+}
+
+// recorded returns a copy of the events so far, taken under the lock.
+func (c *eventChannel) recorded() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.events)
+}
+
+// saw reports whether an event named e was recorded.
+func (c *eventChannel) saw(e string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Contains(c.events, e)
+}
+
+// stderrBefore returns the stderr written before the first event named stop,
+// or all of it when stop never happened.
+func (c *eventChannel) stderrBefore(stop string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var b strings.Builder
+	for _, e := range c.events {
+		if e == stop {
+			break
+		}
+		if rest, ok := strings.CutPrefix(e, "stderr:"); ok {
+			b.WriteString(rest)
+		}
+	}
+	return b.String()
+}
+
+type eventChannelErr struct{ c *eventChannel }
+
+func (e eventChannelErr) Write(p []byte) (int, error) {
+	e.c.record("stderr:" + string(p))
+	return len(p), nil
+}
+func (e eventChannelErr) Read([]byte) (int, error) { return 0, io.EOF }
+
+// TestSSHGateway_ExecStderrTailBeforeExitStatus pins that a command's last
+// stderr bytes reach the channel before the exit status and the Close: stdout
+// ends first, stderr's tail lands later, and Wait is already done. The old
+// order sent exit-status and closed the channel as soon as stdout ended, so
+// the tail was lost.
+func TestSSHGateway_ExecStderrTailBeforeExitStatus(t *testing.T) {
+	for _, sendExit := range []bool{true, false} {
+		t.Run("sendExit="+map[bool]string{true: "true", false: "false"}[sendExit], func(t *testing.T) {
+			srv, _, _, run := newWiredPauseServer(t)
+			stdoutR, stdoutW := io.Pipe()
+			stderrR, stderrW := io.Pipe()
+			_ = stdoutW.Close()
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				_, _ = io.WriteString(stderrW, "tail line")
+				_ = stderrW.Close()
+			}()
+			sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 1, nil }}
+			ch := newEventChannel()
+			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, sendExit)
+
+			if !ch.saw("close") || (sendExit && !ch.saw("exit-status")) {
+				t.Fatalf("events = %q, want a close, and an exit-status when sendExit", ch.recorded())
+			}
+			if got := ch.stderrBefore("close"); got != "tail line" {
+				t.Errorf("stderr before Close = %q, want %q", got, "tail line")
+			}
+			if sendExit {
+				if got := ch.stderrBefore("exit-status"); got != "tail line" {
+					t.Errorf("stderr before exit-status = %q, want %q", got, "tail line")
+				}
+			}
+		})
+	}
+}
+
+// TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel pins the bound on
+// that wait: a stderr that never ends must not keep the bridge, and so the
+// run's channel slot, past execStderrTailGraceNS.
+func TestSSHGateway_ExecStderrNeverEndingDoesNotHoldTheChannel(t *testing.T) {
+	old := execStderrTailGraceNS.Swap(int64(50 * time.Millisecond))
+	t.Cleanup(func() { execStderrTailGraceNS.Store(old) })
+
+	srv, _, _, run := newWiredPauseServer(t)
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	_ = stdoutW.Close()
+	t.Cleanup(func() { _ = stderrW.Close() })
+	sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 0, nil }}
+	ch := newEventChannel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, true)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the bridge never returned with a stderr that never ends")
+	}
+	select {
+	case <-ch.closed:
+	default:
+		t.Error("the channel was not closed")
+	}
+}
+
+// refusingChannel is an eventChannel whose stdout writes fail, as a forwarded channel's do once the
+// client closed it while the connection stayed up.
+type refusingChannel struct{ *eventChannel }
+
+func (refusingChannel) Write([]byte) (int, error) { return 0, errors.New("channel closed") }
+
+// TestSSHGateway_ExecStderrNotAwaitedAfterAChannelWriteFails pins that a channel that refused stdout
+// cannot carry stderr either, so the bridge does not wait out execStderrTailGraceNS for it; and that a
+// stdout READ error still waits, as the last stderr line is then the reason.
+func TestSSHGateway_ExecStderrNotAwaitedAfterAChannelWriteFails(t *testing.T) {
+	t.Run("a channel write error", func(t *testing.T) {
+		srv, _, _, run := newWiredPauseServer(t)
+		stdoutR, stdoutW := io.Pipe()
+		stderrR, stderrW := io.Pipe()
+		t.Cleanup(func() { _ = stdoutW.Close(); _ = stderrW.Close() })
+		go func() { _, _ = stdoutW.Write([]byte("x")) }()
+		sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 0, nil }}
+		ch := newEventChannel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, refusingChannel{ch}, sess, true)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the bridge waited for a stderr that never ends after its channel refused a write")
+		}
+		select {
+		case <-ch.closed:
+		default:
+			t.Error("the channel was not closed")
+		}
+	})
+	t.Run("a stdout read error", func(t *testing.T) {
+		srv, _, _, run := newWiredPauseServer(t)
+		stdoutR, stdoutW := io.Pipe()
+		stderrR, stderrW := io.Pipe()
+		_ = stdoutW.CloseWithError(errors.New("read failed"))
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_, _ = io.WriteString(stderrW, "tail line")
+			_ = stderrW.Close()
+		}()
+		sess := &runner.ExecSession{Stdout: stdoutR, Stderr: stderrR, Wait: func() (int, error) { return 1, nil }}
+		ch := newEventChannel()
+		srv.sshBridgeExecSession(context.Background(), run.ID, holderOwner, ch, sess, true)
+		if got := ch.stderrBefore("close"); got != "tail line" {
+			t.Errorf("stderr before Close = %q, want %q", got, "tail line")
+		}
+	})
+}
+
+// stdinRecorder is an exec's stdin that records its half-close and, like a
+// process that exits at the end of its input, ends its stdout then.
+type stdinRecorder struct {
+	closed  atomic.Bool
+	stdoutW *io.PipeWriter
+}
+
+func (r *stdinRecorder) Write(p []byte) (int, error) { return len(p), nil }
+func (r *stdinRecorder) Close() error {
+	r.closed.Store(true)
+	return r.stdoutW.Close()
+}
+
+// TestSSHGateway_ExecStdinNotHalfClosedOnACut pins that the bridge half-closes
+// a process's stdin when the client's input ends, but not once its context
+// ended (a cut): the cut's own Close ends the process's input, and a half-close
+// first could let it end cleanly, so a cut transfer would read as a success.
+func TestSSHGateway_ExecStdinNotHalfClosedOnACut(t *testing.T) {
+	for name, cut := range map[string]bool{"input ended": false, "cut": true} {
+		t.Run(name, func(t *testing.T) {
+			srv, _, _, run := newWiredPauseServer(t)
+			stdoutR, stdoutW := io.Pipe()
+			stdin := &stdinRecorder{stdoutW: stdoutW}
+			sess := &runner.ExecSession{Stdin: stdin, Stdout: stdoutR, Wait: func() (int, error) { return 0, nil },
+				Close: func() error { return stdoutW.Close() }}
+			ch := newFakeSSHChannel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cut {
+				cancel()
+			}
+			_ = ch.inW.Close() // the client's input ends
+			// Without a cut the bridge returns only after the half-close (it ends stdout).
+			srv.sshBridgeExecSession(ctx, run.ID, holderOwner, ch, sess, true)
+			time.Sleep(100 * time.Millisecond) // on a cut, the stdin goroutine has seen the input's end by now
+			if got := stdin.closed.Load(); got == cut {
+				t.Errorf("stdin half-closed = %v on %s, want %v", got, name, !cut)
+			}
+		})
 	}
 }
 
@@ -1821,10 +2059,57 @@ func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
 	c := panicConn{closed: make(chan struct{})}
-	go sshProbeConn(context.Background(), c)
+	go sshProbeConn(context.Background(), c, nil)
 	select {
 	case <-c.closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the connection was not closed after its keepalive request panicked")
+	}
+}
+
+// livePeerConn answers every keepalive and records its Close.
+type livePeerConn struct {
+	ssh.Conn
+	closed chan struct{}
+}
+
+func (livePeerConn) SendRequest(string, bool, []byte) (bool, []byte, error) { return true, nil, nil }
+func (c livePeerConn) Close() error                                         { close(c.closed); return nil }
+
+// The keepalive recheck tells "unknown" from "gone": a failed store read keeps an idle connection,
+// every other reason closes it. One case per arm.
+func TestSSHProbeConnRecheckArms(t *testing.T) {
+	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	for _, tc := range []struct {
+		name, reason string
+		wantClosed   bool
+	}{
+		{"key lookup failed", sshReasonKeyLookup, false},
+		{"run lookup failed", sshReasonRunLookup, false},
+		{"session cutoff lookup failed", sshReasonCutoffLookup, false},
+		{"key deleted", "SSH key registration changed", true},
+		{"session revoked", "SSH key predates session revocation", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := livePeerConn{closed: make(chan struct{})}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var checks atomic.Int32
+			go sshProbeConn(ctx, c, func() string { checks.Add(1); return tc.reason })
+			select {
+			case <-c.closed:
+				if !tc.wantClosed {
+					t.Fatalf("%q closed an idle connection", tc.reason)
+				}
+			case <-time.After(400 * time.Millisecond):
+				if tc.wantClosed {
+					t.Fatalf("%q did not close the connection", tc.reason)
+				}
+				if checks.Load() < 3 {
+					t.Fatalf("only %d rechecks in 400ms; the keep arm proved nothing", checks.Load())
+				}
+			}
+		})
 	}
 }

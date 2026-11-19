@@ -109,6 +109,24 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     expect(screen.getByText(APPROVAL.STATE_CANCELLED)).toBeInTheDocument();
   });
 
+  // The title is what was decided: it must keep a floor of width (the siblings wrap first) and carry its full
+  // text in a tooltip for when it is still cut.
+  it("gives a decided row's title a width floor and its full text as a tooltip", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole("tab", { name: /decided/i }));
+    const row = (await screen.findByTitle(/^run_cancelled_77 /)).closest<HTMLElement>("div.border-t")!;
+    const title = row.querySelector<HTMLElement>("span.truncate")!;
+    expect(title.className).toContain("sm:min-w-[12rem]");
+    expect(title.className).toContain("basis-full");
+    expect(title.getAttribute("title")).toBeTruthy();
+    expect(title.getAttribute("title")).toBe(title.textContent);
+  });
+
   it("fetches EXPIRED approvals when the Decided tab opens", async () => {
     render(
       <MemoryRouter initialEntries={["/approvals?tab=decided"]}>

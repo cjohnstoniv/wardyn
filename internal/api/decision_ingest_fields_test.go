@@ -20,9 +20,14 @@ import (
 // handlePostDecision (internal.go) deliberately does NOT fold into the
 // audit row's flat Data map: Request is exploded into host/port/method/path
 // instead; Decision drives the action suffix ("egress."+Decision) and the
-// outcome, never a Data field of its own; and Scan becomes its OWN separate
-// llm.scan.* event rather than riding this one.
-var decisionLogFieldsNotIngested = map[string]bool{"request": true, "decision": true, "scan": true}
+// outcome, never a Data field of its own; Scan becomes its OWN separate
+// llm.scan.* event rather than riding this one; and Usage (a model call's token
+// counts) is stored as its own usage row by ingestModelUsage and writes no egress
+// row at all (run_model_usage.go; pinned by
+// TestInternalDecision_MeteredCallIsOneDecisionRowAndOneUsageRow); DNS (one sandbox
+// DNS query) is its own run.dns.query row and writes no egress row
+// (TestPostDecision_DNSQueryIsItsOwnRow).
+var decisionLogFieldsNotIngested = map[string]bool{"request": true, "decision": true, "scan": true, "usage": true, "dns": true}
 
 // TestHandlePostDecisionCarriesEveryDecisionLogField pins handlePostDecision's
 // CLOSED map[string]any literal (internal.go) to egress.DecisionLog's actual

@@ -114,11 +114,14 @@ type RecordingChoice struct {
 	Org            *SiteRecording
 	// Required is the organisation's or the run's pool's required setting: at least terminal.
 	Required bool
+	// WallsFloor is the run owner's own walls' recording floor, read at dispatch: it raises the level
+	// resolved from everything else, never lowers it. Empty when their walls name none.
+	WallsFloor RecordingLevel
 	// CeilingBy names the profile that set Ceiling, for a refusal that says whose it is; "" for none.
 	CeilingBy string
 }
 
-// Resolve is the run's recording level. Whether the organisation keeps recordings at all
+// Resolve is the run's recording level, raised last to the owner's walls' floor. Whether the organisation keeps recordings at all
 // (WARDYN_RECORDING_STORE) is not part of it: off there is off for every level.
 func (c RecordingChoice) Resolve() RecordingLevel {
 	org := c.Org.OrgLevel()
@@ -129,7 +132,7 @@ func (c RecordingChoice) Resolve() RecordingLevel {
 	if c.Required {
 		l = l.AtLeast(RecordingTerminal)
 	}
-	return l
+	return l.AtLeast(c.WallsFloor)
 }
 
 // RecordingFloorSource is the layer that makes a run's recording a minimum.
@@ -142,10 +145,12 @@ const (
 	RecordingFloorOrgLocked RecordingFloorSource = "org_locked"
 	// RecordingFloorCeiling: the run's governance ceiling sets a level above off.
 	RecordingFloorCeiling RecordingFloorSource = "ceiling"
+	// RecordingFloorWalls: the run owner's own walls set a level above off.
+	RecordingFloorWalls RecordingFloorSource = "walls"
 )
 
 // Floor is the lowest level a run may be recorded at: the highest of its ceiling's level, the
-// organisation's when that is locked, and terminal when recording is required. The organisation's
+// organisation's when that is locked, terminal when recording is required, and the owner's walls' floor. The organisation's
 // unlocked level is a default, not a minimum, so it is no part of it. Empty when no layer sets one.
 // Resolve is unchanged: a container run keeps the opt-out rule it has.
 func (c RecordingChoice) Floor() RecordingLevel {
@@ -156,11 +161,11 @@ func (c RecordingChoice) Floor() RecordingLevel {
 	if c.Required {
 		l = l.AtLeast(RecordingTerminal)
 	}
-	return l
+	return l.AtLeast(c.WallsFloor)
 }
 
 // FloorSource is the layer that sets a floor above off, the first of required, a locked organisation
-// level and the ceiling; empty when the floor is off or unset, which a run that cannot be recorded may
+// level, the ceiling and the owner's walls; empty when the floor is off or unset, which a run that cannot be recorded may
 // start under.
 func (c RecordingChoice) FloorSource() RecordingFloorSource {
 	switch {
@@ -170,6 +175,8 @@ func (c RecordingChoice) FloorSource() RecordingFloorSource {
 		return RecordingFloorOrgLocked
 	case c.Ceiling.Rank() > RecordingOff.Rank():
 		return RecordingFloorCeiling
+	case c.WallsFloor.Rank() > RecordingOff.Rank():
+		return RecordingFloorWalls
 	}
 	return ""
 }

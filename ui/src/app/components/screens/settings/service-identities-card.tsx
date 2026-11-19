@@ -29,11 +29,11 @@ import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { MINTED } from "../../wardyn/copy/credentials";
 import { inWords, SERVICES as T } from "../../wardyn/copy/service-tokens";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { TokenDialog } from "./token-dialog";
 
 type Load = "loading" | "ready" | "error" | "unavailable" | "hidden";
-type Panel = { load: "loading" | "ready" | "error"; rows: ApiToken[] };
+type Panel = { load: "loading" | "ready" | "error"; rows: ApiToken[]; message?: string };
 
 const CHIP: Record<ServiceIdentityState, { label: string; tone: "success" | "warning" | "neutral" }> = {
   active: { label: T.STATE_ACTIVE, tone: "success" },
@@ -57,6 +57,7 @@ function loadFailure(e: unknown): Load {
 
 export function ServiceIdentitiesCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [items, setItems] = React.useState<ServiceIdentity[]>([]);
   const [open, setOpen] = React.useState<Record<string, boolean>>({});
   const [panels, setPanels] = React.useState<Record<string, Panel>>({});
@@ -74,7 +75,10 @@ export function ServiceIdentitiesCard() {
         setItems(rows);
         setState("ready");
       })
-      .catch((e: unknown) => setState(loadFailure(e)));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(loadFailure(e));
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -83,7 +87,7 @@ export function ServiceIdentitiesCard() {
     serviceIdentities
       .listTokens(name)
       .then((rows) => setPanels((p) => ({ ...p, [name]: { load: "ready", rows } })))
-      .catch(() => setPanels((p) => ({ ...p, [name]: { load: "error", rows: [] } })));
+      .catch((e: unknown) => setPanels((p) => ({ ...p, [name]: { load: "error", rows: [], message: failureSentence(e) } })));
   }, []);
 
   const toggle = (name: string) => {
@@ -129,7 +133,7 @@ export function ServiceIdentitiesCard() {
         </div>
       ) : state === "error" ? (
         <div role="group" aria-label={T.LOAD_ERROR_LABEL}>
-          <ErrorState as="h4" onRetry={() => {
+          <ErrorState as="h4" message={loadMessage} onRetry={() => {
             setState("loading");
             load();
           }} />
@@ -299,7 +303,7 @@ function ServiceRow({
             </div>
           ) : panel.load === "error" ? (
             <div role="group" aria-label={T.TABLE_LABEL(si.name)}>
-              <ErrorState as="h4" onRetry={onRetryTokens} />
+              <ErrorState as="h4" message={panel.message} onRetry={onRetryTokens} />
             </div>
           ) : panel.rows.length === 0 ? (
             <p className="text-body text-muted-foreground">
@@ -313,7 +317,9 @@ function ServiceRow({
                   <TableHead>{T.COL_TOKEN}</TableHead>
                   <TableHead>{T.COL_EXPIRES}</TableHead>
                   <TableHead>{T.COL_LAST_USED}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

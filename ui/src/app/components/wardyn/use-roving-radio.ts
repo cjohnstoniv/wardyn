@@ -23,7 +23,7 @@ import * as React from "react";
 // then have no element to focus.
 export interface RovingRadioItemProps {
   tabIndex: number;
-  radioRef: (el: HTMLButtonElement | null) => void;
+  radioRef: (el: HTMLElement | null) => void;
 }
 
 /**
@@ -33,7 +33,7 @@ export interface RovingRadioItemProps {
  * selects and focuses item i.
  */
 export function useRovingRadio(count: number, selectedIndex: number, onSelect: (i: number) => void) {
-  const refs = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const refs = React.useRef<(HTMLElement | null)[]>([]);
 
   const moveTo = React.useCallback(
     (i: number) => {
@@ -46,6 +46,9 @@ export function useRovingRadio(count: number, selectedIndex: number, onSelect: (
   const onKeyDown = React.useCallback(
     (e: React.KeyboardEvent) => {
       if (count === 0) return;
+      // Only a key pressed on one of the radios: a React portal's events bubble through the tree, so a popover or
+      // other control inside the group would otherwise move the selection with its own arrows.
+      if (!refs.current.slice(0, count).includes(e.target as HTMLElement)) return;
       switch (e.key) {
         case "ArrowRight":
         case "ArrowDown":

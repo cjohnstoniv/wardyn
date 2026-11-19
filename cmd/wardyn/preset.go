@@ -77,6 +77,9 @@ func presetSetCmd(client clientFn) *cobra.Command {
 			}
 			out, err := client().ApplyPresets(cmd.Context(), doc)
 			if err != nil {
+				if len(out.Presets) > 0 {
+					_ = emitJSON(cmd.OutOrStdout(), out) // the presets already stored stay on record; the error is the exit
+				}
 				return err
 			}
 			return emitJSON(cmd.OutOrStdout(), out)

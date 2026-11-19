@@ -18,8 +18,9 @@ export const templatesApi = {
   getRevision: async (id: string, revision: number): Promise<Template> =>
     asJson<Template>(await wfetch(`${path(id)}/revisions/${revision}`)),
 
-  update: async (id: string, req: TemplateSaveRequest): Promise<Template> =>
-    asJson<Template>(await wfetch(path(id), { method: "PUT", asPerson: true, body: JSON.stringify(req) })),
+  // `person`: a save that read first names the person it began under (core.ts WfetchInit.asPerson).
+  update: async (id: string, req: TemplateSaveRequest, person?: string): Promise<Template> =>
+    asJson<Template>(await wfetch(path(id), { method: "PUT", asPerson: person ?? true, body: JSON.stringify(req) })),
 
   remove: async (id: string): Promise<void> => {
     await asNoContent(await wfetch(path(id), { method: "DELETE" }));

@@ -41,6 +41,8 @@ var capabilityPermissions = map[Capability]map[string]string{
 	CapCodeWrite:      {"contents": levelWrite},
 	CapWorkflowsWrite: {"contents": levelWrite, "workflows": levelWrite},
 	CapPR:             {"pull_requests": levelWrite},
+	CapPRWrite:        {"pull_requests": levelWrite},
+	CapPRReview:       {"pull_requests": levelWrite},
 	CapIssuesRead:     {"issues": levelRead},
 	CapIssuesWrite:    {"issues": levelWrite},
 	CapActionsRead:    {"actions": levelRead},
@@ -102,7 +104,7 @@ func Permits(granted []Capability, repos []string, v Verdict) bool {
 	if v.Capability == CapMetadata {
 		return slices.ContainsFunc(granted, Capability.Grantable)
 	}
-	return v.Capability.Grantable() && slices.Contains(granted, v.Capability)
+	return v.Capability.Grantable() && Has(granted, v.Capability)
 }
 
 // pinned reports whether what v names lies inside repos. A verdict that names

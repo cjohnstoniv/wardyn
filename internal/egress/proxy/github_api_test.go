@@ -225,6 +225,27 @@ func TestGitHubAPI_MintRelayAndShutdownRevoke(t *testing.T) {
 	}
 }
 
+// The token hand-back is the proxy's own send: a run whose host rules deny DELETE on the API host still
+// hands the token back, while the sandbox's own DELETE there is refused.
+func TestGitHubAPI_ShutdownRevokeIsNotJudgedByHostRules(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: ghscope.APIHost, Methods: []string{http.MethodDelete}, Effect: types.HostRuleDeny},
+		{Host: ghscope.APIHost, Effect: types.HostRuleAllow},
+	}}}
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, ghTunnelRequest(t, http.MethodDelete, "/repos/acme/app/issues/1"), ghscope.APIHost, 443)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("the sandbox's DELETE = %d, want 403", rec.Code)
+	}
+	p.revokeGitHubAPITokens(t.Context())
+	if _, seen := up.counts(); len(seen) != 2 || seen[1] != "DELETE /installation/token token "+ghCLIToken {
+		t.Fatalf("seen %q, want the request then the token hand-back", seen)
+	}
+}
+
 // A mint that is still in flight when the shutdown revoke runs is skipped by it, so the request that
 // minted it hands the token back itself and forwards nothing; a request after that mints nothing.
 func TestGitHubAPI_MintInFlightAtShutdownIsHandedBack(t *testing.T) {

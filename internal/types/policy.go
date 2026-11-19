@@ -5,8 +5,12 @@ package types
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -132,6 +136,10 @@ type RunPolicySpec struct {
 	// STILL wins, the SSRF/private-IP guard is unaffected, and credential injection STILL requires
 	// an EXACT allowlist entry, so allow-all never widens where a secret may be injected.
 	AllowAllEgress bool `json:"allow_all_egress,omitempty"`
+	// RefuseIPLiterals refuses, under allow_all_egress, every request whose host is an IP address in
+	// any spelling (dotted, bare decimal, hex, octal, bracketed or zoned v6, v4-mapped). An address
+	// listed exactly in AllowedDomains is still allowed. True only ever narrows.
+	RefuseIPLiterals bool `json:"refuse_ip_literals,omitempty"`
 	// FirstUseApproval controls how an unknown domain is handled: always_deny,
 	// deny_with_review, or wait_for_review. Accepts the legacy boolean on the
 	// wire. Inert under allow-all.
@@ -147,6 +155,11 @@ type RunPolicySpec struct {
 	MaxHolds int `json:"max_holds,omitempty"`
 	// AllowedMethods optionally restricts HTTP methods (empty = all).
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
+	// HostRules are per-host method and path rules, one set per layer (HostRuleSet): each set that names
+	// a host must allow a request on it, by first match inside that set. Composition appends each
+	// layer's sets and never merges them. The proxy inspects every rule host, refuses one it cannot
+	// inspect, and allowed_methods still applies on top. Empty imposes nothing.
+	HostRules []HostRuleSet `json:"host_rules,omitempty"`
 	// MinConfinementClass refuses to launch below this class.
 	MinConfinementClass ConfinementClass `json:"min_confinement_class"`
 	// EligibleGrants is the ceiling of credential scopes a run may request.
@@ -211,9 +224,9 @@ type RunPolicySpec struct {
 	AzureDevOpsCapabilities []adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
 	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, with the same meaning: THIS
 	// run's GitHub capabilities in place of the GitHub provider row's default_profile, chosen only
-	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. Nothing
-	// reads it yet — the row block and the lanes that honour it land after this field — so today
-	// it is stored, narrowed and compared, and inert at dispatch.
+	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. The git
+	// lane reads it: a list without code_write withholds the run's pushes to github.com (its tokens
+	// are read-only and the proxy refuses the push).
 	GitHubCapabilities []ghscope.Capability `json:"github_capabilities,omitempty"`
 	// HarnessInnerWalls chooses the harness's own walls inside Wardyn's: its sandbox and where its
 	// approvals happen (#2822). Nil keeps what the run's harness, lane and autonomy level give today.
@@ -227,6 +240,8 @@ type RunPolicySpec struct {
 	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
 	// minimum: a policy under it may record more, never less.
 	Recording RecordingLevel `json:"recording,omitempty"`
+	// DataOut is the run's rule for content leaving it (docs/POLICIES.md#data_out). "" is allowed.
+	DataOut TransferRule `json:"data_out,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice
@@ -283,6 +298,9 @@ type PushRulesSpec struct {
 	// size the pack does not carry and the forge cannot show unchanged. 0/absent is off; bounded
 	// 0..1024 by validatePolicySpec.
 	MaxFileSizeMiB int `json:"max_file_size_mib,omitempty"`
+	// DenyAll refuses every push to every remote: content, ref updates and deletes. It only adds a
+	// refusal, so a meet ORs it and a ceiling's true is kept. false/absent is off.
+	DenyAll bool `json:"deny_all,omitempty"`
 }
 
 // IsSet reports whether this spec carries an actual rule — NOT a bare != nil. An all-zero-but-non-nil
@@ -291,7 +309,7 @@ type PushRulesSpec struct {
 // advertisement/enforcement) — one method so those readers can't drift.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0 ||
-		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables)
+		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables || s.DenyAll)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared by write-time
@@ -331,17 +349,71 @@ const (
 	ToolHold ToolEffect = "hold"
 	// ToolDeny refuses the call without asking anyone.
 	ToolDeny ToolEffect = "deny"
+	// ToolApproveEach makes every call of one remote MCP tool wait for a person's yes on that
+	// call and its exact arguments; the proxy then sends exactly what was approved, once. It is
+	// stricter than hold (which leaves the asking to the harness) and looser than deny. It is
+	// available with no switch: nothing names it until a policy, a wall or a person writes it,
+	// and writing it can only make a tool stricter.
+	ToolApproveEach ToolEffect = "approve_each"
 )
 
-// ValidToolEffect reports whether e is one of the three effects. A closed enum,
+// ValidToolEffect reports whether e is one of the four effects. A closed enum,
 // checked at every ingest point: an unrecognised effect must be a 400, never a
 // silently-ignored rule that reads as enforcement.
 func ValidToolEffect(e ToolEffect) bool {
 	switch e {
-	case ToolAllow, ToolHold, ToolDeny:
+	case ToolAllow, ToolHold, ToolApproveEach, ToolDeny:
 		return true
 	}
 	return false
+}
+
+// ToolEffectStrictness is the one order every layer ranks tool effects by: allow < hold <
+// approve_each < deny. Clamp, meet, Leq and the proxy's strictest-of-sets all call it, so a new
+// effect cannot be ranked differently in two places. "" is no opinion and ranks below allow, so
+// a caller that starts from "" and takes the stricter ends on the first real effect. An effect
+// this build does not know ranks with deny: a table that forgot it fails closed, never open.
+func ToolEffectStrictness(e ToolEffect) int {
+	switch e {
+	case "":
+		return -1
+	case ToolAllow:
+		return 0
+	case ToolHold:
+		return 1
+	case ToolApproveEach:
+		return 2
+	}
+	return 3
+}
+
+var (
+	exactToolNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	mcpToolNameRE   = regexp.MustCompile(`^mcp__.+__.+$`)
+)
+
+// ValidToolRule is ValidToolEffect for a whole rule: the effect is one of the four, and
+// approve_each is written only on one tool's exact MCP name (mcp__<server>__<tool>), never on a
+// pattern, a built-in tool or the "*" default. Every door that reads a rule calls it.
+func ValidToolRule(r ToolRule) error {
+	if !ValidToolEffect(r.Effect) {
+		return fmt.Errorf("tool %q has unknown effect %q", r.Tool, r.Effect)
+	}
+	if r.Effect == ToolApproveEach && !(exactToolNameRE.MatchString(r.Tool) && mcpToolNameRE.MatchString(r.Tool)) {
+		return fmt.Errorf("tool %q cannot be approve_each: it applies to one MCP tool's exact name, mcp__<server>__<tool>", r.Tool)
+	}
+	return nil
+}
+
+// HasApproveEach reports whether any rule in the run-wide list or in any harness's set is
+// approve_each. The sealed proxy config carries its mcp_approve_each key exactly then.
+func HasApproveEach(rules []ToolRule, sets []HarnessToolRules) bool {
+	if slices.ContainsFunc(rules, func(r ToolRule) bool { return r.Effect == ToolApproveEach }) {
+		return true
+	}
+	return slices.ContainsFunc(sets, func(s HarnessToolRules) bool {
+		return s.Default == ToolApproveEach || slices.ContainsFunc(s.Rules, func(r ToolRule) bool { return r.Effect == ToolApproveEach })
+	})
 }
 
 // ToolRule is one entry in ToolRules: a tool NAME and what to do with it. Tool is matched exactly
@@ -352,6 +424,26 @@ func ValidToolEffect(e ToolEffect) bool {
 type ToolRule struct {
 	Tool   string     `json:"tool"`
 	Effect ToolEffect `json:"effect"`
+}
+
+// Digest is the lowercase hex SHA-256 of the spec's JSON. It names a run's effective policy as the
+// run.policy.resolve row records it, in canonical JSON under JSONB's rules (CanonicalJSONB): reading that row's data back into a RunPolicySpec drops the keys
+// that are not policy, so the digest can be recomputed from the stored row. It is evidence, not
+// enforcement, and comparable within one Wardyn version: a release that adds a field without omitempty
+// changes the digest of the same policy.
+func (s RunPolicySpec) Digest() string {
+	// A RunPolicySpec holds no channel, func or non-finite float, so Marshal cannot fail.
+	b, _ := json.Marshal(s)
+	// Canonical, because a grant scope is a json.RawMessage that keeps its writer's member order and
+	// spelling, while the audit table's JSONB rewrites both: the digest of the stored row must be the
+	// digest of the spec.
+	c, err := CanonicalJSONB(b)
+	if err != nil {
+		c = b // only nesting over 10000 levels gets here; the Marshal bytes are hashed as they are
+	}
+	b = c
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // Clone returns a deep copy: every slice/pointer field is reallocated, so the copy shares no
@@ -366,6 +458,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.AllowedDomains = append([]string(nil), s.AllowedDomains...)
 	out.DeniedDomains = append([]string(nil), s.DeniedDomains...)
 	out.AllowedMethods = append([]string(nil), s.AllowedMethods...)
+	out.HostRules = CloneHostRuleSets(s.HostRules)
 	out.EligibleGrants = append([]GrantSpec(nil), s.EligibleGrants...)
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
@@ -406,6 +499,9 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	return out
 }
 
+// DetectorSidecarFormatPresidio is the one detector_sidecar_format other than Wardyn's own.
+const DetectorSidecarFormatPresidio = "presidio"
+
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.
 type LLMInspectionSpec struct {
@@ -441,6 +537,14 @@ type LLMInspectionSpec struct {
 	// like any other scanner error: fail-OPEN by default, fail-CLOSED when on_scanner_error=block —
 	// so block mode with the sidecar as the SOLE detector DOES guarantee a block on sidecar failure.
 	DetectorSidecarURL string `json:"detector_sidecar_url,omitempty"`
+	// DetectorSidecarFormat names the request and reply format the sidecar speaks. Unset (the
+	// default, so an existing policy keeps working unchanged) is Wardyn's own format; the only
+	// other value is "presidio" (DetectorSidecarFormatPresidio), the analyzer's /analyze API, so
+	// an operator can point detector_sidecar_url at an unmodified Presidio. It needs
+	// detector_sidecar_url. In block mode it also needs block_min_severity of at least medium,
+	// because Presidio reports ordinary code text (dates, names, URLs, ids) as entities and the
+	// default threshold would refuse such prompts.
+	DetectorSidecarFormat string `json:"detector_sidecar_format,omitempty"`
 	// ClassifiedMarkers are operator-defined literal markers (e.g. "INTERNAL ONLY",
 	// "CONFIDENTIAL//NOFORN") whose presence in outbound content flags a
 	// classified-content leak. Case-insensitive substring match; category "classified".

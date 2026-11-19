@@ -32,7 +32,7 @@ import { SIGNED_IN_CLIS as T } from "../../wardyn/copy/cli-sign-in";
 import { MINTED } from "../../wardyn/copy/credentials";
 import { inWords, SERVICES } from "../../wardyn/copy/service-tokens";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 
 type Load = "loading" | "ready" | "error" | "hidden";
 
@@ -48,6 +48,7 @@ const CELL = "max-md:flex max-md:items-baseline max-md:justify-between max-md:ga
 
 export function SignedInClisCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [rows, setRows] = React.useState<CLISession[]>([]);
   const [leaving, setLeaving] = React.useState<CLISession | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -60,7 +61,10 @@ export function SignedInClisCard() {
         setRows(r);
         setState("ready");
       })
-      .catch((e: unknown) => setState(loadFailure(e)));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(loadFailure(e));
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -100,6 +104,7 @@ export function SignedInClisCard() {
         <div role="group" aria-label={T.TABLE_LABEL}>
           <ErrorState
             as="h4"
+            message={loadMessage}
             onRetry={() => {
               setState("loading");
               load();
@@ -121,7 +126,9 @@ export function SignedInClisCard() {
                   <TableHead>{SERVICES.COL_LAST_USED}</TableHead>
                   <TableHead>{T.COL_ENDS}</TableHead>
                   <TableHead>{T.COL_IDLE_END}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody className="max-md:block">
@@ -167,20 +174,31 @@ export function SignedInClisCard() {
   );
 }
 
-function adminMinutes(iso: string): number {
-  return Math.max(1, Math.ceil((Date.parse(iso) - Date.now()) / 60_000));
+function adminMinutes(until: number): number {
+  return Math.max(1, Math.ceil((until - Date.now()) / 60_000));
 }
 
 function Row({ s, onSignOut }: { s: CLISession; onSignOut: () => void }) {
+  // The admin step-up ends at admin_expires_at and the list is not read again then: the row re-renders as each
+  // minute left passes and at that instant, so the chip neither overstates the time left nor outlives the access.
+  const until = s.admin_expires_at ? Date.parse(s.admin_expires_at) : NaN;
+  const [beat, rerender] = React.useReducer((n: number) => n + 1, 0);
+  React.useEffect(() => {
+    const left = until - Date.now();
+    if (!(left > 0)) return;
+    const timer = window.setTimeout(rerender, ((left - 1) % 60_000) + 1);
+    return () => window.clearTimeout(timer);
+  }, [until, beat]);
+  const admin = until > Date.now();
   return (
     <TableRow className="max-md:mb-2 max-md:block max-md:rounded-lg max-md:border max-md:p-3" data-session={s.id}>
       <TableCell className="max-md:block max-md:px-0">
         <span className="font-mono text-xs">{s.machine}</span>
         <span className="mt-1 flex flex-wrap items-center gap-2">
           <Chip tone="info">{T.CHIP}</Chip>
-          {s.admin_expires_at && (
+          {admin && (
             <Chip tone="warning" dot>
-              {T.ADMIN_CHIP(adminMinutes(s.admin_expires_at))}
+              {T.ADMIN_CHIP(adminMinutes(until))}
             </Chip>
           )}
         </span>

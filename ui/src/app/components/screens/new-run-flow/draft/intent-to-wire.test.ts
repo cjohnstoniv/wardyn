@@ -62,9 +62,33 @@ describe("intentToWire (U1)", () => {
     expect(sent[0].body.devcontainer_repo).toBe("org/app");
   });
 
+  it("sends desktop_window: excluded from templates, but each launch names it, as machine_kind and macos_base", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, machine_kind: "macos_vm", desktop_window: "at_start" });
+    expect(body).toMatchObject({ machine_kind: "macos_vm", desktop_window: "at_start" });
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends keep_work_folder: a launch-time choice the registry excludes from templates, carried and never reported", () => {
     const { body, unsupported } = intentToWire({ ...INTENT, keep_work_folder: true });
     expect(body.keep_work_folder).toBe(true);
+    expect(unsupported).toEqual([]);
+  });
+
+  it("sends machine: a launch-time choice to keep or resume a macOS VM machine, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, machine: { resume: "m-1", fresh: true } });
+    expect(body.machine).toEqual({ resume: "m-1", fresh: true });
+    expect(unsupported).not.toContain("machine");
+  });
+
+  it("sends wall_preset: a launch-time choice, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, wall_preset: "sealed" });
+    expect(body.wall_preset).toBe("sealed");
+    expect(unsupported).toEqual([]);
+  });
+
+  it("sends run_in: a launch-time choice, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, run_in: "u-pay" });
+    expect(body.run_in).toBe("u-pay");
     expect(unsupported).toEqual([]);
   });
 

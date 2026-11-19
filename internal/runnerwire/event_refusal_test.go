@@ -147,9 +147,9 @@ func TestEventRefusalOldRunnerRawFrames(t *testing.T) {
 	}
 }
 
-// The protocol version and frame types are those of 0.9.8; the `workload` event (rc.8) is the one kind added.
+// The protocol version and frame types are those of 0.9.8; the `workload` event (rc.8) and `mac_window_unexpected` (rc.12) are the kinds added.
 func TestWireUnchangedSinceV098(t *testing.T) {
-	if ProtocolVersion != 1 || len(EventKinds) != 8 || typeEnd != TypeCurrentActivity+1 {
-		t.Fatalf("protocol %d, %d event kinds, typeEnd %d: want 1, 8, %d", ProtocolVersion, len(EventKinds), typeEnd, TypeCurrentActivity+1)
+	if ProtocolVersion != 1 || len(EventKinds) != 9 || typeEnd != TypeCurrentActivity+1 {
+		t.Fatalf("protocol %d, %d event kinds, typeEnd %d: want 1, 9, %d", ProtocolVersion, len(EventKinds), typeEnd, TypeCurrentActivity+1)
 	}
 }

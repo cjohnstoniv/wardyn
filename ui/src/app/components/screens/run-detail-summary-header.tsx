@@ -6,6 +6,7 @@
 // SummaryHeader — run-detail's header, directly above run-detail-command-bar.tsx's
 // tabs row. Two rows: the title with its actions, then the run's state once
 // and the facts about it as plain, visible text (nothing hides in a tooltip).
+import { WallPresetQueuedChanged } from "./run-detail/wall-preset-run-lines";
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, Laptop, Layers, MoreHorizontal, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
@@ -15,6 +16,8 @@ import { formatDuration, shortTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { scheduledBadgeWord } from "./runs/scheduled-state";
+import { isPausedRun } from "./runs/runs-model";
+import { RUNS_ROW_WORD } from "../wardyn/copy/runs-landing";
 import { AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
@@ -23,6 +26,7 @@ import { RUN_HEADER } from "../wardyn/copy/run-header";
 import { WORKLOAD_CHIP } from "../wardyn/copy/workloads";
 import { useConsoleMode } from "../wardyn/console-view";
 import { serviceBadge } from "../wardyn/copy/run-service";
+import { END_RUN } from "../wardyn/copy/run-lifetime";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { RunEndsControls } from "./run-detail/run-ends-row";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
@@ -156,6 +160,19 @@ export function SummaryHeader({
   // Rename's edit mode: the form renders as its own full-width row under the header.
   const [renaming, setRenaming] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState("");
+  // Closing the edit row unmounts the field that held focus: hand it back to the Rename button, or to the title
+  // when that button is not drawn (phone width, where Rename lives in the More menu).
+  const renameButton = React.useRef<HTMLButtonElement>(null);
+  const titleHeading = React.useRef<HTMLHeadingElement>(null);
+  const wasRenaming = React.useRef(false);
+  React.useEffect(() => {
+    if (wasRenaming.current && !renaming) {
+      const button = renameButton.current;
+      const drawn = !!button && getComputedStyle(button).display !== "none";
+      (drawn ? button : titleHeading.current)?.focus();
+    }
+    wasRenaming.current = renaming;
+  }, [renaming]);
   // Claim "attachable" only under the SAME entry rule AttachTerminal itself
   // gates the connect on (lib/run-entry.ts) — otherwise a viewer sees this chip
   // promise attachability and then gets a refusal the instant they open the
@@ -168,6 +185,7 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.ended_at ?? run.updated_at, terminal);
   const sentence = statusSentence(run, terminal, pendingApprovalCount, viewerBlocked);
   // The list's chip, so a row and its page say the same thing: a live service's health in place of "Running".
+  const paused = isPausedRun(run);
   const health = run.lost_reason === "ended" ? undefined : serviceBadge(run);
   const startRename = () => {
     // F3 (review round 2): never seed from the WHOLE task —
@@ -215,16 +233,16 @@ export function SummaryHeader({
           <span className="shrink-0 text-muted-foreground" aria-hidden="true">/</span>
         </div>
         {/* The page's only h1: for an autonomous run it is the one statement of what the run is doing. */}
-        <h1 className="min-w-[8rem] flex-1 truncate text-lg font-semibold text-foreground sm:text-base" title={run.task || undefined}>
+        <h1 ref={titleHeading} tabIndex={-1} className="min-w-[8rem] flex-1 truncate text-lg font-semibold text-foreground outline-none sm:text-base" title={run.task || undefined}>
           {runHeadline(run)}
         </h1>
         {canRename && (
-          <Button variant="ghost" size="sm" className="hidden shrink-0 sm:inline-flex" onClick={startRename}>
+          <Button ref={renameButton} variant="ghost" size="sm" className="hidden shrink-0 sm:inline-flex" onClick={startRename}>
             <Pencil className="size-4" /> {RUN_COCKPIT.rename}
           </Button>
         )}
-        {/* The primary action leads: Start-a-run-like-this on a run that ended, Kill on one that has not.
-            Neither is the header's danger colour except Kill itself. */}
+        {/* The primary action leads: Start-a-run-like-this on a run that ended, End run on one that has not.
+            Neither is the header's danger colour except End run itself. */}
         {terminal && onClone && (
           <Button variant="outline" size="sm" className="shrink-0" onClick={onClone}>
             <RotateCcw className="size-4" /> {RUN.CLONE_CTA}
@@ -237,7 +255,7 @@ export function SummaryHeader({
             className="shrink-0 text-danger hover:text-danger"
             onClick={() => setConfirmId(run.id)}
           >
-            <Skull className="size-4" /> Kill
+            <Skull className="size-4" /> {END_RUN}
           </Button>
         )}
         {(canRename || onCopyLink) && (
@@ -264,11 +282,16 @@ export function SummaryHeader({
           title={run.title?.trim() || run.task}
           onOpenChange={(o) => !o && setConfirmId(null)}
           onConfirm={onKill}
+          bothWaysFolder={run.computer_folder?.direction === "both"}
         />
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-        <RunStateBadge state={run.state} word={health?.word ?? scheduledBadgeWord(run)} tone={health?.tone} pulse={health?.pulse} />
+        {paused ? (
+          <RunStateBadge state={run.state} word={RUNS_ROW_WORD.PAUSED} tone="neutral" pulse={false} />
+        ) : (
+          <RunStateBadge state={run.state} word={health?.word ?? scheduledBadgeWord(run)} tone={health?.tone} pulse={health?.pulse} />
+        )}
         {sentence && (
           <span data-testid="run-status-sentence" className="min-w-0 text-foreground [overflow-wrap:anywhere]">
             {sentence}
@@ -309,6 +332,8 @@ export function SummaryHeader({
             <span className="block min-w-0 truncate">{run.failure_hint}</span>
           </Chip>
         )}
+        {/* P-85: under the queued run's end sentence, when its wall preset changed or went while it waited. */}
+        <WallPresetQueuedChanged preset={run.wall_preset} className="basis-full" />
         {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
         {workload && (
@@ -362,6 +387,9 @@ export function SummaryHeader({
     {renaming && onRename && (
       <form
         className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setRenaming(false);
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           // F5 (review round 2): an emptied draft is Cancel, not a "renamed

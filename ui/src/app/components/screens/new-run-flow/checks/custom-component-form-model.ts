@@ -30,6 +30,7 @@ export {
   headerHostChoices,
   hostLines,
   requestOf,
+  withStored,
   type ComponentDraft,
   type SecretDraft,
   type SettingDraft,

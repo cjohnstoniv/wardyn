@@ -24,8 +24,9 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
+const workspaceHook = vi.hoisted(() => ({ workspaces: [] as { id: string; name: string }[], reload: vi.fn() }));
 vi.mock("../../lib/use-workspace-list", () => ({
-  useWorkspaceList: () => ({ workspaces: [], loading: false, error: false, reload: vi.fn() }),
+  useWorkspaceList: () => ({ workspaces: workspaceHook.workspaces, loading: false, error: false, reload: workspaceHook.reload }),
 }));
 
 import { RunsScreen } from "./runs";
@@ -33,6 +34,8 @@ import { RoleProvider, type Role } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { CC_META } from "../wardyn/cc-meta";
 import { baseStatus } from "../../lib/test-fixtures";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",
@@ -68,6 +71,8 @@ function pending<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 }
 
 beforeEach(() => {
+  workspaceHook.workspaces = [];
+  workspaceHook.reload.mockClear();
   listRunsFilteredMock.mockReset();
   getSetupStatusMock.mockReset();
   getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: true }));
@@ -82,6 +87,28 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByLabelText("Loading runs")).toBeInTheDocument();
     gate.resolve({ runs: [], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
     await waitFor(() => expect(screen.queryByLabelText("Loading runs")).not.toBeInTheDocument());
+  });
+
+  it("asks for the workspace list on mount and names a run on a named workspace, not 'no repo'", async () => {
+    workspaceHook.workspaces = [{ id: "w1", name: "fix-login" }];
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ repo: "", workspace_path: "", workspace_ids: ["w1"] })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen();
+    const row = await screen.findByTestId("run-row");
+    expect(row).toHaveTextContent("fix-login");
+    expect(row).not.toHaveTextContent("Ephemeral scratch");
+    expect(workspaceHook.reload).toHaveBeenCalled();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listRunsFilteredMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("error, then Retry recovers", async () => {
@@ -147,6 +174,20 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(await screen.findByText(CC_META.CC2.label, { exact: false })).toBeInTheDocument();
     // The page took the shell's answer, so it never asked for a second one.
     expect(getSetupStatusMock).not.toHaveBeenCalled();
+  });
+
+  // A failed status read stands in a made-up status with no classes and no provider. Literals on purpose, so no
+  // sentence can drift.
+  it("first run, admin: a failed setup status read says the barrier and the model provider couldn't be checked", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ unreachable: true, has_runs: false, runner: { driver: "none", confinement_classes: [] } }),
+    );
+    renderScreen("admin");
+    await screen.findByText("No runs yet");
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    expect(await screen.findAllByText("Couldn't check.")).toHaveLength(2);
+    expect(screen.queryByText("None available on this host.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not connected — agent runs need one\./)).not.toBeInTheDocument();
   });
 
   it("first run, Admin view: the inline empty state, no composer", async () => {

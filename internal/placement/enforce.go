@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -160,6 +161,54 @@ func laptopLocalModel(p LocalPlan, base string) bool {
 	return ok && s.AllowOnLaptopRunners && p.OwnerKind == types.RunnerOwnerPerson
 }
 
+// gatewayIdentityDetail is the refusal of a run's identity routes on a runner, as a person reads it:
+// every MCP server and model provider that sends the identity, by the name the run knows it by, and
+// where they can run instead.
+func gatewayIdentityDetail(routes []proxy.GatewayIdentityRoute) string {
+	var servers, providers []string
+	for _, rt := range routes {
+		switch {
+		case rt.MCPKey != "" && !slices.Contains(servers, rt.MCPKey):
+			servers = append(servers, rt.MCPKey)
+		case rt.MCPKey == "" && !slices.Contains(providers, rt.ProviderID):
+			providers = append(providers, rt.ProviderID)
+		}
+	}
+	var what []string
+	if len(servers) > 0 {
+		what = append(what, plural("MCP server", servers)+" "+nameList(servers))
+	}
+	if len(providers) > 0 {
+		what = append(what, plural("model provider", providers)+" "+nameList(providers))
+	}
+	verb, they, them := "sends", "it runs", "it"
+	if len(servers)+len(providers) > 1 {
+		verb, they, them = "send", "they run", "them"
+	}
+	return "The " + strings.Join(what, " and the ") + " " + verb + " your organisation's run identity, so " + they +
+		" only on your organisation's remote-hosted runners. Remove " + them + " from this run, or run this on a remote-hosted runner."
+}
+
+// plural is noun for one name, nouns for more.
+func plural(noun string, names []string) string {
+	if len(names) > 1 {
+		return noun + "s"
+	}
+	return noun
+}
+
+// nameList quotes names and joins them as a list reads: "a", "a" and "b", "a", "b" and "c".
+func nameList(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	if len(q) == 1 {
+		return q[0]
+	}
+	return strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
+}
+
 // viaOrgGitHubHost is the destination of a brokered GitHub grant's /wardyn/gh/ route.
 const viaOrgGitHubHost = "github.com"
 
@@ -212,6 +261,25 @@ var gates = map[string]func(LocalPlan) *Refusal{
 			if !laptopLocalModel(p, u) {
 				return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
 			}
+		}
+		return nil
+	},
+	// The token on these routes comes from the organisation's control plane
+	// through a mint no runner relays, so a run that needs it is refused. Create,
+	// Review and dispatch all ask this gate, so the refusal names the route's
+	// server or provider rather than the field (Refusal.Sentence).
+	"ProxyConfig.GatewayIdentity": func(p LocalPlan) *Refusal {
+		if routes := p.Spec.ProxyConfig.GatewayIdentity; len(routes) > 0 {
+			r := refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", gatewayIdentityDetail(routes))
+			r.named = true
+			return r
+		}
+		return nil
+	},
+	// The headers set on a provider's gateway belong with the gateway's address, which is never sent.
+	"ProxyConfig.LLMHeaders": func(p LocalPlan) *Refusal {
+		if len(p.Spec.ProxyConfig.LLMHeaders) > 0 {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMHeaders", "credential variant has no permitted local rule")
 		}
 		return nil
 	},

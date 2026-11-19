@@ -97,8 +97,8 @@ func TestPG_AuditRetention_PrivilegeModel(t *testing.T) {
 }
 
 // TestPG_AuditRetention_FunctionsArePinned: SECURITY DEFINER where the writes need it, every search_path
-// ends with pg_temp and names the real schema, the lock timeout is bounded, nothing is executable by PUBLIC,
-// and the boot posture reports one that becomes so.
+// is pg_catalog then pg_temp and names no schema a role may create in, the lock timeout is bounded, nothing
+// is executable by PUBLIC, and the boot posture reports one that becomes so.
 func TestPG_AuditRetention_FunctionsArePinned(t *testing.T) {
 	ctx := context.Background()
 	f := newUpgradeFixture(t, 3)
@@ -130,8 +130,8 @@ func TestPG_AuditRetention_FunctionsArePinned(t *testing.T) {
 				sp = c
 			}
 		}
-		if !strings.HasPrefix(sp, "search_path=pg_catalog, ") || !strings.HasSuffix(sp, ", pg_temp") || !strings.Contains(sp, f.schema) {
-			t.Errorf("%s: pinned %q, want pg_catalog, %s, pg_temp", w.fn, sp, f.schema)
+		if sp != "search_path=pg_catalog, pg_temp" {
+			t.Errorf("%s: pinned %q, want search_path=pg_catalog, pg_temp", w.fn, sp)
 		}
 		if has := slices.Contains(cfg, "lock_timeout=5s"); has != w.lockTO {
 			t.Errorf("%s: lock_timeout=5s = %v, want %v (config %v)", w.fn, has, w.lockTO, cfg)

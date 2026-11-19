@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -44,13 +46,14 @@ func (s *pauseStore) NotePauseSettle(_ context.Context, id uuid.UUID, after time
 	return due, nil
 }
 
-func (s *pauseStore) DuePauseSettles(context.Context) ([]store.PauseSettle, error) {
+func (s *pauseStore) DuePauseSettles(_ context.Context, lookFor time.Duration) ([]store.PauseSettle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.PauseSettle
+	now := time.Now()
 	for id, due := range s.settles {
-		if !due.After(time.Now()) {
-			out = append(out, store.PauseSettle{RunID: id, DueAt: due})
+		if !due.After(now) {
+			out = append(out, store.PauseSettle{RunID: id, DueAt: due, Last: !due.Add(lookFor).After(now)})
 		}
 	}
 	return out, nil
@@ -65,6 +68,26 @@ func (s *pauseStore) ClearPauseSettle(_ context.Context, id uuid.UUID, due time.
 	return nil
 }
 
+func (s *pauseStore) NotePauseIntent(_ context.Context, id uuid.UUID, after time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if due, ok := s.settles[id]; ok {
+		return due, false, nil
+	}
+	if s.settles == nil {
+		s.settles = map[uuid.UUID]time.Time{}
+	}
+	due := time.Now().Add(after)
+	s.settles[id] = due
+	return due, true, nil
+}
+
+func (s *pauseStore) PauseSettleFor(_ context.Context, id uuid.UUID) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settles[id], nil
+}
+
 // owing is how many runs have a settle recorded.
 func (s *pauseStore) owing() int {
 	s.mu.Lock()
@@ -72,12 +95,16 @@ func (s *pauseStore) owing() int {
 	return len(s.settles)
 }
 
-// settleDue makes every recorded settle due: the compensation's deadline has passed.
-func (s *pauseStore) settleDue() {
+// settleDue makes every recorded settle due and past its late look (pauseLateSettleAfter), so the next settle is its
+// last: the compensation's deadline has passed, and so has the time a cut call has to land.
+func (s *pauseStore) settleDue() { s.dueSince(pauseLateSettleAfter + time.Second) }
+
+// dueSince makes every recorded settle due since ago.
+func (s *pauseStore) dueSince(ago time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.settles {
-		s.settles[id] = time.Now().Add(-time.Second)
+		s.settles[id] = time.Now().Add(-ago)
 	}
 }
 
@@ -127,6 +154,23 @@ func (s *pauseStore) RunHasOpenRequest(context.Context, uuid.UUID) (bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.open, nil
+}
+
+// pauseStore: a paused run's resume re-checks the owner's capabilities (extendRefusal), with no grant rows and every kind off.
+func (*pauseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (*pauseStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (*pauseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 func (s *pauseStore) paused() (*time.Time, types.PauseReason) {
@@ -558,9 +602,10 @@ func TestInternalActivity_StampsTheTokensRunOnly(t *testing.T) {
 	if _, thaws := f.rn.counts(); thaws != 0 {
 		t.Errorf("thaws = %d; agent activity must never thaw a paused run", thaws)
 	}
-	if agentActivityDecision(ruleSourceApprovalsPoll) || agentActivityDecision(ruleSourceCredentialReauthTimeout) ||
-		!agentActivityDecision("policy:allowlist") {
-		t.Error("agentActivityDecision: the approvals poll and the re-auth timeout are not activity; an allow is")
+	if egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: egress.RuleSourceApprovals}) ||
+		egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout}) ||
+		!egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: "policy:allowlist"}) {
+		t.Error("egress.CountsAsActivity: the approvals poll and the re-auth timeout are not activity; an allow is")
 	}
 }
 
@@ -667,7 +712,15 @@ func TestRunPause_OpenRunPageDoesNotDefeatIdlePause(t *testing.T) {
 	<-walkStarted
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler has reached the walk
 	close(releaseWalk)
 
@@ -692,8 +745,20 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	pr.sample = func() { <-releaseSample }
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
-	<-pr.sampleStarted
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		t.Fatalf("the sweep ended before its sample opened: %v", err)
+	}
 
 	w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
 	close(releaseSample)
@@ -726,7 +791,15 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	go func() { poll1 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
 	<-walkStarted
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler is waiting out the walk
 	poll2 := make(chan int, 1)
 	go func() { poll2 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
@@ -739,7 +812,16 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(releaseSkip)
-	<-pr.sampleStarted
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		select {
+		case <-pr.sampleStarted: // the sample opened, and the sweep finished before this wait
+			sweepDone <- err
+		default:
+			t.Fatalf("the sweep ended before its sample opened: %v", err)
+		}
+	}
 	for _, c := range []chan int{poll1, poll2} {
 		if code := <-c; code != http.StatusOK {
 			t.Fatalf("poll = %d, want 200", code)

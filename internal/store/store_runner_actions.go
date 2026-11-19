@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -174,7 +175,7 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	out, queued, err := queueRunnerActionTx(ctx, tx, a)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
@@ -191,7 +192,7 @@ func (s PG) QueueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind ty
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var runID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM agent_runs WHERE runner_id = $1 AND sandbox_ref = $2 AND sandbox_ref <> ''`, runnerID, ref).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -261,12 +262,16 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 	// The runner's answer to this exact binding already settles a re-assert of
 	// it (the lease sweep queues a kept run's stop every pass), so it is
 	// returned, not repeated. A deferred answer is no answer, and one before a
-	// successful recover_containment stopped what the recovery reopened.
+	// successful recover_containment stopped what the recovery reopened. Nor is a
+	// kill the runner refused that its teardown hold (run_teardown_holds) reports
+	// finished after, on the runner's clock: queued again, the runner applies it.
 	done, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions t
 		WHERE t.run_id = $1 AND t.kind = $2 AND t.ref = $3 AND t.applied_at IS NOT NULL AND t.outcome <> 'deferred'
 		AND t.execution_generation IS NOT DISTINCT FROM $4 AND t.containment_lost_at IS NOT DISTINCT FROM $5
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
 			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		AND NOT (t.kind = 'kill' AND t.outcome = 'refused' AND EXISTS (SELECT 1 FROM run_teardown_holds h
+			WHERE h.run_id = t.run_id AND h.cleared_at > t.observed_at))
 		ORDER BY t.queue_seq DESC LIMIT 1`, a.RunID, string(a.Kind), a.Ref, generationArg, a.LostAt))
 	if err == nil && sameRunnerAction(done, a) {
 		return done, false, nil
@@ -286,10 +291,18 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 
 // ListPendingRunnerActions is the runner's PENDING payload: at most one page of
 // its oldest open bound actions, and whether more remain. A row from before the
-// binding is never delivered; it keeps fencing its run instead.
+// binding is never delivered; it keeps fencing its run instead. A retirement's
+// kill is held back while its run's sandbox is kept for its computer folder's
+// copy back (retirementFolderKeepSQL), and handed over once that keep ends: a
+// kill queued before the keep began is not delivered under it. The runner
+// applies what it is handed without asking again, so a keep that begins after
+// this read does not stop a kill it already returned.
 func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, bool, error) {
-	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions
-		WHERE runner_id = $1 AND applied_at IS NULL AND settled_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
+	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions a
+		WHERE a.runner_id = $1 AND a.applied_at IS NULL AND a.settled_at IS NULL AND a.binding_version = 1
+			AND NOT (a.kind = 'kill' AND EXISTS (SELECT 1 FROM runner_retirements t JOIN agent_runs r ON r.id = t.run_id
+				WHERE t.run_id = a.run_id AND t.obligation_id = a.obligation_id AND t.state = 'kill' AND ` + retirementFolderKeepSQL + `))
+		ORDER BY a.queue_seq LIMIT $2`
 	page, err := collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID, runnerActionPageLimit + 1}, scanAction)
 	if err != nil || len(page) <= runnerActionPageLimit {
 		return page, false, err
@@ -366,7 +379,7 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	// The subject is immutable, so reading it before any lock is safe; an
 	// asserted subject has no run row to lock.
 	var asserted bool
@@ -495,7 +508,7 @@ func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, ses
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var claimed bool
 	err = tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
 	if errors.Is(err, pgx.ErrNoRows) {

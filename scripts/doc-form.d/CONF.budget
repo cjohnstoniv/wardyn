@@ -1,0 +1,3 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S.
+# docs/CONFINEMENT.md 859 measured: the barrier guide and the thin-sandbox recipe.
+docs/CONFINEMENT.md=945 share=15 # 945 measured (+86: the trait floors row, the sentence on runs that execute code and the VM barrier row)

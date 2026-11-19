@@ -44,7 +44,7 @@ func (s PG) RecordPushPathList(ctx context.Context, approvalID, runID uuid.UUID,
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	// A crc32 collision only serializes two runs' raises.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`,
 		db.PushPathListLockClass, int32(crc32.ChecksumIEEE(runID[:]))); err != nil {

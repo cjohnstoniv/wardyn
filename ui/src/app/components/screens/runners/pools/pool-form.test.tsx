@@ -101,10 +101,10 @@ describe("new user pool", () => {
     setField(screen.getByRole("spinbutton", { name: /Runs at once in this pool/ }), "3");
     setField(field("Background tasks, CPU (CPUs), Default"), "1");
     setField(field("Background tasks, CPU (CPUs), Maximum per run"), "4");
-    setField(field("Background tasks, Memory (GB), Default"), "2");
-    setField(field("Background tasks, Memory (GB), Maximum per run"), "8");
-    setField(field("Background tasks, Disk (GB), Default"), "20");
-    setField(field("Background tasks, Disk (GB), Maximum per run"), "100");
+    setField(field("Background tasks, Memory (GiB), Default"), "2");
+    setField(field("Background tasks, Memory (GiB), Maximum per run"), "8");
+    setField(field("Background tasks, Disk (GiB), Default"), "20");
+    setField(field("Background tasks, Disk (GiB), Maximum per run"), "100");
     await userEvent.click(screen.getByRole("button", { name: "Create pool" }));
     await waitFor(() => expect(createMineMock).toHaveBeenCalledTimes(1));
     expect(createMineMock).toHaveBeenCalledWith({
@@ -131,11 +131,11 @@ describe("new user pool", () => {
     expect(field("Name")).toHaveAttribute("aria-invalid", "true");
     setField(field("Name"), "Laptop");
     setField(field("Background tasks, CPU (CPUs), Default"), "2");
-    setField(field("Background tasks, Disk (GB), Default"), "10.5");
-    setField(field("Background tasks, Disk (GB), Maximum per run"), "20");
+    setField(field("Background tasks, Disk (GiB), Default"), "10.5");
+    setField(field("Background tasks, Disk (GiB), Maximum per run"), "20");
     await userEvent.click(screen.getByRole("button", { name: "Create pool" }));
     expect(screen.getByText("Background tasks, CPU: set both a default and a maximum, or leave both empty.", { selector: "p[id]" })).toBeInTheDocument();
-    expect(screen.getByText("Background tasks, disk: set whole numbers of GB.", { selector: "p[id]" })).toBeInTheDocument();
+    expect(screen.getByText("Background tasks, disk: set whole numbers of GiB.", { selector: "p[id]" })).toBeInTheDocument();
     expect(createMineMock).not.toHaveBeenCalled();
   });
 
@@ -189,7 +189,7 @@ describe("edit", () => {
     await waitFor(() => expect(updateMineMock).toHaveBeenCalledWith("p-lap", { revision: 9, name: "Laptop 2", limits }));
   });
 
-  it("an organization pool saves through the organization route and goes back to the pools", async () => {
+  it("an organisation pool saves through the organisation route and goes back to the pools", async () => {
     getMock.mockResolvedValue(pool());
     membersMock.mockResolvedValue([member(remoteRunner())]);
     updateMock.mockResolvedValue({});
@@ -198,7 +198,7 @@ describe("edit", () => {
     expect(screen.getByText("Its runners allow 4 runs at once in total. A run launched past this waits for a free slot.")).toBeInTheDocument();
     expect(screen.getAllByText("Its runners allow up to 4 CPUs per run.")).toHaveLength(1);
     expect(screen.getByTestId("f-bg-qualifier")).toHaveTextContent(/^Optional\. Leave empty to follow its runners, and it can only narrow them\.$/);
-    expect(screen.getByText("Organization pools take remote-hosted runners and the organization's own runners.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Organisation pools take remote-hosted runners and the organisation's own runners.", { exact: false })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p-ci", expect.objectContaining({ revision: 9, name: "CI jobs" })));
     expect(await screen.findByText("runners page")).toBeInTheDocument();

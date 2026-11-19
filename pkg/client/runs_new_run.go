@@ -513,6 +513,14 @@ type ImageFact struct {
 	Source ImageSource `json:"source"`
 }
 
+// ImageAdmissionFact is the policy preview's image_admission: launch checks the image's signatures
+// (images.admission, or a governance profile's required_image_signers). The preview reads no registry, so it
+// cannot say whether the image passes. Absent when launch checks nothing.
+type ImageAdmissionFact string
+
+// ImageAdmissionCheckedAtLaunch is ImageAdmissionFact's one value.
+const ImageAdmissionCheckedAtLaunch ImageAdmissionFact = "checked at launch"
+
 // HarnessSetFact is the run's included harnesses as this door resolved them.
 // Absent for an older client's request and for a run with no harness.
 type HarnessSetFact struct {
@@ -539,6 +547,24 @@ type HarnessModelCredential struct {
 	Provider  string `json:"provider"`
 	Kind      string `json:"kind"`
 	Residency string `json:"residency"`
+	// Model and FastModel are the model and small model the provider's admin fixed for this harness
+	// (types.ProviderHarness); absent where the provider leaves the choice to the session.
+	Model     string `json:"model,omitempty"`
+	FastModel string `json:"fast_model,omitempty"`
+}
+
+// RunAllowedModels is the allowed-models limit a run was dispatched under: the list its proxy holds it
+// to and the governance profile that set it. Written at dispatch and replayed on revive; a later change
+// to the profile does not reach it.
+type RunAllowedModels struct {
+	Models  []string                `json:"models"`
+	Profile RunAllowedModelsProfile `json:"unit"`
+}
+
+// RunAllowedModelsProfile names the governance profile a RunAllowedModels came from.
+type RunAllowedModelsProfile struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // AllowedImage is one image the organisation lets a person choose for a run

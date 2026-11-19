@@ -6,12 +6,12 @@
 // The admin People page's reads and writes (internal/api/people.go, sessions.go, sshkeys_admin.go).
 // All securityOps: admin or security admin. Stored-credential erase is credentials.erase.
 import type { PersonList, PersonSummary, PersonToken } from "../types";
-import { asJson, errText, HttpError, LIST_LIMIT, unwrapList, wfetch } from "./core";
+import { asJson, asNoContent, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
 const seg = (principal: string) => encodeURIComponent(principal);
 
 async function ok(res: Response): Promise<Response> {
-  if (!res.ok) throw new HttpError(res.status, await errText(res));
+  await asNoContent(res);
   return res;
 }
 
@@ -29,8 +29,10 @@ export const people = {
   },
 
   // POST /api/v1/people {principal, email?} -> 201 (created) or 200 (already there).
-  async create(principal: string, email: string): Promise<void> {
-    await ok(await wfetch("/people", { method: "POST", asPerson: true, body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
+  // Resolves true for a new row (201), false when the person was already there (200).
+  async create(principal: string, email: string): Promise<boolean> {
+    const res = await ok(await wfetch("/people", { method: "POST", asPerson: true, body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
+    return res.status === 201;
   },
 
   // GET /api/v1/people -> the one person with this principal, or undefined. There is no read-one route,

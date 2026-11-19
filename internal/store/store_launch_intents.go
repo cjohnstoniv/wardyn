@@ -92,7 +92,7 @@ func insertLaunchIntent(ctx context.Context, q queryRower, run types.AgentRun, d
 	return run, nil
 }
 
-// createRunWithIntent is CreateRun's body when the run carries an intent: always one transaction, holding
+// createRunWithIntent is CreateRun's body when the run carries an intent or an Idempotency-Key: always one transaction, holding
 // the owner's identity rows when ctx carries a guard, as guarded does.
 func (s PG) createRunWithIntent(ctx context.Context, fn func(q queryRower) error) error {
 	g, guarded := identityGuardFrom(ctx)

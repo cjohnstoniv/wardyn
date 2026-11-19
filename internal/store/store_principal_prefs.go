@@ -22,7 +22,17 @@ type PrincipalPrefStore interface {
 	PutPrincipalPref(ctx context.Context, principal, key string, value json.RawMessage) error
 }
 
-var _ PrincipalPrefStore = PG{}
+// PrincipalPrefDeleter is a PrincipalPrefStore that can also drop one record. Like PrincipalPrefStore it is not
+// part of Store, so the api test doubles need not implement it.
+type PrincipalPrefDeleter interface {
+	// DeletePrincipalPref removes principal's value for key; a record that is not there is not an error.
+	DeletePrincipalPref(ctx context.Context, principal, key string) error
+}
+
+var (
+	_ PrincipalPrefStore   = PG{}
+	_ PrincipalPrefDeleter = PG{}
+)
 
 func (s PG) GetPrincipalPref(ctx context.Context, principal, key string) (json.RawMessage, error) {
 	var v json.RawMessage
@@ -39,5 +49,10 @@ func (s PG) PutPrincipalPref(ctx context.Context, principal, key string, value j
 		VALUES ($1, $2, $3, now())
 		ON CONFLICT (principal, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
 		principal, key, value)
+	return err
+}
+
+func (s PG) DeletePrincipalPref(ctx context.Context, principal, key string) error {
+	_, err := s.Pool.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1 AND key = $2`, principal, key)
 	return err
 }

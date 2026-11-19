@@ -294,7 +294,7 @@ func (s *Server) dispatchRunPAT(ctx context.Context, run types.AgentRun, ado ado
 		return s.refuseADOEntraDispatch(ctx, run, reason, body)
 	}
 	pat, err := s.mintRunPAT(lctx, run.ID, sn, cfg, ado.caps,
-		adoRunPATValidTo(s.cfg.Now(), ado.patHours, run.EndsAt), adoPATMintDispatch)
+		adoRunPATValidTo(s.boundNow(ctx), ado.patHours, run.EndsAt), adoPATMintDispatch)
 	if err == nil {
 		e.owner, e.cur, e.caps = sn.OwnerSubject, pat, slices.Clone(ado.caps)
 		if err = s.saveRunPAT(lctx, run.ID, e); err != nil {
@@ -318,7 +318,7 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	capAsk adoCapabilityGrant, responseCaps []adoscope.Capability, fail adoFail,
 ) bool {
 	want := slices.Clone(responseCaps)
-	if capAsk.capability != "" && !slices.Contains(want, capAsk.capability) {
+	if capAsk.capability != "" && !adoscope.Has(want, capAsk.capability) {
 		want = append(want, capAsk.capability)
 	}
 	pat, err := s.runPATFor(r.Context(), claims.RunID, sn, cfg, sc, want, r.URL.Query().Get("stale_jti"))
@@ -346,18 +346,25 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	// The lease, not the PAT's validTo, brings the proxy back to re-judge drift
+	// and the caps: 10 minutes on the cluster, as for bearer and own_pat, and 15
+	// through a runner relay. Outside the renew window the re-resolve returns the
+	// cached token, so it mints nothing.
+	lease := storedKeyTTL
+	if _, relayed := relayRunner(r.Context()); relayed {
+		lease = residentRejudgeEvery
+	}
 	expires := pat.ValidTo
-	if next := s.cfg.Now().Add(residentRejudgeEvery); next.Before(expires) {
-		if _, relayed := relayRunner(r.Context()); relayed {
-			expires = next
-		}
+	if next := s.cfg.Now().Add(lease); next.Before(expires) {
+		expires = next
 	}
 	// JTI is the token's own authorization id: the proxy names it back as
 	// stale_jti when Azure DevOps refuses the header it holds.
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: adoEntraInjectHeader, Value: adoRunPATValue(pat.Token),
 		JTI: pat.AuthorizationID, ExpiresAt: expires.UnixMilli(),
-		Organisation: sn.Organisation, Capabilities: adoCapabilityStrings(responseCaps),
+		CredentialExpiresAt: credentialExpiry(pat.ValidTo),
+		Organisation:        sn.Organisation, Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
 }
@@ -385,7 +392,8 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		return adoPAT{}, errADOPATRunPaused
 	}
 	row, _ := gitProviderRowByID(sc, sn.ProviderRowID) // driftFrom proved it live with an Entra block
-	now := s.cfg.Now()
+	ceiling := effectiveADOCeiling(row.Entra, adoCapOf(s.outerLayers(ctx, run)))
+	now := s.boundNow(ctx)
 	validTo := adoRunPATValidTo(now, row.Entra.PATHours(), run.EndsAt)
 	stale := e.cur
 	var reason string
@@ -395,7 +403,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		if e.paused {
 			reason = adoPATMintResume
 		}
-		want = s.adoRunPATStanding(ctx, runID, sn, row.Entra.CapabilityCeiling, want)
+		want = s.adoRunPATStanding(ctx, runID, sn, ceiling, want)
 	case staleJTI != "" && staleJTI == e.cur.AuthorizationID && now.Sub(e.forcedAt) >= adoRunPATForcedEvery:
 		reason = adoPATMintUpstream401
 		e.forcedAt = now
@@ -410,7 +418,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	// live ceiling no longer allows.
 	var caps []adoscope.Capability
 	for _, c := range append(slices.Clone(e.caps), want...) {
-		if slices.Contains(row.Entra.CapabilityCeiling, c) && !slices.Contains(caps, c) {
+		if adoscope.Has(ceiling, c) && !adoscope.Has(caps, c) {
 			caps = append(caps, c)
 		}
 	}
@@ -453,7 +461,7 @@ func (s *Server) revokeNeverRecordedPAT(ctx context.Context, runID uuid.UUID, cl
 	slog.ErrorContext(ctx, "wardynd: revoking an unrecorded Azure DevOps run token failed; it lives to its valid_to",
 		slog.String("run_id", runID.String()), slog.String("authorization_id", authorizationID), slog.String("reason", reason), slog.Any("err", err))
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed, authorizationID, "failure",
-		mustJSON(map[string]any{"reason": reason, "authorization_id": authorizationID, "organisation": org, "error": err.Error(), "abandoned": true})))
+		mustJSON(map[string]any{"reason": reason, "authorization_id": authorizationID, "organisation": org, "error": auditStepRevokeToken, "abandoned": true})))
 }
 
 // revokeUnrecordedRunPAT revokes a token mintRunPAT created whose value could not be recorded, so
@@ -483,7 +491,7 @@ func (s *Server) adoRunPATStanding(ctx context.Context, runID uuid.UUID, sn adoE
 	}
 	out := slices.Clone(want)
 	for _, c := range adoStanding(sn, ceiling, rows) {
-		if !slices.Contains(out, c) {
+		if !adoscope.Has(out, c) {
 			out = append(out, c)
 		}
 	}

@@ -9,8 +9,10 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"time"
@@ -316,6 +318,13 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindServiceIdentity, changed.After.Principal(), "success", nil)
 	}
+	// A suspended identity's live runs end now; a PATCH that suspends it again ends any a failure left.
+	if req.Suspended != nil && *req.Suspended {
+		if _, err := s.endServiceRuns(r, changed.After.Principal(), killReasonServiceSuspended); err != nil {
+			writeServerError(w, r, "end the service identity's runs", err)
+			return
+		}
+	}
 	if stateErr != nil {
 		writeServerError(w, r, "read the sponsor's session", stateErr)
 		return
@@ -384,12 +393,19 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "cancel the service identity's waiting runs", err)
 		return
 	}
+	// And its live runs end, before their credentials are erased; the same DELETE run again ends any left.
+	if _, err := s.endServiceRuns(r, retired.After.Principal(), queueCancelServiceRetired); err != nil {
+		writeServerError(w, r, "end the service identity's runs", err)
+		return
+	}
 	// The identity's stored credentials go with it, beside the retire row. The retire is already durable,
 	// so a failure here is recorded and answered 500, and the same DELETE run again erases them.
 	if s.cfg.Secrets != nil {
 		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
-		_, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
+		// No Azure DevOps token is ever created in a service identity's name (adoLaneOwner declines one), so
+		// there is no refused revoke to report.
+		_, _, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
 		outcome := "success"
 		if eerr != nil {
 			outcome = "failure"
@@ -405,6 +421,59 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, retired.After)
+}
+
+// The run.kill reasons of a service identity's runs ended by its suspension and by its sponsor's (a SCIM
+// suspension). A retire's is queueCancelServiceRetired, the reason its waiting runs are cancelled with.
+const (
+	killReasonServiceSuspended       = "service_identity_suspended"
+	killReasonServiceSponsorInactive = "service_sponsor_inactive"
+)
+
+// endServiceRuns ends every live run of the service identity principal through the kill a SCIM suspension
+// ends a person's runs with (teardownRunAs): the same bound per run, and a run.kill row as the caller with
+// reason. It runs detached from the request, so a caller who goes away does not leave half the runs. Every
+// run is tried; left is the runs whose kill failed, and the error joins the failures.
+func (s *Server) endServiceRuns(r *http.Request, principal, reason string) (left []uuid.UUID, err error) {
+	ls, ok := s.cfg.Store.(store.LeaverStore)
+	if !ok {
+		return nil, nil
+	}
+	ctx := context.WithoutCancel(r.Context())
+	runs, err := ls.ListNonTerminalRunsBy(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	killerType, killer := actorTypeFromRequest(r), principalFromRequest(r)
+	var errs []error
+	for _, run := range runs {
+		if kerr := s.teardownRunAs(ctx, run.ID, killerType, killer, func(types.AgentRun) string { return reason }); kerr != nil {
+			left, errs = append(left, run.ID), append(errs, kerr)
+		}
+	}
+	return left, errors.Join(errs...)
+}
+
+// serviceRunsNotEnded is an approval's detail when the suspension it applied could not end every live run.
+const serviceRunsNotEnded = "The suspension is applied, but Wardyn could not end every live run of the service identity. " +
+	"End them with PATCH /service-identities/{name} and suspended true."
+
+// approvedSuspendRunsData ends the live runs of a service identity whose suspension an approval applied
+// (change). The approval has committed, so a failure cannot refuse it: the data, added to the approval's
+// service_identity.update row, says runs_end_failed and names the runs still live (none when they could
+// not be read), and the approval's answer says so. A PATCH with suspended true, or a DELETE, ends them.
+func (s *Server) approvedSuspendRunsData(r *http.Request, principal string, change uuid.UUID) map[string]any {
+	left, err := s.endServiceRuns(r, principal, killReasonServiceSuspended)
+	if err == nil {
+		return nil
+	}
+	slog.WarnContext(r.Context(), "api: an approved suspension left service identity runs live; PATCH suspended true again to end them",
+		slog.String("service", principal), slog.String("change_id", change.String()), slog.Any("err", err))
+	ids := make([]string, 0, len(left))
+	for _, id := range left {
+		ids = append(ids, id.String())
+	}
+	return map[string]any{"runs_end_failed": true, "runs_left": ids}
 }
 
 // sponsoredIdentity is the sponsor-only read behind the token routes: the caller's own identity, or false

@@ -68,19 +68,19 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-const orgTable = () => screen.getByRole("table", { name: "Organization pools" });
+const orgTable = () => screen.getByRole("table", { name: "Organisation pools" });
 const userTable = () => screen.getByRole("table", { name: "User pools" });
 
 describe("Pools tab", () => {
-  it("shows organization pools and user pools, each with what it allows, its runners and its state", async () => {
+  it("shows organisation pools and user pools, each with what it allows, its runners and its state", async () => {
     renderTab();
-    await screen.findByRole("table", { name: "Organization pools" });
-    expect(screen.getByRole("heading", { name: "Organization pools", level: 2 })).toBeInTheDocument();
+    await screen.findByRole("table", { name: "Organisation pools" });
+    expect(screen.getByRole("heading", { name: "Organisation pools", level: 2 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "User pools", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("wardyn runner pool create --scope organization --runner <runner>")).toBeInTheDocument();
-    expect(screen.getByText(/^Pools your organization provides/)).toBeInTheDocument();
+    expect(screen.getByText(/^Pools your organisation provides/)).toBeInTheDocument();
     expect(screen.getByText(/You edit them here\.$/)).toBeInTheDocument();
-    expect(screen.queryByText("No organization pools yet")).toBeNull();
+    expect(screen.queryByText("No organisation pools yet")).toBeNull();
     expect(screen.getByRole("link", { name: "Governance" })).toHaveAttribute("href", "/admin/governance");
     const org = within(orgTable());
     expect(org.getAllByRole("row")).toHaveLength(4);
@@ -98,42 +98,42 @@ describe("Pools tab", () => {
 
   it("marks the default with a chip and no button, and offers Make default on the others a super admin may choose", async () => {
     renderTab();
-    await screen.findByRole("table", { name: "Organization pools" });
+    await screen.findByRole("table", { name: "Organisation pools" });
     const rows = within(orgTable()).getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText("✓ Default")).toBeInTheDocument();
     expect(within(rows[0]).queryByRole("button", { name: /Make/ })).toBeNull();
-    expect(within(rows[1]).getByRole("button", { name: "Make CI jobs the organization default" })).toHaveTextContent("Make default");
+    expect(within(rows[1]).getByRole("button", { name: "Make CI jobs the organisation default" })).toHaveTextContent("Make default");
     expect(within(rows[2]).getByText("Can't be the default while it's switched off")).toBeInTheDocument();
     expect(within(rows[2]).getByText("Switched off")).toBeInTheDocument();
-    expect(screen.getByText("The default seeds each person's New Run when they choose an organization pool. It grants nobody a pool.")).toBeInTheDocument();
+    expect(screen.getByText("The default seeds each person's New Run when they choose an organisation pool. It grants nobody a pool.")).toBeInTheDocument();
   });
 
-  it("tells a security admin only a super admin changes organization pools, and offers no Make default", async () => {
+  it("tells a security admin only a super admin changes organisation pools, and offers no Make default", async () => {
     renderTab(false);
-    await screen.findByRole("table", { name: "Organization pools" });
-    expect(screen.getByText("Only a super admin can change organization pools. You can set who may use one.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Make .* the organization default/ })).toBeNull();
+    await screen.findByRole("table", { name: "Organisation pools" });
+    expect(screen.getByText("Only a super admin can change organisation pools. You can set who may use one.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Make .* the organisation default/ })).toBeNull();
   });
 
-  it("says so when there is no organization default", async () => {
+  it("says so when there is no organisation default", async () => {
     orgDefaultsMock.mockResolvedValue({});
     renderTab();
-    await screen.findByText("No organization default. People choose an organization pool each time.");
+    await screen.findByText("No organisation default. People choose an organisation pool each time.");
     expect(screen.queryByText("✓ Default")).toBeNull();
   });
 
   it("shows the empty states when there are no pools", async () => {
     listMock.mockResolvedValue({ pools: [] });
     renderTab();
-    expect(await screen.findByText("No organization pools yet")).toBeInTheDocument();
-    const empty = screen.getByRole("group", { name: "No organization pools yet" });
-    expect(empty).toHaveTextContent("Organization pools are created on the command line:");
+    expect(await screen.findByText("No organisation pools yet")).toBeInTheDocument();
+    const empty = screen.getByRole("group", { name: "No organisation pools yet" });
+    expect(empty).toHaveTextContent("Organisation pools are created on the command line:");
     expect(within(empty).getByText("wardyn runner pool create --scope organization --runner <runner>")).toBeInTheDocument();
     expect(within(empty).getByRole("button", { name: "Copy" })).toBeInTheDocument();
     expect(empty).toHaveTextContent("It then appears here.");
     expect(empty).not.toHaveTextContent("as above");
-    expect(screen.getByRole("heading", { name: "Organization pools", level: 2 })).toBeInTheDocument();
-    expect(screen.queryByText(/^Pools your organization provides/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Organisation pools", level: 2 })).toBeInTheDocument();
+    expect(screen.queryByText(/^Pools your organisation provides/)).toBeNull();
     expect(screen.queryByText(/You edit them here/)).toBeNull();
     expect(screen.getByText("No user pools yet")).toBeInTheDocument();
     expect(screen.getByText("People create their own from Settings → My runner.")).toBeInTheDocument();
@@ -145,7 +145,7 @@ describe("Pools tab", () => {
     renderTab();
     expect(screen.getByRole("status", { name: "Loading pools" })).toBeInTheDocument();
     release({ pools: [entry(CI)] });
-    expect(await screen.findByRole("table", { name: "Organization pools" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Organisation pools" })).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Loading pools" })).toBeNull();
   });
 
@@ -154,7 +154,7 @@ describe("Pools tab", () => {
     renderTab();
     expect(await screen.findByText("Couldn't load pools")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByRole("table", { name: "Organization pools" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Organisation pools" })).toBeInTheDocument();
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
@@ -163,26 +163,26 @@ describe("Pools tab", () => {
     renderTab();
     expect(await screen.findByText("Runner pools are unavailable")).toBeInTheDocument();
     expect(screen.getByText(/This server does not manage runner pools yet\./)).toBeInTheDocument();
-    expect(screen.queryByText("No organization pools yet")).toBeNull();
+    expect(screen.queryByText("No organisation pools yet")).toBeNull();
   });
 
-  it("makes a pool the default and keeps the organization's barrier", async () => {
+  it("makes a pool the default and keeps the organisation's barrier", async () => {
     renderTab();
-    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organization default" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organisation default" }));
     await waitFor(() => expect(setOrgDefaultsMock).toHaveBeenCalledWith({ pool_id: "p-ci", barrier: "CC2" }));
   });
 
-  it("keeps the organization's recording setting and names the revision it read when it makes a pool the default", async () => {
+  it("keeps the organisation's recording setting and names the revision it read when it makes a pool the default", async () => {
     orgDefaultsMock.mockResolvedValue({ pool_id: "p-gen", barrier: "CC2", recording: "required", revision: 4 });
     renderTab();
-    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organization default" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organisation default" }));
     await waitFor(() => expect(setOrgDefaultsMock).toHaveBeenCalledWith({ pool_id: "p-ci", barrier: "CC2", recording: "required", revision: 4 }));
   });
 
   it("shows the server's sentence above the table when the default is refused", async () => {
     setOrgDefaultsMock.mockRejectedValue(new HttpError(409, "CI jobs is switched off right now. Choose another pool.", "runner_pool_unavailable"));
     renderTab();
-    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organization default" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organisation default" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("CI jobs is switched off right now. Choose another pool.");
   });
 
@@ -193,7 +193,7 @@ describe("Pools tab", () => {
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await userEvent.click(within(orgTable()).getByRole("button", { name: "General" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("This is the organization default.");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("This is the organisation default.");
   });
 
   // The list grows with people, so the per-pool reads are bounded: every pool once when the tab opens, and
@@ -202,7 +202,7 @@ describe("Pools tab", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       renderTab();
-      await screen.findByRole("table", { name: "Organization pools" });
+      await screen.findByRole("table", { name: "Organisation pools" });
       expect(getMock.mock.calls.map(([id]) => id).sort()).toEqual(ALL.map((p) => p.id).sort());
       const tick = async () => {
         const lists = listMock.mock.calls.length;
@@ -229,7 +229,7 @@ describe("Pools tab", () => {
   // The sheet's state and revision are what Switch off sends back, so they are read when it opens.
   it("reads a pool when its details open, without waiting for the next re-read", async () => {
     renderTab();
-    await screen.findByRole("table", { name: "Organization pools" });
+    await screen.findByRole("table", { name: "Organisation pools" });
     expect(getMock).toHaveBeenCalledTimes(ALL.length);
     getMock.mockImplementation((id: string) => Promise.resolve({ ...(ALL.find((p) => p.id === id) as RunnerPool), state: "disabled" }));
     await userEvent.click(screen.getByRole("button", { name: "Details of CI jobs" }));
@@ -250,7 +250,7 @@ describe("Pools tab", () => {
       return many.find((p) => p.id === id) as RunnerPool;
     });
     renderTab();
-    expect(await within(await screen.findByRole("table", { name: "Organization pools" })).findAllByRole("row")).toHaveLength(11);
+    expect(await within(await screen.findByRole("table", { name: "Organisation pools" })).findAllByRole("row")).toHaveLength(11);
     expect(getMock).toHaveBeenCalledTimes(10);
     expect(widest).toBe(4);
   });

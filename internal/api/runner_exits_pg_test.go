@@ -271,7 +271,7 @@ func TestRunnerExitPG_AFolderPassPastTheDeadlineStillCompletesTheExit(t *testing
 	}
 	status, err := st.RunLocalFolderStatus(ctx, run.ID)
 	if err != nil || status.Resume != nil || status.Back == nil || !strings.Contains(status.Back.Error, "a sandbox on a runner is not kept") ||
-		!strings.Contains(status.Back.Error, "so the sandbox was stopped with its changes not brought back yet, uncounted") {
+		!strings.Contains(status.Back.Error, "the sandbox was stopped with its changes not brought back yet, uncounted, because") {
 		t.Errorf("back record = %+v, resume = %+v, %v; want the cut pass given up on a runner", status.Back, status.Resume, err)
 	}
 	if !cfg.Audit.(*syncAudit).has(run.ID, "run.folder.transfer", "failure") {

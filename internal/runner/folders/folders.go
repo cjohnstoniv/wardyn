@@ -10,9 +10,11 @@
 // SECURITY: every path the organisation names is checked here, on the person's
 // computer. It must sit inside a root (the runner owner's home unless the
 // person named others), contain no symlink, and neither be nor go through a
-// credential dotfile directory (runner.DeniedUserSegment). Reads and writes go
-// through an os.Root on that path, so a link swapped in later cannot lead
-// outside it.
+// credential dotfile directory (runner.DeniedUserSegment). The folder is opened
+// once, at that check, from its root's handle one directory at a time
+// (foldersync.OpenDir), and every later read and write goes through that handle
+// the same way: a folder renamed or replaced by a link after its check is never
+// followed.
 package folders
 
 import (
@@ -49,19 +51,44 @@ const (
 // passKept is how long a finished pass's outcome waits for sync_folder_wait.
 var passKept = 10 * time.Minute
 
+// backPassLimit bounds a pass back when the organisation names no deadline (an older one), so a
+// stuck stream cannot hold its run's pass forever. A seed pass then has no limit but the runner's.
+var backPassLimit = 5 * time.Minute
+
 // listBudget bounds the counting one listing does; folders not reached by then
 // are listed with More set.
 var listBudget = 3 * time.Second
+
+// listChecked runs between a browse's check of its folder and its first read; tests change the folder there.
+var listChecked = func() {}
+
+// rootChecked runs between New's check of a root and its open; tests change the root there.
+var rootChecked = func() {}
+
+// folderChecked runs between the check of a folder's path and its open; tests change the path there.
+var folderChecked = func() {}
 
 // Server serves list_folders, sync_folder and sync_folder_wait.
 type Server struct {
 	ctx      context.Context
 	roots    []string
 	stateDir string
+	// handles are the roots, opened once by New and closed when ctx ends: every folder is opened from
+	// its root's handle, never again by its path.
+	handles []*os.Root
+
+	// Clock turns the organisation's deadline for a pass into time left here: srvclock.Clock does it
+	// from the authenticated hello. Nil, or no reading yet, reads every deadline as absent.
+	Clock interface {
+		Remaining(at time.Time) (time.Duration, error)
+	}
 
 	mu      sync.Mutex
 	running int
 	passes  map[uint32]*pass
+	// byRun holds the runs with a pass running: one at a time each, from before its state is read
+	// until after it is saved.
+	byRun map[uuid.UUID]bool
 }
 
 type pass struct {
@@ -70,12 +97,20 @@ type pass struct {
 }
 
 // New checks roots (absolute directories, resolved through any symlink once,
-// here) and keeps each pass's state under stateDir/folders. ctx ends every pass.
+// here), opens each, and keeps each pass's state under stateDir/folders. ctx ends
+// every pass and closes the roots.
 func New(ctx context.Context, roots []string, stateDir string) (*Server, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("folders: no root folder")
 	}
-	s := &Server{ctx: ctx, stateDir: filepath.Join(stateDir, "folders"), passes: map[uint32]*pass{}}
+	s := &Server{ctx: ctx, stateDir: filepath.Join(stateDir, "folders"), passes: map[uint32]*pass{}, byRun: map[uuid.UUID]bool{}}
+	// A root refused below closes every root opened before it.
+	built := false
+	defer func() {
+		if !built {
+			s.closeRoots()
+		}
+	}()
 	for _, r := range roots {
 		if !filepath.IsAbs(r) {
 			return nil, fmt.Errorf("folders: root %q is not an absolute path", r)
@@ -90,14 +125,64 @@ func New(ctx context.Context, roots []string, stateDir string) (*Server, error) 
 		if seg := runner.DeniedUserSegment(real); seg != "" {
 			return nil, fmt.Errorf("folders: root %q is inside %s, which holds credentials", r, seg)
 		}
+		rootChecked()
+		h, err := openRoot(real)
+		if err != nil {
+			return nil, fmt.Errorf("folders: root %q: %w", r, err)
+		}
 		s.roots = append(s.roots, real)
+		s.handles = append(s.handles, h)
 	}
+	context.AfterFunc(ctx, s.closeRoots)
+	built = true
 	return s, nil
 }
 
-// credentialPath is Options.Credential for every pass and survey: a path inside the chosen folder
-// that is or goes through a credential folder (runner.DeniedUserSegment) never crosses either way.
-func credentialPath(rel string) bool { return runner.DeniedUserSegment(rel) != "" }
+// openRoot opens real, a root New has resolved and checked, one directory at a time from the top of
+// its volume (foldersync.OpenDir). The handle kept for the server's life is then the directory that
+// path names with no link in it: a root renamed or replaced by a link between its check and its open
+// refuses the start, and is never opened through. Opening a directory needs read access to it, so a
+// folder on the way that the runner's user can pass through but not read refuses the start too, and
+// the refusal names that folder.
+func openRoot(real string) (*os.Root, error) {
+	top := filepath.VolumeName(real) + string(filepath.Separator)
+	rel, err := filepath.Rel(top, real)
+	if err != nil {
+		return nil, err
+	}
+	cur, err := os.OpenRoot(top)
+	if err != nil {
+		return nil, err
+	}
+	at := top
+	for _, name := range strings.Split(filepath.ToSlash(rel), "/") {
+		at = filepath.Join(at, name)
+		next, err := foldersync.OpenDir(cur, name)
+		_ = cur.Close()
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, fmt.Errorf("the runner's user cannot read the folder %s; the runner opens each folder from the top of the drive down to a root, so make that folder readable, or choose another root", at)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+// closeRoots closes the roots' handles. A folder opened from one stays open until its own close.
+func (s *Server) closeRoots() {
+	for _, h := range s.handles {
+		_ = h.Close()
+	}
+}
+
+// credentialUnder is Options.Credential for every pass and survey of dir: a path inside the chosen folder
+// that is or goes through a credential folder never crosses either way. It is judged with dir in front, so
+// a folder such as ~/Library or ~/.config leaves out Keychains, gh and gcloud under it, as a deeper pass does.
+func credentialUnder(dir string) func(rel string) bool {
+	return func(rel string) bool { return runner.DeniedUserSegmentUnder(dir, rel) != "" }
+}
 
 // Roots is the resolved roots.
 func (s *Server) Roots() []string { return slices.Clone(s.roots) }
@@ -127,40 +212,54 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 	return nil, runnerwire.Refuse("this runner shares folders only and holds no sandbox")
 }
 
-// folder checks p, a path the organisation named, and returns it.
-func (s *Server) folder(p string) (string, error) {
+// folder checks p, a path the organisation named, and returns it opened (browsable).
+func (s *Server) folder(p string) (*os.Root, error) {
 	if slices.Contains(s.roots, p) {
-		return "", runnerwire.Refuse("a whole shared folder is never sent: choose a folder inside it")
+		return nil, runnerwire.Refuse("a whole shared folder is never sent: choose a folder inside it")
 	}
 	return s.browsable(p)
 }
 
 // browsable is folder's check without the root refusal: a root can be opened to list what is
-// inside it, never sent.
-func (s *Server) browsable(p string) (string, error) {
+// inside it, never sent. It returns the folder opened from its root's handle one directory at a
+// time, so what is read and written later is the folder checked here, whatever is renamed or linked
+// in at its path afterwards. The caller closes it.
+func (s *Server) browsable(p string) (*os.Root, error) {
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
-		return "", runnerwire.Refuse("the folder must be a clean absolute path")
+		return nil, runnerwire.Refuse("the folder must be a clean absolute path")
 	}
-	inside := slices.ContainsFunc(s.roots, func(r string) bool {
+	i := slices.IndexFunc(s.roots, func(r string) bool {
 		return p == r || strings.HasPrefix(p, strings.TrimSuffix(r, string(filepath.Separator))+string(filepath.Separator))
 	})
-	if !inside {
-		return "", runnerwire.Refuse("that folder is not under a folder this runner shares")
+	if i < 0 {
+		return nil, runnerwire.Refuse("that folder is not under a folder this runner shares")
 	}
 	if seg := runner.DeniedUserSegment(p); seg != "" {
-		return "", runnerwire.Refuse("a folder inside %s is never shared: it holds credentials", seg)
+		return nil, runnerwire.Refuse("a folder inside %s is never shared: it holds credentials", seg)
 	}
 	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
-		return "", runnerwire.Refuse("that folder does not exist on this computer")
+		return nil, runnerwire.Refuse("that folder does not exist on this computer")
 	}
 	if real != p {
-		return "", runnerwire.Refuse("that path goes through a symlink, which is never followed")
+		return nil, runnerwire.Refuse("that path goes through a symlink, which is never followed")
 	}
 	if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
-		return "", runnerwire.Refuse("that path is not a folder")
+		return nil, runnerwire.Refuse("that path is not a folder")
 	}
-	return p, nil
+	rel, err := filepath.Rel(s.roots[i], p)
+	if err != nil {
+		return nil, runnerwire.Refuse("that folder is not under a folder this runner shares")
+	}
+	folderChecked()
+	dir, err := foldersync.OpenDir(s.handles[i], filepath.ToSlash(rel))
+	if errors.Is(err, foldersync.ErrLinkInPath) {
+		return nil, runnerwire.Refuse("that path goes through a symlink, which is never followed")
+	}
+	if err != nil {
+		return nil, runnerwire.Refuse("that folder cannot be read")
+	}
+	return dir, nil
 }
 
 func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (runnerwire.FolderList, error) {
@@ -171,18 +270,16 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 		}
 		return out, nil
 	}
-	dir, err := s.browsable(args.Path)
+	root, err := s.browsable(args.Path)
 	if err != nil {
 		return runnerwire.FolderList{}, err
 	}
+	defer root.Close()
+	listChecked()
+	dir := args.Path
 	if args.Survey && slices.Contains(s.roots, dir) {
 		return runnerwire.FolderList{}, runnerwire.Refuse("a whole shared folder is never sent: choose a folder inside it")
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return runnerwire.FolderList{}, runnerwire.Refuse("that folder cannot be read")
-	}
-	defer root.Close()
 	ents, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return runnerwire.FolderList{}, runnerwire.Refuse("that folder cannot be read")
@@ -205,7 +302,7 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 		out.Folders = append(out.Folders, f)
 	}
 	if args.Survey {
-		sv, err := foldersync.Survey(root, args.Deny, credentialPath)
+		sv, err := foldersync.Survey(root, args.Deny, credentialUnder(dir))
 		if err != nil {
 			return runnerwire.FolderList{}, runnerwire.Refuse("this folder cannot be sent: %s", foldersync.Shown(err.Error()))
 		}
@@ -214,12 +311,12 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 	return out, nil
 }
 
-// count walks rel inside root, never through a symlink, for at most maxCounted
-// entries and until deadline.
+// count walks rel inside root, never through a symlink (foldersync.FS), for at
+// most maxCounted entries and until deadline.
 func count(root *os.Root, rel string, deadline time.Time) (files int, bytes int64, more bool) {
 	seen := 0
 	stop := errors.New("stop")
-	err := fs.WalkDir(root.FS(), rel, func(_ string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(foldersync.FS(root), rel, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -241,10 +338,31 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	if args.RunID == uuid.Nil {
 		return nil, runnerwire.Refuse("a pass names its run")
 	}
-	dir, err := s.folder(args.Path)
+	s.mu.Lock()
+	if s.byRun[args.RunID] {
+		s.mu.Unlock()
+		return nil, &runnerwire.Error{Code: runnerwire.CodeFolderPassBusy, Message: "a pass for this run is still running; try again"}
+	}
+	s.byRun[args.RunID] = true
+	s.mu.Unlock()
+	started := false
+	defer func() {
+		if !started {
+			s.endRun(args.RunID)
+		}
+	}()
+	root, err := s.folder(args.Path)
 	if err != nil {
 		return nil, err
 	}
+	// The folder stays open from its check to the end of its pass, through the waits on the
+	// organisation and the sandbox: run closes it, and every refusal before then does.
+	defer func() {
+		if !started {
+			_ = root.Close()
+		}
+	}()
+	dir := args.Path
 	remote, err := foldersync.RemoteDir(args.RemoteDir)
 	if err != nil {
 		return nil, runnerwire.Refuse("%s", err.Error())
@@ -253,7 +371,11 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	if err := foldersync.StateOutside(dir, stateFile); err != nil {
 		return nil, runnerwire.Refuse("%s", err.Error())
 	}
-	st, err := foldersync.LoadState(stateFile, dir, remote)
+	end, err := s.passEnd(args)
+	if err != nil {
+		return nil, err
+	}
+	st, err := foldersync.LoadStateRecover(stateFile, dir, remote)
 	if err != nil {
 		return nil, err
 	}
@@ -280,10 +402,12 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	s.mu.Lock()
 	s.passes[stream.ID()] = p
 	s.mu.Unlock()
+	started = true
 	go func() {
-		p.res = s.run(stream, dir, remote, st, stateFile, args)
+		p.res = s.run(stream, root, remote, st, stateFile, args, end)
 		_ = stream.Close()
 		release()
+		s.endRun(args.RunID)
 		close(p.done)
 		// An outcome nobody waits for is dropped after a while.
 		time.AfterFunc(passKept, func() {
@@ -297,13 +421,46 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	return runnerwire.StreamResult{Stream: stream.ID()}, nil
 }
 
-// run is one pass over stream, which the organisation joins to the sandbox's
-// sftp-server started in remote.
-func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, stateFile string, args runnerwire.SyncFolderArgs) runnerwire.FolderPass {
-	failed := func(err error) runnerwire.FolderPass {
-		return runnerwire.FolderPass{Refused: []runnerwire.FolderRefusal{}, Error: foldersync.Shown(err.Error())}
+func (s *Server) endRun(id uuid.UUID) {
+	s.mu.Lock()
+	delete(s.byRun, id)
+	s.mu.Unlock()
+}
+
+// passEnd is when one pass must end, on this runner's monotonic clock: the organisation's deadline,
+// read through Clock, when it names one; otherwise backPassLimit from now for a pass back, and none
+// (zero) for a seed pass. A deadline already passed is refused.
+func (s *Server) passEnd(args runnerwire.SyncFolderArgs) (time.Time, error) {
+	if args.DeadlineUnixMs > 0 && s.Clock != nil {
+		if left, err := s.Clock.Remaining(time.UnixMilli(args.DeadlineUnixMs)); err == nil {
+			if left <= 0 {
+				return time.Time{}, errors.New("the pass deadline has passed")
+			}
+			return time.Now().Add(left), nil
+		}
 	}
-	ctx, cancel := context.WithCancel(s.ctx)
+	if args.Pull {
+		return time.Now().Add(backPassLimit), nil
+	}
+	return time.Time{}, nil
+}
+
+// passContext is s.ctx, ended at end when it is set.
+func (s *Server) passContext(end time.Time) (context.Context, context.CancelFunc) {
+	if end.IsZero() {
+		return context.WithCancel(s.ctx)
+	}
+	return context.WithDeadline(s.ctx, end)
+}
+
+// run is one pass over stream, which the organisation joins to the sandbox's
+// sftp-server started in remote, on root, the folder start opened. It closes root.
+func (s *Server) run(stream duplex, root *os.Root, remote string, st *foldersync.State, stateFile string, args runnerwire.SyncFolderArgs, end time.Time) runnerwire.FolderPass {
+	defer root.Close()
+	failed := func(err error) runnerwire.FolderPass {
+		return runnerwire.FolderPass{Refused: []runnerwire.FolderRefusal{}, Recovered: st.Recovered, Error: foldersync.Shown(err.Error())}
+	}
+	ctx, cancel := s.passContext(end)
 	defer cancel()
 	// Closing the stream unblocks an sftp call stuck on a sandbox that stalls.
 	defer context.AfterFunc(ctx, func() { _ = stream.Close() })()
@@ -319,14 +476,9 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 	if got, err := c.RealPath("."); err != nil || got != remote {
 		return failed(fmt.Errorf("the sandbox has no folder %s", remote))
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return failed(err)
-	}
-	defer root.Close()
-	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, Opts: foldersync.Options{
+	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, StateRoot: filepath.Dir(s.stateDir), Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
-		Credential: credentialPath,
+		Credential: credentialUnder(args.Path), RunnerPass: true, RunTag: args.RunID.String()[:8],
 	}}
 	// A pass cut short (its stream closed) still reports what it finished and saved in its state.
 	rep, err := sy.Pass(ctx)
@@ -334,9 +486,14 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 		return failed(err)
 	}
 	out := runnerwire.FolderPass{Pushed: len(rep.Pushed), Pulled: len(rep.Pulled), Conflicts: len(rep.Conflicts),
-		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{}}
+		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{},
+		NotPreserved: foldersync.Shown(rep.NotPreserved), Recovered: st.Recovered}
 	if err != nil {
 		out.Error = foldersync.Shown(err.Error())
+	}
+	unsynced := slices.Sorted(slices.Values(rep.UnsyncedPaths))
+	for _, p := range unsynced[:min(len(unsynced), runnerwire.MaxFolderUnsyncedPaths)] {
+		out.UnsyncedPaths = append(out.UnsyncedPaths, foldersync.Shown(p))
 	}
 	for _, r := range rep.Refused[:min(len(rep.Refused), runnerwire.MaxFolderRefusals)] {
 		out.Refused = append(out.Refused, runnerwire.FolderRefusal{Path: foldersync.Shown(r.Path), Reason: r.Reason})

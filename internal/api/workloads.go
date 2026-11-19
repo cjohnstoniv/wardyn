@@ -44,19 +44,23 @@ import (
 
 // The run.kill reason a workload's run ends with.
 const (
-	workloadKillReplaced = store.WorkloadEndReplaced // a newer launch of the workload replaced it
-	workloadKillDeleted  = store.WorkloadEndDeleted  // the workload was deleted
+	workloadKillReplaced       = store.WorkloadEndReplaced       // a newer launch of the workload replaced it
+	workloadKillDeleted        = store.WorkloadEndDeleted        // the workload was deleted
+	workloadKillBindingDeleted = store.WorkloadEndBindingDeleted // its namespace binding was deleted while it started
 )
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
 
 func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
+	r.Post("/workloads/{name}/preview", s.handlePreviewWorkload)
 	r.Get("/workloads", s.handleListWorkloads)
 	r.Get("/workloads/{name}", s.handleGetWorkload)
 	r.Get("/workloads/{name}/history", s.handleWorkloadHistory)
 	r.Delete("/workloads/{name}", s.handleDeleteWorkload)
 	r.Post("/workloads/{name}/restart", s.handleRestartWorkload)
+	r.Put("/workloads/{name}/policy-pin", s.handlePutWorkloadPolicyPin)
+	r.Delete("/workloads/{name}/policy-pin", s.handleDeleteWorkloadPolicyPin)
 	// A binding is standing authority over a service identity: the security tier's, applied directly and
 	// audited, as a token move is (workload_bindings.go).
 	securityOps.Post("/workload-bindings", s.handleCreateWorkloadBinding)
@@ -122,16 +126,12 @@ func normalizeWorkload(doc client.WorkloadDocument) (store.WorkloadPut, *workloa
 
 // writeWorkloadPutError answers a refused PutWorkload. ok is false when err was answered.
 func writeWorkloadPutError(w http.ResponseWriter, r *http.Request, err error) bool {
-	switch {
-	case err == nil:
+	if err == nil {
 		return true
-	case errors.Is(err, store.ErrWorkloadSourceConflict):
-		writeErrorReason(w, http.StatusConflict, reasonWorkloadSourceConflict,
-			"This workload belongs to its custom resource: change it in Git, not with an apply.")
-	case errors.Is(err, store.ErrWorkloadCapReached):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkloadCapReached,
-			fmt.Sprintf("You hold %d workloads, the most allowed. Delete one first.", store.MaxWorkloadsPerOwner))
-	default:
+	}
+	if ref, refused := workloadPutRefusal(err); refused {
+		writeErrorReason(w, ref.Status, ref.Reason, ref.Error)
+	} else {
 		writeServerError(w, r, "record workload", err)
 	}
 	return false
@@ -142,6 +142,9 @@ func writeWorkloadPutError(w http.ResponseWriter, r *http.Request, err error) bo
 func (s *Server) handlePutWorkload(w http.ResponseWriter, r *http.Request) {
 	ws, ok := s.workloadStore(w)
 	if !ok {
+		return
+	}
+	if refuseForeignApplyOwner(w, r) {
 		return
 	}
 	var req client.WorkloadApplyRequest
@@ -191,12 +194,13 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 }
 
 // viewServiceStatus is v's run's service health as the run routes serve it at now: unknown
-// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+// while paused or stale, with the observation time kept, and Wardyn's own check beside it when the
+// run has a reading of one. Nil when the run has no health yet.
 func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
 	if v.RunState == "" || v.ServiceHealth == "" {
 		return nil
 	}
-	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth), Probe: v.ServiceProbe}}}
 	if v.ServiceObservedAt != nil {
 		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
 	}
@@ -212,10 +216,10 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if st := viewServiceStatus(v, now); st != nil {
-		out.State += "/" + string(st.Health)
+		out.State += "/" + string(viewServiceHealth(v, st, now)) // the worse of the two readings, as the run list's chip
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
-		out.Digest = v.Digest
+		out.Digest, out.PolicyPin = v.Digest, v.PolicyPin
 	}
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
@@ -330,19 +334,25 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 	if err != nil || !ok {
 		return none, err
 	}
-	return s.launchClaimed(r, ws, claimed)
+	return s.launchClaimed(r, ws, claimed, nil)
 }
 
 // launchClaimed is launchWorkload once claimed, the workload ClaimWorkloadLaunch returned, holds the claim.
-func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload) (client.WorkloadLaunch, error) {
+// binding is the namespace binding a custom resource's launch was authorised under, nil for any other
+// launch: the run is recorded only while that binding exists (recordWorkloadRun).
+func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload, binding *uuid.UUID) (client.WorkloadLaunch, error) {
 	none := client.WorkloadLaunch{State: client.WorkloadNoLaunch}
 	ctx := r.Context()
 	if claimed.Source == store.WorkloadSourceK8s && claimed.SourcePoolID == nil {
 		// A custom resource's runs go to its binding's pool only; with the pool gone there is nowhere to go.
 		gone := &runnerpool.Refusal{Reason: runnerpool.ReasonNotFound}
-		return s.refuseWorkloadLaunch(r, ws, claimed, string(gone.Reason), gone.Message())
+		return s.refuseWorkloadLaunch(r, ws, claimed, string(gone.Reason), gone.Message(), nil)
 	}
-	cr, err := workloadCreateRequest(r, claimed)
+	if binding != nil {
+		r = r.WithContext(withLaunchBinding(ctx, *binding)) // a run that waits in its queue starts only while it exists
+	}
+	pinned, pin := withPolicyPin(r.Context(), claimed.PolicyPin) // stepPolicyPin refuses a launch off it before the create answers
+	cr, err := workloadCreateRequest(r.WithContext(pinned), claimed)
 	if err != nil {
 		return none, err
 	}
@@ -353,24 +363,15 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 		if reason == "" {
 			reason = reasonInternalError
 		}
-		return s.refuseWorkloadLaunch(r, ws, claimed, reason, workloadRefusalMsg(reason, msg))
+		return s.refuseWorkloadLaunch(r, ws, claimed, reason, workloadRefusalMsg(reason, msg), pin)
 	}
 	var created createRunResponse
 	if err := json.Unmarshal(cw.body, &created); err != nil {
 		return none, fmt.Errorf("read the launched run: %w", err)
 	}
-	prev, err := ws.SetWorkloadRun(ctx, claimed.ID, claimed.ClaimToken, claimed.Generation, created.ID)
+	prev, err := s.recordWorkloadRun(r, ws, claimed, binding, created.ID)
 	if err != nil {
-		// The run is not the workload's: another launch was recorded first, or the workload is gone.
-		why := workloadKillReplaced
-		if errors.Is(err, store.ErrNotFound) {
-			why = workloadKillDeleted
-		}
-		s.endUntakenWorkloadRun(r, ws, created.ID, claimed, why)
-		if errors.Is(err, store.ErrWorkloadSuperseded) || errors.Is(err, store.ErrNotFound) {
-			return none, nil
-		}
-		return none, err
+		return s.untakenWorkloadLaunch(r, ws, claimed, created.ID, err)
 	}
 	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, actorType, actor, "workload.launch", workloadTarget(claimed), "success", mustJSON(map[string]any{
@@ -419,16 +420,17 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 	if err != nil {
 		return nil, err
 	}
-	cr := r.Clone(r.Context())
+	cr := r.Clone(withLaunchWorkload(r.Context(), wl)) // its run is minted under wl's SPIFFE ID
 	cr.Method, cr.URL, cr.RequestURI = http.MethodPost, &url.URL{Path: "/api/v1/runs"}, ""
 	cr.Body, cr.ContentLength, cr.GetBody = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 	cr.Header.Set("Content-Type", "application/json")
+	cr.Header.Del(idempotencyKeyHeader) // a launch calls handleCreateRun, never the keyed route; this keeps it so
 	return cr, nil
 }
 
 // refuseWorkloadLaunch records the claimed launch's refusal, which leaves the current run running, and
-// answers it. A claim that lapsed and was taken by another launch records nothing.
-func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, wl store.Workload, reason, msg string) (client.WorkloadLaunch, error) {
+// answers it, with a pin mismatch's two digests in its audit row. A claim that lapsed and was taken by another launch records nothing.
+func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, wl store.Workload, reason, msg string, pin *policyPinCheck) (client.WorkloadLaunch, error) {
 	ctx := r.Context()
 	err := ws.RecordWorkloadRefusal(ctx, wl.ID, wl.ClaimToken, store.WorkloadRefusal{Generation: wl.Generation, Reason: reason, Message: msg, At: s.cfg.Now().UTC()})
 	switch {
@@ -438,9 +440,13 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 		return client.WorkloadLaunch{}, err
 	}
 	actorType, actor := workloadActorOf(r)
-	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(map[string]any{
-		"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason,
-	})))
+	data := map[string]any{"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason}
+	if pin != nil && reason == reasonWorkloadPolicyPinMismatch {
+		// The pin the launch was held to and the digest its policy resolved to (stepPolicyPin).
+		data["policy_pin"] = pin.want
+		data["policy_digest"] = pin.got
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(data)))
 	return client.WorkloadLaunch{State: client.WorkloadRefused, Reason: reason, Message: msg}, nil
 }
 
@@ -525,7 +531,9 @@ const workloadRunEndBatch = 100
 // It also settles a replacement that waited in its pool's queue (SetWorkloadRun): once the new run is
 // running the old one ends and the replacement is recorded; when the new run ends before it ran (the
 // start refused it, or it was ended while it waited) the workload takes the old run back and records the
-// refusal. Until then the old run keeps running.
+// refusal. Until then the old run keeps running, and its owed end takes no place in a pass
+// (store.WorkloadStore.ListDueWorkloadRunEnds), so ends that wait never hold back one that is due. A pass
+// starts after the last end a full pass read, so ends that keep failing never hold back the ones behind them.
 func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 	ws, ok := s.cfg.Store.(store.WorkloadStore)
 	if !ok {
@@ -536,17 +544,18 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		return nil
 	}
 	defer end()
-	owed, err := ws.ListWorkloadRunEnds(ctx, workloadRunEndGrace, workloadRunEndBatch)
+	owed, next, err := ws.ListDueWorkloadRunEnds(ctx, workloadRunEndGrace, s.workloadEndsFrom.Load(), workloadRunEndBatch)
 	if err != nil {
 		return err
 	}
+	s.workloadEndsFrom.Store(next)
 	for _, e := range owed {
 		if ctx.Err() != nil {
 			return ctx.Err() // the rest wait for the next pass
 		}
 		switch {
 		case e.AfterRunID == nil:
-			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+			s.endOwedWorkloadRunUnlessHeld(ctx, ws, e)
 		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting, isTerminalRunState(e.AfterState) && e.AfterRan:
 			s.takeOverWorkloadRun(ctx, e)
 		case isTerminalRunState(e.AfterState):
@@ -857,6 +866,9 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{"name": removed.Name, "owner": removed.Owner, "source": removed.Source, "via": "api"}
+	if removed.PolicyPin != "" {
+		data["policy_pin"] = removed.PolicyPin // the pin the delete drops: an apply of the same name starts unpinned
+	}
 	if id := removed.CurrentRunID; id != nil {
 		s.endWorkloadRun(r, *id, removed, workloadKillDeleted)
 		data["ended_run_id"] = *id

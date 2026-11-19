@@ -27,6 +27,7 @@ import { OPERATOR_ONLY_REASON } from "./copy";
 export function DeleteConfirmDialog({
   name,
   entity,
+  wording,
   description,
   allowed,
   onOpenChange,
@@ -38,6 +39,9 @@ export function DeleteConfirmDialog({
   name: string | null;
   // Lowercase noun used in the title/button ("workspace" / "policy" / "secret").
   entity: string;
+  // Replaces the "Delete {entity} “{name}”" wording where the user's own action is another verb
+  // (Disconnect): the title, button and toasts then use this verb and this subject, not the stored name.
+  wording?: { verb: string; past: string; subject: string };
   description: React.ReactNode;
   // F5-F1/X3-F2: whether THIS caller may confirm THIS delete. Defaults to
   // `operator` (today's behaviour, unchanged) so every existing caller
@@ -66,10 +70,12 @@ export function DeleteConfirmDialog({
     setDeleting(true);
     try {
       await onDelete();
-      toast.success(`${capitalize(entity)} “${name}” deleted`);
+      toast.success(wording ? `${capitalize(wording.subject)} ${wording.past}` : `${capitalize(entity)} “${name}” deleted`);
       onDeleted();
     } catch (e) {
-      toast.error(`Failed to delete ${entity} “${name}”`, { description: getErrorMessage(e) });
+      toast.error(wording ? `Failed to ${wording.verb.toLowerCase()} ${wording.subject}` : `Failed to delete ${entity} “${name}”`, {
+        description: getErrorMessage(e),
+      });
     } finally {
       inFlight.current = false;
       setDeleting(false);
@@ -81,7 +87,7 @@ export function DeleteConfirmDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            Delete {entity} “{name}”?
+            {wording ? `${wording.verb} ${wording.subject}?` : `Delete ${entity} “${name}”?`}
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
           {/* Visible, not hover-only — a viewer sees why before they even reach
@@ -104,7 +110,7 @@ export function DeleteConfirmDialog({
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-            Delete {entity}
+            {wording ? wording.verb : `Delete ${entity}`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

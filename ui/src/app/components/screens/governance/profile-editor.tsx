@@ -20,13 +20,14 @@ import { nonNegativeInt } from "../../../lib/format";
 import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
-import { policies as policiesApi } from "../../../lib/api/policies";
+import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceEffective, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
-import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
+import { ScheduledRunsDoorRow } from "./limits-schedule-autonomy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
+import type { GovernanceChange, PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -38,6 +39,8 @@ import { safeRequestHref } from "../../wardyn/policy-remedy";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { specToSource, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { minimalSpec, parseSpec } from "../../wardyn/policy-panel";
+import { AllowedModelsRow, ALLOWED_MODELS_KEY } from "./allowed-models";
+import { DenyListRow } from "./deny-list-strip";
 import { Note, withMono } from "./display";
 import {
   asOverlay,
@@ -54,6 +57,9 @@ import {
 } from "./profile-overlay";
 import { ProfileCeilingPolicy } from "./profile-ceiling-policy";
 import { ProfileRubric } from "./profile-rubric";
+import { UnitDeciders } from "./unit-deciders";
+import { DECIDERS } from "../../wardyn/copy/deciders";
+import type { GovernanceDeciders } from "../../../lib/api/deciders";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
 // rows below, not a value worth spelling out in the input (storage-tab.tsx's
@@ -81,15 +87,22 @@ const specText = (spec: RunPolicySpec): string => specToSource(spec);
 export function ProfileEditor({
   profile,
   profiles = [],
-  disabled,
+  disabled: readOnly,
   onCancel,
   onSaved,
   onSubmitted,
+  deciders, decidersSupported, unitNames, onDecidersChanged,
+  deploymentCeiling,
+  parentWalls,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceUnit | null;
   /** Every profile, for the base picker and an overlay's inherited values. */
   profiles?: GovernanceUnit[];
+  /** The Default unit's effective ceiling: what a profile built on the deployment ceiling inherits. */
+  deploymentCeiling?: RunPolicySpec;
+  /** The parent's effective ceiling and limits when the parent is outside `profiles` (a unit admin's subtree root). */
+  parentWalls?: GovernanceEffective;
   disabled: boolean;
   onCancel: () => void;
   /** Hands the write's OMISSION warnings up: the screen renders them after the
@@ -97,7 +110,11 @@ export function ProfileEditor({
   onSaved: (warnings: string[]) => void;
   /** The write was held for a second person (202): nothing is saved yet. */
   /** The notes the held change carries, for the screen to show beside the submitted note. */
-  onSubmitted: (notes: string[]) => void;
+  onSubmitted: (notes: string[], change: GovernanceChange) => void;
+  deciders?: GovernanceDeciders[];
+  decidersSupported?: boolean;
+  unitNames?: Record<string, string>;
+  onDecidersChanged?: () => void | Promise<unknown>;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -115,25 +132,21 @@ export function ProfileEditor({
   // A standalone profile saves what its source parses to NOW; one that does not parse cannot be saved.
   const ceiling = React.useMemo(() => (composed ? null : parseSpec(spec, format)), [composed, spec, format]);
   const baseProfile = profiles.find((p) => p.id === base);
-  // The deployment ceiling, read once and only when a deployment-based overlay needs its values.
-  const [deployment, setDeployment] = React.useState<RunPolicySpec | null>(null);
-  React.useEffect(() => {
-    if (base !== BASE_DEPLOYMENT || deployment) return;
-    let alive = true;
-    void policiesApi
-      .getDefaultPolicy()
-      .then((d) => alive && setDeployment(d))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [base, deployment]);
+  // A profile built on the deployment ceiling is saved under the Default unit, so it inherits Default's
+  // effective ceiling. GET /policies/default answers the signed-in person's own ceiling, which their own
+  // profile may narrow, so it is not what such a profile inherits. A base the viewer cannot list (a unit
+  // admin's subtree root under a unit outside their scope) inherits the parent walls the snapshot carries.
+  const outside = base === profile?.parent_id ? parentWalls : undefined;
+  const deployment = base === BASE_DEPLOYMENT ? deploymentCeiling : outside?.ceiling;
   const inheritedCeiling = (baseProfile?.effective?.ceiling ?? deployment ?? {}) as unknown as Record<string, unknown>;
-  const inheritedLimits = (baseProfile?.effective?.limits ?? {}) as Record<string, unknown>;
+  // Default holds no limits, so only a listed base or the walls of a parent outside the list carry any.
+  const inheritedLimits = (baseProfile?.effective?.limits ?? outside?.limits ?? {}) as Record<string, unknown>;
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
   const [limitsMoved, setLimitsMoved] = React.useState(false);
   const [limitsFolded, setLimitsFolded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  // Read-only while the save is in flight as well: its answer closes the editor, so an edit made meanwhile would vanish.
+  const disabled = readOnly || saving;
   // The four access-request fields (M3 S5), kept as typed; save trims them.
   const [contact, setContact] = React.useState<Required<PolicyContact>>({
     owner: profile?.contact?.owner ?? "",
@@ -198,6 +211,13 @@ export function ProfileEditor({
   const initial = React.useRef(edited).current;
   useUnsavedGuard("profile-editor", edited !== initial, () => edited);
 
+  // Narrow is on for the models and the box is empty: there is nothing to save for it.
+  const narrowedModels = overlayLimits[ALLOWED_MODELS_KEY];
+  const narrowsToNothing = composed && Array.isArray(narrowedModels) && narrowedModels.length === 0;
+  // The Deciders section saves on its own, and this editor closes on its own save: Save waits until those rules are
+  // saved or discarded, and the section is read-only while this save is out.
+  const [decidersDirty, setDecidersDirty] = React.useState(false);
+
   const save = async () => {
     const parsed = ceiling;
     if (parsed && !parsed.ok) {
@@ -227,6 +247,9 @@ export function ProfileEditor({
       // limits. An empty limits overlay is sent as null: absent would keep a stored one. Leaving a
       // base sends null for the overlay, which clears the base and limits with it. A standalone
       // profile that was never composed sends none of the three, as before.
+      // An empty models list narrows nothing, so it is never sent (Narrow on with an empty box cannot be saved).
+      const { [ALLOWED_MODELS_KEY]: emptyModels, ...rest } = overlayLimits;
+      const sendable = Array.isArray(emptyModels) && emptyModels.length === 0 ? rest : overlayLimits;
       const input: GovernanceUnitInput = composed
         ? {
             name: name.trim(),
@@ -234,7 +257,7 @@ export function ProfileEditor({
             limits: {},
             parent_id: baseProfile?.id ?? null,
             overlay: asOverlay(overlay),
-            overlay_limits: Object.keys(overlayLimits).length > 0 ? overlayLimits : null,
+            overlay_limits: Object.keys(sendable).length > 0 ? sendable : null,
             ...contactField,
           }
         : {
@@ -248,7 +271,7 @@ export function ProfileEditor({
       onSaved(res.warnings);
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        onSubmitted(e.change.diff?.notes ?? []);
+        onSubmitted(e.change.diff?.notes ?? [], e.change);
         return;
       }
       // A refusal the SERVER composed is rendered verbatim — it names the
@@ -258,8 +281,8 @@ export function ProfileEditor({
       setError(
         isGrantBoundError(e)
           ? { title: GOV.GRANT_BOUND_TITLE, message: getErrorMessage(e) }
-          : e instanceof HttpError && composeRefusalTitle(e.reason)
-            ? { title: composeRefusalTitle(e.reason), message: e.message }
+          : e instanceof HttpError && composeRefusalTitle(e.reason, e.message)
+            ? { title: composeRefusalTitle(e.reason, e.message), message: e.message }
           : e instanceof HttpError
             ? { message: e.message }
             : { message: GOV.SAVE_ERROR },
@@ -279,6 +302,7 @@ export function ProfileEditor({
         items={[
           { id: "governance-section-ceiling", label: GOV.CEILING_TITLE },
           { id: "governance-section-limits", label: GOV.LIMITS_TITLE },
+          { id: "governance-section-deciders", label: DECIDERS.TITLE },
           { id: "governance-section-contact", label: GOV.CONTACT_TITLE },
         ]}
       />
@@ -352,6 +376,8 @@ export function ProfileEditor({
         {/* #1200 §3a's "Allowed barriers" control (the same min_confinement_class
             floor the source carries), then the ceiling itself: read first,
             edited on "Edit policy". */}
+        {/* The policy's own editor takes no disabled flag: the fieldset keeps it read-only while the save is in flight. */}
+        <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
         <ProfileCeilingPolicy
           source={spec}
           format={format}
@@ -360,6 +386,7 @@ export function ProfileEditor({
           disabled={disabled}
           modelProviders={modelProviders}
         />
+        </fieldset>
         <p className="mt-2 text-xs text-muted-foreground">{GOV.GRADE_NOTE}</p>
           </>
         )}
@@ -412,6 +439,21 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_ui_apps: v }))}
         />
+        <LimitRow
+          label={BACKGROUND_WATCH_DOOR.LABEL}
+          hint={BACKGROUND_WATCH_DOOR.HINT}
+          checked={!!limits.deny_background_desktop_watch}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_background_desktop_watch: v }))}
+        />
+        <LimitRow
+          label={KEEP_POLICY.LABEL}
+          hint={KEEP_POLICY.HINT}
+          checked={!!limits.deny_kept_machines}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_kept_machines: v }))}
+        />
+        <ScheduledRunsDoorRow limits={limits} disabled={disabled} onChange={setLimits} />
         {/* The user-drive door (0.7 user drives, §5 #5). Its two strings live
             in governance-prompt.md §7.2 and governance-copy.ts, never in the
             drives module: the security admin's authority over drives is this
@@ -458,6 +500,26 @@ export function ProfileEditor({
           value={limits.max_drive_size_mib}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
+        />
+        {/* A blank box is no limit and there is no deny-all, so the key is left out rather than sent empty. */}
+        <AllowedModelsRow
+          value={limits.allowed_models ?? []}
+          disabled={disabled}
+          onChange={(models) =>
+            setLimits(({ allowed_models: _drop, ...rest }) => (models.length > 0 ? { ...rest, allowed_models: models } : rest))
+          }
+        />
+        <DenyListRow
+          which="components"
+          value={limits.deny_components ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_components: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_components: ids } : rest))}
+        />
+        <DenyListRow
+          which="providers"
+          value={limits.deny_model_providers ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_model_providers: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_model_providers: ids } : rest))}
         />
           </>
         )}
@@ -552,6 +614,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
+      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={readOnly} onChanged={onDecidersChanged} profileSaving={saving} onDirtyChange={setDecidersDirty} />
       <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
@@ -622,7 +685,8 @@ export function ProfileEditor({
         onCancel={onCancel}
         onSave={save}
         saving={saving}
-        saveDisabled={disabled || !name.trim() || ceiling?.ok === false}
+        saveDisabled={disabled || decidersDirty || !name.trim() || ceiling?.ok === false || narrowsToNothing}
+        saveNote={decidersDirty ? DECIDERS.PROFILE_SAVE_HELD : undefined}
         saveLabel={GOV.SAVE}
         cancelLabel={PEOPLE.CANCEL}
       />

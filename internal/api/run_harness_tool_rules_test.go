@@ -191,3 +191,86 @@ func TestSidecarPolicyLeavesOwnerOnlyRefsOff(t *testing.T) {
 		t.Fatalf("run policy grant = %+v, want its owner_only_refs kept", policy.EligibleGrants[0])
 	}
 }
+
+// permutations returns every ordering of rules.
+func permutations(rules []types.ToolRule) [][]types.ToolRule {
+	if len(rules) <= 1 {
+		return [][]types.ToolRule{slices.Clone(rules)}
+	}
+	var out [][]types.ToolRule
+	for i := range rules {
+		rest := slices.Concat(rules[:i:i], rules[i+1:])
+		for _, p := range permutations(rest) {
+			out = append(out, append([]types.ToolRule{rules[i]}, p...))
+		}
+	}
+	return out
+}
+
+// layerRank reads a layer's effect for a tool; a layer with no opinion allows it.
+func layerRank(rules []types.ToolRule, tool string) int {
+	return max(types.ToolEffectStrictness(effectiveToolEffect(rules, tool)), types.ToolEffectStrictness(types.ToolAllow))
+}
+
+// A walls document's rules compose the same way in any order: a rule for a named tool beats "*" within
+// the document, a stricter rule the run already has is kept, and the composed result is never wider than
+// the rules the run had nor than the document, for any tool.
+func TestNarrowToolRulesAreOrderIndependentAndNeverWiden(t *testing.T) {
+	bash := func(e types.ToolEffect) types.ToolRule { return types.ToolRule{Tool: "Bash", Effect: e} }
+	star := func(e types.ToolEffect) types.ToolRule { return types.ToolRule{Tool: "*", Effect: e} }
+
+	for _, order := range [][]types.ToolRule{{star(types.ToolDeny), bash(types.ToolHold)}, {bash(types.ToolHold), star(types.ToolDeny)}} {
+		got := narrowToolRules(nil, order)
+		if effectiveToolEffect(got, "Bash") != types.ToolHold || effectiveToolEffect(got, "Other") != types.ToolDeny {
+			t.Errorf("%v over no rules: %+v, want Bash held and every other tool denied", order, got)
+		}
+		got = narrowToolRules([]types.ToolRule{bash(types.ToolDeny)}, order)
+		if effectiveToolEffect(got, "Bash") != types.ToolDeny || effectiveToolEffect(got, "Other") != types.ToolDeny {
+			t.Errorf("%v over an inherited Bash deny: %+v, want Bash still denied", order, got)
+		}
+	}
+
+	bases := [][]types.ToolRule{
+		nil,
+		{star(types.ToolDeny)},
+		{star(types.ToolAllow), bash(types.ToolDeny)},
+		{bash(types.ToolAllow)},
+		{star(types.ToolHold), {Tool: "Read", Effect: types.ToolAllow}, {Tool: "Web", Effect: types.ToolDeny}},
+	}
+	var options []types.ToolRule
+	for _, tool := range []string{"*", "Bash", "Read", "Web"} {
+		for _, e := range []types.ToolEffect{types.ToolAllow, types.ToolHold, types.ToolDeny} {
+			options = append(options, types.ToolRule{Tool: tool, Effect: e})
+		}
+	}
+	docs := [][]types.ToolRule{nil}
+	for _, a := range options {
+		docs = append(docs, []types.ToolRule{a})
+		for _, b := range options {
+			docs = append(docs, []types.ToolRule{a, b})
+			for _, c := range options {
+				docs = append(docs, []types.ToolRule{a, b, c})
+			}
+		}
+	}
+	probes := []string{"*", "Bash", "Read", "Web", "Other"}
+	for bi, base := range bases {
+		for _, doc := range docs {
+			var first []types.ToolRule
+			for i, order := range permutations(doc) {
+				got := narrowToolRules(base, order)
+				if i == 0 {
+					first = got
+				}
+				for _, tool := range probes {
+					if a, b := effectiveToolEffect(first, tool), effectiveToolEffect(got, tool); a != b {
+						t.Fatalf("base %d, %v vs %v: %s is %q then %q, want the same in any order", bi, doc, order, tool, a, b)
+					}
+					if rank := layerRank(got, tool); rank < layerRank(base, tool) || rank < layerRank(order, tool) {
+						t.Fatalf("base %d, %v: %s composes to %+v, wider than its rules before (%+v) or the document", bi, order, tool, got, base)
+					}
+				}
+			}
+		}
+	}
+}

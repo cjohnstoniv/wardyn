@@ -257,8 +257,14 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 		tlsTerminated: &no, trustDomain: &trust,
 	}
 	srv := api.New(api.Config{})
-	if serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, &audit.DenialCoalescer{}, nil, nil); serr == nil {
+	waited, serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, &audit.DenialCoalescer{}, nil, nil)
+	if serr == nil {
 		t.Fatal("serveAndShutdown returned nil against an address already in use")
+	}
+	// A serve that fails at once never reached the clean-up wait: run's close must
+	// still wait the whole budget for the clean-ups the boot's Puts left.
+	if !waited.IsZero() || cleanUpWaitAfterServe(waited) != api.BackgroundShutdownBudget {
+		t.Errorf("after a serve error: the clean-up wait's deadline %v, run's close waits %v; want none and %v", waited, cleanUpWaitAfterServe(waited), api.BackgroundShutdownBudget)
 	}
 
 	mu.Lock()

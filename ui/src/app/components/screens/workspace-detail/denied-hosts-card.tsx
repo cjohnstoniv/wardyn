@@ -18,8 +18,10 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
 import { HostList } from "./host-list";
+import { reloadIfStale } from "./reload-if-stale";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
+import { WORKSPACE_HOSTS as H } from "../../wardyn/copy/workspace-hosts";
 
 export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onWorkspaceUpdated: (w: Workspace) => void }) {
   // useSecurityOperator, not useOperator (0.7 §B): PUT
@@ -47,10 +49,13 @@ export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onW
       const updated = await workspacesApi.setDeniedEgress(
         ws.id,
         (ws.denied_egress ?? []).filter((h) => h !== host),
+        ws.updated_at,
       );
       onWorkspaceUpdated(updated);
+      toast.success(H.REMOVED_DENIED(host));
     } catch (e) {
       toast.error(`Failed to remove ${host}`, { description: getErrorMessage(e) });
+      await reloadIfStale(e, ws.id, onWorkspaceUpdated);
     } finally {
       setRemoving(null);
     }
@@ -59,9 +64,10 @@ export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onW
   return (
     <DetailSectionCard
       title={`Denied hosts · ${rows.length}`}
-      subtitle="Every run against this workspace is permanently blocked from these — deny beats any allow. Removing one only lifts the block; it doesn't approve the host."
+      subtitle="Runs that start against this workspace are permanently blocked from these — deny beats any allow. Removing one only lifts the block for new runs; it doesn't approve the host."
     >
-      <HostList rows={rows} emptyText="Nothing denied." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
+      <HostList rows={rows} emptyText="Nothing denied." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)}
+        confirm={{ title: (h) => H.DENIED_TITLE(h, ws.name), body: H.DENIED_BODY }} />
     </DetailSectionCard>
   );
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -58,7 +59,7 @@ func TestPG_ComputerFolder_BrowseListAndRunPage(t *testing.T) {
 		t.Fatalf("seed: %v %v", ok, err)
 	}
 	at := time.Now().UTC()
-	if ok, err := e.pg.SetRunLocalFolderStatus(ctx, run, types.RunLocalFolderStatus{
+	if ok, err := e.pg.SetRunLocalFolderStatusIf(ctx, run, store.FolderStatusGuard{}, types.RunLocalFolderStatus{
 		Seed: &types.FolderPassRecord{At: at, Files: 2, Bytes: 18, Refused: []types.FolderRefusal{}},
 		Back: &types.FolderPassRecord{At: at, Files: 1, Bytes: 5, Refused: []types.FolderRefusal{}},
 	}); !ok || err != nil {

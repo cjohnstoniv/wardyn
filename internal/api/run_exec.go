@@ -1,0 +1,374 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
+)
+
+// POST /runs/{id}/exec runs one command in a running run and answers with its output: the SSH
+// gateway's exec channel (bridgeSSHExec) over plain HTTP, and no wider. Before the runner is called it
+// checks, in order, who may enter the run (getRunForEntry), the governance profile the run was launched
+// under (refuseExecGovernance: deny_interactive, and deny_task_mode_exec on a background run), the run's
+// data_out rule (as an SSH exec channel does), the run's state (execFreshRun) and the run's SSH channel
+// cap, which a command shares with SSH (sshAcquireSession). A background run takes a command too, though it
+// has no SSH access, so a pipeline step can run commands in its own headless run. The command runs as an SSH
+// exec runs it (sshExecArgv), with no TTY and no added environment, and its output is neither masked nor
+// recorded: its run.command.exec row names the command (its first runExecAuditCommandCap bytes) and its exit
+// code, never its output.
+
+const (
+	// runExecDefaultTimeout is a request's timeout when it names none; runExecMaxTimeoutSec the most it may name.
+	runExecDefaultTimeout = 60 * time.Second
+	runExecMaxTimeoutSec  = 300
+	// runExecMaxCommand is the longest command taken: Linux execs no single argument longer
+	// (MAX_ARG_STRLEN), and /bin/sh -c takes the command as one.
+	runExecMaxCommand = 128 << 10
+	// runExecAuditCommandCap is how much of the command its audit row keeps.
+	runExecAuditCommandCap = 4 << 10
+	// runExecCallerLeft is the run.command.exec error for a caller who left before the command ended.
+	runExecCallerLeft = "The caller left before the command ended."
+	// runExecStreamCap is how much of each stream the reply keeps. Reading never stops there: a stream
+	// nobody reads blocks the command (runner.ExecSession's streaming contract).
+	runExecStreamCap = 1 << 20
+	// runExecDataOutMsg is sshDataOutRefused's sentence for this door.
+	runExecDataOutMsg = "This run's data_out rule (%s) keeps content in, so commands are off; the terminal still works."
+	// runExecSandboxGoneMsg answers a run whose sandbox went away between the state check and the exec.
+	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
+	// runExecBusyMsg answers a run already holding its most SSH channels and commands at once.
+	runExecBusyMsg = "This run already has %d SSH channels or commands open, the most it may; try again when one ends."
+	// runExecFailedMsg answers a runner that could not start the command or lost it; the cause goes to the log.
+	runExecFailedMsg = "The runner could not run the command, or lost it before it ended."
+	// runExecUnsupportedMsg answers a sandbox with nothing to exec into: an exec-less runtime (libkrun) runs the
+	// task as the sandbox's only process, and a runner without exec streaming runs no second command.
+	runExecUnsupportedMsg = "This run's sandbox cannot take a command: its runtime or runner runs only the task, with no way to run another command beside it."
+	// runExecDenyInteractiveMsg answers a command under a profile that denies interactive sessions.
+	runExecDenyInteractiveMsg = "Commands are not allowed in this run: the governance profile %q it was launched under denies interactive sessions (deny_interactive)."
+	// runExecDenyTaskModeExecMsg answers a command into a background run under a profile that refuses commands
+	// nobody supervises.
+	runExecDenyTaskModeExecMsg = "Commands are not allowed in this background run: the governance profile %q it was launched under refuses commands nobody supervises (deny_task_mode_exec)."
+)
+
+func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "run")
+	if !ok {
+		return
+	}
+	run, ok := s.getRunForEntry(w, r, id)
+	if !ok {
+		return
+	}
+	// The governance door, exempt for a super admin as sshAuth's deny_interactive door is: a super admin is
+	// past getRunForEntry only on their own run or an operator-owned one, so the exemption cannot reach a
+	// person's run.
+	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
+		return
+	}
+	var req client.ExecRequest
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	timeout, msg := runExecTimeout(req)
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunExecInvalid, msg)
+		return
+	}
+	if s.refuseExecDataOut(w, r, run) {
+		return
+	}
+	ctx := r.Context()
+	at, actor := actorFromRequest(r)
+	fresh, start, msg := s.execFreshRun(ctx, run.ID, actor)
+	if msg != "" {
+		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
+		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": msg})
+		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)
+		return
+	}
+	defer start.release() // a no-op once runExec has started the command
+	// One of the run's SSH channel slots, the same per-run cap an SSH exec draws from.
+	if !s.sshAcquireSession(run.ID) {
+		start.release()
+		limit := s.cfg.SSHMaxSessionsPerRun
+		// Nothing ran, so the row names the refusal and not the command.
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"error": fmt.Sprintf("%s (max %d)", sshCapReasonChannels, limit)})
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunExecBusy, fmt.Sprintf(runExecBusyMsg, limit))
+		return
+	}
+	defer s.sshReleaseSession(run.ID)
+	s.runExec(w, r, fresh, req.Command, timeout, start)
+}
+
+// execLiveRunWords are this route's refusals for a run that cannot take a command now, written for a pipeline
+// step that reads them: they name the command, not SSH.
+var execLiveRunWords = liveRunWords{
+	noRunner:   "This server runs no sandboxes, so the run cannot take a command.",
+	notFound:   "The run was not found.",
+	notRunning: "The run is not running (state %s), so it cannot take a command. A background run ends when its task exits.",
+	ended:      "The run has ended, so it cannot take a command. Its logs, audit trail and status stay available.",
+}
+
+// execFreshRun is sshFreshRun for this route, less its background refusal: a background run takes a command
+// here (the contract's third exception, run_mode_doors.go), while its SSH channels still refuse. A paused run is
+// thawed first (thawForExec reads it again under the run's operation lock, so a run that ended since this first read
+// is not thawed).
+//
+// The first read refuses a run already ended without waiting for any lock. The run is then read again under its
+// start lock (lockStart), which every write that ends the run or marks it kept takes around that write
+// (FenceRunStarts), so a run ended before this last read is refused, and an end that comes after it waits until
+// startAdmitted has had the command started, at most execStartBudget. The hold is returned for runExec's start; it
+// is never held while the command runs.
+func (s *Server) execFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, startHold, string) {
+	run, msg := s.liveRunForExec(ctx, runID, execLiveRunWords)
+	if msg == "" {
+		msg = s.thawForCommand(ctx, run, principal)
+	}
+	if msg != "" {
+		return types.AgentRun{}, startHold{}, msg
+	}
+	h, err := s.lockStart(ctx, runID)
+	if err != nil {
+		return types.AgentRun{}, startHold{}, lockUnavailableMsg
+	}
+	run, msg = startRead(s, h, func(ctx context.Context) (types.AgentRun, string) {
+		return s.liveRunForExec(ctx, runID, execLiveRunWords)
+	})
+	if msg != "" {
+		h.release()
+		return types.AgentRun{}, startHold{}, msg
+	}
+	return run, h, ""
+}
+
+// refuseExecGovernance is this route's governance door, read from the profile the run was launched under as it
+// stands now (runUnit), so a limit set later reaches runs already going: deny_interactive refuses a command into
+// any run, as it refuses SSH, and deny_task_mode_exec refuses one into a background run, where nobody supervises
+// it, as it refuses an exec run at create. True when it has answered. The harness sign-in run is exempt, as
+// interactiveDeniedBy exempts it. Callers skip it for a super admin, as sshAuth does.
+func (s *Server) refuseExecGovernance(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	if run.Task == harnessLoginTask {
+		return false
+	}
+	ctx := r.Context()
+	p, err := s.runUnit(ctx, run)
+	if err != nil {
+		return s.refuseRunUnitError(w, r, "runs.exec", "exec", run, err)
+	}
+	if p == nil {
+		return false
+	}
+	if p.Limits.DenyInteractive {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.exec", fmt.Sprintf(runExecDenyInteractiveMsg, p.Name)).
+			OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(ctx, p)).OnKnob(s.runLockOf(ctx, p, "deny_interactive")))
+	}
+	if run.BackgroundOnly() && p.Limits.DenyTaskModeExec {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.exec", fmt.Sprintf(runExecDenyTaskModeExecMsg, p.Name)).
+			OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(ctx, p)).OnKnob(s.runLockOf(ctx, p, "deny_task_mode_exec")))
+	}
+	return false
+}
+
+// execStartBudget is the longest an exec's start, or a display's dial, holds the run's start lock (an attach has its
+// own, attachPrepareTimeout): a runner that has not started the command by then is cut off and the command refused,
+// so the run's end waits no longer than that for a slow runner.
+var execStartBudget = 10 * time.Second
+
+// runExec runs command in fresh and answers its result. execAdmitted lets execFreshRun's start lock go beside the
+// command once ExecStream has returned: a release waits on the database, and must not hold the command before
+// collectExec's timeout and Close are in place. While it runs, the run's idle clock is kept reset (TouchRun and
+// attachKeepalive), as for an SSH exec, so auto_stop does not end a long command. A background run has no idle stop,
+// so the touch changes nothing for it: it still ends when its task exits, at its end or when killed, and a command
+// running then loses its sandbox.
+func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.AgentRun, command string, timeout time.Duration, start startHold) {
+	ctx := r.Context()
+	at, actor := actorFromRequest(r)
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	sess, err := s.execAdmitted(execCtx, start, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(command)})
+	if err != nil {
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": auditStepExecOpen}) // writeExecStartError logs the cause
+		writeExecStartError(w, r, err)
+		return
+	}
+	keepCtx, stopKeep := context.WithCancel(ctx)
+	defer stopKeep()
+	// The first touch runs beside the command, never before collectExec: a touch that waits (a row another
+	// transaction holds) must not hold the command past its timeout before collectExec closes the session.
+	go func() {
+		_ = s.cfg.Store.TouchRun(keepCtx, fresh.ID)
+		s.attachKeepalive(keepCtx, fresh.ID)
+	}()
+	res, err := collectExec(execCtx, sess)
+	if err != nil {
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": auditStepCollectExec}) // writeExecStartError logs the cause
+		writeExecStartError(w, r, err)
+		return
+	}
+	// collectExec answers exit code -1 only when execCtx ended first: the timeout, or a caller who left.
+	data, outcome := map[string]any{"command": command, "exit": res.ExitCode}, "success"
+	switch {
+	case res.TimedOut:
+		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
+	case res.ExitCode == -1:
+		data["error"], outcome = runExecCallerLeft, "failure"
+	}
+	s.auditRunExec(ctx, fresh, at, actor, outcome, data)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// runExecTimeout is the request's timeout, or the sentence refusing the request.
+func runExecTimeout(req client.ExecRequest) (time.Duration, string) {
+	if strings.TrimSpace(req.Command) == "" {
+		return 0, "command is required"
+	}
+	if len(req.Command) > runExecMaxCommand {
+		return 0, fmt.Sprintf("command is longer than %d KiB, the most one argument may be", runExecMaxCommand>>10)
+	}
+	switch {
+	case req.TimeoutSec == 0:
+		return runExecDefaultTimeout, ""
+	case req.TimeoutSec < 1 || req.TimeoutSec > runExecMaxTimeoutSec:
+		return 0, fmt.Sprintf("timeout_sec must be from 1 to %d", runExecMaxTimeoutSec)
+	}
+	return time.Duration(req.TimeoutSec) * time.Second, ""
+}
+
+// refuseExecDataOut is an SSH exec channel's data_out gate (sshDataOut, sshDataOutRefused) for this
+// door: a rule that cannot be read is blocked, and any rule but allowed refuses the command with the
+// run.data_out.deny row SSH writes. True when it has answered.
+func (s *Server) refuseExecDataOut(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	ctx := r.Context()
+	rule, _, err := s.runDataOutRule(ctx, run.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a run's data_out rule is unreadable; its commands are refused", "run_id", run.ID, "err", err)
+		rule = types.TransferBlocked
+	}
+	if rule.DataOut() == types.TransferAllowed {
+		return false
+	}
+	at, actor := actorFromRequest(r)
+	s.auditDataOutDenied(ctx, run.ID, at, actor, "exec", rule)
+	writeErrorReason(w, http.StatusConflict, reasonDataOutBlocked, fmt.Sprintf(runExecDataOutMsg, rule))
+	return true
+}
+
+// writeExecStartError answers a command the runner did not start, or lost before it ended.
+func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, runner.ErrExecStreamUnsupported):
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, runExecUnsupportedMsg)
+	case errors.Is(err, runner.ErrSandboxGone):
+		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, runExecSandboxGoneMsg)
+	default:
+		writeErrorReason(w, http.StatusBadGateway, reasonRunExecFailed, loggedMsg(r.Context(), runExecFailedMsg, err))
+	}
+}
+
+// auditRunExec writes the command's run.command.exec row: the command's first runExecAuditCommandCap
+// bytes and its exit code, or the error, never output. A cut command adds command_bytes and command_sha256,
+// its full length and hash, so padding cannot hide what ran. It outlives a caller who left before the command ended.
+func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.ActorType, actor, outcome string, data map[string]any) {
+	if c, ok := data["command"].(string); ok && len(c) > runExecAuditCommandCap {
+		cut := runExecAuditCommandCap
+		for cut > 0 && !utf8.RuneStart(c[cut]) {
+			cut--
+		}
+		sum := sha256.Sum256([]byte(c))
+		data["command"], data["command_bytes"], data["command_sha256"] = c[:cut]+store.AuditTargetTruncatedMarker, len(c), hex.EncodeToString(sum[:])
+	}
+	s.recordStreamAudit(context.WithoutCancel(ctx), run.SandboxRef, s.auditEvent(&run.ID, at, actor, "run.command.exec",
+		run.ID.String(), outcome, mustJSON(data)))
+}
+
+// collectExec reads both of sess's streams to their end, keeping the first runExecStreamCap bytes of
+// each, and then its exit code. When ctx ends first (the timeout, or a caller who left) the session is
+// closed, which ends both streams, and the exit code is -1. Otherwise a stream that broke, or a Wait
+// that gave no exit code, is the error: the runner lost the command (a k8s exec whose connection failed
+// after ExecStream returned ends its streams that way), and no exit code is made up for it.
+func collectExec(ctx context.Context, sess *runner.ExecSession) (client.ExecResult, error) {
+	// Close is what ends a stream no context reaches (a docker exec's hijacked connection), as
+	// sshBridgeExecSession does on a dropped connection.
+	stop := context.AfterFunc(ctx, func() {
+		if sess.Close != nil {
+			_ = sess.Close()
+		}
+	})
+	defer stop()
+	defer func() {
+		if sess.Close != nil {
+			_ = sess.Close()
+		}
+	}()
+	if sess.Stdin != nil {
+		_ = sess.Stdin.Close() // no input: a command reading stdin sees its end
+	}
+	stdout, stderr := &execCapture{max: runExecStreamCap}, &execCapture{max: runExecStreamCap}
+	var wg sync.WaitGroup
+	var errErr, outErr error
+	if sess.Stderr != nil {
+		// Drained beside Stdout, never after it: one demux feeds both (drainExecStderr).
+		wg.Go(func() { _, errErr = io.Copy(stderr, sess.Stderr) })
+	}
+	if sess.Stdout != nil {
+		_, outErr = io.Copy(stdout, sess.Stdout)
+	}
+	wg.Wait()
+	res := client.ExecResult{Stdout: string(stdout.buf), Stderr: string(stderr.buf), Truncated: stdout.dropped || stderr.dropped}
+	if ctx.Err() != nil {
+		res.ExitCode, res.TimedOut = -1, errors.Is(ctx.Err(), context.DeadlineExceeded)
+		return res, nil
+	}
+	if err := errors.Join(outErr, errErr); err != nil {
+		return client.ExecResult{}, fmt.Errorf("the command's output stream broke: %w", err)
+	}
+	if sess.Wait == nil {
+		return client.ExecResult{}, errors.New("the runner gave no exit code")
+	}
+	code, err := sess.Wait()
+	if err != nil {
+		if ctx.Err() != nil {
+			res.ExitCode, res.TimedOut = -1, errors.Is(ctx.Err(), context.DeadlineExceeded)
+			return res, nil
+		}
+		return client.ExecResult{}, fmt.Errorf("the runner lost the command: %w", err)
+	}
+	res.ExitCode = clampExitCode(code)
+	return res, nil
+}
+
+// execCapture keeps the first max bytes written to it and notes that more came. It never refuses a
+// write, so the stream behind it is read to its end.
+type execCapture struct {
+	buf     []byte
+	max     int
+	dropped bool
+}
+
+func (c *execCapture) Write(p []byte) (int, error) {
+	n := min(len(p), c.max-len(c.buf))
+	c.buf = append(c.buf, p[:n]...)
+	if n < len(p) {
+		c.dropped = true
+	}
+	return len(p), nil
+}

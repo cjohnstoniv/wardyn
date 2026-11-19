@@ -3,19 +3,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import * as AsciinemaPlayer from "asciinema-player";
 import type { Recording } from "../../lib/types";
 
 // asciinema-player drives real DOM/canvas terminal emulation — stub it so the
-// component mounts without a real player instance.
+// component mounts without a real player instance. Each stub records its
+// listeners and answers getCurrentTime with `at`.
+type Stub = { at: number; on: Record<string, () => void>; seek: ReturnType<typeof vi.fn>; play: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
+const players: Stub[] = [];
 vi.mock("asciinema-player", () => ({
-  create: vi.fn(() => ({ dispose: vi.fn() })),
+  create: vi.fn(() => {
+    const p: Stub = { at: 0, on: {}, seek: vi.fn(async () => {}), play: vi.fn(async () => {}), dispose: vi.fn() };
+    players.push(p);
+    return {
+      dispose: p.dispose,
+      seek: p.seek,
+      play: p.play,
+      getCurrentTime: () => p.at,
+      addEventListener: (name: string, handler: () => void) => {
+        p.on[name] = handler;
+      },
+    };
+  }),
 }));
 vi.mock("asciinema-player/dist/bundle/asciinema-player.css", () => ({}));
 
 import { TerminalPlayer } from "./terminal-player";
+
+beforeEach(() => {
+  players.length = 0;
+  vi.mocked(AsciinemaPlayer.create).mockClear();
+});
 
 function rec(): Recording {
   return {
@@ -59,5 +80,35 @@ describe("TerminalPlayer", () => {
     expect(speed(2)).toHaveAttribute("aria-checked", "true");
     await userEvent.keyboard("{End}");
     expect(speed(4)).toHaveFocus();
+  });
+
+  // A speed change rebuilds the player, which used to start again from the beginning, paused.
+  it("a speed change keeps the replay's place and keeps playing", async () => {
+    render(<TerminalPlayer recording={rec()} />);
+    const first = players[0];
+    first.on.playing();
+    first.at = 42.5;
+    await userEvent.click(screen.getByRole("radio", { name: "2x speed" }));
+    expect(AsciinemaPlayer.create).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(AsciinemaPlayer.create).mock.calls[1][2]).toMatchObject({ speed: 2 });
+    expect(first.dispose).toHaveBeenCalled();
+    const second = players[1];
+    expect(second.seek).toHaveBeenCalledWith(42.5);
+    expect(second.play).toHaveBeenCalled();
+  });
+
+  it("a paused replay stays paused at its place; a new recording starts from the beginning", async () => {
+    const { rerender } = render(<TerminalPlayer recording={rec()} />);
+    players[0].on.playing();
+    players[0].on.pause();
+    players[0].at = 7;
+    await userEvent.click(screen.getByRole("radio", { name: "4x speed" }));
+    expect(players[1].seek).toHaveBeenCalledWith(7);
+    expect(players[1].play).not.toHaveBeenCalled();
+
+    players[1].at = 9;
+    rerender(<TerminalPlayer recording={{ ...rec(), run_id: "run_2", cast: "y" }} />);
+    expect(players[2].seek).not.toHaveBeenCalled();
+    expect(players[2].play).not.toHaveBeenCalled();
   });
 });

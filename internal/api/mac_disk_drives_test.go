@@ -171,12 +171,14 @@ func TestOwnerDeleteOfAHeldDiskStillAborts(t *testing.T) {
 func TestDiskDriveOffItsMacIsRefusedAsNotInPool(t *testing.T) {
 	mac := uuid.New()
 	disk := types.UserDrive{Name: "Notes", Backend: types.DriveBackendMacDisk, OwnerSubject: aliceSub, HomeRunnerID: &mac}
-	w := httptest.NewRecorder()
-	f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
-		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: disk}}}, mode: foldPreview}
-	if (&Server{}).stepDriveEligibility(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity ||
-		!strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) || !strings.Contains(w.Body.String(), driveMacDiskElsewhereMsg("Notes", macDiskNoName)) {
-		t.Fatalf("a disk drive on the organisation's runners = %d %s, want 422 drive_not_in_pool", w.Code, w.Body)
+	for _, kind := range []string{"", "linux_vm"} { // a Linux VM takes a bound drive, never a Mac's disk
+		w := httptest.NewRecorder()
+		f := &runFold{w: w, req: &createRunRequest{MachineKind: kind}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
+			drives: []runDrive{{resolved: types.ResolvedDrive{Drive: disk}}}, mode: foldPreview}
+		if (&Server{}).stepDriveEligibility(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity ||
+			!strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) || !strings.Contains(w.Body.String(), driveMacDiskElsewhereMsg("Notes", macDiskNoName)) {
+			t.Fatalf("a disk drive in a %q run on the organisation's runners = %d %s, want 422 drive_not_in_pool", kind, w.Code, w.Body)
+		}
 	}
 }
 

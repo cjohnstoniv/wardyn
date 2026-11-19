@@ -350,7 +350,8 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 	}
 
 	// The total is the run's: an idle release and a runner reconnect keep it spent.
-	setViaOrgSeams(t, 150*time.Millisecond, 20*time.Millisecond, 8)
+	// The watcher never ticks here: the test makes the idle release itself, so nothing depends on the clock.
+	setViaOrgSeams(t, viaOrgIdleTimeout, time.Hour, 8)
 	k := newViaOrgAPIFixture(t)
 	exhausted := func(stage string) {
 		t.Helper()
@@ -358,9 +359,21 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 			t.Fatalf("%s = %d %s, want 429 via_org_cap_exceeded", stage, w.Code, w.Body)
 		}
 	}
-	k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost)
+	if w := k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
+		t.Fatalf("the first forward = %d %s, want 200", w.Code, w.Body)
+	}
+	if hits, _, _ := k.up.seen(); hits != 1 {
+		t.Fatalf("the first forward reached the destination %d times, want 1", hits)
+	}
 	exhausted("past the total")
-	waitFor(t, "the idle release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
+	k.srv.viaOrg.mu.Lock()
+	kRun := k.srv.viaOrg.runs[k.run.ID]
+	k.srv.viaOrg.mu.Unlock()
+	idleGen := kRun.closeIdle(time.Now().Add(2 * viaOrgIdleTimeout))
+	if idleGen == nil {
+		t.Fatal("no idle release past the timeout")
+	}
+	closeViaOrgGen(k.run.ID, idleGen)
 	exhausted("after the idle release")
 	k.srv.RecordRunnerDisconnected(context.Background(), k.rn.ID, nil)
 	waitFor(t, "the disconnect release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
@@ -471,6 +484,47 @@ func TestViaOrg_EndToEndThroughTheRelay(t *testing.T) {
 		ev, ok := relayAudit(f.srv, f.run.ID, "egress.allow")
 		return ok && auditDataOf(ev)["relay"] == "runner:"+f.rn.ID.String()
 	})
+}
+
+// TestViaOrg_RelayedVMFlowIsNotActivity: on a VM run, a forwarded request the runner marked as a guest flow off its
+// relay listener (ViaOrgRelayedHeader) rides the engine's relay lane, so its allow row never moves the idle clock
+// (agent_runs.updated_at); the same request unmarked is the run working and does.
+func TestViaOrg_RelayedVMFlowIsNotActivity(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		t.Run(map[bool]string{true: "marked", false: "unmarked"}[marked], func(t *testing.T) {
+			f := newViaOrgAPIFixture(t)
+			if _, err := f.pool.Exec(f.ctx, `UPDATE agent_runs SET machine_kind = $2, updated_at = now() - interval '1 hour' WHERE id = $1`,
+				f.run.ID, string(types.MachineLinuxVM)); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+f.grant.String()+"/v1/messages", strings.NewReader(`{"q":1}`))
+			req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, f.run.ID))
+			req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+			req.Header.Set(proxy.ViaOrgAuthorizationHeader, "Bearer sandbox-own")
+			if marked {
+				req.Header.Set(proxy.ViaOrgRelayedHeader, "1")
+			}
+			req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: f.rn.ID}))
+			w := httptest.NewRecorder()
+			f.srv.relayRoutes(f.srv.InternalHandler()).ServeHTTP(w, req)
+			if w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+				t.Fatalf("via_org = %d %s", w.Code, w.Body)
+			}
+			// The decision rows flush with the engine; the touch is made before the row's audit write.
+			f.srv.endViaOrgRunner(f.rn.ID)
+			waitFor(t, "the org-side allow row", func() bool {
+				_, ok := relayAudit(f.srv, f.run.ID, "egress.allow")
+				return ok
+			})
+			var touched bool
+			if err := f.pool.QueryRow(f.ctx, `SELECT updated_at > now() - interval '30 minutes' FROM agent_runs WHERE id = $1`, f.run.ID).Scan(&touched); err != nil {
+				t.Fatal(err)
+			}
+			if touched == marked {
+				t.Fatalf("marked=%v: the idle clock moved=%v, want %v", marked, touched, !marked)
+			}
+		})
+	}
 }
 
 // viaOrgRelayClient is runnerRelayClient keeping both directions of every relayed byte.
@@ -590,6 +644,57 @@ func TestViaOrg_OrgInspectsWithTheDeclaredCorpus(t *testing.T) {
 	}
 }
 
+// An engine built for a request that comes after a quiet period is not idle: the idle tick that lands
+// between its build and the admission of its stream leaves it in place, and the request is served by it.
+func TestViaOrg_FreshEngineSurvivesAnIdleTick(t *testing.T) {
+	setViaOrgSeams(t, viaOrgIdleTimeout, time.Hour, viaOrgMaxBytes)
+	f := newViaOrgAPIFixture(t)
+	R := f.rn.ID
+	if w := f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
+		t.Fatalf("the first forward = %d %s, want 200", w.Code, w.Body)
+	}
+	f.srv.viaOrg.mu.Lock()
+	run := f.srv.viaOrg.runs[f.run.ID]
+	f.srv.viaOrg.mu.Unlock()
+	f.srv.releaseViaOrgRun(run, false, false)
+	run.smu.Lock()
+	run.idleSince = time.Now().Add(-2 * viaOrgIdleTimeout)
+	run.smu.Unlock()
+
+	acquired, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	resume := sync.OnceFunc(func() { close(proceed) })
+	viaOrgAfterEngine = func() { once.Do(func() { close(acquired); <-proceed }) }
+	t.Cleanup(func() { viaOrgAfterEngine = nil; resume() })
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
+	run.mu.Lock()
+	built := run.engine
+	run.mu.Unlock()
+	if built == nil {
+		t.Fatal("the request parked without an engine")
+	}
+	if gen := run.closeIdle(time.Now()); gen != nil {
+		t.Fatal("an idle tick retired the engine a waiting request had just built")
+	}
+	resume()
+	w := <-done
+	if w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+		t.Fatalf("the request after the idle tick = %d %s, want 200 upstream-ok", w.Code, w.Body)
+	}
+	run.mu.Lock()
+	cur := run.engine
+	run.mu.Unlock()
+	if cur != built {
+		t.Fatal("the request was not served by the engine it waited on")
+	}
+}
+
 // A request that took the run's engine just before a non-final release (idle, or the runner away)
 // is never served through the retired engine: it takes the live replacement, and the org-side
 // decision row of its traffic is written.
@@ -602,7 +707,11 @@ func TestViaOrg_RetiredEngineIsNeverServed(t *testing.T) {
 	t.Cleanup(func() { viaOrgAfterEngine = nil })
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
-	<-acquired
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
 	f.srv.viaOrg.mu.Lock()
 	run := f.srv.viaOrg.runs[f.run.ID]
 	f.srv.viaOrg.mu.Unlock()
@@ -724,4 +833,61 @@ func TestViaOrg_StalledPeerDoesNotPinARetiredEngine(t *testing.T) {
 	run.mu.Unlock()
 	f.srv.releaseViaOrgRun(run, false, false)
 	waitFor(t, "the retired engine closes although its peer stopped reading", func() bool { return old.engine.Closed() })
+}
+
+// TestViaOrg_AnUpstreamProxyHostTheProxyRefusesIsNotAnsweredAsARetry: a site upstream proxy URL whose host is
+// in a spelling the proxy refuses, stored before the write refused it, stops the run's via_org engine from
+// being built. That is permanent, so each 503 says why, asks for no retry, and names neither the host nor the
+// URL's credential, and nothing is dialed. The refusal is remembered for the URL: its resolve is audited once,
+// however many requests come, and once more for each rewrite. Once the URL is cleared, the next request is served.
+func TestViaOrg_AnUpstreamProxyHostTheProxyRefusesIsNotAnsweredAsARetry(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	const want = "the organisation's egress for this run cannot be built: the site's upstream proxy URL writes its host in a " +
+		"spelling the proxy refuses in every request, so it stays refused until an operator rewrites the URL"
+	refusedRows := func() int {
+		a := f.srv.cfg.Audit.(*syncAudit)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		n := 0
+		for _, ev := range a.events {
+			if ev.Action == "run.upstream_proxy.resolve" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == f.run.ID &&
+				strings.Contains(string(ev.Data), `"`+upstreamURLHostRefused+`"`) {
+				n++
+			}
+		}
+		return n
+	}
+	logs := captureSlog(t)
+	for i, raw := range []string{"http://user:pass@010.0.0.1:3128", "http://134744072:3128"} {
+		if _, err := f.st.PutSiteConfig(f.ctx, types.SiteConfig{UpstreamProxyURL: raw}); err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			w := f.forward(t, f.rn.ID, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost)
+			var got errorBody
+			if w.Code != http.StatusServiceUnavailable || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
+				got.Reason != reasonViaOrgUpstreamProxyRefused || got.Error != want {
+				t.Errorf("a via_org request with the site's upstream at %q = %d %s, want 503 %s %q", raw, w.Code, w.Body, reasonViaOrgUpstreamProxyRefused, want)
+			}
+			if body := w.Body.String(); strings.Contains(body, "retry") || strings.Contains(body, "010.0.0.1") ||
+				strings.Contains(body, "134744072") || strings.Contains(body, "user:pass") {
+				t.Errorf("the answer asks for a retry or names the host or the credential: %s", body)
+			}
+		}
+		if n := refusedRows(); n != i+1 {
+			t.Errorf("after 3 requests at %q: %d run.upstream_proxy.resolve failure rows for the host's spelling, want %d (one per URL)", raw, n, i+1)
+		}
+		if n := strings.Count(logs.String(), "level=ERROR msg=\"api: build the via_org engine\""); n != i+1 {
+			t.Errorf("after 3 requests at %q: %d error lines for the refused build, want %d (one per URL)", raw, n, i+1)
+		}
+	}
+	if hits, _, _ := f.up.seen(); hits != 0 {
+		t.Fatalf("a refused request reached the destination %d times", hits)
+	}
+	if _, err := f.st.PutSiteConfig(f.ctx, types.SiteConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.forward(t, f.rn.ID, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+		t.Fatalf("with the URL cleared = %d %s, want the request served", w.Code, w.Body)
+	}
 }

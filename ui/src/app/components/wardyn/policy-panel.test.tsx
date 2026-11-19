@@ -141,6 +141,12 @@ describe("PolicyPanel — helper rail", () => {
     }
   });
 
+  // jsdom does no layout: this pins the class that lets a long field name break, so the list never scrolls sideways.
+  it("a field name may break anywhere", () => {
+    render(<Harness initial={VALID} />);
+    expect(screen.getByText("allowed_domains", { selector: "code" })).toHaveClass("[overflow-wrap:anywhere]");
+  });
+
   it("the run instance drops workspace_mounts (the Workspace card owns mounts there)", () => {
     render(<Harness instance="run" initial={VALID} />);
     const keys = Object.keys(FIELD_HELP);
@@ -266,6 +272,33 @@ describe("PolicyPanel — live derivations", () => {
 
     expect(screen.getByText("Allow-all egress (block-list only)")).toBeInTheDocument();
     expect(screen.getByText("Runs until stopped")).toBeInTheDocument();
+  });
+});
+
+describe("PolicyPanel — recording and a macOS VM run", () => {
+  it("says what a level does to a macOS VM run only when it edits a profile ceiling", () => {
+    const { unmount } = render(<Harness initial={VALID} ceiling />);
+    expect(screen.getByTestId("policy-recording-macos")).toBeInTheDocument();
+    unmount();
+    render(<Harness initial={VALID} />);
+    expect(screen.queryByTestId("policy-recording-macos")).toBeNull();
+  });
+
+  it("the New Run policy does not say it", () => {
+    render(<Harness initial={VALID} instance="run" />);
+    expect(screen.queryByTestId("policy-recording-macos")).toBeNull();
+  });
+});
+
+describe("PolicyPanel — data out", () => {
+  it("renders the Data out section on a parsed spec, after Recording, and not on a spec that does not parse", () => {
+    const { unmount } = render(<Harness initial={VALID} />);
+    const section = screen.getByTestId("policy-data-out");
+    expect(within(section).getByRole("radiogroup", { name: "Data out" })).toBeInTheDocument();
+    expect(screen.getByTestId("policy-recording").compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    render(<Harness initial="allowed_domains: [" />);
+    expect(screen.queryByTestId("policy-data-out")).toBeNull();
   });
 });
 

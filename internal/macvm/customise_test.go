@@ -40,6 +40,7 @@ type itemGuest struct {
 	steps []string // "push <dest> <mode>" and "run <argv>", in order
 	argvs [][]string
 	fail  func(argv []string) int
+	out   func(argv []string) string // a run's combined output; nil is none
 }
 
 func newItemGuest() *itemGuest { return &itemGuest{guest: newGuest()} }
@@ -72,10 +73,14 @@ func (g *itemGuest) Run(ctx context.Context, argv []string) (string, int, error)
 	g.steps = append(g.steps, "run "+strings.Join(argv, " "))
 	g.argvs = append(g.argvs, argv)
 	g.mu.Unlock()
-	if g.fail != nil {
-		return "", g.fail(argv), nil
+	out := ""
+	if g.out != nil {
+		out = g.out(argv)
 	}
-	return "", 0, nil
+	if g.fail != nil {
+		return out, g.fail(argv), nil
+	}
+	return out, 0, nil
 }
 
 // itemFile writes body to a file in dir and returns its path and pin.
@@ -152,6 +157,7 @@ func TestParseBaseListRefuses(t *testing.T) {
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
 		"codex requirements":           listJSON(t, file(guestagent.MacCodexRequirementsPath)),
 		"the run secrets dir":          listJSON(t, file(guestagent.MacRunDir+"/x")),
+		"the run settings dir":         listJSON(t, file(guestagent.MacSessionEnvPath)),
 		"the stage dir":                listJSON(t, file(guestagent.MacItemStageDir+"/edr/item.pkg")),
 		"a harness CLI":                listJSON(t, file("/usr/local/bin/claude")),
 		"the agent":                    listJSON(t, file(guestagent.MacAgentBinaryPath)),
@@ -472,6 +478,7 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []string{
+				"run /usr/bin/security remove-trusted-cert -d " + S + "/org-ca/item.cer",
 				"run /usr/bin/security delete-certificate -t -Z " + strings.Repeat("0A", 20) + " " + K,
 				"run /bin/rm -rf " + S + "/gone",
 				"run /bin/mkdir -p -m 0700 " + S,
@@ -494,13 +501,32 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 			}
 		})
 	}
-	// A removal macOS refuses stops the update with what to do.
+	// A removal macOS refuses stops the update with what to do; a refused admin-trust removal stops
+	// before the certificate is deleted.
+	for _, refused := range []string{"remove-trusted-cert", "delete-certificate"} {
+		f := newTools(t)
+		f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
+		g := newItemGuest()
+		g.fail = func(argv []string) int { return map[string]int{refused: 1}[argv[1]] }
+		if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err == nil || !strings.Contains(err.Error(), "prepare --new-image") {
+			t.Fatalf("a refused %s: %v", refused, err)
+		}
+		if deleted := slices.ContainsFunc(g.steps, func(s string) bool { return strings.Contains(s, "delete-certificate") }); refused == "remove-trusted-cert" && deleted {
+			t.Error("the certificate was deleted after its admin trust removal was refused")
+		}
+	}
+	// Nothing left to remove (a trust macOS refused at the add, or a certificate already gone) is no error.
 	f := newTools(t)
 	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
 	g := newItemGuest()
-	g.fail = func(argv []string) int { return map[string]int{"delete-certificate": 1}[argv[1]] }
-	if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err == nil || !strings.Contains(err.Error(), "prepare --reprepare") {
-		t.Fatalf("a refused CA removal: %v", err)
+	g.fail = func(argv []string) int {
+		return map[string]int{"remove-trusted-cert": 1, "delete-certificate": 44}[argv[1]]
+	}
+	g.out = func([]string) string {
+		return "SecTrustSettingsRemoveTrustSettings: The specified item could not be found in the keychain."
+	}
+	if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err != nil {
+		t.Fatalf("a CA already gone: %v", err)
 	}
 	f = newTools(t)
 	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "leaf", Path: leaf, SHA256: leafPin}}}

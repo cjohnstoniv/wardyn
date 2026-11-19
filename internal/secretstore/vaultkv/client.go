@@ -7,13 +7,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,7 +20,9 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/httpkv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
@@ -90,16 +90,12 @@ func (e *vaultError) Error() string {
 // at once, not ride out a grace period (design rule 21).
 func (e *vaultError) Unwrap() error {
 	switch {
-	case transient(e.status):
+	case httpkv.Transient(e.status):
 		return secretstore.ErrUnavailable
 	case e.status == http.StatusUnauthorized || e.status == http.StatusForbidden:
 		return kek.ErrAccess
 	}
 	return nil
-}
-
-func transient(status int) bool {
-	return status == 0 || status == http.StatusTooManyRequests || status >= 500
 }
 
 func statusOf(err error) int {
@@ -117,7 +113,7 @@ func newClient(cfg Config) (*client, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return nil, fmt.Errorf("WARDYN_VAULT_ADDR %q is not an http(s) URL", cfg.Addr)
 	}
-	if u.Scheme == "http" && !loopback(u.Hostname()) {
+	if u.Scheme == "http" && !httpkv.Loopback(u.Hostname()) {
 		return nil, fmt.Errorf("WARDYN_VAULT_ADDR %q is plain http:// to a non-loopback host; use https:// (credentials cross this connection)", cfg.Addr)
 	}
 	tlsCfg, err := tlsConfig(cfg.CACertFile)
@@ -146,7 +142,7 @@ func newClient(cfg Config) (*client, error) {
 func sameOrigin(base *url.URL) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		to := req.URL
-		if to.User != nil || to.Scheme != base.Scheme || !sameHost(to.Hostname(), base.Hostname()) || port(to) != port(base) {
+		if to.User != nil || to.Scheme != base.Scheme || !httpkv.SameHost(to.Hostname(), base.Hostname()) || httpkv.EffectivePort(to) != httpkv.EffectivePort(base) {
 			return http.ErrUseLastResponse
 		}
 		// Setting CheckRedirect replaces net/http's own bound, so it is kept here.
@@ -157,50 +153,10 @@ func sameOrigin(base *url.URL) func(*http.Request, []*http.Request) error {
 	}
 }
 
-// sameHost compares two host names as DNS does: ASCII letters fold and nothing
-// else does. strings.EqualFold would also take a Kelvin sign for a k.
-func sameHost(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range len(a) {
-		x, y := a[i], b[i]
-		if 'A' <= x && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if 'A' <= y && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
-}
-
-// port is the port u is dialled on: its own, else its scheme's.
-func port(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	if u.Scheme == "http" {
-		return "80"
-	}
-	return "443"
-}
-
-func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 // tlsConfig adds caFile (WARDYN_VAULT_CACERT_FILE, else WARDYN_TRUSTED_CA_FILE)
 // to the system roots.
 func tlsConfig(caFile string) (*tls.Config, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg := &tls.Config{MinVersion: hoptls.MinClientTLSVersion}
 	if caFile == "" {
 		return cfg, nil
 	}
@@ -208,11 +164,8 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the Vault CA bundle: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
+	pool, err := hoptls.SystemPoolWith(pem)
+	if err != nil {
 		return nil, fmt.Errorf("the Vault CA bundle %s holds no PEM certificate", caFile)
 	}
 	cfg.RootCAs = pool
@@ -260,17 +213,11 @@ func (c *client) relogin(ctx context.Context) error {
 func (c *client) retrying(ctx context.Context, method, path string, in, out any, authed bool) (int, bool, error) {
 	var err error
 	status := 0
-	for attempt := 0; ; attempt++ {
+	retried := httpkv.Retry(ctx, retries, c.backoff, func() (bool, time.Duration) {
 		status, err = c.once(ctx, method, path, in, out, authed)
-		if err == nil || !transient(statusOf(err)) || attempt == retries {
-			return status, attempt > 0, err
-		}
-		select {
-		case <-ctx.Done():
-			return status, attempt > 0, err
-		case <-time.After(c.backoff << attempt):
-		}
-	}
+		return err != nil && httpkv.Transient(statusOf(err)), 0
+	})
+	return status, retried, err
 }
 
 func (c *client) once(ctx context.Context, method, path string, in, out any, authed bool) (int, error) {

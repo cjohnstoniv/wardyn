@@ -161,10 +161,15 @@ cmd_build() {
   fi
 }
 
+# cmd_wait [PID] — with PID (the wardynd `up` just started), a wardynd that exits fails at once, and an
+# answer on its port counts only while it runs: another process may have taken a picked port first.
 cmd_wait() {
   log "Waiting for ${DAEMON_URL}/healthz"
-  if ! wait_healthy "${DAEMON_URL}" 60 0.5; then
+  local rc=0
+  wait_healthy "${DAEMON_URL}" 60 0.5 "${1:-}" || rc=$?
+  if [[ ${rc} -ne 0 ]]; then
     cat "${LOG_FILE}" 2>/dev/null | tail -30
+    [[ ${rc} -ne 2 ]] || die "wardynd exited before it served ${ADDR} (a port taken first exits with \"address already in use\" above)"
     die "wardynd did not become healthy"
   fi
   log "wardynd healthy"
@@ -274,15 +279,24 @@ cmd_up() {
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 8>&- 9>&- &
   echo $! > "${PID_FILE}"
-  cmd_wait
+  cmd_wait "$(cat "${PID_FILE}")"
   if [[ -n "${BASE_PATH}" ]]; then
     "${BIN_DIR}/basepathproxy" -listen "${PROXY_ADDR}" -target "${BASE_URL}" -prefix "${BASE_PATH}" \
       >"${PROXY_LOG_FILE}" 2>&1 &
     echo $! > "${PROXY_PID_FILE}"
     log "Waiting for the base-path proxy on ${PROXY_ADDR}"
-    wait_healthy "$(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
+    local prc=0
+    wait_healthy "$(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}" 40 0.25 "$(cat "${PROXY_PID_FILE}")" || prc=$?
+    [[ ${prc} -ne 2 ]] || die "basepathproxy exited before it served ${PROXY_ADDR} (log: ${PROXY_LOG_FILE})"
+    [[ ${prc} -eq 0 ]] || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
   fi
   cmd_seed
+  # Another process on ${ADDR} answers the health check while wardynd is still starting. A wardynd that has
+  # exited on its bind error by now is caught here; one that has not is not, and what stops the seed
+  # above against another process is that process refusing the seed's calls (another wardynd refuses
+  # this up's token). The same holds for the base-path proxy on ${PROXY_ADDR}.
+  kill -0 "$(cat "${PID_FILE}")" 2>/dev/null || die "wardynd exited during up; whatever answered on ${ADDR} was not it"
+  [[ -z "${BASE_PATH}" ]] || kill -0 "$(cat "${PROXY_PID_FILE}")" 2>/dev/null || die "basepathproxy exited during up; whatever answered on ${PROXY_ADDR} was not it (log: ${PROXY_LOG_FILE})"
   log "Seeded backend ready:"
   log "  URL:   ${DAEMON_URL}"
   if [[ -n "${BASE_PATH}" ]]; then
@@ -365,18 +379,18 @@ cmd_seed() {
   TOKEN="$(cmd_token)"
   log "Seeding deterministic fixtures via API + SQL"
   # Match fixtures.ts's per-person derivation without passing the bearer to psql.
-  local token_hashes member_hash security_hash security2_hash open_egress_hash
+  local token_hashes member_hash security_hash security2_hash open_egress_hash unit_admin_hash
   token_hashes="$(printf '%s' "${TOKEN}" | python3 -c '
 import hashlib, sys
 admin = sys.stdin.read()
-for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2", "e2e-open-egress"):
+for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2", "e2e-open-egress", "e2e-unit-admin"):
     token = "wdn_" + hashlib.sha256(f"{admin}:{principal}".encode()).hexdigest()
     print(hashlib.sha256(token.encode()).hexdigest(), end=" ")
 ')"
-  read -r member_hash security_hash security2_hash open_egress_hash <<< "${token_hashes}"
+  read -r member_hash security_hash security2_hash open_egress_hash unit_admin_hash <<< "${token_hashes}"
   psql_e2e -v ON_ERROR_STOP=1 -v member_hash="${member_hash}" \
     -v security_hash="${security_hash}" -v security2_hash="${security2_hash}" \
-    -v open_egress_hash="${open_egress_hash}" >/dev/null <<'SQL'
+    -v open_egress_hash="${open_egress_hash}" -v unit_admin_hash="${unit_admin_hash}" >/dev/null <<'SQL'
 INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
 VALUES
   ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
@@ -394,7 +408,12 @@ VALUES
   -- narrowed default ceiling that member-demos-sweep.spec.ts relies on.
   ('69800000-0000-4000-8000-000000000004', 'e2e-open-egress', 'open-egress@e2e.wardyn.invalid',
    'user', 'standard', '[]', false, 'e2e open egress member',
-   :'open_egress_hash')
+   :'open_egress_hash'),
+  -- A person a spec makes a unit admin (governance-unit-admin.spec.ts and the governance specs' unit-admin cases);
+  -- e2e-member stays a plain user.
+  ('69800000-0000-4000-8000-000000000005', 'e2e-unit-admin', 'unit-admin@e2e.wardyn.invalid',
+   'user', 'standard', '[]', false, 'e2e unit admin',
+   :'unit_admin_hash')
 ON CONFLICT (id) DO NOTHING;
 SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,

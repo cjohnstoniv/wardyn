@@ -222,7 +222,7 @@ func digest(s string) string { d := sha256.Sum256([]byte(s)); return hex.EncodeT
 
 // The relay under the default rules: the desktop's copy never reaches the browser, the browser's
 // paste reaches the desktop, the extension offer never reaches the sandbox, and both transfers are
-// audited by direction, size and hash with neither text in any audit row.
+// audited by direction and size with neither text, nor a digest of it, in any audit row.
 func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 	offered, pasted := make(chan string, 1), make(chan []byte, 1)
 	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
@@ -261,10 +261,9 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 	want := map[string]struct {
 		outcome string
 		bytes   int
-		sum     string
 	}{
-		"copy_out": {"denied", len(copySentinel), digest(copySentinel)},
-		"paste_in": {"success", len(pasteSentinel), digest(pasteSentinel)},
+		"copy_out": {"denied", len(copySentinel)},
+		"paste_in": {"success", len(pasteSentinel)},
 	}
 	if len(rows) != 2 {
 		t.Fatalf("ui.clipboard.transfer rows = %d, want 2", len(rows))
@@ -273,12 +272,14 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 		var d struct {
 			Direction string `json:"direction"`
 			Bytes     int    `json:"bytes"`
-			SHA256    string `json:"sha256"`
 		}
 		_ = json.Unmarshal(row.Data, &d)
 		w := want[d.Direction]
-		if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction {
+		if row.Outcome != w.outcome || d.Bytes != w.bytes || row.Target != d.Direction {
 			t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
+		}
+		if strings.Contains(string(row.Data), "sha256") {
+			t.Errorf("a ui.clipboard.transfer row carries a digest of the text: %s", row.Data)
 		}
 	}
 	all, _ := json.Marshal(h.audit.snapshot())
@@ -330,8 +331,8 @@ func TestUIGateway_ClipboardLeavesOtherAppsUnfiltered(t *testing.T) {
 	}
 }
 
-// The sign-in display is a noVNC desktop in the same sandbox, so its socket gets the same filter
-// as the run's own desktop; an editor's does not.
+// The sign-in display is a noVNC desktop in the same sandbox, so its socket gets the same filter and
+// frame check as the run's own desktop; an editor's does not.
 func TestUIGateway_ClipboardWrapsTheSigninDisplay(t *testing.T) {
 	h := desktopHarness(t, http.NotFoundHandler(), nil)
 	for app, want := range map[string]bool{"novnc": true, desktopSigninApp: true, "code": false} {
@@ -342,7 +343,7 @@ func TestUIGateway_ClipboardWrapsTheSigninDisplay(t *testing.T) {
 		if err := h.srv.uiFilterUpgrade(resp, uiSession{Run: h.run.ID, App: app}); err != nil {
 			t.Fatalf("%s: uiFilterUpgrade: %v", app, err)
 		}
-		if _, filtered := resp.Body.(*rfbfilter.Conn); filtered != want {
+		if _, filtered := resp.Body.(*rfbfilter.CheckedConn); filtered != want {
 			t.Errorf("%s: socket filtered = %v, want %v", app, filtered, want)
 		}
 	}

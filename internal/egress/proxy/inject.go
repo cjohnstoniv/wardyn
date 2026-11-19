@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -51,8 +52,22 @@ type InjectionConfig struct {
 const injectRefreshMargin = 5 * time.Minute
 
 // lastGoodGrace is how long past expiry an entry keeps serving its last-good header while re-resolve
-// fails transiently; a definitive refusal drops the header at once regardless of grace.
+// fails transiently; a definitive refusal drops the header at once regardless of grace. It never
+// carries a header past the credential's own expiry (injEntry.lastGoodDeadline).
 const lastGoodGrace = 15 * time.Minute
+
+// envStaleCredentialMax shortens lastGoodGrace for this proxy (a duration; 0 serves no last-good value past the lease;
+// inside the lease the last value is still served). Unset, unparseable, negative or longer than lastGoodGrace keeps lastGoodGrace.
+const envStaleCredentialMax = "WARDYN_PROXY_STALE_CREDENTIAL_MAX"
+
+// staleCredentialMax is the last-good bound past a lease: lastGoodGrace, or envStaleCredentialMax when shorter.
+func staleCredentialMax() time.Duration {
+	d, err := time.ParseDuration(os.Getenv(envStaleCredentialMax))
+	if err != nil || d < 0 || d > lastGoodGrace {
+		return lastGoodGrace
+	}
+	return d
+}
 
 // lastGoodRetry paces re-resolves during last-good serving, so an outage is asked once per interval, not once per request.
 const lastGoodRetry = 30 * time.Second
@@ -71,6 +86,9 @@ type injector struct {
 	approvals approvalReader
 	// maskKey files this injector's credentials in procRegistry (procMaskFor).
 	maskKey uuid.UUID
+	// llmHeaders is Config.LLMHeaders by host key: the non-secret headers set on a gateway host's requests
+	// (extra_headers.go). Immutable once the proxy is built, so no lock.
+	llmHeaders map[string]map[string]string
 }
 
 type injectedHeader struct {
@@ -96,6 +114,8 @@ type injEntry struct {
 	// rule is the authored rule, kept for PinPath/PinQuery; immutable after buildInjector, so no lock needed.
 	rule      egress.InjectionRule
 	expiresAt int64 // unix ms
+	// credExpiresAt is ResolvedInjection.CredentialExpiresAt: the credential's own expiry, 0 = none stated.
+	credExpiresAt int64
 	// retryAt is set while last-good is served after a transient failure, or a stale re-resolve
 	// (install). Guarded by reMu.
 	retryAt time.Time
@@ -110,25 +130,40 @@ type injEntry struct {
 // inside injectRefreshMargin (else every request would re-resolve: a mint + secret.read row). Caller holds reMu.
 func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
 	e.header = injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI, placeholder: e.rule.Placeholder}
-	e.expiresAt = resolved.ExpiresAt
+	e.expiresAt, e.credExpiresAt = resolved.ExpiresAt, resolved.CredentialExpiresAt
 	e.retryAt, e.staleJTI = time.Time{}, ""
 	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
-		e.retryAt = now.Add(lastGoodRetry)
+		e.retryAt = earlier(now.Add(lastGoodRetry), e.lastGoodDeadline())
 	}
 }
 
+// lastGoodDeadline is when e stops serving its header without a fresh resolve: staleCredentialMax
+// past the lease, but never past the credential's own stated expiry. Caller holds reMu.
+func (e *injEntry) lastGoodDeadline() time.Time {
+	deadline := time.UnixMilli(e.expiresAt).Add(staleCredentialMax())
+	if e.credExpiresAt != 0 {
+		deadline = earlier(deadline, time.UnixMilli(e.credExpiresAt))
+	}
+	return deadline
+}
+
+// earlier returns the earlier of a and b.
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
 // lastGood reports whether e may keep serving its header after a transient re-resolve failure,
-// while the header isn't already dropped and e is within lastGoodGrace of expiry. Caller holds reMu.
+// while the header isn't already dropped and now is before e.lastGoodDeadline. Caller holds reMu.
 func (e *injEntry) lastGood(err error, now time.Time) bool {
-	deadline := time.UnixMilli(e.expiresAt).Add(lastGoodGrace)
+	deadline := e.lastGoodDeadline()
 	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 || !now.Before(deadline) {
 		return false
 	}
-	// Paced, but never past the grace deadline: the fast path serves while now < retryAt.
-	e.retryAt = now.Add(lastGoodRetry)
-	if e.retryAt.After(deadline) {
-		e.retryAt = deadline
-	}
+	// Paced, but never past the deadline: the fast path serves while now < retryAt.
+	e.retryAt = earlier(now.Add(lastGoodRetry), deadline)
 	return true
 }
 
@@ -187,6 +222,8 @@ func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token
 			requireTLS: r.RequireTLS,
 			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
+			// The boot answer's own expiry, so a lapse before the first re-resolve stops at it too.
+			credExpiresAt: resolved.CredentialExpiresAt,
 		}
 
 		// SECURITY: register in the process-global Registry so every rendering is masked from
@@ -267,10 +304,10 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
 		}
 		if e.lastGood(err, time.Now()) {
-			h := e.header
+			h, until := e.header, e.lastGoodDeadline()
 			e.reMu.Unlock()
 			slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
-				slog.String("host", key), slog.Time("until", time.UnixMilli(e.expiresAt).Add(lastGoodGrace)), slog.Any("err", err))
+				slog.String("host", key), slog.Time("until", until), slog.Any("err", err))
 			return h, true, nil
 		}
 		// Definitive, or grace spent: drop the header now so nothing later serves it as last-good (a 423 counts).
@@ -448,21 +485,25 @@ func stripSandboxCredentials(h http.Header, owned string) {
 	if owned != "" {
 		h.Del(owned)
 	}
-	for _, name := range []string{
-		"Authorization",
-		"X-Api-Key",
-		"Api-Key",
-		"X-Auth-Token",
-		"Anthropic-Api-Key",
-		"Cookie",
-		"Private-Token",
-		"X-Access-Token",
-		"X-Amz-Security-Token",
-		"X-Functions-Key",
-		"X-Goog-Api-Key",
-	} {
+	for _, name := range strippedCredentialHeaders {
 		h.Del(name)
 	}
+}
+
+// strippedCredentialHeaders is the fixed list stripSandboxCredentials removes. An admin's extra gateway
+// header may not take any of these names (ReservedExtraHeader).
+var strippedCredentialHeaders = []string{
+	"Authorization",
+	"X-Api-Key",
+	"Api-Key",
+	"X-Auth-Token",
+	"Anthropic-Api-Key",
+	"Cookie",
+	"Private-Token",
+	"X-Access-Token",
+	"X-Amz-Security-Token",
+	"X-Functions-Key",
+	"X-Goog-Api-Key",
 }
 
 // injectableTransport reports whether a brokered credential may attach to a forward request bound
@@ -510,7 +551,15 @@ func (p *Proxy) applyInjection(req *http.Request, host string, port int) {
 	if req.URL == nil || !p.injectableTransport(req.URL.Scheme, host, port) {
 		return
 	}
+	// The same routing-header strip the brokered and terminated-tunnel lanes run, before the
+	// rule's credential attaches: the rule's own header is the one it keeps.
+	owned := ""
+	if h, ok, err := p.inject.resolve(host); err == nil && ok {
+		owned = h.name
+	}
+	p.stripGatewayRoutingHeaders(req.Header, host, owned)
 	p.inject.apply(req, host, port)
+	p.applyExtraHeaders(req.Header, host, owned)
 }
 
 // apply strips the sandbox's own credential headers and sets the injected one if an exactly-allowed

@@ -112,6 +112,15 @@ func macShareTarget(target string) (string, error) {
 	return guestagent.MacAgentHome + "/" + rest, nil
 }
 
+// macSideDirs are the admission ledger and socket directories, the defaults when c leaves them unset or
+// is nil. A VM share and a container bind both keep them out, so both read them here.
+func macSideDirs(c *MacVMConfig) []string {
+	if c == nil {
+		c = &MacVMConfig{}
+	}
+	return []string{cmp.Or(c.LedgerDir, admission.DefaultDir), cmp.Or(c.SockRoot, admission.DefaultSockDir)}
+}
+
 // macShares checks every mount and every share drive of a macOS VM run and returns the shares the
 // helper builds and the guest mounts. Each source is resolved once, on a probe worker, and every rule,
 // and the privacy probe, decides about that one canonical path, which alone is recorded.
@@ -124,8 +133,7 @@ func (d *Driver) macShares(ctx context.Context, spec runner.SandboxSpec) ([]macv
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker: the runner login's home: %w", err)
 	}
-	protected := runner.MacProtectedPaths(home, c.Layout.Root, cmp.Or(c.LedgerDir, admission.DefaultDir),
-		cmp.Or(c.SockRoot, admission.DefaultSockDir))
+	protected := runner.MacProtectedPaths(home, append([]string{c.Layout.Root}, macSideDirs(c)...)...)
 	var shares []macvm.Share
 	var mounts []guestagent.Mount
 	for i, m := range spec.Mounts {

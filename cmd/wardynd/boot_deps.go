@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -93,6 +94,9 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 			return nil, fmt.Errorf("connect migrate db: %w", merr)
 		}
 		merr = migrate(migrateCtx, mpool)
+		if merr == nil {
+			merr = refuseAppSchemaDrift(migrateCtx, mpool, pool)
+		}
 		mpool.Close()
 		if merr != nil {
 			pool.Close()
@@ -256,6 +260,11 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		return nil, nil, nil, nil, ferr
 	}
 	if fan != nil {
+		if pool != nil { // the maintenance-mode tests build the chain without a pool; there is no run to read then
+			fan.EnrichRuns(func(ctx context.Context, runID uuid.UUID) (string, bool, error) {
+				return store.RunCorrelationID(ctx, pool, runID)
+			}, runValueMasker(maskReg, enrichCoverage(serve)), enrichCoverage(serve))
+		}
 		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
 		resealed = landedRecorder{primary: storeRec, fanout: fan}
 		slog.Info("wardynd: audit fanout enabled")
@@ -285,9 +294,10 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	// request says it was a dry run (data.dry_run), before it is masked, sealed,
 	// spooled or stored. The coalescer sits above masking so its summary rows are
 	// masked like any other.
-	var head audit.Recorder = masked
+	stamped := withPolicyStamp(pool, masked) // a run's rows carry its policy digest before they are masked, sealed, spooled or stored
+	var head audit.Recorder = stamped
 	if coalescer != nil {
-		coalescer.Inner = masked
+		coalescer.Inner = stamped
 		head = coalescer
 	}
 	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil

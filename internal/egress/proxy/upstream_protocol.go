@@ -115,6 +115,7 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 			cfg.ServerName, _, _ = net.SplitHostPort(addr)
 		}
 		cfg.NextProtos = []string{"h2", "http/1.1"}
+		p.offerGatewayClientCert(cfg, addr)
 		tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 		if err != nil {
 			return nil, err
@@ -135,9 +136,14 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	// serves peers that never negotiate it.
 	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
+		//lint:ignore SA1019 see h2Fallback
 		TLSClientConfig: base.Clone(),
+		//lint:ignore SA1019 see h2Fallback
 		IdleConnTimeout: 60 * time.Second,
+		//lint:ignore SA1019 see h2Fallback
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+			cfg = cfg.Clone()
+			p.offerGatewayClientCert(cfg, addr)
 			tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 			if err != nil {
 				return nil, err // never a typed-nil *tls.Conn inside net.Conn
@@ -286,6 +292,10 @@ func peerTextClass(err error) (string, bool) {
 // incomplete request returns as an error, so an allow decision always
 // follows a successful round trip.
 func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
+	req, err := p.outboundHostRuleRefused(req) // every brokered route sends here (host_rules.go)
+	if err != nil {
+		return nil, err
+	}
 	key := memoKey(req.URL.Hostname(), cmp.Or(req.URL.Port(), "443"))
 	tlsLane := req.URL.Scheme == "https"
 	if v, seen := p.h2.hosts.Load(key); seen && v.(bool) && tlsLane {
@@ -455,6 +465,7 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, shape errShape, err erro
 		dl.Cause = cause
 		dl.Via = p.viaHop(host)
 		dl.Scan = seen.Scan
+		dl.GatewayCallID = seen.GatewayCallID
 		p.sink.emit(dl)
 	}
 	port := 443
@@ -470,11 +481,16 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, shape errShape, err erro
 // lane's allow row is only ever emitted after a successful round trip, so a
 // failed dial never over-reports an allow. seen may be nil.
 func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
+	if p.answerHostRuleRefusal(w, p.shapeOfHost(host), err) {
+		return
+	}
 	if p.refuseH2Mismatch(w, p.shapeOfHost(host), err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
 		return
 	}
 	if seen != nil && p.sink != nil {
-		p.sink.emit(p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan))
+		dl := p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan)
+		dl.GatewayCallID = seen.GatewayCallID
+		p.sink.emit(dl)
 	}
 	p.httpError(w, msg, err, http.StatusBadGateway)
 }

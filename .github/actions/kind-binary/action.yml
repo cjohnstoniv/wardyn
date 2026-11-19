@@ -1,0 +1,41 @@
+name: kind binary
+description: >-
+  Puts a sha256-pinned kind binary where helm/kind-action looks before it
+  downloads one (<tool cache>/kind/<version>/amd64/kind/bin/kind), so
+  kind-action finds it and skips its own fetch. That fetch takes the binary
+  and its checksum from the same GitHub release without --fail, so a 504 body
+  fails as "no properly formatted checksum lines" (nightly 42566616802). Place
+  this step right before helm/kind-action with the same version; on a
+  mismatch kind-action downloads again and its log says "Installing kind...".
+inputs:
+  version:
+    description: The kind release. It must equal the kind-action step's `version` (that action's default is v0.33.0).
+    default: v0.33.0
+runs:
+  using: composite
+  steps:
+    - name: Look up the pinned kind sha256
+      id: pin
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        [ "$(uname -m)" = x86_64 ] || { echo "::error::kind-binary pins the linux-amd64 binary only"; exit 1; }
+        # From https://github.com/kubernetes-sigs/kind/releases/download/<version>/kind-linux-amd64.sha256sum
+        case "$VERSION" in
+          v0.33.0) sum=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d ;;
+          v0.23.0) sum=1d86e3069ffbe3da9f1a918618aecbc778e00c75f838882d0dfa2d363bc4a68c ;;
+          *) echo "::error::kind-binary has no sha256 for kind $VERSION; add it from that release's kind-linux-amd64.sha256sum"; exit 1 ;;
+        esac
+        echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+    - uses: ./.github/actions/pinned-download
+      with:
+        url: https://github.com/kubernetes-sigs/kind/releases/download/${{ inputs.version }}/kind-linux-amd64
+        sha256: ${{ steps.pin.outputs.sha256 }}
+        path: ${{ runner.tool_cache }}/kind/${{ inputs.version }}/amd64/kind/bin/kind
+    - name: Make kind executable
+      shell: bash
+      env:
+        KIND: ${{ runner.tool_cache }}/kind/${{ inputs.version }}/amd64/kind/bin/kind
+      run: chmod +x "$KIND"

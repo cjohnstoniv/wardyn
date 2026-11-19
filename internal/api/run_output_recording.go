@@ -23,18 +23,40 @@ const recordingOutputSource = "recording"
 // rather than failing: the work stays pending for a later attempt.
 var errRecordingOutputOverBudget = errors.New("recording output read outlived its budget")
 
+// errRecordingOutputUnavailable is a source read that failed, not on its deadline and not with an answer (the
+// recording erased, missing or invalid): a part that cannot be read, or a store that does not answer. The work
+// stays pending for a later attempt, and a stale row settles on it only past recordingOutputReadGiveUp.
+var errRecordingOutputUnavailable = errors.New("recording output source is temporarily unavailable")
+
 // recordingOutputEnabled is whether run's output is read from its recording:
-// only a recorded run whose own runner keeps no tail (execOutputCapture). A run
-// whose tail this process holds reads that tail, so a recording that yields
-// nothing never hides output that was captured.
+// only a recorded run whose own runner keeps no tail (execOutputCapture), and
+// whose output has not expired (runOutputExpiredNow). A run whose tail this
+// process holds reads that tail, so a recording that yields nothing never hides
+// output that was captured. A database clock that cannot be read leaves the run
+// on its recording path for this pass: a false here would send the run's end and
+// the stale sweep (run_output_final.go) to recoverRunOutput, which writes a gap
+// and marks the run not recorded. The read door judges the window strictly
+// (repairRecordingOutput).
 func (s *Server) recordingOutputEnabled(ctx context.Context, run types.AgentRun) bool {
+	on, _ := s.recordingOutputEnabledNow(ctx, run)
+	return on
+}
+
+// recordingOutputEnabledNow is recordingOutputEnabled with the clock's error: the
+// bool is the answer as if the run had not expired, and the error is the
+// database's clock not answering. It reads that clock once, and not at all for a run the other
+// rules already rule out.
+func (s *Server) recordingOutputEnabledNow(ctx context.Context, run types.AgentRun) (bool, error) {
 	if s.cfg.RecordingStore == nil || s.cfg.ExecOutputTailOff || s.runOutputStore() == nil ||
-		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.runOutputExpiredByRetention(run) ||
-		s.tailFor(run.ID) != nil {
-		return false
+		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.tailFor(run.ID) != nil {
+		return false, nil
+	}
+	expired, err := s.runOutputExpiredNow(ctx, run)
+	if expired {
+		return false, nil
 	}
 	uncaptured, known := s.execOutputCapture(ctx, run)
-	return known && uncaptured
+	return known && uncaptured, err
 }
 
 // uploadedRecordingOutput runs only after the cast commit. The durable work
@@ -45,7 +67,12 @@ func (s *Server) uploadedRecordingOutput(ctx context.Context, runID uuid.UUID) e
 		return nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) {
+		return err
+	}
+	// An expired run owes no recording output. A window that cannot be judged is the upload's error, as a run that
+	// cannot be read is.
+	if expired, err := s.runOutputExpiredNow(ctx, run); err != nil || expired {
 		return err
 	}
 	// The runner never withholds a receipt: one that cannot be asked owes
@@ -74,12 +101,60 @@ func (s *Server) queueRecordingOutput(ctx context.Context, st store.RunOutputSto
 	return err
 }
 
-func (s *Server) finalizeRecordingOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun) {
+// finalizeRecordingOutput queues and runs one recovery of run's output from its recording, logging a failure that
+// leaves the work pending, and returns the recovery's error for a caller that settles on it.
+func (s *Server) finalizeRecordingOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun) error {
 	err := s.queueRecordingOutput(ctx, st, run, false)
 	if err == nil {
 		err = s.recoverRecordingOutput(ctx, st, run)
 	}
 	s.logRecordingOutputError(ctx, run.ID, err)
+	return err
+}
+
+// recordingOutputReadGiveUp is how long after a run ended (its ended_at, else its last update) a stale pending
+// row keeps waiting on a recording whose read runs over its budget (outputRecoverWait) or fails on every try: about
+// six tries at the claim's five-minute cooldown (runOutputPendingStale). Past it the row becomes a capture gap;
+// agentCastReadGiveUp is the same bound for the cast obligation.
+const recordingOutputReadGiveUp = 30 * time.Minute
+
+// runEndedBeforeReader is the store read that answers the give-up on the database's clock (store.PG).
+type runEndedBeforeReader interface {
+	RunEndedBefore(ctx context.Context, runID uuid.UUID, age time.Duration) (bool, error)
+}
+
+// recordingReadGaveUp is whether run ended longer ago than recordingOutputReadGiveUp, asked of the database in one
+// read so the stamp and the compare share a clock. A store that cannot answer, or a read that fails, answers false:
+// the row stays pending for the next sweep rather than becoming a gap.
+func (s *Server) recordingReadGaveUp(ctx context.Context, st store.RunOutputStore, runID uuid.UUID) bool {
+	r, ok := st.(runEndedBeforeReader)
+	if !ok {
+		return false
+	}
+	ended, err := r.RunEndedBefore(ctx, runID, recordingOutputReadGiveUp)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: reading a run's end to settle its pending output failed; retrying next sweep",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
+	}
+	return ended
+}
+
+// settleStaleRecordingOutput is finalizeRecordingOutput for a stale pending row. A recording that can never give
+// the output (erased), or whose read runs over its budget or cannot be read on a try made recordingOutputReadGiveUp
+// or more after the run ended, turns the row into a capture gap with that reason; a later read of the recording
+// that succeeds still replaces it. A read cut short by the pass's own deadline, or a transient error before the
+// give-up, leaves the row pending for the next sweep.
+func (s *Server) settleStaleRecordingOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun) {
+	err := s.finalizeRecordingOutput(ctx, st, run)
+	switch {
+	case errors.Is(err, store.ErrRecordingOutputErased):
+		s.writeGapRow(ctx, st, run.ID, "recording_erased")
+	case errors.Is(err, errRecordingOutputOverBudget) && ctx.Err() == nil && s.recordingReadGaveUp(ctx, st, run.ID):
+		s.writeGapRow(ctx, st, run.ID, "recording_over_budget")
+	case errors.Is(err, errRecordingOutputUnavailable) && ctx.Err() == nil && s.recordingReadGaveUp(ctx, st, run.ID):
+		s.writeGapRow(ctx, st, run.ID, "recording_unavailable")
+	}
 }
 
 func (s *Server) logRecordingOutputError(ctx context.Context, runID uuid.UUID, err error) {
@@ -101,10 +176,13 @@ func (s *Server) recoverRecordingOutput(ctx context.Context, st store.RunOutputS
 		case "recording_over_budget":
 			return errRecordingOutputOverBudget
 		case "recording_unavailable":
-			return errors.New("recording output source is temporarily unavailable")
+			return errRecordingOutputUnavailable
 		case "recording_erased":
-			_, err := st.EraseRecordingRunOutputs(ctx, []uuid.UUID{run.ID})
-			return err
+			if _, err := st.EraseRecordingRunOutputs(ctx, []uuid.UUID{run.ID}); err != nil {
+				return err
+			}
+			// The same answer a later claim gives once the fence is set, so the caller settles on this pass.
+			return store.ErrRecordingOutputErased
 		}
 		wrote, err := st.SaveRecordingRunOutput(ctx, claim, row, s.cfg.RunOutputRetention)
 		if errors.Is(err, store.ErrRecordingOutputUncovered) {
@@ -153,6 +231,10 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
+		if err := readCtx.Err(); err != nil {
+			done <- err // cut before the store was opened: nothing is written into tail
+			return
+		}
 		rc, err := recording.OpenJoined(readCtx, s.cfg.RecordingStore, runID.String())
 		if err == nil {
 			// Each batch still refreshes after its bytes arrive; per-event
@@ -177,6 +259,7 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	case readErr = <-done:
 	case <-readCtx.Done():
 		readErr = readCtx.Err()
+		<-done // the reader writes into tail until it returns; tail is sealed and released below
 	}
 	// A read that ran out of time keeps no bytes, so it asks no closing coverage
 	// question: in a sweep pass the caller's own deadline is what ended it, and
@@ -213,8 +296,16 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 // repairRecordingOutput is reachable only after recordingReader. A cooldown
 // bounds rereads of unchanged gaps, including a lost upload receipt on restart.
 func (s *Server) repairRecordingOutput(ctx context.Context, run types.AgentRun, row store.RunOutput, found bool) (store.RunOutput, bool, error) {
-	if !run.State.IsTerminal() || found && row.CapturedAt != nil && !row.CaptureGap || !s.recordingOutputEnabled(ctx, run) {
+	if !run.State.IsTerminal() || found && row.CapturedAt != nil && !row.CaptureGap {
 		return row, found, nil
+	}
+	// The read door rebuilds no output on a guess: a window it cannot judge is the read's error (a 500).
+	on, err := s.recordingOutputEnabledNow(ctx, run)
+	if !on {
+		return row, found, nil
+	}
+	if err != nil {
+		return row, found, err
 	}
 	st := s.runOutputStore()
 	if err := s.queueRecordingOutput(ctx, st, run, false); err != nil {
@@ -234,9 +325,14 @@ func (s *Server) sweepRecordingOutputs(ctx context.Context, st store.RunOutputSt
 	if err != nil {
 		return err
 	}
+	// A recording that cannot be read holds back no other run: the pass reads the rest of its page and answers that
+	// error at its end. It stays the pass's error, as a failing recording store is, while the run is inside its
+	// give-up (recordingReadGaveUp); past it the run's pending row settles as a gap (settleStaleRecordingOutput), and
+	// the recording is that run's outcome alone, logged with its id.
+	var unreadable error
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return nil // the remaining page is still durable for the next pass
+			return unreadable // the remaining page is still durable for the next pass
 		}
 		run, err := s.cfg.Store.GetRun(ctx, id)
 		if err != nil {
@@ -251,9 +347,14 @@ func (s *Server) sweepRecordingOutputs(ctx context.Context, st store.RunOutputSt
 			// That run's outcome, not the pass's: a sandbox sizes its own recording,
 			// and one slow read must not turn the whole sweep's health stale.
 			s.logRecordingOutputError(ctx, run.ID, err)
+		case errors.Is(err, errRecordingOutputUnavailable):
+			s.logRecordingOutputError(ctx, run.ID, err)
+			if unreadable == nil && ctx.Err() == nil && !s.recordingReadGaveUp(ctx, st, run.ID) {
+				unreadable = err
+			}
 		case err != nil && !errors.Is(err, store.ErrRunOutputErased) && !errors.Is(err, store.ErrRecordingOutputErased):
 			return err
 		}
 	}
-	return nil
+	return unreadable
 }

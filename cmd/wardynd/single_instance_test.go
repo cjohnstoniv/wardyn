@@ -73,7 +73,7 @@ func TestWarnSmallPool_BelowFourAndNoRotatorBranch(t *testing.T) {
 	}
 	// The call is unconditional: it must not sit inside the rotator's branch.
 	src := readRepo(t, "cmd/wardynd/boot_serve.go")
-	call, branch := strings.Index(src, "warnSmallPool(pool.Config().MaxConns)"), strings.Index(src, `os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")`)
+	call, branch := strings.Index(src, "warnSmallPool(pool.Config().MaxConns)"), strings.Index(src, "runGroundtruthTokenRotatorLeader(")
 	if call < 0 || branch < 0 || call > branch {
 		t.Errorf("warnSmallPool is not called ahead of the rotator branch (call at %d, branch at %d)", call, branch)
 	}

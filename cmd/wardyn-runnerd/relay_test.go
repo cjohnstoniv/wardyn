@@ -142,14 +142,23 @@ func TestRelayEnsureNeedsAPair(t *testing.T) {
 	if _, err := r.Ensure(u); err == nil {
 		t.Fatal("Ensure listened before any pair was set")
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.Host = ln.Addr().String() // a port free a moment ago
-	_ = ln.Close()
 	r.use(pair("127.0.0.1", "192.168.5.2"))
-	if target, err := r.Ensure(u); err != nil || target != "192.168.5.2" {
+	// Ensure listens on the URL's own port, never port 0, so the test picks a free port, and picks again when
+	// another process took it before the bind.
+	var target string
+	var err error
+	for range 20 {
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		u.Host = ln.Addr().String()
+		_ = ln.Close()
+		if target, err = r.Ensure(u); err == nil {
+			break
+		}
+	}
+	if err != nil || target != "192.168.5.2" {
 		t.Fatalf("Ensure = %q, %v; want the pair's target", target, err)
 	}
 }

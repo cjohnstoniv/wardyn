@@ -19,6 +19,7 @@ package db
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,6 +92,41 @@ func TestPG_BootCanaryRefusesAChainTriggerThatDoesNotChain(t *testing.T) {
 				t.Errorf("Migrate error = %q; it must say what the canary observed (%q)", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestPG_BootCanaryNamesAPathlessOperatorTrigger: since 0285 an operator's trigger function that sets no
+// search_path runs with pg_catalog, pg_temp, so a bare table name in it is not found and the canary's append
+// fails. The boot names that trigger, not the chain trigger, and leaves out Wardyn's own, one with a path of its
+// own, a disabled one, and one that runs a function of PostgreSQL's own; a pathless trigger on a bookkeeping table is named too.
+func TestPG_BootCanaryNamesAPathlessOperatorTrigger(t *testing.T) {
+	ctx := context.Background()
+	pool, schema := probeSchemaPool(t)
+	for _, q := range []string{
+		`CREATE TABLE fu_outbox (id uuid)`,
+		`CREATE FUNCTION fu_bare() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO fu_outbox VALUES (NEW.id); RETURN NULL; END; $$`,
+		`CREATE FUNCTION fu_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$`,
+		`CREATE FUNCTION fu_pinned() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ BEGIN RETURN NULL; END; $$`,
+		`CREATE TRIGGER fu_bare_t AFTER INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fu_bare()`,
+		`CREATE TRIGGER fu_pinned_t AFTER INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fu_pinned()`,
+		`CREATE TRIGGER fu_meta_t AFTER UPDATE ON audit_partition_meta FOR EACH ROW EXECUTE FUNCTION fu_noop()`,
+		`CREATE TRIGGER fu_off_t AFTER INSERT ON audit_chain_anchors FOR EACH ROW EXECUTE FUNCTION fu_noop()`,
+		`ALTER TABLE audit_chain_anchors DISABLE TRIGGER fu_off_t`,
+		`CREATE TRIGGER fu_builtin_t BEFORE UPDATE ON audit_chain_anchors FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("install the operator triggers in %s: %v", schema, err)
+		}
+	}
+	got, err := auditPathlessTriggers(ctx, pool)
+	slices.Sort(got)
+	want := []string{"fu_bare_t (" + schema + ".fu_bare)", "fu_meta_t (" + schema + ".fu_noop)"}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("auditPathlessTriggers = %q, %v; want %q", got, err, want)
+	}
+	err = Migrate(ctx, pool)
+	if err == nil || !strings.Contains(err.Error(), want[0]) || strings.Contains(err.Error(), "chain trigger is catalogued") {
+		t.Fatalf("Migrate = %v; want a refusal that names %s and does not blame the chain trigger", err, want[0])
 	}
 }
 

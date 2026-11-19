@@ -15,6 +15,7 @@ import { AlertTriangle, ChevronRight, Laptop, Trash2, XCircle } from "lucide-rea
 import { toast } from "sonner";
 import type { ConfinementClass, Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
@@ -32,7 +33,7 @@ import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
-import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
 import { compositionSummary, resolvedModelProviders, sourceRunnerLabel, staleRunnerSource, workspaceModelProviderUnavailable, workspaceRunnerRefusal, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
@@ -42,7 +43,7 @@ import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
 import { DeniedHostsCard } from "./denied-hosts-card";
 import { RecordPane } from "./record-pane";
-import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
+import { cleanVerdictMayMove, isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
 import { PageContainer } from "../../wardyn/page-container";
 
 const POLL_MS = 2500;
@@ -95,6 +96,7 @@ export function WorkspaceDetailScreen() {
   const caps = useMyCapabilities(!operator);
   const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
   const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
@@ -117,16 +119,21 @@ export function WorkspaceDetailScreen() {
       if (!id) return;
       const requestId = ++loadRequestId.current;
       if (foreground) setStatus("loading");
-      workspacesApi
+      // Returned so the poll waits for it: each read discards the one before, so reads that overlap because the
+      // server answers slower than the interval would all be discarded and the page would never update.
+      return workspacesApi
         .getWorkspace(id)
         .then((w) => {
           if (loadRequestId.current !== requestId) return;
           setWs(w ?? null);
           setStatus("ready");
         })
-        .catch(() => {
+        .catch((e) => {
           if (loadRequestId.current !== requestId) return;
-          if (foreground) setStatus("error");
+          if (foreground) {
+            setLoadMessage(failureSentence(e));
+            setStatus("error");
+          }
         });
     },
     [id],
@@ -135,7 +142,7 @@ export function WorkspaceDetailScreen() {
   React.useEffect(() => {
     setWs(undefined);
     setStatus("loading");
-    load(true);
+    void load(true);
   }, [id, load]);
 
   React.useEffect(() => {
@@ -169,18 +176,25 @@ export function WorkspaceDetailScreen() {
   }, []);
 
   // Poll while a session (open record / confined replay) is in-flight
-  // server-side, so the page reflects it without a manual refresh — paused
-  // otherwise so a settled workspace isn't polled forever.
-  const inFlight = !!ws && isRecording(ws);
+  // server-side, so the page reflects it without a manual refresh, and for a
+  // while after a confined replay is stamped clean, which the server can still
+  // take back (cleanVerdictMayMove) — paused otherwise so a settled workspace
+  // isn't polled forever.
+  const inFlight = !!ws && (isRecording(ws) || cleanVerdictMayMove(ws, Date.now()));
   usePoll(() => load(false), POLL_MS, !(id && inFlight));
 
   const rebuild = async () => {
     if (!ws) return;
     setRebuilding(true);
     try {
-      await workspacesApi.buildWorkspace(ws.id);
-      toast.success(`Rebuild started for "${ws.name}"`);
-      load(false);
+      // The toast says what the server did: a 200 done or nothing_to_build
+      // built nothing, and none means this server has no image builder.
+      const res = await workspacesApi.buildWorkspace(ws.id, true);
+      if (res.state === "building") toast.success(`Rebuild started for "${ws.name}"`);
+      else if (res.state === "done" || res.state === "nothing_to_build") toast.info(`Nothing to rebuild for "${ws.name}".`, { description: res.detail });
+      else if (res.state === "none") toast.warning(`"${ws.name}" was not rebuilt.`, { description: res.detail });
+      else toast.error("Failed to start the rebuild", { description: res.detail });
+      void load(false);
     } catch (e) {
       toast.error("Failed to start the rebuild", { description: getErrorMessage(e) });
     } finally {
@@ -190,7 +204,7 @@ export function WorkspaceDetailScreen() {
 
   // ---------------- sessions (record / confined replay) ----------------
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
-  const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
+  const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string; reason?: string } | null>(null);
   // The launch's own warnings (open-egress exfiltration window on weak
   // confinement, the masking caveat) + its REAL confinement class — the
   // server's own facts about THIS launch, never dropped and never guessed
@@ -214,11 +228,11 @@ export function WorkspaceDetailScreen() {
     try {
       const r = await workspacesApi.recordTask(ws.id, name, confined);
       if (!r.ok) {
-        setRecordNotice({ status: r.status, detail: r.detail });
+        setRecordNotice({ status: r.status, detail: r.detail, reason: r.reason });
       } else {
         setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
       }
-      load(false);
+      void load(false);
     } catch (e) {
       toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", {
         description: getErrorMessage(e),
@@ -235,7 +249,7 @@ export function WorkspaceDetailScreen() {
   const doneRecording = async (runId: string) => {
     try {
       await runsApi.killRun(runId);
-      load(false);
+      void load(false);
     } catch (e) {
       toast.error("Failed to stop the session", { description: getErrorMessage(e) });
     }
@@ -271,6 +285,8 @@ export function WorkspaceDetailScreen() {
   // grows a new caller of approveHosts owes the same gate.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
+    // Read before the fresh read below: the write names this person, not whoever signs in while it is out.
+    const person = getExpectedPrincipal();
     try {
       // Merge onto the FRESHEST overlay, not the one captured at click time —
       // the confirm dialog can sit open for minutes, and the PUT is a full
@@ -281,7 +297,7 @@ export function WorkspaceDetailScreen() {
       const fresh = (await workspacesApi.getWorkspace(ws.id).catch(() => null)) ?? ws;
       const next = { ...(fresh.requirements ?? {}) };
       for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
-      setWs(await workspacesApi.setRequirements(ws.id, next));
+      setWs(await workspacesApi.setRequirements(ws.id, next, person));
       toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
       return true;
     } catch (e) {
@@ -333,7 +349,7 @@ export function WorkspaceDetailScreen() {
     return (
       <PageContainer width="form">
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={() => load(true)} />
+          <ErrorState message={loadMessage} onRetry={() => load(true)} />
         </div>
       </PageContainer>
     );

@@ -145,7 +145,7 @@ func DeriveBase(ctx context.Context, o UpdateOptions, name string) (Manifest, bo
 	if err := mkdirPrivate(filepath.Dir(dir)); err != nil {
 		return Manifest{}, false, err
 	}
-	nb, done, err := beginUpdate(ctx, dir, o.Log)
+	nb, done, err := beginUpdateOnce(ctx, dir, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -198,7 +198,8 @@ func DeriveBase(ctx context.Context, o UpdateOptions, name string) (Manifest, bo
 	}
 	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Kept: &kept})
 	if res.ToolsDial != "" {
-		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
+		// Stamped like prepare's emit, so status dates the dial by this clock, not by the log's mtime.
+		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}
 	if err != nil {
 		return m, false, err

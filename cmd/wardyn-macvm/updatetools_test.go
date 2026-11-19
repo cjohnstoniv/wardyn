@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
@@ -55,12 +57,52 @@ func runnerdArgs(root, entry, ledger string) []string {
 // boots the base's staging copy on the net_fd runnerd sends to the job's
 // ctl.sock, reaches the guest agent's tools mode on 1026, records the guest's
 // tools-port dial, and swaps the updated base in.
-func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) { updateToolsJob(t, false) }
+func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) { updateToolsJob(t, false, false) }
 
 // TestUpdateToolsPushesTheAgentWhenItDrifts: a base whose pins are current
 // but whose guest agent is another build is updated, and stage 2 pushes the
 // wardyn-guest-agent beside the helper to where stage 1 installed it.
-func TestUpdateToolsPushesTheAgentWhenItDrifts(t *testing.T) { updateToolsJob(t, true) }
+func TestUpdateToolsPushesTheAgentWhenItDrifts(t *testing.T) { updateToolsJob(t, true, false) }
+
+// --kept <folder> reaches UpdateTools as KeptDir, so the same job updates that kept machine and leaves the
+// base as it was.
+func TestUpdateToolsKeptFlagUpdatesTheKeptMachineAndNotTheBase(t *testing.T) {
+	updateToolsJob(t, false, true)
+}
+
+// A --kept folder that is not a kept machine's is refused, and the base is not updated in its place; --kept
+// with --variant is a usage error.
+func TestUpdateToolsKeptFlagRefusals(t *testing.T) {
+	placeGuestAgent(t)
+	root := t.TempDir()
+	ledger := makeLedger(t, root)
+	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
+	base := layout.BaseDir(0)
+	writeBaseFiles(base)
+	d, _, _ := testDeps(&macvmtest.Engine{})
+	var out, errb lockedBuf
+	d.stdout, d.stderr, d.powerSource = &out, &errb, onAC{}
+	args := append(runnerdArgs(layout.Root, "entry-1", ledger), "--"+macvm.FlagSockRoot, macvmtest.SockRoot(t))
+	if code := run(context.Background(), append(slices.Clone(args), "--"+macvm.FlagKept, base), d); code != 1 || !strings.Contains(errb.String(), "not a kept machine folder") {
+		t.Fatalf("--kept <the base>: exit %d: %s", code, errb.String())
+	}
+	if code := run(context.Background(), append(slices.Clone(args), "--"+macvm.FlagKept, layout.KeptMachineDir(uuid.NewString()), "--"+macvm.FlagVariant, "x"), d); code != 2 {
+		t.Fatalf("--kept with --variant: exit %d", code)
+	}
+	if m, err := macvm.ReadyBase(base); err != nil || m.AgentVersion != "0.0.0-old" {
+		t.Fatalf("base touched: %+v %v", m, err)
+	}
+}
+
+// writeBaseFiles writes a ready base's files into dir, built by an older guest agent.
+func writeBaseFiles(dir string) {
+	_ = os.MkdirAll(dir, 0o700)
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
+		_ = os.WriteFile(filepath.Join(dir, n), []byte(b), 0o600)
+	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.ManifestFile),
+		[]byte(`{"format":2,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
+}
 
 // TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting: with no
 // wardyn-guest-agent beside the helper, update-tools stops by name before it
@@ -197,7 +239,7 @@ func placeGuestAgent(t *testing.T) []byte {
 
 // updateToolsJob runs update-tools as runnerd starts it. With drift, the base
 // has every shipped pin and only its guest agent build differs.
-func updateToolsJob(t *testing.T, drift bool) {
+func updateToolsJob(t *testing.T, drift, kept bool) {
 	agent := placeGuestAgent(t)
 	root := t.TempDir()
 	ledger := makeLedger(t, root)
@@ -211,12 +253,18 @@ func updateToolsJob(t *testing.T, drift bool) {
 	}
 	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
 	base := layout.BaseDir(0)
-	_ = os.MkdirAll(base, 0o700)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
-		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
+	writeBaseFiles(base)
+	// target is what the job updates: the base, or with --kept a kept machine beside it.
+	target, keptArgs, keptID := base, []string(nil), ""
+	if kept {
+		keptID = uuid.NewString()
+		target = layout.KeptMachineDir(keptID)
+		writeBaseFiles(target)
+		if err := macvm.WriteKept(target, macvm.KeptRecord{ID: keptID, OwnerHash: "o", RunnerID: "r1", Scrubbed: true}); err != nil {
+			t.Fatal(err)
+		}
+		keptArgs = []string{"--" + macvm.FlagKept, target}
 	}
-	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile),
-		[]byte(`{"format":2,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
 	if drift {
 		tooling, err := macvm.ShippedTooling()
 		if err != nil {
@@ -227,8 +275,8 @@ func updateToolsJob(t *testing.T, drift bool) {
 			rec.Pins[p.ID] = macvm.PinRecord{Version: p.Version, SHA256: p.SHA256}
 		}
 		b, _ := json.Marshal(rec)
-		_ = os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600)
-		if macvm.NeedsToolsUpdate(base, tooling, "", time.Now()) {
+		_ = os.WriteFile(filepath.Join(target, macvm.ToolsRecordFile), b, 0o600)
+		if macvm.NeedsToolsUpdate(target, tooling, "", time.Now()) {
 			t.Fatal("the base's pins are not current: only the agent should drift")
 		}
 	}
@@ -242,7 +290,7 @@ func updateToolsJob(t *testing.T, drift bool) {
 	defer cancel()
 	done := make(chan int, 1)
 	go func() {
-		done <- run(ctx, append(runnerdArgs(layout.Root, e.ID, ledger), "--"+macvm.FlagSockRoot, sockRoot), d)
+		done <- run(ctx, append(runnerdArgs(layout.Root, e.ID, ledger), append(keptArgs, "--"+macvm.FlagSockRoot, sockRoot)...), d)
 	}()
 
 	// runnerd's side: the net_fd to the job's ctl.sock.
@@ -316,9 +364,17 @@ func updateToolsJob(t *testing.T, drift bool) {
 	if !ranSU {
 		t.Fatalf("stage 2 ran no tools step over 1026: %v", execs)
 	}
-	man, err := macvm.ReadyBase(base)
+	man, err := macvm.ReadyBase(target)
 	if err != nil || man.HelperVersion != version.String() || man.Desktop != "control" || man.AgentVersion != version.String() {
 		t.Fatalf("base after the update: %+v %v", man, err)
+	}
+	if kept {
+		if bm, err := macvm.ReadyBase(base); err != nil || bm.AgentVersion != "0.0.0-old" {
+			t.Fatalf("the base was updated by a --kept job: %+v %v", bm, err)
+		}
+		if rec, err := macvm.ReadKept(target, keptID); err != nil || rec.Scrubbed {
+			t.Fatalf("kept record after the update: %+v %v", rec, err)
+		}
 	}
 	mu.Lock()
 	pushed := pushes[guestagent.MacAgentBinaryPath]

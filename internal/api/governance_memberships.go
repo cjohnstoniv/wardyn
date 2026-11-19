@@ -128,14 +128,19 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 	if writeMembershipTreeError(w, r, "", defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg)) {
 		return
 	}
-	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
+	if s.upsertApprovedGroupMembership(w, r, a) { // an envelope's approved group (governance_envelope_members.go)
 		return
 	}
+	// A unit admin's scope comes first: the user-type read answers 400 for a type that does not
+	// exist, which would tell someone outside the unit which types there are.
 	var belongsBy []uuid.UUID
 	if s.isUnitAdminCaller(r.Context()) {
 		if belongsBy, ok = s.membershipAddInScope(w, r, a); !ok {
 			return
 		}
+	}
+	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
+		return
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = principalFromRequest(r)
@@ -180,18 +185,28 @@ func (s *Server) handleDeleteGovernanceMembership(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	if s.isUnitAdminCaller(r.Context()) {
-		s.deleteMembershipInScope(w, r, id)
+		s.deleteMembershipInScope(w, r, id, under)
 		return
 	}
 	if mode == govQueue {
 		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
-		s.holdMembershipDelete(w, r, id, nil)
+		s.holdMembershipDelete(w, r, id, nil, under)
 		return
 	}
 	// The audit names the row the delete removed, not one read beside it.
-	removed, err := s.cfg.Store.DeleteGovernanceMembership(r.Context(), id)
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
+	var removed types.GovernanceMembership
+	var err error
+	if under != nil {
+		removed, err = s.deleteMembershipUnder(r.Context(), id, *under)
+	} else {
+		removed, err = s.cfg.Store.DeleteGovernanceMembership(r.Context(), id)
+	}
+	if answerNotUnder(w, err) || notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
 		return
 	}
 	if err != nil {

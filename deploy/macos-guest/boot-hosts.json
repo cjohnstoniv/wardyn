@@ -4,6 +4,9 @@
     "gdmf.apple.com",
     "mesu.apple.com",
     "gateway.icloud.com",
-    "init-kt.apple.com"
+    "init-kt.apple.com",
+    "mask.icloud.com",
+    "mask-h2.icloud.com",
+    "proxy.safebrowsing.apple"
   ]
 }

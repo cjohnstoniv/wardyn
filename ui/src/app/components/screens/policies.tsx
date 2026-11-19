@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
-import { LIST_LIMIT } from "../../lib/api/core";
+import { getExpectedPrincipal, HttpError, LIST_LIMIT } from "../../lib/api/core";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -61,7 +61,8 @@ import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec, parseSpec } 
 import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
 import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
@@ -77,6 +78,7 @@ import {
 } from "../wardyn/availability-control";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
+import { SavedElsewhereBanner } from "../wardyn/saved-elsewhere-banner";
 import { ADOAccessSummary } from "../wardyn/ado-access-summary";
 import { setup as setupApi } from "../../lib/api/setup";
 import { scmAccess as scmAccessApi } from "../../lib/api/scm-access";
@@ -95,7 +97,10 @@ export function PoliciesScreen() {
   const routed = useInRouterContext();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
@@ -116,7 +121,10 @@ export function PoliciesScreen() {
         setPolicies(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -181,7 +189,8 @@ export function PoliciesScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search policies by name or id…"
-            value={query}
+            aria-label="Search policies"
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="max-w-sm"
           />
@@ -201,7 +210,7 @@ export function PoliciesScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={7} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={UserCog}
@@ -210,8 +219,8 @@ export function PoliciesScreen() {
               query
                 ? "Try a different search term."
                 : operator
-                  ? "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run."
-                  : `A policy overrides the default for specific runs — tighter or looser. ${OPERATOR_ONLY_REASON}`
+                  ? "A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it."
+                  : `A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it. ${OPERATOR_ONLY_REASON}`
             }
             action={
               query ? (
@@ -235,7 +244,9 @@ export function PoliciesScreen() {
                 <TableHead>Egress</TableHead>
                 <TableHead className="w-[160px]">Attributes</TableHead>
                 <TableHead className="w-[100px]">Updated</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -308,7 +319,7 @@ export function PoliciesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Policy actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Policy actions: ${p.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -393,9 +404,11 @@ function PolicyDetail({
     <Sheet open={!!policy} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
         <SheetHeader className="border-b border-border pb-4">
-          <SheetTitle className="flex items-center gap-2">
-            <ShieldCheck className="size-4 text-primary" />
-            {policy?.name}
+          <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
+            <ShieldCheck className="size-4 shrink-0 text-primary" />
+            {/* A flex item of its own: min-width:0 on the title does not reach an anonymous text item, so a long
+                unbroken name would run under Close. */}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{policy?.name}</span>
           </SheetTitle>
         </SheetHeader>
         {policy && (
@@ -503,20 +516,37 @@ function PolicyEditor({
   // F5-F9: what the editor opened WITH — the dirty check below compares
   // against this, not against empty/starter values.
   const initial = React.useRef({ name: "", specText: "" });
+  // A create landed, so the spec on screen is the saved policy's: a late setup status must not re-seed it.
+  const landed = React.useRef(false);
   // A new policy asks who gets it (#923 decision 4). Create writes the policy,
   // then the list, then Only these; a refused list write keeps the editor open
   // on the saved policy, which stays available to everyone meanwhile.
   const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
   const [partial, setPartial] = React.useState<{ policy: RunPolicy; message: string } | null>(null);
-  const editing = partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
+  // A save refused because the policy was saved since it opened (409 policy_stale): the draft stays in the
+  // editor, the shared saved-elsewhere banner offers a copy of it, and Discard reloads the stored policy.
+  const [stale, setStale] = React.useState(false);
+  const [reloaded, setReloaded] = React.useState<RunPolicy | null>(null);
+  // Discard's GET can answer late: a close, an open or a newer Discard moves the generation on, and an answer that
+  // finds it moved is dropped, so it never replaces another policy's draft or retargets its save. The editor body
+  // and Save stay frozen while the reload is pending, so nothing typed meanwhile is lost to it.
+  const reloadGeneration = React.useRef(0);
+  const [reloading, setReloading] = React.useState(false);
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const editing = reloaded ?? partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
   // Once the create landed, closing must re-read even without another save.
   const close = partial ? onSaved : onClose;
 
   React.useEffect(() => {
+    reloadGeneration.current += 1;
+    setReloading(false);
     if (!editor) return;
+    landed.current = false;
     setError(null);
     setSaving(false);
     setPartial(null);
+    setStale(false);
+    setReloaded(null);
     setAudience({ restricted: false, audiences: [] });
     const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
     const seedSpec = specToSource(editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC);
@@ -535,17 +565,17 @@ function PolicyEditor({
   React.useEffect(() => {
     if (!editor) return;
     let alive = true;
-    let severalOrgs = false;
+    let ownRows = false;
     void setupApi
       .getSetupStatus()
       .then((st) => {
         if (!alive) return;
-        // The first row's ceiling, unless the person's several rows (below) already answered.
-        if (!severalOrgs) setAdoCeiling(st.scm_access?.capability_ceiling);
+        // The first row's ceiling, unless the person's own rows (below) already answered.
+        if (!ownRows) setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
-        if (editor.mode !== "edit") {
+        if (editor.mode !== "edit" && !landed.current) {
           const seeded = specToSource(minimalSpec(providers));
           const was = initial.current.specText;
           setSpecText((prev) => (prev === was ? seeded : prev));
@@ -553,13 +583,14 @@ function PolicyEditor({
         }
       })
       .catch(() => {});
-    // With several organisations (#2146) every row names its own ceiling; unreadable leaves the first row's.
+    // The person's own rows name their ceilings, even with one organisation, so the lock follows their row and not
+    // the first row on the provider (#2146); unreadable, or no row naming one, leaves the first row's.
     void scmAccessApi
       .getMine()
       .then((rows) => {
         const perOrg = orgCeilings(Array.isArray(rows) ? rows : []);
-        if (!alive || perOrg.length < 2) return;
-        severalOrgs = true;
+        if (!alive || perOrg.length < 1) return;
+        ownRows = true;
         setAdoCeiling(unionCeiling(perOrg));
         setAdoOrgCeilings(perOrg);
       })
@@ -581,14 +612,17 @@ function PolicyEditor({
     }
     if (!parsed.ok) return;
     const spec = parsed.spec;
+    const person = getExpectedPrincipal();
     setSaving(true);
     try {
       if (editing) {
-        await api.updatePolicy(editing.id, name.trim(), spec);
+        await api.updatePolicy(editing.id, name.trim(), spec, editing.updated_at);
       } else {
+        // Sent: from here no setup status may replace the person's spec, answered or refused.
+        landed.current = true;
         const created = await api.createPolicy(name.trim(), spec);
         try {
-          await writeAvailability("policy", created.id, audience);
+          await writeAvailability("policy", created.id, audience, person);
         } catch (e) {
           initial.current = { name, specText };
           setPartial({ policy: created, message: getErrorMessage(e) });
@@ -598,16 +632,49 @@ function PolicyEditor({
       }
       onSaved();
     } catch (e) {
-      // Surface the server's validation message (HttpError carries the body).
-      setError(getErrorMessage(e) || "Failed to save policy.");
       setSaving(false);
+      if (e instanceof HttpError && e.status === 409 && e.reason === "policy_stale") {
+        setStale(true);
+        return;
+      }
+      // Surface the server's validation message (HttpError carries the body).
+      setError(getErrorMessage(e, "Failed to save policy."));
+    }
+  };
+
+  // Discard mine and reload: the stored policy replaces the draft, and the next save is made against it.
+  const reload = async () => {
+    if (!editing) return;
+    const requestedId = editing.id;
+    const generation = ++reloadGeneration.current;
+    // Discard holds focus and is about to be disabled, and the dialog's focus trap cannot hand focus back to a
+    // disabled control: park focus on the dialog itself first.
+    dialogRef.current?.focus();
+    setReloading(true);
+    try {
+      const fresh = await api.getPolicy(requestedId);
+      if (generation !== reloadGeneration.current) return;
+      setReloading(false);
+      if (fresh.id !== requestedId) return;
+      const seedSpec = specToSource(fresh.spec);
+      setReloaded(fresh);
+      setName(fresh.name);
+      setSpecText(seedSpec);
+      setFormat("yaml");
+      initial.current = { name: fresh.name, specText: seedSpec };
+      setStale(false);
+      setError(null);
+    } catch (e) {
+      if (generation !== reloadGeneration.current) return;
+      setReloading(false);
+      setError(getErrorMessage(e));
     }
   };
 
   const isEdit = !!editing;
 
   return (
-    <Dialog open={!!editor} onOpenChange={(o) => !o && close()}>
+    <Dialog open={!!editor} onOpenChange={(o) => !o && !saving && close()}>
       {/* F3-F8: the primitive (ui/dialog.tsx) now carries the max-height/
           overflow/scroll-thin floor itself — this local patch, narrower than
           the primitive's (85vh vs 100dvh-2rem), is deleted. */}
@@ -618,6 +685,7 @@ function PolicyEditor({
           dialog only. ponytail: block, don't confirm — same call as that
           precedent. */}
       <DialogContent
+        ref={dialogRef}
         className="sm:max-w-2xl"
         onPointerDownOutside={(e) => dirty && e.preventDefault()}
         onEscapeKeyDown={(e) => dirty && e.preventDefault()}
@@ -627,7 +695,7 @@ function PolicyEditor({
           <DialogDescription>{POLICY_DIALOG.LEDE}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1">
+        <fieldset disabled={reloading} inert={reloading} className="m-0 min-w-0 space-y-4 border-0 px-0 py-1">
           {partial && (
             <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
               <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
@@ -680,6 +748,7 @@ function PolicyEditor({
               )}
             </div>
           )}
+          {stale && <SavedElsewhereBanner documentText={specText} onDiscard={() => void reload()} disabled={reloading || saving} />}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below — a
               rejected save previously only ever showed visually. */}
@@ -697,22 +766,22 @@ function PolicyEditor({
               {OPERATOR_ONLY_REASON}
             </p>
           )}
-        </div>
+        </fieldset>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={close}>
+          <Button variant="ghost" onClick={close} disabled={saving}>
             Cancel
           </Button>
           <Button
             onClick={save}
-            disabled={!operator || saving || !name.trim() || !parsed.ok || audience.pending}
+            disabled={!operator || saving || reloading || !name.trim() || !parsed.ok || audience.pending}
             aria-describedby={
               [error ? "policy-editor-error" : undefined, !operator ? "policy-editor-operator-reason" : undefined]
                 .filter(Boolean)
                 .join(" ") || undefined
             }
           >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+            {saving || reloading ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
             {isEdit ? "Save changes" : "Create policy"}
           </Button>
         </DialogFooter>

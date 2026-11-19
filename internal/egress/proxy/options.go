@@ -41,6 +41,8 @@ type Options struct {
 	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> grant id)
 	// backing the /wardyn/gh/ route. See Proxy.gitGrants.
 	GitGrants map[string]uuid.UUID
+	// GitPushWithheld is Config.GitPushWithheld.
+	GitPushWithheld map[string]string
 	// PATGrants is the git_pat broker's per-HOST allowlist backing /wardyn/git/.
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
@@ -104,12 +106,16 @@ type Options struct {
 	LLMUnavailableDetail string
 	// LocalModels is Config.LocalModels, forwarded verbatim. See Proxy.localModels.
 	LocalModels map[string]types.LocalModelSettings
+	// GatewayIdentity is Config.GatewayIdentity, forwarded verbatim. Empty == off.
+	GatewayIdentity []GatewayIdentityRoute
 	// RunnerLocalModels is Config.RunnerLocalModels, forwarded verbatim.
 	RunnerLocalModels []string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
 	// ScrubResponses is Config.ScrubResponses.
 	ScrubResponses bool
+	// NoNetwork is Config.NoNetwork.
+	NoNetwork bool
 	// CanonicalPushRepos is Config.CanonicalPushRepos.
 	CanonicalPushRepos bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.

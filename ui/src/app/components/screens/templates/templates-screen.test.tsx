@@ -16,6 +16,7 @@ import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { WORKLOADS as W } from "../../wardyn/copy/workloads";
 import { NR_RUN } from "../../wardyn/copy/new-run/run";
+import { STALE_NOTE, STATES } from "../../wardyn/states";
 import { TemplatesScreen } from "./templates-screen";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -246,6 +247,28 @@ describe("Templates screen: filters and empty states", () => {
     api.list.mockResolvedValue({ templates: [MINE], publish: MEMBER });
     await userEvent.click(screen.getByRole("button", { name: /retry/i }));
     expect(await screen.findByText("Nightly tests")).toBeInTheDocument();
+  });
+
+  it("a failed first read without a server sentence shows the default line, not the raw error", async () => {
+    api.list.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(
+      <MemoryRouter>
+        <TemplatesScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
+  });
+
+  it("a failed re-read after a write keeps the list and says it may be old", async () => {
+    api.remove.mockResolvedValue(undefined);
+    mount({ templates: [MINE], publish: MEMBER });
+    await screen.findByText("Nightly tests");
+    api.list.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await userEvent.click(screen.getByRole("button", { name: T.DELETE }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.DELETE_CONFIRM }));
+    expect(await screen.findByRole("status")).toHaveTextContent(STALE_NOTE);
+    expect(screen.queryByText(T.EMPTY_TITLE)).toBeNull();
   });
 });
 

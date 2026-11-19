@@ -443,9 +443,14 @@ func TestEntraProfileDefaultsToDefaultProfile(t *testing.T) {
 	if !slices.Equal(cfg.Profile(), adoscope.ProfileDefault()) {
 		t.Fatalf("Profile() = %v, want %v", cfg.Profile(), adoscope.ProfileDefault())
 	}
+	// The written profile, with pr read as its three parts; the stored row keeps pr.
 	cfg.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}
-	if !slices.Equal(cfg.Profile(), cfg.DefaultProfile) {
-		t.Fatalf("Profile() = %v, want the written profile %v", cfg.Profile(), cfg.DefaultProfile)
+	want := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPRCreate, adoscope.CapPRVote, adoscope.CapPRComplete}
+	if !slices.Equal(cfg.Profile(), want) {
+		t.Fatalf("Profile() = %v, want the written profile as %v", cfg.Profile(), want)
+	}
+	if !slices.Equal(cfg.DefaultProfile, []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}) {
+		t.Fatalf("Profile() rewrote the stored profile to %v", cfg.DefaultProfile)
 	}
 	var absent *types.ADOEntraConfig
 	if !slices.Equal(absent.Profile(), adoscope.ProfileDefault()) {

@@ -139,7 +139,13 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 			read := func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) }
 			switch {
 			case row.Pool.Scope == types.RunnerPoolOrganization:
-				targets, _ = executorTargets(row, s.configuredExecutors(), read)
+				// Its claimed organization runners (poolAvailability read them) and, unless remote is denied, its
+				// configured executors, as launch offers both (poolTargets), so its barriers read the same.
+				targets = slices.Clone(st.org)
+				if !slices.Contains(in.denied, types.PlacementRemote) {
+					remote, _ := executorTargets(row, s.configuredExecutors(), read)
+					targets = append(targets, remote...)
+				}
 			case !slices.Contains(in.denied, types.PlacementRemote):
 				// A user pool also offers its remote-hosted members whose people policy admits the
 				// person, as launch does (poolTargets), so its barriers read the same.

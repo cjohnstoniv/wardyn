@@ -94,6 +94,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 		"a boolean, the overlay's key names, and the starting spec recorded with each mount source already <redacted>"},
 	"run.drive.mount":                {[]string{"object"}, keepObject},
 	"run.egress.confine":             {[]string{"hosts"}, keepEgress},
+	"run.egress.edit":                {[]string{"denied_hosts", "removed_hosts"}, keepEgress},
 	"run.folder.transfer":            {[]string{"remote_dir"}, keepSandbox},
 	"run.git_pat.drop":               {[]string{"dropped_hosts"}, keepEgress},
 	"run.injection.drop":             {[]string{"host"}, keepEgress},
@@ -120,7 +121,9 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"site_config.redirect.test":      {[]string{"from_host"}, "the public host a redirect replaces, an egress destination; to_host is withheld"},
 	"site_config.write": {[]string{"internal_hosts_count", "policy_help_request_url", "request_url", "scm_hosts_count", "sign_in_help_url"},
 		"two counts, and links every console or signed-out reader is shown"},
-	"ui.authorize":             {[]string{"host"}, "the sandbox app's own host name the relay authorized"},
+	"ui.authorize": {[]string{"host"}, "the sandbox app's own host name the relay authorized"},
+	"wall_preset.create": {[]string{"spec"}, "a shared preset's walls (types.PersonalWallsSpec, decoded strictly): egress hosts, capability and tool lists, " +
+		"push deny paths in a repository, desktop rules and withheld grants; it has no workspace_mounts and names no deployment host or path"},
 	"workspace.provider.admit": {[]string{"host"}, keepEgress},
 	"workspace_provider.write": {[]string{"base_urls"}, "forge base URLs, the egress axis the security tier decides on"},
 }

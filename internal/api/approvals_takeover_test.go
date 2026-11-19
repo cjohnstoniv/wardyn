@@ -21,6 +21,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -248,6 +250,119 @@ func TestTakeover_UnrecordedRunHasNothingToPause(t *testing.T) {
 	}
 }
 
+// TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap: a macOS VM run's desktop is recorded at
+// Screen and actions as a Linux VM's is, so a take over holds its desktop recording, and the terminal's
+// gap rows stay (its console and SSH sessions are recorded).
+func TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap(t *testing.T) {
+	for _, tc := range []struct {
+		kind               types.MachineKind
+		desktopPauses, res int
+	}{{types.MachineMacOSVM, 1, 1}, {types.MachineLinuxVM, 1, 1}} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			f := newTakeoverFixture(t, true)
+			ast := f.srv.cfg.Store.(*authzStore)
+			ast.mu.Lock()
+			run := ast.runs[f.run]
+			run.MachineKind, run.RecordingLevel = tc.kind, types.RecordingScreenActions
+			ast.runs[f.run] = run
+			ast.mu.Unlock()
+			id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+			for _, verb := range []string{"/take-over", "/hand-back"} {
+				if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", verb, w.Code, w.Body.String())
+				}
+			}
+			want := [][2]string{
+				{"takeover.begin/human:" + takeoverOwnerSub, "after_ms,approval_id,surface"},
+				{"recording.pause/system:wardyn", "approval_id,reason"},
+				{"recording.resume/system:wardyn", "approval_id,gap_ms,reason"},
+				{"takeover.close/human:" + takeoverOwnerSub, "approval_id,held_ms"},
+			}
+			if got := takeoverRows(t, f.audit); !slices.Equal(got, want) {
+				t.Fatalf("audit rows =\n%v\nwant\n%v", got, want)
+			}
+			if p, r := desktopRows(f.audit); p != tc.desktopPauses || r != tc.res {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want %d and %d", p, r, tc.desktopPauses, tc.res)
+			}
+		})
+	}
+}
+
+// takeoverUnitStore serves a run's governance profile chain and its recorded policy envelope on top of authzStore.
+type takeoverUnitStore struct {
+	*authzStore
+	profiles []types.GovernanceUnit
+	events   []types.AuditEvent
+}
+
+func (s *takeoverUnitStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	return unitChainOf(s.profiles, nil, id)
+}
+
+func (s *takeoverUnitStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return s.events, nil
+}
+
+// TestTakeover_SurfaceForAVMRun pins where a take over puts the person (UXR-16): a VM run with the gateway on
+// drives the gateway's built-in desktop, a macOS VM run whose desktop is view only in the browser (no runner
+// caps say control) keeps the terminal, and so does a run with the gateway off, no VM at all, a background VM
+// run, or one whose governance profile denies UI apps (the desktop door would refuse it).
+func TestTakeover_SurfaceForAVMRun(t *testing.T) {
+	denyUI := types.GovernanceUnit{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
+	novnc, err := json.Marshal(effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{UIApps: []types.UIApp{{Name: "novnc", Port: 6080}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		kind    types.MachineKind
+		gateway bool
+		prep    func(t *testing.T, f takeoverFixture, run *types.AgentRun)
+		want    string
+	}{
+		{"linux vm, gateway on", types.MachineLinuxVM, true, nil, "desktop"},
+		{"linux vm, gateway off", types.MachineLinuxVM, false, nil, "terminal"},
+		{"macos vm, view only", types.MachineMacOSVM, true, nil, "terminal"},
+		{"no vm", "", true, nil, "terminal"},
+		{"linux vm, profile denies ui apps", types.MachineLinuxVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			f.srv.cfg.Store = &takeoverUnitStore{authzStore: f.srv.cfg.Store.(*authzStore), profiles: []types.GovernanceUnit{denyUI}}
+			run.UnitID = &denyUI.ID
+		}, "terminal"},
+		{"linux vm, background run", types.MachineLinuxVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			run.Experience = types.ExperienceBackground
+		}, "terminal"},
+		{"declared novnc app, gateway off", types.MachineLinuxVM, false, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			f.srv.cfg.Store = &takeoverUnitStore{authzStore: f.srv.cfg.Store.(*authzStore),
+				events: []types.AuditEvent{{Action: "run.policy.resolve", Data: novnc}}}
+		}, "terminal"},
+		{"macos vm, runner caps say control", types.MachineMacOSVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{Desktop: runnerwire.MacVMDesktopControl}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := uuid.New()
+			sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+			sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+			f.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: {sub: sub, link: &remote.Link{}}}
+			run.RunnerID = &id
+		}, "desktop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTakeoverFixture(t, false)
+			if tc.gateway {
+				f.srv.cfg.UIListenAddr, f.srv.cfg.UISessionKey = ":8081", make([]byte, 32)
+			}
+			run := types.AgentRun{ID: f.run, CreatedBy: takeoverOwnerSub, State: types.RunRunning, MachineKind: tc.kind}
+			if tc.prep != nil {
+				tc.prep(t, f, &run)
+			}
+			if got := f.srv.takeoverSurface(context.Background(), run); got != tc.want {
+				t.Fatalf("takeoverSurface = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestTakeover_Refusals: a takeover request is never approved or denied (every tier), the verbs
 // refuse another kind and a stranger, only the holder hands back, and decline is a recorded DENIED.
 func TestTakeover_Refusals(t *testing.T) {
@@ -400,6 +515,91 @@ func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
 	}
 	if _, thaws := f.rn.counts(); thaws != 1 {
 		t.Errorf("thaws = %d after a hand back, want still 1", thaws)
+	}
+}
+
+// TestTakeover_HandBackThawsARunFrozenIdleWhileHeld: an idle freeze is admitted while a person holds control
+// (a held takeover is no open request), so the hand back thaws the run, or the agent's `wardyn needs-you`
+// would wait in a frozen sandbox until someone pressed Resume. It counts no second decision.
+func TestTakeover_HandBackThawsARunFrozenIdleWhileHeld(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	frozen := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &frozen, types.PauseIdle
+	f.st.mu.Unlock()
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if at, _ := f.st.paused(); at != nil {
+		t.Errorf("run still paused at %v after the hand back", at)
+	}
+	if _, thaws := f.rn.counts(); thaws != 2 {
+		t.Errorf("thaws = %d, want 2 (the take over's and the hand back's)", thaws)
+	}
+	if n := approvalsCounted(f, "approved") + approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("decisions counted = %d after the hand back, want still 1", n)
+	}
+}
+
+// TestTakeover_HandBackThawsARunWhoseOwnThawIsBackingOff: the hand back's presence stamp thaws nothing while
+// an earlier failed thaw of the run is backing off, so approvalClosed is what wakes the run. Without it the
+// run stays frozen idle until the backoff has passed and someone touches it.
+func TestTakeover_HandBackThawsARunWhoseOwnThawIsBackingOff(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	frozen := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &frozen, types.PauseIdle
+	f.st.mu.Unlock()
+	// Seven failed thaws put the backoff at its 60 s cap, well past this test's run time.
+	for range 7 {
+		f.srv.pause.thawFailed(f.run.ID, f.srv.cfg.Now())
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if at, _ := f.st.paused(); at != nil {
+		t.Errorf("run still paused at %v after the hand back", at)
+	}
+	if _, thaws := f.rn.counts(); thaws != 2 {
+		t.Errorf("thaws = %d, want 2 (the take over's and the hand back's)", thaws)
+	}
+	if rows := f.rows("run.resume", "success"); len(rows) != 2 || rows[1].Actor != "wardynd" {
+		t.Errorf("run.resume rows = %+v, want the second by wardynd (request_closed), not the person's presence", rows)
+	}
+}
+
+// TestTakeover_HandBackDuringASweepPassLeavesTheRunRunning: a sweep pass lists the run as idle while the
+// person holds control, and the hand back lands between its freeze and its mark. The hand back finds the
+// run not paused, so it thaws nothing; its presence stamp makes the mark fail, and the sweep undoes its
+// freeze. Without the stamp the run stays frozen idle with nothing to wake it: its pause began after the
+// hand back.
+func TestTakeover_HandBackDuringASweepPassLeavesTheRunRunning(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	f.st.run.RunLimits.PauseIdleAfterSec = 60
+	f.st.mu.Unlock()
+	f.rn.cpu = pct(0)
+	f.rn.onFreeze = func() {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+			t.Errorf("hand back = %d %s", w.Code, w.Body.String())
+		}
+	}
+	f.sweep(t)
+	freezes, thaws := f.rn.counts()
+	if at, reason := f.st.paused(); at != nil || freezes != 1 || thaws != 2 {
+		t.Fatalf("paused %v %q, freezes %d thaws %d; want the freeze undone (thaws: the take over's and the undo)", at, reason, freezes, thaws)
+	}
+	if rows := f.rows("run.pause", "success"); len(rows) != 0 {
+		t.Errorf("run.pause rows = %+v, want none", rows)
 	}
 }
 

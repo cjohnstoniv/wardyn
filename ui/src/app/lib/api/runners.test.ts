@@ -54,6 +54,13 @@ describe("runners api", () => {
     expect(call(spy, 4)).toMatchObject({ path: "/runners/tokens/t1", method: "DELETE" });
   });
 
+  it("setRequireManagedDevice PUTs only require_managed_device", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ enabled: true, require_managed_device: true }));
+    expect(await runners.setRequireManagedDevice(true)).toEqual({ enabled: true, require_managed_device: true });
+    expect(call(spy)).toMatchObject({ path: "/runners/settings", method: "PUT", body: { require_managed_device: true } });
+    expect(String((spy.mock.calls[0] as [string, RequestInit])[1].body)).toBe('{"require_managed_device":true}');
+  });
+
   it("a refusal keeps the server's sentence and reason", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ error: "runners are off", reason: "runners_disabled" }, { status: 403 }));
     const err = await runners.listMine().catch((e) => e);

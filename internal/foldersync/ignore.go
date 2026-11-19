@@ -133,11 +133,11 @@ func (ig *syncIgnore) load(root *os.Root, dir string) {
 	}
 	for _, name := range syncIgnoreFiles {
 		rel := path.Join(dir, name)
-		fi, err := root.Lstat(rel)
+		fi, err := lstatIn(root, rel)
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxSyncIgnoreFile {
 			continue
 		}
-		b, err := root.ReadFile(rel)
+		b, err := readFileIn(root, rel)
 		if err != nil {
 			continue
 		}

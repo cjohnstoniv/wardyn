@@ -11,6 +11,7 @@ package stage1test
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -57,6 +58,8 @@ type Server struct {
 	// AskAgain, with KeyboardOnly, asks for the password again after a wrong
 	// answer until the client gives up, as a PAM sshd does.
 	AskAgain bool
+	// ProductVersion and BuildVersion are what sw_vers prints; "" is 26.6.2 and 25G83.
+	ProductVersion, BuildVersion string
 
 	mu       sync.Mutex
 	sharing  bool // Screen Sharing loaded: port 5900 sends its RFB banner
@@ -307,11 +310,9 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	}
 	switch {
 	case slices.Equal(argv, []string{"/usr/bin/dscl", "."}):
-		f := strings.Fields(strings.TrimSpace(string(rest)))
-		if s.RejectPasswd || len(f) != 4 || f[0] != "passwd" || f[1] != "/Users/"+s.user || f[2] != s.password {
+		if !s.dsclPasswd(rest) {
 			return 0, nil, append([]byte("passwd: DS error: eDSAuthFailed; input: "), rest...), false
 		}
-		s.password = f[3]
 	case slices.Equal(argv, []string{"/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"}):
 		out := "root 0\ndaemon 1\nnobody -2\n" + s.user + " 501\n"
 		for i, u := range append(slices.Clone(s.users), s.ExtraAccounts...) {
@@ -325,12 +326,36 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":
 		sum := sha256.Sum256(s.files[argv[3]])
 		return 0, []byte(hex.EncodeToString(sum[:]) + "  " + argv[3] + "\n"), nil, false
+	case len(argv) == 2 && argv[0] == "/usr/bin/sw_vers":
+		return s.swVers(argv[1])
 	case len(argv) >= 3 && argv[0] == "/bin/launchctl":
 		code, stderr = s.launchctl(argv)
 		return code, nil, stderr, false
 	case len(argv) == 4 && argv[0] == "/usr/sbin/systemsetup" && argv[2] == "-setremotelogin" && argv[3] == "off":
 		s.on = s.StaysOn
 		return 0, nil, nil, s.DropOnOff
+	}
+	return 0, nil, nil, false
+}
+
+// dsclPasswd changes the test user's password from dscl's "passwd /Users/<user> <old> <new>" input, and
+// reports whether it did.
+func (s *Server) dsclPasswd(in []byte) bool {
+	f := strings.Fields(strings.TrimSpace(string(in)))
+	if s.RejectPasswd || len(f) != 4 || f[0] != "passwd" || f[1] != "/Users/"+s.user || f[2] != s.password {
+		return false
+	}
+	s.password = f[3]
+	return true
+}
+
+// swVers answers sw_vers -productVersion and -buildVersion; any other flag succeeds with no output.
+func (s *Server) swVers(flag string) (code int, stdout, stderr []byte, drop bool) {
+	switch flag {
+	case "-productVersion":
+		return 0, []byte(cmp.Or(s.ProductVersion, "26.6.2") + "\n"), nil, false
+	case "-buildVersion":
+		return 0, []byte(cmp.Or(s.BuildVersion, "25G83") + "\n"), nil, false
 	}
 	return 0, nil, nil, false
 }

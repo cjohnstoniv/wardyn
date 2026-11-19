@@ -31,8 +31,8 @@ func osVersion() string {
 }
 
 // diskEncrypted reports whether the root filesystem sits on dm-crypt, through
-// any device-mapper layers (LVM on LUKS). A filesystem with no block device
-// (btrfs subvolumes, overlay) reads as not encrypted.
+// any device-mapper or md layers (LVM on LUKS). A filesystem with no block
+// device (btrfs subvolumes, overlay) reads as not encrypted.
 func diskEncrypted() bool {
 	var st syscall.Stat_t
 	if err := syscall.Stat("/", &st); err != nil {
@@ -42,6 +42,9 @@ func diskEncrypted() bool {
 	return cryptBacked(filepath.Join("/sys/dev/block", strconv.FormatUint(uint64(unix.Major(dev)), 10)+":"+strconv.FormatUint(uint64(unix.Minor(dev)), 10)), 0)
 }
 
+// cryptBacked reports whether the block device at sysDev is a dm-crypt mapping, or a layer whose backing
+// devices all are, each through its own layers. A layer that spans one plain or unreadable device (an LVM
+// volume or md array over an encrypted disk and a plain one) is not encrypted.
 func cryptBacked(sysDev string, depth int) bool {
 	if depth > 8 {
 		return false
@@ -51,9 +54,9 @@ func cryptBacked(sysDev string, depth int) bool {
 	}
 	slaves, _ := filepath.Glob(filepath.Join(sysDev, "slaves", "*"))
 	for _, s := range slaves {
-		if cryptBacked(s, depth+1) {
-			return true
+		if !cryptBacked(s, depth+1) {
+			return false
 		}
 	}
-	return false
+	return len(slaves) > 0
 }

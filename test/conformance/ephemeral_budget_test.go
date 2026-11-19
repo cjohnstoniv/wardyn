@@ -22,6 +22,9 @@ import (
 // number, so re-ordering the Makefile does not silently disarm this.
 var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 
+// makefileDefaultTimeoutRe reads the default of the recipe's `CONFORMANCE_K8S_TIMEOUT ?= <dur>` line.
+var makefileDefaultTimeoutRe = regexp.MustCompile(`(?m)^CONFORMANCE_K8S_TIMEOUT \?= (\S+)`)
+
 // ephemeralBudgetSuiteMargin is what the eviction case must leave behind for
 // every OTHER case in the package. 5m against a measured 457 s green run — the
 // margin is the measurement, rounded up, not a round number chosen for comfort.
@@ -63,8 +66,13 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 		if m == nil {
 			t.Fatalf("the k8s conformance recipe carries no -timeout: %q — this case can outrun go test's 10m default", line)
 		}
-		if timeout, err = time.ParseDuration(m[1]); err != nil {
-			t.Fatalf("parse -timeout %q: %v", m[1], err)
+		// The recipe takes its value from CONFORMANCE_K8S_TIMEOUT; this guard checks the default conformance-k8s runs.
+		val := m[1]
+		if d := makefileDefaultTimeoutRe.FindStringSubmatch(string(b)); d != nil && val == "$(CONFORMANCE_K8S_TIMEOUT)" {
+			val = d[1]
+		}
+		if timeout, err = time.ParseDuration(val); err != nil {
+			t.Fatalf("parse -timeout %q: %v", val, err)
 		}
 		break
 	}
@@ -85,6 +93,29 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 	}
 }
 
+// TestConformanceK8sJobPassesNoTimeoutOverride holds ci.yml's conformance-k8s job to the Makefile's
+// CONFORMANCE_K8S_TIMEOUT default, the timeout TestEphemeralCaseBudgetFitsTheMakefileTimeout checks the eviction case
+// against: the job or the workflow's own env setting it would run the suite under a timeout no test sized.
+func TestConformanceK8sJobPassesNoTimeoutOverride(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	wf := string(b)
+	job := workflowJob(wf, "conformance-k8s")
+	if !strings.Contains(job, "run: make test-conformance-k8s\n") {
+		t.Fatal("ci.yml's conformance-k8s job has no `run: make test-conformance-k8s` step")
+	}
+	head, _, _ := strings.Cut(wf, "\njobs:\n")
+	for _, part := range []struct{ name, text string }{{"the conformance-k8s job", job}, {"the workflow's top-level settings", head}} {
+		for _, line := range strings.Split(part.text, "\n") {
+			if code, _, _ := strings.Cut(line, "#"); strings.Contains(code, "CONFORMANCE_K8S_TIMEOUT") {
+				t.Errorf("%s sets CONFORMANCE_K8S_TIMEOUT (%q); the conformance-k8s suite must run under the Makefile's default", part.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 // TestEphemeralFillScriptCodesAreDistinct pins the fill script's exit-code
 // contract, which is what the case BRANCHES on — 90 skips as an image verdict, 91
 // as an environment one (or, on a substrate-owned target, a substrate verdict),
@@ -93,7 +124,7 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 // It is a source assertion and not an execution: running busybox here would need
 // Docker, and the thing that broke was not the shell but WHERE it wrote. So the
 // two facts asserted are the two that were wrong: the target is not $HOME (which
-// is `/` for uid 1000 on the agent image, and root-owned), and the open is probed
+// is `/`, root-owned, for uid 1000 in an image with no passwd entry for it), and the open is probed
 // under its own code so an unwritable target cannot be reported as a substrate
 // that does not enforce.
 //
@@ -113,7 +144,7 @@ func TestEphemeralFillScriptCodesAreDistinct(t *testing.T) {
 		sawTmp = sawTmp || strings.HasPrefix(target.path, "/tmp/")
 		sawSubstrateOwned = sawSubstrateOwned || target.substrateOwned
 		if strings.Contains(script, "$HOME") {
-			t.Errorf("target %s writes under $HOME, which runc answers as `/` for the agent image's uid 1000 — "+
+			t.Errorf("target %s writes under $HOME, which runc answers as `/` for uid 1000 in an image with no passwd entry for it — "+
 				"root-owned, so every fill dies `Permission denied` with exit 1, the coded skip never fires, and "+
 				"the case reports a substrate that does not enforce. Spell the path out.", target.name)
 		}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,10 +30,12 @@ import (
 // expiry refusal for ONE token and a flat error for anything else — the two
 // shapes internal/api has to tell apart. The provider side (that a real expired
 // token verifies this way, and that no OTHER failure does) is pinned where it
-// lives, internal/identity/embedded's TestExpiredVerifyCarriesTheRunID.
+// lives, internal/identity/embedded's TestExpiredVerifyCarriesTheRunID. expiry is the
+// token's expiry claim the refusal carries (zero: none).
 type expiredIdentity struct {
-	token string
-	runID uuid.UUID
+	token  string
+	runID  uuid.UUID
+	expiry time.Time
 }
 
 const expiredIdentityToken = "expired-run-token"
@@ -48,7 +51,7 @@ func (e *expiredIdentity) Verify(_ context.Context, token, _ string) (*identity.
 		// Forged / unknown: names no run of ours, stays flat.
 		return nil, errors.New("embedded identity: verify signature: bad signature")
 	}
-	return nil, &identity.ExpiredTokenError{RunID: e.runID, Err: errors.New("validate claims: go-jose/go-jose/jwt: validation failed, token is expired (exp)")}
+	return nil, &identity.ExpiredTokenError{RunID: e.runID, Expiry: e.expiry, Err: errors.New("validate claims: go-jose/go-jose/jwt: validation failed, token is expired (exp)")}
 }
 
 func (e *expiredIdentity) RevokeRun(context.Context, uuid.UUID) error { return nil }

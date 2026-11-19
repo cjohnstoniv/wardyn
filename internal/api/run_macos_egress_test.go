@@ -17,7 +17,7 @@ import (
 
 // The boot hosts are the shipped list, read once.
 func TestMacOSBootHostsAreTheShippedList(t *testing.T) {
-	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}
+	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}
 	if got := macOSBootHosts(); !slices.Equal(got, want) {
 		t.Fatalf("macOSBootHosts() = %q, want %q", got, want)
 	}
@@ -57,11 +57,11 @@ func TestAppendMacOSBootDenials(t *testing.T) {
 	}{
 		{name: "no allow covers one", wantDenied: macOSBootHosts()},
 		{name: "an exact allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "mesu.apple.com") },
-			wantDenied: []string{"gdmf.apple.com", "gateway.icloud.com", "init-kt.apple.com"}, wantAllow: []string{"mesu.apple.com"}},
+			wantDenied: []string{"gdmf.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"mesu.apple.com"}},
 		{name: "a wildcard allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "*.apple.com") },
-			wantDenied: []string{"gateway.icloud.com"}, wantAllow: []string{"gdmf.apple.com", "mesu.apple.com", "init-kt.apple.com"}},
+			wantDenied: []string{"gateway.icloud.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"gdmf.apple.com", "mesu.apple.com", "init-kt.apple.com"}},
 		{name: "a port-qualified allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "gdmf.apple.com:443") },
-			wantDenied: []string{"mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}, wantAllow: []string{"gdmf.apple.com"}},
+			wantDenied: []string{"mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"gdmf.apple.com"}},
 		{name: "a wildcard of another domain", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "*.notapple.com") },
 			wantDenied: macOSBootHosts()},
 		{name: "already denied", edit: func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "GDMF.apple.com") },
@@ -168,6 +168,32 @@ func TestDispatchDeniesBootHostsOnlyOnMacOSVM(t *testing.T) {
 	for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, ""} {
 		if got := appendMacOSBootDenials(kind, spec); !slices.Equal(got, spec.DeniedDomains) {
 			t.Errorf("%q: denied %v, want the run's own %v", kind, got, spec.DeniedDomains)
+		}
+	}
+}
+
+// Dispatch gives a macOS VM run's proxy the boot hosts as the hosts whose allowed traffic is not activity, and
+// every other kind none, so the key is absent from a container run's config. The list is a copy.
+func TestDispatchSetsActivityIgnoreHostsOnlyOnMacOSVM(t *testing.T) {
+	src, err := os.ReadFile("runs_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const field = "ActivityIgnoreHosts: activityIgnoreHosts(run.MachineKind)"
+	if strings.Count(string(src), "activityIgnoreHosts(") != 1 || !strings.Contains(string(src), field) {
+		t.Fatal("dispatchRun must set the proxy config's ActivityIgnoreHosts once, from the run's kind")
+	}
+	if got := activityIgnoreHosts(types.MachineMacOSVM); !slices.Equal(got, macOSBootHosts()) || len(got) == 0 {
+		t.Errorf("macOS VM: %v, want the boot hosts %v", got, macOSBootHosts())
+	}
+	got := activityIgnoreHosts(types.MachineMacOSVM)
+	got[0] = "changed.example"
+	if macOSBootHosts()[0] == "changed.example" {
+		t.Error("the returned list aliases the boot-host list")
+	}
+	for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, ""} {
+		if got := activityIgnoreHosts(kind); got != nil {
+			t.Errorf("%q: %v, want none", kind, got)
 		}
 	}
 }

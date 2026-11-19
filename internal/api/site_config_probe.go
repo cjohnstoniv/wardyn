@@ -375,25 +375,6 @@ func curlFailureDetail(exitCode int) string {
 	return fmt.Sprintf("curl exit code %d", exitCode)
 }
 
-// upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
-// failReason codes in the same human-readable style as curlFailureDetail.
-var upstreamResolveFailDetail = map[string]string{
-	"unsupported-scheme": "it is not an http:// URL (https is not supported)",
-	// The sidecar's own loader (proxy.ValidUpstreamProxyURL) refused the
-	// authority — in practice a port outside 1-65535, or no host at all.
-	"unloadable-upstream-url": "the proxy sidecar's own loader refuses it (check the host and port)",
-	"reserved-secret-name":    "its secret ref names a reserved secret",
-	"no-secret-store":         "no secret store is configured",
-	"secret-not-found":        "its secret ref does not resolve to a stored secret",
-}
-
-func upstreamFailDetail(reason string) string {
-	if d, ok := upstreamResolveFailDetail[reason]; ok {
-		return d
-	}
-	return reason
-}
-
 // probeRunResult is what a throwaway site-config probe run actually observed,
 // resolved from its own audit trail -- never inferred. A COMPLETED run always
 // reports hasExitCode=true, exitCode=0; a FAILED run reports the real exit
@@ -666,11 +647,8 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	// stamps FailureHint on every create/dispatch failure, whereas a trail can
 	// carry NON-fatal failure events (a proxy resolve, a lost sandbox ref)
 	// ahead of the run.complete that is still on its way.
-	launchFailed := false
-	if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && run.FailureHint != "" {
-		launchFailed = true
-	}
-	for i := 0; i < probeTrailSettleTries && err == nil && !launchFailed && !hasRunComplete(events); i++ {
+	hint, startHint := s.probeRunHints(ctx, runID)
+	for i := 0; i < probeTrailSettleTries && err == nil && hint == "" && !hasRunComplete(events); i++ {
 		select {
 		case <-ctx.Done():
 			i = probeTrailSettleTries
@@ -681,6 +659,10 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	if err != nil {
 		res.incompleteReason = "could not read the probe run's own audit trail: " + err.Error()
 		return res
+	}
+	if hint == "" && startHint == "" {
+		// The loop may have waited out the terminal write's hint, which can land after the first read.
+		hint, startHint = s.probeRunHints(ctx, runID)
 	}
 	for _, ev := range events {
 		if ev.Action != "run.complete" {
@@ -725,7 +707,11 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 			}
 			_ = json.Unmarshal(ev.Data, &es)
 			res.neverRan = es.ExecStarted != nil && !*es.ExecStarted
-			res.incompleteReason = probeFailureReason(ev)
+			if res.neverRan {
+				res.incompleteReason = probeFailureReason(ev, startHint)
+			} else {
+				res.incompleteReason = probeFailureReason(ev, "")
+			}
 			return res
 		}
 		if launchFail == nil {
@@ -734,24 +720,11 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 	}
 	if launchFail != nil {
 		res.neverRan = true
-		res.incompleteReason = probeFailureReason(launchFail)
+		res.incompleteReason = probeFailureReason(launchFail, hint)
 		return res
 	}
 	res.incompleteReason = "the probe sandbox failed for an unreported reason"
 	return res
-}
-
-// probeFailureReason words one failure-outcome audit event for a probe verdict:
-// "<action>: <error>" when the event carried one, else the action alone.
-func probeFailureReason(ev *types.AuditEvent) string {
-	var d struct {
-		Error string `json:"error"`
-	}
-	_ = json.Unmarshal(ev.Data, &d)
-	if d.Error != "" {
-		return fmt.Sprintf("%s: %s", ev.Action, d.Error)
-	}
-	return ev.Action + " did not succeed"
 }
 
 // reclaimProbeRun tears down a site-config probe run that never reached a
@@ -813,9 +786,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// here, not a 400. Anything actually sent still decodes strictly, so a
 	// typo'd field can't be silently swallowed.
 	var req testProxyRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &req, true); err != nil && !errors.Is(err, io.EOF) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigProbeRequestInvalid, "invalid JSON body: "+err.Error())
 		return
 	}

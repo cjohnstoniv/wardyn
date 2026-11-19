@@ -15,10 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -237,6 +240,123 @@ func loadOrCreateRunConfigKey(ctx context.Context, secrets bootKeyStore) ([]byte
 			return key, nil
 		},
 	)
+}
+
+// gatewayIdentity returns api.Config.GatewayIdentity. This key is not made at
+// boot: an install that never turns identity on has no row, so the row is read
+// on first use and made only when create asks. A loaded signer lasts the
+// process, since a rotation needs every replica stopped. A miss or a failed read
+// is kept 30 seconds, because the JWKS route is anonymous and must not cost a
+// query per request.
+//
+// A row that fails to decrypt or to parse fails closed and is never made again:
+// valid is true for any row that exists, because a false one is what makes
+// loadOrCreateSecret write a new key, and gatewayidentity.New is the shape check.
+func (secrets bootKeyStore) gatewayIdentity() func(ctx context.Context, create bool) (*gatewayidentity.Signer, error) {
+	const recheck = 30 * time.Second
+	var (
+		mu      sync.Mutex
+		signer  *gatewayidentity.Signer
+		lastErr error
+		checked time.Time
+	)
+	valid := func([]byte) bool { return true }
+	return func(ctx context.Context, create bool) (*gatewayidentity.Signer, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if signer != nil {
+			return signer, nil
+		}
+		if !create && !checked.IsZero() && time.Since(checked) < recheck {
+			return nil, lastErr
+		}
+		var (
+			raw   []byte
+			found bool
+			err   error
+		)
+		if create {
+			raw, err = loadOrCreateSecret(ctx, secrets, secretGatewayIdentityKey, valid, func() ([]byte, error) {
+				slog.Info("wardynd: generated and persisted the AI gateway identity signing key")
+				return gatewayidentity.Rotate(nil, false, time.Now())
+			})
+			found = err == nil
+		} else {
+			raw, found, err = loadBootKey(ctx, secrets, secretGatewayIdentityKey, valid)
+		}
+		if found {
+			signer, err = gatewayidentity.New(raw)
+		}
+		if ctx.Err() != nil { // this caller went away; the next one asks again
+			return nil, err
+		}
+		lastErr, checked = err, time.Now()
+		return signer, err
+	}
+}
+
+// gatewayClientCA returns api.Config.GatewayClientCA, on gatewayIdentity's terms:
+// not made at boot, read on first use and made only when create asks, a loaded CA
+// kept for the process, a miss or a failed read kept 30 seconds because the
+// bundle route is anonymous, and a row that fails to decrypt or parse never made
+// again (gatewayidentity.NewAuthority is the shape check).
+func (secrets bootKeyStore) gatewayClientCA() func(ctx context.Context, create bool) (*gatewayidentity.Authority, error) {
+	const recheck = 30 * time.Second
+	var (
+		mu      sync.Mutex
+		ca      *gatewayidentity.Authority
+		lastErr error
+		checked time.Time
+	)
+	valid := func([]byte) bool { return true }
+	return func(ctx context.Context, create bool) (*gatewayidentity.Authority, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ca != nil {
+			return ca, nil
+		}
+		if !create && !checked.IsZero() && time.Since(checked) < recheck {
+			return nil, lastErr
+		}
+		var (
+			raw   []byte
+			found bool
+			err   error
+		)
+		if create {
+			raw, err = loadOrCreateSecret(ctx, secrets, secretGatewayClientCA, valid, func() ([]byte, error) {
+				slog.Info("wardynd: generated and persisted the AI gateway client certificate CA")
+				return gatewayidentity.RotateAuthority(nil, false, time.Now())
+			})
+			found = err == nil
+		} else {
+			raw, found, err = loadBootKey(ctx, secrets, secretGatewayClientCA, valid)
+		}
+		if found {
+			ca, err = gatewayidentity.NewAuthority(raw)
+		}
+		if ctx.Err() != nil { // this caller went away; the next one asks again
+			return nil, err
+		}
+		lastErr, checked = err, time.Now()
+		return ca, err
+	}
+}
+
+// ensureGatewayClientCA makes the client CA on an install whose gateway identity
+// signing key already exists, so an install that turned identity on before the CA
+// existed gets one at its next boot, and a gateway can fetch the bundle before any
+// run asks for a certificate. An install with no signing key gets no CA. A
+// failure is logged, not fatal: only a gateway that asks for a client certificate
+// needs the CA, and the certificate mint refuses without it.
+func (secrets bootKeyStore) ensureGatewayClientCA(ctx context.Context, load func(context.Context, bool) (*gatewayidentity.Authority, error)) {
+	_, found, err := loadBootKey(ctx, secrets, secretGatewayIdentityKey, func([]byte) bool { return true })
+	if err == nil && found {
+		_, err = load(ctx, true)
+	}
+	if err != nil {
+		slog.Error("wardynd: make the AI gateway client certificate CA", slog.Any("err", err))
+	}
 }
 
 // loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,

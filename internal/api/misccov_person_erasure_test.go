@@ -124,7 +124,7 @@ func (s *miscCovPersonStore) BeginADOSignInEnd(context.Context, string, string) 
 	return s.beginErr
 }
 
-func (s *miscCovPersonStore) FinishADOSignInEnd(context.Context, string) error { return nil }
+func (s *miscCovPersonStore) FinishADOSignInEnd(context.Context, string, string) error { return nil }
 
 func (s *miscCovPersonStore) ADOSignInEnds(context.Context, string) (store.ADOSignInEndState, error) {
 	return store.ADOSignInEndState{}, nil

@@ -10,27 +10,28 @@
 // since renewal, a pause and an approval each change the list.
 import * as React from "react";
 import { adoPat } from "../api/ado-pat";
+import { usePoll } from "../use-poll";
 import type { ADORunToken } from "../types/ado-pat";
 
 const POLL_MS = 10_000;
 
 export function useRunAdoTokens(runId: string, live: boolean, enabled = true): ADORunToken[] {
   const [tokens, setTokens] = React.useState<ADORunToken[]>([]);
+  // Bumped when the run, `live` or `enabled` changes and on unmount, so a read still in flight then sets nothing.
+  const gen = React.useRef(0);
+  const read = () => {
+    const mine = gen.current;
+    return adoPat
+      .runTokens(runId)
+      .then((t) => mine === gen.current && setTokens(Array.isArray(t) ? t : []))
+      .catch(() => mine === gen.current && setTokens((prev) => prev));
+  };
+  const abandon = () => void gen.current++;
   React.useEffect(() => {
     if (!enabled) return;
-    let alive = true;
-    const read = () =>
-      adoPat
-        .runTokens(runId)
-        .then((t) => alive && setTokens(Array.isArray(t) ? t : []))
-        .catch(() => alive && setTokens((prev) => prev));
     void read();
-    if (!live) return () => void (alive = false);
-    const id = window.setInterval(() => void read(), POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, [runId, live, enabled]);
+    return abandon;
+  }, [runId, live, enabled]); // eslint-disable-line react-hooks/exhaustive-deps -- read is rebuilt each render and reads runId
+  usePoll(read, POLL_MS, !live || !enabled);
   return tokens;
 }

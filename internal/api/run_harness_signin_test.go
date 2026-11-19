@@ -67,7 +67,7 @@ func TestDispatch_SignInOnlyOnThePrimaryLane(t *testing.T) {
 	}
 }
 
-// TestDispatch_NoProviderDetailNamesTheHarness (DS1-S2 Opus I1): when the
+// TestDispatch_NoProviderDetailNamesTheHarness: when the
 // primary has no provider but another harness has one, the brokered-LLM 404
 // names the primary instead of saying no provider serves the run.
 func TestDispatch_NoProviderDetailNamesTheHarness(t *testing.T) {
@@ -80,7 +80,7 @@ func TestDispatch_NoProviderDetailNamesTheHarness(t *testing.T) {
 	}
 }
 
-// TestHarnessProviderPairsConflict_SSOPortalHost (DS1-S2 Fable L1): an
+// TestHarnessProviderPairsConflict_SSOPortalHost: an
 // endpoint on an AWS sign-in's portal host conflicts with it at create, as it
 // did at dispatch before the predicate was shared.
 func TestHarnessProviderPairsConflict_SSOPortalHost(t *testing.T) {

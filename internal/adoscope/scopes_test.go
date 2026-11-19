@@ -309,7 +309,7 @@ func TestEveryCapabilityIsLabelledAndClassified(t *testing.T) {
 			t.Errorf("%q is both grantable and denied", c)
 		}
 	}
-	if len(GrantableCapabilities()) != 28 {
+	if len(GrantableCapabilities()) != 31 {
 		t.Fatalf("GrantableCapabilities() has %d entries — the catalogue's grantable set changed; update the profiles and the scope golden with it",
 			len(GrantableCapabilities()))
 	}

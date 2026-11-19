@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -98,6 +99,21 @@ describe("MyComponentsCard", () => {
     expect(JSON.parse(String(put[1].body)).name).toBe("Acme v2");
   });
 
+  it("closing the form reads the list again, so the next edit names the version now saved", async () => {
+    mount();
+    await openCard();
+    await user.click(screen.getByRole("button", { name: "Edit Acme" }));
+    await screen.findByLabelText(/^Name/);
+    mine = reply({ mine: [{ ...A, name: "Acme (renamed)", version: 2 }, B] });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Acme (renamed)" }));
+    await screen.findByLabelText(/^Name/);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toContain(`PUT /api/v1/me/components/${A.id}`));
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
+    expect(JSON.parse(String(put[1].body)).expected_version).toBe(2);
+  });
+
   it("creates a new one with POST", async () => {
     mount();
     await openCard();
@@ -126,11 +142,30 @@ describe("MyComponentsCard", () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
+  it("a list the server worded shows its sentence, not the default line", async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "Your sentence from the server.", reason: "load_failed" }), { status: 500, headers: { "content-type": "application/json" } }));
+    mount();
+    await user.click(screen.getByRole("button", { name: /Your components/ }));
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    fetchMock.mockImplementationOnce(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    mount();
+    await user.click(screen.getByRole("button", { name: /Your components/ }));
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+  });
+
   it("says so, and retries, when the list cannot be read", async () => {
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } }));
     mount();
     await user.click(screen.getByRole("button", { name: /Your components/ }));
-    expect(await screen.findByText("Couldn't load your components.")).toBeInTheDocument();
+    // UXA-74: the shared compact failure block, not red text beside a button.
+    expect(await screen.findByRole("heading", { name: "Couldn't load your components.", level: 4 })).toBeInTheDocument();
+    expect(document.querySelector('[data-size="compact"]')).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("2 saved");
     expect(within(screen.getByTestId("my-components-card")).getByText("Acme")).toBeInTheDocument();

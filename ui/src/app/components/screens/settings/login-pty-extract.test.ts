@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { extractSetupToken, extractAuthUrl, extractDeviceVerificationUrl, extractFailSentence } from "./login-pty-extract";
+import { extractSetupToken, extractAuthUrl, extractDeviceSignIn, extractDeviceVerificationUrl, extractFailSentence } from "./login-pty-extract";
 import { deviceCodeOf } from "./signin-progress";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
@@ -127,6 +127,18 @@ describe("extractDeviceVerificationUrl", () => {
     const buf = `${CLEAN}\x1b[25;1HABCD1234 is not part of the link\r\n`;
     expect(extractDeviceVerificationUrl(buf)).toBe(CLEAN);
   });
+
+  // The link still printing runs to the end of the buffer, so the scan stops
+  // there instead of re-joining it from each later row (about half a second
+  // for 64 KiB before).
+  it("reads 64 KiB of full-width link rows still printing in linear time", () => {
+    const head = "\x1b[2;23H\x1b[1K\r\n";
+    const row = "https://a.awsapps.com/x\r\n";
+    const buf = head + row.repeat(Math.floor((65536 - head.length - 12) / row.length)) + "https://a.aw";
+    const start = performance.now();
+    expect(extractDeviceSignIn(buf)).toBeNull();
+    expect(performance.now() - start).toBeLessThan(100);
+  });
 });
 
 // wardyn-aws-sso prints `<failMarker> <sentence>\n` on a refused capture — a
@@ -187,7 +199,8 @@ describe("extractFailSentence", () => {
 // The cases the server's pane parser (internal/api/run_sign_in.go) reads too,
 // read by path the way wire-parity.test.ts reads Go-side files. Each states the
 // server's answer and this extractor's result: where the server says waiting,
-// both name the same link and code.
+// both name the same link and code (the pane's code line for a sign-in page
+// link, which carries none).
 describe("extractDeviceVerificationUrl on the shared sign-in pane cases", () => {
   const root = (() => {
     let dir = resolve(process.cwd());
@@ -208,7 +221,8 @@ describe("extractDeviceVerificationUrl on the shared sign-in pane cases", () => 
       expect(got).toBe(c.ts);
       if (c.go.state === "waiting") {
         expect(got).toBe(c.go.verification_url);
-        expect(deviceCodeOf(got ?? "")).toBe(c.go.user_code);
+        expect(extractDeviceSignIn(c.pane)?.code).toBe(c.go.user_code);
+        expect(deviceCodeOf(got ?? "") || extractDeviceSignIn(c.pane)?.code).toBe(c.go.user_code);
       }
     });
   }

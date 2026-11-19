@@ -57,6 +57,11 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", msg)
 		return false
 	}
+	// deny_all refuses every repository write before the push's paths are
+	// read: content, a ref update and a ref delete alike. Reads pass.
+	if rules != nil && rules.denyAll && adoWritesRepository(r, host, grant) {
+		return refuse(ruleSourceGitPushDenyAll, adoPushDenyAllRefusal)
+	}
 	if entryErr != "" {
 		// Rules that cannot be looked up are not "no rules": every write is refused; reads pass.
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
@@ -107,10 +112,8 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", deniedPathsBody(denied, ""))
 		return false
 	}
-	if err == nil && rules.denyNewExec {
-		// A REST push names paths but no modes, and a rename keeps a file's mode at its new path.
-		return refuse(ruleSourceGitPackBlind, "Wardyn refused this Azure DevOps request: this run's push rules refuse new "+
-			"executable files, and a REST push does not say which files it leaves executable. Push the change with git instead.")
+	if src, msg := adoRESTUnproved(rules, push); err == nil && msg != "" {
+		return refuse(src, msg)
 	}
 	var review []string
 	if err == nil {
@@ -127,6 +130,50 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		cmds[i] = gitpack.Command{Ref: ref, New: push.Digest}
 	}
 	return p.holdPush(w, r, rules, pushReview{paths: review, cmds: cmds}, p.adoRESTTarget(host, grant, t.RepoPath), subject, deny)
+}
+
+// adoRESTUnproved is the rule source and sentence refusing a REST push that the
+// size or the executable rule cannot be applied to, or "" for both. A file whose
+// content the body carries is under any size limit (adoscope.MaxBodyPeek), but
+// one it does not carry, such as a renamed file, shows no size. A REST push
+// names no modes at all, and a rename keeps a file's mode at its new path.
+func adoRESTUnproved(rules *pushRuleSet, push adoscope.Push) (src, msg string) {
+	switch {
+	case rules.maxFileBytes > 0 && len(push.Unsized) > 0:
+		shown := push.Unsized[:min(len(push.Unsized), maxDeniedPathsInBody)]
+		return ruleSourceGitRules, fmt.Sprintf("Wardyn refused this Azure DevOps request: this run's push rules limit file size, and this push "+
+			"puts content it does not carry at %s (%d path(s) in all), so that size cannot be checked.", strings.Join(shown, ", "), len(push.Unsized))
+	case rules.denyNewExec:
+		return ruleSourceGitPackBlind, "Wardyn refused this Azure DevOps request: this run's push rules refuse new " +
+			"executable files, and a REST push does not say which files it leaves executable. Push the change with git instead."
+	}
+	return "", ""
+}
+
+// adoPushDenyAllRefusal is the REST door's sentence for a write deny_all refused.
+const adoPushDenyAllRefusal = "Wardyn refused this Azure DevOps request: every push is refused for this run."
+
+// adoWritesRepository reports whether an Azure DevOps REST request writes a
+// repository: what it holds (Git Pushes - Create, a route that writes content
+// without naming its paths, a pull request's completion, a wiki or TFVC write)
+// or one of its refs, a delete included. A request that cannot be classified
+// counts as a write.
+func adoWritesRepository(r *http.Request, host string, grant ADOGrant) bool {
+	req := adoscope.Request{Method: r.Method, Host: host, Path: adoRawPath(r), RawQuery: r.URL.RawQuery,
+		Header: r.Header, Org: grant.Organization, BodyWithheld: true}
+	v, verr := adoscope.Classify(req)
+	t, cerr := adoscope.ClassifyContent(req)
+	if errors.Is(verr, adoscope.ErrNeedsBody) || errors.Is(cerr, adoscope.ErrNeedsBody) {
+		peek, msg := adoPeekBody(r)
+		if msg != "" {
+			return true
+		}
+		req.BodyWithheld, req.BodyPeek = false, peek
+		v, verr = adoscope.Classify(req)
+		t, cerr = adoscope.ClassifyContent(req)
+	}
+	return verr != nil || cerr != nil || v.Capability == adoscope.CapCodeWrite || len(v.Refs) > 0 ||
+		t.Write != adoscope.NoContentWrite
 }
 
 // adoRESTTarget names a REST push's repository the way the git door does —

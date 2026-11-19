@@ -58,13 +58,24 @@ type diagSrc struct {
 	runnerd, runnerID        string
 }
 
-// kubectl runs kubectl under the admin kubeconfig and returns its output, whether or not it failed.
-func (d diagSrc) kubectl(args ...string) string {
+// kubectl runs kubectl under the admin kubeconfig and returns its output and true, or, when it failed,
+// the command, its error and its output and false: a section that greps the output prints the error
+// instead, since a grep would drop it.
+func (d diagSrc) kubectl(args ...string) (string, bool) {
 	out, err := exec.Command("kubectl", append([]string{"--kubeconfig", d.kc}, args...)...).CombinedOutput()
 	if err != nil {
-		return fmt.Sprintf("kubectl %s: %v\n%s", strings.Join(args, " "), err, out)
+		return fmt.Sprintf("kubectl %s: %v\n%s", strings.Join(args, " "), err, out), false
 	}
-	return string(out)
+	return string(out), true
+}
+
+// orNone is a section's body, or why it has none: a header with nothing under it reads the same as a
+// body that a log filter dropped.
+func orNone(s, why string) string {
+	if strings.TrimSpace(s) == "" {
+		return "(" + why + ")"
+	}
+	return s
 }
 
 // tailLines keeps the last dumpLines lines of s, then its last dumpBytes bytes.
@@ -116,34 +127,46 @@ func redactedPod(p corev1.Pod) string {
 	return s
 }
 
-// dump logs the diagnostics for the runs ids, which may be empty.
+// dump logs the diagnostics for the runs ids, which may be empty. Each section is one message, its
+// header on the first line and its body under it.
 func (d diagSrc) dump(t *testing.T, ids []string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	t.Logf("failure diagnostics for runs %v", ids)
-	t.Logf("pods in %s:\n%s", d.runsNS, tailLines(d.kubectl("-n", d.runsNS, "get", "pods", "-o", "wide")))
+	table, _ := d.kubectl("-n", d.runsNS, "get", "pods", "-o", "wide")
+	t.Logf("pods in %s:\n%s", d.runsNS, orNone(tailLines(table), "kubectl printed nothing"))
 	for _, id := range ids {
 		pods, err := d.admin.CoreV1().Pods(d.runsNS).List(ctx, metav1.ListOptions{LabelSelector: labelRun + "=" + id})
-		if err != nil {
+		switch {
+		case err != nil:
 			t.Logf("run %s: listing pods: %v", id, err)
+		case len(pods.Items) == 0:
+			t.Logf("run %s: no pod labelled %s=%s in %s", id, labelRun, id, d.runsNS)
 		}
 		for _, p := range pods.Items {
 			t.Logf("pod %s of run %s:\n%s", p.Name, id, redactedPod(p))
 		}
-		logs := d.kubectl("-n", d.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy", "--timestamps", "--tail", fmt.Sprint(dumpLines))
-		t.Logf("proxy log of run %s (tail):\n%s", id, tailLines(logs))
+		logs, _ := d.kubectl("-n", d.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy", "--timestamps", "--tail", fmt.Sprint(dumpLines))
+		t.Logf("proxy log of run %s (tail):\n%s", id, orNone(tailLines(logs), "the proxy container logged nothing"))
 	}
-	t.Logf("events in %s (recent):\n%s", d.runsNS, d.events(ctx))
+	t.Logf("events in %s (recent):\n%s", d.runsNS, orNone(d.events(ctx), "no events"))
 	match := append([]string{d.runnerID, "orphan sweep"}, ids...)
 	if d.orgNS != "" {
-		org := d.kubectl("-n", d.orgNS, "logs", "deployment/wardyn-org", "--all-containers", "--timestamps")
-		t.Logf("org lines for runner %s and runs %v:\n%s", d.runnerID, ids, tailLines(grep(org, match...)))
+		org, ok := d.kubectl("-n", d.orgNS, "logs", "deployment/wardyn-org", "--all-containers", "--timestamps")
+		if ok {
+			org = orNone(grep(org, match...), `no line names the runner, a run or "orphan sweep"`)
+		}
+		t.Logf("org lines for runner %s and runs %v:\n%s", d.runnerID, ids, tailLines(org))
 	}
 	if d.runnerd != "" {
-		rd := d.kubectl("-n", d.ownNS, "logs", "deployment/"+d.runnerd, "-c", "runnerd", "--timestamps")
-		t.Logf("runnerd lines for runs %v:\n%s", ids, tailLines(grep(rd, append([]string{"orphan sweep"}, ids...)...)))
-		t.Logf("runnerd log (last lines):\n%s", tailLines(tail(rd, 2000)))
+		rd, ok := d.kubectl("-n", d.ownNS, "logs", "deployment/"+d.runnerd, "-c", "runnerd", "--timestamps")
+		lines := rd
+		if ok {
+			lines = orNone(grep(rd, append([]string{"orphan sweep"}, ids...)...), `no line names a run or "orphan sweep"`)
+		}
+		t.Logf("runnerd lines for runs %v:\n%s", ids, tailLines(lines))
+		t.Logf("runnerd log (last lines):\n%s", orNone(tailLines(tail(rd, 2000)), "runnerd logged nothing"))
 	}
 }
 

@@ -125,7 +125,7 @@ func (s *Server) gitHubOwnTokenNeeds(ctx context.Context, subject string, needed
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, http.StatusInternalServerError, errors.New(loggedMsg(ctx, "get site config", err))
 	}
 	kept := needed[:0]
 	for _, n := range needed {

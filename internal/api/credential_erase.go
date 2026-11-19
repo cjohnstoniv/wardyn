@@ -100,10 +100,17 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 			"The Azure DevOps sign-in configuration could not be read, so nothing was erased. Try again.")
 		return
 	}
+	if errors.Is(err, errADORevokeUnfinished) {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseRevokeUnfinished}, owner, known)))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialEraseRevokeUnfinished, credentialEraseRevokeUnfinishedMsg)
+		return
+	}
 	data := credentialEraseData(rep)
 	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
 		data = done // with runs_fenced
 	}
+	maps.Copy(data, tokensNotRevokedOf(err)) // a step that failed after a failed revoke still says so on its row
 	if ne, ok := notErasedDetail(names.notErased); ok {
 		data["not_erased"] = ne
 	}
@@ -314,11 +321,11 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 		var kept *secretstore.ExpiredKept
 		if !errors.As(e, &kept) {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", "", "failure",
-				mustJSON(map[string]any{"reason": "expired", "error": e.Error()})))
+				mustJSON(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, e, slog.String("stage", "scan"))})))
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", kept.Name, "failure",
-			withSecretOwner(map[string]any{"reason": "expired", "error": kept.Err.Error()}, kept.Owner, true)))
+			withSecretOwner(map[string]any{"reason": "expired", "error": auditStep(ctx, auditStepDeleteExpired, kept.Err, slog.String("credential", kept.Name))}, kept.Owner, true)))
 	}
 }
 
@@ -343,7 +350,7 @@ func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store,
 		return
 	} else if err != nil {
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
-		outcome, data["error"] = "failure", err.Error()
+		outcome, data["error"] = "failure", auditStepDeleteExpired
 	}
 	s.adoEntraTokens.forget(owner)
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", name, outcome,

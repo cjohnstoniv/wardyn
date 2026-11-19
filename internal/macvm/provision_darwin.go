@@ -130,15 +130,15 @@ func (v *provisionVM) stop(ctx context.Context) error {
 	return v.result
 }
 
-// screen opens this VM's window (showScreen), with its text. The lock keeps the VM and its handle from
-// being freed until the window's block holds them.
+// screen opens this VM's window (showScreen), with its text. The lock keeps the VM from being freed
+// until the window's block holds it.
 func (v *provisionVM) screen() (func(), error) {
 	v.mu.Lock()
 	if v.h == nil {
 		v.mu.Unlock()
 		return nil, ErrGuestStopped
 	}
-	return showScreen(C.wardynProvisionMachine(v.h), v.h, v.text, v.mu.Unlock)
+	return showScreen(C.wardynProvisionMachine(v.h), v.text, v.mu.Unlock)
 }
 
 func (v *provisionVM) call(f func(unsafe.Pointer)) {

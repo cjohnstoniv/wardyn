@@ -61,7 +61,7 @@ func runnerPoolUsePolicyState(present bool, subjects []types.RunnerPoolSubject, 
 }
 
 // canonicalPoolSubjects folds each subject to the form the caller's identities are matched in, and
-// refuses one that could never match anybody: a non-ASCII group, or a user type that does not exist.
+// refuses one that could never match anybody: a non-ASCII group, or a user type or unit that does not exist.
 func (s *Server) canonicalPoolSubjects(w http.ResponseWriter, r *http.Request, in []types.RunnerPoolSubject) ([]types.RunnerPoolSubject, bool) {
 	out := make([]types.RunnerPoolSubject, 0, len(in))
 	for _, sub := range in {
@@ -81,6 +81,20 @@ func (s *Server) canonicalPoolSubjects(w http.ResponseWriter, r *http.Request, i
 				return nil, false
 			}
 			if !s.userTypeSubjectExists(w, r, sub.SubjectType, sub.Subject) {
+				return nil, false
+			}
+		case types.RunnerPoolSubjectUnit:
+			id, err := uuid.Parse(sub.Subject)
+			if err != nil {
+				writePoolInvalid(w, "subject "+sub.Subject+" is not a unit id")
+				return nil, false
+			}
+			sub.Subject = id.String()
+			if _, err := s.unitLeafName(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+				writePoolInvalid(w, "subject "+sub.Subject+" is not a unit")
+				return nil, false
+			} else if err != nil {
+				writeServerError(w, r, "read unit", err)
 				return nil, false
 			}
 		}

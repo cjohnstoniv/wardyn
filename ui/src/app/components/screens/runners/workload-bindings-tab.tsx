@@ -12,13 +12,12 @@ import { toast } from "sonner";
 import { runnerPools } from "../../../lib/api/runner-pools";
 import { serviceIdentities } from "../../../lib/api/service-identities";
 import { workloadBindings } from "../../../lib/api/workloads";
-import { getErrorMessage } from "../../../lib/format";
 import type { ServiceIdentity } from "../../../lib/types/service-identities";
 import type { WorkloadBinding } from "../../../lib/types/workloads";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { agoLong, WORKLOAD_BINDINGS as B } from "../../wardyn/copy/workloads";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, StaleNote, TableSkeleton } from "../../wardyn/states";
 import { ConfirmDialog } from "./confirm-dialog";
 import { BindNamespaceDialog, servicePrincipal } from "./workload-bind-dialog";
 
@@ -32,7 +31,7 @@ export function WorkloadBindingsTab() {
   const [bindings, setBindings] = React.useState<WorkloadBinding[] | null>(null);
   const [pools, setPools] = React.useState<PoolName[]>([]);
   const [services, setServices] = React.useState<ServiceIdentity[]>([]);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loadError, setLoadError] = React.useState<{ message?: string } | null>(null);
   const [binding, setBinding] = React.useState(false);
   const [deleting, setDeleting] = React.useState<WorkloadBinding | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
@@ -46,14 +45,14 @@ export function WorkloadBindingsTab() {
         setLoadError(null);
         setNow(Date.now());
       })
-      .catch((e) => setLoadError(getErrorMessage(e)));
+      .catch((e) => setLoadError({ message: failureSentence(e) }));
   }, []);
   React.useEffect(load, [load]);
 
   const poolName = (id: string) => pools.find((p) => p.id === id)?.name ?? id;
 
   let body: React.ReactNode;
-  if (loadError !== null) body = <ErrorState message={loadError} onRetry={load} />;
+  if (loadError && !bindings) body = <ErrorState message={loadError.message} onRetry={load} />;
   else if (!bindings) body = <TableSkeleton rows={3} cols={5} />;
   else if (bindings.length === 0) body = <p className="px-4 py-8 text-center text-sm text-muted-foreground">{B.EMPTY}</p>;
   else
@@ -103,7 +102,10 @@ export function WorkloadBindingsTab() {
           <Plus className="size-4" /> {B.BIND}
         </Button>
       </div>
-      <div className="overflow-hidden rounded-xl border border-border bg-card">{body}</div>
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        {loadError && bindings && <StaleNote onRetry={load} />}
+        {body}
+      </div>
       {binding && (
         <BindNamespaceDialog
           pools={pools}

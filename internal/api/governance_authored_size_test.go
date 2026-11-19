@@ -24,6 +24,9 @@ func TestResolvedUnitCarriesTheAuthoredSize(t *testing.T) {
 		Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{CPUMillis: n(2500)}}}
 	composedBare := types.GovernanceUnit{ID: uuid.New(), Name: "composed", ParentID: &bare.ID,
 		Overlay: &types.CeilingOverlay{}}
+	diskOnly := types.GovernanceUnit{ID: uuid.New(), Name: "disk-only", Ceiling: types.RunPolicySpec{Resources: &types.ResourceLimits{DiskMiB: 4096}}}
+	diskNarrowed := types.GovernanceUnit{ID: uuid.New(), Name: "disk-narrowed", ParentID: &diskOnly.ID,
+		Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{DiskMiB: n(2048)}}}
 	for _, tc := range []struct {
 		name      string
 		chain     []types.GovernanceUnit
@@ -34,6 +37,8 @@ func TestResolvedUnitCarriesTheAuthoredSize(t *testing.T) {
 		{"a row with no size authors none", []types.GovernanceUnit{bare}, types.ResourceLimits{}, 1000},
 		{"an overlay's size is the meet's", []types.GovernanceUnit{narrowed, sized}, types.ResourceLimits{CPUMillis: 2500}, 2500},
 		{"a composed chain that sets none authors none", []types.GovernanceUnit{composedBare, bare}, types.ResourceLimits{}, 1000},
+		{"a standalone row's disk alone; cpu and memory inherited", []types.GovernanceUnit{diskOnly}, types.ResourceLimits{DiskMiB: 4096}, 1000},
+		{"an overlay's disk is the meet's", []types.GovernanceUnit{diskNarrowed, diskOnly}, types.ResourceLimits{DiskMiB: 2048}, 1000},
 	} {
 		p, err := srv.composeChain(tc.chain)
 		if err != nil {
@@ -42,6 +47,31 @@ func TestResolvedUnitCarriesTheAuthoredSize(t *testing.T) {
 		if p.AuthoredResources != tc.authored || p.Ceiling.Resources == nil || p.Ceiling.Resources.CPUMillis != tc.inherited || p.Ceiling.Resources.MemoryMiB != 2048 {
 			t.Errorf("%s: authored %+v ceiling %+v, want authored %+v and ceiling cpu %d / 2048 MiB", tc.name, p.AuthoredResources, p.Ceiling.Resources, tc.authored, tc.inherited)
 		}
+	}
+}
+
+// A standalone ceiling that sets only a disk is the unit's size to answer for, in the path's provenance,
+// and it moves no member cap: the cap reads the authored CPU and memory, and a disk is neither.
+func TestDiskOnlyCeilingIsCreditedAndMovesNoMemberCap(t *testing.T) {
+	srv := &Server{cfg: Config{DefaultPolicy: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}}}}
+	limits := types.GovernanceLimits{MaxCPUMillis: 3000, MaxMemoryMiB: 4096}
+	compose := func(name string, r *types.ResourceLimits) *ResolvedUnit {
+		t.Helper()
+		p, err := srv.composeChain([]types.GovernanceUnit{{ID: uuid.New(), Name: name, Limits: limits, Ceiling: types.RunPolicySpec{Resources: r}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	bare, disk := compose("bare", nil), compose("disk-only", &types.ResourceLimits{DiskMiB: 4096})
+	if got := bare.PathProvenance["resources"]; got != deploymentProvenance {
+		t.Errorf("no size: provenance[resources] = %+v, want the deployment's", got)
+	}
+	if got := disk.PathProvenance["resources"]; got != unitRec("disk-only") {
+		t.Errorf("a disk alone: provenance[resources] = %+v, want the unit's", got)
+	}
+	if got, want := srv.resolvedMemberCap(disk), srv.resolvedMemberCap(bare); got != want {
+		t.Errorf("member cap with a disk = %+v, without = %+v: a disk moved it", got, want)
 	}
 }
 

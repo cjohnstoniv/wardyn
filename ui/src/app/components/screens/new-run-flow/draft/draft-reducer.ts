@@ -4,6 +4,9 @@
  */
 
 import type { StartChoice } from "../../../../lib/schedule";
+import { isVMKind } from "../../../../lib/types/machine-kind";
+import { giveBackText, textLeft } from "../lenses/harness-lens";
+import { withKeys } from "../lenses/lens-keys";
 import { emptyGuided, initialDraft, type DocBuffer, type GuidedFacts, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./run-intent";
 
 export type DraftAction =
@@ -21,13 +24,26 @@ const startFromOf = (origin: NewRunOrigin): GuidedFacts["startFrom"] =>
 
 export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDraft {
   switch (action.type) {
-    case "seed":
+    case "seed": {
+      // A VM starts no harness and the server refuses a start there, though a template can still name one: the seed
+      // leaves the start out and holds its first message, as choosing a VM does (chooseMachineKind). A template that
+      // also names a workload is left as written: Autonomous takes the start's first message as its task (shapeCarriers).
+      const vmStart = isVMKind(action.intent.machine_kind) && action.intent.startup?.kind === "harness" && !action.intent.workload;
+      const bare = vmStart ? withKeys(action.intent, { startup: undefined }) : action.intent;
+      // An Autonomous draft has a place for that message: it is the task at once, as a switch to Autonomous makes it.
+      const intent = bare.experience === "background" ? giveBackText(bare, textLeft(action.intent, bare)) : bare;
+      const heldText = textLeft(action.intent, intent);
       return {
-        ...draft, intent: action.intent, base: action.intent, origin: action.origin,
-        guided: emptyGuided(startFromOf(action.origin)), doc: undefined, schedule: undefined, revision: draft.revision + 1,
+        ...draft, intent, base: intent, origin: action.origin,
+        guided: { ...emptyGuided(startFromOf(action.origin)), ...(heldText && { heldText }), ...(vmStart && { startLeftOut: true }) }, doc: undefined, schedule: undefined, revision: draft.revision + 1,
       };
-    case "edit":
-      return { ...draft, intent: action.apply(draft.intent), revision: draft.revision + 1 };
+    }
+    case "edit": {
+      const intent = action.apply(draft.intent);
+      // Text held for an agent task is that task's: another shape takes none of it.
+      const guided = draft.guided.heldText && intent.shape !== draft.intent.shape ? { ...draft.guided, heldText: undefined } : draft.guided;
+      return { ...draft, intent, guided, revision: draft.revision + 1 };
+    }
     case "guided":
       return { ...draft, guided: { ...draft.guided, ...action.patch } };
     case "doc":
@@ -36,8 +52,9 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
       return {
         ...draft, intent: action.intent, doc: undefined, revision: draft.revision + 1,
         origin: draft.origin.kind === "scratch" ? { kind: "import" } : draft.origin,
-        // A document the person commits holds the figures they chose, so leaving macOS takes none of them back.
-        guided: { ...draft.guided, macosFill: undefined },
+        // A document the person commits holds the figures they chose, so leaving macOS takes none of them back, and
+        // its agent text is the run as written, so no held text is given back over it.
+        guided: { ...draft.guided, macosFill: undefined, heldText: undefined },
       };
     case "launchFields":
       return { ...draft, launch: { ...draft.launch, ...action.patch } };

@@ -1,0 +1,145 @@
+{{- /*
+Experimental agent-sandbox backend (#3863). Rendered ONLY when k8s.agentSandbox.enabled and k8s.enabled are
+both on; the default render has no admissionregistration object at all.
+
+The agent pod's scheduling gate (wardyn.dev/verify) keeps it unscheduled until wardynd has read the pod back
+and checked it. The agent-sandbox controller, not wardynd, creates that pod from the Sandbox's template, so
+a mutating admission hook that dropped the gate at create would start the pod before the check.
+
+What the policy SELECTS on is the authenticated requester, request.userInfo.username, which no admission
+hook can rewrite. It must not select on the pod's own fields (ownerReferences, schedulingGates, nodeName):
+a hook that removes the gate AND the owner reference would make such a match false and the pod would be
+admitted ungated. Every pod the controller creates in the runs namespace (the binding's namespace) must
+then PASS three validations, each a field a hook could have removed: the gate, a Sandbox owner reference,
+and an empty spec.nodeName (a pod bound to a node at create skips the scheduler and its gate).
+
+Pods created by anyone else (wardynd's own proxy and canary pods, a person's kubectl) are not selected and
+are unaffected. The controller identity is a value because it is the installer's choice; the defaults are
+the upstream v1.0.9 manifest's ServiceAccount. Refused: the controller identity being wardynd's own
+ServiceAccount, which would put Wardyn's proxy and canary pods under the validations.
+
+The second policy covers the UPDATE that releases the gate (wardynd patches the gate away once its read-back
+passes). It selects on stored state, oldObject still holding the gate, which a hook cannot rewrite. It denies
+a gate removal by anyone but wardynd's own identity, and a removal that also changes anything else a pod
+UPDATE may change: labels (the agent NetworkPolicy selects on them), annotations (the read-back treats them
+as meaningful), owner references, any container or init container image, tolerations, nodeSelector,
+affinity, activeDeadlineSeconds, a bound node, or an ephemeral container. Pod Scheduling Readiness lets a
+gated pod's nodeSelector, affinity and tolerations change, and the rest of the spec is immutable. CEL cannot
+express "spec equal apart from schedulingGates" (it cannot drop a field from an object), so this is a hand
+list of what an update may still change, not a whole-spec compare. The API server itself refuses adding a scheduling gate to an existing pod, so no rule is needed for
+that. Pod subresources (status, ephemeralcontainers) are not matched.
+
+Both policies together close create and gate-removal hooks, and only as far as the two configured identities
+are right (the controller's, and wardynd's ServiceAccount). Neither is a proof about a hook that is not
+subject to admission, such as a compromised API server.
+
+failurePolicy Fail, so an unavailable policy engine refuses the create too. ValidatingAdmissionPolicy is GA
+in Kubernetes 1.30. The names carry the release fullname because both objects are cluster-scoped. The
+controller retries a refused create, so a denied pod shows as repeated SandboxPodCreateFailed events.
+*/ -}}
+{{- if and .Values.k8s.enabled (.Values.k8s.agentSandbox | default dict).enabled }}
+{{- $ctl := (.Values.k8s.agentSandbox.controller | default dict) -}}
+{{- $ctlNs := $ctl.namespace | default "agent-sandbox-system" | toString -}}
+{{- $ctlSa := $ctl.serviceAccount | default "agent-sandbox-controller" | toString -}}
+{{- if not (and (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ctlNs) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ctlSa)) -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.controller.namespace and .serviceAccount must be Kubernetes names (lowercase letters, digits, '-' and '.'), got %q and %q." $ctlNs $ctlSa) -}}
+{{- end -}}
+{{- $ctlUser := printf "system:serviceaccount:%s:%s" $ctlNs $ctlSa -}}
+{{- $wardynUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "wardyn.serviceAccountName" .) -}}
+{{- if eq $ctlUser $wardynUser -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.controller is wardynd's own ServiceAccount (%s): the policy would hold Wardyn's proxy and canary pods to the Sandbox gate. Set the identity the agent-sandbox controller runs as." $ctlUser) -}}
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: created-by-agent-sandbox-controller
+      expression: {{ printf "request.userInfo.username == '%s'" $ctlUser | quote }}
+  validations:
+    - expression: "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must carry the wardyn.dev/verify scheduling gate"
+    - expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must be owned by a Sandbox"
+    - expression: "!has(object.spec.nodeName) || object.spec.nodeName == ''"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must not name a node at create"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-ungate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: pod-held-by-the-wardyn-gate
+      expression: "has(oldObject.spec.schedulingGates) && oldObject.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')"
+  variables:
+    - name: gateHeld
+      expression: "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')"
+    - name: unchanged
+      expression: >-
+        (has(oldObject.metadata.labels) == has(object.metadata.labels) && (!has(object.metadata.labels) || oldObject.metadata.labels == object.metadata.labels)) &&
+        (has(oldObject.metadata.annotations) == has(object.metadata.annotations) && (!has(object.metadata.annotations) || oldObject.metadata.annotations == object.metadata.annotations)) &&
+        (has(oldObject.spec.nodeSelector) == has(object.spec.nodeSelector) && (!has(object.spec.nodeSelector) || oldObject.spec.nodeSelector == object.spec.nodeSelector)) &&
+        (has(oldObject.spec.affinity) == has(object.spec.affinity) && (!has(object.spec.affinity) || oldObject.spec.affinity == object.spec.affinity)) &&
+        (has(oldObject.metadata.ownerReferences) == has(object.metadata.ownerReferences) && (!has(object.metadata.ownerReferences) || oldObject.metadata.ownerReferences == object.metadata.ownerReferences)) &&
+        oldObject.spec.containers.map(c, c.image) == object.spec.containers.map(c, c.image) &&
+        (has(oldObject.spec.initContainers) == has(object.spec.initContainers) && (!has(object.spec.initContainers) || oldObject.spec.initContainers.map(c, c.image) == object.spec.initContainers.map(c, c.image))) &&
+        (has(oldObject.spec.tolerations) == has(object.spec.tolerations) && (!has(object.spec.tolerations) || oldObject.spec.tolerations == object.spec.tolerations)) &&
+        (has(oldObject.spec.activeDeadlineSeconds) == has(object.spec.activeDeadlineSeconds) && (!has(object.spec.activeDeadlineSeconds) || oldObject.spec.activeDeadlineSeconds == object.spec.activeDeadlineSeconds)) &&
+        (!has(object.spec.nodeName) || object.spec.nodeName == '') &&
+        (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0)
+  validations:
+    - expression: {{ printf "variables.gateHeld || request.userInfo.username == '%s'" $wardynUser | quote }}
+      message: "only wardynd may remove the wardyn.dev/verify scheduling gate from a pod"
+    - expression: "variables.gateHeld || (has(oldObject.metadata.ownerReferences) && oldObject.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/')))"
+      message: "the wardyn.dev/verify scheduling gate may be removed only from a pod owned by a Sandbox"
+    - expression: "variables.gateHeld || variables.unchanged"
+      message: "removing the wardyn.dev/verify scheduling gate must not also change the pod's labels, owner references, images, tolerations, nodeSelector, affinity, annotations, activeDeadlineSeconds or node, or add an ephemeral container"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-ungate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "wardyn.fullname" . }}-sandbox-pod-ungate
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+{{- end }}

@@ -323,6 +323,39 @@ func TestRunnerPoolCreateWithRunners(t *testing.T) {
 	}
 }
 
+// create --json --runner prints the pool as one JSON value on stdout and nothing else: what happened to each
+// runner (added, or refused with the server's sentence) goes to stderr, and a refusal still fails the command.
+func TestRunnerPoolCreateJSONKeepsRunnerLinesOffStdout(t *testing.T) {
+	id := uuid.New()
+	sentence := "us-cluster is not available to this pool."
+	srv := newPoolRoutes(t, map[string]any{
+		"POST /api/v1/runner-pools": sdk.RunnerPool{ID: id, Name: "General", Scope: sdk.RunnerPoolOrganization, Revision: 1},
+		"GET /api/v1/remote-runners": []sdk.RemoteRunnerView{
+			{RemoteRunner: sdk.RemoteRunner{ID: "k8s", Name: "eu-cluster"}}, {RemoteRunner: sdk.RemoteRunner{ID: "k8s-us", Name: "us-cluster"}}},
+		"PUT /api/v1/runner-pools/" + id.String() + "/remote-runners/k8s":    sdk.RunnerPoolMember{PoolID: id},
+		"PUT /api/v1/runner-pools/" + id.String() + "/remote-runners/k8s-us": poolRefusal{sentence},
+	})
+	root := rootCmd()
+	root.SetArgs([]string{"runner", "pool", "create", "--name", "General", "--scope", "organization", "--json",
+		"--runner", "eu-cluster", "--runner", "us-cluster", "--url", srv.URL, "--token", "t"})
+	var out, errOut strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	err := root.Execute()
+	dec := json.NewDecoder(strings.NewReader(out.String()))
+	var got sdk.RunnerPool
+	if derr := dec.Decode(&got); derr != nil || got.ID != id || strings.TrimSpace(out.String()[dec.InputOffset():]) != "" {
+		t.Errorf("stdout = %q (%v), want the pool as one JSON value and nothing after it", out.String(), derr)
+	}
+	if want := "eu-cluster added to General"; !strings.Contains(errOut.String(), want) ||
+		!strings.Contains(errOut.String(), "us-cluster was not added to General: ") || !strings.Contains(errOut.String(), sentence) {
+		t.Errorf("stderr = %q, want the added runner and the refused one with the server's sentence", errOut.String())
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 runners failed") {
+		t.Errorf("err = %v, want the refusal to fail the command", err)
+	}
+}
+
 // org-default set --pool takes an organization pool by name and keeps the barrier; a user pool is
 // refused before any write, in the canon's words; none and clear take the default pool away.
 func TestRunnerPoolOrgDefaultSetByPool(t *testing.T) {

@@ -82,9 +82,10 @@ export function shortTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-/** Best-effort human message for a caught value — an Error's message, or its String(). */
-export function getErrorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+/** Best-effort human message for a caught value — an Error's message, or its String(); `fallback` when that is blank. */
+export function getErrorMessage(e: unknown, fallback = "No reason was given."): string {
+  const message = e instanceof Error ? e.message : String(e);
+  return message.trim() ? message : fallback;
 }
 
 export function fmtBytes(n?: number): string {

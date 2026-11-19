@@ -542,3 +542,34 @@ func TestServiceHealthSweep_ASmallBudgetStillReadsEveryRun(t *testing.T) {
 		}
 	}
 }
+
+// The observation's observed_at is the database's time (Server.dbNow), the clock the lease sweep's renewal reads
+// it on, not this server's. Before, mirrorServiceRun stamped the server's clock.
+func TestServiceHealthSweep_ObservedAtIsTheDatabasesTime(t *testing.T) {
+	run := serviceRun(time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC), "ref", time.Hour)
+	f := newServiceHealthFixture(t, answerWith(stateFileJSON("healthy", "", 2, "137"), 0), nil, run)
+	db := f.now.Add(-2 * time.Minute)
+	f.srv.cfg.Store = struct {
+		*serviceHealthStore
+		fixedDBClock
+	}{f.st, fixedDBClock{at: db}}
+	f.sweep(t)
+	if got := f.st.status(run.ID); got == nil || !got.ObservedAt.Equal(db) {
+		t.Fatalf("status = %+v, want observed_at at the database's time %v", got, db)
+	}
+}
+
+// No observation is written while the database's clock cannot be read; the next sweep reads it again. Catches
+// the error arm dropped (the server's clock standing in writes the observation).
+func TestServiceHealthSweep_AClockReadFailureWritesNoObservation(t *testing.T) {
+	run := serviceRun(time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC), "ref", time.Hour)
+	f := newServiceHealthFixture(t, answerWith(stateFileJSON("healthy", "", 2, "137"), 0), nil, run)
+	f.srv.cfg.Store = struct {
+		*serviceHealthStore
+		fixedDBClock
+	}{f.st, fixedDBClock{err: errClockRead}}
+	f.sweep(t)
+	if n := f.st.writeCount(run.ID); n != 0 {
+		t.Fatalf("writes = %d, want 0", n)
+	}
+}

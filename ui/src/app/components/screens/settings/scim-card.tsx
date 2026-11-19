@@ -15,14 +15,14 @@
 import * as React from "react";
 import { scim as scimApi } from "../../../lib/api/scim";
 import { appURL } from "../../../lib/base-path";
-import { absoluteTime, relativeTime } from "../../../lib/format";
+import { absoluteTime, formatDuration, relativeTime } from "../../../lib/format";
 import { SCIM, SCIM_LIST_CAP, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
 import type { SCIMStatus } from "../../../lib/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { Mono, makeMono } from "../../wardyn/code-block";
 import { SectionLabel } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 
 const withMono = makeMono(["WARDYN_SCIM_TOKEN"]);
 
@@ -56,8 +56,10 @@ function List({ title, empty, children }: { title: string; empty: string | null;
   );
 }
 
+// The delay is any duration the operator set, and stored credentials are erased when it ends: it reads in the
+// largest whole unit that states it exactly, never rounded up to more time than there is.
 const purgeDelay = (seconds: number) =>
-  seconds > 0 ? SCIM.PURGE_DAYS(Math.max(1, Math.round(seconds / 86400))) : <span className="text-muted-foreground">{SCIM.PURGE_OFF}</span>;
+  seconds > 0 ? SCIM.PURGE_DAYS(formatDuration(seconds * 1000, "words")) : <span className="text-muted-foreground">{SCIM.PURGE_OFF}</span>;
 
 function Facts({ s }: { s: SCIMStatus }) {
   const token = s.last_token_slot === "primary" ? SCIM.TOKEN_PRIMARY : s.last_token_slot === "next" ? SCIM.TOKEN_NEXT : SCIM.TOKEN_NONE;
@@ -165,6 +167,7 @@ function Lists({ s }: { s: SCIMStatus }) {
 export function ScimCard() {
   const [status, setStatus] = React.useState<SCIMStatus | null>(null);
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
 
   const load = React.useCallback(() => {
     setState("loading");
@@ -174,7 +177,10 @@ export function ScimCard() {
         setStatus(s);
         setState("ready");
       })
-      .catch(() => setState("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -196,7 +202,7 @@ export function ScimCard() {
       <p className="text-body leading-snug text-muted-foreground">{SCIM.LEAD}</p>
       <div className="mt-3">
         {state === "loading" && <TableSkeleton rows={2} cols={3} />}
-        {state === "error" && <ErrorState onRetry={load} />}
+        {state === "error" && <ErrorState as="h4" message={loadMessage} onRetry={load} />}
         {state === "ready" && status && !status.configured && (
           <>
             <p className="text-body text-foreground">{SCIM.OFF_BODY}</p>

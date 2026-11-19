@@ -228,6 +228,7 @@ func (l noDeadlineListener) Accept() (net.Conn, error) {
 // An upload on a connection that cannot take a read deadline is refused
 // before its body is read, and the refusal is audited.
 func TestUploadRecording_RefusedWithoutReadDeadline(t *testing.T) {
+	logs := captureSlog(t)
 	store := &fakeRecordingStore{}
 	h := newRecordingHarness(t, store, nil)
 	srv := httptest.NewUnstartedServer(panicFails(t, h.srv.Handler()))
@@ -243,8 +244,42 @@ func TestUploadRecording_RefusedWithoutReadDeadline(t *testing.T) {
 		t.Fatalf("the store read %q", store.saved)
 	}
 	ev := lastAuditEvent(t, h.audit.snapshot(), "recording.upload")
-	if ev.Outcome != "failure" || !strings.Contains(string(ev.Data), "read deadline") {
-		t.Fatalf("refusal audit = %s %s", ev.Outcome, ev.Data)
+	// The row names the step that failed; the refusal's own words are in the server log.
+	if ev.Outcome != "failure" || !strings.Contains(string(ev.Data), auditStepSaveRecording) || !strings.Contains(logs.String(), "read deadline") {
+		t.Fatalf("refusal audit = %s %s, log %s", ev.Outcome, ev.Data, logs.String())
+	}
+}
+
+// failBeforeReadStore fails every save without reading its body.
+type failBeforeReadStore struct{ fakeRecordingStore }
+
+func (*failBeforeReadStore) SaveCast(context.Context, string, io.Reader) error {
+	return errors.New("fake store: failed before reading")
+}
+
+func (s *failBeforeReadStore) SaveCastNamed(ctx context.Context, run, _ string, r io.Reader) error {
+	return s.SaveCast(ctx, run, r)
+}
+
+// A save that fails before its first Read leaves the body unread, and net/http reads the rest of a
+// short body before it answers. The read window bounds that read too: a client that sends part of
+// its body and stalls gets the save's 500 once the window passes.
+func TestUploadRecording_SaveFailedBeforeItsFirstReadIsAnsweredInTheWindow(t *testing.T) {
+	shortenUploadWindow(t)
+	h := newRecordingHarness(t, &failBeforeReadStore{}, nil)
+	srv := httptest.NewServer(panicFails(t, h.srv.Handler()))
+	defer srv.Close()
+	run := uuid.New()
+	c, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = fmt.Fprintf(c, "PUT /api/v1/internal/recordings/%s HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\nContent-Length: 1000\r\n\r\n0123456789", run, h.mintRunToken(t, run))
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, _ := io.ReadAll(io.LimitReader(c, 12))
+	if !strings.HasPrefix(string(line), "HTTP/1.1 500") {
+		t.Fatalf("a save that failed before reading its stalled body answered %q, want the save-error 500", line)
 	}
 }
 
@@ -259,6 +294,7 @@ func (blockedSaveStore) SaveCastNamed(ctx context.Context, _, _ string, _ io.Rea
 // A session recording save waits at most sessionRecordingSaveWait, even on the
 // daemon-lifetime context, and its audit row is still written.
 func TestSessionRecorder_SaveWaitIsBounded(t *testing.T) {
+	logs := captureSlog(t)
 	old := sessionRecordingSaveWait
 	sessionRecordingSaveWait = 50 * time.Millisecond
 	t.Cleanup(func() { sessionRecordingSaveWait = old })
@@ -274,8 +310,9 @@ func TestSessionRecorder_SaveWaitIsBounded(t *testing.T) {
 		t.Fatal("finish waited on the store past its bound")
 	}
 	ev := lastAuditEvent(t, audit.snapshot(), "session.recording.write")
-	if ev.Outcome != "failure" || !strings.Contains(string(ev.Data), "deadline exceeded") {
-		t.Fatalf("session recording audit = %s %s", ev.Outcome, ev.Data)
+	// The row names the step that failed; the bound's own error is in the server log.
+	if ev.Outcome != "failure" || !strings.Contains(string(ev.Data), auditStepSaveRecording) || !strings.Contains(logs.String(), "deadline exceeded") {
+		t.Fatalf("session recording audit = %s %s, log %s", ev.Outcome, ev.Data, logs.String())
 	}
 }
 
@@ -297,6 +334,7 @@ func (s savedStore) SaveCast(ctx context.Context, key string, r io.Reader) error
 // upload goes through. (The relay resets the stream when the daemon closes the
 // connection, so the client sees the connection end, not the 500.)
 func TestRelay_RecordingUploadReadDeadline(t *testing.T) {
+	logs := captureSlog(t)
 	shortenUploadWindow(t)
 	f := newAdmissionFixture(t)
 	store := savedStore{PGStore: recording.NewPGStore(f.pool), saved: make(chan error, 4)}
@@ -345,8 +383,9 @@ func TestRelay_RecordingUploadReadDeadline(t *testing.T) {
 	if _, err := store.OpenCast(t.Context(), f.run.ID.String()); !errors.Is(err, recording.ErrNotFound) {
 		t.Fatalf("stalled relayed upload stored a cast: %v", err)
 	}
-	if ev, ok := relayAudit(f.srv, f.run.ID, "recording.upload"); !ok || ev.Outcome != "failure" || !strings.Contains(string(ev.Data), "timeout") {
-		t.Fatalf("stalled relayed upload audit = %v %+v", ok, ev)
+	if ev, ok := relayAudit(f.srv, f.run.ID, "recording.upload"); !ok || ev.Outcome != "failure" || !strings.Contains(string(ev.Data), auditStepSaveRecording) || !strings.Contains(logs.String(), "timeout") {
+		// The row names the step that failed; the read's timeout is in the server log.
+		t.Fatalf("stalled relayed upload audit = %v %+v, log %s", ok, ev, logs.String())
 	}
 	if code := boundedPut(t, client, url, token, strings.NewReader("cast"), 4); code != http.StatusNoContent {
 		t.Fatalf("relayed upload after the stalled one = %d", code)

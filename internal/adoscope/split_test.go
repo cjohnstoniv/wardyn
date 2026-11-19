@@ -21,7 +21,7 @@ var splitMap = map[Capability][]Capability{
 	"build_admin":           {CapBuildAdmin, CapReleaseAdmin},
 	"packaging_write":       {CapPackagingWrite},
 	"code_write":            {CapCodeWrite},
-	"pr":                    {CapPR},
+	"pr":                    {CapPR, CapPRCreate, CapPRVote, CapPRComplete}, // pr reads as its three parts
 	"policy_admin":          {CapPolicyAdmin},
 	"policy_bypass":         {CapPolicyBypass},
 	"repo_admin":            {CapRepoAdmin},

@@ -17,7 +17,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { WFETCH_TIMEOUT_MS } from "../../../lib/api/core";
+import { getExpectedPrincipal, WFETCH_TIMEOUT_MS } from "../../../lib/api/core";
 import { runs as runsApi } from "../../../lib/api/runs";
 import type { AdminRestartResult } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
@@ -76,10 +76,12 @@ export function AdminOlderLimitsCard() {
     // batch's own runs are unknown (a restart the server claimed survives the request that
     // timed out), so the listing is refreshed whatever happened.
     const collected: AdminRestartResult[] = [];
+    // A restart runs for minutes: every batch goes out as the person who started it, never as whoever signs in since.
+    const person = getExpectedPrincipal();
     try {
       for (let i = 0; i < outsideIds.length; i += RESTART_BATCH_SIZE) {
         const batch = outsideIds.slice(i, i + RESTART_BATCH_SIZE);
-        const res = await runsApi.restartAdminRuns(batch, restartBatchDeadlineMs(batch.length));
+        const res = await runsApi.restartAdminRuns(batch, restartBatchDeadlineMs(batch.length), person);
         collected.push(...res.results);
         // FR-0163: a restart is minutes long, so each batch's answer shows as it lands.
         setResults([...collected]);

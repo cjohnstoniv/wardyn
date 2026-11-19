@@ -12,10 +12,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -124,6 +127,32 @@ func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 		t.Errorf("the VNC settings file was written: %v", err)
 	}
 	noArgvHolds(t, r, "Abcd2345")
+}
+
+// A run with a desktop whose guest is still at the login window when the wait after boot ends is refused
+// with the reason before anything is written, so the run fails instead of running. A run with no desktop
+// is not held, and one whose agent is at the console starts.
+func TestDarwinInitFailsARunStillAtTheLoginWindow(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	s.Cred = &syscall.Credential{Uid: 502}
+	s.Desktop.Console = fakeConsole{err: ErrNoConsoleUser}
+	s.Desktop.LoginWait, s.Desktop.SessionEnvEvery = 20*time.Millisecond, time.Millisecond
+	w := postInit(h, Init{DesktopPassword: "Abcd2345"})
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "the Mac guest never reached the agent's desktop: still at the login window") {
+		t.Fatalf("Init at the login window = %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(s.MarkerDir, initMarkerFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused Init wrote its marker: %v", err)
+	}
+	if w := postInit(h, Init{SignInsOff: true, DesktopPassword: "Abcd2345"}); w.Code != 200 {
+		t.Errorf("Init with no desktop = %d %s, want it not held", w.Code, w.Body)
+	}
+
+	s, _, h = newDarwinServer(t)
+	s.Cred = &syscall.Credential{Uid: 502}
+	if w := postInit(h, Init{DesktopPassword: "Abcd2345"}); w.Code != 200 {
+		t.Fatalf("Init with the agent at the console = %d %s", w.Code, w.Body)
+	}
 }
 
 func TestDarwinInitSignInsOffDisablesTheDesktopEvenIfWritingFails(t *testing.T) {
@@ -359,5 +388,255 @@ func TestDarwinInitTrustsTheRunCABeforeItAnswers(t *testing.T) {
 	}
 	if w := postInit(h, Init{}); w.Code != 200 || strings.Contains(w.Body.String(), "keychain_trust") {
 		t.Errorf("Init with no run CA = %d %s", w.Code, w.Body)
+	}
+}
+
+// A terminal exec on a real macOS kernel: the PTY opens, the child gets it as its controlling terminal
+// and the winsize, and the session ends with an exit frame, not an error frame. The attach path in the
+// runner resets the stream when the guest errors at once, so a failure here names the cause.
+func TestDarwinExecTTYRunsAShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `stty size; [ -t 0 ] && echo istty`}, TTY: true, Cols: 100, Rows: 30})
+	var body bytes.Buffer
+	if err := WriteFrame(&body, FrameSpec, spec); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	var out strings.Builder
+	var exit []byte
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		case FrameExit:
+			exit = p
+		}
+	}
+	if !bytes.Equal(exit, int32Payload(0)) || !strings.Contains(out.String(), "30 100") || !strings.Contains(out.String(), "istty") {
+		t.Fatalf("tty exec = %q, exit %v", out.String(), exit)
+	}
+}
+
+// A resize after the parent has closed its slave end still reaches the shell, and an exec with no size
+// (what `wardyn attach` opens before its first resize) gets a terminal too.
+func TestDarwinExecTTYResizeReachesTheShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `read _; stty size`}, TTY: true})
+	var body bytes.Buffer
+	for _, f := range []struct {
+		typ byte
+		p   []byte
+	}{{FrameSpec, spec}, {FrameResize, uint16Pair(120, 40)}, {FrameStdin, []byte("go\n")}} {
+		if err := WriteFrame(&body, f.typ, f.p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	// The shell waits on stdin; a lost line ends here, not at the suite's timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	h.ServeHTTP(w, httptest.NewRequestWithContext(ctx, "POST", "/v1/exec", &body))
+	var out strings.Builder
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		}
+	}
+	if !strings.Contains(out.String(), "40 120") {
+		t.Fatalf("after a resize to 120x40, the shell printed %q", out.String())
+	}
+}
+
+// heldFlush holds the first flush, the 200 that handleExec sends before it starts the process, until the
+// test lets it go. Only the handler's goroutine flushes before held is set.
+type heldFlush struct {
+	*httptest.ResponseRecorder
+	held             bool
+	entered, release chan struct{}
+}
+
+func (h *heldFlush) Flush() {
+	if !h.held {
+		h.held = true
+		close(h.entered)
+		<-h.release
+	}
+	h.ResponseRecorder.Flush()
+}
+
+// An exec the agent admitted before the stop scrub, held short of its start until the scrub has answered,
+// is refused at the start, attached, on a terminal and detached: no process and no output file begins on
+// the scrubbed guest. Catches a scrub that reports done while an admitted exec can still start and write
+// back what the scrub removed.
+func TestDarwinExecAdmittedBeforeTheStopScrubDoesNotStartAfterIt(t *testing.T) {
+	for _, er := range []ExecRequest{{}, {TTY: true}, {Detach: true}} {
+		s, _, h := newDarwinServer(t)
+		scrubs := 0
+		s.Scrub = func(context.Context, string) ScrubReport {
+			if s.starts.enter() == nil {
+				s.starts.leave()
+				t.Error("the scrub ran while an exec could still start")
+			}
+			scrubs++
+			return ScrubReport{When: ScrubAtStop, Outcome: ScrubDone}
+		}
+		ran := filepath.Join(t.TempDir(), "ran")
+		er.Argv = []string{"/usr/bin/touch", ran}
+		spec, _ := json.Marshal(er)
+		var body bytes.Buffer
+		if err := WriteFrame(&body, FrameSpec, spec); err != nil {
+			t.Fatal(err)
+		}
+		w := &heldFlush{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
+		done := make(chan struct{})
+		go func() { defer close(done); h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body)) }()
+		select {
+		case <-w.entered:
+		case <-done:
+			t.Fatalf("tty %v detach %v: the exec answered before its start: %d %s", er.TTY, er.Detach, w.Code, w.Body)
+		}
+		sw := httptest.NewRecorder()
+		h.ServeHTTP(sw, httptest.NewRequest("POST", "/v1/scrub", nil))
+		if sw.Code != http.StatusOK || scrubs != 1 {
+			t.Fatalf("tty %v detach %v: scrub = %d after %d scrubs", er.TTY, er.Detach, sw.Code, scrubs)
+		}
+		close(w.release)
+		<-done
+		typ, p, err := ReadFrame(bytes.NewReader(w.Body.Bytes()))
+		if err != nil || typ != FrameError || !strings.Contains(string(p), errStopping.Error()) {
+			t.Errorf("tty %v detach %v: the held exec answered frame %d %q (%v), want the stopping error", er.TTY, er.Detach, typ, p, err)
+		}
+		if _, err := os.Lstat(ran); err == nil {
+			t.Errorf("tty %v detach %v: the held exec ran after the scrub", er.TTY, er.Detach)
+		}
+		if out, _ := os.ReadDir(s.OutDir); len(out) != 0 {
+			t.Errorf("tty %v detach %v: %d output files were made after the scrub", er.TTY, er.Detach, len(out))
+		}
+	}
+}
+
+// The stop scrub waits for an exec whose process start is under way, attached, on a terminal and detached,
+// and that exec is not refused. Catches a start that checks the stop fence and lets go of it before the
+// process starts: the scrub would not wait for it, and it would start on the scrubbed guest.
+func TestDarwinStopScrubWaitsForAnExecStartUnderWay(t *testing.T) {
+	for _, er := range []ExecRequest{{}, {TTY: true}, {Detach: true}} {
+		s, _, h := newDarwinServer(t)
+		starting, release, scrubbed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		s.startProc = func(cmd *exec.Cmd) error { close(starting); <-release; return cmd.Start() }
+		s.Scrub = func(context.Context, string) ScrubReport {
+			close(scrubbed)
+			return ScrubReport{When: ScrubAtStop, Outcome: ScrubDone}
+		}
+		er.Argv = []string{"/usr/bin/true"}
+		spec, _ := json.Marshal(er)
+		var body bytes.Buffer
+		if err := WriteFrame(&body, FrameSpec, spec); err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() { defer close(done); h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body)) }()
+		select {
+		case <-starting:
+		case <-done:
+			t.Fatalf("tty %v detach %v: the exec answered before its start: %d %s", er.TTY, er.Detach, w.Code, w.Body)
+		}
+		go h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/scrub", nil))
+		select {
+		case <-scrubbed:
+			t.Fatalf("tty %v detach %v: the scrub ran while an exec's start was under way", er.TTY, er.Detach)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(release)
+		select {
+		case <-scrubbed:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("tty %v detach %v: the scrub did not run after the start finished", er.TTY, er.Detach)
+		}
+		<-done
+		if strings.Contains(w.Body.String(), errStopping.Error()) {
+			t.Errorf("tty %v detach %v: the exec the scrub waited for was refused: %q", er.TTY, er.Detach, w.Body)
+		}
+	}
+}
+
+func TestDarwinInitTurnsTheScreenLockOffBeforeItAnswersAndNeverFailsInit(t *testing.T) {
+	for _, off := range []bool{true, false} {
+		s, _, h := newDarwinServer(t)
+		calls := 0
+		s.ScreenLockOff = func(context.Context) bool {
+			if s.inited {
+				t.Error("the screen lock was handled after Init answered")
+			}
+			calls++
+			return off
+		}
+		if w := postInit(h, Init{}); w.Code != 200 || calls != 1 {
+			t.Errorf("off=%v: Init = %d after %d screen lock calls", off, w.Code, calls)
+		}
+	}
+}
+
+// postExec sends an exec spec and returns the answer.
+func postExec(h http.Handler, er ExecRequest) *httptest.ResponseRecorder {
+	spec, _ := json.Marshal(er)
+	var body bytes.Buffer
+	_ = WriteFrame(&body, FrameSpec, spec)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	return w
+}
+
+// An agent that launchd started again after its run's Init has none of the run's settings in memory: an
+// exec, attached or detached, is refused with 409 and runs nothing, and the Init is not taken again. Catches
+// an exec that runs with no proxy, CA or secrets after the service restarts.
+func TestDarwinExecRefusedAfterAServiceRestart(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	if w := postInit(h, Init{SignInsOff: true, Env: map[string]string{"HTTPS_PROXY": "http://proxy:3128"}}); w.Code != 200 {
+		t.Fatalf("Init = %d %s", w.Code, w.Body)
+	}
+	if w := postExec(h, ExecRequest{Argv: []string{"/usr/bin/true"}}); w.Code != 200 {
+		t.Fatalf("an exec before the restart = %d %s", w.Code, w.Body)
+	}
+
+	restarted := &Server{Version: "t", Home: s.Home, User: s.User, OutDir: s.OutDir, MarkerDir: s.MarkerDir, ToolsDial: &ToolsDialRecord{}}
+	h2, err := restarted.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := filepath.Join(t.TempDir(), "ran")
+	for _, detach := range []bool{false, true} {
+		w := postExec(h2, ExecRequest{Argv: []string{"/usr/bin/touch", ran}, Detach: detach})
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "restarted and lost the run's environment") {
+			t.Errorf("exec (detach %v) after the restart = %d %s, want 409 errRestarted", detach, w.Code, w.Body)
+		}
+	}
+	if _, err := os.Lstat(ran); err == nil {
+		t.Error("the restarted agent ran the exec")
+	}
+	if w := postInit(h2, Init{SignInsOff: true}); w.Code != http.StatusConflict {
+		t.Errorf("Init after the restart = %d %s, want 409", w.Code, w.Body)
+	}
+
+	// A new boot clears the marker folder: an exec before its Init still runs, as before.
+	_, _, h3 := newDarwinServer(t)
+	if w := postExec(h3, ExecRequest{Argv: []string{"/usr/bin/true"}}); w.Code != 200 {
+		t.Errorf("an exec before a new boot's Init = %d %s, want 200", w.Code, w.Body)
 	}
 }

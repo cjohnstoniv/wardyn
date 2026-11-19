@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { END_RUN } from "../src/app/components/wardyn/copy/run-lifetime";
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
@@ -286,7 +287,7 @@ test.describe("Approvals screen", () => {
     // #3036: a decided row names its run through RunRef (title, then the short id that copies), never the bare id link.
     const ref = page.getByTestId("run-ref").filter({ has: page.locator(`button[title^="${anyRunId()}"]`) }).first();
     await expect(ref).toContainText(anyRunId().replace(/^run_/, "").slice(0, 8));
-    await expect(ref.getByRole("button", { name: /^[0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
+    await expect(ref.getByRole("button", { name: /^Copy run id [0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
 
     // Decided cards are terminal — no Approve/Deny actions.
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
@@ -736,13 +737,13 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
 
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
       await expect(killBtn).toBeEnabled();
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
-      await confirm.getByRole("button", { name: "Kill run" }).click();
-      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+      await confirm.getByRole("button", { name: "End run" }).click();
+      await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // The run's own Approvals tab: CANCELLED, no Approve/Deny — `pending &&`
       // gates those buttons on a.state === "PENDING", so a CANCELLED row
@@ -798,13 +799,13 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
 
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
       await expect(killBtn).toBeEnabled();
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
-      await confirm.getByRole("button", { name: "Kill run" }).click();
-      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+      await confirm.getByRole("button", { name: "End run" }).click();
+      await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // Killing the run cancels the still-open sign-in request — the same
       // fact the live walk proves (a PENDING reauth on a dead run repairs

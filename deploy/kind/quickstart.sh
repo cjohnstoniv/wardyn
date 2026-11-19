@@ -101,6 +101,23 @@ BASE_IMAGE="wardyn/agent-base:local"
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf 'quickstart: %s\n' "$*" >&2; exit 1; }
 
+# calico_rollout waits for one Calico workload, and on a rollout that does not finish prints what the cluster knows
+# about it before failing: the wait itself says only that it timed out.
+calico_rollout() {
+  local target="$1" selector="$2"
+  if kubectl --context "${CONTEXT}" -n kube-system rollout status "${target}" --timeout=180s; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "FAIL: ${target} did not roll out in 180s. Pod state and events follow verbatim."
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system get pods -o wide || true
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system describe pod -l "${selector}" || true
+    kubectl --context "${CONTEXT}" --request-timeout=30s -n kube-system get events --sort-by=.lastTimestamp || true
+  } >&2
+  die "Calico is not ready: ${target}"
+}
+
 if [[ "${1:-}" == "--down" ]]; then
   step "deleting kind cluster ${CLUSTER}"
   kind delete cluster --name "${CLUSTER}"
@@ -158,8 +175,8 @@ fi
 
 step "installing Calico ${CALICO_VERSION} (kind's default CNI does not enforce NetworkPolicy)"
 kubectl --context "${CONTEXT}" apply -f "${CALICO_MANIFEST}"
-kubectl --context "${CONTEXT}" -n kube-system rollout status daemonset/calico-node --timeout=180s
-kubectl --context "${CONTEXT}" -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+calico_rollout daemonset/calico-node k8s-app=calico-node
+calico_rollout deployment/calico-kube-controllers k8s-app=calico-kube-controllers
 
 step "loading images into the cluster (no registry pull)"
 for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${BASE_IMAGE}"; do

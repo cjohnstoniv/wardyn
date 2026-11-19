@@ -19,18 +19,27 @@ import (
 )
 
 type policyPreviewResponse struct {
-	Spec             types.RunPolicySpec       `json:"spec"`
-	Source           policyPreviewSource       `json:"source"`
-	Provisional      bool                      `json:"provisional"`
-	Redacted         bool                      `json:"redacted"`
-	Warnings         []string                  `json:"warnings"`
-	Pending          []policyPreviewPending    `json:"pending"`
-	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
+	Spec        types.RunPolicySpec `json:"spec"`
+	Source      policyPreviewSource `json:"source"`
+	Provisional bool                `json:"provisional"`
+	Redacted    bool                `json:"redacted"`
+	Warnings    []string            `json:"warnings"`
+	// PushesUnstoppable is set when this install's git token broker is off and the run's capability list
+	// leaves out code_write: a git token in the sandbox can still push. It is the same decision as the run
+	// warning unstoppablePushWarning, which the preview's warning filter drops.
+	PushesUnstoppable bool                      `json:"pushes_unstoppable,omitempty"`
+	Pending           []policyPreviewPending    `json:"pending"`
+	RepositoryAccess  []policyPreviewRepository `json:"repository_access"`
 	// ADOLaneDeclined is the run-level reason the per-person Azure DevOps
 	// credential would not be given to this run's sandbox (adoLaneDecline),
 	// decided by the resolver launch uses. Absent means no structural decline
 	// was reported; it is never set on a repository group.
 	ADOLaneDeclined string `json:"ado_lane_declined,omitempty"`
+	// PushDenyAllSecrets is set when the draft refuses every push and carries an
+	// environment or file secret of its own (pushDenyAllSecrets). Review then says:
+	// "A push token you add as a secret could still push to a code host Wardyn
+	// doesn't recognize, if this run can reach it." (types.PushDenyAllSecretsNote).
+	PushDenyAllSecrets bool `json:"push_deny_all_secrets,omitempty"`
 	// Components is what the draft is given access to (componentFacts): absent
 	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`
@@ -48,8 +57,14 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// ImageAdmission is "checked at launch" when launch checks Image's signatures (imageAdmissionPreview);
+	// absent when it checks nothing, so a preview with admission off is unchanged.
+	ImageAdmission client.ImageAdmissionFact `json:"image_admission,omitempty"`
 	// HarnessSet is the preflight's, with the same meaning.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
+	// AllowedModels and AllowedModelsProfile are the preflight's, with the same meaning.
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_unit,omitempty"`
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
@@ -60,6 +75,9 @@ type policyPreviewResponse struct {
 	Access *accessBlock `json:"access,omitempty"`
 	// Attachments is the preflight's, with the same meaning.
 	Attachments []client.RunAttachment `json:"attachments"`
+	// Ungoverned is present only when the caller's own runs are outside governance:
+	// what a member of their type would be held to, or that there is nobody to compare with.
+	Ungoverned *client.UngovernedNotice `json:"ungoverned,omitempty"`
 }
 
 type policyPreviewPending string
@@ -124,7 +142,7 @@ var previewSafeWarning = regexp.MustCompile(`^(confinement raised from "(CC[1-3]
 func previewSafeWarnings(warnings []string) []string {
 	out := []string{}
 	for _, warning := range warnings {
-		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == "push_rules inherited from the operator's policy" ||
+		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == warnLinuxVMDiskNotCapped || warning == warnLinuxVMPidsNotCapped || warning == "push_rules inherited from the operator's policy" ||
 			warning == "allow_all_egress disabled: operator policy does not permit allow-all egress" ||
 			warning == "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on" || previewSafeWarning.MatchString(warning) {
 			out = append(out, warning)

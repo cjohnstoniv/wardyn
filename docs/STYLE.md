@@ -1,7 +1,6 @@
 # Documentation style
 
-Rules for every tracked Markdown file. `make lint` checks form and links; `make diagrams` checks visuals.
-[Enforcement](#4-enforcement) lists the docs each gate fails.
+Rules for the docs the gates list; [Enforcement](#4-enforcement) says which. `make lint` checks form and links; `make diagrams` checks visuals.
 
 ## 1. Form
 
@@ -33,7 +32,7 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 - A line that is only an image does not count toward the 1–5 lines between the H1 and the first H2.
 - A blockquote is prose. An alert's marker line is exempt from the word count; its body is not.
 - YAML front matter that starts on line 1 (between two lines that are exactly `---`) is metadata: it meets no cap, summary rule or share, but its words still count in the prose budget.
-- Aim below the caps: sentences ≤ 25 words, paragraphs ≤ 3 sentences.
+- Cap 35, target 25 for sentences; paragraphs ≤ 3 sentences.
 - No summary line under an H2 unless the section exceeds 150 words and its first line is not already a summary.
 - No lead-in or stub lines ("Apply it:", "Result:"). Put the fact in the bullet.
 

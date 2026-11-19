@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute, sidewaysScroll } from "./fixtures";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import { GIT_PAT_SCOPE, OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
@@ -151,6 +151,16 @@ test("the policy dialog keeps Cancel and Create on screen however tall the form 
   await dialog.getByRole("button", { name: "Cancel" }).click();
 });
 
+test("nothing in the new-policy dialog scrolls sideways at 320, 375, 412 or 430 (D531)", async ({ page }) => {
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  for (const width of [320, 375, 412, 430]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect.poll(() => sidewaysScroll(dialog), { message: `${width}px` }).toEqual([]);
+  }
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("renders the Policies screen header, description and primary action", async ({ page }) => {
   await expect(
     page.getByText(
@@ -173,7 +183,7 @@ test("shows the empty state when no policies are defined", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "No policies yet" })).toBeVisible();
   await expect(
     page.getByText(
-      "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run.",
+      "A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it.",
     ),
   ).toBeVisible();
   // The empty-state action button (second "New policy") opens the editor.

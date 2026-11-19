@@ -11,6 +11,7 @@ import { TEMPLATE_REFUSAL } from "../../../lib/template-refusals";
 import type { Template, TemplateDocument, TemplateSummary } from "../../../lib/types/templates";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { RenameTemplateDialog } from "./rename-template-dialog";
+import { setExpectedPrincipal } from "../../../lib/api/core";
 
 const api = vi.hoisted(() => ({ getRevision: vi.fn(), update: vi.fn() }));
 vi.mock("./templates-api", () => ({ templatesApi: api }));
@@ -75,7 +76,24 @@ describe("Rename dialog", () => {
       description: "Overnight",
       document: doc(),
       expected_revision: 2,
-    });
+    }, "");
+  });
+
+  it("the save after the revision read still names the person who renamed, when another signed in meanwhile", async () => {
+    // The server then refuses it rather than rename the template as the next person.
+    let seen!: (t: Template) => void;
+    api.getRevision.mockImplementationOnce(() => new Promise((done) => (seen = done)));
+    open();
+    await retype("Weekly tests");
+    setExpectedPrincipal("a@example.com");
+    await submit();
+    await waitFor(() => expect(api.getRevision).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    seen(stored(doc(), "Overnight"));
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    expect(api.update.mock.calls[0][2]).toBe("a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("a document that carries its own name is renamed with it, or the server refuses the save", async () => {

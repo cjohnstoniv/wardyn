@@ -439,7 +439,7 @@ func (d *Driver) checkOnce(ctx context.Context, runID uuid.UUID, component, name
 	})
 	if err != nil {
 		unlock()
-		// A failed witness save stops the sequence: the patch never follows it (Codex R8).
+		// A failed witness save stops the sequence: the patch never follows it.
 		return false, err
 	}
 	if component == componentProxy && saved.Fence != nil && d.cfg.Unfence != nil {
@@ -559,8 +559,8 @@ func (d *Driver) nodeRecordRun(ctx context.Context, runID, recordID uuid.UUID) (
 }
 
 // AcceptNodeRecord checks a security operator's node record against the run's own record and an
-// acceptance list sent now, and accepts it as an infrastructure fence for the run's pods (design K1
-// §3.1 (b), r9 M1(c), Codex R9-L1, R11-M1, Fable r12 M3, r13 M1, owner #7a, #8).
+// acceptance list sent now, and accepts it as an infrastructure fence for the run's pods (design K1,
+// section 3.1 (b)).
 func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.NodeRecord) error {
 	if !d.runnerMode() {
 		return runner.ErrEndUnsupported

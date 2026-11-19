@@ -16,7 +16,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("RunRef (#3036)", () => {
   it("leads with the title and follows with the 8-character id, whole id on hover", () => {
     render(<RunRef runId={ID} title="payments deps bump" />);
-    const id = screen.getByRole("button", { name: "3f9c1e2a" });
+    const id = screen.getByRole("button", { name: "Copy run id 3f9c1e2a" });
     expect(id).toHaveAttribute("title", `${ID}\nClick to copy`);
     expect(screen.getByText("payments deps bump")).toBeInTheDocument();
     expect(screen.queryByText(ID)).toBeNull();
@@ -31,16 +31,26 @@ describe("RunRef (#3036)", () => {
         <RunRef runId={ID} title="t" />
       </div>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "3f9c1e2a" }));
+    await userEvent.click(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" }));
     expect(writeText).toHaveBeenCalledWith(ID);
     expect(await screen.findByText("Copied")).toBeInTheDocument();
     expect(rowClick).not.toHaveBeenCalled();
   });
 
+  it("the copy button says it copies, and its Copied announcement sits outside the button", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    render(<RunRef runId={ID} title="t" />);
+    const button = screen.getByRole("button", { name: "Copy run id 3f9c1e2a" });
+    await userEvent.click(button);
+    const live = await screen.findByText("Copied");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(button).not.toContainElement(live);
+  });
+
   it("with no title the id stands alone after 'Run'", () => {
     render(<RunRef runId={ID} />);
     expect(screen.getByText("Run")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toBeInTheDocument();
   });
 
   it("names a long task by its first line only", () => {

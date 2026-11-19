@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 966" width="1200" height="966" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">The egress proxy's checks, in order</title>
+  <desc id="desc">Every outbound request meets the proxy's checks in a fixed order and the first refusal ends it: literal IP, brokered-only hosts, host port and method, a repeated private address, an unlisted host's first-use mode, the address after DNS, then allow and the credential.</desc>
+  <style>
+    .bg { fill: #0d1117; stroke: #3d444d; }
+    .zone { fill: #161b22; stroke: #3d444d; stroke-width: 1.5; }
+    .card { fill: #0d1117; stroke: #9198a1; stroke-width: 1.5; }
+    .sand { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; stroke-dasharray: 8 5; }
+    .ok { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; }
+    .held { fill: #2e2410; stroke: #d29922; stroke-width: 2; }
+    .deny { fill: #0d1117; stroke: #ff7b72; stroke-width: 1.5; }
+    .outline { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .frame { fill: none; stroke: #9198a1; stroke-width: 1.5; }
+    .tab { fill: #161b22; stroke: #9198a1; stroke-width: 1.5; }
+    .halo { paint-order: stroke; stroke: #0d1117; stroke-width: 5px; stroke-linejoin: round; }
+    .dot { fill: #9198a1; }
+    .pill { fill: #3cc6b6; stroke: none; }
+    .pt { fill: #0d1117; }
+    .t { fill: #e6edf3; }
+    .m { fill: #9198a1; }
+    .a { fill: #3cc6b6; }
+    .r { fill: #ff7b72; }
+    .h { fill: #d29922; }
+    .ln { fill: none; stroke: #9198a1; stroke-width: 2; }
+    .lt { fill: none; stroke: #3cc6b6; stroke-width: 2.5; }
+    .lr { fill: none; stroke: #ff7b72; stroke-width: 2; }
+    .lh { fill: none; stroke: #d29922; stroke-width: 2; }
+    .life { fill: none; stroke: #3d444d; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .edge { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .dash { stroke-dasharray: 6 4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  </style>
+  <defs><marker id="h-ln" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9198a1"/></marker><marker id="h-lt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3cc6b6"/></marker><marker id="h-lr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#ff7b72"/></marker><marker id="h-lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d29922"/></marker></defs>
+  <rect class="bg" x="0.5" y="0.5" width="1199" height="965" rx="10"/>
+  <text class="t" x="40" y="40" font-size="16" font-weight="600">Each request, in this order. The first refusal ends it.</text>
+  <text class="t" x="680" y="40" font-size="16" font-weight="600">Refused, with this rule_source</text>
+  <rect class="card" x="40" y="64" width="540" height="92" rx="8"/>
+  <text class="t" x="56" y="92" font-size="16" font-weight="600">1  A literal IP address</text>
+  <text class="m mono" x="56" y="114" font-size="14">literalIPGuard</text>
+  <text class="m" x="56" y="136" font-size="14">An exact address the allowlist names passes</text>
+  <rect class="deny" x="680" y="92.0" width="480" height="36" rx="6"/>
+  <text class="r mono" x="694" y="115.0" font-size="14">builtin:private-ip</text>
+  <path class="lr" d="M580 110.0 L678 110.0" marker-end="url(#h-lr)"/>
+  <path class="ln" d="M310.0 156 L310.0 184" marker-end="url(#h-ln)"/>
+  <rect class="card" x="40" y="186" width="540" height="70" rx="8"/>
+  <text class="t" x="56" y="214" font-size="16" font-weight="600">2  A host reached only by a brokered route</text>
+  <text class="m" x="56" y="236" font-size="14">An MCP server, a local model server</text>
+  <rect class="deny" x="680" y="192.0" width="480" height="58" rx="6"/>
+  <text class="r mono" x="694" y="215.0" font-size="14">brokered:mcp:direct</text>
+  <text class="r mono" x="694" y="237.0" font-size="14">brokered:local-model</text>
+  <path class="lr" d="M580 221.0 L678 221.0" marker-end="url(#h-lr)"/>
+  <path class="ln" d="M310.0 256 L310.0 284" marker-end="url(#h-ln)"/>
+  <rect class="card" x="40" y="286" width="540" height="92" rx="8"/>
+  <text class="t" x="56" y="314" font-size="16" font-weight="600">3  Host, port and method</text>
+  <text class="m mono" x="56" y="336" font-size="14">gateConnect</text>
+  <text class="m" x="56" y="358" font-size="14">Then a push to a forge under deny_all</text>
+  <rect class="deny" x="680" y="303.0" width="480" height="58" rx="6"/>
+  <text class="r mono" x="694" y="326.0" font-size="14">policy:denied, policy:port, policy:method</text>
+  <text class="r mono" x="694" y="348.0" font-size="14">brokered:git:push-deny-all-forge</text>
+  <path class="lr" d="M580 332.0 L678 332.0" marker-end="url(#h-lr)"/>
+  <path class="ln" d="M310.0 378 L310.0 406" marker-end="url(#h-ln)"/>
+  <rect class="card" x="40" y="408" width="540" height="70" rx="8"/>
+  <text class="t" x="56" y="436" font-size="16" font-weight="600">4  A private address refused before</text>
+  <text class="m mono" x="56" y="458" font-size="14">privateIPMemoHit</text>
+  <rect class="deny" x="680" y="425.0" width="480" height="36" rx="6"/>
+  <text class="m" x="694" y="448.0" font-size="14">refused again, with no new decision row</text>
+  <path class="lr" d="M580 443.0 L678 443.0" marker-end="url(#h-lr)"/>
+  <path class="ln" d="M310.0 478 L310.0 506" marker-end="url(#h-ln)"/>
+  <rect class="card" x="40" y="508" width="540" height="196" rx="8"/>
+  <text class="t" x="56" y="536" font-size="16" font-weight="600">5  A host the policy does not list</text>
+  <text class="m mono" x="56" y="558" font-size="14">first_use_approval</text>
+  <rect class="card" x="56" y="584" width="508" height="34" rx="6"/>
+  <text class="t mono" x="68" y="606" font-size="14">always_deny</text>
+  <text class="m" x="250" y="606" font-size="14">refused</text>
+  <path class="lr" d="M564 601 L680 601" marker-end="url(#h-lr)"/>
+  <rect class="deny" x="680" y="584" width="480" height="34" rx="6"/>
+  <text class="r mono" x="694" y="606" font-size="14">policy:default-deny</text>
+  <rect class="card" x="56" y="624" width="508" height="34" rx="6"/>
+  <text class="t mono" x="68" y="646" font-size="14">deny_with_review</text>
+  <text class="m" x="250" y="646" font-size="14">refused; a request is raised</text>
+  <path class="lr" d="M564 641 L680 641" marker-end="url(#h-lr)"/>
+  <rect class="deny" x="680" y="624" width="480" height="34" rx="6"/>
+  <text class="r mono" x="694" y="646" font-size="14">approval:pending</text>
+  <text class="m" x="842.64" y="646" font-size="13">a person can approve it for a retry</text>
+  <rect class="held" x="56" y="664" width="508" height="34" rx="6"/>
+  <text class="t mono" x="68" y="686" font-size="14">wait_for_review</text>
+  <text class="h" x="250" y="686" font-size="14">held until a person answers</text>
+  <path class="lr dash" d="M564 681 L680 681" marker-end="url(#h-lr)"/>
+  <rect class="deny" x="680" y="664" width="480" height="34" rx="6"/>
+  <text class="r mono" x="694" y="686" font-size="14">approval:denied</text>
+  <text class="m" x="834.1" y="686" font-size="13">or approval:pending with no answer in time</text>
+  <text class="h" x="322.0" y="728" font-size="14">approved: goes on, as approval:&lt;id&gt;</text>
+  <path class="lh" d="M310.0 704 L310.0 742" marker-end="url(#h-lh)"/>
+  <rect class="card" x="40" y="744" width="540" height="70" rx="8"/>
+  <text class="t" x="56" y="772" font-size="16" font-weight="600">6  The address after DNS</text>
+  <text class="m mono" x="56" y="794" font-size="14">egressTarget</text>
+  <rect class="deny" x="680" y="750.0" width="480" height="58" rx="6"/>
+  <text class="r mono" x="694" y="773.0" font-size="14">builtin:private-ip</text>
+  <text class="r mono" x="694" y="795.0" font-size="14">builtin:resolve-failed</text>
+  <path class="lr" d="M580 779.0 L678 779.0" marker-end="url(#h-lr)"/>
+  <path class="ln" d="M310.0 814 L310.0 842" marker-end="url(#h-ln)"/>
+  <rect class="ok" x="40" y="844" width="540" height="92" rx="8"/>
+  <text class="t" x="56" y="872" font-size="16" font-weight="600">7  Allowed</text>
+  <text class="a mono" x="56" y="894" font-size="14">policy:allowed, or approval:&lt;id&gt;</text>
+  <text class="m" x="56" y="916" font-size="14">The proxy adds the credential where it can read the request</text>
+  <rect class="card" x="680" y="864" width="480" height="52" rx="6"/>
+  <text class="t" x="694" y="888" font-size="14">On to the destination; the credential</text>
+  <text class="m" x="694" y="907" font-size="14">is added by injector.apply</text>
+  <path class="lt" d="M580 890 L678 890" marker-end="url(#h-lt)"/>
+</svg>

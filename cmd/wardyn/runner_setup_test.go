@@ -46,6 +46,7 @@ type setupRig struct {
 	mintStatus        int
 	mintBody          string
 	claimStatus       int
+	readStatus        int // when set, GET of this runner answers it
 	advertised        string
 	signIn            bool         // /healthz.cli_sign_in
 	fallback          http.Handler // the sign-in fake, for routes this rig does not answer
@@ -70,6 +71,11 @@ func newSetupRig(t *testing.T) *setupRig {
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = r.srv.Client().Transport
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	// A stored sign-in dials through headerBoundTransport, a copy of the default transport: copy it again
+	// now that the default trusts this server.
+	oldBound := headerBoundTransport
+	headerBoundTransport = newHeaderBoundTransport()
+	t.Cleanup(func() { headerBoundTransport = oldBound })
 	t.Setenv("HOME", r.home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(r.home, ".config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(r.home, ".local", "share"))
@@ -135,6 +141,8 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		r.claimed = true
 		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: r.runnerID, State: types.RunnerClaimed})
+	case req.Method == http.MethodGet && p == me && r.readStatus != 0:
+		w.WriteHeader(r.readStatus)
 	case req.Method == http.MethodGet && p == me:
 		state := types.RunnerUnclaimed
 		if r.claimed {

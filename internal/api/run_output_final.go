@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,13 +86,22 @@ func (c *outputCapture) dropSealed() (late func(), sealed bool) {
 // tailWriter is what the runner receives as SandboxSpec.ExecOutput: the masking
 // writer's pipe, plus runner.OutputDrainer so the drivers report the start and
 // end of each copy into it and the finisher can wait for the last bytes.
+//
+// cast, when set (attachAgentCast), is a macOS VM task run's agent output recording: every byte the tail
+// takes, the gap marker included, is masked into it too, and it is saved when the copy ends. It is set
+// before the writer is handed to a runner, and never changed after.
 type tailWriter struct {
-	t *execOutputTail
+	t    *execOutputTail
+	cast *agentCast
 }
 
 func (w *tailWriter) Write(p []byte) (int, error) {
 	w.t.arrived.Store(w.t.ring.now().UnixNano())
-	return w.t.in.Write(p)
+	n, err := w.t.in.Write(p)
+	if w.cast != nil {
+		w.cast.write(p)
+	}
+	return n, err
 }
 
 func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
@@ -99,6 +109,9 @@ func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
 // OutputGap (runner.OutputGapMarker): a recovered copy starts after skipped bytes the runner had
 // already discarded. The row says so where they would have been and is marked incomplete.
 func (w *tailWriter) OutputGap(skipped int64) {
+	if w.cast != nil {
+		w.cast.gapBytes.Store(skipped)
+	}
 	w.t.mw.mu.Lock()
 	w.t.mw.capture.dropped = true
 	w.t.mw.mu.Unlock()
@@ -112,11 +125,26 @@ func outputGapMarker(skipped int64) string {
 
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
-// of them: the end waits for that on its own goroutine.
+// of them: the end waits for that on its own goroutine. The agent output cast is
+// sealed before the drain ends and settled after, so its store wait never holds
+// the finisher; its obligation, stored at dispatch, outlives a process that dies
+// in between (sweepAgentCasts). A copy that ends in an error ends the cast's
+// read the same way (agentCast.endRead): nothing copied keeps the obligation for
+// the sweep, and a partial copy is saved cut, as the output row is incomplete.
 func (w *tailWriter) EndDrain(err error) {
+	if err != nil && w.cast != nil {
+		w.cast.endRead("", err)
+	}
 	go func() {
 		w.t.in.flush()
+		var end func() error
+		if w.cast != nil {
+			end = w.cast.seal()
+		}
 		w.t.endDrain(err)
+		if end != nil {
+			_ = end() // logged where it failed; the obligation stays for the sweep
+		}
 	}()
 }
 
@@ -280,7 +308,8 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 		}
 	case runIsUnrecordable(run), hasTail:
 	case s.recordingOutputEnabled(ctx, run):
-		s.finalizeRecordingOutput(ctx, st, run)
+		// Logged inside; a failure leaves the work durable for the sweep.
+		_ = s.finalizeRecordingOutput(ctx, st, run)
 	case s.execOutputUncaptured(ctx, run):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
@@ -288,9 +317,22 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 }
 
 // writeGapRow resolves runID's pending row (or writes the row) as a capture
-// gap with no bytes, never over a final row, and audits it.
+// gap with no bytes, never over a final row, and audits it. Chunks a gone
+// replica left are written into the row instead. A failed read of them writes
+// no gap, which would delete them unread: the chunks stay, with a pending row
+// (made here when there was none) that the stale-pending sweep tries again.
 func (s *Server) writeGapRow(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string) {
-	if s.saveRowFromChunks(ctx, runID, reason) {
+	switch s.saveRowFromChunks(ctx, runID, reason) {
+	case chunksDone:
+		return
+	case chunksFailed:
+		switch err := st.InsertPendingRunOutput(ctx, runID); {
+		case errors.Is(err, store.ErrRunOutputErased):
+			s.fenceRunOutput(runID)
+		case err != nil:
+			slog.WarnContext(ctx, "wardynd: could not keep a run's output pending after a failed read of its live chunks",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		return
 	}
 	wrote, err := st.SaveGapRunOutput(ctx, runID)
@@ -457,7 +499,9 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
 		if lateSince {
-			s.markLateIncomplete(ctx, row.RunID)
+			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
+			id := row.RunID
+			s.goBackground(func() { s.markLateIncompleteOwed(id) })
 		}
 		return persistDone
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -542,18 +586,41 @@ func (s *Server) lateRunOutput(runID uuid.UUID, e *execOutputTail) {
 	if !committed || fenced {
 		return
 	}
-	s.goBackground(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), 10*time.Second)
-		defer cancel()
-		s.markLateIncomplete(ctx, runID)
-	})
+	s.goBackground(func() { s.markLateIncompleteOwed(runID) })
 }
 
-// markLateIncomplete flips the committed row to incomplete and audits it.
-func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
+// lateMarkAttemptWait bounds one try of the incomplete mark a committed row owes.
+const lateMarkAttemptWait = 10 * time.Second
+
+// markLateIncompleteOwed settles the incomplete mark a committed row owes for a byte dropped after its
+// commit. Each try runs on the daemon's context, bounded by lateMarkAttemptWait, with the final write's
+// backoff (outputRetryBase doubling to runOutputRetryMax) between tries, until the mark lands or the output is erased: one failed write must not leave a
+// capture that lost bytes labelled complete, and nothing else re-reads a committed row for this. Only the
+// daemon's shutdown ends it early. Run it on a tracked goroutine.
+func (s *Server) markLateIncompleteOwed(runID uuid.UUID) {
+	base := s.cfg.BaseCtx
+	for backoff := s.outputRetryBase(); ; backoff = min(backoff*2, runOutputRetryMax) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), lateMarkAttemptWait)
+		settled := s.markLateIncomplete(ctx, runID)
+		cancel()
+		if settled {
+			return
+		}
+		select {
+		case <-base.Done():
+			return
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// markLateIncomplete flips the committed row to incomplete and audits it. It reports whether the mark is
+// settled: written, nothing committed to mark, no store, or the output erased (the tail is fenced). false
+// is a failed write, which markLateIncompleteOwed tries again.
+func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
 	st := s.runOutputStore()
 	if st == nil {
-		return
+		return true
 	}
 	marked, err := st.MarkRunOutputIncomplete(ctx, runID)
 	switch {
@@ -562,9 +629,11 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not mark a run's output row incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
 	case marked:
 		s.auditOutputFinalize(ctx, runID, map[string]any{"incomplete": true, "late_write": true})
 	}
+	return true
 }
 
 // auditOutputFinalize records a capture that was not clean: its flags, never
@@ -602,9 +671,11 @@ func withFinalizeStep(data map[string]any) map[string]any {
 }
 
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
-// older than the retention window, then resolves the pending rows of terminal
-// runs whose claim went stale to capture-gap rows (when persistence is on, the
-// only time pending rows are written). A tail this process still holds is the
+// older than the retention window and the live chunks of runs that ended
+// before it, gives chunks that have no row the pending row they were owed
+// (adoptOrphanChunks), then resolves the pending rows of terminal runs whose
+// claim went stale to capture-gap rows (when persistence is on, the only time
+// pending rows are written). A tail this process still holds is the
 // finisher's own, and is left alone.
 func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	st, _ := s.cfg.Store.(store.RunOutputStore)
@@ -621,11 +692,60 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/run-output-sweeper", "run.output.retention.sweep",
 				"run_outputs", "success", mustJSON(map[string]any{"deleted": n, "retention_days": int(retention.Hours() / 24)})))
 		}
+		// A run's live chunks expire with it, whatever row it has: a fault can leave chunks no row ages.
+		if err := s.deleteEndedRunOutputChunks(ctx, retention); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
 	}
-	ids, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, 200)
+	if err := s.adoptOrphanChunks(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := s.sweepStalePending(ctx, st); err != nil {
+		return err
+	}
+	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// outputSweepCursors holds where the next pass of sweepAgentCasts and of sweepStalePending starts: the last
+// row of the pass before, nil for the oldest. Carried between passes so rows that fail on every pass cannot
+// hold the first page. The zero value is ready.
+type outputSweepCursors struct {
+	mu                      sync.Mutex
+	agentCast, stalePending *store.SweepCursor
+}
+
+// get reads the cursor at slot under the lock.
+func (c *outputSweepCursors) get(slot **store.SweepCursor) *store.SweepCursor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *slot
+}
+
+// set stores the cursor at slot under the lock.
+func (c *outputSweepCursors) set(slot **store.SweepCursor, v *store.SweepCursor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	*slot = v
+}
+
+// staleOutputSweepPage is how many stale pending rows one sweep takes.
+const staleOutputSweepPage = 200
+
+// sweepStalePending resolves one page of terminal runs' stale pending rows, from where the last pass stopped.
+// A failed list keeps the position, as does a pass whose ctx ended; a short page starts the next pass from the
+// oldest. A tail this process still holds is the finisher's own, and is left alone.
+func (s *Server) sweepStalePending(ctx context.Context, st store.RunOutputStore) error {
+	after := s.execOutputs.sweep.get(&s.execOutputs.sweep.stalePending)
+	ids, next, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, after, staleOutputSweepPage)
 	if err != nil {
 		return err
 	}
@@ -634,10 +754,10 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.resolveStalePending(ctx, st, id)
 		}
 	}
-	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
-		firstErr = err
+	if ctx.Err() == nil {
+		s.execOutputs.sweep.set(&s.execOutputs.sweep.stalePending, next)
 	}
-	return firstErr
+	return nil
 }
 
 // resolveStalePending resolves a terminal run's abandoned pending row: by
@@ -657,7 +777,7 @@ func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStor
 		return
 	}
 	if s.recordingOutputEnabled(ctx, run) {
-		s.finalizeRecordingOutput(ctx, st, run)
+		s.settleStaleRecordingOutput(ctx, st, run)
 		return
 	}
 	s.recoverRunOutput(ctx, st, run, "stale_pending")

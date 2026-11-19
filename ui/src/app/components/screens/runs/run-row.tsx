@@ -14,22 +14,25 @@
 // shares the word).
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import type { AgentRun } from "../../../lib/types";
+import { isTerminalRunState } from "../../../lib/types/runs";
 import { formatDuration, relativeTime } from "../../../lib/format";
 import { OpenInUserViewMenu, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Chip, RunStateBadge } from "../../wardyn/primitives";
-import { repoLabel, rowHeadline } from "./board-groups";
+import { repoLabel, rowHeadline, WorkspaceNamesContext } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
-import { rowPresentation, waitingSignInPresentation } from "./runs-model";
+import { isPausedRun, rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { serviceBadge } from "../../wardyn/copy/run-service";
 import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { scheduledMeta, signInTimedOut } from "./scheduled-state";
-import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
+import { REVIVE, REVIVING, toastRunName } from "../../wardyn/copy/run-lifetime";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { reviveWithToasts } from "./revive-run";
 import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 
@@ -39,8 +42,11 @@ const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"
 // Lazy for the same reason: the confirm is for the rare scheduled row.
 const CancelRunDialog = React.lazy(() => import("../run-detail/cancel-run-dialog"));
 
-function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
-  const parts: string[] = [repoLabel(run).text];
+function metaLine(run: AgentRun, adminView: boolean, own: boolean, names: Readonly<Record<string, string>>): string {
+  const parts: string[] = [repoLabel(run, names).text];
+  // UXR-31: a VM run says which kind; a container run says nothing, as before.
+  if (run.machine_kind === "macos_vm") parts.push(RUNS_ROW_WORD.MACOS_VM);
+  else if (run.machine_kind === "linux_vm") parts.push(RUNS_ROW_WORD.LINUX_VM);
   // 0.9 (M-RN-3 RS8): a local run names its computer, and says so while it is offline, in neutral words in
   // the meta line; the row's hue, word and action are rowPresentation's and unchanged.
   if (run.placement === "local") {
@@ -69,6 +75,7 @@ function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
 
 export function RunRow({ run }: { run: AgentRun }) {
   const navigate = useNavigate();
+  const workspaceNames = React.useContext(WorkspaceNamesContext);
   const view = useConsoleMode();
   const adminView = view === "admin";
   const principal = usePrincipal();
@@ -98,6 +105,16 @@ export function RunRow({ run }: { run: AgentRun }) {
     }
   };
   const [cancelling, setCancelling] = React.useState(false);
+  // The Cancel confirm says nothing was set up, which holds only while the run waits: a poll that finds it started closes
+  // the confirm and says so, and the End run confirm on its page is the one that warns what ending it tears down. A run
+  // that ended while the confirm was open has no End run: the confirm closes and the row says how it ended.
+  const waiting = run.state === "QUEUED";
+  const ended = isTerminalRunState(run.state);
+  React.useEffect(() => {
+    if (!cancelling || waiting) return;
+    setCancelling(false);
+    if (!ended) toast.info(CANCEL_NOT_STARTED.STARTED(toastRunName({ title })), { description: CANCEL_NOT_STARTED.STARTED_NEXT });
+  }, [cancelling, waiting, ended, title]);
   const actionLabel =
     p.action === "review"
       ? RUNS_ROW_ACTION.REVIEW
@@ -112,7 +129,7 @@ export function RunRow({ run }: { run: AgentRun }) {
                 ? REVIVING
                 : REVIVE
               : null;
-  const meta = metaLine(run, adminView, own);
+  const meta = metaLine(run, adminView, own, workspaceNames);
   // A live service says its health in place of "Running". Unhealthy is a warning chip on the same row, under Running:
   // a report is not a request, so the row never moves to Needs you or borrows its glyph.
   const health = p.word === RUNS_ROW_WORD.RUNNING ? serviceBadge(run) : undefined;
@@ -157,6 +174,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             <Chip tone="neutral">{p.word}</Chip>
           ) : health ? (
             <RunStateBadge state={run.state} word={health.word} tone={health.tone} pulse={health.pulse} />
+          ) : isPausedRun(run) && p.word === RUNS_ROW_WORD.PAUSED ? (
+            <RunStateBadge state={run.state} word={p.word} tone="neutral" pulse={false} />
           ) : (
             <RunStateBadge state={run.state} word={p.word} />
           )}
@@ -176,6 +195,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             variant="outline"
             className="h-7 shrink-0"
             disabled={p.action === "revive" && reviving}
+            // The visible word first, then which run it acts on, so a list of buttons is not N copies of "Review".
+            aria-label={`${actionLabel}: ${title}`}
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);
@@ -188,7 +209,7 @@ export function RunRow({ run }: { run: AgentRun }) {
           </Button>
         )}
       </div>
-      {cancelling && (
+      {cancelling && waiting && (
         <React.Suspense fallback={null}>
           <CancelRunDialog runId={run.id} title={title} onClose={() => setCancelling(false)} />
         </React.Suspense>

@@ -305,6 +305,8 @@ export interface Workspace {
   // PUT /workspaces/{id}/owning-unit. owning_unit_name is the unit's name, joined at read.
   owning_unit_id?: string;
   owning_unit_name?: string;
+  // A strict pin: only people whose own unit is the pin or below it run on the workspace.
+  owning_unit_strict?: boolean;
   created_at: string;
   updated_at: string;
   // #1267: a member-safe, per-row, per-CALLER bit — would the SAME decide

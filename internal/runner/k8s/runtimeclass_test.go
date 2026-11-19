@@ -39,6 +39,7 @@ func TestCreateSandbox_PinsTheRuntimeClassPerTier(t *testing.T) {
 			{"CC2 gVisor", types.CC2, "gvisor", "runsc"},
 			{"CC2 gVisor KVM platform", types.CC2, "gvisor-kvm", "runsc-kvm"},
 			{"CC3 Kata", types.CC3, "kata", "kata-qemu"},
+			{"CC3 managed Kata", types.CC3, "kata-vm-isolation", "kata"},
 			{"CC3 bring-your-own microVM", types.CC3, "fc", "firecracker"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

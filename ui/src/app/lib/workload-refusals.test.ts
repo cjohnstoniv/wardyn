@@ -32,9 +32,15 @@ describe("workload refusal sentences", () => {
 
   it("every workload reason of reasons.go that a workload can carry is told", () => {
     const go = readFileSync(join(repoRoot(), "internal/api/reasons.go"), "utf8");
-    const carried = [...go.matchAll(/reasonWorkload(Invalid|SourceConflict|CapReached|PoolMismatch|BindingInactive)\s*=\s*"([a-z_]+)"/g)].map((m) => m[2]);
-    expect(carried).toHaveLength(5);
+    const carried = [...go.matchAll(/reasonWorkload(Invalid|SourceConflict|CapReached|PoolMismatch|BindingInactive|PolicyPinMismatch)\s*=\s*"([a-z_]+)"/g)].map((m) => m[2]);
+    expect(carried).toHaveLength(6);
     for (const reason of carried) expect(WORKLOAD_REFUSAL_SENTENCE[reason], reason).toBeTruthy();
+  });
+
+  it("the pin-mismatch sentence says its words", () => {
+    expect(WORKLOAD_REFUSAL_SENTENCE.workload_policy_pin_mismatch).toBe(
+      "Its policy now resolves to a launch policy digest other than the one it is pinned to, so nothing launches until the pin or the policy changes.",
+    );
   });
 
   it("every runner pool reason is told", () => {
@@ -54,9 +60,12 @@ describe("workload refusal sentences", () => {
   it("follows a credential refusal's table sentence with the server's, for the reader the server gives it to", () => {
     const told = WORKLOAD_REFUSAL_SENTENCE.placement_credential;
     const server = "ProxyConfig.Policy.EligibleGrants[0]: a github_token grant is not delivered to this runner. The grant may come from the default policy.";
-    expect(told).toBe("A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.");
+    expect(told).toBe("A credential it carries, such as a grant from the default policy or an MCP server's run identity, cannot be sent to the runner it would land on.");
     // Full tier: the server sentence names the grant and the fix.
     expect(refusalSentence("placement_credential", ` ${server} `)).toBe(`${told} ${server}`);
+    // A run identity refusal names the server, and the table's sentence stays true of it.
+    const named = 'The MCP server "tools" sends your organisation\'s run identity, so it runs only on your organisation\'s remote-hosted runners. Remove it from this run, or run this on a remote-hosted runner.';
+    expect(refusalSentence("placement_credential", named)).toBe(`${told} ${named}`);
     // Security tier: the server withholds the sentence, so the table's stands alone.
     expect(refusalSentence("placement_credential", "")).toBe(told);
     expect(refusalSentence("placement_credential")).toBe(told);

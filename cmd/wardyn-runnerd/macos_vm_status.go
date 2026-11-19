@@ -10,6 +10,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,8 +211,8 @@ func toolsFailure(baseDir string) string {
 }
 
 // selftestWithheld is a status line for each harness the ready base in baseDir withheld because the
-// launcher's self-test failed for it. The end of the self-test's output is in the base's tools.json,
-// which the line names.
+// launcher's self-test failed for it, then agentSignatureLines. The end of the self-test's output is in
+// the base's tools.json, which the line names.
 func selftestWithheld(baseDir string) []string {
 	rec, err := macvm.ReadToolsRecord(baseDir)
 	if err != nil {
@@ -223,6 +225,34 @@ func selftestWithheld(baseDir string) []string {
 		}
 	}
 	slices.Sort(lines)
+	return append(lines, agentSignatureLines(rec)...)
+}
+
+// agentSignatureLines say how the base's guest agent is signed, by which signer and why others failed, and
+// Full Disk Access as the base last read it. Only an agent signed ad hoc loses the grant at each tools update. A record from before the
+// signature says nothing.
+func agentSignatureLines(rec macvm.ToolsRecord) []string {
+	var lines []string
+	switch {
+	case rec.AgentSignature == macvm.AgentSignedAdHoc:
+		lines = append(lines, "guest agent: signed ad hoc; Full Disk Access is lost at each tools update")
+	case rec.AgentSignature == macvm.AgentSignedThisMac:
+		lines = append(lines, "guest agent: signed on this Mac")
+	}
+	// Which signer the last tools update used, and why each one tried before it failed (path-free).
+	if rec.AgentSigner != "" {
+		lines = append(lines, "guest agent signer: "+rec.AgentSigner)
+	}
+	if len(rec.AgentSignErrors) > 0 {
+		lines = append(lines, "guest agent signing errors: "+strings.Join(rec.AgentSignErrors, "; "))
+	}
+	switch {
+	case rec.Guest != nil && rec.Guest.FullDiskAccess != "":
+		lines = append(lines, "Full Disk Access: "+rec.Guest.FullDiskAccess+" (as the base last read it)")
+	case rec.AgentSignature != "":
+		// The update could not carry the reading across to the new agent (another signature).
+		lines = append(lines, "Full Disk Access: unknown; recheck it in macos-vm edit-base")
+	}
 	return lines
 }
 
@@ -282,6 +312,7 @@ func (m *macOSVMs) setThermal(t string) {
 // the probe's thermal state. A probe that fails changes nothing.
 func (m *macOSVMs) tick(ctx context.Context) {
 	m.ticks++
+	m.keptSweepTick(ctx)
 	if m.ticks%macOSVMReprobeEvery != 0 || m.helper == "" {
 		return
 	}
@@ -356,4 +387,38 @@ func (m *macOSVMs) reasonDiskShort(c *runnerwire.MacVMCaps) {
 	if free, err := m.host.FreeDiskBytes(m.layout.Root); err == nil && free < need {
 		c.Reason, c.FreeGB = runnerwire.MacVMReasonDiskShort, int(free>>30)
 	}
+}
+
+// guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
+// is more (a run below it is refused at start).
+func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return max(m.perRunMemory, man.MinMemoryMiB<<20)
+}
+
+// The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
+// (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
+const (
+	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
+	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
+)
+
+// belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
+// to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
+func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal, reason string) {
+	m.mu.Lock()
+	mem, cpus := m.perRunMemory, m.perRunCPUs
+	m.mu.Unlock()
+	switch {
+	case mem != 0 && mem < man.MinMemoryMiB<<20:
+		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
+		need := (man.MinMemoryMiB + 1023) >> 10
+		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
+			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID), runnerwire.MacVMReasonMemoryBelowMinimum
+	case cpus != 0 && cpus < man.MinCPUs:
+		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
+			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID), runnerwire.MacVMReasonCPUBelowMinimum
+	}
+	return "", "", ""
 }

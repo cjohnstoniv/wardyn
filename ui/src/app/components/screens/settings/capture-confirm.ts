@@ -51,7 +51,7 @@ export const CAPTURE_NOT_CORROBORATED =
 // `unreachable` payload for a 5xx or a dropped socket, it does not throw. An
 // honest capture that DID land would then be accused of not existing. One
 // retry, then this: the check failed, not the sign-in.
-export const CAPTURE_CHECK_UNREACHABLE = "Wardyn couldn't reach the server to verify this sign-in — try again.";
+export const CAPTURE_CHECK_UNREACHABLE = "Wardyn couldn't verify this sign-in with the server — try again.";
 // R-8: the corroboration is a round trip the
 // operator otherwise experiences as a terminal that stopped scrolling. Says
 // what is happening WITHOUT claiming the capture the server has not confirmed.

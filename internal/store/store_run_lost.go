@@ -28,6 +28,8 @@ type RunLoser interface {
 	// refused — a lost run's identity must never carry forward.
 	// ErrRunTokenLineage means prevJTI is not a token of the run's current
 	// lineage (one RetireRunTokenLineage cut off): nothing is recorded.
+	// RunTokenRunEndedError means the run reached a terminal state before the
+	// stamp: nothing is recorded, and the renewal is answered as a terminal run's.
 	StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error)
 	// RetireRunTokenLineage makes fresh the only token a renewal of id may
 	// present from now on, and returns the ids the last renewal recorded (the
@@ -55,24 +57,38 @@ var _ RunLoser = PG{}
 // ErrRunTokenLineage is StampRunTokenRenewed's refusal of a token outside the run's current lineage.
 var ErrRunTokenLineage = errors.New("store: the presented token is not of the run's current token lineage")
 
+// RunTokenRunEndedError is StampRunTokenRenewed's refusal of a run that ended before its renewal was
+// stamped: a token minted for it must not be handed out.
+type RunTokenRunEndedError struct{ State types.RunState }
+
+func (e RunTokenRunEndedError) Error() string {
+	return "store: the run ended before its token renewal was stamped (state " + string(e.State) + ")"
+}
+
 // StampRunTokenRenewed — see RunLoser. A run with no recorded renewal has no lineage yet; otherwise
 // the presented token must be the last one minted, or the one that renewal presented (a proxy keeps
-// it when the lease send behind a renewal fails).
+// it only when the renewal's answer never reaches it). An ended run (any terminal state) is not stamped.
+// An end that commits while this statement waits on the run's row is not seen by its trailing reads, which
+// then answer ErrRunTokenLineage; the handler re-reads the run for that answer.
 func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error) {
 	var stamped, live bool
+	var state string
 	err := s.Pool.QueryRow(ctx, `
 		WITH stamped AS (
 			UPDATE agent_runs SET token_renewed_at = now(), token_jti = $2, token_prev_jti = $3
-			WHERE id=$1 AND lost_at IS NULL
+			WHERE id=$1 AND lost_at IS NULL AND state IN (`+nonTerminalRunStates+`)
 			  AND (COALESCE(token_jti, '') = '' OR $3 IN (token_jti, token_prev_jti))
 			RETURNING 1)
-		SELECT EXISTS (SELECT 1 FROM stamped), EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND lost_at IS NULL)`,
-		id, jti, prevJTI).Scan(&stamped, &live)
+		SELECT EXISTS (SELECT 1 FROM stamped), EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND lost_at IS NULL),
+			COALESCE((SELECT state FROM agent_runs WHERE id=$1), '')`,
+		id, jti, prevJTI).Scan(&stamped, &live, &state)
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("store: stamp run token renewed: %w", err)
 	case stamped:
 		return true, nil
+	case live && types.RunState(state).IsTerminal():
+		return false, RunTokenRunEndedError{State: types.RunState(state)}
 	case live:
 		return false, ErrRunTokenLineage
 	}

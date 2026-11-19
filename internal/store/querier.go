@@ -33,7 +33,7 @@ func (s PG) inTx(ctx context.Context, fn func(q Querier) error) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if err := fn(tx); err != nil {
 		return err
 	}
