@@ -393,9 +393,9 @@ func TestHostCallDecidersOnceCapRefuses(t *testing.T) {
 	}
 }
 
-// The adopter's rule, an egress_domain rule naming the owner and unit admins capped at max_scope once, decides a
-// hold whose proxy accepts once: a bodyless approve or deny is stored as once, as for an egress_domain request,
-// "once" is decided, and "run" is refused (decision_scope_above_rule).
+// An egress_domain rule naming the owner and unit admins, capped at max_scope once, decides a hold whose proxy
+// accepts once: a bodyless approve or deny is stored as once, as for an egress_domain request, "once" is
+// decided, and "run" is refused (decision_scope_above_rule).
 func TestHostCallDecidersOnceCapDecidesOnce(t *testing.T) {
 	f := newDCFix(t)
 	rule := dcRule(types.DeciderKindEgressDomain, types.DeciderOwner, types.DeciderUnitAdmins)
