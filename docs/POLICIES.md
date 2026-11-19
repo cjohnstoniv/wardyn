@@ -729,7 +729,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 - `first_use_approval` decides *whether* an unknown host gets escalated to a human at all; scope decides *how far the human's answer reaches* once given.
 - Omit the field and you get `run` — today's original behavior, unchanged.
 - Only an `egress_domain` approval may carry any scope. A `credential` approval may carry `run`, the per-run credential lease ([member runs](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)); without it, it mints exactly once by construction. A `tool_call` is bounded by the composer clamp.
-- Any other scope is refused at write time (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)). Some requests set their own: an MCP call, a kubectl change and a download take only `once`, a host request only `run`, and an Azure DevOps access request `once` or `run`.
+- Any other scope is refused at write time (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)). Some requests set their own: an MCP call, a kubectl change and a download take only `once`, and an Azure DevOps access request `once` or `run`. A host request takes `run`, and also `once` when its row carries `accepts_once` ([host rule hold](#a-host-rule-hold-effect-hold)).
 - [Delegation](operations/delegation.md) puts each scope in a tier of consent: `always` is standing, `run` and `until` last a session, and `once` is one-time. It also says who may give each and when a running run loses it.
 
 | Scope | Reaches | Where it lives |

@@ -76,6 +76,12 @@ describe("approvalScopeBadge for a held host request", () => {
     expect(approvalScopeBadge(host({ decision_scope: "once" }))).toBe("Allowed for this run");
     expect(approvalScopeBadge(host())).toBe("Allowed for this run");
   });
+  it("reads 'Allowed once' for a row whose proxy accepts once and that was approved once", () => {
+    const stamped = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds", call_sha256: "ab".repeat(32), accepts_once: true };
+    expect(approvalScopeBadge(host({ requested_scope: stamped, decision_scope: "once" }))).toBe("Allowed once");
+    expect(approvalScopeBadge(host({ requested_scope: stamped, decision_scope: "run" }))).toBe("Allowed for this run");
+    expect(approvalScopeBadge(host({ requested_scope: stamped, decision_scope: "once", state: "DENIED" }))).toBeUndefined();
+  });
   it("carries no badge for a denied, cancelled or pending row", () => {
     for (const state of ["DENIED", "CANCELLED", "PENDING"] as const) expect(approvalScopeBadge(host({ state }))).toBeUndefined();
   });

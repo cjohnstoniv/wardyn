@@ -121,9 +121,22 @@ describe("a host call row whose proxy accepts once", () => {
     expect(onApprove).toHaveBeenLastCalledWith("run");
   });
 
-  it("under a deciders rule capped below run, Approve for this run is off and the note says Deny refuses one request", () => {
-    renderCard(row(onceScope, { max_scope: "once" }));
+  it("says the approval reaches one request or the run, and so does the no-longer-waiting note", () => {
+    renderCard(row(onceScope, { held: false, held_until: inPast() }));
     const card = screen.getByTestId("host-call-card");
+    expect(card).toHaveTextContent(C.WHAT_EITHER("POST", "/v1/refunds", scope.host));
+    expect(card).toHaveTextContent(C.HELD_EXPIRED_EITHER);
+    expect(card).not.toHaveTextContent(C.HELD_EXPIRED);
+  });
+
+  it("under a deciders rule capped below run, Approve for this run is off and the note says Deny refuses one request", () => {
+    renderCard(row(onceScope, { max_scope: "once", held: false, held_until: inPast() }));
+    const card = screen.getByTestId("host-call-card");
+    expect(within(card).getByText(APPROVAL_SCOPE_LABEL.once)).toBeInTheDocument();
+    expect(within(card).queryByText(APPROVAL_SCOPE_LABEL.run)).toBeNull();
+    expect(card).toHaveTextContent(C.WHAT_ONE("POST", "/v1/refunds", scope.host));
+    expect(card).not.toHaveTextContent("for the rest of this run");
+    expect(card).toHaveTextContent(C.HELD_EXPIRED_ONE);
     expect(within(card).getByRole("button", { name: C.APPROVE })).toBeDisabled();
     expect(within(card).getByRole("button", { name: C.APPROVE_ONCE })).toBeEnabled();
     expect(card).toHaveTextContent(C.CAP_NOTE);
