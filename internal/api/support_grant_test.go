@@ -296,7 +296,11 @@ func TestSupportRequest(t *testing.T) {
 		wantSupportStatus(t, "host mode", w, http.StatusCreated, "")
 	})
 	t.Run("a store with no grant record is 503", func(t *testing.T) {
-		rig := newSupportRig(t, func(c *Config) { c.Store = newAuthzStore() })
+		bare := newAuthzStore()
+		rig := newSupportRig(t, func(c *Config) { c.Store = bare })
+		bare.mu.Lock()
+		bare.runs[rig.run.ID] = rig.run // the run is read before the grant record, so this store must know it
+		bare.mu.Unlock()
 		wantSupportStatus(t, "request", rig.request("helper"), http.StatusServiceUnavailable, reasonSupportUnavailable)
 	})
 }
@@ -557,7 +561,8 @@ func TestSupportStatus(t *testing.T) {
 }
 
 // TestSupportMayEnterVerdicts is the verdict list: each case is asked with a Nil grant and with the grant's id,
-// and where they differ the Nil ask is supportNone and the set ask is supportEnded.
+// and where they differ the set ask is supportEnded and the Nil ask is supportEndedUnnamed for a past helper (the
+// grant ended) or supportNone for a caller who was never accepted as helper.
 func TestSupportMayEnterVerdicts(t *testing.T) {
 	lost := time.Now()
 	type tc struct {
@@ -606,18 +611,18 @@ func TestSupportMayEnterVerdicts(t *testing.T) {
 		{name: "reserved task (a harness sign-in run)", arrange: runMut(func(r *types.AgentRun) { r.Task = harnessLoginTask }), door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "local mode", config: func(c *Config) { c.LocalMode = true }, door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
 		{name: "no row for this principal", who: "someone-else", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone},
-		{name: "expired", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone, endReason: "expired",
+		{name: "expired", door: supportDoorTerminal, want: supportEnded, wantNil: supportEndedUnnamed, endReason: "expired",
 			arrange: func(_ *testing.T, rig *supportRig, _ store.SupportGrant) { rig.be.tick(31 * time.Minute) }},
 		{name: "door not ticked", door: supportDoorForward, want: supportDoorRefused, wantNil: supportDoorRefused},
 		{name: "ssh pseudo-door with one of its doors", door: supportDoorSSH, want: supportOK, wantNil: supportOK},
 		{name: "ui pseudo-door with none of its doors", door: supportDoorUI, want: supportDoorRefused, wantNil: supportDoorRefused},
-		{name: "helper signed out", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone, endReason: "helper_signed_out",
+		{name: "helper signed out", door: supportDoorTerminal, want: supportEnded, wantNil: supportEndedUnnamed, endReason: "helper_signed_out",
 			arrange: func(t *testing.T, rig *supportRig, _ store.SupportGrant) {
 				if err := rig.rev.CutSessions(context.Background(), supportHelperSub); err != nil {
 					t.Fatal(err)
 				}
 			}},
-		{name: "owner revoked", door: supportDoorTerminal, want: supportEnded, wantNil: supportNone, endReason: "owner_revoked",
+		{name: "owner revoked", door: supportDoorTerminal, want: supportEnded, wantNil: supportEndedUnnamed, endReason: "owner_revoked",
 			arrange: func(t *testing.T, rig *supportRig, _ store.SupportGrant) {
 				if err := rig.rev.RevokeSub(context.Background(), supportOwnerSub); err != nil {
 					t.Fatal(err)

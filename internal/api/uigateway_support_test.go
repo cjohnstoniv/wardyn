@@ -607,6 +607,10 @@ func TestSupportUI_CookieExpiresWithTheGrant(t *testing.T) {
 		t.Fatalf("cookie Expires = %d, want the grant's expires_at %d", got, want)
 	}
 	rig.srv.cfg.UISessionTTL = 10 * time.Minute
+	// The grant's clock starts when the test binary does and the session clock is real time, so a long run would
+	// put the 30 minute grant behind this TTL; this ticket's grant outlasts it.
+	far := rig.clock.now().Add(time.Hour)
+	rig.grant.ExpiresAt = &far
 	cookie = rig.helperSession("code")
 	if got, want := cookie.Expires.Unix(), rig.clock.now().Add(10*time.Minute).Unix(); got != want {
 		t.Fatalf("cookie Expires = %d under a 10 minute TTL, want %d", got, want)
@@ -669,7 +673,7 @@ func supportFilesEnv(t *testing.T, desktop *types.DesktopControls, limits *types
 }
 
 // (c) (h) the Files panel under a grant: the files door admits listing and upload, any other door refuses, no
-// grant, an ended one or the switch off keep the owner rule's refusal, and a profile that denies interactive
+// grant or the switch off keep the owner rule's refusal, an ended one names its end, and a profile that denies interactive
 // sessions or UI apps closes it for the helper (no exemption, GovernAdminRuns off).
 func TestSupportFiles_DoorAndGovernance(t *testing.T) {
 	allowed := &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed}
@@ -687,10 +691,10 @@ func TestSupportFiles_DoorAndGovernance(t *testing.T) {
 			if _, err := g.EndSupportGrant(context.Background(), e.run.ID, gr.ID, "revoked", true); err != nil {
 				t.Fatal(err)
 			}
-		}, http.StatusForbidden, runOwnerOnlyReason},
+		}, http.StatusForbidden, string(authz.ReasonSupportGrantEnded)},
 		{"the grant ran out", []string{"files"}, nil, func(_ *desktopFilesEnv, g *fakeSupportGrants, _ store.SupportGrant, _ *testing.T) {
 			g.tick(31 * time.Minute)
-		}, http.StatusForbidden, runOwnerOnlyReason},
+		}, http.StatusForbidden, string(authz.ReasonSupportGrantEnded)},
 		{"the switch is off", []string{"files"}, nil, func(_ *desktopFilesEnv, _ *fakeSupportGrants, _ store.SupportGrant, t *testing.T) {
 			t.Setenv(envSupportSessions, "")
 		}, http.StatusForbidden, runOwnerOnlyReason},
