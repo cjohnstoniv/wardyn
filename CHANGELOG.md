@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.26] — 2026-11-19
+
 ### Security
 
 - A run's requests through the organisation (`via_org`), such as a `git push` through `/wardyn/gh/`, now follow the run's current network rules on every server. Before, the organisation's copy of the run's proxy was rebuilt only after a network edit, and only on the server that handled the edit. A restart that applied a new wall or `deny_all`, or an edit handled by another server, left it on the old rules until the run had sent nothing for 10 minutes. Now a new request on any server is served under the new rules at once. The server that applied the change ends the run's open requests at once, and any other server ends them within about 5 seconds.
