@@ -320,13 +320,15 @@ export function isKubeCallRequest<T extends Pick<ApprovalRequest, "kind" | "gran
 // rule holds. Approving it lets every request with this host, method and path through for the rest of the run in
 // that proxy; the query and body are not in the scope. host is lowercase without port; method is upper case; path is
 // in normal form (no query, no dot segments). call_sha256 is HostCallKey(host, method, path); hold_seconds is how long
-// the proxy holds the open request.
+// the proxy holds the open request. accepts_once, set by the server alone, says the proxy that raised it spends a
+// "once" decision on the one held request, so the row may be decided once; absent, only the run is offered.
 export interface HostCallScope {
   host: string;
   method: string;
   path: string;
   call_sha256: string;
   hold_seconds?: number;
+  accepts_once?: boolean;
 }
 
 // Structural, like the server's isHostCallRow: a tool_call with no grant whose scope carries a call_sha256 and a

@@ -584,7 +584,7 @@ export function LiveApprovals({
               canDecide={canDecide(a)}
               run={run}
               busy={busy === a.id ? busyAction : null}
-              onApprove={() => decidePush(a, true)}
+              onApprove={(scope) => decideAdo(a, true, scope ? [{ scope }] : [])}
               onDeny={() => decidePush(a, false)}
             />
           );

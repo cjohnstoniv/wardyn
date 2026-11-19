@@ -29,6 +29,16 @@ func hostCallScopeJSON(t *testing.T, method, path string) json.RawMessage {
 	return raw
 }
 
+// acceptingOnce is scope as the control plane stores it for a proxy that accepts once.
+func acceptingOnce(t *testing.T, scope json.RawMessage) json.RawMessage {
+	t.Helper()
+	out, ok := hostCallAcceptingOnce(scope)
+	if !ok {
+		t.Fatalf("not a host rule hold's scope: %s", scope)
+	}
+	return out
+}
+
 func seedHostCall(t *testing.T, f *scopeFixture, withGrant bool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -101,6 +111,53 @@ func TestHostCallDecisionIsForTheRun(t *testing.T) {
 			}
 			if got.State != types.ApprovalPending {
 				t.Errorf("a refused decision moved the row to %s", got.State)
+			}
+		})
+	}
+}
+
+// A hold whose proxy accepts once also takes "once", and the row records it; a bodyless decision or "run"
+// stores run, and a wider scope is refused with a reason that offers once. A hold without accepts_once refuses
+// once (TestHostCallDecisionIsForTheRun): its proxy would read it as the run.
+func TestHostCallOnceForAProxyThatAcceptsIt(t *testing.T) {
+	for _, tc := range []struct {
+		verb  string
+		scope types.ApprovalScope
+		want  int
+		store types.ApprovalScope
+	}{
+		{"approve", "", http.StatusOK, types.ScopeRun},
+		{"approve", types.ScopeRun, http.StatusOK, types.ScopeRun},
+		{"approve", types.ScopeOnce, http.StatusOK, types.ScopeOnce},
+		{"deny", types.ScopeOnce, http.StatusOK, types.ScopeOnce},
+		{"approve", types.ScopeUntil, http.StatusBadRequest, ""},
+		{"approve", types.ScopeAlways, http.StatusBadRequest, ""},
+	} {
+		t.Run(tc.verb+"/scope="+string(tc.scope), func(t *testing.T) {
+			f := newScopeFixture(t)
+			id := seedHostCall(t, f, false)
+			f.approval.mu.Lock()
+			ap := f.approval.byID[id]
+			ap.RequestedScope = acceptingOnce(t, ap.RequestedScope)
+			f.approval.byID[id] = ap
+			f.approval.mu.Unlock()
+			w := mcpDecide(t, f, id, tc.verb, ssoSession(t, f.memberID, "owner@corp.example", oidc.RoleUser), tc.scope)
+			if w.Code != tc.want {
+				t.Fatalf("status %d body %s, want %d", w.Code, w.Body.String(), tc.want)
+			}
+			f.approval.mu.Lock()
+			got := f.approval.byID[id]
+			f.approval.mu.Unlock()
+			if tc.want == http.StatusOK {
+				if got.State == types.ApprovalPending || got.DecisionScope != tc.store {
+					t.Fatalf("row = %s/%q, want decided/%q", got.State, got.DecisionScope, tc.store)
+				}
+				return
+			}
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if body.Reason != "decision_scope_invalid_for_kind" || !strings.Contains(body.Error, `"once"`) || got.State != types.ApprovalPending {
+				t.Errorf("refusal = %q %q, state %s", body.Reason, body.Error, got.State)
 			}
 		})
 	}
@@ -223,6 +280,7 @@ func TestHostCallScopeHashMismatchRefused(t *testing.T) {
 		"no hash":          with(func(m map[string]any) { m["call_sha256"] = "" }),
 		"an MCP key too":   with(func(m map[string]any) { m["mcp_server"] = "jira" }),
 		"an unknown key":   with(func(m map[string]any) { m["query"] = "a=1" }),
+		"accepts_once":     with(func(m map[string]any) { m["accepts_once"] = true }),
 		"a host with port": with(func(m map[string]any) { m["host"] = "api.example.com:443" }),
 		"a dot segment":    with(func(m map[string]any) { m["path"] = "/x/../admin" }),
 		"case variant":     strings.Replace(string(good), `"host"`, `"Host"`, 1),
@@ -255,6 +313,29 @@ func TestInternalRaiseStoresTheValidatedHostCallScope(t *testing.T) {
 	}
 	if got := string(h.approvals.requested[0].RequestedScope); got != string(scope) {
 		t.Fatalf("stored scope\n got %s\nwant %s", got, scope)
+	}
+}
+
+// A raise saying its proxy accepts once stores the validated scope stamped accepts_once, and accepts_once on
+// any other raise is refused. A scope that carries the stamp itself is refused (TestHostCallScopeHashMismatchRefused).
+func TestInternalRaiseStampsAcceptsOnce(t *testing.T) {
+	scope := hostCallScopeJSON(t, "DELETE", "/admin/users/7")
+	h := newHarness(t)
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, uuid.New()),
+		`{"kind":"tool_call","requested_scope":`+string(scope)+`,"accepts_once":true}`)
+	if w.Code != http.StatusCreated || len(h.approvals.requested) != 1 {
+		t.Fatalf("status %d body %s, %d rows; want 201 and one row", w.Code, w.Body.String(), len(h.approvals.requested))
+	}
+	stored := h.approvals.requested[0]
+	if got, want := string(stored.RequestedScope), string(acceptingOnce(t, scope)); got != want || !hostCallAcceptsOnce(stored) {
+		t.Fatalf("stored scope\n got %s\nwant %s", got, want)
+	}
+
+	other := newHarness(t)
+	w = do(t, other.srv, http.MethodPost, "/api/v1/internal/approvals", other.mintRunToken(t, uuid.New()),
+		`{"kind":"egress_domain","requested_scope":{"host":"api.example.com"},"accepts_once":true}`)
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonInternalApprovalRequestInvalid || len(other.approvals.requested) != 0 {
+		t.Fatalf("accepts_once on an egress_domain raise: %d %s, %d rows", w.Code, w.Body.String(), len(other.approvals.requested))
 	}
 }
 
@@ -309,5 +390,35 @@ func TestHostCallDecidersOnceCapRefuses(t *testing.T) {
 	f.wantStatus("unit admin under a once cap", f.decide(dcMember(t, dcAdmin), ap, "approve", ""), http.StatusForbidden, "decision_scope_above_rule", ap)
 	if f.row(ap).State != types.ApprovalPending {
 		t.Fatalf("state %s, want PENDING", f.row(ap).State)
+	}
+}
+
+// An egress_domain rule naming the owner and unit admins, capped at max_scope once, decides a hold whose proxy
+// accepts once: a bodyless approve or deny is stored as once, as for an egress_domain request, "once" is
+// decided, and "run" is refused (decision_scope_above_rule).
+func TestHostCallDecidersOnceCapDecidesOnce(t *testing.T) {
+	f := newDCFix(t)
+	rule := dcRule(types.DeciderKindEgressDomain, types.DeciderOwner, types.DeciderUnitAdmins)
+	rule.MaxScope = types.ScopeOnce
+	f.st.setRules(f.root.ID, rule)
+	for _, tc := range []struct {
+		name, verb, body string
+		code             int
+		reason           string
+	}{
+		{"bodyless approve", "approve", "", http.StatusOK, ""},
+		{"bodyless deny", "deny", "", http.StatusOK, ""},
+		{"once", "approve", `{"reason":"t","decision_scope":"once"}`, http.StatusOK, ""},
+		{"run", "approve", `{"reason":"t","decision_scope":"run"}`, http.StatusForbidden, "decision_scope_above_rule"},
+	} {
+		ap := f.hostHold()
+		f.aps.mu.Lock()
+		ap.RequestedScope = acceptingOnce(t, ap.RequestedScope)
+		f.aps.byID[ap.ID] = ap
+		f.aps.mu.Unlock()
+		f.wantStatus(tc.name, f.decide(dcMember(t, dcAdmin), ap, tc.verb, tc.body), tc.code, tc.reason, ap)
+		if got := f.row(ap).DecisionScope; tc.code == http.StatusOK && got != types.ScopeOnce {
+			t.Errorf("%s: decision_scope = %q, want once", tc.name, got)
+		}
 	}
 }
