@@ -190,7 +190,7 @@ func (st *viaOrgStream) moved(n int) bool {
 // watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
 // while the run is away (kept, its runner offline, or two reads of it failing in a row) every stream
 // is ended and the engine released, and so is an engine idle with no stream; the run's byte total is kept through all of these. The
-// state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run). An engine
+// state, and with it the total, is dropped only when the run ends (the bounds are per run). An engine
 // whose run's policy generation moved is retired with its streams (retireViaOrgStale), so a replica that gets no new
 // request does not keep streaming under the old rules; a failed read of the generation counts as a failed read of the run.
 func (s *Server) watchViaOrgRun(run *viaOrgRun) {
