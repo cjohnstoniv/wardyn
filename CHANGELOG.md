@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A command sent to a run (`wardyn exec` or an SSH exec) in the first seconds after the run reads `RUNNING` now waits, up to 15 seconds, for the run's CA files (`/tmp/wardyn/ca-bundle.pem` and `mitm-ca.pem`) instead of failing its first TLS call; if they never appear the command does not run and a sentence says why. A run with no CA does not wait.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

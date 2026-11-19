@@ -73,6 +73,25 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 while :; do sleep 3600 & wait $!; done`
 
+// ExecCAWait is the shell a person's exec runs first (internal/api's sshExecArgv). A run reads RUNNING
+// once its sandbox has started, while the idle process (AgentIdleScript, or install_mitm_ca under
+// `agent-run --idle`) may still be writing /tmp/wardyn/mitm-ca.pem and ca-bundle.pem, so a TLS call
+// in the first exec failed on a file its CA variables name. When those variables name these files and
+// a CA was delivered (the idle script's own test), it waits up to 15 seconds for both, then refuses
+// with a sentence and exit 1. A run with no CA, or whose variables name other files, never waits, nor
+// does a macOS guest, where nothing writes /tmp/wardyn (its CA lands in ~/.wardyn). The counter's name is one no image is expected to export.
+const ExecCAWait = `if [ "${SSL_CERT_FILE:-}" = /tmp/wardyn/ca-bundle.pem ] && { [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s ` + TrustedCAMountPath + ` ]; } && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  wardyn_ca_wait=0
+  while [ ! -s /tmp/wardyn/mitm-ca.pem ] || [ ! -s /tmp/wardyn/ca-bundle.pem ]; do
+    if [ "$wardyn_ca_wait" -ge 75 ]; then
+      echo "wardyn: this run's CA files (/tmp/wardyn/mitm-ca.pem and ca-bundle.pem) were not written within 15 seconds, so the command did not run: its TLS calls would fail." >&2
+      echo "wardyn: try again; if it keeps happening, end the run and start a new one." >&2; exit 1
+    fi
+    if sleep 0.2 2>/dev/null; then wardyn_ca_wait=$((wardyn_ca_wait+1)); else sleep 1; wardyn_ca_wait=$((wardyn_ca_wait+5)); fi
+  done
+fi
+`
+
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a
 // per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc
 // (gVisor) is a userspace-kernel sandbox (the Wall/CC2 tier). Named as
