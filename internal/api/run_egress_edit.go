@@ -247,9 +247,9 @@ func editedHost(host string, entries []string) bool {
 }
 
 // retireViaOrgEngine retires this replica's cached via_org engine for the run, cancelling its open
-// streams, once the edited config is stored: the next via_org request rebuilds the engine from that
-// config. Another replica's engine is reached only through the run's proxy, and the new proxy no
-// longer routes an edited host to the organisation.
+// streams, once a revive's config is stored, a restart's or an egress edit's: the next via_org request
+// rebuilds the engine from that config. Another replica's engine is retired at its next request, or at its
+// watch's next tick, when it reads the run's newer policy generation (viaOrgEngine, retireViaOrgStale).
 func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 	s.viaOrg.mu.Lock()
 	run := s.viaOrg.runs[runID]

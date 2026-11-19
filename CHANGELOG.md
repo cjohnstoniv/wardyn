@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A restarted run's new rules, such as a wall that denies every push, now apply at once to its requests sent through the organisation (`via_org`), such as a `git push` through `/wardyn/gh/`, including requests already in flight. Before, those requests kept the run's old rules until the run had sent none for 10 minutes, and with more than one server replica an egress edit's new rules did not reach them either.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

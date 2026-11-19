@@ -21,7 +21,7 @@ import (
 // reviveAdvanceHeld is reviveRunProxy's generation advance after the claim, and the check that its run lock is still held. It returns the generation
 // and proxy start the replace acts under, or the revive's refusal.
 func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.AgentRun, fate *store.RunLostFate, data map[string]any, actorType types.ActorType, actor string,
-	policy types.RunPolicySpec, retiring string, renewed renewedTokens, freshJTI string, expected store.PolicySlot, storedJSON, source []byte, edited bool) (int, proxyStartRec, *reviveError) {
+	policy types.RunPolicySpec, retiring string, renewed renewedTokens, freshJTI string, expected store.PolicySlot, storedJSON, source []byte) (int, proxyStartRec, *reviveError) {
 	// The revive's config becomes the run's stored one in the generation's own write, before the new
 	// proxy's first row and before the replace: any revive that reads the new generation reads this config.
 	gen, start, gerr := s.advanceRevivePolicyAndStart(ctx, run, policy, retiring, renewed, freshJTI, expected, storedJSON, source)
@@ -36,8 +36,10 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 			fence = gen
 		}
 		return 0, proxyStartRec{}, s.reviveGenerationFailed(ctx, run, fence, data, actorType, actor, retiring, freshJTI, renewed, gerr)
-	case edited && gen > 0:
-		s.retireViaOrgEngine(run.ID) // the edited config is stored: no engine built from the pre-edit one serves again
+	case gen > 0:
+		// The revive's config is stored, a restart's re-applied walls as much as an edit's: no engine built from the
+		// earlier one serves again here. Another replica's engine is retired at its next request (viaOrgEngine).
+		s.retireViaOrgEngine(run.ID)
 	}
 	// A hold lost since the claim is a lock another replica may now hold, under which a newer revive may
 	// have replaced the proxy: a replace from here would remove that proxy. The old (or newer) proxy is left
