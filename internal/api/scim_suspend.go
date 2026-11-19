@@ -594,8 +594,8 @@ func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverFor
 // any run the ledger counted done that is live again; then every pending run, including one already
 // KILLED whose teardown failed, is torn down. The runs of every service identity a target sponsors join
 // too: the identity goes sponsor_inactive with the person, and its runs end with theirs. A failed read of
-// those identities never holds back the person's own runs: they are killed, and the step fails, so the
-// ledger's audit rows stay pending and the retry reads the identities again.
+// those identities, or of one identity's runs, never holds back the person's own runs: they are killed, and
+// the step fails, so the ledger's audit rows stay pending and the retry reads the identities again.
 func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
@@ -603,8 +603,13 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 	}
 	services, servicesErr := s.sponsoredServicePrincipals(ctx, targets)
 	var add []store.JobKey
-	for _, t := range append(slices.Clip(targets), services...) {
+	for i, t := range append(slices.Clip(targets), services...) {
 		runs, err := st.ListNonTerminalRunsBy(ctx, t)
+		if err != nil && i >= len(targets) {
+			// Nor does a sponsored identity whose runs cannot be read: the rest are killed, and the step fails.
+			servicesErr = errors.Join(servicesErr, err)
+			continue
+		}
 		if err != nil {
 			return err
 		}
