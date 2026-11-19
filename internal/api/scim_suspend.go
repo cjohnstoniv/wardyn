@@ -593,16 +593,15 @@ func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverFor
 // killStep is step 3. Every non-terminal run a target owns joins the ledger as pending, and so does
 // any run the ledger counted done that is live again; then every pending run, including one already
 // KILLED whose teardown failed, is torn down. The runs of every service identity a target sponsors join
-// too: the identity goes sponsor_inactive with the person, and its runs end with theirs.
+// too: the identity goes sponsor_inactive with the person, and its runs end with theirs. A failed read of
+// those identities never holds back the person's own runs: they are killed, and the step fails, so the
+// ledger's audit rows stay pending and the retry reads the identities again.
 func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
 	}
-	services, err := s.sponsoredServicePrincipals(ctx, targets)
-	if err != nil {
-		return err
-	}
+	services, servicesErr := s.sponsoredServicePrincipals(ctx, targets)
 	var add []store.JobKey
 	for _, t := range append(slices.Clip(targets), services...) {
 		runs, err := st.ListNonTerminalRunsBy(ctx, t)
@@ -661,7 +660,7 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 		}
 		errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 1}))
 	}
-	return errors.Join(errs...)
+	return errors.Join(servicesErr, errors.Join(errs...))
 }
 
 // sponsoredServicePrincipals is the principal of every non-retired service identity one of sponsors

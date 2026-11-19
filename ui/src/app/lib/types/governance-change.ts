@@ -37,6 +37,9 @@ export interface GovernanceChange {
   // POST /governance/changes/{id}/approve only: the change is applied, but it could not revoke every API token
   // that may still hold the role it took away; detail is the server's remedy.
   tokens_revocation_failed?: boolean;
+  // POST /governance/changes/{id}/approve only: a service identity suspension is applied, but it could not end
+  // every live run of the identity; detail is the server's remedy.
+  runs_end_failed?: boolean;
   detail?: string;
 }
 

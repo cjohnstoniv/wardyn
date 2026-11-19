@@ -9,7 +9,7 @@ package api
 
 import (
 	"errors"
-	"log/slog"
+	"maps"
 	"net/http"
 	"time"
 
@@ -158,15 +158,11 @@ func applyServiceIdentityChange(s *Server, r *http.Request, q store.Querier, ch 
 			if s.withServiceState(r, &after) != nil {
 				after.State = after.BaseState()
 			}
-			// A suspend held with the sponsor change ends the identity's live runs once it applies. The approval
-			// has committed, so a failure cannot answer it: a PATCH with suspended true, or a DELETE, on the
-			// suspended identity ends the runs it left (both call endServiceRuns whatever the state was).
+			data := map[string]any{"state": after.State}
+			// A suspend held with the sponsor change ends the identity's live runs once it applies.
 			if req.Suspended != nil && *req.Suspended {
-				if err := s.endServiceRuns(r, after.Principal(), killReasonServiceSuspended); err != nil {
-					slog.WarnContext(r.Context(), "api: an approved suspension left service identity runs live; PATCH suspended true again to end them",
-						slog.String("service", after.Principal()), slog.String("change_id", ch.ID.String()), slog.Any("err", err))
-				}
+				maps.Copy(data, s.approvedSuspendRunsData(r, after.Principal(), ch.ID))
 			}
-			return map[string]any{"state": after.State}
+			return data
 		}}, nil
 }
