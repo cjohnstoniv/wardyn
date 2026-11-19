@@ -32,6 +32,7 @@
 | **v0.10.0-rc.24** | rc.24: Claude Code 2.1.312, a Kubernetes run that keeps its `data_out` rule after a live egress edit, a Bedrock sign-in link for the AWS page, and run identity MCP servers refused on every runner. | **Shipped (pre-alpha)** — `v0.10.0-rc.24`, 2026-11-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.25** | rc.25: an Azure DevOps token on a cluster run that stops working within 10 minutes of the connection being disabled or capped. | **Shipped (pre-alpha)** — `v0.10.0-rc.25`, 2026-11-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.26** | rc.26, the last candidate: via_org follows current rules on every server, service identity runs end when it stops, resume re-checks the owner, and Azure WireServer is refused. | **Shipped (pre-alpha)** — `v0.10.0-rc.26`, 2026-11-19 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0** | Developer sandboxes: Linux VM and macOS VM sandboxes (macOS is a preview, off by default), folders from your computer, local model servers, services, desktop controls, governance units with walls, image signatures and audit receipts. | **Shipped (pre-alpha)** — `v0.10.0`, 2026-11-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
