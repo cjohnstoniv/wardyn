@@ -104,7 +104,6 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_proxy_readback.go", "Server.abortUnconfirmedSandbox", "stopSandboxOrAudit"}:                   {1, "unguarded: K11, K12"},
 	{"internal/api/run_proxy_readback.go", "Server.stopTerminalSandbox", "stopSandboxOrAudit"}:                       {1, "unguarded: K11, K12"},
 	{"internal/api/run_proxy_readback.go", "Server.stopUnconfirmedProxyAt", "stopSandboxOrAudit"}:                    {3, "unguarded: K11, K12"},
-	{"internal/api/run_start_after_readback.go", "Server.awaitStartReadback", "stopSandboxOrAudit"}:                  {1, "unguarded: K11, K12"},
 	{"internal/api/runs_dispatch.go", "Server.dispatchRun", "stopSandboxOrAudit"}:                                    {1, "unguarded: K11, K12"},
 	{"internal/api/runs_dispatch_byoi.go", "Server.byoiExecLessRefused", "stopSandboxOrAudit"}:                       {1, "unguarded: K11, K12"},
 	{"internal/api/runs_dispatch_mounts.go", "Server.abortUnrecordedSandbox", "stopSandboxOrAudit"}:                  {1, "unguarded: K11, K12"},
