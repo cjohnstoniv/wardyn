@@ -299,7 +299,7 @@ The owner accepted every recommendation except D11, amended, and re-ruled four r
 | D3 | Claiming never grants the `api_token` feature |
 | D4 | Only the sponsor mints service tokens |
 | D5 | Service-token expiry required: at most `90d`, or the deployment cap if lower |
-| D6 | **Amended (0.10.0).** Sponsor suspended or deactivated: service tokens refused at once, and the live runs end in the sponsor's SCIM suspension, as an admin suspend or retire ends them |
+| Live runs when a service identity stops | **Amended (0.10.0).** Sponsor suspended or deactivated: service tokens refused at once, and the live runs end in the sponsor's SCIM suspension, as an admin suspend or retire ends them |
 | D7 | A sponsor change revokes every token of the identity |
 | D8 | New `service` audit actor type. Fallback to `system` with actor `service:<name>` only if C1 measures the constraint migration as too slow |
 | D9 | Fixed route allow-list; never an operator |

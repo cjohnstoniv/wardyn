@@ -237,3 +237,39 @@ func TestSCIMSuspensionOfTheSponsorEndsTheServiceRuns(t *testing.T) {
 		t.Errorf("person.deprovision = %+v, want runs_killed 3 (two of the person's, one of the service's)", deprov)
 	}
 }
+
+// A suspend whose kill failed leaves the identity suspended with its run live; a later PATCH with suspended
+// true on the already-suspended identity ends the run the first kill left.
+func TestServiceIdentityRepeatSuspendEndsARunTheFirstLeft(t *testing.T) {
+	st := newSvcEndStore(svcEndOpsBot())
+	live, ended, bystander := svcEndRuns(st)
+	e := svcEndEnv(t, st)
+
+	st.failNext("ListNonTerminalRunsBy", errSCIMCovBoom, 1)
+	if w := svcEndCall(e, e.srv.handleUpdateServiceIdentity, http.MethodPatch, "ops-bot", `{"suspended":true}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PATCH suspended with the run list failing = %d, want 500", w.Code)
+	}
+	if si, _ := st.GetServiceIdentity(context.Background(), "ops-bot"); si.SuspendedAt == nil || e.st.runState(live) != types.RunRunning {
+		t.Fatalf("after the failed kill: suspended_at %v, run %s; want suspended with the run still RUNNING", si.SuspendedAt, e.st.runState(live))
+	}
+	if w := svcEndCall(e, e.srv.handleUpdateServiceIdentity, http.MethodPatch, "ops-bot", `{"suspended":true}`); w.Code != http.StatusOK {
+		t.Fatalf("repeat PATCH suspended = %d %s", w.Code, w.Body.String())
+	}
+	svcEndWant(t, e, live, ended, bystander, killReasonServiceSuspended, "sub-secadmin")
+}
+
+// Retiring an identity already suspended, whose suspend left a run live, ends that run.
+func TestServiceIdentityRetireOfASuspendedIdentityEndsItsRuns(t *testing.T) {
+	st := newSvcEndStore(svcEndOpsBot())
+	live, ended, bystander := svcEndRuns(st)
+	e := svcEndEnv(t, st)
+
+	st.failNext("ListNonTerminalRunsBy", errSCIMCovBoom, 1)
+	if w := svcEndCall(e, e.srv.handleUpdateServiceIdentity, http.MethodPatch, "ops-bot", `{"suspended":true}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PATCH suspended with the run list failing = %d, want 500", w.Code)
+	}
+	if w := svcEndCall(e, e.srv.handleRetireServiceIdentity, http.MethodDelete, "ops-bot", ""); w.Code != http.StatusOK {
+		t.Fatalf("DELETE of the suspended identity = %d %s", w.Code, w.Body.String())
+	}
+	svcEndWant(t, e, live, ended, bystander, queueCancelServiceRetired, "sub-secadmin")
+}
