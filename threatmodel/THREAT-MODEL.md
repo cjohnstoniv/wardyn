@@ -640,6 +640,8 @@ is not the deployment described above.**
   guard `allow_all_egress` does not reach — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions)
   for the guard and its two admin-authored exceptions
 
+By default an agent starts before its proxy confirms the policy it loaded. With `WARDYN_START_AFTER_READBACK=on`, no agent task, attach or exec runs before that confirmation, on any substrate, and a start that does not confirm fails the run. The sandbox's own startup (CA install, interactive workspace preparation) still runs first.
+
 ### Sandbox writing into the control plane through the brokered approvals route
 
 - `POST /wardyn/v1/approvals` is dispatched by the proxy on EVERY run, not only `tool_approvals=hold`

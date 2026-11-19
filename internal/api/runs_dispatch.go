@@ -713,8 +713,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer stopDispatchLease()
 
 	// The sandbox's ref, then the driver's hash of the bytes its proxy was handed: a start that must
-	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go).
-	if !s.recordConfirmedSandbox(ctx, run, sb, start) {
+	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go). With
+	// WARDYN_START_AFTER_READBACK=on the run also waits here for its proxy's report (run_start_after_readback.go).
+	if !s.recordConfirmedSandbox(ctx, run, sb, start) || !s.awaitStartReadback(ctx, run, sb.Ref, start) {
 		return
 	}
 
@@ -818,6 +819,9 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 // delivery refused the run (the mark is taken back: its Mac was never asked), or the create failed.
 func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
 	resident []residentValue, kept keptDispatch, token string, done func()) (runnerExecution, runner.Sandbox, proxyStartRec, bool) {
+	if s.startAfterReadbackRefused(ctx, run, spec, done) {
+		return runnerExecution{}, runner.Sandbox{}, proxyStartRec{}, false
+	}
 	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
 	// create is still running is held against it (run_proxy_readback.go).
 	start, ok := s.beginDispatchProxyStart(ctx, run, token, done)
