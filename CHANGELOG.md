@@ -10,41 +10,27 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 [CHANGELOG-ARCHIVE.md](CHANGELOG-ARCHIVE.md).**
 
 ## [Unreleased]
-- An admin can set `WARDYN_START_AFTER_READBACK=on` so a run's agent starts only after its proxy confirms the policy it
-  loaded. Until then the run shows `STARTING` and takes no attach; a run whose proxy does not confirm fails with nothing
-  started. An interactive run with a task is refused while it is on. Off by default.
+
+### Security
+
+- A run's requests through the organisation (`via_org`), such as a `git push` through `/wardyn/gh/`, now follow the run's current network rules on every server. Before, the organisation's copy of the run's proxy was rebuilt only after a network edit, and only on the server that handled the edit. A restart that applied a new wall or `deny_all`, or an edit handled by another server, left it on the old rules until the run had sent nothing for 10 minutes. Now a new request on any server is served under the new rules at once. The server that applied the change ends the run's open requests at once, and any other server ends them within about 5 seconds.
+- On a Kubernetes runner that restarts while cut off from the server, a run's network access now ends at its scheduled end, or when its run token would lapse if that is sooner, as the runner last heard them from the server. Before, the restart gave each such run a fresh hour, so it could keep network access up to about 65 minutes past its scheduled end. The runner must be at this release: a run it already held when it restarts to upgrade gets the old fresh hour that one time.
+- Wardyn refuses an MCP call approval request that carries a field the call's scope does not have, such as a stray host (`mcp_call_scope_invalid`). Before, it dropped the field and stored the rest, so the request a person approved could lack part of what was sent for approval.
+- While the proxy cannot reach Wardyn, it no longer adds a credential that states its own expiry, such as a cloud sign-in, an Azure DevOps token or a kubectl token, after that expiry. Before, it kept adding the last value it had for up to 15 minutes past the expiry. Requests that need it are refused as credential unavailable until Wardyn answers again. A stored key, which states no expiry, is still added for up to 15 minutes past its 10-minute lease; set `WARDYN_PROXY_STALE_CREDENTIAL_MAX` (for example `0` or `5m`) on wardynd, or on `wardyn-runnerd` for runs on a runner's computer, to shorten that. Both the proxy and wardynd need this version.
+- An address written in square brackets with no port, such as `[::1]` or `[::ffff:169.254.169.254]`, could get past the check that refuses literal IP addresses such as loopback and the cloud metadata address, so a review mode could ask a person to approve it, and with a corporate upstream proxy the request was handed to that proxy. It is now refused like the same address written without brackets.
+- Azure's WireServer address `168.63.129.16` is now refused like the `169.254.169.254` metadata address, on every port including its host agent plugin port 32526: a sandbox can no longer reach it by address or by a host name that resolves to it, and on Kubernetes the proxy pod's NetworkPolicy excludes it too.
+- Resuming a paused run now checks its owner again first. If the owner was deactivated or suspended while the run was paused, or its service identity was suspended or retired or its sponsor is no longer active, the run is ended instead of resumed (`identity_deactivated` or `service_identity_inactive`). If the owner's governance profile was deleted, no longer holds them, or now denies the run's placement or macOS base, or a capability or the model provider the run was launched with was withdrawn, the run stays paused; Resume in the console (`POST /runs/{id}/resume`) says why, while an attach or SSH session that would resume it gets a plain error. Stop it and start a new run under the current rules. If the check cannot be answered, the resume answers `503` and can be tried again. Before, a resume thawed the run without these checks. A paused run's token still renews, because the proxy needs it to wait on a decision.
+- Suspending or retiring a service identity now ends its live runs, and so does a SCIM suspension of its sponsor, the way a SCIM suspension ends the person's own runs. Before, those runs kept running until someone killed them. Each ended run has a `run.kill` audit row whose reason names the event: `service_identity_suspended`, `service_identity_retired` or `service_sponsor_inactive`.
 
 ### Added
 
-- Saving an organisation component whose host serves a model on this deployment still succeeds, and the console and the API now warn the admin that the port does not count and to use a host name no model uses; before, only the person using the component was told.
-
-### Security
-
-- While the proxy cannot reach Wardyn, it no longer keeps adding a credential that has its own expiry, such as a cloud sign-in, an Azure DevOps token or a kubectl token, after that expiry. Before, it kept adding the last value it had for up to 15 minutes past the expiry. Requests that need it are refused as credential unavailable until Wardyn answers again. A stored key, which has no expiry of its own, is still added for up to 15 minutes past its 10-minute lease; set `WARDYN_PROXY_STALE_CREDENTIAL_MAX` on wardynd (for example `0` or `5m`) to shorten that. Both the proxy and wardynd need this version.
+- Saving an organisation component whose host serves a model on this deployment still succeeds, and the save now warns the admin, in the console and as `warnings[]` in the API, that the port does not count and to give the component a host name no model uses; until then, people who attach it are refused. Before, only a person using the component was told. `pkg/client`'s `ComponentSaved` gains `Warnings`.
+- An admin can set `WARDYN_START_AFTER_READBACK=on` so a run's agent starts only after its proxy confirms the policy it loaded. Until then the run shows `STARTING` and takes no attach or exec; a run whose proxy does not confirm in time fails with its sandbox stopped and no agent started. The sandbox's own startup (the CA install, an interactive run's workspace preparation) still runs first. An interactive run with a task is refused while it is on. Off by default; any other value stops wardynd at boot.
 
 ### Fixed
 
-- A command sent to a run (`wardyn exec` or an SSH exec) in the first seconds after the run reads `RUNNING` now waits, up to 15 seconds, for the run's CA files (`/tmp/wardyn/ca-bundle.pem` and `mitm-ca.pem`) instead of failing its first TLS call; if they never appear the command does not run and a sentence says why. A run with no CA does not wait. Both files are now written whole and renamed into place, so a program never reads half of one.
-
-### Security
-
-- An address written in square brackets with no port, such as `[::1]` or `[::ffff:169.254.169.254]`, could get past the check that refuses literal IP addresses such as loopback and the cloud metadata address, so a review mode could ask a person to approve it, and with a corporate upstream proxy the request was handed to that proxy. It is now refused like the same address written without brackets.
-
-### Security
-
-- A restarted run's new rules, such as a wall that denies every push, now apply at once to its requests sent through the organisation (`via_org`), such as a `git push` through `/wardyn/gh/`, including requests already in flight. Before, those requests kept the run's old rules until the run had sent none for 10 minutes, and with more than one server replica an egress edit's new rules did not reach them either.
-
-### Security
-
-- Azure's WireServer address `168.63.129.16` is now refused like the `169.254.169.254` metadata address, on every port including its host agent plugin port 32526: a sandbox can no longer reach it by address or by a host name that resolves to it, and on Kubernetes the proxy pod's NetworkPolicy excludes it too.
-
-### Security
-
-- Resuming a paused run now checks its owner again first. If the owner was deactivated or suspended while the run was paused, or its service identity was suspended or retired, the run is ended instead of resumed (`identity_deactivated` or `service_identity_inactive`). If the owner's governance profile was deleted, no longer holds them, or now denies the run's placement or macOS base, or a capability or the model provider the run was launched with was withdrawn, the run stays paused and Resume says why; stop it and start a new run under the current rules. Before, a resume thawed the run without these checks. A paused run's token still renews, because the proxy needs it to wait on a decision.
-
-### Security
-
-- Suspending or retiring a service identity now ends its live runs, and so does a SCIM suspension of its sponsor, the way a SCIM suspension ends the person's own runs. Before, those runs kept running until someone killed them. Each ended run has a `run.kill` audit row whose reason names the event: `service_identity_suspended`, `service_identity_retired` or `service_sponsor_inactive`.
+- A command sent to a run (`wardyn run exec` or an SSH exec) in the first seconds after the run reads `RUNNING` now waits, up to 15 seconds, for the run's CA files (`/tmp/wardyn/ca-bundle.pem` and `mitm-ca.pem`) instead of failing its first TLS call. If they never appear, the command does not run and a sentence says why. A run with no CA, or a macOS guest, does not wait. Both files are now written whole and renamed into place, so a program never reads half of one.
+- The People screen's copy button now gives `wardyn person invite`; it gave a command that does not exist.
 
 ## [0.10.0-rc.25] — 2026-11-18
 
