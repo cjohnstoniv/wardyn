@@ -48,13 +48,17 @@ export const KUBE_CALL_CARD = {
 } as const;
 
 // HC-1 (rc.18 mock verdicts): the held host-rule request. Approving covers the method and path on the host for the
-// rest of the run, so the card says that, not "once".
+// rest of the run, so the card says that, not "once". A row whose proxy accepts once (requested_scope.accepts_once)
+// reads the _EITHER lines, and under a deciders rule whose max_scope is below run, the _ONE lines.
 export const HOST_CALL_CARD = {
   TITLE: "Approve requests to one host",
   FIELD_HOST: "Host",
   FIELD_METHOD: "Method",
   FIELD_PATH: "Path",
   WHAT: (method: string, path: string, host: string) => `allowing ${method} requests to ${path} on ${host} for the rest of this run.`,
+  WHAT_EITHER: (method: string, path: string, host: string) =>
+    `allowing ${method} requests to ${path} on ${host}, for one request or for the rest of this run.`,
+  WHAT_ONE: (method: string, path: string, host: string) => `allowing one ${method} request to ${path} on ${host}.`,
   BLAST: "This covers any query or body sent with this host, method and path. Other policy rules still apply.",
   APPROVE: "Approve for this run",
   // Offered only on a row whose proxy accepts once (requested_scope.accepts_once).
@@ -65,5 +69,8 @@ export const HOST_CALL_CARD = {
   CAP_NOTE: "This unit's deciders rule allows one request at most, so Approve for this run is off and Deny refuses only the waiting request.",
   HELD_NOTE: "If the request is still waiting, approving lets it proceed when all other rules allow it.",
   HELD_EXPIRED: "No longer waiting. This approval covers retries with the same host, method and path for the rest of the run. Other policy rules still apply.",
+  HELD_EXPIRED_EITHER:
+    "No longer waiting. Approve for this run covers retries with the same host, method and path for the rest of the run; Just this request covers the next one only. Other policy rules still apply.",
+  HELD_EXPIRED_ONE: "No longer waiting. Approving covers only the next request with the same host, method and path. Other policy rules still apply.",
   LIST_TITLE: (method: string, path: string, host: string) => `${method} ${path} on ${host}`,
 } as const;
