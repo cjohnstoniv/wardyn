@@ -37,9 +37,12 @@ type ComponentRequirement struct {
 }
 
 // ComponentSaved answers a component save: the stored row, and what it still needs.
+// Warnings is advisory text for the saver and never refuses a save: today, an
+// organisation component with a host that serves a model.
 type ComponentSaved struct {
 	Component
 	Requirements []ComponentRequirement `json:"requirements"`
+	Warnings     []string               `json:"warnings,omitempty"`
 }
 
 // ComponentSecretView is one secret an organisation component carries, as a

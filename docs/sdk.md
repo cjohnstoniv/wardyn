@@ -519,6 +519,7 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
   - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
   - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
+  - `warnings[]` appears only when there is something to say, and never refuses a save. An organisation component with a host that serves a model still saves, and warns that the port does not count.
 - `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
 - `UpdateMyComponent` and `PutComponent` take `expected_version`, the version the caller read: the row is replaced only at that version, else `409` `component_version_conflict`. With it, `PutComponent` never creates; a deleted id is `404`.
 - A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 16.

@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Saving an organisation component whose host serves a model on this deployment still succeeds, and the console and the API now warn the admin that the port does not count and to use a host name no model uses; before, only the person using the component was told.
+
 ## [0.10.0-rc.25] — 2026-11-18
 
 ### Security

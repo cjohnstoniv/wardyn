@@ -21,6 +21,7 @@
 ## Two hostnames, not one
 
 - A component may not reach a host that serves a model on the deployment. Wardyn refuses it as `component_host_serves_model` ([`internal/api/components_run.go`](../../internal/api/components_run.go)). The port does not count: the same host on another port is refused too.
+- Saving an organisation component with such a host still succeeds, and the save answers with a warning that says the same.
 - An MCP gateway on the model route's host could therefore not be attached as a component.
 - Give the model route and MCP federation a hostname each. They can share one gateway pod and one certificate that names both.
 
