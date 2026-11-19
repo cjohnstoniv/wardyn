@@ -789,13 +789,13 @@ func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUn
 	ov := overlayOf(p)
 	// Every refusal of the author's own overlay is a 400, an empty meet included (a method the base
 	// excludes): 409 governance_overlay_unsatisfiable is for a BASE change that strands a descendant.
-	if err := composer.ValidateOverlay(base, ov); err != nil {
+	if err := composer.ValidateUnitOverlay(base, ov); err != nil {
 		return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "%v", err)
 	}
 	// What the overlay adds (an llm_inspection mode, a tool rule, a UI app) gets the validation a
 	// ceiling gets, but only when the overlay is what made it fail: a deployment default this
 	// validator dislikes is not the author's to fix.
-	if eff, _, err := composer.ApplyOverlay(base, ov); err == nil {
+	if eff, _, err := composer.ApplyUnitOverlay(base, ov); err == nil {
 		// A maximum where the base authored no size is the size, so the member cap is compared, not
 		// the maximum (memberCapOf).
 		if raises := memberCapRaises(s.memberCapOf(authoredAfter(baseAuthored, p, eff), eff.Limits, eff.Ceiling.Resources),

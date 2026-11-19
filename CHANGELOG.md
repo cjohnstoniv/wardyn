@@ -33,6 +33,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A command sent to a run (`wardyn run exec` or an SSH exec) in the first seconds after the run reads `RUNNING` now waits, up to 15 seconds, for the run's CA files (`/tmp/wardyn/ca-bundle.pem` and `mitm-ca.pem`) instead of failing its first TLS call. If they never appear, the command does not run and a sentence says why. A run with no CA, or a macOS guest, does not wait. Both files are now written whole and renamed into place, so a program never reads half of one.
 - The People screen's copy button now gives `wardyn person invite`; it gave a command that does not exist.
+- A governance unit whose base allows all egress can now lock itself to its own list by setting `allow_all_egress: false` with `allowed_domains`, including hosts the base's own `allowed_domains` does not name. Before, each such host was refused (`governance_overlay_invalid`), though the base already reached it. A host on a port other than 80 or 443, or an IP address, still needs the base's own entry, and the base's `denied_domains` still apply.
 
 ### Before you upgrade
 
