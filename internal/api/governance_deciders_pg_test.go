@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -636,5 +637,36 @@ func TestDecidersBoundaryLockHeldRefusedAtApproval(t *testing.T) {
 	}
 	if e.changeState(ch.ID) != types.GovernanceChangePending {
 		t.Errorf("change is %s after the refusal, want still pending", e.changeState(ch.ID))
+	}
+}
+
+// TestDecidersSaveWarnsWhenHostHoldsOutOfReach: an egress_domain rule whose max_scope is below run saves
+// with 200 and a warning, since its deciders cannot answer a host rule hold (decided for the run); a rule
+// at run, or one that does not name egress_domain, saves with none.
+func TestDecidersSaveWarnsWhenHostHoldsOutOfReach(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	save := func(rule map[string]any) types.UnitDeciders {
+		t.Helper()
+		w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(rule))
+		var saved types.UnitDeciders
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil {
+			t.Fatalf("saving %v = %d %s, want 200", rule, w.Code, w.Body)
+		}
+		return saved
+	}
+	once := map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"owner", "unit_admins"}, "max_scope": "once"}
+	want := fmt.Sprintf(decidersHostHoldWarning, "once")
+	if got := save(once); len(got.Warnings) != 1 || got.Warnings[0] != want {
+		t.Errorf("a once egress_domain rule warnings = %q, want [%q]", got.Warnings, want)
+	}
+	if got := e.storedDeciders(e.a); len(got) != 1 || got[0].MaxScope != types.ScopeOnce {
+		t.Errorf("the warned rule stored %v, want it saved unchanged", got)
+	}
+	if got := save(egressOwnerRule()).Warnings; len(got) != 0 {
+		t.Errorf("a run egress_domain rule warnings = %q, want none", got)
+	}
+	mcpOnce := map[string]any{"kinds": []string{"mcp_call"}, "who": []string{"unit_admins"}, "max_scope": "once"}
+	if got := save(mcpOnce).Warnings; len(got) != 0 {
+		t.Errorf("a rule not naming egress_domain warnings = %q, want none", got)
 	}
 }

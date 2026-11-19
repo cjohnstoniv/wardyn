@@ -45,6 +45,8 @@ export interface UnitDeciders {
   rules: DeciderRule[];
   updated_by?: string;
   updated_at?: string;
+  /** Advisory text a save still tells the saver; the save is never refused for it. */
+  warnings?: string[];
 }
 
 /** governanceDecidersView: one unit's entry in GET /governance. `from` maps each kind to the nearest unit with a rule;

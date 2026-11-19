@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -113,6 +114,7 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, saved)
 		return
 	}
+	saved.Warnings = decidersSaveWarnings(rules)
 	data := unitDecidersAuditData(unit, rules, principalFromRequest(r), "")
 	data["unit_scope"] = s.auditUnitScope(ctx, unit, true)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.deciders.set",
@@ -121,6 +123,25 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		s.recordGovernanceBypass(r, govKindUnitDeciders, unit.String(), "success", nil)
 	}
 	writeJSON(w, http.StatusOK, saved)
+}
+
+// decidersHostHoldWarning is the save warning for an egress_domain rule whose max_scope is below run.
+const decidersHostHoldWarning = "Host rule holds are egress_domain approvals decided for the rest of the run, " +
+	"so with max_scope %q the deciders listed for egress_domain cannot approve them and only security can: " +
+	"raise max_scope to run for egress_domain, or expect those approvals to wait for security"
+
+// decidersSaveWarnings is what a direct deciders save still tells its admin; the save stays 200 and the
+// decision rule is unchanged. A host rule hold is an egress_domain approval (deciderKindOf) that is decided
+// for the rest of the run (hostCallDecisionRule), so a rule naming egress_domain that lists deciders and caps
+// max_scope below run leaves them unable to answer one (decision_scope_above_rule). No other kind needs more
+// than once: an MCP call, a kubectl write, a download and an Azure DevOps escalation are decided once, and a
+// credential decision with no scope passes any cap.
+func decidersSaveWarnings(rules []types.DeciderRule) []string {
+	rule, ok := types.DeciderRuleFor(rules, types.DeciderKindEgressDomain)
+	if !ok || len(rule.Who) == 0 || rule.MaxScope == "" || scopeRank(rule.MaxScope) >= scopeRank(types.ScopeRun) {
+		return nil
+	}
+	return []string{fmt.Sprintf(decidersHostHoldWarning, rule.MaxScope)}
 }
 
 // writeDecidersError answers a failed write and reports true; false for nil.

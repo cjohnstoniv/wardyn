@@ -162,8 +162,9 @@ export function UnitDeciders({
     setRefusal(null);
     setHeld(false);
     try {
-      await putUnitDeciders(profile.id, draft);
+      const saved = await putUnitDeciders(profile.id, draft);
       toast.success(DECIDERS.SAVED);
+      for (const warning of saved.warnings ?? []) toast.warning(warning);
       // The reload puts the stored rules back in the draft: the section stays read-only until it has landed.
       await onChanged();
     } catch (e) {

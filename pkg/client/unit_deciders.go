@@ -20,7 +20,8 @@ type UnitDeciders = types.UnitDeciders
 
 // PutUnitDeciders replaces the deciders rules of the unit unitID; an empty list clears them. PUT
 // /api/v1/governance/units/{id}/deciders. A write the server holds for a second approver (always, when
-// the caller is a unit admin) comes back as the pending change and zero rules.
+// the caller is a unit admin) comes back as the pending change and zero rules. A saved write's Warnings
+// are advisory: today, an egress_domain rule whose max_scope is below run, so host rule holds wait for security.
 func (c *Client) PutUnitDeciders(ctx context.Context, unitID uuid.UUID, rules []DeciderRule) (UnitDeciders, *GovernanceChange, error) {
 	return c.putUnitDeciders(ctx, unitID, rules, "")
 }
