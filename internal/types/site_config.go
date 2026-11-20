@@ -29,6 +29,10 @@ type SiteConfig struct {
 	// Runners defaults off. PUT /site-config retains the stored value; the
 	// dedicated audited runner enablement operation owns changes.
 	Runners *RunnerSettings `json:"runners,omitempty"`
+	// Assistant is the organisation's assistant block: which purposes are on, which model providers may
+	// serve them, and what is never sent. PUT /site-config retains the stored value; PUT
+	// /assistant/settings owns changes. Absent means every purpose is off.
+	Assistant *AssistantSettings `json:"assistant,omitempty"`
 	// UpstreamProxySecretRef names a secret holding the corporate upstream
 	// proxy URL, or "" for none. UpstreamProxyURL wins if both are set (not
 	// rejected, so an operator can migrate between the two).

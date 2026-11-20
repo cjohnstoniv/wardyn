@@ -886,6 +886,14 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled` or `require_managed_device`, each true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` or `runners.require_managed_device` with `PUT /runners/settings`. |
+| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. |
+| `assistant_no_provider` | `GET /me/assistant`: no model provider is marked to serve this purpose. |
+| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models` rules out every marked provider and model. |
+| `assistant_not_connected` | `GET /me/assistant`: you have no credential for a marked provider yet. |
+| `assistant_settings_invalid` | `PUT /assistant/settings`: `400` for an unknown provider, a bad model list or an unknown record kind, `428` without `If-Match`, `412` when it no longer matches. `GET /me/assistant`: `purpose` is not `compose` or `review`. An approval refuses a block the providers no longer allow. |
+| `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |
+| `assistant_provider_defers_inspection` | `PUT /assistant/settings`: a marked provider leaves prompt inspection to its gateway. |
+| `assistant_settings_via_own_route` | Change `assistant` with `PUT /assistant/settings`, not `PUT /site-config`. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |

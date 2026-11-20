@@ -678,7 +678,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
-	if !carryRunners(w, &cfg, existing) {
+	if !carryRunners(w, &cfg, existing) || !carryAssistant(w, &cfg, existing) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)

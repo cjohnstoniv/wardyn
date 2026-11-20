@@ -983,3 +983,15 @@ const (
 	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
 	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
 )
+
+// The assistant's settings and availability (assistant_settings.go, assistant_availability.go).
+const (
+	reasonAssistantOff                 = "assistant_off"                   // the purpose is turned off for the organisation
+	reasonAssistantNoProvider          = "assistant_no_provider"           // no provider is marked to serve the purpose
+	reasonAssistantUnitDenies          = "assistant_unit_denies"           // the person's governance profile rules out every marked provider or model
+	reasonAssistantNotConnected        = "assistant_not_connected"         // the person has no credential for a marked provider
+	reasonAssistantSettingsInvalid     = "assistant_settings_invalid"      // the block, its If-Match or a purpose is refused
+	reasonAssistantCannotServe         = "assistant_provider_cannot_serve" // a marked provider does not pair with Claude Code, or is a Bedrock kind
+	reasonAssistantDefersInspection    = "assistant_provider_defers_inspection"
+	reasonAssistantSettingsViaOwnRoute = "assistant_settings_via_own_route" // a changed assistant block was named inline instead of through PUT /assistant/settings
+)
