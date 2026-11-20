@@ -198,7 +198,9 @@ One mode places a Git credential inside the sandbox:
 - Not masked: SSH exec, SFTP and direct-tcpip channels ([`internal/api/sshgateway_channels.go`](../internal/api/sshgateway_channels.go)); see [SSH.md](SSH.md#recording).
 - Not masked: casts written through the optional recording mount set by `WARDYN_RECORDING_MOUNT` ([ENV.md](ENV.md)).
 - Masking covers output Wardyn relays or stores. It does not cover what the workload sends to a destination its policy allows.
-- Deleting a secret from Wardyn stops masking it; revoke it at its provider first. Deleting the stored secret does not revoke a value already delivered to a run or remove that run's masking copies. Revoke or rotate the value at its issuer when needed.
+- Deleting a stored secret means a run that starts later is not given it, and so does not mask it ([`internal/api/secrets.go#Server.deleteSecretFrom`](../internal/api/secrets.go)).
+- A run that already holds the value keeps it, and keeps the masking copies made at dispatch, until the run has been over for an hour and the sweep drops them ([`internal/api/mask_manifest.go#Server.maskDispatchValue`](../internal/api/mask_manifest.go), [`internal/api/run_secret_sweep.go#Server.SweepRunSecrets`](../internal/api/run_secret_sweep.go)).
+- Deleting the stored secret does not revoke a value already delivered to a run. Revoke or rotate the value at its issuer when needed.
 
 > [!WARNING]
 > **A credential delivered inside can be read by anything running in that sandbox.** That includes code the workload downloads and runs.

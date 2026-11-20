@@ -1234,9 +1234,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 
 **It narrows; it never widens.**
 
-- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
-- The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
-- That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
+- Routing a run to the gated lane never loosens it: a routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
+- An explicit `allow` runs that tool without asking, so a rule that allows too much removes the human decision for that tool.
+- Tools no rule names on a supervised run keep their hold default unless the policy sets a different default.
+- A member's `inline_policy` may narrow the operator's rules, never widen them: a member's rules cannot weaken the operator's ceiling.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
 - So a tool the operator denies stays denied in a run whose policy never mentioned it.
 
@@ -1665,9 +1666,9 @@ So an entry a pattern matches is judged one of two ways:
 - Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
-  - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,
+  - on a connection whose code host cannot be read (every host but github.com and Azure DevOps), a file the push does not carry is refused when Wardyn cannot establish its size;
   - so the push is refused whatever the sizes;
-  - set it to `0` on that lane, or push through a GitHub lane.
+  - use a supported connection or change the size rule: set it to `0` on that lane, or push through a GitHub or Azure DevOps lane.
 - A complete clone does not help: git never sends objects the remote already holds.
 - A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it.
 - A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`).
