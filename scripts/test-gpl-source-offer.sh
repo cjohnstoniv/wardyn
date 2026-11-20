@@ -113,13 +113,16 @@ offer() { (cd "$M" && ./scripts/gpl-source-offer.sh sbom v0.0.2 >/dev/null 2>&1)
 section() { awk -v h="## \`ghcr.io/cjohnstoniv/$2:v0.0.2\`" '/^## /{f = ($0 == h)} f' <<<"$1"; }
 
 # 6a. no recipe (Dockerfiles absent) => unchanged wording, and the preamble is
-#     byte-for-byte the committed offer's, so prior-release offers stay as they are.
+#     byte-for-byte the pinned no-modification preamble (the one every offer
+#     before the first repack carried). It is pinned in a fixture, not read from
+#     the live offer, because the live offer gains the modified preamble once a
+#     release ships a repacked package.
 matrix wardynd > "$M/.github/workflows/release.yml"; echo '{"source":{"type":"image","metadata":{}},"artifacts":[]}' > "$M/sbom/04-sbom-wardynd-v0.0.2-amd64.json"
 out="$(offer)" || fail "the generator must succeed with no repacked package"
 case "$out" in *"None of these packages are modified by Wardyn."*) ;; *) fail "with no repacked package the offer must keep its 'None of these packages are modified' sentence" ;; esac
 case "$out" in *"Modified by Wardyn"*) fail "with no repacked package the offer must not carry a modified-package section" ;; esac
-cmp -s <(awk '/^## /{exit} {print}' <<<"$out") <(awk '/^## /{exit} {print}' "$ROOT/deploy/images/THIRD-PARTY-GPL.md") \
-  || fail "the no-modification preamble must stay byte-identical to the committed offer's"
+cmp -s <(awk '/^## /{exit} {print}' <<<"$out") "$ROOT/scripts/test-gpl-source-offer.d/preamble-unmodified.md" \
+  || fail "the no-modification preamble must stay byte-identical to scripts/test-gpl-source-offer.d/preamble-unmodified.md"
 echo "ok  no repacked package: wording and preamble unchanged"
 
 # 6b. the real base and codex-cli Dockerfiles carry the repack; the SBOMs predate it.
