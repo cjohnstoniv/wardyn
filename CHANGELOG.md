@@ -63,6 +63,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
+- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, as listing already did. Before, a SCIM token could read, change, suspend or remove such a user if it knew the user's id.
+
 ### Before you upgrade
 
 - Three old inputs are refused. A site-config body that still has `artifact_overrides` answers 400 `site_config_request_invalid`, and `wardyn site-config set` refuses such a file before sending it; rewrite it as `egress_redirects`, or save the output of `wardyn site-config get`. `wardyn audit --run <id>` is refused; write `wardyn audit <id>`. `POST /workspaces/{id}/record` answers 400 `invalid_request_body` to a body with `task_key`, which `wardyn record task` and the Go SDK's `RecordWorkspaceTask` of 0.10.0 still send: upgrade them together with the server, or send `{"name": ...}`.

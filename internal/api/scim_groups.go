@@ -138,6 +138,25 @@ func memberIdentities(ms []scim.Member) []uuid.UUID {
 	return out
 }
 
+// ownMembers keeps the identity ids that name a user of this SCIM endpoint's issuer and tenant. An id
+// of another issuer or tenant is treated as an id nobody holds: dropped, with no error.
+func (s *Server) ownMembers(ctx context.Context, st scimStore, ids []uuid.UUID) ([]uuid.UUID, error) {
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		ident, err := st.GetIdentity(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if s.scimOwns(ident) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.scimStore(w)
 	if !ok {
@@ -160,7 +179,10 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil {
-		err = st.AddScimGroupMembers(ctx, g.ID, memberIdentities(in.Members), now)
+		var own []uuid.UUID
+		if own, err = s.ownMembers(ctx, st, memberIdentities(in.Members)); err == nil {
+			err = st.AddScimGroupMembers(ctx, g.ID, own, now)
+		}
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)
@@ -207,16 +229,23 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		members, _ := op.Value.([]scim.Member)
 		switch op.Kind {
 		case scim.OpAdd:
-			if err := st.AddScimGroupMembers(ctx, g.ID, memberIdentities(members), s.cfg.Now().UTC()); err != nil {
+			own, err := s.ownMembers(ctx, st, memberIdentities(members))
+			if err == nil {
+				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
+			}
+			if err != nil {
 				errs = append(errs, err)
 			}
 		case scim.OpRemove:
-			ids := memberIdentities(members)
+			var ids []uuid.UUID
+			var err error
 			if members == nil {
-				var err error
-				if ids, err = st.GroupRemovalIdentities(ctx, g.ID); err != nil {
-					errs = append(errs, err)
-				}
+				ids, err = st.GroupRemovalIdentities(ctx, g.ID)
+			} else {
+				ids, err = s.ownMembers(ctx, st, memberIdentities(members))
+			}
+			if err != nil {
+				errs = append(errs, err)
 			}
 			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot))
 		}
