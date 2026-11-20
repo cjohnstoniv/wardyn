@@ -15,12 +15,13 @@ import (
 )
 
 // replayHost is one host the counted runs reached: how many runs, what the host list decided for it
-// today, what the draft decides, and how many of those runs a different answer would change.
+// today, what the draft decides, and how many of those runs a different answer would change. It is built
+// after the per-attempt comparison, so one host reached on two ports can be "mixed" under the draft.
 type replayHost struct {
 	Host        string
 	Runs        int
 	Today       string // "allow", "deny" or "mixed"
-	Under       string // "allow" or "deny"
+	Under       string // "allow", "deny", "mixed" across ports, or "unknown" when no attempt at the host had a recorded port
 	RunsChanged int
 }
 
@@ -34,41 +35,43 @@ type replayRun struct {
 }
 
 // replayResult is what the counts answer. Runs is for a person who may read the runs; the model never gets it.
+// RunsInScope and RunsCounted are the store's: both leave out the excluded (assistant) runs. NotComparable
+// is the runs with a host-list decision whose audit row recorded no port (older rows); the draft's answer
+// for such an attempt is unknown, so it is never counted as refused, allowed or unchanged.
 type replayResult struct {
-	RunsInScope int
-	RunsCounted int
-	Truncated   bool
-	WouldRefuse int
-	WouldAllow  int
-	Hosts       []replayHost
-	Runs        []replayRun
+	RunsInScope   int
+	RunsCounted   int
+	Truncated     bool
+	WouldRefuse   int
+	WouldAllow    int
+	NotComparable int
+	Hosts         []replayHost
+	Runs          []replayRun
 }
 
-// replayCounts counts, for the runs the store read, how many would now be refused at a host they reached
-// and how many refused today would now be allowed. Only the three host-list rule sources count. Rows of a
-// run for which excluded is true are dropped first and RunsCounted shrinks by those runs (only a run that
-// has rows can be named, so an excluded run with none stays in RunsCounted). allowedUnder is the draft's
-// whole host verdict; this function never reads a policy.
-func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allowedUnder func(host string) bool, excluded func(runID uuid.UUID) bool) replayResult {
+// replayCounts counts, for the runs the store read, how many would now be refused at a host and port they
+// reached and how many refused today would now be allowed. Only the three host-list rule sources count.
+// The store has already left the excluded runs out of the rows and of both totals, so nothing is dropped
+// here. allowedUnder is the draft's whole host verdict for one attempt, host and port, because the proxy
+// matches a port-qualified allow or deny entry by both (TOOLS builds it from the builtin evaluator's
+// EvaluateHost); this function never reads a policy. A row with Port 0 has no recorded port and is not
+// compared. Display hosts are aggregated only after every attempt was compared.
+func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allowedUnder func(host string, port int) bool) replayResult {
 	res := replayResult{RunsInScope: totals.RunsInScope, RunsCounted: totals.RunsCounted, Truncated: totals.Truncated}
 	type hostAcc struct {
-		runs        map[uuid.UUID]bool
-		allow, deny bool
-		changed     map[uuid.UUID]bool
+		runs                  map[uuid.UUID]bool
+		allow, deny           bool
+		underAllow, underDeny bool
+		changed               map[uuid.UUID]bool
 	}
 	type runAcc struct {
-		run          replayRun
-		refuse, open bool
-		hosts        map[string]bool
+		run                         replayRun
+		refuse, open, notComparable bool
+		hosts                       map[string]bool
 	}
 	hosts := map[string]*hostAcc{}
 	runs := map[uuid.UUID]*runAcc{}
-	dropped := map[uuid.UUID]bool{}
 	for _, r := range rows {
-		if excluded != nil && excluded(r.RunID) {
-			dropped[r.RunID] = true
-			continue
-		}
 		var allowedToday bool
 		switch r.RuleSource {
 		case egress.RuleSourcePolicyAllowed:
@@ -93,7 +96,17 @@ func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allow
 			ra = &runAcc{run: replayRun{RunID: r.RunID, Owner: r.Owner, CreatedAt: r.CreatedAt}, hosts: map[string]bool{}}
 			runs[r.RunID] = ra
 		}
-		if allowedUnder(r.Host) != allowedToday {
+		if r.Port <= 0 {
+			ra.notComparable = true
+			continue
+		}
+		allowedNow := allowedUnder(r.Host, r.Port)
+		if allowedNow {
+			h.underAllow = true
+		} else {
+			h.underDeny = true
+		}
+		if allowedNow != allowedToday {
 			h.changed[r.RunID] = true
 			ra.hosts[r.Host] = true
 			if allowedToday {
@@ -103,7 +116,6 @@ func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allow
 			}
 		}
 	}
-	res.RunsCounted = max(0, res.RunsCounted-len(dropped))
 	for host, h := range hosts {
 		today := "mixed"
 		switch {
@@ -112,14 +124,22 @@ func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allow
 		case h.deny && !h.allow:
 			today = "deny"
 		}
-		under := "deny"
-		if allowedUnder(host) {
+		under := "unknown"
+		switch {
+		case h.underAllow && h.underDeny:
+			under = "mixed"
+		case h.underAllow:
 			under = "allow"
+		case h.underDeny:
+			under = "deny"
 		}
 		res.Hosts = append(res.Hosts, replayHost{Host: host, Runs: len(h.runs), Today: today, Under: under, RunsChanged: len(h.changed)})
 	}
 	slices.SortFunc(res.Hosts, func(a, b replayHost) int { return cmp.Compare(a.Host, b.Host) })
 	for _, ra := range runs {
+		if ra.notComparable {
+			res.NotComparable++
+		}
 		if ra.refuse {
 			res.WouldRefuse++
 		}
