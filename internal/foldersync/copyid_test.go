@@ -119,7 +119,7 @@ func TestPass_AFailedCopyWhoseFileIDChangesLeavesNoUnnamedPartial(t *testing.T) 
 			if tc.after == nil && (!errors.Is(err, os.ErrNotExist) || len(temps) != 0 || reason == "") {
 				t.Errorf("laptop %s: %v, temps %v, refusal %q: want the partial copy removed, no temp and %s refused", name, err, temps, reason, name)
 			}
-			if tc.after != nil && (err != nil || len(temps) != 0 || !strings.Contains(reason, "its partial copy is left at "+name)) {
+			if tc.after != nil && (err != nil || len(temps) != 0 || !strings.Contains(reason, "the file is kept at "+name)) {
 				t.Errorf("laptop %s: %v, temps %v, refusal %q: want the partial copy kept, no temp and the refusal naming it", name, err, temps, reason)
 			}
 		})
@@ -149,7 +149,7 @@ func TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved(t *testing.T) {
 	reason := refusedFor(pass(t, sy), name)
 	temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
 	if got := getSyncFile(t, filepath.Join(root, name)); got != "from the sandbox and an edit" || len(temps) != 0 ||
-		!strings.Contains(reason, "its partial copy is left at "+name) {
+		!strings.Contains(reason, "the file is kept at "+name) {
 		t.Errorf("laptop %s = %q, temps %v, refusal %q: want the written-into copy kept and the refusal naming it", name, got, temps, reason)
 	}
 }
@@ -164,7 +164,7 @@ func TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy(t *testing.T) {
 	reason := refusedFor(pass(t, sy), name)
 	kept, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
 	if _, err := os.Lstat(filepath.Join(root, name)); err != nil || len(kept) != 1 || getSyncFile(t, kept[0]) != "laptop save" ||
-		!strings.Contains(reason, "it is kept as "+filepath.Base(kept[0])) || !strings.Contains(reason, "its partial copy is left at "+name) {
+		!strings.Contains(reason, "it is kept as "+filepath.Base(kept[0])) || !strings.Contains(reason, "the file is kept at "+name) {
 		t.Errorf("laptop %s: %v, kept %v, refusal %q: want the save kept and both files named", name, err, kept, reason)
 	}
 }
