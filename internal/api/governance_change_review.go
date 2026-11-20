@@ -301,17 +301,18 @@ func restrictionHeldReview(create bool, cur types.Restriction, body types.Restri
 // sites use, called with no request and no proposal. after is the write's body as its route takes it
 // (nil for a delete, which no check judges); before, when set, stands in for the stored row (a profile
 // as a types.GovernanceUnit, a restriction as a types.Restriction), and when nil the stored row is read.
-// unitAdmin is whether the writer is a unit admin, whose rename is also held for a legacy shift
-// (unitWriteApplies); every other read of the caller is ctx's, as the write's is.
+// caller says who writes, the parts of the request a hold reads: a unit admin's rename is also held for
+// a legacy shift (unitWriteApplies), and a super admin's body may set a mount's host path. The envelope
+// proof reads ctx's caller, as the write's does.
 //
 // A nil review with no error is a write that applies without approval. A profile or a restriction is
 // judged in full; a pin answers the review its held move stores; a request kind stores none; every
 // other kind is not_checked. The write's refusals are not repeated here, except that a body its route
 // would refuse is an error.
-func (s *Server) reviewFor(ctx context.Context, kind, targetKey string, before, after json.RawMessage, unitAdmin bool) (*changeReview, error) {
+func (s *Server) reviewFor(ctx context.Context, kind, targetKey string, before, after json.RawMessage, caller reviewCaller) (*changeReview, error) {
 	switch kind {
 	case govKindUnit:
-		return s.unitReviewFor(ctx, targetKey, before, after, unitAdmin)
+		return s.unitReviewFor(ctx, targetKey, before, after, caller)
 	case govKindRestriction:
 		return s.restrictionReviewFor(ctx, targetKey, before, after)
 	case govKindWorkspaceOwningUnit, govKindComponentOwningUnit:
@@ -322,10 +323,15 @@ func (s *Server) reviewFor(ctx context.Context, kind, targetKey string, before, 
 	return notCheckedReview(), nil
 }
 
+// reviewCaller is who writes, for reviewFor: a unit admin, and a super admin (isOperator).
+type reviewCaller struct {
+	unitAdmin, super bool
+}
+
 // unitReviewFor is reviewFor for a profile: the row built as writeGovernanceUnit builds it, judged by
 // unitWriteVerdict and graded by unitReviewRisk, as holdUnitWrite stores it. A unit admin's new unit
 // binds nobody and applies directly.
-func (s *Server) unitReviewFor(ctx context.Context, targetKey string, before, after json.RawMessage, unitAdmin bool) (*changeReview, error) {
+func (s *Server) unitReviewFor(ctx context.Context, targetKey string, before, after json.RawMessage, caller reviewCaller) (*changeReview, error) {
 	id, err := uuid.Parse(targetKey)
 	if err != nil {
 		return nil, fmt.Errorf("target key %q is not a profile id", targetKey)
@@ -346,7 +352,7 @@ func (s *Server) unitReviewFor(ctx context.Context, targetKey string, before, af
 	if after == nil {
 		return notCheckedReview(), nil
 	}
-	if unitAdmin && !exists {
+	if caller.unitAdmin && !exists {
 		return nil, nil
 	}
 	req, msg := unitRequestFromPayload(after)
@@ -361,12 +367,12 @@ func (s *Server) unitReviewFor(ctx context.Context, targetKey string, before, af
 	if err != nil {
 		return nil, err
 	}
-	p, res, _, err := s.buildGovernanceUnit("", s.isOperator(ctx), id, req, all, b, limit)
+	p, res, _, err := s.buildGovernanceUnit("", caller.super, id, req, all, b, limit)
 	if err != nil {
 		return nil, err
 	}
 	exempt, review := s.unitWriteVerdict(ctx, all, p, res)
-	if exempt && unitAdmin && cur.Name != p.Name {
+	if exempt && caller.unitAdmin && cur.Name != p.Name {
 		shift, err := s.renameShift(ctx, id, p.Name)
 		if err != nil {
 			return nil, err

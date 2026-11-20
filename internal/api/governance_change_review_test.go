@@ -320,7 +320,7 @@ func TestReviewForIsTheHoldSitesReview(t *testing.T) {
 	s, _ := govCovServer(t, st)
 	ch := govCovHoldAnswer(t, doSSO(t, s, http.MethodPut, "/api/v1/governance/units/"+govCovPID.String(), super, widen), st)
 	stored := govCovDiff(t, ch).Review
-	got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), nil, json.RawMessage(widen), false)
+	got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), nil, json.RawMessage(widen), reviewCaller{super: true})
 	if err != nil || stored == nil || got == nil {
 		t.Fatalf("reviewFor = %+v, %v; stored %+v", got, err, stored)
 	}
@@ -333,23 +333,23 @@ func TestReviewForIsTheHoldSitesReview(t *testing.T) {
 
 	// before stands in for the stored row: over a wider one the same write narrows and applies directly.
 	wide := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")
-	if got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), mustJSON(wide), json.RawMessage(widen), false); err != nil || got != nil {
+	if got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), mustJSON(wide), json.RawMessage(widen), reviewCaller{super: true}); err != nil || got != nil {
 		t.Errorf("the same write over a wider before = %+v, %v; want none", got, err)
 	}
 	// A create is not_checked with no risk before; a unit admin's create applies directly; a delete is not_checked.
 	fresh := uuid.MustParse("dddddddd-0000-0000-0000-0000000000ad").String()
-	if got, err := s.reviewFor(superCtx, govKindUnit, fresh, nil, json.RawMessage(govCovProfileBody("fresh", "pypi.org")), false); err != nil ||
+	if got, err := s.reviewFor(superCtx, govKindUnit, fresh, nil, json.RawMessage(govCovProfileBody("fresh", "pypi.org")), reviewCaller{super: true}); err != nil ||
 		got == nil || got.Verdict != verdictNotChecked || got.Risk == nil || got.Risk.Before != nil {
 		t.Errorf("a create = %+v, %v; want not_checked with risk after only", got, err)
 	}
-	if got, err := s.reviewFor(superCtx, govKindUnit, fresh, nil, json.RawMessage(govCovProfileBody("fresh", "pypi.org")), true); err != nil || got != nil {
+	if got, err := s.reviewFor(superCtx, govKindUnit, fresh, nil, json.RawMessage(govCovProfileBody("fresh", "pypi.org")), reviewCaller{unitAdmin: true}); err != nil || got != nil {
 		t.Errorf("a unit admin's create = %+v, %v; want none", got, err)
 	}
-	if got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), nil, nil, false); err != nil || got == nil || got.Verdict != verdictNotChecked {
+	if got, err := s.reviewFor(superCtx, govKindUnit, govCovPID.String(), nil, nil, reviewCaller{super: true}); err != nil || got == nil || got.Verdict != verdictNotChecked {
 		t.Errorf("a delete = %+v, %v; want not_checked", got, err)
 	}
 	for _, bad := range []struct{ key, body string }{{"not-an-id", widen}, {govCovPID.String(), `{"name":"p","nope":1}`}} {
-		if _, err := s.reviewFor(superCtx, govKindUnit, bad.key, nil, json.RawMessage(bad.body), false); err == nil {
+		if _, err := s.reviewFor(superCtx, govKindUnit, bad.key, nil, json.RawMessage(bad.body), reviewCaller{super: true}); err == nil {
 			t.Errorf("reviewFor(%q, %s) answered no error", bad.key, bad.body)
 		}
 	}
@@ -357,7 +357,7 @@ func TestReviewForIsTheHoldSitesReview(t *testing.T) {
 	// A restriction, its before given; the other kinds.
 	oldR := types.Restriction{Spec: types.RestrictionSpec{DeniedDomains: strs("a.example")}, Members: []types.RestrictionMember{userMember("sub-1")}}
 	looser := types.RestrictionWrite{Name: "r", Members: oldR.Members}
-	if got, err := s.reviewFor(superCtx, govKindRestriction, uuid.NewString(), mustJSON(oldR), mustJSON(looser), false); err != nil ||
+	if got, err := s.reviewFor(superCtx, govKindRestriction, uuid.NewString(), mustJSON(oldR), mustJSON(looser), reviewCaller{super: true}); err != nil ||
 		got == nil || got.Verdict != verdictWidens {
 		t.Errorf("a looser restriction = %+v, %v; want widens", got, err)
 	}
@@ -365,12 +365,12 @@ func TestReviewForIsTheHoldSitesReview(t *testing.T) {
 		govKindWorkspaceOwningUnit: verdictWidens, govKindComponentOwningUnit: verdictWidens,
 		govKindGrant: verdictNotChecked, govKindMembership: verdictNotChecked,
 	} {
-		if got, err := s.reviewFor(superCtx, kind, "k", nil, json.RawMessage(`{}`), false); err != nil || got == nil || got.Verdict != want {
+		if got, err := s.reviewFor(superCtx, kind, "k", nil, json.RawMessage(`{}`), reviewCaller{super: true}); err != nil || got == nil || got.Verdict != want {
 			t.Errorf("%s = %+v, %v; want %s", kind, got, err, want)
 		}
 	}
 	for _, kind := range []string{types.GovernanceTargetElevation, types.GovernanceTargetImageRequest} {
-		if got, err := s.reviewFor(superCtx, kind, "k", nil, json.RawMessage(`{}`), false); err != nil || got != nil {
+		if got, err := s.reviewFor(superCtx, kind, "k", nil, json.RawMessage(`{}`), reviewCaller{super: true}); err != nil || got != nil {
 			t.Errorf("%s = %+v, %v; want none (a request stores no review)", kind, got, err)
 		}
 	}
