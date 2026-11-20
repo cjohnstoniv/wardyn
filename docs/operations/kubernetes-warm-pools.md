@@ -40,7 +40,7 @@
 5. The pool makes a replacement at its next pass; passes run every 10 seconds.
 
 - A run that fits no pool, or finds no Ready placeholder, starts as it would without pools.
-- An image without `sh` and `sleep` makes a placeholder that never becomes Ready; it is counted but never used.
+- The pool's image needs a working `sh` and `sleep`. Without them the placeholder's container exits and restarts. It can briefly show Ready before it exits, so a run can still claim it.
 
 ## What it saves, and when it does not
 
