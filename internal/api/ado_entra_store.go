@@ -210,13 +210,17 @@ type adoEntraBlob struct {
 	// clears it.
 	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
 	// Issuer and IDPSubject are an endpoint sign-in's authority and the subject it knows the person by,
-	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
+	// kept so a review can say which platform account a person connected. Entra blobs carry neither, and an
+	// endpoint sign-in captured under require_id_token false holds neither (IDTokenNotRequired).
 	Issuer     string `json:"issuer,omitempty"`
 	IDPSubject string `json:"idp_sub,omitempty"`
 	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
 	// (endpointOIDCCaptureDigest). A redemption posts the refresh token only while it matches; an endpoint
 	// sign-in without one reads as no sign-in. Entra blobs carry none.
 	CaptureDigest string `json:"capture_digest,omitempty"`
+	// IDTokenNotRequired marks an endpoint sign-in captured under require_id_token false: it holds no issuer
+	// (no identity token was read), and valid() accepts it in that issuer's place.
+	IDTokenNotRequired bool `json:"id_token_not_required,omitempty"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
@@ -240,7 +244,7 @@ const adoEntraSourceSignIn = "signin"
 // deployment does not have. Not authentication — the authority is the only
 // oracle for that.
 func (b adoEntraBlob) valid() bool {
-	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "") && b.ClientID != "" && b.Subject != ""
+	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "" || b.IDTokenNotRequired) && b.ClientID != "" && b.Subject != ""
 }
 
 // adoEntraSecretName is the reserved store name holding one provider row's
