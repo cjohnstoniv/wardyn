@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { alsoChanges, fieldLabel, reviewSentence } from "./change-review";
+import { aheadByHours } from "./test-clock";
 import type { ChangeReview, GovernanceChange } from "./types";
 
 function change(review: ChangeReview | undefined, over: Partial<GovernanceChange["diff"]> = {}): GovernanceChange {
@@ -15,8 +16,8 @@ function change(review: ChangeReview | undefined, over: Partial<GovernanceChange
     target_key: "u1",
     state: "pending",
     proposed_by: "ana@example.com",
-    proposed_at: "2026-01-01T00:00:00Z",
-    expires_at: "2026-01-02T00:00:00Z",
+    proposed_at: aheadByHours(-1),
+    expires_at: aheadByHours(20),
     diff: {
       before: { name: "Payments", ceiling: { allowed_domains: ["a.example"], min_confinement_class: "CC1" } },
       after: { name: "Payments", ceiling: { allowed_domains: ["a.example", "b.example", "c.example"], min_confinement_class: "CC2" } },

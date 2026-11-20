@@ -6,6 +6,7 @@
 // The change-impact client: the GET beside the change's own.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { governance } from "./governance";
+import { aheadByHours } from "../test-clock";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -20,7 +21,7 @@ describe("change impact client", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("getChangeImpact GETs the impact route of the change and returns the body", async () => {
-    const body = { computed: "tree", as_of: "2026-01-01T00:00:00Z", people: [], live_runs_total: 0 };
+    const body = { computed: "tree", as_of: aheadByHours(0), people: [], live_runs_total: 0 };
     fetchMock.mockResolvedValueOnce(json(body));
     const got = await governance.getChangeImpact("c/1");
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
