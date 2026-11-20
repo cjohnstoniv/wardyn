@@ -178,12 +178,40 @@ describe("ImpactSection", () => {
   });
 
   it.each([
-    ["kind", CHANGE_REVIEW.IMPACT_NOT_COMPUTED("Role mapping")],
+    ["kind", CHANGE_REVIEW.IMPACT_NOT_COMPUTED],
     ["stale", CHANGE_REVIEW.IMPACT_STALE("u1")],
     ["refused", CHANGE_REVIEW.IMPACT_REFUSED],
   ] as const)("says why nothing is computed: %s", (why, text) => {
     render(<ImpactSection change={change(undefined, { target_kind: "role_mapping" })} impact={impact({ computed: "none", not_computed: why })} />);
     expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  // The server computes some operations of a kind and not others, so the text speaks of this change, never of the kind.
+  it.each([
+    ["a membership add", { target_kind: "governance_membership", op: "upsert" }],
+    ["a profile deletion", { target_kind: "governance_unit", op: "delete" }],
+  ])("says impact is not available for %s, without ruling out its kind", (_name, over) => {
+    render(<ImpactSection change={change(undefined, over)} impact={impact({ computed: "none", not_computed: "kind" })} />);
+    const note = screen.getByText(CHANGE_REVIEW.IMPACT_NOT_COMPUTED);
+    expect(note.textContent).not.toMatch(/kind|Assignment|Profile|yet/);
+  });
+
+  it("says the same when a computed answer carries nothing to show", () => {
+    render(<ImpactSection change={change(undefined, { target_kind: "governance_boundary" })} impact={impact({ computed: "boundary" })} />);
+    expect(screen.getByText(CHANGE_REVIEW.IMPACT_NOT_COMPUTED)).toBeInTheDocument();
+  });
+
+  it("still shows the counts of a membership move, which the server computes", () => {
+    render(
+      <ImpactSection
+        change={change(undefined, { target_kind: "governance_membership", op: "move" })}
+        impact={impact({ people: [person(1), person(2)], live_runs_total: 4 })}
+      />,
+    );
+    const tree = screen.getByTestId("change-impact-tree");
+    expect(within(tree).getByText(CHANGE_REVIEW.PEOPLE).previousSibling).toHaveTextContent("2");
+    expect(within(tree).getByText(CHANGE_REVIEW.LIVE_RUNS_WALLS).previousSibling).toHaveTextContent("4");
+    expect(screen.queryByText(CHANGE_REVIEW.IMPACT_NOT_COMPUTED)).toBeNull();
   });
 
   it("shows a failed fetch for this section only, and nothing while it loads", () => {

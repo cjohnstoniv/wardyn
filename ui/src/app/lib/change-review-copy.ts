@@ -74,7 +74,8 @@ export const CHANGE_REVIEW = {
   COL_RUN: "Run",
   COL_RUN_OWNER: "Run owner",
   COL_STARTED: "Started",
-  IMPACT_NOT_COMPUTED: (kind: string) => `Impact is not computed for ${kind} changes yet.`,
+  /** Proposed: scoped to this change, since the server computes some operations of a kind and not others. */
+  IMPACT_NOT_COMPUTED: "Impact is not available for this change.",
   /** not on the board. */
   IMPACT_STALE: (target: string) =>
     `${target} changed after this change was proposed, so approving it would be refused as stale.`,

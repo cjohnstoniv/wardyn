@@ -10,7 +10,7 @@
 // Every string is from CHANGE_REVIEW (change-review-copy.ts) or the canon it reads; this file adds none.
 import type { ReactNode } from "react";
 import { BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
-import { alsoChanges, fieldLabel, kindLabel, reviewSentence, showValue, valueAt, changeTarget } from "../../../lib/change-review";
+import { alsoChanges, fieldLabel, reviewSentence, showValue, valueAt, changeTarget } from "../../../lib/change-review";
 import { CHANGE_REVIEW, entriesLabel } from "../../../lib/change-review-copy";
 import type {
   BoundaryChange,
@@ -331,7 +331,7 @@ export function ImpactSection({
           ? CHANGE_REVIEW.IMPACT_STALE(changeTarget(change))
           : impact?.not_computed === "refused"
             ? CHANGE_REVIEW.IMPACT_REFUSED
-            : CHANGE_REVIEW.IMPACT_NOT_COMPUTED(kindLabel(change))}
+            : CHANGE_REVIEW.IMPACT_NOT_COMPUTED}
       </p>
     );
   }
