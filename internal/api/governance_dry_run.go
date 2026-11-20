@@ -62,6 +62,9 @@ type treeDryRunReport struct {
 	// Vacates the units it may take someone out of (H3).
 	Activates []unitActivation `json:"activates,omitempty"`
 	Vacates   []unitActivation `json:"vacates,omitempty"`
+	// liveRunRows are the runs LiveRuns names, in its order, for a reader that shows more than the id
+	// (a held change's impact). Never served by the dry run.
+	liveRunRows []types.AgentRun `json:"-"`
 }
 
 // treeDryRunPerson is one membership, the context it is (from_unit) and would be (unit), and the knobs
@@ -395,6 +398,7 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (tr
 		}
 		if hit {
 			report.LiveRuns = append(report.LiveRuns, run.ID)
+			report.liveRunRows = append(report.liveRunRows, run)
 		}
 	}
 	return report, nil
