@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -276,4 +277,53 @@ func TestSCIMCovAFailedMemberReadDoesNotSuppressOtherNamedRemovals(t *testing.T)
 	if !st.tokenRevoked(tok1) || first != 1 || len(st.pendingSteps(p1.ID, store.JobKindGroupRemove)) != 0 {
 		t.Errorf("after the retry: first revoked = %t, its rows %d, pending %v", st.tokenRevoked(tok1), first, st.pendingSteps(p1.ID, store.JobKindGroupRemove))
 	}
+}
+
+// The sweeper picks its pending group removals among the endpoint's own people before it limits the batch, so a
+// full batch's worth of earlier pending removals of another issuer or tenant, which sort first, does not keep the
+// endpoint's own removals from resuming. The own removal's token is revoked; no foreign token is.
+func TestSCIMCovSweeperResumesOwnRemovalsBehindAFullBatchOfForeignOnes(t *testing.T) {
+	st := newSCIMCovStore()
+	st.sweepRemovals = true
+	g := st.addGroup("g-sweep", "Sweep")
+	seed := func(id uuid.UUID) {
+		for _, step := range store.GroupRemovalSteps {
+			st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: id, Kind: store.JobKindGroupRemove, Step: step, Target: g.ID.String()})
+		}
+	}
+	var foreign []store.PrincipalIdentity
+	var foreignTokens []uuid.UUID
+	for i := range scimSweepBatch + 1 {
+		row := store.PrincipalIdentity{
+			ID: uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", i)), Principal: fmt.Sprintf("sub-foreign-%d", i),
+			Issuer: "https://idp.other.example", TenantID: scimCovTenant,
+		}
+		if i%2 == 1 {
+			row = store.PrincipalIdentity{ID: row.ID, Principal: row.Principal, Issuer: scimCovIssuer, TenantID: "99999999-8888-7777-6666-555555555555"}
+		}
+		foreign = append(foreign, st.addIdentity(row))
+		foreignTokens = append(foreignTokens, scimCovTokenIn(st, row.Principal, nil, nil))
+		seed(row.ID)
+	}
+	ownRow := scimCovBound()
+	ownRow.ID = uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffffe")
+	own := st.addIdentity(ownRow)
+	legacy := st.addIdentity(store.PrincipalIdentity{ID: uuid.MustParse("ffffffff-ffff-4fff-8fff-ffffffffffff"), Principal: "sub-legacy", Issuer: scimCovIssuer, EmailLower: "legacy@corp.example"})
+	ownTok, legacyTok := scimCovTokenIn(st, own.Principal, nil, nil), scimCovTokenIn(st, legacy.Principal, nil, nil)
+	seed(own.ID)
+	seed(legacy.ID)
+	e := newSCIMCovEnv(t, st)
+
+	if err := e.srv.SweepSCIMPurge(context.Background()); err != nil {
+		t.Fatalf("SweepSCIMPurge = %v", err)
+	}
+	for name, id := range map[string]uuid.UUID{"own": own.ID, "legacy": legacy.ID} {
+		if steps := st.pendingSteps(id, store.JobKindGroupRemove); len(steps) != 0 {
+			t.Errorf("the %s removal is still pending: %v", name, steps)
+		}
+	}
+	if !st.tokenRevoked(ownTok) || !st.tokenRevoked(legacyTok) {
+		t.Errorf("own token revoked = %t, legacy token revoked = %t, want both", st.tokenRevoked(ownTok), st.tokenRevoked(legacyTok))
+	}
+	e.wantNoForeignEffect(t, st, foreignTokens, foreign...)
 }
