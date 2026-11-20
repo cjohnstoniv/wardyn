@@ -163,7 +163,7 @@ func (e *scimCovEnv) wantNoForeignEffect(t *testing.T, st *scimCovStore, tokens 
 	revoked, cut := e.rev.snapshot()
 	for _, f := range foreign {
 		for _, c := range append(revoked, cut...) {
-			if strings.Contains(c, f.Principal) || strings.Contains(c, f.EmailLower) || strings.Contains(c, f.ID.String()) {
+			if strings.Contains(c, f.Principal) || (f.EmailLower != "" && strings.Contains(c, f.EmailLower)) || strings.Contains(c, f.ID.String()) {
 				t.Errorf("a cut or revoke names foreign %s: %q", f.Principal, c)
 			}
 		}
