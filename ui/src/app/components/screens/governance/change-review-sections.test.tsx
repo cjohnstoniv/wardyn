@@ -80,9 +80,19 @@ describe("VerdictBlock", () => {
     expect(screen.queryByText(/This lets runs/)).toBeNull();
   });
 
-  it("says an unchecked kind is treated as widening, by its kind's name", () => {
-    render(<VerdictBlock change={change(undefined, { target_kind: "role_mapping" })} />);
-    expect(screen.getByText(CHANGE_REVIEW.NOT_CHECKED_NOTE("Role mapping"))).toBeInTheDocument();
+  it("says a change with no narrowing result is treated as widening, never that its kind has no check", () => {
+    // A legacy profile change: a kind that has a check, stored before the review was written.
+    render(<VerdictBlock change={change(undefined)} />);
+    const note = screen.getByText(CHANGE_REVIEW.NOT_CHECKED_NOTE);
+    expect(note).toBeInTheDocument();
+    expect(note.textContent).not.toMatch(/kind|Profile/);
+  });
+
+  it("reads a removed blocked host as removed from the blocked hosts, never as added", () => {
+    render(<VerdictBlock change={change({ verdict: "widens", widens: [{ field: "denied_domains", entries: ["blocked.example"] }] })} />);
+    expect(screen.getByText(CHANGE_REVIEW.REMOVES_FROM_BLOCKED, { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("blocked.example")).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(`^${CHANGE_REVIEW.ADDS}\\b`))).toBeNull();
   });
 });
 
@@ -198,9 +208,11 @@ describe("RiskSection", () => {
     expect(screen.getByText(CHANGE_REVIEW.RISK_AFTER)).toBeInTheDocument();
   });
 
-  it("says a kind with no grade has none", () => {
-    render(<RiskSection change={change(undefined, { target_kind: "role_mapping" })} />);
-    expect(screen.getByText(CHANGE_REVIEW.RISK_NOT_GRADED("Role mapping"))).toBeInTheDocument();
+  it("says a profile change with no grade has none available, not that its kind is never graded", () => {
+    render(<RiskSection change={change({ verdict: "widens" })} />);
+    const note = screen.getByText(CHANGE_REVIEW.RISK_NOT_GRADED);
+    expect(note).toBeInTheDocument();
+    expect(note.textContent).not.toMatch(/kind|Profile/);
   });
 });
 

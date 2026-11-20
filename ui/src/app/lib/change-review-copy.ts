@@ -30,7 +30,8 @@ export const CHANGE_REVIEW = {
     /** not on the board. */
     first_allowlist: "it sets the first allowlist, with no earlier one to judge it against",
   } as Record<HeldBecause, string>,
-  NOT_CHECKED_NOTE: (kind: string) => `Treated as widening: no narrowing check exists for ${kind} changes.`,
+  /** Proposed: says only what this stored change lacks, since the server cannot tell a kind with no check from a change whose check gave no result. */
+  NOT_CHECKED_NOTE: "No narrowing result is available for this change. Treat it as widening.",
 
   RISK_CHIP: (before: string, after: string) => `Risk ${before} → ${after}`,
   /** not on the board: a profile create has no earlier grade. */
@@ -44,6 +45,8 @@ export const CHANGE_REVIEW = {
   /** The board's wording names a raised barrier floor; the direction word is not drawn for each field. */
   SENTENCE_ALSO: (label: string, before: string, after: string) => `It also changes ${label} from ${before} to ${after}.`,
   ADDS: "Adds",
+  /** Proposed: a widened blocked-hosts rule lists the blocked hosts that are no longer blocked. */
+  REMOVES_FROM_BLOCKED: "Removes from blocked hosts",
   ALSO_CHANGES: "Also changes:",
   RULES_NOTE: "Written by Wardyn's rules from the server's diff, not by a model. The same change always reads the same way.",
 
@@ -75,7 +78,8 @@ export const CHANGE_REVIEW = {
   RISK_TODAY: "Today",
   RISK_AFTER: "After approval",
   RISK_NEW_OR_CHANGED: "New or changed",
-  RISK_NOT_GRADED: (kind: string) => `Risk is graded for policy-shaped kinds only. ${kind} changes have no grade.`,
+  /** Proposed: record-scoped for the same reason as NOT_CHECKED_NOTE. */
+  RISK_NOT_GRADED: "No risk grade is available for this change.",
 
   RAW_DIFF: "Raw diff",
   SHOW_FULL: "Show full before and after",

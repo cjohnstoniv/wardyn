@@ -103,7 +103,7 @@ export function VerdictBlock({ change }: { change: GovernanceChange }) {
           <VerdictChip review={review} />
         )}
       </div>
-      {verdict === "not_checked" && <p className="text-body text-foreground">{CHANGE_REVIEW.NOT_CHECKED_NOTE(kindLabel(change))}</p>}
+      {verdict === "not_checked" && <p className="text-body text-foreground">{CHANGE_REVIEW.NOT_CHECKED_NOTE}</p>}
       {widens.length > 0 && (
         <ul className="space-y-1">
           {widens.map((w) => (
@@ -111,7 +111,7 @@ export function VerdictBlock({ change }: { change: GovernanceChange }) {
               <FieldName path={w.field} />
               {w.entries && w.entries.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  {CHANGE_REVIEW.ADDS} <Mono className="break-all text-foreground">{w.entries.join(", ")}</Mono>
+                  {w.field === "denied_domains" ? CHANGE_REVIEW.REMOVES_FROM_BLOCKED : CHANGE_REVIEW.ADDS} <Mono className="break-all text-foreground">{w.entries.join(", ")}</Mono>
                 </p>
               )}
             </li>
@@ -360,7 +360,7 @@ export function RiskSection({ change }: { change: GovernanceChange }) {
   if (!risk) {
     return (
       <section data-testid="change-risk">
-        <p className="text-body text-muted-foreground">{CHANGE_REVIEW.RISK_NOT_GRADED(kindLabel(change))}</p>
+        <p className="text-body text-muted-foreground">{CHANGE_REVIEW.RISK_NOT_GRADED}</p>
       </section>
     );
   }
