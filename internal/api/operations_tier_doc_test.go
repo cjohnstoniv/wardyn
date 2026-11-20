@@ -219,6 +219,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/dry-run", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/governance/changes", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/governance/changes/{id}", "the unit-admin `/governance` routes"},
+	{"GET /api/v1/governance/changes/{id}/impact", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/approve", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/reject", "the unit-admin `/governance` routes"},
 	{"PUT /api/v1/governance/changes/{id}/note", "the unit-admin `/governance` routes"},

@@ -627,6 +627,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// the handler (governance_changes_pg_test.go).
 	"GET /api/v1/governance/changes":               {class: classUnit},
 	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":   {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
 	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},

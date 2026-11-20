@@ -139,7 +139,7 @@ func (s *Server) holdComponentOwningUnit(w http.ResponseWriter, r *http.Request,
 		payload: componentOwningUnitChange{ComponentID: id, UnitID: unit},
 		before:  owningUnitState(from, false), after: owningUnitState(unit, false),
 		changed:   []string{"owning_unit_id"},
-		baseState: owningUnitState(from, false)})
+		baseState: owningUnitState(from, false), review: pinReview()})
 }
 
 // setComponentOwningUnitQ is a direct pin write on q, under the graph lock and the target lock a held
