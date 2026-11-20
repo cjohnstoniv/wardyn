@@ -387,7 +387,7 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 const freshBatch = 1 << 20
 
 // errMaskStale ends an upload when this server cannot prove it has read every masking value committed before a
-// part of the body arrived. It answers as an uncovered run does, 503 mask_state_unavailable, and as any read
+// part of the body arrived, or cannot hold its masker still across the coverage check (maskAdoptTries). It answers as an uncovered run does, 503 mask_state_unavailable, and as any read
 // error does, the store keeps nothing of the upload.
 var errMaskStale = fmt.Errorf("api: the shared masking corpus was not read after the upload's bytes arrived: %w", errMaskUncovered)
 
@@ -491,22 +491,43 @@ func (r *recordingMaskReader) fill() ([]byte, error) {
 	}
 }
 
+// maskAdoptTries bounds refresh's attempts to adopt a masker whose generation held still across its coverage
+// check. Past it the upload fails as a stale corpus does, 503, for the recorder to send again.
+const maskAdoptTries = 8
+
 // refresh makes the masker answer for a corpus read after arrived, by when every byte about to be masked had
-// arrived. The shared corpus is proven fresh first, so a value another server committed before arrived is in
-// the registry; then the Masker and its generation are read together, under the registry's lock, and swapped in
-// when the generation moved. A registration that ended before arrived moved the generation before this read
-// of it, so it is never missed. The swap keeps the bytes the masker holds as they arrived, and r.held is not
-// masked yet, so both are masked against the new corpus. A value registered after arrived is not in any byte
-// already masked: the run is handed a value only after it is registered.
-func (r *recordingMaskReader) refresh(arrived time.Time) bool {
+// arrived, and proven covered at the generation it adopts. Its order:
+//
+//  1. Fresh: a value another server committed before arrived is in the registry, and so is any erasure's drop.
+//  2. The Masker and its generation, read together under the registry's lock, so the Masker is that corpus.
+//  3. The guard, after both: its answer is read at or after that generation (Watch reads Covered again once
+//     the generation moved), so a corpus an erasure made smaller is never adopted on an answer from before.
+//  4. The generation again: had it moved, the guard may have loaded values the Masker lacks, or a drop came
+//     after it, so steps 2 to 4 run again.
+//
+// A registration that ended before arrived moved the generation before step 2. The swap keeps the bytes the
+// masker holds as they arrived, and r.held is not masked yet, so both are masked against the adopted corpus. A
+// value registered after arrived is not in any byte already masked: the run is handed a value only after it is
+// registered. It runs before anything of a batch is masked, flushed or handed on, the end of the body included.
+func (r *recordingMaskReader) refresh(arrived time.Time) error {
 	if !r.reg.Fresh(arrived) {
-		return false
+		return errMaskStale
 	}
-	if mask, gen := r.reg.JSONVariantMaskerGen(r.runID); gen != r.gen {
-		r.mask, r.gen = mask, gen
-		r.masker.SetMasker(mask)
+	for range maskAdoptTries {
+		mask, gen := r.reg.JSONVariantMaskerGen(r.runID)
+		if r.guard != nil && !r.guard() {
+			return errMaskUncovered
+		}
+		if r.reg.Generation() != gen {
+			continue
+		}
+		if gen != r.gen {
+			r.mask, r.gen = mask, gen
+			r.masker.SetMasker(mask)
+		}
+		return nil
 	}
-	return true
+	return errMaskStale
 }
 
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
@@ -524,8 +545,8 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 			return 0, nil
 		}
 		// Every byte masked from here on, r.held's included, has arrived: none was masked yet.
-		if !r.refresh(time.Now()) {
-			r.err = errMaskStale
+		if err := r.refresh(time.Now()); err != nil {
+			r.err = err
 			return 0, r.err
 		}
 		r.held = append(r.held, raw...)

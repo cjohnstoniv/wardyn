@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,5 +275,150 @@ func TestBuildMaskingBody_StaleSharedCorpusFailsTheUpload(t *testing.T) {
 				t.Fatal("a cast was stored from an upload whose corpus was stale")
 			}
 		})
+	}
+}
+
+// scriptReader answers each Read with its next step, which may act before it returns: a source that changes
+// the registry after the reader's guard ran and before the bytes come back.
+type scriptReader struct {
+	steps []func() (string, error)
+	next  int
+}
+
+func (s *scriptReader) Read(p []byte) (int, error) {
+	if s.next == len(s.steps) {
+		return 0, io.EOF
+	}
+	data, err := s.steps[s.next]()
+	s.next++
+	return copy(p, data), err
+}
+
+// maskErasure is a mask_copies erase as an upload sees it: the run's manifest fenced, so the guard answers false,
+// and the run's value dropped from the registry.
+type maskErasure struct {
+	reg    *secretmask.Registry
+	runID  uuid.UUID
+	value  []byte
+	fenced atomic.Bool
+}
+
+func newMaskErasure(t *testing.T, reg *secretmask.Registry, runID uuid.UUID, value string) *maskErasure {
+	t.Helper()
+	if !reg.AddLocal(runID, []byte(value)) {
+		t.Fatal("the value was not registered")
+	}
+	return &maskErasure{reg: reg, runID: runID, value: []byte(value)}
+}
+
+func (e *maskErasure) apply() {
+	e.fenced.Store(true)
+	e.reg.DropRunValue(e.runID, e.value)
+}
+
+func (e *maskErasure) covered() bool { return !e.fenced.Load() }
+
+// saveUncovered saves body through a real file store and requires the save to fail as uncovered, not as a stale
+// corpus, with nothing stored.
+func saveUncovered(t *testing.T, runID uuid.UUID, save func(*recording.FSStore) error) {
+	t.Helper()
+	store, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := save(store); !errors.Is(err, errMaskUncovered) || errors.Is(err, errMaskStale) {
+		t.Fatalf("save = %v, want errMaskUncovered", err)
+	}
+	if rc, err := store.OpenCast(context.Background(), runID.String()); err == nil {
+		rc.Close()
+		t.Fatal("a cast was stored after the run's masking value was erased")
+	}
+}
+
+// An erasure the last shared-corpus read brings in, dropping the run's only value and fencing the run, ends the
+// upload as uncovered: the smaller corpus is not adopted on the guard's answer from before the read.
+func TestBuildMaskingBody_ErasureAtTheLastFreshReadFailsTheUpload(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "erased-recording-secret"
+	e := newMaskErasure(t, reg, runID, secret)
+	reg.SetBackend(&freshBackend{err: func(call int) error {
+		if call == 2 { // the read for the final batch, its end of body included
+			e.apply()
+		}
+		return nil
+	}})
+	body := buildGuardedMaskingBody(strings.NewReader(strings.Repeat("x", freshBatch)+" "+secret+" tail"), reg, runID, e.covered)
+	saveUncovered(t, runID, func(s *recording.FSStore) error {
+		return s.SaveCast(context.Background(), runID.String(), body)
+	})
+}
+
+// The same erasure landing while the source read is blocked, its bytes and the end of the body coming back
+// after it, ends the upload as uncovered.
+func TestBuildMaskingBody_ErasureDuringABlockedReadFailsTheUpload(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "erased-recording-secret"
+	e := newMaskErasure(t, reg, runID, secret)
+	entered, gate := make(chan struct{}), make(chan struct{})
+	src := &scriptReader{steps: []func() (string, error){
+		func() (string, error) { return "start ", nil },
+		func() (string, error) {
+			close(entered)
+			<-gate
+			return secret + " tail", io.EOF
+		},
+	}}
+	body := buildGuardedMaskingBody(src, reg, runID, e.covered)
+	saveUncovered(t, runID, func(s *recording.FSStore) error {
+		done := make(chan error, 1)
+		go func() { done <- s.SaveCast(context.Background(), runID.String(), body) }()
+		<-entered
+		e.apply()
+		close(gate)
+		return <-done
+	})
+}
+
+// An erasure that lands in the read that finds the end of the body, while the secret is still in the bytes held
+// back for the log cut marker, ends the upload as uncovered: the held bytes are not flushed with the smaller
+// corpus.
+func TestBuildMaskingBody_ErasureAtTheEndFailsTheHeldTail(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "erased-recording-secret"
+	e := newMaskErasure(t, reg, runID, secret)
+	src := &scriptReader{steps: []func() (string, error){
+		func() (string, error) { return strings.Repeat("output line\n", 40) + secret, nil },
+		func() (string, error) {
+			e.apply()
+			return "", io.EOF
+		},
+	}}
+	body := buildGuardedMaskingBody(src, reg, runID, e.covered)
+	saveUncovered(t, runID, func(s *recording.FSStore) error {
+		return s.SaveCast(context.Background(), runID.String(), body)
+	})
+}
+
+// A value the coverage check itself loads into the registry (Covered loads a manifest's values) moves the
+// generation after the masker was read, so the masker is read again before it is adopted.
+func TestBuildMaskingBody_ValueTheGuardLoadsIsMasked(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "manifest-recording-secret"
+	calls := 0
+	guard := func() bool {
+		calls++
+		if calls == 2 { // the first check after the masker was read; the first is fill's, before the read
+			reg.AddLocal(runID, []byte(secret))
+		}
+		return true
+	}
+	after := strings.Repeat("b", 2*recording.LogCutMarkerMax)
+	got, err := io.ReadAll(buildGuardedMaskingBody(strings.NewReader("a "+secret+" "+after), reg, runID, guard))
+	if want := "a <secret-hidden> " + after; err != nil || string(got) != want {
+		t.Fatalf("masked = (%v), starts %q", err, got[:min(len(got), 60)])
 	}
 }
