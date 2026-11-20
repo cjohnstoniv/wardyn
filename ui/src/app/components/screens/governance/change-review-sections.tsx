@@ -11,7 +11,7 @@
 import type { ReactNode } from "react";
 import { BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { alsoChanges, fieldLabel, kindLabel, reviewSentence, showValue, valueAt, changeTarget } from "../../../lib/change-review";
-import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
+import { CHANGE_REVIEW, entriesLabel } from "../../../lib/change-review-copy";
 import type {
   BoundaryChange,
   BoundaryReport,
@@ -111,7 +111,7 @@ export function VerdictBlock({ change }: { change: GovernanceChange }) {
               <FieldName path={w.field} />
               {w.entries && w.entries.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  {w.field === "denied_domains" ? CHANGE_REVIEW.REMOVES_FROM_BLOCKED : CHANGE_REVIEW.ADDS} <Mono className="break-all text-foreground">{w.entries.join(", ")}</Mono>
+                  {entriesLabel(w.field)} <Mono className="break-all text-foreground">{w.entries.join(", ")}</Mono>
                 </p>
               )}
             </li>

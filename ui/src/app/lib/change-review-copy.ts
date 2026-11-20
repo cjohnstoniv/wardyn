@@ -19,7 +19,8 @@ export const CHANGE_REVIEW = {
   VERDICT: {
     widens: "Widens",
     narrows_held: (because: string) => `Narrows, but held because ${because}`,
-    not_checked: "Not checked for this kind",
+    /** Proposed: the board says "for this kind", but the server cannot tell a kind with no check from a change whose check gave no result. */
+    not_checked: "Not checked",
   },
   HELD_BECAUSE: {
     contact: "the contact changes",
@@ -47,6 +48,13 @@ export const CHANGE_REVIEW = {
   ADDS: "Adds",
   /** Proposed: a widened blocked-hosts rule lists the blocked hosts that are no longer blocked. */
   REMOVES_FROM_BLOCKED: "Removes from blocked hosts",
+  /** Proposed: the words before a widening's entries, one per field, for the direction its entries mean. */
+  NO_LONGER_WITHHELD: "No longer withheld:",
+  NO_LONGER_BOUND: "No longer bound:",
+  LOOSENED: "Loosened:",
+  RAISED: "Raised:",
+  MOVES: "Moves:",
+  AFFECTED: "Affected:",
   ALSO_CHANGES: "Also changes:",
   RULES_NOTE: "Written by Wardyn's rules from the server's diff, not by a model. The same change always reads the same way.",
 
@@ -110,4 +118,30 @@ export function renderReviewSentence(input: ReviewSentenceInput): string | null 
   if (others.length > 0) sentences.push(CHANGE_REVIEW.SENTENCE_WIDENS(input.target, joinAnd([...new Set(others)])));
   for (const a of input.also.slice(0, 2)) sentences.push(CHANGE_REVIEW.SENTENCE_ALSO(a.label, a.before, a.after));
   return sentences.length > 0 ? sentences.join(" ") : null;
+}
+
+// The words before a widening's entries. Only the allow-type fields add entries; the others list what a rule
+// stops doing or by how much it loosens, so "Adds" would reverse their meaning. A field this console does not
+// know gets the neutral "Affected:".
+export function entriesLabel(field: string): string {
+  switch (field) {
+    case "allowed_domains":
+    case "allowed_methods":
+    case "eligible_grants":
+      return CHANGE_REVIEW.ADDS;
+    case "denied_domains":
+      return CHANGE_REVIEW.REMOVES_FROM_BLOCKED;
+    case "withheld_grants":
+      return CHANGE_REVIEW.NO_LONGER_WITHHELD;
+    case "members":
+      return CHANGE_REVIEW.NO_LONGER_BOUND;
+    case "vcs":
+      return CHANGE_REVIEW.LOOSENED;
+    case "member_cap":
+      return CHANGE_REVIEW.RAISED;
+    case "owning_unit":
+      return CHANGE_REVIEW.MOVES;
+    default:
+      return CHANGE_REVIEW.AFFECTED;
+  }
 }

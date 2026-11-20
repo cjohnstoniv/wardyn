@@ -88,11 +88,24 @@ describe("VerdictBlock", () => {
     expect(note.textContent).not.toMatch(/kind|Profile/);
   });
 
-  it("reads a removed blocked host as removed from the blocked hosts, never as added", () => {
-    render(<VerdictBlock change={change({ verdict: "widens", widens: [{ field: "denied_domains", entries: ["blocked.example"] }] })} />);
-    expect(screen.getByText(CHANGE_REVIEW.REMOVES_FROM_BLOCKED, { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("blocked.example")).toBeInTheDocument();
-    expect(screen.queryByText(new RegExp(`^${CHANGE_REVIEW.ADDS}\\b`))).toBeNull();
+  // Each widening field with the entries the server sends for it, and the words that say which way they go.
+  it.each([
+    ["allowed_domains", ["settle.partner-a.example"], CHANGE_REVIEW.ADDS],
+    ["allowed_methods", ["DELETE"], CHANGE_REVIEW.ADDS],
+    ["eligible_grants", ["github"], CHANGE_REVIEW.ADDS],
+    ["denied_domains", ["blocked.example"], CHANGE_REVIEW.REMOVES_FROM_BLOCKED],
+    ["withheld_grants", ["github"], CHANGE_REVIEW.NO_LONGER_WITHHELD],
+    ["members", ["kai@example.com"], CHANGE_REVIEW.NO_LONGER_BOUND],
+    ["vcs", ["github"], CHANGE_REVIEW.LOOSENED],
+    ["member_cap", ["cpu_millis"], CHANGE_REVIEW.RAISED],
+    ["owning_unit", ["Payments"], CHANGE_REVIEW.MOVES],
+    ["a_field_from_a_newer_server", ["x"], CHANGE_REVIEW.AFFECTED],
+  ])("reads the entries of %s with the words for their direction", (field, entries, words) => {
+    render(<VerdictBlock change={change({ verdict: "widens", widens: [{ field, entries }] })} />);
+    const line = screen.getByText(entries[0]).parentElement as HTMLElement;
+    expect(line.firstChild?.textContent?.trim()).toBe(words);
+    // Only the allow-type fields add anything.
+    if (words !== CHANGE_REVIEW.ADDS) expect(line.textContent).not.toMatch(/^Adds/);
   });
 });
 
