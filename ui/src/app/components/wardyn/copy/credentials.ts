@@ -74,7 +74,7 @@ export const ERASE = {
   DONE_NONE: (person: string) => `Nothing was stored for ${person}, so nothing was erased.`,
   DONE_AUDIT: "Recorded in the Audit log as credential.erase.",
   NOT_ERASED: (names: string) =>
-    `Not erased: ${names}. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.`,
+    `Not erased: ${names}. Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately.`,
   KEY_VAULT_RECOVERABLE: (days: number) =>
     `Your organisation's Key Vault keeps deleted secrets recoverable for ${days} days; ask its operators to purge them sooner.`,
   FAILED: (person: string) =>

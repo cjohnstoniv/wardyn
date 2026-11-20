@@ -171,6 +171,7 @@ describe("the add-token door", () => {
   });
 
   it("a token name the server already holds: the first save stores nothing and warns; Overwrite secret replaces it", async () => {
+    vi.spyOn(health, "whoami").mockResolvedValue({ operator: true } as Me);
     setSecret.mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
     show([COMPONENT_SECRET]);
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
@@ -185,6 +186,7 @@ describe("the add-token door", () => {
   });
 
   it("after the overwrite warning, Enter in the field stores nothing: only Overwrite secret replaces the stored token", async () => {
+    vi.spyOn(health, "whoami").mockResolvedValue({ operator: true } as Me);
     setSecret.mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
     show([COMPONENT_SECRET]);
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
@@ -196,6 +198,70 @@ describe("the add-token door", () => {
     await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(COMPONENT_SECRET.id));
     expect(secrets.setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: "shared", createOnly: false });
+  });
+
+  // The warning was for one namespace. A role change since the refusal moves the next save to the other one, which
+  // is another destination: create-only again, with its own warning if it is occupied.
+  it.each([
+    ["a member's personal secret, then promoted", false, true, "personal", "shared"],
+    ["an administrator's shared secret, then demoted", true, false, "shared", "personal"],
+  ] as const)("a role change between the refusal and Overwrite secret (%s) overwrites nothing", async (_name, firstOperator, nowOperator, first, second) => {
+    const exists = () => new HttpError(409, "A secret with this name already exists", "secret_exists");
+    setSecret.mockRejectedValueOnce(exists()).mockRejectedValueOnce(exists()).mockResolvedValue(undefined);
+    const whoami = vi.spyOn(health, "whoami").mockResolvedValue({ operator: firstOperator } as Me);
+    render(
+      <OperatorProvider operator={firstOperator}>
+        <SetupNeeded items={[COMPONENT_SECRET]} pending={new Set()} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} />
+      </OperatorProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: first, createOnly: true });
+    whoami.mockResolvedValue({ operator: nowOperator } as Me);
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(setSecret).toHaveBeenCalledTimes(2));
+    expect(setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: second, createOnly: true });
+    expect(onDone).not.toHaveBeenCalled();
+    // The other namespace holds the name too: its own warning, and only the button after it replaces.
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(COMPONENT_SECRET.id));
+    expect(setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: second, createOnly: false });
+  });
+
+  it("a /me read that fails after the refusal keeps the save create-only: the old warning authorises nothing", async () => {
+    setSecret.mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockRejectedValue(new HttpError(409, "A secret with this name already exists", "secret_exists"));
+    const whoami = vi.spyOn(health, "whoami").mockResolvedValue({ operator: true } as Me);
+    show([COMPONENT_SECRET]);
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    whoami.mockResolvedValue(null);
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(setSecret).toHaveBeenCalledTimes(2));
+    expect(setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: "shared", createOnly: true });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("a refusal before this tab knows the namespace is not a confirmation of any namespace", async () => {
+    setSecret.mockRejectedValue(new HttpError(409, "A secret with this name already exists", "secret_exists"));
+    render(
+      <OperatorProvider operator={true} operatorResolved={false}>
+        <SetupNeeded items={[COMPONENT_SECRET]} pending={new Set()} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} />
+      </OperatorProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    vi.spyOn(health, "whoami").mockResolvedValue({ operator: true } as Me);
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(setSecret).toHaveBeenCalledTimes(2));
+    expect(setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: "shared", createOnly: true });
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it.each([

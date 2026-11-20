@@ -2121,11 +2121,11 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision or a replaced object is a REFUSED RUN, not a cross-mount.**
+34. **Older drive names can collide. Identity checks refuse mismatched storage, with the startup and removed-hold exceptions below.**
     - An old-scheme name is `wardyn-drive-<drive-slug>-<home>`. Both fields admit `-`, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name one object.
     - Since `0067` every new drive names its objects by its fixed-width id (`DriveObjectSchemeID`), so `<home>` starts at a fixed offset. A row keeps the scheme it was created under, because neither substrate can rename storage.
     - A fail-closed identity check bounds the old scheme: `driveClaimIdentity` refuses a claim whose `wardyn.drive` / `wardyn.home` labels are not this run's, and `driveVolumeAdoptable` refuses another drive's volume.
-    - A collision costs one of the two people a refused run; the remedy is distinct home names.
+    - A collision the identity check catches costs one of the two people a refused run; the remedy is distinct home names.
     - A run checks a drive's object before its proxy starts and mounts it by name later. In between, a reclaim can remove it and another person's first run make one under that name (an old-scheme collision, or a reused `home_override`).
     - On Kubernetes the run reads the claim again before the agent pod is made and once its main container runs, and refuses one that is gone, deleting or another UID (`recheckDriveClaims`).
     - On Docker a never-started container with no network mounts each checked volume, read-only and `NoCopy`, until teardown (`pinDriveVolumes`), so a reclaim answers "in use"; a volume whose labels changed before that is refused. A drive's seed, which writes into an empty volume, is made only after it.

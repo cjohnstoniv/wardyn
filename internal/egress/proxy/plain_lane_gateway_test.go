@@ -191,8 +191,8 @@ func TestGatewayIdentity_PlainLaneLookAlikeHostStaysOffTheRoute(t *testing.T) {
 			t.Fatalf("the signed call: status %d, %d gateway requests", code, g.gw.count())
 		}
 		for _, path := range []string{"/v1/messages", "/other"} {
-			if code := send("https://" + look + path); code != http.StatusBadRequest || g.gw.count() != 1 || g.other.count() != 0 {
-				t.Fatalf("%q%s: status %d, %d gateway requests, %d at the other server; want 400, 1 and none", look, path, code, g.gw.count(), g.other.count())
+			if code := send("https://" + look + path); code != http.StatusForbidden || g.gw.count() != 1 || g.other.count() != 0 {
+				t.Fatalf("%q%s: status %d, %d gateway requests, %d at the other server; want 403, 1 and none", look, path, code, g.gw.count(), g.other.count())
 			}
 		}
 	}
