@@ -163,6 +163,8 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 - `healthy` needs fresh heartbeats whose kernel event counts (`observed_total` plus `dropped_unmapped`) rose in the last 15 minutes. A sensor that stops can read `healthy` for up to 15 minutes after its last such heartbeat.
 - A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "No new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
 - With no rise on record it reads `idle` with "Whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
+- The missing connect kind, `kernel.network.connect`, is listed under `missing_kinds` only while the overall sensor state is `partial`. `degraded` and `idle` take precedence, and `/healthz` then omits `missing_kinds`.
+- The check reads event counts alone. If the supported connect hook has recorded connects, the counts cannot show that another hook's connects were dropped. Neither `healthy` nor a `partial` that omits the connect kind proves every connect was recorded.
 - The node's row keeps when its counts last rose, so every server reads the same verdict, one that just started included.
 - A failed write of a node's row is logged and does not fail the heartbeat.
 - With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.
