@@ -888,7 +888,7 @@ start.
 | `site_config_runners_via_own_route` | Change `runners.enabled` or `runners.require_managed_device` with `PUT /runners/settings`. |
 | `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. |
 | `assistant_no_provider` | `GET /me/assistant`: no model provider is marked to serve this purpose. |
-| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models` rules out every marked provider and model. |
+| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. |
 | `assistant_not_connected` | `GET /me/assistant`: you have no credential for a marked provider yet. |
 | `assistant_settings_invalid` | `PUT /assistant/settings`: `400` for an unknown provider, a bad model list or an unknown record kind, `428` without `If-Match`, `412` when it no longer matches. `GET /me/assistant`: `purpose` is not `compose` or `review`. An approval refuses a block the providers no longer allow. |
 | `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |

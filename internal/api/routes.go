@@ -546,6 +546,7 @@ func (s *Server) routes() chi.Router {
 			// defaults to — see mountProviderRoutes. One MOUNT, attached with no
 			// blank line, for the ratchet reason just above.
 			s.mountProviderRoutes(r, operatorOnly)
+			s.mountAssistantRoutes(r)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
