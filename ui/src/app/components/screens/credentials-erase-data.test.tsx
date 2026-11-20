@@ -183,7 +183,22 @@ describe("Erase someone's data (M4)", () => {
     expect(await within(dialog).findByText("Saved components")).toBeInTheDocument();
   });
 
-  it("names the principals the erasure left alone beside the result", async () => {
+  it("names an ambiguous name the erasure left out without calling it a principal", async () => {
+    erasePersonMock.mockResolvedValue({
+      person: "sub-ana",
+      scopes: [],
+      outcome: {},
+      not_erased: { subjects: ["Ana Example", "iss2|ana"], note: "not erased: erase by subject" },
+    });
+    const dialog = await openDialog();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
+    expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
+    expect(within(dialog).getByText(ERASE.NOT_ERASED("Ana Example, iss2|ana"))).toBeInTheDocument();
+    expect(within(dialog).queryByText(/separate principal/)).not.toBeInTheDocument();
+  });
+
+  it("names what the erasure left out beside the result", async () => {
     erasePersonMock.mockResolvedValue({
       person: "sub-ana",
       scopes: [],
@@ -196,7 +211,7 @@ describe("Erase someone's data (M4)", () => {
     expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
     expect(
       within(dialog).getByText(
-        "Not erased: iss2|ana, sub-ana-2. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+        "Not erased: iss2|ana, sub-ana-2. Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately.",
       ),
     ).toBeInTheDocument();
   });

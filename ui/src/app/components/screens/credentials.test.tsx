@@ -259,7 +259,7 @@ describe("erasing a listed person (design F-5)", () => {
     expect(await screen.findByText("Erased 1 credential for alice@corp.example.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Not erased: iss2|alice. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+        "Not erased: iss2|alice. Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately.",
       ),
     ).toBeInTheDocument();
   });

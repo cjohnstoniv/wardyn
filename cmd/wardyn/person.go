@@ -83,7 +83,7 @@ the person's runs is revoked. You cannot erase yourself except --scope credentia
 				for i, s := range ne.Subjects {
 					quoted[i] = strconv.Quote(s)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: not erased: %s; each is a principal of its own that has, or had, this person's tenant and object id. If one is the same person, erase it by that name too\n",
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: not erased: %s; Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately\n",
 					strings.Join(quoted, ", "))
 			}
 			if tokensLeft {

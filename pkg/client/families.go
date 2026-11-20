@@ -605,13 +605,14 @@ type ErasePersonResult struct {
 	Outcome map[string]string `json:"outcome"`
 	// Detail is each scope's counts.
 	Detail map[string]any `json:"detail"`
-	// NotErased lists the other principals that have, or had, the person's tenant and object id
-	// (another issuer's sign-in, for one): the erasure leaves them alone. Erase each by its subject
-	// when it is the same person. nil when there are none.
+	// NotErased lists the names the erasure leaves out: another principal that has, or had, the person's
+	// tenant and object id (another issuer's sign-in, for one), or an unbound name that more than one
+	// person may match. An entry does not say who it identifies; check that before erasing it by its
+	// own name. nil when there are none.
 	NotErased *ErasureNotErased `json:"not_erased,omitempty"`
 }
 
-// ErasureNotErased is an erasure answer's not_erased: the principals left alone and the server's note.
+// ErasureNotErased is an erasure answer's not_erased: the names left out and the server's note.
 type ErasureNotErased struct {
 	Subjects []string `json:"subjects"`
 	Note     string   `json:"note"`
