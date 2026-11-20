@@ -82,6 +82,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 - `agent-base` and `agent-codex-cli` no longer include `python3-pkg-resources` and the `python3-jaraco.context` chain that came with Debian's `asciinema`, so a full-severity scan no longer reports CVE-2026-23949 on them. `asciinema` is now Debian's package with that unused dependency removed and a `+wardyn1` version suffix, and the GPL source offer says so.
+- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, and group requests ignore such a user named as a member. Before, a SCIM token that knew such a user's id could read, change, suspend or remove the user, and a group removal naming them cut their sessions and revoked their tokens.
 
 ### Before you upgrade
 

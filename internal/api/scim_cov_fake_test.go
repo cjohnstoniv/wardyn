@@ -63,6 +63,8 @@ type scimCovStore struct {
 	failErr map[string]error
 	// skips is how many calls of a method pass before its armed failure applies.
 	skips map[string]int
+	// sweepRemovals makes PendingGroupRemovals list the pending removals; by default it lists none.
+	sweepRemovals bool
 	// casLost is how many UpdateRunStateIf calls answer "someone else moved the run".
 	casLost int
 
@@ -909,10 +911,34 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (s *scimCovStore) PendingGroupRemovals(context.Context, time.Duration, int) ([]store.PendingGroupRemoval, error) {
+// PendingGroupRemovals answers nothing unless sweepRemovals is set; then it lists the pending group_remove
+// pairs of a person of the issuer and tenant the way the store does (a row with no tenant matches any),
+// ordered by identity id then group id, before the limit. The idle window is not modelled.
+func (s *scimCovStore) PendingGroupRemovals(_ context.Context, issuer, tenant string, _ time.Duration, limit int) ([]store.PendingGroupRemoval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return nil, s.enter("PendingGroupRemovals")
+	if err := s.enter("PendingGroupRemovals"); err != nil || !s.sweepRemovals {
+		return nil, err
+	}
+	var out []store.PendingGroupRemoval
+	for _, j := range s.jobs {
+		g, err := uuid.Parse(j.Target)
+		i, known := s.idents[j.IdentityID]
+		if j.Kind != store.JobKindGroupRemove || j.Done || err != nil || !known || slices.Contains(s.members[g], j.IdentityID) ||
+			i.Issuer != issuer || (tenant != "" && i.TenantID != "" && i.TenantID != tenant) {
+			continue
+		}
+		if p := (store.PendingGroupRemoval{GroupID: g, IdentityID: j.IdentityID}); !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b store.PendingGroupRemoval) int {
+		return strings.Compare(a.IdentityID.String()+a.GroupID.String(), b.IdentityID.String()+b.GroupID.String())
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) GroupRemovalFailures(context.Context, int) ([]store.DeprovisionFailure, error) {

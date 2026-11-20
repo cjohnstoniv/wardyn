@@ -23,8 +23,8 @@ type afterCandidates struct {
 	hook func()
 }
 
-func (s *afterCandidates) PendingGroupRemovals(ctx context.Context, idle time.Duration, limit int) ([]store.PendingGroupRemoval, error) {
-	rows, err := s.PG.PendingGroupRemovals(ctx, idle, limit)
+func (s *afterCandidates) PendingGroupRemovals(ctx context.Context, issuer, tenant string, idle time.Duration, limit int) ([]store.PendingGroupRemoval, error) {
+	rows, err := s.PG.PendingGroupRemovals(ctx, issuer, tenant, idle, limit)
 	if hook := s.hook; err == nil && len(rows) > 0 && hook != nil {
 		s.hook = nil
 		hook()

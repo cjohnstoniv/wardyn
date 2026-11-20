@@ -76,7 +76,20 @@ func (s *Server) scimIdentity(w http.ResponseWriter, r *http.Request) (scimStore
 		s.scimServerError(w, r, "read the user", err)
 		return nil, store.PrincipalIdentity{}, false
 	}
+	if !s.scimOwns(ident) {
+		writeSCIMError(w, notFound)
+		return nil, store.PrincipalIdentity{}, false
+	}
 	return st, ident, true
+}
+
+// scimOwns reports whether an identity row belongs to the identity provider this SCIM endpoint serves:
+// the configured issuer and, as scimMatch finds a row by tenant, the configured tenant. A row with no
+// tenant recorded stays reachable under its issuer. A row of another issuer or tenant is, to every
+// by-id route, a user that does not exist.
+func (s *Server) scimOwns(ident store.PrincipalIdentity) bool {
+	cfg := s.cfg.SCIM
+	return ident.Issuer == cfg.Issuer && (cfg.Tenant == "" || ident.TenantID == "" || ident.TenantID == cfg.Tenant)
 }
 
 func (s *Server) scimServerError(w http.ResponseWriter, r *http.Request, what string, err error) {

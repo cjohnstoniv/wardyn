@@ -55,7 +55,7 @@ type ScimGroupStore interface {
 	ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error)
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
 	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
-	PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
+	PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
 	GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
 }
 
@@ -258,15 +258,19 @@ const pendingGroupRemovalWhere = `j.kind = 'group_remove' AND j.state = 'pending
 	AND NOT EXISTS (SELECT 1 FROM scim_group_members m WHERE m.identity_id = j.identity_id AND m.group_id::text = j.target)`
 
 // PendingGroupRemovals is the pendingGroupRemovalWhere removals that no step of the same removal has
-// touched for idleFor (a request still working on it is not one the sweeper may race), at most limit.
-func (s PG) PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error) {
+// touched for idleFor (a request still working on it is not one the sweeper may race), at most limit. Only
+// a person of the given issuer, and of the tenant when one is given and the row records one, is listed,
+// and that is decided before the limit: a pending removal of another issuer's person must not fill the batch.
+func (s PG) PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error) {
 	return collect(ctx, s.Pool, "list", "pending group removals", `
 		SELECT DISTINCT j.target::uuid, j.identity_id FROM deprovision_jobs j
+		  JOIN principal_identities pi ON pi.id = j.identity_id
 		 WHERE `+pendingGroupRemovalWhere+`
+		   AND pi.issuer = $3 AND ($4::text = '' OR pi.tenant_id = '' OR pi.tenant_id = $4::text)
 		   AND NOT EXISTS (SELECT 1 FROM deprovision_jobs x WHERE x.identity_id = j.identity_id
 		                  AND x.kind = 'group_remove' AND x.target = j.target
 		                  AND x.updated_at > now() - $1::bigint * interval '1 microsecond')
-		 ORDER BY 2, 1 LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingGroupRemoval, error) {
+		 ORDER BY 2, 1 LIMIT $2`, []any{idleFor.Microseconds(), limit, issuer, tenant}, func(r pgx.Row) (PendingGroupRemoval, error) {
 		var p PendingGroupRemoval
 		return p, r.Scan(&p.GroupID, &p.IdentityID)
 	})

@@ -640,7 +640,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	}
 	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A
 	// group deleted since still has its member's steps finished, with its external id unknown.
-	removals, err := st.PendingGroupRemovals(ctx, scimResumeIdle, scimSweepBatch)
+	removals, err := st.PendingGroupRemovals(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range removals {
 		g, err := st.GetScimGroup(ctx, p.GroupID)
