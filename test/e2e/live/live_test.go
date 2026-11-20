@@ -77,12 +77,10 @@ func TestLive_GradersRejectBadWorkspace(t *testing.T) {
 			ran++
 			t.Run(task.Name+"/"+filepath.Base(bad), func(t *testing.T) {
 				code, out := h.gradeExit(task.GraderImage, task.dir, bad)
-				switch {
-				case code == 0:
+				switch classifyGrade(code) {
+				case verdictPass:
 					t.Fatalf("grader PASSED the %s fixture — it is a rubber stamp:\n%s", filepath.Base(bad), out)
-				case code != 1:
-					// grade.sh exits 1 on a graded failure. -1 (docker could not run, signal, timeout), 2..124
-					// (a crashed or misused grader) and 125+ (docker's own errors) are no verdict at all.
+				case verdictNoVerdict:
 					t.Fatalf("grader exited %d (not the graded rejection, exit 1):\n%s", code, out)
 				default:
 					t.Logf("grader correctly REJECTED %s (exit %d): %s", filepath.Base(bad), code, strings.TrimSpace(lastLine(out)))
