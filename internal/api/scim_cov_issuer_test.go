@@ -216,7 +216,9 @@ func TestSCIMCovSweeperResumeOfAForeignRemovalDoesNothing(t *testing.T) {
 			}
 			tok := scimCovTokenIn(st, target.Principal, nil, nil)
 			g := st.addGroup("g-resume", "Resume")
-			st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: target.ID, Kind: store.JobKindGroupRemove, Step: store.JobStepAuditDeprovision, Target: g.ID.String()})
+			for _, step := range store.GroupRemovalSteps {
+				st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: target.ID, Kind: store.JobKindGroupRemove, Step: step, Target: g.ID.String()})
+			}
 			e := newSCIMCovEnv(t, st)
 
 			if err := e.srv.removeGroupMember(context.Background(), st, g, target.ID, scimSweeperSlot, true); err != nil {
@@ -225,8 +227,13 @@ func TestSCIMCovSweeperResumeOfAForeignRemovalDoesNothing(t *testing.T) {
 			if got := st.callCount("ResumeGroupRemoval") + st.callCount("StartGroupRemoval"); got != 0 {
 				t.Errorf("a ledger was resumed or started %d times", got)
 			}
-			if len(st.jobs) != 1 || st.jobs[0].Done {
-				t.Errorf("the ledger row changed: %+v", st.jobs)
+			if len(st.jobs) != len(store.GroupRemovalSteps) {
+				t.Errorf("the ledger rows changed: %+v", st.jobs)
+			}
+			for _, j := range st.jobs {
+				if j.Done {
+					t.Errorf("ledger step %s was settled: %+v", j.Step, j)
+				}
 			}
 			e.wantNoForeignEffect(t, st, []uuid.UUID{tok}, target)
 		})
