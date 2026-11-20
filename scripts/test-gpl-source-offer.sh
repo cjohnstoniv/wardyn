@@ -147,4 +147,19 @@ sec="$(section "$(offer)" agent-base)"
 grep -qF 'This image carries `asciinema 2.4.0-1+wardyn1`, which is Debian'"'"'s `asciinema 2.4.0-1`' <<<"$sec" || fail "an SBOM row with the suffix must name Debian's own version"
 echo "ok  suffixed SBOM row names the Debian version"
 
+# 6d. a +wardyn SBOM row that no Dockerfile recipe describes any more is refused,
+#     and the existing offer is left as it was.
+printf 'FROM debian:trixie-slim\n' > "$M/deploy/images/base/Dockerfile"
+cp "$M/deploy/images/THIRD-PARTY-GPL.md" "$M/before.md"
+if (cd "$M" && ./scripts/gpl-source-offer.sh sbom v0.0.2 >/dev/null 2>&1); then fail "a +wardyn SBOM row with no recipe must be refused"; fi
+cmp -s "$M/before.md" "$M/deploy/images/THIRD-PARTY-GPL.md" || fail "a refused run must not rewrite the offer"
+cp "$ROOT/deploy/images/base/Dockerfile" "$M/deploy/images/base/"
+echo "ok  +wardyn SBOM row with no recipe refused"
+
+# 6e. an artifact of the repacked package's name with no version does not stop
+#     the write half way.
+printf '{"source":{"type":"image","metadata":{}},"artifacts":[{"name":"asciinema","licenses":[{"value":"GPL-3"}],"type":"python"},{"name":"asciinema","version":"2.4.0-1","licenses":[{"value":"GPL-3"}],"type":"deb"}]}\n' > "$M/sbom/04-sbom-agent-base-v0.0.2-amd64.json"
+offer >/dev/null || fail "an artifact with no version must not stop the generator"
+echo "ok  versionless artifact does not truncate the offer"
+
 echo "test-gpl-source-offer: PASS"

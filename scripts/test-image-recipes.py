@@ -394,8 +394,9 @@ class AsciinemaWithoutPkgResources(unittest.TestCase):
                 self.assertIn("grep -rIl 'pkg_resources' asciinema-src/usr", text)
                 self.assertIn("grep -qx 'Depends: python3:any, python3-pkg-resources' asciinema-src/DEBIAN/control", text)
                 self.assertIn("Version: \\1+wardyn1", text)
-                self.assertIn("if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi", text)
-                self.assertIn("if dpkg -s python3-jaraco.context >/dev/null 2>&1; then exit 1; fi", text)
+                # Live RUN continuation lines, not comments: a guard moved into a `#` line passes assertIn.
+                self.assertRegex(text, r"(?m)^\s+&& if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi \\$")
+                self.assertRegex(text, r"(?m)^\s+&& if dpkg -s python3-jaraco\.context >/dev/null 2>&1; then exit 1; fi$")
 
     def test_the_recipe_has_no_script_image_scope_cannot_model(self):
         self.assertFalse((ROOT / "deploy/images/common/asciinema-deb.sh").exists())

@@ -228,6 +228,23 @@ if [ "${#unbuilt[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# An SBOM row carrying a `+wardyn<N>` version is a package Wardyn modified. If
+# no Dockerfile recipe describes it any more (the repack was dropped after that
+# image shipped), the offer cannot say how it differs from Debian's: refuse
+# rather than print "None of these packages are modified" over that row.
+orphans=()
+for img in "${ALL_IMAGES[@]}"; do
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    [[ $'\n'"${MODIFIED[$img]}" == *$'\n'"${row%% *}|"* ]] || orphans+=("$img: $row")
+  done < <(jq -r '.artifacts[] | select((.version // "") | test("\\+wardyn[0-9]+$")) | "\(.name) \(.version)"' "${SBOM_FILE[$img]}")
+done
+if [ "${#orphans[@]}" -gt 0 ]; then
+  echo "FATAL: these SBOM rows carry a +wardyn version that no Dockerfile recipe describes; describe them before writing the offer:" >&2
+  printf '  %s\n' "${orphans[@]}" >&2
+  exit 1
+fi
+
 {
   echo "# Corresponding source for GPL and LGPL components in the published images"
   echo
@@ -348,7 +365,7 @@ fi
         echo "- \`Version:\` gained the suffix \`${msuffix}\`, so the dpkg record names a"
         echo "  package that is not Debian's own."
         echo
-        exact=$(jq -r --arg p "$mpkg" '[.artifacts[] | select(.name == $p and (.version | test("\\+wardyn[0-9]+$")))] | first | .version // ""' "$f")
+        exact=$(jq -r --arg p "$mpkg" '[.artifacts[] | select(.name == $p and ((.version // "") | test("\\+wardyn[0-9]+$")))] | first | .version // ""' "$f")
         if [ -n "$exact" ]; then
           echo "This image carries \`${mpkg} ${exact}\`, which is Debian's \`${mpkg} ${exact%"$msuffix"}\`"
           echo "with those two edits."
