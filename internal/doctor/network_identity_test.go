@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -194,5 +195,49 @@ func TestEachHandshakeIsHeldToTheHostItDialled(t *testing.T) {
 		if err := p.verify(tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}); err == nil {
 			t.Errorf("organisation %s behind an https:// proxy: the proxy's own certificate passed as the organisation's", origin)
 		}
+	}
+}
+
+// An unknown-root failure names the host that presented the certificate and offers only the fix that reaches
+// it: for the organisation, the CLI's `wardyn ca add` store among the options; for an https:// proxy, the
+// system trust store and not `wardyn ca add`, whose anchors never vouch for a proxy (verify).
+func TestUntrustedIssuerRemedyFollowsTheHandshakeThatFailed(t *testing.T) {
+	ca := newTestCA(t)
+	u, _ := url.Parse("https://wardyn.example.com:8443")
+	for _, tc := range []struct {
+		name       string
+		sent       string
+		wantPeer   string
+		wantOrigin bool
+		wantAdd    bool
+		presenter  string
+	}{
+		{"the organisation's handshake", "wardyn.example.com", "wardyn.example.com", true, true, "wardyn.example.com:8443"},
+		{"an https:// proxy's handshake", "proxy.example.com", "proxy.example.com", false, false, "proxy.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert, _ := x509.ParseCertificate(ca.leaf(t, nil, tc.sent).Certificate[0])
+			n := Network{SystemRoots: x509.NewCertPool(), OrgSetting: "WARDYN_URL"}
+			p := &probe{n: &n, origin: "wardyn.example.com", proxy: "proxy.example.com"}
+			if err := p.verify(tls.ConnectionState{ServerName: tc.sent, PeerCertificates: []*x509.Certificate{cert}}); err == nil {
+				t.Fatal("an unknown issuer verified")
+			}
+			if p.peerName != tc.wantPeer || p.peerOrigin != tc.wantOrigin {
+				t.Fatalf("recorded peer %q (organisation's: %v), want %q (%v)", p.peerName, p.peerOrigin, tc.wantPeer, tc.wantOrigin)
+			}
+			st := n.certFailure(p, u)
+			if st.Status != StatusFail || st.Setting != "SSL_CERT_FILE" || !strings.HasPrefix(st.Detail, tc.presenter+" presented a certificate") {
+				t.Fatalf("stage %+v, want a FAIL naming %s as the presenter", st, tc.presenter)
+			}
+			if got := strings.Contains(st.Fix, "wardyn ca add <file>"); got != tc.wantAdd {
+				t.Errorf("fix %q: offers `wardyn ca add <file>` = %v, want %v", st.Fix, got, tc.wantAdd)
+			}
+			if !strings.Contains(st.Fix, "system trust store") {
+				t.Errorf("fix %q does not name the system trust store", st.Fix)
+			}
+			if !tc.wantOrigin && strings.Contains(st.Detail, "wardyn.example.com:8443") {
+				t.Errorf("detail %q names the organisation as the proxy's presenter", st.Detail)
+			}
+		})
 	}
 }

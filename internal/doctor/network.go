@@ -210,6 +210,11 @@ type probe struct {
 	verifyErr error
 	connect   int
 
+	// peer and peerOrigin are the host the failed handshake dialled and whether it is the organisation's (false:
+	// the https:// proxy's), so a failure names who presented the certificate and the fix that reaches it.
+	peerName   string
+	peerOrigin bool
+
 	// origin is the organisation's host, and proxy an https:// proxy's ("" for none): the names a handshake is held to.
 	origin, proxy string
 }
@@ -238,6 +243,7 @@ func (p *probe) verify(cs tls.ConnectionState) error {
 		inter.AddCert(c)
 	}
 	name, origin := p.peer(cs)
+	p.peerName, p.peerOrigin = name, origin
 	try := func(roots *x509.CertPool) error {
 		_, err := p.leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots, Intermediates: inter})
 		return err
@@ -320,7 +326,11 @@ func (n *Network) tlsStage(p *probe, u, proxy *url.URL, err error) Stage {
 // certFailure names the certificate the server presented and who issued it, which tells a proxy that inspects
 // TLS (its own issuer) from a wrong address or an expired certificate, and the setting that fixes each.
 func (n *Network) certFailure(p *probe, u *url.URL) Stage {
-	presented := fmt.Sprintf("%s presented a certificate for %s issued by %s", u.Host, runnerwire.Distinguished(p.leaf.Subject), runnerwire.Distinguished(p.leaf.Issuer))
+	presenter := u.Host
+	if !p.peerOrigin && p.peerName != "" {
+		presenter = p.peerName // the https:// proxy's handshake, not the organisation's
+	}
+	presented := fmt.Sprintf("%s presented a certificate for %s issued by %s", presenter, runnerwire.Distinguished(p.leaf.Subject), runnerwire.Distinguished(p.leaf.Issuer))
 	var unknown x509.UnknownAuthorityError
 	var wrongHost x509.HostnameError
 	var invalid x509.CertificateInvalidError
@@ -330,13 +340,22 @@ func (n *Network) certFailure(p *probe, u *url.URL) Stage {
 			"a PEM bundle holding that root (Linux), or add the root to the system trust store; wardyn-runnerd reads "+p.store+" instead")
 	case errors.As(p.verifyErr, &unknown):
 		detail := presented + ", which no trusted root signed (a proxy that inspects TLS does this)"
+		if !n.ExtraCATrusted && !p.peerOrigin {
+			// The CLI's stored organisation anchors vouch for the organisation's host only (verify), so they cannot fix this.
+			return FailStage("tls", detail, "SSL_CERT_FILE",
+				"a PEM bundle holding that issuer's root CA (Linux), or add the root to the system trust store; `wardyn ca add` does not apply, since it covers the organisation's certificate and not a proxy's; wardyn-runnerd reads WARDYN_TRUSTED_CA_FILE instead")
+		}
 		if !n.ExtraCATrusted {
 			return FailStage("tls", detail, "SSL_CERT_FILE",
 				"a PEM bundle holding that issuer's root CA (Linux), add the root to the system trust store, or run `wardyn ca add <file>` to add it to the CLI's trust store; wardyn-runnerd reads WARDYN_TRUSTED_CA_FILE instead")
 		}
 		return FailStage("tls", detail, "WARDYN_TRUSTED_CA_FILE", "a PEM file holding that issuer's root CA")
 	case errors.As(p.verifyErr, &wrongHost):
-		return FailStage("tls", presented+", which does not cover "+u.Hostname(), n.OrgSetting, "the address that certificate covers")
+		covers := u.Hostname()
+		if !p.peerOrigin && p.peerName != "" {
+			covers = p.peerName
+		}
+		return FailStage("tls", presented+", which does not cover "+covers, n.OrgSetting, "the address that certificate covers")
 	case errors.As(p.verifyErr, &invalid):
 		return FailStage("tls", presented+", which is expired or not valid yet", "", "check this computer's clock; if it is right, the organisation's certificate needs renewing")
 	}
