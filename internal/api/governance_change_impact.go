@@ -208,16 +208,11 @@ func treeModels(ch types.GovernanceChange) bool {
 func (s *Server) treeImpact(r *http.Request, ch types.GovernanceChange, out *changeImpact) error {
 	ctx := r.Context()
 	kind := governanceChangeKinds[ch.TargetKind].forChange(ch)
-	var before, after treeSnapshot
-	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
-		if before, err = readTreeSnapshot(ctx, q); err != nil {
-			return err
-		}
-		if _, err = kind.apply(s, r, q, ch); err != nil {
+	before, after, in, err := s.treeReplay(ctx, func(q store.Querier) error {
+		if _, err := kind.apply(s, r, q, ch); err != nil {
 			return &impactApplyError{err}
 		}
-		after, err = readTreeSnapshot(ctx, q)
-		return err
+		return nil
 	})
 	var refused *impactApplyError
 	switch {
@@ -230,7 +225,7 @@ func (s *Server) treeImpact(r *http.Request, ch types.GovernanceChange, out *cha
 	case err != nil:
 		return err
 	}
-	report, err := s.treeEffect(ctx, before, after)
+	report, err := s.treeEffect(ctx, before, after, in)
 	if err != nil {
 		return err
 	}
