@@ -159,10 +159,12 @@ modified_recipes() {
   while IFS= read -r logical; do
     [[ "$logical" =~ \+wardyn[0-9]+ ]] || continue
     suffix="${BASH_REMATCH[0]}"
-    [[ "$logical" =~ apt-get\ download\ ([a-z0-9.+-]+) ]] || continue
+    # A `+wardyn<N>` RUN this parse cannot read is a modified package the offer
+    # would silently omit: refuse instead.
+    [[ "$logical" =~ apt-get\ download\ ([a-z0-9.+-]+) ]] || { echo "FATAL: $df sets a +wardyn version in a RUN with no 'apt-get download <pkg>'; teach $0 this recipe shape" >&2; exit 1; }
     pkg="${BASH_REMATCH[1]}"
-    before=""; after=""
-    if [[ "$logical" =~ $re ]]; then before="${BASH_REMATCH[1]}"; after="${BASH_REMATCH[2]}"; fi
+    [[ "$logical" =~ $re ]] || { echo "FATAL: $df repacks $pkg but its Depends edit is not the 's/^Depends: .../Depends: .../' form $0 reads" >&2; exit 1; }
+    before="${BASH_REMATCH[1]}"; after="${BASH_REMATCH[2]}"
     printf '%s|%s|%s|%s|%s\n' "$pkg" "$suffix" "$before" "$after" "$df"
   done < <(grep -Ev '^[[:space:]]*#' "$df" | awk '{ if (sub(/\\[[:space:]]*$/, "")) {buf = buf $0} else {print buf $0; buf = ""} }')
 }
