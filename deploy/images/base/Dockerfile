@@ -147,18 +147,26 @@ LABEL org.opencontainers.image.title="agent-base" \
 # tmux + openssh-client already ship here (do not re-touch that pairing/
 # known_hosts baking).
 # apt-get upgrade: take the current security updates for packages the pinned base already carries.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# asciinema comes from deploy/images/common/asciinema-deb.sh: Debian's package minus its
+# python3-pkg-resources dependency, which asciinema never uses and which pulls in the
+# python3-jaraco.context chain a scanner flags (CVE-2026-23949). The trailing check keeps
+# the chain from creeping back in.
+COPY deploy/images/common/asciinema-deb.sh /tmp/asciinema-deb.sh
+RUN apt-get update && apt-get upgrade -y && sh /tmp/asciinema-deb.sh /tmp/asciinema \
+    && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
-        asciinema \
+        /tmp/asciinema/asciinema.deb \
         tmux \
         openssh-client \
         openssh-sftp-server \
         socat \
         rsync \
         corkscrew \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/asciinema /tmp/asciinema-deb.sh \
+    && if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi \
+    && if dpkg -s python3-jaraco.context >/dev/null 2>&1; then exit 1; fi
 
 # ── SSH SCM lane (git-over-SSH clone via SSH-over-443) ────────────────────────
 # openssh-client provides `ssh`; corkscrew is the HTTP-CONNECT proxy helper used
