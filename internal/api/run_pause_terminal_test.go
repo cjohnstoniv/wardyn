@@ -84,7 +84,7 @@ func TestApprovalClosed_LeavesAnEndedOrKeptRunFrozen(t *testing.T) {
 	}
 }
 
-// TestResumeRun_RefusesARunThatIsNotLive pins the seam itself: the refusal names the run's state and comes
+// TestResumeRun_RefusesARunThatIsNotLive pins the seam itself: the refusal is errResumeRunNotLive and comes
 // before the owner check, the thaw and the clear.
 func TestResumeRun_RefusesARunThatIsNotLive(t *testing.T) {
 	for _, c := range endedPausedCases() {
@@ -117,5 +117,47 @@ func TestResumeClosedRun_ThawsALiveRunWithNoOpenRequest(t *testing.T) {
 	}
 	if rows := f.rows("run.resume", "success"); len(rows) != 1 {
 		t.Errorf("run.resume success rows = %d, want 1", len(rows))
+	}
+}
+
+// TestResumeClosedRun_LeavesARunPastItsLifetimeFrozen: a RUNNING paused run whose end time or lifetime cap has
+// passed, and which the lifetime sweep has not reached yet, is not thawed; the sweep ends it.
+func TestResumeClosedRun_LeavesARunPastItsLifetimeFrozen(t *testing.T) {
+	past := time.Now().UTC().Add(-time.Minute)
+	for _, c := range []struct {
+		name string
+		set  func(r *types.AgentRun)
+	}{
+		{"ends_at", func(r *types.AgentRun) { r.EndsAt = &past }},
+		{"lifetime_cap_at", func(r *types.AgentRun) { r.LifetimeCapAt = &past }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, _ := newSandboxFixture(t, types.PauseWaiting)
+			f.st.open, f.st.waiting = false, false
+			f.st.mu.Lock()
+			c.set(&f.st.run)
+			f.st.mu.Unlock()
+			listed, _ := f.st.GetRun(context.Background(), f.run.ID)
+
+			f.srv.resumeClosedRun(context.Background(), f.st, store.PauseCandidate{Run: listed})
+			assertNothingResumed(t, f)
+		})
+	}
+}
+
+// TestResumeClosedRun_ThawsARunInsideItsLifetime: an end time and a cap still ahead do not stop the resume.
+func TestResumeClosedRun_ThawsARunInsideItsLifetime(t *testing.T) {
+	ahead := time.Now().UTC().Add(time.Hour)
+	f, _ := newSandboxFixture(t, types.PauseWaiting)
+	f.st.open, f.st.waiting = false, false
+	f.st.mu.Lock()
+	f.st.run.EndsAt, f.st.run.LifetimeCapAt = &ahead, &ahead
+	f.st.mu.Unlock()
+	listed, _ := f.st.GetRun(context.Background(), f.run.ID)
+
+	f.srv.resumeClosedRun(context.Background(), f.st, store.PauseCandidate{Run: listed})
+
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d, want 1", thaws)
 	}
 }
