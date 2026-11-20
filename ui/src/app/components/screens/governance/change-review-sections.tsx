@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The sections that tell a reviewer what a change does before the raw diff: the verdict and its sentence, the
+// The sections that tell the person deciding what a change does before the raw diff: the verdict and its sentence, the
 // impact, the risk, and the raw diff last. Each takes the change and, for the impact, the server's impact
 // result, and holds no layout of the drawer, so any page can place them.
 //

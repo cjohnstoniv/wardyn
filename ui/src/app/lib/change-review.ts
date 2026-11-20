@@ -14,7 +14,7 @@ import type { ChangeWidening, GovernanceChange } from "./types";
 
 const LABELS: Record<string, string> = { ...FIELD_LABEL, ...BOUNDARY_DRY_RUN.KNOB };
 
-// What a change is about, as the reviewer reads it. A profile's key is its id, which says nothing, so its
+// What a change is about, as the person deciding reads it. A profile's key is its id, which says nothing, so its
 // name is read from the server's own diff (the stored row on an edit or a delete, the proposed one on a
 // create), as is a runner trust change's runner. Every other kind's key is already its natural key.
 export function changeTarget(c: GovernanceChange): string {
