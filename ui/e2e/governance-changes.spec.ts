@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, asRealSecurityAdmin, asRealSecurityAdmin2, consoleAPI } from "./fixtures";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { CHANGE_NOTE } from "../src/app/components/wardyn/copy/change-note";
+import { CHANGE_REVIEW } from "../src/app/lib/change-review-copy";
 
 // ---------------------------------------------------------------------------
 // Four-eyes on governance writes (0.8.6): a covered write is held for a second human, the console shows
@@ -94,7 +95,8 @@ test.describe("governance — a covered write waits for a second human", () => {
     await page.getByRole("button", { name: CHANGE_LABEL, exact: true }).click();
     const drawer = page.getByRole("dialog");
     await expect(drawer.getByText(NAME, { exact: true }).first()).toBeVisible();
-    // The server's own diff: the changed field, before and after.
+    // The server's own diff, last and closed: open it to read the changed field, before and after.
+    await drawer.getByText(CHANGE_REVIEW.RAW_DIFF, { exact: true }).click();
     await expect(drawer.getByText("limits.max_concurrent_runs", { exact: true })).toBeVisible();
     // R1-0098: the approver's drawer carries the notes, under the existing heading.
     await expect(drawer.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
