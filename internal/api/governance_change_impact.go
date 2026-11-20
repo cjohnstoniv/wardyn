@@ -18,13 +18,14 @@ import (
 
 // What a change's impact computed, and why it computed nothing.
 const (
-	impactTree     = "tree"     // a profile or membership change replayed through the tree dry run
+	impactTree     = "tree"     // a profile write or a membership move replayed through the tree dry run
 	impactBoundary = "boundary" // a boundary change met with every layer, as the boundary dry run does
 	impactNone     = "none"     // nothing: not_computed says why
 
-	impactKindNotComputed    = "kind"    // the kind has no dry run
-	impactStaleNotComputed   = "stale"   // the target or the deployment default moved since the proposal
-	impactRefusedNotComputed = "refused" // the change, replayed now, is refused
+	impactKindNotComputed      = "kind"      // the kind has no dry run
+	impactOperationNotComputed = "operation" // the dry run does not model the operation (treeModels)
+	impactStaleNotComputed     = "stale"     // the target or the deployment default moved since the proposal
+	impactRefusedNotComputed   = "refused"   // the change, replayed now, is refused
 )
 
 // maxImpactLiveRuns bounds the live runs an impact lists; live_runs_total counts them all.
@@ -168,8 +169,8 @@ func (s *Server) unitWriteAsHeld(ctx context.Context, targetKey string, after js
 	}, nil
 }
 
-// changeImpactOf replays held change ch, as of now: a profile or membership change through its own
-// apply between two reads of the tree (treeImpact), a boundary change met with every layer
+// changeImpactOf replays held change ch, as of now: a profile write or a membership move through its
+// own apply between two reads of the tree (treeImpact), a boundary change met with every layer
 // (boundaryImpact). A change whose deployment default moved is stale, as its approval would be.
 func (s *Server) changeImpactOf(r *http.Request, ch types.GovernanceChange) (changeImpact, error) {
 	out := changeImpact{Computed: impactNone, AsOf: time.Now().UTC().Format(time.RFC3339)}
@@ -181,10 +182,25 @@ func (s *Server) changeImpactOf(r *http.Request, ch types.GovernanceChange) (cha
 		out.NotComputed = impactStaleNotComputed
 	case ch.TargetKind == govKindBoundary:
 		err = s.boundaryImpact(r.Context(), ch, &out)
+	case !treeModels(ch):
+		out.NotComputed = impactOperationNotComputed
 	default:
 		err = s.treeImpact(r, ch, &out)
 	}
 	return out, err
+}
+
+// treeModels reports whether the tree dry run models held change ch: a unit's profile created or
+// updated, or a membership moved. It compares the memberships both reads of the tree hold, so a
+// membership added, removed or promoted, or a unit deleted, would answer an empty impact that is false.
+func treeModels(ch types.GovernanceChange) bool {
+	switch ch.TargetKind {
+	case govKindUnit:
+		return ch.Op == "create" || ch.Op == "update"
+	case govKindMembership:
+		return ch.Op == "move"
+	}
+	return false
 }
 
 // treeImpact replays a profile or membership change through its own apply between two reads of the

@@ -409,6 +409,22 @@ func TestImpactForCounts(t *testing.T) {
 	if err != nil || out.counts() != (impactCounts{Computed: impactNone, NotComputed: impactStaleNotComputed}) {
 		t.Errorf("a moved deployment default = %+v, %v; want none/stale", out.counts(), err)
 	}
+	// A membership add, removal or promotion, and a unit deletion, are not modelled by the tree dry run.
+	for _, op := range []struct {
+		kind, op string
+		tree     bool
+	}{{govKindUnit, "create", true}, {govKindUnit, "update", true}, {govKindUnit, "delete", false},
+		{govKindMembership, "move", true}, {govKindMembership, "upsert", false}, {govKindMembership, "delete", false},
+		{govKindMembership, "promote", false}} {
+		if got := treeModels(types.GovernanceChange{TargetKind: op.kind, Op: op.op}); got != op.tree {
+			t.Errorf("treeModels(%s %s) = %v, want %v", op.kind, op.op, got, op.tree)
+		}
+	}
+	ch.DeploymentHash, ch.TargetKind, ch.Op = computeETag(s2.cfg.DefaultPolicy), govKindMembership, "upsert"
+	out, err = s2.changeImpactOf(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), ch)
+	if err != nil || out.counts() != (impactCounts{Computed: impactNone, NotComputed: impactOperationNotComputed}) || out.People != nil {
+		t.Errorf("a membership add = %+v, %v; want none/operation", out.counts(), err)
+	}
 	people := []treeDryRunPerson{{}, {}}
 	total := 7
 	full := changeImpact{Computed: impactTree, People: &people, LiveRunsTotal: &total, Activates: []unitActivation{{}}}
