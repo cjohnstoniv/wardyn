@@ -26,7 +26,7 @@
 | --- | --- |
 | One container running the pool's image idle. | Settings, secrets, files or drives. |
 | The pool's `cpu` and `memory` plus a proxy's share, with requests equal to limits. | A service-account token, or any run's labels. |
-| Priority -10 from the chart's class, so any run evicts it. | Network, where the namespace enforces NetworkPolicy: the deny-all NetworkPolicy `wardyn-warm-deny` selects every placeholder, and stands before the first one is made. |
+| Priority -10 from the chart's class, so any run evicts it. | Any network allowance from Wardyn. Where the namespace enforces NetworkPolicy, Wardyn adds `wardyn-warm-deny`, a policy that allows no traffic for placeholders, and it stands before the first one is made. Other matching policies and the platform's network exceptions still apply. |
 
 - A webhook in the runs namespace can change any pod. Wardyn checks each placeholder as the API server stored it, when its create returns and on every pass. It deletes one that holds anything, has more than one container, runs another image or shares a host namespace. When a create of its name returns, it also deletes one that lost its `wardyn.component` or `wardyn.warm-pool` label, which the deny-all policy and each pass find it by. That pool then waits 5 minutes. Such a placeholder can start before it is deleted. The deny-all policy covers it unless a webhook removed its `wardyn.component` label, or put it on the host network, where most network plugins apply no policy.
 - Each pass reads `wardyn-warm-deny` by name. If it is not exactly the deny-all policy, the placeholders are deleted first, and none is made until the right policy stands.

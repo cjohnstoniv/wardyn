@@ -863,7 +863,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_K8S_WARM_POOLS`
 
 - Experimental, empty by default (`-tags k8s`). A JSON array of pools: `name` (a DNS label, at most 30 characters), `image`, `class` (`CC1`, `CC2` or `CC3`), `cpu`, `memory` and `size` (0 to 20; at most 50 across all pools).
-- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials and, where the namespace enforces NetworkPolicy, no network. Each reserves `cpu` and `memory` plus a proxy's share.
+- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials. Where the namespace enforces NetworkPolicy, Wardyn adds a policy that allows no traffic for placeholders. Other matching policies and the platform's network exceptions still apply. Each reserves `cpu` and `memory` plus a proxy's share.
 - A run whose image and class match a pool, and whose requests fit, removes one placeholder and prefers its node. The run's own pods are made fresh and checked as always.
 - Boot refuses a malformed value, a `CC2` or `CC3` pool whose RuntimeClass is not pinned, and any value under `wardyn-runnerd`. `WARDYN_K8S_WARM_PRIORITY_CLASS` names the PriorityClass placeholders take.
 - How placeholders are kept and claimed, and what they cost: [Kubernetes: warm pools](operations/kubernetes-warm-pools.md).
