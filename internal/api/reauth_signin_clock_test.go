@@ -18,9 +18,9 @@ import (
 // signInClockRows are the sign-in gate's rows. The database stamps requested_at and a server stamps the capture.
 // capturer and reader are the capturing and the reading server's clocks less the database's, and capture is when the
 // sign-in came on the database's clock, from the raise. stamped is a capture that carries its server's database stamp
-// (CapturedDBAt); one without it is an older capture, which the reader moves onto the database's clock itself. readGap
-// is how far the reader's clock moves while its database clock read is in flight. A capture after the raise answers it
-// whatever the clocks; one before never does.
+// (CapturedDBAt); one without it is an older capture, or one whose server could not read the database's clock, and it
+// never answers the request, whatever the clocks. readGap is how far the reader's clock moves while its database
+// clock read is in flight. A stamped capture after the raise answers it whatever the clocks; one before never does.
 var signInClockRows = []struct {
 	name                      string
 	capturer, reader, capture time.Duration
@@ -29,15 +29,19 @@ var signInClockRows = []struct {
 	clockErr                  error
 	want                      types.ApprovalState
 }{
-	{"older capture, server 30s behind, 5s after the raise", -30 * time.Second, -30 * time.Second, 5 * time.Second, false, 0, nil, types.ApprovalApproved},
-	{"older capture, server 30s behind, 5s before the raise", -30 * time.Second, -30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
-	{"older capture, clocks agree, 5s after the raise", 0, 0, 5 * time.Second, false, 0, nil, types.ApprovalApproved},
-	{"older capture, clocks agree, 5s before the raise", 0, 0, -5 * time.Second, false, 0, nil, types.ApprovalPending},
-	{"older capture, server 30s ahead, 5s after the raise", 30 * time.Second, 30 * time.Second, 5 * time.Second, false, 0, nil, types.ApprovalApproved},
-	{"older capture, server 30s ahead, 5s before the raise", 30 * time.Second, 30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
-	{"older capture, database clock unreadable, 5s after the raise", 0, 0, 5 * time.Second, false, 0, errClockRead, types.ApprovalPending},
-	// The database's clock is read before the server's: a capture inside the read's delay reads as before the raise.
-	{"older capture 1s after the raise, a 2s clock read", 0, 0, time.Second, false, 2 * time.Second, nil, types.ApprovalPending},
+	{"unstamped, server 30s behind, 5s after the raise", -30 * time.Second, -30 * time.Second, 5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, server 30s behind, 5s before the raise", -30 * time.Second, -30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, clocks agree, 5s after the raise", 0, 0, 5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, clocks agree, 5s before the raise", 0, 0, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, server 30s ahead, 5s after the raise", 30 * time.Second, 30 * time.Second, 5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, server 30s ahead, 5s before the raise", 30 * time.Second, 30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, database clock unreadable, 5s after the raise", 0, 0, 5 * time.Second, false, 0, errClockRead, types.ApprovalPending},
+	// The reader's clock is 30s slow and it reads a minute after the raise: translating a capture through it would put a
+	// capture 5s before the raise 25s after it. No stamp, no translation.
+	{"unstamped, capturer in sync, reader 30s slow a minute on, 5s before the raise", 0, -30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, capturer 30s ahead, reader 30s slow a minute on, 5s before the raise", 30 * time.Second, -30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, capturer 30s behind, reader 30s ahead, 5s before the raise", -30 * time.Second, 30 * time.Second, -5 * time.Second, false, 0, nil, types.ApprovalPending},
+	{"unstamped, a 2s clock read, 1s after the raise", 0, 0, time.Second, false, 2 * time.Second, nil, types.ApprovalPending},
 	{"stamped, both servers 30s ahead, 5s before the raise", 30 * time.Second, 30 * time.Second, -5 * time.Second, true, 0, nil, types.ApprovalPending},
 	{"stamped, both servers 30s ahead, 5s after the raise", 30 * time.Second, 30 * time.Second, 5 * time.Second, true, 0, nil, types.ApprovalApproved},
 	{"stamped, capturer in sync, reader 30s behind, 5s before the raise", 0, -30 * time.Second, -5 * time.Second, true, 0, nil, types.ApprovalPending},
@@ -106,8 +110,8 @@ func (s azA3ClockStore) DatabaseNow(context.Context) (time.Time, error) {
 // An Azure DevOps sign-in answers the request it follows, read on one clock. Catches: the capture (a server's clock)
 // compared with requested_at (the database's), so a server behind the database never lets a sign-in made just after
 // the raise answer it, and one ahead lets a sign-in made just before it count; a capture's own database stamp ignored,
-// so a server reading another's capture moves it by the difference between the two servers' clocks; and the anchor
-// read in the wrong order, so a capture inside the read's delay counts.
+// so a server reading another's capture moves it by the difference between the two servers' clocks; and a capture with
+// no stamp translated through the reading server's clock, so a slow reader lets a capture before the raise count.
 func TestADOSignIn_CaptureAnswersTheRaiseOnTheDatabaseClock(t *testing.T) {
 	f := newADOSignInFixture(t)
 	ctx := context.Background()

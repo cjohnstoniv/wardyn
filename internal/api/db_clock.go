@@ -94,13 +94,3 @@ func (s *Server) databaseStamp(ctx context.Context, at time.Time) time.Time {
 	}
 	return db.AppClockAnchor{DatabaseAt: dbAt, AppAt: s.cfg.Now()}.Translate(at).UTC()
 }
-
-// capturedAfter reports whether a sign-in captured at capturedAt on this server's clock came after at, a time the
-// database stamped: an approval's requested_at. It is exact only for a capture this server stamped, since another
-// server's clock may differ from this one's; signedInAfter prefers the capture's own database stamp. The anchor's read
-// order keeps a capture before the raise from ever counting here. A database clock that cannot be read answers false:
-// the request stays pending, and the next read or sign-in asks again.
-func (s *Server) capturedAfter(ctx context.Context, capturedAt, at time.Time) bool {
-	t := s.databaseStamp(ctx, capturedAt)
-	return !t.IsZero() && t.After(at)
-}

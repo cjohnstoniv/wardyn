@@ -186,7 +186,7 @@ type adoEntraBlob struct {
 	// CapturedDBAt is CapturedAt on the database's clock, read by the server that captured the sign-in
 	// (databaseStamp), so any server can compare it with a database stamp such as requested_at. Absent on a
 	// capture stored before it existed, when that clock could not be read, or after a server without the field
-	// rewrote the blob: signedInAfter then falls back.
+	// rewrote the blob: signedInAfter then never counts it.
 	CapturedDBAt time.Time `json:"captured_db_at,omitzero"`
 	// Source names HOW this credential arrived, so a review can tell a
 	// browser sign-in from anything added later. One value today.
@@ -223,13 +223,12 @@ type adoEntraBlob struct {
 // until the person signs in again.
 func (b adoEntraBlob) signInEnded() bool { return !b.DeadAt.IsZero() }
 
-// signedInAfter reports whether b was captured after at, a database stamp (an approval's requested_at): by the
-// capture's own database stamp where it has one, whichever server reads it, else through capturedAfter.
-func (s *Server) signedInAfter(ctx context.Context, b adoEntraBlob, at time.Time) bool {
-	if !b.CapturedDBAt.IsZero() {
-		return b.CapturedDBAt.After(at)
-	}
-	return s.capturedAfter(ctx, b.CapturedAt, at)
+// signedInAfter reports whether b was captured after at, a database stamp (an approval's requested_at), by the
+// capture's own database stamp, whichever server reads it. A capture with no stamp never counts: its time is one
+// server's clock, which this one cannot place against the database's, so the request stays pending until a stamped
+// sign-in arrives.
+func (b adoEntraBlob) signedInAfter(at time.Time) bool {
+	return !b.CapturedDBAt.IsZero() && b.CapturedDBAt.After(at)
 }
 
 // adoEntraSourceSignIn is the only capture source in 0.7.10: the interactive
