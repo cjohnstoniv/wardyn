@@ -102,6 +102,46 @@ func TestHostCallOnceOneOfTwoWaiters(t *testing.T) {
 	}
 }
 
+// TestHostCallOnceDeclineRefusesBothWaiters: two identical requests waiting on one approval declined once are
+// both refused, the second without asking again, and a later identical request asks again.
+func TestHostCallOnceDeclineRefusesBothWaiters(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	cp := newHCCP(t, p)
+	hostCallSecond = time.Second
+	d1, c1 := hcGo(p, "/admin")
+	d2, c2 := hcGo(p, "/admin")
+	defer c1()
+	defer c2()
+	hcWait(t, "both requests to wait on one approval", func() bool {
+		rows, raises, _ := cp.counts()
+		return rows == 1 && raises >= 2
+	})
+	cp.decideAllAs(types.ApprovalDenied, types.ScopeOnce)
+	for i, d := range []chan hcResult{d1, d2} {
+		res := hcOutcome(t, d)
+		if res.sent || res.rec.Code != http.StatusForbidden {
+			t.Fatalf("waiter %d was not refused under a once decline: sent=%v %d %v", i+1, res.sent, res.rec.Code, res.rec.Header())
+		}
+		if !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+			t.Errorf("waiter %d: detail = %q", i+1, res.rec.Header().Get(egressHeaderDetail))
+		}
+	}
+	if rows, _, _ := cp.counts(); rows != 1 {
+		t.Errorf("approval rows after both refusals = %d, want 1: a refused waiter must not ask again", rows)
+	}
+	if n := strings.Count(buf.String(), `"rule_source":"`+ruleSourceHostRuleApprovalDenied+`"`); n != 2 {
+		t.Errorf("approval-denied rows = %d, want 2", n)
+	}
+	next, stop := hcGo(p, "/admin")
+	defer stop()
+	hcWait(t, "a later identical request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+	select {
+	case res := <-next:
+		t.Fatalf("the later request was answered without a person: sent=%v %d", res.sent, res.rec.Code)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 // TestHostCallRunAndNoAnswers: a yes for the run is kept for the run, a no for the run refuses every later
 // identical request without asking, and a no decided once refuses only the held request, so the next one asks.
 func TestHostCallRunAndNoAnswers(t *testing.T) {

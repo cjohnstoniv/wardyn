@@ -66,6 +66,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The warning that Wardyn could not confirm a person's Azure DevOps tokens were revoked no longer begins "The credentials are erased". The same text is on an erase that failed before their stored credentials were erased, so it could say they were gone when they remained. It now begins "Wardyn could not confirm that every token it created for this person's runs was revoked", still with `tokens_revocation_failed` and the remedy, and says nothing of whether the credentials were erased.
 - The 0.10.0 note that an erase whose Azure DevOps token revoke does not finish "erases nothing" holds for a person's stored credentials only. A `POST /people/{principal}/erasure` with several scopes runs `credentials` last, so scopes before it, such as run outputs, tasks and recordings, may already be erased when it answers `503` `credential_erase_revoke_unfinished`, and stay erased. Running it again is another attempt, which revokes the token and erases the credentials once the revoke finishes. The Azure DevOps guide now says so.
 
+### Corrections to the 0.10.0 notes
+
+- With `WARDYN_LOCAL_TRUST_FORWARDER` on, non-loopback peers must match `WARDYN_LOCAL_TRUSTED_PEERS`. When it is empty, Wardyn uses the gateway and its own addresses found at startup. Traffic from other addresses gets 403; list the intended peer explicitly if it is not found. The 0.10.0 notes said only the listed peers are trusted.
+- Commands try to start in `$HOME`; SFTP uses the sandbox account's home directory. If that directory cannot be entered, they keep the image's working directory. Use an absolute path to choose a location. The 0.10.0 notes said they start in your home directory.
+- The old Docker run network is permitted only on an older engine, with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`. The setting has no effect on Docker Engine 28 or later, which the 0.10.0 notes did not say.
+- A decline decided `once` refuses the requests already waiting on that approval; a later request asks again. The 0.10.0 notes said it refuses only the waiting request.
+
 ### Security
 
 ### Before you upgrade

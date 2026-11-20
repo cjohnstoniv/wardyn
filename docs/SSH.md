@@ -190,8 +190,9 @@ Host wardyn-<run-id>
   connect to, and no "try anyway" affordance that would just fail.
 - **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
   that session is in now.
-  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
-    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) tries to start in `$HOME`,
+    and an sftp session starts in the sandbox account's home directory. If that directory cannot be entered, they
+    keep the image's working directory. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 
@@ -349,7 +350,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 - **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`, [`test/editors/`](../test/editors/)). Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
   - JetBrains: an sftp upload of the IDE, an exec unpack, the headless `remote-dev-server.sh`, and a TLS handshake with the backend through `-L`. Gateway's GUI thin client is not run.
   - Mutagen: `sync create`, a flush each way, a byte compare.
-- **Mutagen needs one link.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory, so the agent is not found. Once per sandbox, before `mutagen sync create`:
+- **Mutagen finds its agent through `$HOME`.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. Commands start in `$HOME`, as under `sshd`, so it is found. Only where `$HOME` is unset or cannot be entered do they keep the image's working directory and miss it; in such a sandbox, once, before `mutagen sync create`:
 
 ```sh
 ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
