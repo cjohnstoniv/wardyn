@@ -190,8 +190,9 @@ Host wardyn-<run-id>
   connect to, and no "try anyway" affordance that would just fail.
 - **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
   that session is in now.
-  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
-    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) tries to start in `$HOME`,
+    and an sftp session starts in the sandbox account's home directory. If that directory cannot be entered, they
+    keep the image's working directory. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 

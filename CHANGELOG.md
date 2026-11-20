@@ -61,6 +61,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `make notices` (the third-party notices check) no longer fails when go-licenses cannot reach the licence host of a module whose recorded licence link has its version as a path segment (`…/v0.9.1/…`): it keeps that link and warns. A new module, a licence change or a version change still fails the check.
 - Kubernetes runners keep each run's lease deadline across a runner restart. After a restart, a run whose organisation cannot be reached has its proxy stopped at its saved deadline, no sooner than 10 minutes and no later than one hour after the restart. Before, every such run got a fresh hour. A run saved before the upgrade has no saved deadline and still gets the hour.
 
+### Corrections to the 0.10.0 notes
+
+- With `WARDYN_LOCAL_TRUST_FORWARDER` on, non-loopback peers must match `WARDYN_LOCAL_TRUSTED_PEERS`. When it is empty, Wardyn uses the gateway and its own addresses found at startup. Traffic from other addresses gets 403; list the intended peer explicitly if it is not found. The 0.10.0 notes said only the listed peers are trusted.
+- Commands try to start in `$HOME`; SFTP uses the sandbox account's home directory. If that directory cannot be entered, they keep the image's working directory. Use an absolute path to choose a location. The 0.10.0 notes said they start in your home directory.
+- The old Docker run network is permitted only on an older engine, with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`. The setting has no effect on Docker Engine 28 or later, which the 0.10.0 notes did not say.
+- A decline decided `once` refuses the requests already waiting on that approval; a later request asks again. The 0.10.0 notes said it refuses only the waiting request.
+
 ### Security
 
 ### Before you upgrade
