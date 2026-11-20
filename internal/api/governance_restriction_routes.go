@@ -242,6 +242,56 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 	return true
 }
 
+// restrictionReview is restrictionAtLeastAsStrict's sibling for a replacement it holds: every reason
+// it is not at least as strict, collected rather than stopping at the first. It never decides; the
+// hold is restrictionAtLeastAsStrict's. A spec that does not decode is not_checked.
+func restrictionReview(old types.Restriction, next types.RestrictionWrite) *changeReview {
+	a, err := restrictionEffective(next.Spec, next.Limits)
+	if err != nil {
+		return notCheckedReview()
+	}
+	b, err := restrictionEffective(old.Spec, old.Limits)
+	if err != nil {
+		return notCheckedReview()
+	}
+	var widens []composer.Widening
+	var held []string
+	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) {
+		widens = composer.LeqWidenings(a.Ceiling, b.Ceiling)
+		if len(widens) == 0 {
+			widens = append(widens, composer.Widening{Field: wideningLimits})
+		}
+	}
+	if !sameJSON(old.Contact, next.Contact) {
+		held = append(held, heldContact)
+	}
+	if old.Spec.AllowedDomains == nil && next.Spec.AllowedDomains != nil {
+		held = append(held, heldFirstAllowlist)
+	}
+	if ol := old.Spec.AllowedDomains; ol != nil && (next.Spec.AllowedDomains == nil || !composer.AllowlistWithin(*next.Spec.AllowedDomains, *ol)) {
+		var outside []string
+		if next.Spec.AllowedDomains != nil {
+			for _, e := range *next.Spec.AllowedDomains {
+				if !composer.AllowlistWithin([]string{e}, *ol) && !slices.Contains(outside, e) {
+					outside = append(outside, e)
+				}
+			}
+		}
+		widens = addWidening(widens, wideningAllowedDomains, outside)
+	}
+	if slices.ContainsFunc(old.Spec.WithheldGrants, func(g types.GrantSpec) bool { return !grantWithheldBy(g, next.Spec.WithheldGrants) }) {
+		widens = addWidening(widens, wideningWithheldGrants, nil)
+	}
+	if !vcsCapsAtLeastAsStrict(old.Spec, next.Spec) {
+		widens = addWidening(widens, wideningVCS, nil)
+	}
+	if !slices.Contains(next.Members, types.RestrictionMember{SubjectType: types.CapabilitySubjectAll}) &&
+		slices.ContainsFunc(old.Members, func(m types.RestrictionMember) bool { return !slices.Contains(next.Members, m) }) {
+		widens = addWidening(widens, wideningMembers, nil)
+	}
+	return reviewFrom(widens, held, true)
+}
+
 func (s *Server) handleCreateRestriction(w http.ResponseWriter, r *http.Request) {
 	s.writeRestriction(w, r, uuid.New(), true)
 }
@@ -336,12 +386,14 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 func (s *Server) holdRestrictionWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, create bool, cur types.Restriction, body types.RestrictionWrite) {
 	if create {
 		s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: "create", key: id.String(),
-			payload: restrictionChangePayload{ID: id, Write: &body}, after: body, changed: changedPaths(nil, body)})
+			payload: restrictionChangePayload{ID: id, Write: &body}, after: body, changed: changedPaths(nil, body),
+			review: restrictionHeldReview(true, cur, body)})
 		return
 	}
 	s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: "update", key: id.String(),
 		payload: restrictionChangePayload{ID: id, Write: &body},
-		before:  restrictionState(cur), after: body, changed: changedPaths(restrictionState(cur), body), baseState: restrictionState(cur)})
+		before:  restrictionState(cur), after: body, changed: changedPaths(restrictionState(cur), body), baseState: restrictionState(cur),
+		review: restrictionHeldReview(false, cur, body)})
 }
 
 // putRestrictionQ is a direct restriction write on q, under the target lock a held change's approval
