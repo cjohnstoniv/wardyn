@@ -80,12 +80,14 @@ func TestBuildMaskingBody_MasksASecretRegisteredDuringABlockedRead(t *testing.T)
 	if err := reg.Add(runID, []byte("pipe-recording-secret")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pw.Write([]byte("pipe-recording-secret end")); err != nil {
+	// More follows the secret than the reader holds back, so the secret is masked before the body ends.
+	after := strings.Repeat("e", 2*recording.LogCutMarkerMax)
+	if _, err := pw.Write([]byte("pipe-recording-secret " + after)); err != nil {
 		t.Fatal(err)
 	}
 	pw.Close()
 	res := <-done
-	if res.err != nil || string(res.got) != "start <secret-hidden> end" {
+	if res.err != nil || string(res.got) != "start <secret-hidden> "+after {
 		t.Fatalf("masked = (%q, %v)", res.got, res.err)
 	}
 }
@@ -115,14 +117,15 @@ func (h *hookReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// A secret registered between two chunks of the body is masked in the later one, and the earlier chunk's bytes
-// the reader still holds are masked against the new corpus too.
+// A secret registered between two chunks of the body is masked in the later one, before the body ends: more
+// follows it than the reader holds back.
 func TestBuildMaskingBody_MasksASecretRegisteredBetweenChunks(t *testing.T) {
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()
 	lines := strings.Repeat("output line\n", 8000) // past the reader's held bytes and the masker's tail
+	after := strings.Repeat("y", 2*recording.LogCutMarkerMax)
 	src := &hookReader{
-		chunks: []string{lines, "x between-recording-secret y"},
+		chunks: []string{lines, "x between-recording-secret " + after},
 		before: map[int]func(){1: func() {
 			if err := reg.Add(runID, []byte("between-recording-secret")); err != nil {
 				t.Error(err)
@@ -130,7 +133,7 @@ func TestBuildMaskingBody_MasksASecretRegisteredBetweenChunks(t *testing.T) {
 		}},
 	}
 	got, err := io.ReadAll(buildMaskingBody(src, reg, runID))
-	if want := lines + "x <secret-hidden> y"; err != nil || string(got) != want {
+	if want := lines + "x <secret-hidden> " + after; err != nil || string(got) != want {
 		t.Fatalf("masked = (%v), ends %q", err, got[max(0, len(got)-60):])
 	}
 }
@@ -185,6 +188,25 @@ func (b *freshBackend) Fresh(_ context.Context, arrived time.Time) error {
 	defer b.mu.Unlock()
 	b.arrivals = append(b.arrivals, arrived)
 	return b.err(len(b.arrivals))
+}
+
+// The shared corpus is read before the masker is: a value another server committed before the bytes arrived,
+// which only that read brings into this server's registry, is masked in the first batch, mid-stream.
+func TestBuildMaskingBody_SharedCorpusIsReadBeforeTheMasker(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "replica-recording-secret"
+	reg.SetBackend(&freshBackend{err: func(call int) error {
+		if call == 1 {
+			reg.AddLocal(runID, []byte(secret))
+		}
+		return nil
+	}})
+	rest := strings.Repeat("x", freshBatch) // the first batch ends long after the secret
+	got, err := io.ReadAll(buildMaskingBody(strings.NewReader(secret+rest), reg, runID))
+	if err != nil || string(got) != "<secret-hidden>"+rest {
+		t.Fatalf("masked = (%v), starts %q", err, got[:min(len(got), 60)])
+	}
 }
 
 // lastReadReader records when its last Read returned.
