@@ -247,3 +247,39 @@ func TestAssistantHoldDecidableInLocalMode(t *testing.T) {
 		})
 	}
 }
+
+// A widening held before the server restarted in local mode cannot be approved there, whatever the switch
+// says: the local seat is an operator and a different principal from the proposer, so only the refusal
+// stops it. The change stays pending, the block is unchanged, and no approval or write row is written.
+func TestAssistantHeldWideningCannotBeApprovedInLocalMode(t *testing.T) {
+	direct := assistantTestProvider("direct", "uid-direct", types.ModelProviderAnthropicAPIKey, "m")
+	e := newAssistantHoldEnv(t, assistantHoldStored(), direct)
+	t.Setenv(envGovernanceSecondHuman, "false")
+	ch := e.pending(e.put(e.super, assistantReviewOnBody))
+	before := e.stored().Assistant
+
+	local := e.otherServer(func(c *Config) {
+		c.LocalMode = true
+		c.LocalOperator = "local:alice"
+		c.OIDC = nil
+	})
+	req := httptest.NewRequest(http.MethodPost, approvePath(ch.ID), nil)
+	req.Host = "127.0.0.1:8080"
+	req.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	panicFails(t, local.Handler()).ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable || wireReason(t, w) != reasonGovernanceSecondHumanLocalMode {
+		t.Fatalf("approve in local mode = %d %s, want 503 %s", w.Code, w.Body, reasonGovernanceSecondHumanLocalMode)
+	}
+	if n := e.pendingCount(); n != 1 {
+		t.Errorf("%d pending changes after the refused approval, want 1", n)
+	}
+	if got := e.stored().Assistant; got == nil || got.Review || computeETag(*got) != computeETag(*before) {
+		t.Errorf("a refused approval changed the stored block: %+v", got)
+	}
+	for _, action := range []string{"governance.change.approve", assistantSettingsWriteAction} {
+		if n := len(e.audits(action)); n != 0 {
+			t.Errorf("%d %s rows after a refused approval, want none", n, action)
+		}
+	}
+}

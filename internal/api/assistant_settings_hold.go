@@ -20,7 +20,8 @@ const govKindAssistantSettings = "assistant_settings"
 const assistantLocalModeMsg = "This change would be held for a second super admin, and local mode authenticates nobody, so no one could decide it. Configure SSO to widen the assistant settings." // PROPOSED
 
 // assistantHoldDecidable reports whether a held widening could ever be decided, answering 503 itself when
-// not. A widening is held whatever WARDYN_GOVERNANCE_SECOND_HUMAN says, so unlike governanceWriteMode this
+// not. The PUT asks it before holding one and decideGovernanceChange before approving one, so a change
+// proposed before the server went to local mode is refused too; a reject is not, as it applies nothing. A widening is held whatever WARDYN_GOVERNANCE_SECOND_HUMAN says, so unlike governanceWriteMode this
 // refuses in local mode with the switch off too. The admin token stays the way past it, as there.
 func (s *Server) assistantHoldDecidable(w http.ResponseWriter, r *http.Request) bool {
 	if s.cfg.LocalMode && !isAdminTokenCaller(r) {
