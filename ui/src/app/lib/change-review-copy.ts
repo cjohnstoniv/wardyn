@@ -8,7 +8,7 @@
 // read them from here.
 //
 // Strings marked "not on the board" are wording the approved board does not draw.
-import type { HeldBecause, RiskLevel } from "./types";
+import type { ChangeVerdict, HeldBecause, RiskLevel } from "./types";
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -80,3 +80,30 @@ export const CHANGE_REVIEW = {
   RAW_DIFF: "Raw diff",
   SHOW_FULL: "Show full before and after",
 } as const;
+
+// The structured fields a review sentence is written from: the widened fields (their plain name, or the field's
+// own name when it has none) and the other fields the change moves, each with the value on both sides.
+export interface ReviewSentenceInput {
+  verdict: ChangeVerdict | undefined;
+  target: string;
+  widens: { field: string; label: string; entries?: string[] }[];
+  also: { label: string; before: string; after: string }[];
+}
+
+// "a, b and c".
+const joinAnd = (items: string[]) =>
+  items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+
+// The one plain sentence for a widening change, from the server's structured review: the new hosts when the allowed
+// hosts widen, the widened fields' names for any other widening, then up to two other changes. Null for a change
+// that does not widen. This is the only place the sentence is written, so every surface reads the same words.
+export function renderReviewSentence(input: ReviewSentenceInput): string | null {
+  if (input.verdict !== "widens") return null;
+  const sentences: string[] = [];
+  const hosts = input.widens.find((w) => w.field === "allowed_domains" && (w.entries?.length ?? 0) > 0);
+  if (hosts) sentences.push(CHANGE_REVIEW.SENTENCE_HOSTS(input.target, hosts.entries!.length));
+  const others = input.widens.filter((w) => w !== hosts).map((w) => w.label);
+  if (others.length > 0) sentences.push(CHANGE_REVIEW.SENTENCE_WIDENS(input.target, joinAnd([...new Set(others)])));
+  for (const a of input.also.slice(0, 2)) sentences.push(CHANGE_REVIEW.SENTENCE_ALSO(a.label, a.before, a.after));
+  return sentences.length > 0 ? sentences.join(" ") : null;
+}

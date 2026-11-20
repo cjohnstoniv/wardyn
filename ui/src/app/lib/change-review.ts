@@ -8,7 +8,7 @@
 // the same change always reads the same way.
 import { FIELD_LABEL } from "../components/screens/run-detail/policy-tab-copy";
 import { BOUNDARY_DRY_RUN } from "./boundary-copy";
-import { CHANGE_REVIEW } from "./change-review-copy";
+import { renderReviewSentence } from "./change-review-copy";
 import { CHANGES, RUBRIC } from "./governance-copy";
 import type { ChangeWidening, GovernanceChange } from "./types";
 
@@ -97,23 +97,14 @@ export function alsoChanges(c: GovernanceChange): AlsoChange[] {
     }));
 }
 
-// "a, b and c".
-function joinAnd(items: string[]): string {
-  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
-
-// The one plain sentence for a widening change: the new hosts when the allowed hosts widen, the widened fields'
-// names for any other widening, then up to two other changed fields. Null for a change that does not widen.
+// The one plain sentence for a widening change, from the server's diff: see renderReviewSentence. Null for a change
+// that does not widen.
 export function reviewSentence(c: GovernanceChange): string | null {
   const review = c.diff.review;
-  if (!review || review.verdict !== "widens") return null;
-  const target = changeTarget(c);
-  const widens = review.widens ?? [];
-  const sentences: string[] = [];
-  const hosts = widens.find((w) => w.field === "allowed_domains" && (w.entries?.length ?? 0) > 0);
-  if (hosts) sentences.push(CHANGE_REVIEW.SENTENCE_HOSTS(target, hosts.entries!.length));
-  const others = widens.filter((w) => w !== hosts).map((w) => fieldLabel(w.field) ?? w.field);
-  if (others.length > 0) sentences.push(CHANGE_REVIEW.SENTENCE_WIDENS(target, joinAnd([...new Set(others)])));
-  for (const a of alsoChanges(c).slice(0, 2)) sentences.push(CHANGE_REVIEW.SENTENCE_ALSO(a.label, a.before, a.after));
-  return sentences.length > 0 ? sentences.join(" ") : null;
+  return renderReviewSentence({
+    verdict: review?.verdict,
+    target: changeTarget(c),
+    widens: (review?.widens ?? []).map((w) => ({ ...w, label: fieldLabel(w.field) ?? w.field })),
+    also: alsoChanges(c),
+  });
 }
