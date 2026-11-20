@@ -178,15 +178,16 @@ const (
 	// OIDCBindingConsole requires the identity token's issuer to be the one the console signs people in
 	// with, and the person it names to be the signed-in one. The default.
 	OIDCBindingConsole = "console"
-	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject and
-	// stores the sign-in under whoever made it. An admin's choice, audited when set.
+	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject (none with
+	// RequireIDToken false) and stores the sign-in under whoever made it. An admin's choice, audited when set.
 	OIDCBindingNone = "none"
 )
 
 // ProviderOIDC is a custom_endpoint's sign-in: where each person signs in and as which client. PKCE
-// (S256), openid and offline_access are always on and are not settings.
+// (S256) and offline_access are always on and are not settings; openid is on unless RequireIDToken is false.
 type ProviderOIDC struct {
-	// Issuer is required: discovery and the identity token's verification both come from it.
+	// Issuer is required: discovery and, unless RequireIDToken is false, the identity token's verification
+	// both come from it.
 	Issuer string `json:"issuer"`
 	// AuthorizeURL and TokenURL override what discovery names.
 	AuthorizeURL string `json:"authorize_url,omitempty"`
@@ -194,7 +195,7 @@ type ProviderOIDC struct {
 	ClientID     string `json:"client_id"`
 	// ClientSecretRef names an operator secret holding the client's secret; empty is a public client.
 	ClientSecretRef string `json:"client_secret_ref,omitempty"`
-	// Scopes are asked for beside openid and offline_access.
+	// Scopes are asked for beside offline_access and, unless RequireIDToken is false, openid.
 	Scopes []string `json:"scopes"`
 	// IdentityBinding is OIDCBindingConsole (also "") or OIDCBindingNone.
 	IdentityBinding string `json:"identity_binding,omitempty"`

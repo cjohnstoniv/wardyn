@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -66,18 +68,18 @@ func TestEndpointOIDCNoIDToken_AddressBytesOfDefaultRowsAreUnchanged(t *testing.
 }
 
 func TestEndpointOIDCNoIDToken_TransitionsInBothDirectionsChangeTheAddressAndPurge(t *testing.T) {
-	// Each pair also changes the binding where the mode needs none, so the mode alone is held apart too.
-	noneTrue := withOIDC(oidcRow(), func(o *types.ProviderOIDC) { o.IdentityBinding = types.OIDCBindingNone })
-	noneOmitted := withOIDC(oidcRow(), func(o *types.ProviderOIDC) {
+	// Every row here has binding none, so the mode is the only thing that differs inside a pair.
+	noneOmitted := withOIDC(oidcRow(), func(o *types.ProviderOIDC) { o.IdentityBinding = types.OIDCBindingNone })
+	noneTrue := withOIDC(oidcRow(), func(o *types.ProviderOIDC) {
 		o.IdentityBinding = types.OIDCBindingNone
 		o.RequireIDToken = boolPtr(true)
 	})
 	off := noIDTokenRow(oidcRow())
-	if oidcAddress(noneTrue) != oidcAddress(noneOmitted) {
+	if oidcAddress(noneOmitted) != oidcAddress(noneTrue) {
 		t.Fatal("omitted and true differ")
 	}
 	for name, pair := range map[string][2]types.ModelProvider{
-		"on to off": {noneTrue, off}, "off to on": {off, noneTrue}, "off to omitted": {off, noneOmitted},
+		"on to off": {noneOmitted, off}, "off to on": {off, noneOmitted}, "off to true": {off, noneTrue},
 	} {
 		a, b := pair[0], pair[1]
 		if oidcAddress(a) == oidcAddress(b) || providerAddressDigest(a) == providerAddressDigest(b) || !providerAddressChanged(a, b) {
@@ -197,6 +199,46 @@ func TestEndpointOIDCNoIDToken_AConfigEditThatRacesACallbackIsRefused(t *testing
 		}
 		if _, found := f.stored(t, oidcPersonSub); found {
 			t.Errorf("%s: stored a sign-in started under another mode", name)
+		}
+	}
+}
+
+// The same race at the handler, with the authority's token endpoint held: the callback has passed its first
+// read of the row (endpointOIDCStampHolds before the exchange) and is waiting on the token POST when the admin
+// flips the mode. Only the check under the site-config lock, after the exchange, can refuse it.
+func TestEndpointOIDCNoIDToken_AModeFlipWhileTheTokenPostIsHeldIsRefusedAfterTheExchange(t *testing.T) {
+	for name, toOff := range map[string]bool{"on to off": true, "off to on": false} {
+		f := newOIDCFlow(t, types.OIDCBindingNone)
+		from, to := f.row, noIDTokenRow(f.row)
+		if !toOff {
+			from, to = to, from
+		}
+		f.site.set(func(b *types.ModelProviders) { b.Providers[0] = from })
+		f.row = from
+		at := f.begin(t, oidcPersonSub)
+
+		gate, reached, release := oidcPauseFirst("/token")
+		f.gate.Store(&gate)
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- f.callback(oidcPersonSub, at.q, at.cookies) }()
+		oidcWait(t, reached, "the callback to reach the held token POST")
+
+		f.site.set(func(b *types.ModelProviders) { b.Providers[0] = to })
+		close(release)
+		var w *httptest.ResponseRecorder
+		select {
+		case w = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the callback did not finish", name)
+		}
+		if w.Code != http.StatusFound || w.Header().Get("Location") != f.errorRedirect(azureCaptureRowChanged) {
+			t.Errorf("%s: %d Location %q, want the row-changed refusal", name, w.Code, w.Header().Get("Location"))
+		}
+		if _, found := f.stored(t, oidcPersonSub); found || f.rawSignIn(t, oidcPersonSub) != nil {
+			t.Errorf("%s: stored a sign-in captured under the other mode", name)
+		}
+		if rows := f.audit.find(endpointOIDCCapturedAction); len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Errorf("%s: audit rows = %+v; want one failure row", name, rows)
 		}
 	}
 }

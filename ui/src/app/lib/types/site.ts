@@ -294,9 +294,9 @@ export interface ModelProviderGatewayIdentity {
 }
 
 // A custom_endpoint's sign-in (Go's types.ProviderOIDC): where each person signs in and as which
-// client. PKCE, openid and offline_access are always on and are not settings.
+// client. PKCE and offline_access are always on and are not settings; openid is on unless require_id_token is false.
 export interface ProviderOIDC {
-  // Required: discovery and the identity token's verification both come from it.
+  // Required: discovery and, unless require_id_token is false, the identity token's verification both come from it.
   issuer: string;
   // Overrides of what discovery names. The editor does not show them; a save carries them through.
   authorize_url?: string;
@@ -304,7 +304,7 @@ export interface ProviderOIDC {
   client_id: string;
   // The name of an operator secret holding the client's secret; absent is a public client.
   client_secret_ref?: string;
-  // Asked for beside openid and offline_access. The server keeps the list as sent, duplicates included.
+  // Asked for beside offline_access and, unless require_id_token is false, openid. The server keeps the list as sent, duplicates included.
   scopes: string[];
   // "console" (also absent) or "none".
   identity_binding?: "console" | "none" | (string & {});

@@ -210,7 +210,8 @@ type adoEntraBlob struct {
 	// clears it.
 	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
 	// Issuer and IDPSubject are an endpoint sign-in's authority and the subject it knows the person by,
-	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
+	// kept so a review can say which platform account a person connected. Entra blobs carry neither, and an
+	// endpoint sign-in captured under require_id_token false holds neither (IDTokenNotRequired).
 	Issuer     string `json:"issuer,omitempty"`
 	IDPSubject string `json:"idp_sub,omitempty"`
 	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
