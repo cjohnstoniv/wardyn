@@ -56,6 +56,10 @@ const (
 // lazily poll the approval and transition the cached state. The raise and the poll
 // are single round trips bounded by approvalCallTimeout.
 type approvalClient struct {
+	// clock is the time source of the pending-host timing: the floor between checks, the hold's inline throttle
+	// and the budget a request spends waiting. The real clock in production; a test drives its own.
+	clock approvalClock
+
 	base   string // control plane base URL
 	token  *tokenSource
 	runID  uuid.UUID
@@ -221,6 +225,7 @@ var approvalCallTimeout = 5 * time.Second
 
 func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client *http.Client) *approvalClient {
 	return &approvalClient{
+		clock:       realClock{},
 		base:        base,
 		token:       token,
 		runID:       runID,
@@ -417,8 +422,8 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 				// see it without re-polling; harmless for once since step (3) clears
 				// it before this unlock.
 				st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
-				st.lastPoll = time.Now()
-				st.verifiedAt = st.lastPoll
+				st.lastPoll = a.clock.Now()
+				st.verifiedAt = time.Now()
 				// (3) Consume if this was a `once` grant, expiring it if stale — an
 				// already-past expiresAt returns apNone, fail-closed via evaluate's default arm.
 				s, id, _, gb := consumeIfOnce(st)
@@ -477,7 +482,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 // so a pending host there is checked inline at most once per holdInlinePollInterval and is never waited on.
 func (a *approvalClient) resolve(ctx context.Context, host string, holding bool) resolveResult {
 	host = approvalHostKey(host)
-	var pb pendingBudget
+	pb := pendingBudget{clock: a.clock}
 	defer pb.stop()
 	for {
 		if r := a.resolveOnce(ctx, host, &pb, holding); !r.again {
@@ -490,19 +495,78 @@ func (a *approvalClient) resolve(ctx context.Context, host string, holding bool)
 // a pending check must re-read the entry, so a decided grant is claimed or consumed under the lock by each
 // waiter on its own, never handed from one waiter to the next.
 func (a *approvalClient) resolveOnce(ctx context.Context, host string, pb *pendingBudget, holding bool) resolveResult {
+	sn, early, done := a.claim(ctx, host, pb, holding)
+	if done {
+		return early
+	}
+	if sn.joined != nil || sn.floor > 0 {
+		return a.waitPending(sn.budget, host, sn.joined, sn.floor, sn.id)
+	}
+	if sn.consumed {
+		// We SPENT the grant; must return BEFORE the switch, or falling through
+		// would re-raise on the very request the operator's decision released.
+		return resolveResult{State: sn.cur, ApprovalID: sn.id, GivenBack: sn.givenBack}
+	}
+	switch {
+	case sn.cur == apApproved && !sn.needPoll:
+		// Fresh approval: fast path, no per-request network call.
+		return resolveResult{State: apApproved, ApprovalID: sn.id}
+	case sn.cur == apDenied:
+		return resolveResult{State: apDenied, ApprovalID: sn.id}
+	case sn.cur == apRefused:
+		return resolveResult{State: apRefused}
+	case sn.needRaise:
+		return a.raiseHost(ctx, host, pb)
+	case sn.needPoll:
+		return a.recheckHost(ctx, host, sn)
+	default:
+		// Pending with no real id yet (the raise is still in flight), or held and not due a check.
+		return resolveResult{State: apPending, ApprovalID: sn.id}
+	}
+}
+
+// claimed is what one locked look at a host's entry decided: the state it read, whether this request spent a
+// once grant or claimed the raise, and what it does about a pending host.
+type claimed struct {
+	cur       approvalState
+	id        uuid.UUID
+	consumed  bool
+	givenBack bool
+	needRaise bool
+	needPoll  bool
+	prevPoll  time.Time
+	// joined and floor are a pending host's check this request joined or started, or the floor it must wait out
+	// first; budget is the request's budget for either.
+	joined *pendingPoll
+	floor  time.Duration
+	budget context.Context
+}
+
+// claim is resolveOnce's step under a.mu: a request whose budget ended answers pending and touches nothing;
+// otherwise it reads the entry and claims or consumes what it finds. done=true means early is the answer.
+func (a *approvalClient) claim(ctx context.Context, host string, pb *pendingBudget, holding bool) (sn claimed, early resolveResult, done bool) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if pb.ended() {
+		// The request waited and its budget ended meanwhile: it answers pending and claims, consumes and raises
+		// nothing, so a grant the check published stays for a request that is still waiting.
+		var id uuid.UUID
+		if st := a.hosts[host]; st != nil {
+			id = st.approvalID
+		}
+		return sn, resolveResult{State: apPending, ApprovalID: id}, true
+	}
 	st, ok := a.hosts[host]
 	if !ok {
 		if len(a.hosts) >= maxApprovalHosts {
 			// Fail closed: no entry, no raise, no row. Already-decided hosts keep
 			// working — they have their entries — so this bites only new names.
-			a.mu.Unlock()
 			approvalCapWarnOnce.Do(func() {
 				slog.Error("wardyn-proxy: first-use approval host cap reached; further NEW hosts are refused without raising an approval",
 					slog.Int("cap", maxApprovalHosts),
 					slog.String("run_id", a.runID.String()))
 			})
-			return resolveResult{State: apCapped}
+			return sn, resolveResult{State: apCapped}, true
 		}
 		st = &hostApproval{state: apNone}
 		a.hosts[host] = st
@@ -510,262 +574,115 @@ func (a *approvalClient) resolveOnce(ctx context.Context, host string, pb *pendi
 	// Snapshot under lock; perform network calls without holding the lock. The
 	// snapshot is also a CLAIM-AND-CONSUME: consumeIfOnce drops an expired
 	// `until` grant then SPENDS a `once` grant so no concurrent caller can take it.
-	cur, id, consumed, givenBack := consumeIfOnce(st)
-	needRaise := cur == apNone
-	if needRaise {
+	sn.cur, sn.id, sn.consumed, sn.givenBack = consumeIfOnce(st)
+	sn.needRaise = sn.cur == apNone
+	if sn.needRaise {
 		// Claim the raise UNDER the lock so a concurrent caller polls instead of
 		// raising a duplicate; a failed raise rolls this back to apNone.
 		st.state = apPending
-		st.lastPoll = time.Now()
+		st.lastPoll = a.clock.Now()
 	}
 	// A pending approval is checked through the host's single-flight poll (waitPending), which needs a real
-	// id (else raise() may still be in flight); a held request polls inline instead. Re-validate an approved entry older than approvalTTL — that is
-	// how a later EXPIRE/REVOKE is observed instead of failing open forever.
-	var (
-		joined *pendingPoll
-		floor  time.Duration
-	)
-	var budget context.Context
-	if cur == apPending && id != uuid.Nil && !holding {
-		budget = pb.get(ctx)
-		if budget.Err() != nil {
-			a.mu.Unlock()
-			return resolveResult{State: apPending, ApprovalID: id}
+	// id (else raise() may still be in flight); a held request polls inline instead. Re-validate an approved
+	// entry older than approvalTTL — that is how a later EXPIRE/REVOKE is observed instead of failing open forever.
+	if sn.cur == apPending && sn.id != uuid.Nil && !holding {
+		sn.budget = pb.get(ctx)
+		if sn.budget.Err() != nil {
+			return sn, resolveResult{State: apPending, ApprovalID: sn.id}, true
 		}
-		joined, floor = a.claimPendingPoll(ctx, host, st, id)
+		sn.joined, sn.floor = a.claimPendingPoll(ctx, host, st, sn.id)
 	}
-	prevPoll := st.lastPoll
-	needPoll := (holding && cur == apPending && id != uuid.Nil && time.Since(st.lastPoll) >= holdInlinePollInterval) ||
-		(cur == apApproved && time.Since(st.lastPoll) >= approvalTTL)
-	if needPoll {
-		st.lastPoll = time.Now()
+	sn.prevPoll = st.lastPoll
+	sn.needPoll = (holding && sn.cur == apPending && sn.id != uuid.Nil && a.clock.Now().Sub(st.lastPoll) >= holdInlinePollInterval) ||
+		(sn.cur == apApproved && a.clock.Now().Sub(st.lastPoll) >= approvalTTL)
+	if sn.needPoll {
+		st.lastPoll = a.clock.Now()
 	}
-	a.mu.Unlock()
+	return sn, resolveResult{}, false
+}
 
-	if joined != nil || floor > 0 {
-		return a.waitPending(budget, host, joined, floor, id)
-	}
-
-	if consumed {
-		// We SPENT the grant; must return BEFORE the switch, or falling through
-		// would re-raise on the very request the operator's decision released.
-		return resolveResult{State: cur, ApprovalID: id, GivenBack: givenBack}
-	}
-
-	switch {
-	case cur == apApproved && !needPoll:
-		// Fresh approval: fast path, no per-request network call.
-		return resolveResult{State: apApproved, ApprovalID: id}
-	case cur == apDenied:
-		return resolveResult{State: apDenied, ApprovalID: id}
-	case cur == apRefused:
-		return resolveResult{State: apRefused}
-	case needRaise:
-		// We already claimed apPending under the lock above, so exactly one
-		// goroutine reaches here for the first use of host — no duplicate raise.
-		raiseCtx, cancel := pb.within(ctx)
-		newID, err := a.raise(raiseCtx, host)
-		cancel()
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		st = a.hosts[host]
-		if err != nil {
-			// Fail closed: roll our claimed pending back to none; never clobber a
-			// decision that landed meanwhile. A refusal the same raise will meet again is settled
-			// instead, so the host is not re-POSTed on every request.
-			var refused *raiseRefusedError
-			settled := errors.As(err, &refused)
-			if st.state == apPending && st.approvalID == uuid.Nil {
-				st.state = apNone
-				if settled {
-					st.state = apRefused
-				}
-			}
+// raiseHost raises the host's first-use approval. The caller claimed apPending under the lock, so exactly one
+// goroutine reaches here for the first use of host — no duplicate raise.
+func (a *approvalClient) raiseHost(ctx context.Context, host string, pb *pendingBudget) resolveResult {
+	raiseCtx, cancel := pb.within(ctx)
+	newID, err := a.raise(raiseCtx, host)
+	cancel()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.hosts[host]
+	if err != nil {
+		// Fail closed: roll our claimed pending back to none; never clobber a
+		// decision that landed meanwhile. A refusal the same raise will meet again is settled
+		// instead, so the host is not re-POSTed on every request.
+		var refused *raiseRefusedError
+		settled := errors.As(err, &refused)
+		if st.state == apPending && st.approvalID == uuid.Nil {
+			st.state = apNone
 			if settled {
-				return resolveResult{State: apRefused}
+				st.state = apRefused
 			}
-			return resolveResult{State: apPending}
 		}
-		// Record the real approval id against the pending we claimed.
-		if st.approvalID == uuid.Nil {
-			st.state = apPending
-			st.approvalID = newID
-			st.lastPoll = time.Now()
-			st.holdStart = st.lastPoll
+		if settled {
+			return resolveResult{State: apRefused}
 		}
+		return resolveResult{State: apPending}
+	}
+	// Record the real approval id against the pending we claimed.
+	if st.approvalID == uuid.Nil {
+		st.state = apPending
+		st.approvalID = newID
+		st.lastPoll = a.clock.Now()
+		st.holdStart = time.Now()
+	}
+	return resolveResult{State: apPending, ApprovalID: st.approvalID}
+}
+
+// recheckHost polls a held request's pending approval, or an approved entry past its TTL being re-validated; a
+// transient poll error leaves the prior state, but an approved entry goes without a re-check for at most
+// maxApprovalStaleness (see below).
+func (a *approvalClient) recheckHost(ctx context.Context, host string, sn claimed) resolveResult {
+	id := sn.id
+	pollCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
+	decided, newState, polledScope, polledExpiry := a.poll(pollCtx, id)
+	cancel()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.hosts[host]
+	if st.approvalID != id {
+		// STALE POLLER: two goroutines can both pass needPoll when a poll
+		// round trip exceeds holdInlinePollInterval (a held host) or approvalTTL (an
+		// approved one being re-validated). Writing here would resurrect
+		// apApproved onto a fresh PENDING id — breaking the audit join and
+		// letting `until` fail open. Write NOTHING and report pending.
+		// st.approvalID may be Nil (entry reset, not yet re-raised); that
+		// costs ResolveWait's retry loop one extra iteration.
 		return resolveResult{State: apPending, ApprovalID: st.approvalID}
-	case needPoll:
-		// A pending approval, or an approved entry past its TTL being
-		// re-validated; a transient poll error leaves the prior state, but an approved entry goes
-		// without a re-check for at most maxApprovalStaleness (see below).
-		pollCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
-		decided, newState, polledScope, polledExpiry := a.poll(pollCtx, id)
-		cancel()
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		st = a.hosts[host]
-		if st.approvalID != id {
-			// STALE POLLER: two goroutines can both pass needPoll when a poll
-			// round trip exceeds holdInlinePollInterval (a held host) or approvalTTL (an
-			// approved one being re-validated). Writing here would resurrect
-			// apApproved onto a fresh PENDING id — breaking the audit join and
-			// letting `until` fail open. Write NOTHING and report pending.
-			// st.approvalID may be Nil (entry reset, not yet re-raised); that
-			// costs ResolveWait's retry loop one extra iteration.
-			return resolveResult{State: apPending, ApprovalID: st.approvalID}
-		}
-		if decided && newState == apExpired {
-			st.forget()
-			return resolveResult{State: apExpired, ApprovalID: id}
-		}
-		if decided {
-			// SPLIT from the id check ABOVE ON PURPOSE: !decided is a TRANSIENT
-			// control-plane error that must fall through unchanged (the
-			// availability-over-strictness tradeoff above) — folding the two
-			// conditions would turn a transient error into a 403 for scope=run.
-			st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
-			st.verifiedAt = time.Now()
-		} else if cur == apApproved {
-			// No answer: the grant is still served, but lastPoll goes back so the next request re-checks
-			// rather than trusting it for another approvalTTL, and past maxApprovalStaleness it is dropped.
-			st.lastPoll = prevPoll
-			if !st.verifiedAt.IsZero() && time.Since(st.verifiedAt) >= maxApprovalStaleness {
-				st.forget()
-				return resolveResult{State: apStale, ApprovalID: id}
-			}
-		}
-		// This branch is ITSELF a grant-serving site: without this call, a `once`
-		// grant observed here for the first time would be served AND left
-		// APPROVED for the next caller — served twice.
-		s, sid, _, gb := consumeIfOnce(st)
-		return resolveResult{State: s, ApprovalID: sid, GivenBack: gb}
-	default:
-		// Pending with no real id yet (the raise is still in flight), or held and not due a check.
-		return resolveResult{State: apPending, ApprovalID: id}
 	}
-}
-
-// pendingBudget is the ONE approvalCallTimeout a request gets for everything it waits on while its host is
-// pending: the floor wait and the status check together.
-type pendingBudget struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
-func (b *pendingBudget) get(parent context.Context) context.Context {
-	if b.ctx == nil {
-		b.ctx, b.cancel = context.WithTimeout(parent, approvalCallTimeout)
-	}
-	return b.ctx
-}
-
-// within bounds a raise by what is left of the request's budget when it has one, so a request that waited on a
-// check and then re-raises (a sibling spent the once grant) never takes a second approvalCallTimeout. A spent
-// budget fails the raise at once, which rolls the host back to none and answers pending, as any failed raise does.
-func (b *pendingBudget) within(parent context.Context) (context.Context, context.CancelFunc) {
-	if b.ctx != nil {
-		if deadline, ok := b.ctx.Deadline(); ok {
-			return context.WithDeadline(parent, deadline)
-		}
-	}
-	return context.WithTimeout(parent, approvalCallTimeout)
-}
-
-func (b *pendingBudget) stop() {
-	if b.cancel != nil {
-		b.cancel()
-	}
-}
-
-// pendingPoll is a pending host's one in-flight status check. Its result fields are written under a.mu before
-// done closes, and read only after.
-type pendingPoll struct {
-	done chan struct{}
-	// decided is false when the check saw the approval still pending or failed: whoever waited on it is
-	// answered pending.
-	decided bool
-	// applied is true when the decision was written to the host's entry. False for a decided check whose
-	// approval id had been replaced meanwhile: its result is dropped.
-	applied bool
-	state   approvalState
-}
-
-// claimPendingPoll, with a.mu held, picks what a request on a pending host with a real id does next. It joins
-// the host's in-flight check if there is one; else, when pendingPollFloor has passed since the last check, it
-// starts one; else it returns the floor still to wait out. A request never gets the cached pending state just
-// because a floor or another check is active.
-func (a *approvalClient) claimPendingPoll(ctx context.Context, host string, st *hostApproval, id uuid.UUID) (*pendingPoll, time.Duration) {
-	if st.pending != nil {
-		return st.pending, 0
-	}
-	if left := pendingPollFloor - time.Since(st.lastPoll); left > 0 {
-		return nil, left
-	}
-	p := &pendingPoll{done: make(chan struct{})}
-	st.pending = p
-	st.lastPoll = time.Now()
-	// The check outlives a request that stops waiting, so the requests that joined it still get its answer;
-	// it is bounded by approvalCallTimeout on its own.
-	pollCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalCallTimeout)
-	go func() {
-		defer cancel()
-		decided, newState, polledScope, polledExpiry := a.poll(pollCtx, id)
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		defer close(p.done)
-		p.decided, p.state = decided, newState
-		e := a.hosts[host]
-		if e.pending == p {
-			e.pending = nil
-		}
-		// STALE POLLER: an approval replaced while this ran must not have its result written onto the new
-		// one (see the approved branch of resolveOnce).
-		if !decided || e.approvalID != id {
-			return
-		}
-		p.applied = true
-		if newState == apExpired {
-			e.forget()
-			return
-		}
-		e.state, e.scope, e.expiresAt = newState, polledScope, polledExpiry
-		e.verifiedAt = time.Now()
-	}()
-	return p, 0
-}
-
-// waitPending spends the request's one budget on the floor wait, or on a check joined or started above, and
-// answers it. Out of budget, or cancelled: pending, with no state change. A check that saw pending answers
-// pending, and the next retry starts a fresh one. A decided one is not answered from here: the request re-reads
-// the entry (again), where it claims or consumes the grant under the lock.
-func (a *approvalClient) waitPending(budget context.Context, host string, p *pendingPoll, floor time.Duration, id uuid.UUID) resolveResult {
-	pending := resolveResult{State: apPending, ApprovalID: id}
-	if p == nil {
-		t := time.NewTimer(floor)
-		defer t.Stop()
-		select {
-		case <-budget.Done():
-			return pending
-		case <-t.C:
-			return resolveResult{again: true}
-		}
-	}
-	select {
-	case <-budget.Done():
-		return pending
-	case <-p.done:
-	}
-	switch {
-	case !p.decided:
-		return pending
-	case !p.applied:
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return resolveResult{State: apPending, ApprovalID: a.hosts[host].approvalID}
-	case p.state == apExpired:
+	if decided && newState == apExpired {
+		st.forget()
 		return resolveResult{State: apExpired, ApprovalID: id}
 	}
-	return resolveResult{again: true}
+	if decided {
+		// SPLIT from the id check ABOVE ON PURPOSE: !decided is a TRANSIENT
+		// control-plane error that must fall through unchanged (the
+		// availability-over-strictness tradeoff above) — folding the two
+		// conditions would turn a transient error into a 403 for scope=run.
+		st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
+		st.verifiedAt = time.Now()
+	} else if sn.cur == apApproved {
+		// No answer: the grant is still served, but lastPoll goes back so the next request re-checks
+		// rather than trusting it for another approvalTTL, and past maxApprovalStaleness it is dropped.
+		st.lastPoll = sn.prevPoll
+		if !st.verifiedAt.IsZero() && time.Since(st.verifiedAt) >= maxApprovalStaleness {
+			st.forget()
+			return resolveResult{State: apStale, ApprovalID: id}
+		}
+	}
+	// This branch is ITSELF a grant-serving site: without this call, a `once`
+	// grant observed here for the first time would be served AND left
+	// APPROVED for the next caller — served twice.
+	s, sid, _, gb := consumeIfOnce(st)
+	return resolveResult{State: s, ApprovalID: sid, GivenBack: gb}
 }
 
 // egressScope is the requested_scope body for an egress_domain approval — the
