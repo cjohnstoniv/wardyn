@@ -121,6 +121,17 @@ func entryOf(ap *approvalClient) hostApproval {
 	return *ap.hosts[retryHost]
 }
 
+// stillWaiting fails the test if the request behind ch has already answered: a joiner of a check in flight
+// must wait for it, so an answer before the check is released is the cached pending state in disguise.
+func stillWaiting(t *testing.T, name string, ch <-chan resolveResult) {
+	t.Helper()
+	select {
+	case r := <-ch:
+		t.Fatalf("request %s answered %+v before the check it joined finished", name, r)
+	default:
+	}
+}
+
 func awaitEntered(t *testing.T, cp *retryCP, n int) {
 	t.Helper()
 	for range n {
@@ -214,6 +225,9 @@ func TestApprovalRetryJoinsTheCheckInFlight(t *testing.T) {
 	b := resolveAsync(ap, context.Background())
 	c := resolveAsync(ap, context.Background())
 	time.Sleep(50 * time.Millisecond) // b and c reach the join well inside this, and neither waits out the floor
+	stillWaiting(t, "a", a)
+	stillWaiting(t, "b", b)
+	stillWaiting(t, "c", c)
 	close(release)
 
 	for name, ch := range map[string]<-chan resolveResult{"a": a, "b": b, "c": c} {
@@ -243,6 +257,8 @@ func TestApprovalJoinerOfAPendingSampleIsRefusedThenNextRetryIsAllowed(t *testin
 	cp.decide(types.ApprovalApproved, types.ScopeRun, nil) // t1
 	t2 := resolveAsync(ap, context.Background())
 	time.Sleep(50 * time.Millisecond)
+	stillWaiting(t, "t0", t0)
+	stillWaiting(t, "t2", t2)
 	close(release)
 
 	for name, ch := range map[string]<-chan resolveResult{"t0": t0, "t2": t2} {
@@ -264,6 +280,64 @@ func TestApprovalJoinerOfAPendingSampleIsRefusedThenNextRetryIsAllowed(t *testin
 	}
 	if got := cp.gets.Load(); got != 2 {
 		t.Fatalf("control plane saw %d checks, want 2 (a fresh check for the retry)", got)
+	}
+}
+
+// A joiner of a check that sampled APPROVED is answered approved, by the check's answer and not a second call.
+func TestApprovalJoinerOfAnApprovedSampleIsAllowed(t *testing.T) {
+	retryTimings(t, 100*time.Millisecond, 5*time.Second)
+	cp := newRetryCP(t)
+	ap := cp.client()
+	seedPending(ap, cp.id, time.Second)
+	cp.decide(types.ApprovalApproved, types.ScopeRun, nil)
+	release := cp.hold()
+
+	a := resolveAsync(ap, context.Background())
+	awaitEntered(t, cp, 1)
+	b := resolveAsync(ap, context.Background())
+	c := resolveAsync(ap, context.Background())
+	time.Sleep(50 * time.Millisecond)
+	stillWaiting(t, "a", a)
+	stillWaiting(t, "b", b)
+	stillWaiting(t, "c", c)
+	close(release)
+
+	for name, ch := range map[string]<-chan resolveResult{"a": a, "b": b, "c": c} {
+		if res := <-ch; res.State != apApproved || res.ApprovalID != cp.id {
+			t.Errorf("request %s -> %+v, want apApproved naming %s", name, res, cp.id)
+		}
+	}
+	if got := cp.gets.Load(); got != 1 {
+		t.Fatalf("control plane saw %d checks, want 1", got)
+	}
+}
+
+// The request that started a check is cancelled while it runs: the check goes on, and a request that joined it
+// still gets its answer.
+func TestApprovalStarterCancelDoesNotPoisonAJoiner(t *testing.T) {
+	retryTimings(t, 100*time.Millisecond, 5*time.Second)
+	cp := newRetryCP(t)
+	ap := cp.client()
+	seedPending(ap, cp.id, time.Second)
+	cp.decide(types.ApprovalApproved, types.ScopeRun, nil)
+	release := cp.hold()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	starter := resolveAsync(ap, ctx)
+	awaitEntered(t, cp, 1)
+	joiner := resolveAsync(ap, context.Background())
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if res := <-starter; res.State != apPending {
+		t.Fatalf("starter -> %+v, want pending (it was cancelled)", res)
+	}
+	stillWaiting(t, "joiner", joiner)
+	close(release)
+	if res := <-joiner; res.State != apApproved || res.ApprovalID != cp.id {
+		t.Fatalf("joiner -> %+v, want apApproved: the starter's cancel must not end the check", res)
+	}
+	if got := cp.gets.Load(); got != 1 {
+		t.Fatalf("control plane saw %d checks, want 1", got)
 	}
 }
 
@@ -318,17 +392,21 @@ func TestApprovalRetryWaitEndsPendingWithNoStateChange(t *testing.T) {
 		check(t, ap, before)
 	})
 	t.Run("budget ends during the check", func(t *testing.T) {
-		retryTimings(t, 100*time.Millisecond, 80*time.Millisecond)
+		// The check's own timeout (approvalCallTimeout, 10 s) is far longer than the request's budget (80 ms,
+		// set by its context deadline), so only the request's budget can end the wait.
+		retryTimings(t, 100*time.Millisecond, 10*time.Second)
 		cp := newRetryCP(t)
 		ap := cp.client()
 		seedPending(ap, cp.id, time.Second)
 		cp.decide(types.ApprovalApproved, types.ScopeRun, nil)
 		release := cp.hold()
 		defer close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+		defer cancel()
 		start := time.Now()
-		res := ap.Resolve(context.Background(), retryHost)
+		res := ap.Resolve(ctx, retryHost)
 		if res.State != apPending || res.ApprovalID != cp.id || time.Since(start) > 2*time.Second {
-			t.Fatalf("budget end -> %+v after %v, want pending at about %v", res, time.Since(start), approvalCallTimeout)
+			t.Fatalf("budget end -> %+v after %v, want pending at about 80ms", res, time.Since(start))
 		}
 		if e := entryOf(ap); e.state != apPending || e.approvalID != cp.id {
 			t.Fatalf("entry after the budget ended = %+v, want the same pending approval", e)
@@ -513,4 +591,89 @@ func TestApprovalConcurrentPendingRetriesCallOncePerFloorWindow(t *testing.T) {
 			t.Fatalf("checks %d and %d came %v apart, want at least the %v floor", i-1, i, gap, pendingPollFloor)
 		}
 	}
+}
+
+// A request that waited on a check, and then meets a spent once grant and re-raises, still ends within its one
+// budget: the re-raise is bounded by what is left of it, not by a fresh approvalCallTimeout.
+func TestApprovalRetryNeverTakesMoreThanOneBudget(t *testing.T) {
+	retryTimings(t, 50*time.Millisecond, 400*time.Millisecond)
+	id := uuid.New()
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts.Add(1)
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done() // a stalled raise
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: id, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce})
+	}))
+	t.Cleanup(srv.Close)
+	ap := newApprovalClient(srv.URL, newTokenSource("tok"), uuid.New(), srv.Client())
+	seedPending(ap, id, time.Second)
+
+	start := time.Now()
+	type out struct {
+		res     resolveResult
+		elapsed time.Duration
+	}
+	ch := make(chan out, 2)
+	for range 2 {
+		go func() {
+			res := ap.Resolve(context.Background(), retryHost)
+			ch <- out{res, time.Since(start)}
+		}()
+	}
+	allowed := 0
+	for range 2 {
+		o := <-ch
+		if o.res.State == apApproved {
+			allowed++
+		}
+		if o.elapsed > approvalCallTimeout+150*time.Millisecond {
+			t.Errorf("a request took %v, beyond its one %v budget", o.elapsed, approvalCallTimeout)
+		}
+	}
+	if allowed != 1 {
+		t.Fatalf("%d requests were let through, want exactly 1 (the once grant)", allowed)
+	}
+	if posts.Load() == 0 {
+		t.Fatal("no request re-raised, so the bound on the re-raise was never exercised")
+	}
+}
+
+// A held (wait_for_review) request's own first resolve checks a pending host inline at most once per
+// holdInlinePollInterval (2 s): ResolveWait's throttle, not the floor deny_with_review waits out.
+func TestApprovalHoldInlineCheckKeepsItsTwoSecondThrottle(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = time.Hour // the hold's own ticker must not poll in this test
+	t.Cleanup(func() { holdPollInterval = saved })
+
+	t.Run("one second since the last check: not checked", func(t *testing.T) {
+		cp := newRetryCP(t)
+		ap := cp.client()
+		ap.configureHold(types.FirstUseWaitForReview, 100*time.Millisecond, 2)
+		seedPending(ap, cp.id, time.Second)
+		cp.decide(types.ApprovalApproved, types.ScopeRun, nil)
+		if res := ap.ResolveWait(context.Background(), retryHost); res.State != apPending {
+			t.Fatalf("held -> %+v, want pending: a check only 1 s after the last is inside the 2 s throttle", res)
+		}
+		if got := cp.gets.Load(); got != 0 {
+			t.Fatalf("control plane saw %d checks, want 0", got)
+		}
+	})
+	t.Run("three seconds since the last check: checked", func(t *testing.T) {
+		cp := newRetryCP(t)
+		ap := cp.client()
+		ap.configureHold(types.FirstUseWaitForReview, 100*time.Millisecond, 2)
+		seedPending(ap, cp.id, 3*time.Second)
+		cp.decide(types.ApprovalApproved, types.ScopeRun, nil)
+		if res := ap.ResolveWait(context.Background(), retryHost); res.State != apApproved {
+			t.Fatalf("held -> %+v, want apApproved from the inline check", res)
+		}
+		if got := cp.gets.Load(); got != 1 {
+			t.Fatalf("control plane saw %d checks, want 1", got)
+		}
+	})
 }

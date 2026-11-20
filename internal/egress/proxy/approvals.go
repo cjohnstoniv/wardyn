@@ -114,6 +114,11 @@ var rejoinGap = time.Second
 // A var only so a test need not wait it out.
 var pendingPollFloor = 250 * time.Millisecond
 
+// holdInlinePollInterval is the least time between the inline checks of a held (wait_for_review) request's own
+// first resolve on a pending host: ResolveWait's old 2 s throttle, kept as it was. The hold polls on holdPollInterval
+// after that. A var only so a test need not wait it out.
+var holdInlinePollInterval = 2 * time.Second
+
 const (
 	// defaultHoldTimeout / defaultMaxHolds back wait_for_review when the config
 	// leaves them unset. #1197: points at types.HoldWindowEgress, the ONE
@@ -135,7 +140,7 @@ const (
 )
 
 // holdPollInterval is how often a held (wait_for_review) connection re-polls
-// the control plane; intentionally bypasses the pendingPollFloor fan-out throttle
+// the control plane; intentionally bypasses the holdInlinePollInterval fan-out throttle
 // (a hold is one goroutine, not a herd re-checking the same host).
 var holdPollInterval = 1 * time.Second
 
@@ -271,8 +276,10 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //
 // Invariant: a terminal `once` entry survives an unlock only as refundOnce
 // writes it, and every path that serves a grant reads it through consumeIfOnce
-// under a.mu, so it goes to one caller. Every other write of
-// state/scope/expiresAt is followed by a consumeIfOnce under the SAME lock.
+// under a.mu, so it goes to one caller. A write of state/scope/expiresAt that
+// serves the grant is followed by a consumeIfOnce under the SAME lock. The one that
+// only publishes it, a pending host's check (claimPendingPoll), serves nothing: each
+// request that waited on the check re-reads the entry through resolveOnce, which consumes.
 //
 // Both resets clear the ENTIRE entry, not just `state`: a surviving approvalID
 // would let a stale poll re-stamp apApproved onto it with no human in the
@@ -467,7 +474,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 }
 
 // resolve is Resolve; holding is ResolveWait's own call, which parks the connection and polls on holdPollInterval,
-// so a pending host there is checked inline at most once per pendingPollFloor and is never waited on.
+// so a pending host there is checked inline at most once per holdInlinePollInterval and is never waited on.
 func (a *approvalClient) resolve(ctx context.Context, host string, holding bool) resolveResult {
 	host = approvalHostKey(host)
 	var pb pendingBudget
@@ -528,7 +535,7 @@ func (a *approvalClient) resolveOnce(ctx context.Context, host string, pb *pendi
 		joined, floor = a.claimPendingPoll(ctx, host, st, id)
 	}
 	prevPoll := st.lastPoll
-	needPoll := (holding && cur == apPending && id != uuid.Nil && time.Since(st.lastPoll) >= pendingPollFloor) ||
+	needPoll := (holding && cur == apPending && id != uuid.Nil && time.Since(st.lastPoll) >= holdInlinePollInterval) ||
 		(cur == apApproved && time.Since(st.lastPoll) >= approvalTTL)
 	if needPoll {
 		st.lastPoll = time.Now()
@@ -556,7 +563,7 @@ func (a *approvalClient) resolveOnce(ctx context.Context, host string, pb *pendi
 	case needRaise:
 		// We already claimed apPending under the lock above, so exactly one
 		// goroutine reaches here for the first use of host — no duplicate raise.
-		raiseCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
+		raiseCtx, cancel := pb.within(ctx)
 		newID, err := a.raise(raiseCtx, host)
 		cancel()
 		a.mu.Lock()
@@ -599,7 +606,8 @@ func (a *approvalClient) resolveOnce(ctx context.Context, host string, pb *pendi
 		st = a.hosts[host]
 		if st.approvalID != id {
 			// STALE POLLER: two goroutines can both pass needPoll when a poll
-			// round trip exceeds approvalTTL. Writing here would resurrect
+			// round trip exceeds holdInlinePollInterval (a held host) or approvalTTL (an
+			// approved one being re-validated). Writing here would resurrect
 			// apApproved onto a fresh PENDING id — breaking the audit join and
 			// letting `until` fail open. Write NOTHING and report pending.
 			// st.approvalID may be Nil (entry reset, not yet re-raised); that
@@ -649,6 +657,18 @@ func (b *pendingBudget) get(parent context.Context) context.Context {
 		b.ctx, b.cancel = context.WithTimeout(parent, approvalCallTimeout)
 	}
 	return b.ctx
+}
+
+// within bounds a raise by what is left of the request's budget when it has one, so a request that waited on a
+// check and then re-raises (a sibling spent the once grant) never takes a second approvalCallTimeout. A spent
+// budget fails the raise at once, which rolls the host back to none and answers pending, as any failed raise does.
+func (b *pendingBudget) within(parent context.Context) (context.Context, context.CancelFunc) {
+	if b.ctx != nil {
+		if deadline, ok := b.ctx.Deadline(); ok {
+			return context.WithDeadline(parent, deadline)
+		}
+	}
+	return context.WithTimeout(parent, approvalCallTimeout)
 }
 
 func (b *pendingBudget) stop() {
