@@ -381,22 +381,24 @@ class TestHarnessesRecipe(unittest.TestCase):
 
 
 class AsciinemaWithoutPkgResources(unittest.TestCase):
-    """agent-base and agent-codex-cli install asciinema from the repacked deb, so python3-pkg-resources and its jaraco chain stay out."""
+    """agent-base and agent-codex-cli install asciinema from a deb repacked inline, so python3-pkg-resources and its jaraco chain stay out."""
 
-    def test_both_images_install_the_repacked_deb(self):
+    def test_both_images_repack_inline_with_every_refusal(self):
         for name in ["base", "codex-cli"]:
             with self.subTest(image=name):
                 text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
-                self.assertIn("COPY deploy/images/common/asciinema-deb.sh /tmp/asciinema-deb.sh", text)
-                self.assertIn("/tmp/asciinema/asciinema.deb", text)
+                self.assertNotIn("asciinema-deb.sh", text)
+                self.assertIn("apt-get download asciinema", text)
+                self.assertIn("/tmp/asciinema-wardyn.deb", text)
                 self.assertNotRegex(text, r"(?m)^\s+asciinema \\$")
+                self.assertIn("grep -rIl 'pkg_resources' asciinema-src/usr", text)
+                self.assertIn("grep -qx 'Depends: python3:any, python3-pkg-resources' asciinema-src/DEBIAN/control", text)
+                self.assertIn("Version: \\1+wardyn1", text)
                 self.assertIn("if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi", text)
                 self.assertIn("if dpkg -s python3-jaraco.context >/dev/null 2>&1; then exit 1; fi", text)
 
-    def test_script_refuses_when_the_dependency_becomes_real(self):
-        text = (ROOT / "deploy/images/common/asciinema-deb.sh").read_text()
-        self.assertIn("grep -rIl 'pkg_resources' src/usr", text)
-        self.assertIn("Depends: python3:any, python3-pkg-resources", text)
+    def test_the_recipe_has_no_script_image_scope_cannot_model(self):
+        self.assertFalse((ROOT / "deploy/images/common/asciinema-deb.sh").exists())
 
 
 class FullImageHomeOwnership(unittest.TestCase):

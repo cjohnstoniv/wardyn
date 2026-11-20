@@ -94,4 +94,53 @@ out="$(run_stale)"
 case "$out" in *"newimage"*"fail=1"*) ;; *) fail "the newest final tag (v1.1.0, not an ancestor of HEAD) was not used for the staleness check. Got: $out" ;; esac
 echo "ok  staleness check uses the newest final tag"
 
+# 6. A package a Dockerfile repacks with a `+wardyn<N>` version is described as
+#    MODIFIED even when no SBOM shows it yet (the first release it ships in is
+#    written from the PREVIOUS release's SBOMs). The recipes are read from the
+#    real Dockerfiles; with none, the original sentence and preamble stay.
+M="$(mktemp -d)"; trap 'rm -rf "$TMP" "$R" "$M"' EXIT
+mkdir -p "$M/scripts" "$M/.github/workflows" "$M/deploy/images/base" "$M/deploy/images/codex-cli" "$M/deploy/images/vscode" "$M/sbom"
+cp "$ROOT/scripts/gpl-source-offer.sh" "$M/scripts/"
+cp "$ROOT/deploy/images/base/Dockerfile" "$M/deploy/images/base/"
+cp "$ROOT/deploy/images/codex-cli/Dockerfile" "$M/deploy/images/codex-cli/"
+printf 'ARG BASE_IMAGE=wardyn/agent-base:local\nFROM ${BASE_IMAGE}\n' > "$M/deploy/images/vscode/Dockerfile"
+echo "## historical" > "$M/deploy/images/third-party-gpl-historical.md"
+matrix() { printf 'jobs:\n  publish:\n    strategy:\n      matrix:\n        include:\n'; for i in "$@"; do printf '          - name: %s\n            dockerfile: deploy/images/%s/Dockerfile\n' "$i" "${i#agent-}"; done; }
+sbom() { # IMAGE ASCIINEMA-VERSION
+  printf '{"source":{"type":"image","metadata":{}},"artifacts":[{"name":"asciinema","version":"%s","licenses":[{"value":"GPL-3"}],"type":"deb"}]}\n' "$2" > "$M/sbom/04-sbom-$1-v0.0.2-amd64.json"
+}
+offer() { (cd "$M" && ./scripts/gpl-source-offer.sh sbom v0.0.2 >/dev/null 2>&1) && cat "$M/deploy/images/THIRD-PARTY-GPL.md"; }
+section() { awk -v h="## \`ghcr.io/cjohnstoniv/$2:v0.0.2\`" '/^## /{f = ($0 == h)} f' <<<"$1"; }
+
+# 6a. no recipe (Dockerfiles absent) => unchanged wording, and the preamble is
+#     byte-for-byte the committed offer's, so prior-release offers stay as they are.
+matrix wardynd > "$M/.github/workflows/release.yml"; echo '{"source":{"type":"image","metadata":{}},"artifacts":[]}' > "$M/sbom/04-sbom-wardynd-v0.0.2-amd64.json"
+out="$(offer)" || fail "the generator must succeed with no repacked package"
+case "$out" in *"None of these packages are modified by Wardyn."*) ;; *) fail "with no repacked package the offer must keep its 'None of these packages are modified' sentence" ;; esac
+case "$out" in *"Modified by Wardyn"*) fail "with no repacked package the offer must not carry a modified-package section" ;; esac
+cmp -s <(awk '/^## /{exit} {print}' <<<"$out") <(awk '/^## /{exit} {print}' "$ROOT/deploy/images/THIRD-PARTY-GPL.md") \
+  || fail "the no-modification preamble must stay byte-identical to the committed offer's"
+echo "ok  no repacked package: wording and preamble unchanged"
+
+# 6b. the real base and codex-cli Dockerfiles carry the repack; the SBOMs predate it.
+matrix agent-base agent-codex-cli agent-vscode > "$M/.github/workflows/release.yml"
+sbom agent-base 2.4.0-1; sbom agent-codex-cli 2.4.0-1; sbom agent-vscode 2.4.0-1
+out="$(offer)" || fail "the generator must succeed with a repacked package"
+case "$out" in *"None of these packages are modified"*) fail "an offer with a repacked package must not say none are modified" ;; esac
+for img in agent-base agent-codex-cli agent-vscode; do
+  sec="$(section "$out" "$img")"
+  for want in 'Modified by Wardyn: `asciinema`' '`Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`)' '`Version:` gained the suffix `+wardyn1`' 'apt-get source asciinema=<that version>' 'built before this change'; do
+    grep -qF -- "$want" <<<"$sec" || fail "$img section must say: $want"
+  done
+done
+grep -qF 'RUN` in `deploy/images/codex-cli/Dockerfile`' <<<"$(section "$out" agent-codex-cli)" || fail "codex-cli's section must point at its own Dockerfile"
+grep -qF 'RUN` in `deploy/images/base/Dockerfile`' <<<"$(section "$out" agent-vscode)" || fail "an image built FROM agent-base must point at the base Dockerfile's recipe"
+echo "ok  repacked package described from the Dockerfiles, before any SBOM shows it"
+
+# 6c. once an SBOM row carries the suffix the section names the exact Debian version.
+sbom agent-base 2.4.0-1+wardyn1
+sec="$(section "$(offer)" agent-base)"
+grep -qF 'This image carries `asciinema 2.4.0-1+wardyn1`, which is Debian'"'"'s `asciinema 2.4.0-1`' <<<"$sec" || fail "an SBOM row with the suffix must name Debian's own version"
+echo "ok  suffixed SBOM row names the Debian version"
+
 echo "test-gpl-source-offer: PASS"

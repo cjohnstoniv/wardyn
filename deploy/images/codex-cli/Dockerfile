@@ -122,22 +122,40 @@ LABEL org.opencontainers.image.title="agent-codex-cli" \
 # corkscrew (SSH-over-443 proxy tunnel), no GIT_SSH_COMMAND from agent-run.
 # This image's git-over-SSH clone story is unchanged (git-over-HTTPS only).
 # apt-get upgrade: take the current security updates for packages the pinned base already carries.
-# asciinema comes from deploy/images/common/asciinema-deb.sh: Debian's package minus its
-# python3-pkg-resources dependency, which asciinema never uses and which pulls in the
-# python3-jaraco.context chain a scanner flags (CVE-2026-23949). The trailing check keeps
-# the chain from creeping back in.
-COPY deploy/images/common/asciinema-deb.sh /tmp/asciinema-deb.sh
-RUN apt-get update && apt-get upgrade -y && sh /tmp/asciinema-deb.sh /tmp/asciinema \
-    && apt-get install -y --no-install-recommends \
+# asciinema is Debian's package with ONE change, built here: its Depends line no longer
+# names python3-pkg-resources. asciinema 2.4.0 never imports pkg_resources, but Debian
+# declares the dependency, and python3-pkg-resources pulls in python3-jaraco.context,
+# -jaraco.functools, -autocommand, -more-itertools, -inflect and -typeguard. A scanner
+# flags CVE-2026-23949 (jaraco.context tarball path traversal) on that chain, and Debian
+# trixie ships no setuptools fix. Dropping the chain keeps dpkg records intact and apt
+# consistent for images built FROM this one. The package is repacked with a "+wardyn1"
+# version suffix so its dpkg record says it is not Debian's byte-for-byte package;
+# scripts/gpl-source-offer.sh names it as modified. The build refuses if asciinema starts
+# using pkg_resources or Debian changes the Depends line, and the last two checks fail it
+# if the chain is installed after all.
+# WORKDIR, not cd: `apt-get download` writes into the working directory.
+WORKDIR /tmp
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get download asciinema \
+    && dpkg-deb --raw-extract ./asciinema_*.deb asciinema-src \
+    && if grep -rIl 'pkg_resources' asciinema-src/usr; then echo 'asciinema now uses pkg_resources: its python3-pkg-resources dependency is real, do not drop it' >&2; exit 1; fi \
+    && if grep -qx 'Depends: python3:any, python3-pkg-resources' asciinema-src/DEBIAN/control; then :; else echo "asciinema's Depends line changed upstream: re-check it before dropping a dependency" >&2; exit 1; fi \
+    && sed -i -e 's/^Depends: python3:any, python3-pkg-resources$/Depends: python3:any/' -e 's/^Version: \(.*\)$/Version: \1+wardyn1/' asciinema-src/DEBIAN/control \
+    && dpkg-deb --root-owner-group --build asciinema-src asciinema-wardyn.deb \
+    && apt-get install -y --no-install-recommends /tmp/asciinema-wardyn.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/asciinema_*.deb /tmp/asciinema-wardyn.deb /tmp/asciinema-src
+WORKDIR /
+
+# The rest of the packages (a separate RUN: scripts/check-image-pins.sh reads any RUN that names curl).
+RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
-        /tmp/asciinema/asciinema.deb \
         tmux \
         openssh-sftp-server \
         socat \
         rsync \
-    && rm -rf /var/lib/apt/lists/* /tmp/asciinema /tmp/asciinema-deb.sh \
+    && rm -rf /var/lib/apt/lists/* \
     && if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi \
     && if dpkg -s python3-jaraco.context >/dev/null 2>&1; then exit 1; fi
 
