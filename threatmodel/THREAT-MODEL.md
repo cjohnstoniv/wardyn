@@ -2016,8 +2016,9 @@ These risks are **not closed by v1 Wardyn**.
     - The gate re-resolves the source with `EvalSymlinks` in the docker driver immediately before `ContainerCreate` — as late as this process can look.
     - But validate and create remain two operations, exactly the window `ValidateMountSource`'s own residual note publishes for OPERATOR mounts.
     - A member with local root can swap the source for a symlink inside that window; we do not claim to defeat it.
-    - Two things bound the blast radius: the roots are **operator/MDM-set**, so the widest a member can aim the race is *within the declared roots* — the target set cannot be enlarged, only raced within.
-    - And the credential-dotfile deny-list matches the **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a too-wide root is still refused unless the attacker also defeats that list.
+    - The roots (**operator/MDM-set**) and the credential-dotfile deny-list (matched on the **post-`EvalSymlinks` real path**) protect the mount target at **CHECK TIME only**.
+    - The container runtime is handed the original source path and resolves it again itself, and no open directory handle ties that later lookup to the target the checks resolved.
+    - So a source swapped after the checks is held to neither the roots nor the deny-list: a won race can bind a path outside the roots or a credential directory. That is the accepted, host-side race, and the host is the trust boundary.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
     - The env-as-code write (`POST /workspaces/{id}/env-as-code/write`) re-checks the directory it opened through `/proc/self/fd` on Linux; on a daemon host without it (macOS, Windows) a source swapped between that write's path check and its open is not re-checked.
 
@@ -2159,8 +2160,8 @@ These risks are **not closed by v1 Wardyn**.
     - So a share whose mount point is or traverses a credential directory — or a symlink that lands in one — is refused at authoring and again at bind time.
     - And the claim residual #25 makes about member mounts is now true of drives.
     - It closes nothing beyond that: a drive inherits residual #25's TOCTOU **identically**.
-    - The blast radius is bounded two ways.
-    - The roots are operator/MDM-set, so the race can only be aimed WITHIN the declared roots.
+    - Both the roots and the deny-list are checks made at CHECK TIME only: they say nothing about what the runtime resolves after them.
+    - The roots are operator/MDM-set.
     - And containment is **PER DRIVE**, evaluated at CHECK TIME.
     - `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved source is a strict subdirectory of THIS drive's own `host_root` — carried onto the mount from the resolved row, and an absent one is a refusal rather than a skip.
     - That is on top of `UserDriveMountSourceCheck`'s ceiling over the whole root LIST and the base-name rule.
@@ -2169,7 +2170,7 @@ These risks are **not closed by v1 Wardyn**.
     - **What is left is the window, not the rule.**
       - Every one of those checks runs on the `EvalSymlinks`-resolved path, and what is handed to `ContainerCreate` is still the LEXICAL `<host_root>/<home>` source, which the daemon resolves again for itself.
       - Validate and create remain two operations, so a host-root attacker who re-points the home in between binds whatever that second resolve finds.
-      - The check is placed as late as this process can look, immediately before the create, and the deny-list matches the post-`EvalSymlinks` real path, so a won race landing on a credential directory is still refused.
+      - The check is placed as late as this process can look, immediately before the create, and the deny-list matches the post-`EvalSymlinks` real path at that moment. Neither holds the target the runtime resolves afterwards, so a won race can land outside the roots or on a credential directory.
       - The race is not deterministically testable and no test claims to cover it.
 
     </details>
@@ -2590,8 +2591,10 @@ These risks are **not closed by v1 Wardyn**.
     - A frozen agent sits exactly where a running one would, reachable to anyone who already had host or daemon access.
     - The proxy sidecar is deliberately never frozen (so it keeps renewing its token and answering egress decisions), so a frozen run is not "off the network" either.
     - Verified only on runc/cgroup v2 today (`runsc`/Kata report unsupported rather than assume an unproven control).
-    - Nothing yet calls Freeze from a real pause-and-resume feature (residual #55 covers reach once something does).
-    - This residual is about the primitive itself, which any future caller inherits unchanged.
+    - The shipped caller is the control plane's pause sweep (`pauseRun` in [`internal/api/run_pause.go`](../internal/api/run_pause.go)): it freezes a run that has had an approval waiting for a quarter of an hour, or that is idle past its `pause_idle_after_sec` limit, on a confinement class whose freeze the runner reports as supported.
+    - It records its intent, freezes the agent, then marks the run paused. A decided approval, or a person thawing it to open a shell, resumes it.
+    - The freeze changes nothing listed above: the agent's files, network namespace and any host or daemon access to it stay as they were, and the proxy keeps running.
+    - Residual #55 covers reach over a run once it is paused or revived.
 
 54. **A control-plane outage leaves a window of egress with no durable audit.**
     - The proxy's token renewer gives up asking for a fresh token after an hour of failures and keeps running "on a dead identity, visibly" (`runTokenRenewerTuned` in [`internal/egress/proxy/renew.go`](../internal/egress/proxy/renew.go)) rather than stopping, deliberately.
@@ -2627,13 +2630,15 @@ These risks are **not closed by v1 Wardyn**.
     - An operator sizing host disk for "however many runs are live" can be surprised by however many are merely kept.
     - A fleet of long-running, frequently-ended runs under a generous grace is the case this compounds; surfacing disk used on the run page is a tracked follow-up, not yet shipped.
 
-58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a run — each is an optional `Runner` capability the k8s substrate does not implement.**
-    - So a k8s run's end and limits still fire on schedule but every other long-holds behavior degrades to an immediate, non-resumable teardown.
+58. **On the ordinary Kubernetes substrate a run cannot be kept, revived, restarted or paused — each is an optional `Runner` capability that substrate does not implement.**
+    - So an ordinary k8s run's end and limits still fire on schedule but every other long-holds behavior degrades to an immediate, non-resumable teardown.
     - `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer` (all in [`internal/runner/runner.go`](../internal/runner/runner.go)) each document the same shape — a router in front of a substrate without the interface returns that interface's own `Err*Unsupported` sentinel.
     - And the control plane's fallback for an end is to stop the run outright rather than keep it.
-    - This is a substrate gap, not a policy choice: a k8s deployment gets none of "kept for a grace window," "revived after an outage," "resumed after a reboot," or (when it ships) "paused when idle."
+    - This is a substrate gap, not a policy choice: an ordinary k8s deployment gets none of "kept for a grace window," "revived after an outage," "resumed after a reboot," or "paused when idle."
+    - The optional, experimental agent-sandbox mode with `k8s.agentSandbox.keep.enabled` ([B13a](#b13a--agent-sandbox-controller-vs-run)) adds keep and revive, and restart with current limits, for a run that can be kept: an interactive run with a kept work folder and a `claude-code` or `codex-cli` agent. Any other run on it ends as it does without keep.
+    - It keeps the work folder and the run's Secret, and it loses running programs and memory. It trusts the controller and the runs namespace's `sandboxes` and `endpointslices` writers, and it is not a Kubernetes freeze: no Kubernetes substrate pauses a run in place.
     - Every one of those needs a durable, re-attachable unit of storage and identity that a stopped or evicted pod does not provide, which is also why user-drive persistence is the prerequisite direction for closing this rather than a k8s-specific reimplementation of each behavior individually.
-    - See [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md).
+    - See [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md) and [keep and revive](../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
 
 59. **A run's rendered proxy config — its run token, per-run MITM CA private key and (when configured) the operator's upstream-proxy credential — is held in two places: the running proxy's memory, and one sealed database row.**
     <details><summary>Details</summary>
@@ -2649,7 +2654,7 @@ These risks are **not closed by v1 Wardyn**.
     - The kept run's token is also refused at every `/internal` door (`authz.denied`, `run_kept`), so a copy of it mints, injects and decides nothing.
     - What remains: an actor with the database AND the secret store's key can open any live or kept run's config, the same actor who can already open every stored credential.
     - An actor with Docker-daemon or host access can still read a RUNNING proxy's memory, the pre-existing process-memory residual.
-    - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and a kept run is not kept at all (residual 58), so the Secret's life is the run's.
+    - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and on the ordinary substrate a run is not kept at all (residual 58), so the Secret's life is the run's. With the optional keep mode a kept run's Secret stays until the run is revived or torn down.
     - It is not re-created from the row.
     - On a Mac with `macos_vm_inspection_ca` on, the runner re-issues this CA under the Mac's own, limited to the hosts the run's proxy terminates; see the macOS VM inspection CA residual (#99).
 
@@ -2680,7 +2685,8 @@ These risks are **not closed by v1 Wardyn**.
     - A UI-app session a portal opens through an attach ticket is a credential derived from the grant and is bounded by it (0.8.5, #1475).
     - Redemption and every 30-second re-check resolve the grant by id, so revoking the portal or the grant expiring ends it.
     - And the session cookie is capped at the grant's expiry (about ten minutes).
-    - The exception is a stream already open — a terminal WebSocket or a relayed socket — which keeps working until it closes or the run ends.
+    - A terminal WebSocket opened through a portal ticket is checked again every 30 seconds, each check bounded to five seconds: it closes on the grant's expiry or revocation, the portal's revocation, the person's revocation, or any check that fails or cannot be made (`attachAuthority` in [`internal/api/attach_authority.go`](../internal/api/attach_authority.go)).
+    - The exception left is an upgraded relayed socket of a UI-app browser session, which carries no re-check and keeps working until it closes (`TestUIGateway_EstablishedConnectionOutlivesTheRevoke` pins this).
     - A portal registered under the wrong identity-provider client id acts for whoever that client's tokens name, which is why only a super admin registers one and why it may never be Wardyn's own client id.
 
     </details>
@@ -2926,7 +2932,10 @@ These risks are **not closed by v1 Wardyn**.
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).
-    - **Bind write-back does not exist yet.** Through 0.9.3 a run on a runner takes no laptop folder: a `local_dir` source or a `host_path` drive is refused `placement_local_path` (`ReasonPlacementLocalPath`, [`internal/placement/reasons.go`](../internal/placement/reasons.go)), because nothing binds a path to a runner yet.
+    - **A folder bind is not sync.** A member's `local_dir` mount or a `host_path` drive on a run placed on a runner is bound to that runner and its allowed roots (`--drive-root`): the run is refused `placement_local_path` unless the stored path names the runner it is sent to and lies inside one of that runner's roots, and a run with a folder bound to a runner is failed rather than started on any other (`boundFolderOffItsRunner`, [`internal/api/run_placement_dispatch.go`](../internal/api/run_placement_dispatch.go)).
+    - A path that is not bound that way is still refused `placement_local_path` (`ReasonPlacementLocalPath`, [`internal/placement/reasons.go`](../internal/placement/reasons.go)).
+    - A bind opted in as writable (read-only is the other mode) changes the selected host folder directly. None of the sync client's protections apply to it: no conflict rule, no deletion rule and no file exclusion, so the agent can delete, overwrite or add any file in that folder, including `.git/`, `.envrc` and editor launch files.
+    - The root checks and the credential deny-list protect the bind target at check time only (residuals #25 and #35).
 
 69. **On a runner host the developer is root: every control binds the agent, not the developer, and everything a local run uses is developer-readable [0.9, client mode].**
     <details><summary>Details</summary>
@@ -3072,7 +3081,8 @@ These risks are **not closed by v1 Wardyn**.
     - A sponsor may see and stop the service's runs. Entering one needs an explicit `service_attach` grant, is recorded as the sponsor, and is never available over SSH or to a portal's delegated token.
     - Entry is off for everyone until an administrator names the grant, and it never takes the super-admin exemption. An allow written for everyone admits every sponsor.
     - A withdrawn grant refuses only the next ticket. An issued UI session keeps working until its TTL (`WARDYN_UI_SANDBOX_SESSION_TTL`), a session revoke, or its next re-check after the sponsorship ends.
-    - A terminal stream already open runs until it closes, and an open `/events` stream keeps flowing until the run ends.
+    - A withdrawn `service_attach` grant is checked at ticket mint only, so it ends no terminal already open. What the terminal's 30-second authority check does ask again is the sponsor's entry rule: the sponsor must still be the service identity's sponsor since the ticket's authority time, and a sponsorship that has ended, or that cannot be read, closes the socket (`sponsorStillEntitled` in [`internal/api/run_entry.go`](../internal/api/run_entry.go)).
+    - An open `/events` stream ends at the run's end, at its five-minute hold timer, on cancellation, or when a keepalive check (every 15 seconds) finds the session or portal delegation ended; a stream authenticated as the service identity ends when the identity is suspended or retired, its sponsor changed after the stream opened, or its sponsor's session is no longer live (`serviceEndedSince`, [`internal/api/run_events.go`](../internal/api/run_events.go)).
 
 79. **A run's launch intent is kept as long as the run row, and an erase races only launches that begin after it [0.9].**
     - The intent holds the run's task text, inline component definitions, and the names (never values) of the secrets, hosts and workspaces it asked for.
