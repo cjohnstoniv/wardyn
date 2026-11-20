@@ -361,6 +361,9 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		s.denyApprover(kind).write(w, r)
 		return
 	}
+	if approve && head.TargetKind == govKindAssistantSettings && !s.assistantHoldDecidable(w, r) {
+		return
+	}
 	if approve && head.TargetKind == govKindUnit {
 		// The site-config lock before the decision transaction's graph lock, as writeGovernanceUnit
 		// takes them: applyUnitChange reads governance_max_depth, so a lowering cannot slip between.
