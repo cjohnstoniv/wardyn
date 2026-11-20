@@ -714,7 +714,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 				return egress.Pending, "", &log
 			}
 		} else {
-			log := decisionLog(req, egress.Deny, "policy:default-deny")
+			log := decisionLog(req, egress.Deny, egress.RuleSourceDefaultDeny)
 			return egress.Deny, "", &log
 		}
 	case egress.VerdictAllow:
@@ -798,7 +798,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 // (approvalID == Nil, the common case) it is a standing policy allow.
 func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID, givenBack bool) egress.DecisionLog {
 	if approvalID == uuid.Nil {
-		return decisionLog(req, egress.Allow, "policy:allowed")
+		return decisionLog(req, egress.Allow, egress.RuleSourcePolicyAllowed)
 	}
 	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
 	log.ApprovalID = &approvalID
