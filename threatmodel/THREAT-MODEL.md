@@ -220,7 +220,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 |---|---|---|
 | **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata), the VM boundary of B14 and B15, and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
 | **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (no route off the host, so nothing to bypass to), not by omitting the var. |
-| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships and is in-sandbox and cooperative; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
+| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The in-sandbox per-tool-call decision plane is cooperative; the proxy enforces `deny` and `approve_each` on remote MCP servers attached through it, and does not mediate other tools: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | Authenticated by a per-run JWT from wardynd's embedded issuer (SPIFFE-shaped; the runner asserts the attestation; SPIRE is planned). The broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
 | **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
@@ -266,8 +266,18 @@ A run gets what every layer allows. The run's policy record names the layer that
   - A decision plane, not a containment one.
   - Note also that `ToolAllow` is WIDENING authority evaluated outside the sandbox: an operator
     writing `tool_rules` is pre-approving calls no human will see.
-- **Planned half:** interception of MCP tool-call EGRESS, which is what would make this a boundary
-  rather than a protocol both sides have to honour.
+- **Shipped half, for attached remote MCP servers:** the proxy's MCP broker enforces outside the sandbox.
+  - A server is attached through the proxy only. Its host is refused on the ordinary route above every
+    allow, so a direct request to it is denied.
+  - Before forwarding, the broker refuses a `tools/call` the run's rules `deny` and holds an
+    `approve_each` call for a person's yes on that call's exact arguments. A caller that skips the
+    harness and the in-sandbox relay is still bound by both.
+  - A `hold` is not asked there: it passes, because the harness or the relay asked before the call, so a
+    direct call that skips both is not held.
+- **What the proxy does not mediate:** a tool that is not a remote MCP server attached through the
+  proxy (an MCP server running in the sandbox, a local tool, or any other egress to an allowed host) has
+  only the cooperative gate above and the egress policy of B2. This is not a claim that every tool call
+  is mediated.
 - **Above this plane (0.8):** a governance profile's autonomy rubric decides, control-plane side and
   before dispatch, whether a run may operate at `L2`/`L3` (auto-approval, seeded auto tools,
   `task_mode=exec`) at all, graded on the run's posture.
@@ -520,13 +530,13 @@ A run gets what every layer allows. The run's policy record names the layer that
 | L0 structural 🟢 **[shipped]** | Per-run Docker network with no route off the host and no address on it: internal, gateway mode `isolated`, IPv6 off, Docker Engine 28.0.0 or later. The only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny 🟢 **[shipped on Kubernetes]** / 🟡 **[Docker planned]** | Kubernetes NetworkPolicy default-deny proven by a boot canary; the Docker form is planned: [detail](#l1-default-deny). | Non-HTTP raw-socket tunnels that never reach the proxy process; extends "no route but the proxy" to Kubernetes. Depth ATOP the metadata/link-local guard L2 already enforces — the metadata block does not wait on L1 |
 | L2 wardyn-proxy 🟢 **[shipped]** | Allowlist, approval, injection and the unconditional loopback/multicast/metadata guard: [detail](#l2-wardyn-proxy). | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
-| L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. A remote MCP tool set to `approve_each` is held at the MCP broker for a person's yes on each call **[shipped]**. Interception of tool-call EGRESS **[planned]** | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. An `approve_each` tool is gated at the broker whatever process calls it. It does NOT stop tool-call egress: the relay is in-sandbox and cooperative (B3), so an agent that never calls it is not gated |
+| L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. A remote MCP tool set to `approve_each` is held at the MCP broker for a person's yes on each call **[shipped]**. Other tools' call egress is not mediated (B3) | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. An `approve_each` tool is gated at the broker whatever process calls it. It does NOT stop tool-call egress: the relay is in-sandbox and cooperative (B3), so an agent that never calls it is not gated |
 
 - L0 residual (Docker): a run started before the Docker Engine 28.0.0 change, or under `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, can reach services on the Docker host ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)).
 - Four egress layers stack outward: L0 structural confinement (Docker) and the L2 proxy carry
   enforcement on every path, L1 is shipped on Kubernetes (canary-proven NetworkPolicy; the Docker
   nftables form remains planned).
-- And L3 is partial — its decision half ships, its interception half does not.
+- And L3 is partial — it enforces `deny` and `approve_each` for remote MCP servers attached through the proxy, and the rest of its decision half is cooperative.
 
 **Substrate delta: Docker (L0) vs Kubernetes (L1).**
 
@@ -567,8 +577,8 @@ is not the deployment described above.**
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the run's network has no route off the host, so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟢 **[shipped on Kubernetes]**, 🟡 **[Docker planned]**, adds depth; the metadata block does not wait on it | |
-| MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[partial]**: the DECISION half ships — operator-authored `tool_rules` resolved proxy-side by `decideByToolRules`, the in-sandbox `cmd/wardyn-toolgate` relay, and a `tool_call` approval for anything on `hold`. | L3, B3 |
-| | But the relay is cooperative, so the EGRESS-interception half that would close this class is still planned and the class stays open below L2. | |
+| MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[partial]**: operator-authored `tool_rules` resolved proxy-side by `decideByToolRules`, the in-sandbox `cmd/wardyn-toolgate` relay, and a `tool_call` approval for anything on `hold`; for a remote MCP server attached through the proxy, the broker also refuses a `deny` call and holds an `approve_each` call. | L3, B3 |
+| | But the relay is cooperative, so for a tool that is not an attached remote MCP server the class stays open below L2. | |
 | Sandbox writing into the control plane through the brokered approvals route | An inbound write surface from inside B1, bounded in shape but not in volume: [detail](#sandbox-writing-into-the-control-plane-through-the-brokered-approvals-route). | B1, B5, AU |
 | Container-runtime escape via known runc/containerd CVE classes | Hardened-runc floor on Docker (cap-drop ALL, no-new-privileges, tmpfs, RuntimeDefault seccomp — never `unconfined` — host-gated AppArmor) and container-level PSS hardening on every Kubernetes pod (`baseSecurityContext`, [`internal/runner/k8s/naming.go`](../internal/runner/k8s/naming.go)) **[shipped]**. | CC2, L0 |
 | | No hostPath is shipped by construction; userns (`hostUsers:false`) is **[planned]** — [§7](#7-confinement-class-claims) CC1 states the full posture. | |
@@ -1609,7 +1619,9 @@ These risks are **not closed by v1 Wardyn**.
 ### Numbered residuals
 
 1. **The model-API channel is an unavoidable data-exit path.**
-   - The LLM gateway logs every prompt/token/tool call but cannot stop an agent encoding data into a prompt to a model it may call.
+   - The proxy records connection and request decisions (host, port, method and path), token counts on the model routes it can meter, and, where `llm_inspection` is on, a content-free inspection summary.
+   - That is not a transcript: no prompt or response body is kept, and a model call in an opaque tunnel yields only the connection row, marked as a model tunnel, with no per-call counts.
+   - It cannot stop an agent encoding data into a prompt to a model it may call.
    - Wardyn does not prevent exfiltration over the model channel.
    - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values, and the `env_secret` and `file_secret` values placed in the run, and can alert/block.
    - But a prompt-injected agent can base64/hex/split-across-turns/encrypt around any scanner, and subscription-OAuth/Bedrock CONNECT modes stay opaque until the Phase-2 TLS-MITM tier (flagged `llm.scan.bypass`).
@@ -1690,8 +1702,13 @@ These risks are **not closed by v1 Wardyn**.
         - A base ref may be a mutable tag or a digest-pinned ref (`repo@sha256:…`).
         - A pinned, pre-pulled base is matched without a registry round-trip (works air-gapped) and pinning is the recommended operator practice — but Wardyn **does not require it**.
         - A mutable tag is resolved at wrap time — a registry re-pointing a tag changes what gets wrapped, and the run's recorded image tag is not by itself proof of content.
-      - **Base CONTENT is not scanned or attested** — no malware/CVE scan, no signature or provenance verification (no cosign/notation/SLSA).
-        - A backdoored base is wrapped and launched.
+      - **Base CONTENT is not scanned**, and base signatures are checked only when an admin turns image admission on.
+        - There is no malware or CVE scan, and no SLSA provenance check of the build.
+        - Image admission (site setting `images.admission`, and a governance profile's required signers) is OFF by default. In audit mode it reports what enforce would have refused and neither refuses nor pins.
+        - Where it enforces (the site's enforce mode, or a profile naming required signers, which applies whatever the site mode), it reads the digest's Sigstore signatures and attestations and holds them to the signers that cover the image. It refuses an image no signer covers, or one whose signature or required attestation is missing or does not verify. It then pins the admitted digest, and the base wrap uses that pin rather than the tag.
+        - It checks the member's image, an attached workspace's base image or a policy-carried one. It does not check the convention image, a macOS VM run (which runs no member image), an operator or the break-glass admin.
+        - It proves who signed that digest, not that the content is benign: a malicious-but-signed base is admitted.
+        - A backdoored base is wrapped and launched when admission is off or in audit mode, or when a trusted signer vouches for it.
         - What bounds it is structural.
         - A BYOI base's code executes only *later*, inside the run's confinement tier under the same egress policy, credential-brokering and audit — contained exactly as well as a hostile agent, no better.
         - (Devcontainer build-TIME content is NOT covered by that argument.)
@@ -1989,12 +2006,11 @@ These risks are **not closed by v1 Wardyn**.
     - The fix is the multi-user central-control-plane topology ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md#multi-user-who-can-change-what)'s "Multi-user: who can change what"); nothing in the product enforces that separation exists.
 
 24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the UI-sandbox gateway.**
-    - The matrix's own coverage-boundary comment ([`internal/api/authz_test.go`](../internal/api/authz_test.go)) names exactly one excluded surface — the SSH gateway's separate listener — because `chi.Walk` only discovers routes on `srv.router`.
-    - So a route living on a different `http.Handler` is invisible to it.
-    - `UIGatewayHandler` is wired as its own listener/handler, never registered on `srv.router`, so it is exactly as invisible as SSH is.
-    - But the comment does not say so, which reads as a stronger guarantee ("every route") than the test provides.
-    - A credibility gap in what a green matrix run means, not a live authorization hole: `uigateway_test.go` exercises that surface's authorization today, the same relationship `sshgateway_test.go` has to the SSH exclusion.
-    - A future route on the UI gateway's own router would escape both the guarantee and this document's notice of the exclusion — the failure mode `TestAuthzMatrix` exists to prevent everywhere else.
+    - `chi.Walk` only discovers routes on `srv.router`, so a route living on a different `http.Handler` is invisible to the matrix.
+    - The matrix's own coverage-boundary comment ([`internal/api/authz_test.go`](../internal/api/authz_test.go)) names both separate listeners, the SSH gateway and `UIGatewayHandler`, and says a green matrix says nothing about their authorization.
+    - `UIGatewayHandler` is wired as its own listener/handler, never registered on `srv.router`, so the matrix does not discover it.
+    - What remains is that limit, not a live authorization hole: the matrix cannot discover a route on the UI gateway's own router, and that surface's authorization is pinned only by its own tests in `uigateway_test.go`, the same relationship `sshgateway_test.go` has to the SSH exclusion.
+    - A future route on the UI gateway's own router would escape the matrix — the failure mode `TestAuthzMatrix` exists to prevent everywhere else — and only those separate tests would catch it.
 
 25. **A member-authored mount's bind is still not atomic with its check (TOCTOU), and the residual is accepted, not closed.**
     - The gate re-resolves the source with `EvalSymlinks` in the docker driver immediately before `ContainerCreate` — as late as this process can look.
@@ -2019,9 +2035,9 @@ These risks are **not closed by v1 Wardyn**.
     - The workspace-noun instance of residual #14's one-operator-tier, bounded the same way.
 
 28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not merely tolerated on one hop.**
-    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS.
+    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything those paths send over TLS.
     - `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`).
-    - The proxy sidecar's forward and control-plane transports.
+    - The proxy sidecar's egress (forward) transport. Its control-plane connection to `wardynd` is excluded: it trusts only `wardynd`'s own internal CA, never the system roots or this bundle (B6).
     - And — because `runner.InstallSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
@@ -4695,7 +4711,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | No resident secrets | Late-bound, proxy-injected credentials with output masking 🟢 **[shipped]**: [gaps and exceptions](#no-resident-secrets). | AT-1.1: agent reading secrets from sandbox env/disk |
 | Env-var proxy bypass defended | L0 🟢 **[shipped]** (no route off the host; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3's decision half ships (`tool_rules`, `wardyn-toolgate`) and is cooperative; its interception half is planned, so this row is NOT "always active" for tool-call egress until that ships |
+| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3 enforces `deny` and `approve_each` at the proxy for remote MCP servers attached through it, and its `tool_rules` and `wardyn-toolgate` relay are cooperative for the rest, so this row is NOT "always active" for a tool that is not an attached remote MCP server |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
 | Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
