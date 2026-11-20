@@ -1063,7 +1063,7 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
 - It reads metadata only, deletes nothing, and exits non-zero when it finds either.
 - A crash between the two writes of a Put or a Delete is what produces one; neither leaks a value to anyone.
 - So can a shutdown or a burst of saves.
-- A save's clean-up of a value it replaced, or of its own value whose row was not written, is cut if it is still running when shutdown's wait ends. It is skipped while clean-ups already run on a quarter of the database pool's connections (rounded down, at least one). Either way the value is kept, and `wardynd -reconcile` lists it.
+- A save's clean-up of a value it replaced, or of its own value whose row was not written, is cut if it is still running when shutdown's wait ends. It is skipped while clean-ups already run on a quarter of the database pool's connections (rounded down, at least one). Either way, a clean-up cut short may leave a value behind. `wardynd -reconcile` lists remaining values that no row uses.
 - Beside a serving wardynd, one run can list a value without a pointer that a save has since put back. Before you remove a listed value, run `wardynd -reconcile` again and act only on a value both runs list.
 
 **Erasure horizon.** A removed credential is gone from Vault at once (all versions); what survives is your Vault storage's own snapshots and backups, under your retention. **Backup** in store mode is the Postgres dump plus your Vault's own backup — the dump alone holds pointers, not values.

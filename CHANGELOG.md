@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `make notices` (the third-party notices check) no longer fails when go-licenses cannot reach the licence host of a module whose recorded licence link has its version as a path segment (`…/v0.9.1/…`): it keeps that link and warns. A new module, a licence change or a version change still fails the check.
 - Kubernetes runners keep each run's lease deadline across a runner restart. After a restart, a run whose organisation cannot be reached has its proxy stopped at its saved deadline, no sooner than 10 minutes and no later than one hour after the restart. Before, every such run got a fresh hour. A run saved before the upgrade has no saved deadline and still gets the hour.
 - Correction to an earlier release note on SSH gateway audit rows. An sftp transfer or port forward whose process ends with a known nonzero exit is a failure, unless the client or its channel closing ended the transfer first; that close is a success. A transfer whose exit was never read while its client was still connected is a failure that carries no exit status.
+- Correction to an earlier release note on secret store clean-ups. A clean-up of a replaced value, or of a value whose row was not written, that is cut short by a shutdown may leave a value behind, or may already have removed it; it is not certain to leave the value in place. `wardynd -reconcile` lists remaining values that no row uses, and the shutdown warning now says so. A value kept because its save did commit is not listed.
 
 ### Security
 

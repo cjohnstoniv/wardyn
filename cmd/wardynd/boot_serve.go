@@ -586,7 +586,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 		cleanErr = waitCleanUps(cleanCtx)
 	}
 	if cleanErr != nil {
-		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut and may have left a value behind (`wardynd -reconcile` lists remaining values that no row uses)",
 			slog.Duration("budget", api.BackgroundShutdownBudget))
 	}
 
