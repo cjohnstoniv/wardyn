@@ -351,13 +351,20 @@ func (n *Network) certFailure(p *probe, u *url.URL) Stage {
 		}
 		return FailStage("tls", detail, "WARDYN_TRUSTED_CA_FILE", "a PEM file holding that issuer's root CA")
 	case errors.As(p.verifyErr, &wrongHost):
-		covers := u.Hostname()
 		if !p.peerOrigin && p.peerName != "" {
-			covers = p.peerName
+			// The https:// proxy's own handshake: the organisation's address is not what is wrong, and
+			// changing it does not change the proxy's certificate.
+			return FailStage("tls", presented+", which does not cover "+p.peerName, proxyVar(u), "the address of a proxy whose certificate covers it")
 		}
-		return FailStage("tls", presented+", which does not cover "+covers, n.OrgSetting, "the address that certificate covers")
+		return FailStage("tls", presented+", which does not cover "+u.Hostname(), n.OrgSetting, "the address that certificate covers")
 	case errors.As(p.verifyErr, &invalid):
+		if !p.peerOrigin && p.peerName != "" {
+			return FailStage("tls", presented+", which is expired or not valid yet", "", "check this computer's clock; if it is right, the proxy's certificate needs renewing: ask whoever runs the proxy")
+		}
 		return FailStage("tls", presented+", which is expired or not valid yet", "", "check this computer's clock; if it is right, the organisation's certificate needs renewing")
+	}
+	if !p.peerOrigin && p.peerName != "" {
+		return FailStage("tls", presented+": "+p.verifyErr.Error(), proxyVar(u), "a proxy whose certificate this computer trusts")
 	}
 	return FailStage("tls", presented+": "+p.verifyErr.Error(), n.OrgSetting, "an address whose certificate this computer trusts")
 }

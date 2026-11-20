@@ -241,3 +241,75 @@ func TestUntrustedIssuerRemedyFollowsTheHandshakeThatFailed(t *testing.T) {
 		})
 	}
 }
+
+// expiredLeaf is a server certificate ca signed for dns that lapsed an hour ago.
+func (ca testCA) expiredLeaf(t *testing.T, dns string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "org leaf"},
+		NotBefore: time.Now().Add(-3 * time.Hour), NotAfter: time.Now().Add(-time.Hour), DNSNames: []string{dns},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// A wrong-name or expired certificate is fixed where it was presented: the organisation's own address
+// setting for the organisation's handshake, and for an https:// proxy's the proxy's address (the proxy setting)
+// or its certificate, never the organisation's address or certificate.
+func TestHostnameAndExpiryRemediesFollowTheHandshakeThatFailed(t *testing.T) {
+	ca := newTestCA(t)
+	u, _ := url.Parse("https://wardyn.example.com:8443")
+	for _, peer := range []struct {
+		name, sent, presenter string
+		origin                bool
+	}{
+		{"the organisation's handshake", "wardyn.example.com", "wardyn.example.com:8443", true},
+		{"an https:// proxy's handshake", "proxy.example.com", "proxy.example.com", false},
+	} {
+		for _, class := range []string{"another name", "expired"} {
+			t.Run(peer.name+", "+class, func(t *testing.T) {
+				leaf := ca.leaf(t, nil, "elsewhere.example.com")
+				if class == "expired" {
+					leaf = ca.expiredLeaf(t, peer.sent)
+				}
+				cert, _ := x509.ParseCertificate(leaf.Certificate[0])
+				n := Network{SystemRoots: ca.pool, OrgSetting: "WARDYN_URL"}
+				p := &probe{n: &n, origin: "wardyn.example.com", proxy: "proxy.example.com"}
+				if err := p.verify(tls.ConnectionState{ServerName: peer.sent, PeerCertificates: []*x509.Certificate{cert}}); err == nil {
+					t.Fatal("a certificate that fails verification verified")
+				}
+				st := n.certFailure(p, u)
+				if st.Status != StatusFail || !strings.HasPrefix(st.Detail, peer.presenter+" presented a certificate") {
+					t.Fatalf("stage %+v, want a FAIL naming %s as the presenter", st, peer.presenter)
+				}
+				switch {
+				case class == "another name" && peer.origin:
+					if st.Setting != "WARDYN_URL" || !strings.Contains(st.Detail, "does not cover wardyn.example.com") {
+						t.Errorf("stage %+v, want WARDYN_URL and the organisation's name not covered", st)
+					}
+				case class == "another name":
+					if st.Setting != "HTTPS_PROXY" || !strings.Contains(st.Detail, "does not cover proxy.example.com") || !strings.Contains(st.Fix, "proxy") {
+						t.Errorf("stage %+v, want HTTPS_PROXY, the proxy's name not covered and a proxy fix", st)
+					}
+				case peer.origin:
+					if !strings.Contains(st.Fix, "the organisation's certificate needs renewing") {
+						t.Errorf("fix %q, want the organisation's certificate named", st.Fix)
+					}
+				default:
+					if !strings.Contains(st.Fix, "the proxy's certificate needs renewing") || strings.Contains(st.Fix, "organisation") {
+						t.Errorf("fix %q, want the proxy's certificate named and not the organisation's", st.Fix)
+					}
+				}
+				if !peer.origin && (st.Setting == "WARDYN_URL" || strings.Contains(st.Detail, "wardyn.example.com")) {
+					t.Errorf("stage %+v points a proxy failure at the organisation", st)
+				}
+			})
+		}
+	}
+}
