@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -61,7 +62,7 @@ func TestPG_ChangeImpact_ProfileUpdate(t *testing.T) {
 	ctx := context.Background()
 	person := treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, "sub-imp-person", 1, false)
 	runID := uuid.New()
-	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: runID, CreatedBy: "sub-imp-runner", Agent: "claude-code", ConfinementClass: types.CC2,
+	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: runID, CreatedAt: time.Now(), CreatedBy: "sub-imp-runner", Agent: "claude-code", ConfinementClass: types.CC2,
 		State: types.RunRunning, RunnerTarget: "docker", Task: "t", Title: "quarterly close", SPIFFEID: "spiffe://wardyn.local/agent-run/" + runID.String(),
 		SandboxRef: "wardyn-agent-" + runID.String(), UnitID: &e.a1.ID}); err != nil {
 		t.Fatal(err)

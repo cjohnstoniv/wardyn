@@ -336,7 +336,7 @@ func (s *Server) unitReviewFor(ctx context.Context, targetKey string, before, af
 	if err != nil {
 		return nil, fmt.Errorf("target key %q is not a profile id", targetKey)
 	}
-	all, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	all, err := s.unitRowsForWrite(ctx)
 	if err != nil {
 		return nil, err
 	}
