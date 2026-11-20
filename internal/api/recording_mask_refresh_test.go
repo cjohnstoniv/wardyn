@@ -1,0 +1,256 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+)
+
+// A secret registered for the run after its upload's reader was built, while the upload waited in the store's
+// queue, is masked: with no secret at all when the reader was built, and beside one it already held.
+func TestBuildMaskingBody_MasksASecretRegisteredAfterConstruction(t *testing.T) {
+	for name, older := range map[string]string{"empty corpus": "", "older secret": "older-recording-secret"} {
+		t.Run(name, func(t *testing.T) {
+			runID := uuid.New()
+			reg := secretmask.NewRegistry()
+			input := "a late-recording-secret b"
+			want := "a <secret-hidden> b"
+			if older != "" {
+				if err := reg.Add(runID, []byte(older)); err != nil {
+					t.Fatal(err)
+				}
+				input, want = input+" "+older, want+" <secret-hidden>"
+			}
+			body := buildMaskingBody(strings.NewReader(input), reg, runID)
+			if err := reg.Add(runID, []byte("late-recording-secret")); err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(body)
+			if err != nil || string(got) != want {
+				t.Fatalf("masked = (%q, %v), want %q", got, err, want)
+			}
+		})
+	}
+}
+
+// enteredReader signals each Read before it blocks on the source.
+type enteredReader struct {
+	io.Reader
+	entered chan struct{}
+}
+
+func (e enteredReader) Read(p []byte) (int, error) {
+	e.entered <- struct{}{}
+	return e.Reader.Read(p)
+}
+
+// A secret registered while the reader is blocked reading the body is masked in the bytes that come after.
+func TestBuildMaskingBody_MasksASecretRegisteredDuringABlockedRead(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	pr, pw := io.Pipe()
+	src := enteredReader{Reader: pr, entered: make(chan struct{}, 64)}
+	body := buildMaskingBody(src, reg, runID)
+	type result struct {
+		got []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		got, err := io.ReadAll(body)
+		done <- result{got, err}
+	}()
+	<-src.entered
+	if _, err := pw.Write([]byte("start ")); err != nil {
+		t.Fatal(err)
+	}
+	<-src.entered // blocked on the pipe for the next bytes
+	if err := reg.Add(runID, []byte("pipe-recording-secret")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pw.Write([]byte("pipe-recording-secret end")); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	res := <-done
+	if res.err != nil || string(res.got) != "start <secret-hidden> end" {
+		t.Fatalf("masked = (%q, %v)", res.got, res.err)
+	}
+}
+
+// hookReader returns its chunks in order, a chunk over several Reads when it is longer than the buffer, and runs
+// before[i] just before the first Read of chunk i returns.
+type hookReader struct {
+	chunks []string
+	before map[int]func()
+	next   int
+	rest   string
+}
+
+func (h *hookReader) Read(p []byte) (int, error) {
+	if h.rest == "" {
+		if h.next == len(h.chunks) {
+			return 0, io.EOF
+		}
+		if f := h.before[h.next]; f != nil {
+			f()
+		}
+		h.rest = h.chunks[h.next]
+		h.next++
+	}
+	n := copy(p, h.rest)
+	h.rest = h.rest[n:]
+	return n, nil
+}
+
+// A secret registered between two chunks of the body is masked in the later one, and the earlier chunk's bytes
+// the reader still holds are masked against the new corpus too.
+func TestBuildMaskingBody_MasksASecretRegisteredBetweenChunks(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	lines := strings.Repeat("output line\n", 8000) // past the reader's held bytes and the masker's tail
+	src := &hookReader{
+		chunks: []string{lines, "x between-recording-secret y"},
+		before: map[int]func(){1: func() {
+			if err := reg.Add(runID, []byte("between-recording-secret")); err != nil {
+				t.Error(err)
+			}
+		}},
+	}
+	got, err := io.ReadAll(buildMaskingBody(src, reg, runID))
+	if want := lines + "x <secret-hidden> y"; err != nil || string(got) != want {
+		t.Fatalf("masked = (%v), ends %q", err, got[max(0, len(got)-60):])
+	}
+}
+
+// A newly registered value's JSON-escaped rendering, as an asciicast "o" event carries it, is masked.
+func TestBuildMaskingBody_MasksTheEscapedRenderingOfANewSecret(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	body := buildMaskingBody(strings.NewReader(`[0.5,"o","multi\nline-recording-secret"]`+"\n"), reg, runID)
+	if err := reg.Add(runID, []byte("multi\nline-recording-secret")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(body)
+	if want := `[0.5,"o","<secret-hidden>"]` + "\n"; err != nil || string(got) != want {
+		t.Fatalf("masked = (%q, %v), want %q", got, err, want)
+	}
+}
+
+// The held bytes, kept back to learn whether the body ends with wardyn-rec's log cut marker, are flushed through
+// the corpus as it stands at the end, not as it stood when they were read: a secret the cut split is masked.
+func TestBuildMaskingBody_HeldTailUsesTheFreshCorpus(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "late-cut-recording-secret"
+	head := strings.Repeat("output line\n", 4000) + secret[:10]
+	marker := recording.LogCutMarker(int64(len(head)), int64(len(head)+len(secret)))
+	src := &hookReader{
+		chunks: []string{head, marker}, // the start of the secret is held, unmasked, when it is registered
+		before: map[int]func(){1: func() {
+			if err := reg.Add(runID, []byte(secret)); err != nil {
+				t.Error(err)
+			}
+		}},
+	}
+	got, err := io.ReadAll(buildMaskingBody(src, reg, runID))
+	if want := head[:len(head)-10] + string(secretmask.Placeholder()) + marker; err != nil || string(got) != want {
+		t.Fatalf("masked = (%v), ends %q", err, got[max(0, len(got)-200):])
+	}
+}
+
+// freshBackend is a shared corpus whose Fresh answers err and records each arrival it was asked about. Only
+// Fresh is called on it here.
+type freshBackend struct {
+	secretmask.Backend
+	mu       sync.Mutex
+	err      func(call int) error
+	arrivals []time.Time
+}
+
+func (b *freshBackend) Fresh(_ context.Context, arrived time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.arrivals = append(b.arrivals, arrived)
+	return b.err(len(b.arrivals))
+}
+
+// lastReadReader records when its last Read returned.
+type lastReadReader struct {
+	io.Reader
+	returned time.Time
+	reads    int
+}
+
+func (l *lastReadReader) Read(p []byte) (int, error) {
+	n, err := l.Reader.Read(p)
+	l.reads++
+	l.returned = time.Now()
+	return n, err
+}
+
+// With a shared corpus, a batch of the body is masked only after a corpus read that began after its last byte
+// arrived, and one proof covers a batch, not each read.
+func TestBuildMaskingBody_SharedCorpusIsReadAfterTheBytesArrive(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	src := &lastReadReader{Reader: strings.NewReader(strings.Repeat("x", 3*freshBatch))}
+	var b *freshBackend
+	b = &freshBackend{err: func(int) error {
+		if b.arrivals[len(b.arrivals)-1].Before(src.returned) {
+			return errors.New("asked about bytes that arrived later")
+		}
+		return nil
+	}}
+	reg.SetBackend(b)
+	got, err := io.ReadAll(buildMaskingBody(src, reg, runID))
+	if err != nil || len(got) != 3*freshBatch {
+		t.Fatalf("read = (%d bytes, %v)", len(got), err)
+	}
+	if n := len(b.arrivals); n == 0 || n > 4 || n >= src.reads {
+		t.Fatalf("freshness proofs = %d for %d reads, want one per batch", n, src.reads)
+	}
+}
+
+// A corpus that cannot be proven fresh ends the upload with an error, whether at its first batch or a later one:
+// the store gets the error, keeps nothing, and the route answers 503 as for an uncovered run. This is the shared
+// registry's freshness, apart from the manifest's fence (TestRecordingMaskReader_GuardEndsTheUpload).
+func TestBuildMaskingBody_StaleSharedCorpusFailsTheUpload(t *testing.T) {
+	for name, failAt := range map[string]int{"first batch": 1, "later batch": 2} {
+		t.Run(name, func(t *testing.T) {
+			runID := uuid.New()
+			reg := secretmask.NewRegistry()
+			reg.SetBackend(&freshBackend{err: func(call int) error {
+				if call >= failAt {
+					return errors.New("postgres does not answer")
+				}
+				return nil
+			}})
+			store, err := recording.NewFSStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := buildMaskingBody(strings.NewReader(strings.Repeat("output line\n", freshBatch/4)), reg, runID)
+			err = store.SaveCast(context.Background(), runID.String(), body)
+			if !errors.Is(err, errMaskStale) || !errors.Is(err, errMaskUncovered) {
+				t.Fatalf("save = %v, want the stale corpus error", err)
+			}
+			if rc, oerr := store.OpenCast(context.Background(), runID.String()); oerr == nil {
+				rc.Close()
+				t.Fatal("a cast was stored from an upload whose corpus was stale")
+			}
+		})
+	}
+}

@@ -915,6 +915,9 @@ By default an agent starts before its proxy confirms the policy it loaded. With 
   - Every replica masks with that corpus, whichever replica served the request and across restarts.
   - The five doors that relay or persist sandbox output (the recording upload, live attach, exec relay, SSH shell and live output read) answer `503` `mask_state_unavailable` (the SSH shell refuses with a channel error and the same `authz.denied` row) for a run whose manifest they cannot prove complete.
     - And a consumer that cannot prove its copy current replaces a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+    - A recording upload proves its copy current again after each batch of its body arrives, up to 1 MiB with a shared corpus, and masks the batch with the corpus it then holds.
+    - So a value handed to the run while the upload waited or was being read is masked, in the bytes the upload still held back as well.
+    - A batch it cannot vouch for ends the upload `503`, and the store keeps none of it.
   - A `mask_copies` erase also records a durable owner fence, including when no values exist.
   - Global registration compares that fence with a cursor snapshot taken before credential reads or network exchange: a delayed AWS or Entra response cannot register behind the erase.
   - A new sign-in can use a later snapshot.

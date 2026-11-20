@@ -357,10 +357,8 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	if reg == nil {
 		return src
 	}
-	snap := reg.Snapshot(runID)
-	if len(snap) == 0 && guard == nil {
-		return src
-	}
+	// Wrapped even with no secret yet: one registered for the run while this upload waits in the store's queue,
+	// or while its body is read, is masked as well (refresh).
 	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
 	// json-encodes each terminal-output chunk into an "o" event, so a secret containing any byte
 	// JSON escapes (newline, quote, backslash, control char) never appears
@@ -374,18 +372,35 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	// across two asciicast events by wardyn-rec's PTY read boundaries is still not
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
-	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap), limit: recording.MaxCastBytes}
+	//
+	// The Masker is the registry's JSON-variant one (JSONEscapedVariants of the run's snapshot), and refresh derives
+	// it again, after the bytes it masks arrived, whenever the corpus moved since this one.
+	mask, gen := reg.JSONVariantMaskerGen(runID)
+	r := &recordingMaskReader{src: src, guard: guard, reg: reg, runID: runID, gen: gen, mask: mask, limit: recording.MaxCastBytes}
 	r.masker = secretmask.NewMaskingWriter(&r.output, r.mask)
 	return r
 }
 
+// freshBatch is how many body bytes a server with a shared masking corpus reads before it proves the corpus fresh
+// and masks them. A proof per read would cost a corpus read per read, at most one per 50 ms, and a 32 MiB part
+// would outrun its read window. The bytes wait in memory, never handed on, until the proof.
+const freshBatch = 1 << 20
+
+// errMaskStale ends an upload when this server cannot prove it has read every masking value committed before a
+// part of the body arrived. It answers as an uncovered run does, 503 mask_state_unavailable, and as any read
+// error does, the store keeps nothing of the upload.
+var errMaskStale = fmt.Errorf("api: the shared masking corpus was not read after the upload's bytes arrived: %w", errMaskUncovered)
+
 type recordingMaskReader struct {
 	src    io.Reader
 	output bytes.Buffer
+	reg    *secretmask.Registry
+	runID  uuid.UUID
+	gen    uint64 // the registry generation mask was built at
 	mask   secretmask.Masker
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
+	raw    []byte // the bytes fill read, not yet masked
 	// held are the last bytes read, kept from the masker until the end says whether they are a log cut marker.
 	held  []byte
 	err   error
@@ -455,19 +470,67 @@ func (r *recordingMaskReader) finish(eof bool) error {
 	return cmp.Or(err, r.masker.Close())
 }
 
+// fill reads the next bytes to mask: one read, or with a shared corpus up to freshBatch bytes, so one proof of
+// freshness covers them. It stops early at an error or an empty read, and ends with errMaskUncovered, dropping
+// what it read, when the guard says the run is no longer covered.
+func (r *recordingMaskReader) fill() ([]byte, error) {
+	want := 1
+	if r.reg.Persisted() {
+		want = freshBatch
+	}
+	r.raw = r.raw[:0]
+	for {
+		if r.guard != nil && !r.guard() {
+			return nil, errMaskUncovered
+		}
+		n, err := r.src.Read(r.chunk[:])
+		r.raw = append(r.raw, r.chunk[:n]...)
+		if err != nil || n == 0 || len(r.raw) >= want {
+			return r.raw, err
+		}
+	}
+}
+
+// refresh makes the masker answer for a corpus read after arrived, by when every byte about to be masked had
+// arrived. The shared corpus is proven fresh first, so a value another server committed before arrived is in
+// the registry; then the Masker and its generation are read together, under the registry's lock, and swapped in
+// when the generation moved. A registration that ended before arrived moved the generation before this read
+// of it, so it is never missed. The swap keeps the bytes the masker holds as they arrived, and r.held is not
+// masked yet, so both are masked against the new corpus. A value registered after arrived is not in any byte
+// already masked: the run is handed a value only after it is registered.
+func (r *recordingMaskReader) refresh(arrived time.Time) bool {
+	if !r.reg.Fresh(arrived) {
+		return false
+	}
+	if mask, gen := r.reg.JSONVariantMaskerGen(r.runID); gen != r.gen {
+		r.mask, r.gen = mask, gen
+		r.masker.SetMasker(mask)
+	}
+	return true
+}
+
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	for r.output.Len() <= r.holdBack() && r.err == nil {
-		if r.guard != nil && !r.guard() {
-			r.err = errMaskUncovered
+		raw, readErr := r.fill()
+		if errors.Is(readErr, errMaskUncovered) {
+			r.err = readErr
 			return 0, r.err
 		}
-		n, readErr := r.src.Read(r.chunk[:])
-		r.held = append(r.held, r.chunk[:n]...)
+		n := len(raw)
+		if n == 0 && readErr == nil {
+			return 0, nil
+		}
+		// Every byte masked from here on, r.held's included, has arrived: none was masked yet.
+		if !r.refresh(time.Now()) {
+			r.err = errMaskStale
+			return 0, r.err
+		}
+		r.held = append(r.held, raw...)
 		if room := len(castHeadPrefix) - len(r.head); room > 0 {
-			r.head = append(r.head, r.chunk[:min(n, room)]...)
+			r.head = append(r.head, raw[:min(n, room)]...)
 		}
 		var maskErr error
 		if over := len(r.held) - recording.LogCutMarkerMax; over > 0 {
@@ -484,9 +547,6 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 				r.err = closeErr
 			}
 			r.capOutput()
-		}
-		if n == 0 && r.err == nil {
-			return 0, nil
 		}
 	}
 	n, _ := r.output.Read(p[:min(len(p), r.output.Len()-r.holdBack())])
