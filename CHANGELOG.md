@@ -63,7 +63,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, as listing already did. Before, a SCIM token could read, change, suspend or remove such a user if it knew the user's id.
+- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, and group requests ignore such a user named as a member. Before, a SCIM token that knew such a user's id could read, change, suspend or remove the user, and a group removal naming them cut their sessions and revoked their tokens.
 
 ### Before you upgrade
 

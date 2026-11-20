@@ -1520,7 +1520,7 @@ erases one person's retained records by explicit scope, in one audited act
 - SCIM never grants anything: a user or group created over SCIM is stored and gives no access, and roles still come
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
-- A SCIM request that names a user by id answers not found for a user of another issuer or tenant, as listing does.
+- A SCIM request naming a user by id, including a group member, answers not found for a user of another issuer or tenant.
 
 | Provisioning event | What Wardyn does |
 |---|---|
