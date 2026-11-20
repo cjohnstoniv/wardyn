@@ -843,7 +843,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`, and `"accepts_once": true` when the proxy can keep a `once` decision.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval for the run lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline for the run refuses them all. The answer lives in the run's proxy, so a new proxy asks again.
-- A decision `once` answers only the request waiting, or the next one sent if none waits. The next request with that host, method and path asks again.
+- An approval decided `once` is spent by one waiting request, or by the next one sent if none waits; any other waiting request asks again. A decline decided `once` refuses every request already waiting on that approval. The next request with that host, method and path asks again.
 - On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
   - when it has had nothing open for 10 minutes;
   - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
