@@ -297,6 +297,9 @@ type govProposal struct {
 	// warnings are advisory sentences for the proposer, carried on the 202's pending_change only (a deciders
 	// write's decidersSaveWarnings); they are not stored with the change.
 	warnings []string
+	// review is what the check that held the write found, stored as diff.review; nil stores not_checked,
+	// and a request (an elevation or an image request) stores none.
+	review *changeReview
 }
 
 // heldChangeAnswer is a 202's pending_change: the held change, and the proposer's warnings when there are any.
@@ -314,10 +317,14 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	_, proposer := actorFromRequest(r)
+	review := p.review
+	if review == nil && p.kind != types.GovernanceTargetElevation && p.kind != types.GovernanceTargetImageRequest {
+		review = notCheckedReview()
+	}
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy}),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy, review: review}),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -387,13 +394,18 @@ type governanceDiffBody struct {
 	// BelongsBy lists, for a unit admin's membership add or delete, the units they are granted that its
 	// subject holds another membership below.
 	BelongsBy []uuid.UUID `json:"belongs_by,omitempty"`
+	// Review is why the change was held (changeReview); absent on a request and on a change stored
+	// before reviews were.
+	Review *changeReview `json:"review,omitempty"`
 }
 
 // heldReads is what a held change records for its decision to read again: a legacy shift (H3), and
-// the units a unit admin's add or delete was admitted by (heldBelongsStale).
+// the units a unit admin's add or delete was admitted by (heldBelongsStale). review rides with them
+// for the reader; no decision reads it.
 type heldReads struct {
 	shift     legacyShift
 	belongsBy []uuid.UUID
+	review    *changeReview
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
@@ -403,6 +415,7 @@ func renderGovernanceDiff(before, after any, changed, notes []string, held ...he
 	body := governanceDiffBody{Changed: changed, Notes: notes}
 	if len(held) > 0 {
 		body.Activates, body.Vacates, body.BelongsBy = held[0].shift.activates, held[0].shift.vacates, held[0].belongsBy
+		body.Review = held[0].review.settled()
 	}
 	if body.Changed == nil {
 		body.Changed = []string{}

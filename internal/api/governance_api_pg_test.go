@@ -425,7 +425,11 @@ func TestDryRunEqualsEffect(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err := e.srv.treeEffect(ctx, before, after)
+		in, err := e.srv.wallInputsQ(ctx, e.pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := e.srv.treeEffect(ctx, before, after, in)
 		if err != nil {
 			t.Fatal(err)
 		}
