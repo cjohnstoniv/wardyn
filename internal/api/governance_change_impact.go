@@ -22,10 +22,9 @@ const (
 	impactBoundary = "boundary" // a boundary change met with every layer, as the boundary dry run does
 	impactNone     = "none"     // nothing: not_computed says why
 
-	impactKindNotComputed      = "kind"      // the kind has no dry run
-	impactOperationNotComputed = "operation" // the dry run does not model the operation (treeModels)
-	impactStaleNotComputed     = "stale"     // the target or the deployment default moved since the proposal
-	impactRefusedNotComputed   = "refused"   // the change, replayed now, is refused
+	impactKindNotComputed    = "kind"    // the kind, or this operation of it (treeModels), has no dry run
+	impactStaleNotComputed   = "stale"   // the target or the deployment default moved since the proposal
+	impactRefusedNotComputed = "refused" // the change, replayed now, is refused
 )
 
 // maxImpactLiveRuns bounds the live runs an impact lists; live_runs_total counts them all.
@@ -183,7 +182,7 @@ func (s *Server) changeImpactOf(r *http.Request, ch types.GovernanceChange) (cha
 	case ch.TargetKind == govKindBoundary:
 		err = s.boundaryImpact(r.Context(), ch, &out)
 	case !treeModels(ch):
-		out.NotComputed = impactOperationNotComputed
+		out.NotComputed = impactKindNotComputed
 	default:
 		err = s.treeImpact(r, ch, &out)
 	}

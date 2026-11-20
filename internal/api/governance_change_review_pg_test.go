@@ -145,7 +145,7 @@ func TestPG_ChangeImpact_KindWithNoDryRun(t *testing.T) {
 }
 
 // TestPG_ChangeImpact_MembershipAddAndDelete: a held membership add and a held membership delete,
-// which the tree dry run does not model, answer none/operation, never a tree with no people.
+// which the tree dry run does not model, answer none/kind, never a tree with no people.
 func TestPG_ChangeImpact_MembershipAddAndDelete(t *testing.T) {
 	e := newUnitAdminEnv(t, true)
 	for name, ch := range map[string]types.GovernanceChange{"add": e.heldOn(e.a2), "delete": e.legacyDelete("sub-imp-legacy", e.a2)} {
@@ -154,8 +154,8 @@ func TestPG_ChangeImpact_MembershipAddAndDelete(t *testing.T) {
 		}
 		w := e.call(e.bob, http.MethodGet, impactPath(ch.ID), "")
 		got := readImpact(t, w)
-		if got.Computed == impactTree || got.Computed != impactNone || got.NotComputed != impactOperationNotComputed {
-			t.Errorf("a held membership %s's impact = %s, want none/operation", name, w.Body)
+		if got.Computed == impactTree || got.Computed != impactNone || got.NotComputed != impactKindNotComputed {
+			t.Errorf("a held membership %s's impact = %s, want none/kind", name, w.Body)
 		}
 		if got.People != nil || got.LiveRuns != nil || got.LiveRunsTotal != nil || strings.Contains(w.Body.String(), `"people"`) {
 			t.Errorf("a held membership %s's impact claims people or live runs: %s", name, w.Body)

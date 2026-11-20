@@ -422,8 +422,8 @@ func TestImpactForCounts(t *testing.T) {
 	}
 	ch.DeploymentHash, ch.TargetKind, ch.Op = computeETag(s2.cfg.DefaultPolicy), govKindMembership, "upsert"
 	out, err = s2.changeImpactOf(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), ch)
-	if err != nil || out.counts() != (impactCounts{Computed: impactNone, NotComputed: impactOperationNotComputed}) || out.People != nil {
-		t.Errorf("a membership add = %+v, %v; want none/operation", out.counts(), err)
+	if err != nil || out.counts() != (impactCounts{Computed: impactNone, NotComputed: impactKindNotComputed}) || out.People != nil {
+		t.Errorf("a membership add = %+v, %v; want none/kind", out.counts(), err)
 	}
 	people := []treeDryRunPerson{{}, {}}
 	total := 7
