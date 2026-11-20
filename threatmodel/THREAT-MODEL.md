@@ -4131,6 +4131,14 @@ What it does not stop:
   redirect. Its code works once and lasts 5 minutes, the request 10, and the approve page shows the computer name, the
   code and whether the request came from the approver's own address; that address check is advisory.
 
+### Endpoint sign-in with no identity token (opt-in, per provider row)
+
+`oidc.require_id_token: false` on a `custom_endpoint` row signs people in against an authority that never grants `openid`.
+
+- It is allowed only with `identity_binding: none`, which already ties nothing about the authority's identity to the console person. The `console` binding is refused with `false` and keeps requiring a verified identity token.
+- No identity token is requested. One sent anyway is ignored: not verified, stored or logged. No issuer or subject is recorded, so a review shows no platform account for that sign-in; the capture audit row says `id_token: not_required`.
+- State, PKCE, the session's person, the one-use callback and the authority and TLS checks are unchanged. The mode is part of the row's sign-in address, so changing it deletes the row's stored sign-ins and refuses a callback or redemption made under the other setting.
+
 ### The unauthenticated metrics listener (opt-in)
 
 - `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).

@@ -72,7 +72,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC ExtraHeaders"),
-	reflect.TypeFor[types.ProviderOIDC]():        strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding"), // ClientSecretRef names an operator secret, never its value
+	reflect.TypeFor[types.ProviderOIDC]():        strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding RequireIDToken"), // ClientSecretRef names an operator secret, never its value
 	reflect.TypeFor[types.SiteImages]():          strings.Fields("RequireDigest Admission"),
 	reflect.TypeFor[types.SiteImageAdmission]():  strings.Fields("Mode Scope TrustedRoots Signers"),
 	reflect.TypeFor[types.ImageTrustedRoot]():    strings.Fields("Name Path"),

@@ -308,6 +308,9 @@ export interface ProviderOIDC {
   scopes: string[];
   // "console" (also absent) or "none".
   identity_binding?: "console" | "none" | (string & {});
+  // Set through the API or the policy file only: false signs in against an authority that grants no openid
+  // (identity_binding "none" only). Absent is true. The editor shows no control for it and keeps what is stored.
+  require_id_token?: boolean;
 }
 
 // One provider. No credential lives here — each person supplies their own.

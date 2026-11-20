@@ -198,6 +198,15 @@ type ProviderOIDC struct {
 	Scopes []string `json:"scopes"`
 	// IdentityBinding is OIDCBindingConsole (also "") or OIDCBindingNone.
 	IdentityBinding string `json:"identity_binding,omitempty"`
+	// RequireIDToken is whether the sign-in asks for openid and needs a verified identity token. Omitted is
+	// true. False is for an authority that never grants openid, is valid only with OIDCBindingNone, and
+	// stores the sign-in under the signed-in console person with no issuer or subject recorded.
+	RequireIDToken *bool `json:"require_id_token,omitempty"`
+}
+
+// IDTokenRequired is RequireIDToken with the default filled in: a missing value is true.
+func (o *ProviderOIDC) IDTokenRequired() bool {
+	return o == nil || o.RequireIDToken == nil || *o.RequireIDToken
 }
 
 // Binding is IdentityBinding with the default filled in.

@@ -64,6 +64,9 @@ const (
 	mp400OIDCSecretRef = "model_providers: %q: oidc.client_secret_ref must be the name of an operator secret — letters, digits and ._- , at most 128 characters"
 	mp400OIDCScopes    = "model_providers: %q: oidc.scopes must name 1 to %d scopes, each a single value with no .default"
 	mp400OIDCBinding   = "model_providers: %q: oidc.identity_binding must be %q or %q"
+	// mp400OIDCNoIDToken and mp400OIDCNoIDTokenScope hold require_id_token: false to the one case it is safe in.
+	mp400OIDCNoIDToken      = "model_providers: %q: oidc.require_id_token false is allowed only with identity_binding %q — the console binding matches the person by their identity token"
+	mp400OIDCNoIDTokenScope = "model_providers: %q: oidc.require_id_token false cannot be combined with the openid scope — without an identity token openid is not requested"
 )
 
 var (
@@ -126,20 +129,36 @@ func validateProviderOIDC(mp types.ModelProvider, allowHTTP bool) error {
 	if b := o.IdentityBinding; b != "" && b != types.OIDCBindingConsole && b != types.OIDCBindingNone {
 		return atField("oidc.identity_binding", fmt.Errorf(mp400OIDCBinding, mp.ID, types.OIDCBindingConsole, types.OIDCBindingNone))
 	}
+	if !o.IDTokenRequired() {
+		if o.Binding() != types.OIDCBindingNone {
+			return atField("oidc.require_id_token", fmt.Errorf(mp400OIDCNoIDToken, mp.ID, types.OIDCBindingNone))
+		}
+		if slices.Contains(o.Scopes, entraOpenIDScope) {
+			return atField("oidc.scopes", fmt.Errorf(mp400OIDCNoIDTokenScope, mp.ID))
+		}
+	}
 	return nil
 }
 
 // oidcAddress is a row's sign-in authority and client: what an old refresh token must never be
 // redeemed against after it changes. "" for a row with no `oidc` block. Scopes are an unordered
 // set. The binding is in it too, so a person's sign-in made under one rule is never kept under
-// another.
+// another, and so is a require_id_token of false (a marker appended only then, so an omitted or true value
+// keeps the bytes 0.10.0 wrote and no one's sign-in ends).
 func oidcAddress(p types.ModelProvider) string {
 	o := p.OIDC
 	if o == nil {
 		return ""
 	}
-	return string(mustJSON([]any{o.Issuer, o.AuthorizeURL, o.TokenURL, o.ClientID, slices.Sorted(slices.Values(o.Scopes)), o.Binding()}))
+	parts := []any{o.Issuer, o.AuthorizeURL, o.TokenURL, o.ClientID, slices.Sorted(slices.Values(o.Scopes)), o.Binding()}
+	if !o.IDTokenRequired() {
+		parts = append(parts, oidcNoIDTokenMarker)
+	}
+	return string(mustJSON(parts))
 }
+
+// oidcNoIDTokenMarker is the element oidcAddress appends for require_id_token: false.
+const oidcNoIDTokenMarker = "id_token:not_required"
 
 // ── routes, names and reasons ───────────────────────────────────────────────
 
@@ -157,6 +176,9 @@ const (
 
 	// endpointOIDCCapturedAction is the one audit action a capture owns, on both outcomes.
 	endpointOIDCCapturedAction = "provider_oidc.signin.capture"
+	// endpointOIDCIDTokenNotRequired is the capture row's `id_token` value for a row with require_id_token false,
+	// whether or not a token came back.
+	endpointOIDCIDTokenNotRequired = "not_required"
 
 	endpointOIDCStateCookie = "wardyn_poidc_state"
 	endpointOIDCNonceCookie = "wardyn_poidc_nonce"
@@ -208,9 +230,12 @@ func endpointOIDCRowFor(sc types.SiteConfig, uid string) (types.ModelProvider, b
 }
 
 // endpointOIDCRequestedScopes is what a sign-in asks for: openid and offline_access, which are not settings,
-// then the row's scopes.
+// then the row's scopes. A row with require_id_token false leaves openid out.
 func endpointOIDCRequestedScopes(o *types.ProviderOIDC) []string {
 	out := []string{entraOpenIDScope, entraOfflineAccessScope}
+	if !o.IDTokenRequired() {
+		out = out[1:]
+	}
 	for _, sc := range o.Scopes {
 		if !slices.Contains(out, sc) {
 			out = append(out, sc)
@@ -224,7 +249,8 @@ type endpointOIDCBinding struct {
 	row           types.ModelProvider
 	disc          endpointOIDCDiscovery
 	consoleIssuer string
-	// issuer and idpSub are the verified token's, set by a successful bind.
+	// issuer and idpSub are the verified token's, set by a successful bind; both stay empty when the row does
+	// not require an identity token.
 	issuer, idpSub string
 }
 
@@ -426,6 +452,11 @@ func (s *Server) verifyEndpointOIDCIDToken(ctx context.Context, b *endpointOIDCB
 //
 // Matching on email or preferred_username is not an option of either binding: both are mutable at the authority.
 func (s *Server) bindEndpointOIDCIdentity(ctx context.Context, b *endpointOIDCBinding, rawIDToken, nonce, subject string) (string, bool) {
+	if !b.row.OIDC.IDTokenRequired() && b.row.OIDC.Binding() == types.OIDCBindingNone {
+		// openid was not requested, so any id_token in the response is unsolicited: it is not read, verified,
+		// stored or logged, and no issuer or subject is recorded.
+		return "", true
+	}
 	idToken, reason := s.verifyEndpointOIDCIDToken(ctx, b, rawIDToken, nonce)
 	if reason != "" {
 		return reason, false
@@ -489,6 +520,16 @@ type endpointOIDCStamp struct {
 	Digest  string `json:"d"`
 	Person  string `json:"p"`
 	Expires int64  `json:"x"`
+	// NoIDToken is set when the row asked for no identity token (require_id_token false): the callback refuses
+	// a row whose mode is no longer the one the sign-in started under. Absent for every default row, so a
+	// stamp from 0.10.0 still opens.
+	NoIDToken bool `json:"n,omitempty"`
+}
+
+// endpointOIDCStampHolds reports whether the live row is still the one a sign-in was started for: its whole
+// address digest (which carries the identity-token mode) and the mode the signed state names.
+func endpointOIDCStampHolds(row types.ModelProvider, stamp endpointOIDCStamp) bool {
+	return providerAddressDigest(row) == stamp.Digest && !row.OIDC.IDTokenRequired() == stamp.NoIDToken
 }
 
 // endpointOIDCStampPurpose keys the stamp's signature apart from every other use of the console's shared key.
@@ -632,7 +673,7 @@ func (s *Server) handleEndpointOIDCSignIn(w http.ResponseWriter, r *http.Request
 		return
 	}
 	sealed, keyed := s.endpointOIDCSealStamp(endpointOIDCStamp{
-		State: state, RowUID: row.UID, Digest: providerAddressDigest(row),
+		State: state, RowUID: row.UID, Digest: providerAddressDigest(row), NoIDToken: !row.OIDC.IDTokenRequired(),
 		Person: endpointOIDCPersonDigest(oidcHumanFromContext(ctx)), Expires: s.cfg.Now().Add(adoCookieMaxAge * time.Second).Unix(),
 	})
 	if !keyed {
@@ -717,7 +758,7 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	row, found := endpointOIDCRowFor(sc, stamp.RowUID)
-	if !found || providerAddressDigest(row) != stamp.Digest {
+	if !found || !endpointOIDCStampHolds(row, stamp) {
 		fail(azureCaptureRowChanged)
 		return
 	}
@@ -774,10 +815,14 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.retireReplacedEntraTokens(ctx, subject, ec, grant)
-	s.auditEndpointOIDC(ctx, subject, target, "success", map[string]any{
+	captured := map[string]any{
 		"scopes": blob.Scopes, "expires_at": blob.ExpiresAt.Format(time.RFC3339),
 		"issuer": blob.Issuer, "idp_subject": blob.IDPSubject, "binding": row.OIDC.Binding(),
-	})
+	}
+	if !row.OIDC.IDTokenRequired() { // absent for every default row, so those read as they always have
+		captured["id_token"] = endpointOIDCIDTokenNotRequired
+	}
+	s.auditEndpointOIDC(ctx, subject, target, "success", captured)
 	resolved = s.resolvePendingAzureReauth(ctx, endpointOIDCApprovalLane, subject, ec.rowUID)
 	http.Redirect(w, r, s.cfg.BasePath+ec.donePath+"&provider="+url.QueryEscape(stamp.RowUID), http.StatusFound)
 }
@@ -799,7 +844,7 @@ func (s *Server) storeEndpointOIDCCapture(ctx context.Context, subject string, s
 		return "", fmt.Errorf("read model providers: %w", err)
 	}
 	row, found := endpointOIDCRowFor(sc, stamp.RowUID)
-	if !found || providerAddressDigest(row) != stamp.Digest {
+	if !found || !endpointOIDCStampHolds(row, stamp) {
 		return azureCaptureRowChanged, nil
 	}
 	blob.CaptureDigest = endpointOIDCCaptureDigest(row, ec.authority.tokenURL)

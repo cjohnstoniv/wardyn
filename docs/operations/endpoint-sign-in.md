@@ -21,11 +21,12 @@
 | `client_secret_ref` | No | The name of an operator secret holding the client secret. Leave it out for a public client |
 | `scopes` | Yes | 1 to 32 scopes, each one word and none ending in `.default`. `openid` and `offline_access` are always added |
 | `identity_binding` | No | `console` (the default) or `none` ([Who the sign-in is for](#who-the-sign-in-is-for)) |
+| `require_id_token` | No | `true` (the default) or `false`. `false` is for an authority that never grants `openid` ([When the authority does not grant `openid`](#when-the-authority-does-not-grant-openid)) |
 
 - Every address is `https` with no user information. A private address follows the same rule as any admin-typed model address (`internal_hosts`).
 - PKCE with an S256 challenge is always on. It is not a setting.
 - A row with an `oidc` block takes no pasted token. A paste is refused with "signs people in, so a token cannot be pasted for it. Use Sign in".
-- **An edit purges every sign-in.** A change to the issuer, either address, the client id, the scopes or the binding deletes every person's stored sign-in for the row. Everyone signs in again.
+- **An edit purges every sign-in.** A change to the issuer, either address, the client id, the scopes, the binding or `require_id_token` deletes every person's stored sign-in for the row. Everyone signs in again.
 - The sign-in needs the console's own OIDC login. Without it, the door answers `endpoint_oidc_unconfigured`: "This deployment offers no endpoint sign-in".
 
 ## Who the sign-in is for
@@ -39,6 +40,19 @@
 - A `console` sign-in that fails the check is refused. The reason is one of two:
   - "The identity token was issued by an authority other than the one the console signs you in with";
   - "The identity token is not for the person signed in to this browser session".
+
+## When the authority does not grant `openid`
+
+Some identity services never grant `openid` to a client, so no identity token is ever issued and the sign-in fails. Set `require_id_token: false` on the `oidc` block to sign in against one.
+
+- It is allowed only with `identity_binding: none`. The `console` binding matches the person by their identity token, so it keeps requiring `openid`, and a save with `false` and `console` is refused with a 400.
+- It is also refused when `scopes` names `openid`, because a row that asks for no identity token cannot ask for `openid`.
+- With `false`, Wardyn does not request `openid`. A token response with no identity token is accepted. If the authority sends one anyway, Wardyn ignores it: it is not verified, stored or logged.
+- No issuer or subject is recorded for the sign-in. The tokens are stored under the signed-in console person, as for any other sign-in. State, PKCE, the person binding of the browser session and the one-use callback are unchanged, and so are the authority and TLS checks.
+- Renewal works as it does for any other sign-in.
+- Turning `require_id_token` on or off is an address change: it deletes every person's stored sign-in for the row, and a sign-in that was started or stored under the other setting is refused. Leaving it out is the same as `true`, and a row that never set it keeps its sign-ins.
+- The capture audit row records `id_token: not_required` for such a row, whether or not a token came back ([Audit actions](../AUDIT-ACTIONS.md)).
+- In this release the field is set through the API and the policy file. The console editor keeps a value set that way when an unrelated change is saved, and shows no control for it.
 
 ## How a person signs in
 
