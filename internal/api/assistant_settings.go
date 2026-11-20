@@ -96,20 +96,20 @@ func (s *Server) handleGetAssistantSettings(w http.ResponseWriter, r *http.Reque
 }
 
 // handlePutAssistantSettings is PUT /api/v1/assistant/settings: the whole block, replaced. Super admin,
-// If-Match is required, 428 without it and 412 when it no longer matches. A change that only narrows is written
+// If-Match is required, 428 without it (or with only *) and 412 when it no longer matches. A change that only narrows is written
 // and answered 200; one that widens is held and answered 202 with the pending change; an identical block is a 200 and no audit row.
 func (s *Server) handlePutAssistantSettings(w http.ResponseWriter, r *http.Request) {
 	var body types.AssistantSettings
 	if !decodeStrict(w, r, &body) {
 		return
 	}
-	if strings.TrimSpace(r.Header.Get("If-Match")) == "" {
+	if ifMatch := strings.TrimSpace(r.Header.Get("If-Match")); ifMatch == "" || ifMatch == "*" {
 		writeErrorReason(w, http.StatusPreconditionRequired, reasonAssistantSettingsInvalid, assistantIfMatchMsg)
 		return
 	}
 	after := body.Normalized()
 	before, held := s.writeAssistantNarrowing(w, r, after)
-	if !held {
+	if !held || !s.assistantHoldDecidable(w, r) {
 		return
 	}
 	s.proposeGovernanceChange(w, r, govProposal{
