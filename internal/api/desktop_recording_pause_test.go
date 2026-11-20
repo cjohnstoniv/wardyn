@@ -488,7 +488,7 @@ func TestDesktopSignin_ANormalEndReadsTheAgentBackToo(t *testing.T) {
 		message string // the end's 502 message, when it has one
 	}{
 		"every read finds pid 1 stopped": {states: "TTT", conts: 3, endCode: http.StatusBadGateway, close: "failure false",
-			message: "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"},
+			message: "the sign-in display closed, but the agent's resume is unconfirmed; Wardyn retries, and tries to end the run after 3 failed retries"},
 		"a read finds pid 1 running": {states: "T", conts: 2, endCode: http.StatusNoContent, closed: true, close: "success true"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -521,7 +521,7 @@ func TestDesktopSignin_AnEndThatCannotProveTheDisplayClosedSaysSo(t *testing.T) 
 	f := newSigninFixture(t)
 	f.begin(t)
 	f.rn.exit["stop"] = 1
-	want := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+	want := "the sign-in display could not be proven closed; the agent's state is unconfirmed while Wardyn retries, and it tries to end the run after 3 failed retries"
 	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway || !strings.Contains(body, want) {
 		t.Fatalf("end = %d %s, want 502 %q", code, body, want)
 	}

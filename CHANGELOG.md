@@ -73,6 +73,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The old Docker run network is permitted only on an older engine, with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`. The setting has no effect on Docker Engine 28 or later, which the 0.10.0 notes did not say.
 - A decline decided `once` refuses the requests already waiting on that approval; a later request asks again. The 0.10.0 notes said it refuses only the waiting request.
 
+- Correction to an earlier release note on SSH gateway audit rows. An sftp transfer or port forward whose process ends with a known nonzero exit is a failure, unless the client or its channel closing ended the transfer first; that close is a success. A transfer whose exit was never read while its client was still connected is a failure that carries no exit status.
+- Correction to an earlier release note on secret store clean-ups. A clean-up of a replaced value, or of a value whose row was not written, that is cut short by a shutdown may leave a value behind, or may already have removed it; it is not certain to leave the value in place. `wardynd -reconcile` lists remaining values that no row uses, and the shutdown warning now says so. A value kept because its save did commit is not listed.
+- Correction to an earlier release note on a `once` egress approval that a failed HTTPS connection did not spend. A retry that arrives before the approval is restored may ask again. The approval is still given back at most once and only for the window that note names.
+- Correction to an earlier release note on a Linux VM guest's plain HTTP requests through its relay. Only a request target that neither starts with `/` nor is a full URL with a host is answered `400` and not forwarded, such as `OPTIONS *`. A full URL with a host is forwarded, and `CONNECT` is answered `405`.
+
 ### Security
 
 ### Before you upgrade
