@@ -387,8 +387,9 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 const freshBatch = 1 << 20
 
 // errMaskStale ends an upload when this server cannot prove it has read every masking value committed before a
-// part of the body arrived, or cannot hold its masker still across the coverage check (maskAdoptTries). It answers as an uncovered run does, 503 mask_state_unavailable, and as any read
-// error does, the store keeps nothing of the upload.
+// part of the body arrived, or cannot hold its masker still across the coverage check (maskAdoptTries). It
+// answers as an uncovered run does, 503 mask_state_unavailable, and as any read error does, the store keeps
+// nothing of the upload.
 var errMaskStale = fmt.Errorf("api: the shared masking corpus was not read after the upload's bytes arrived: %w", errMaskUncovered)
 
 type recordingMaskReader struct {

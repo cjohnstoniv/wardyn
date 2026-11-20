@@ -422,3 +422,29 @@ func TestBuildMaskingBody_ValueTheGuardLoadsIsMasked(t *testing.T) {
 		t.Fatalf("masked = (%v), starts %q", err, got[:min(len(got), 60)])
 	}
 }
+
+// An erasure that lands while the coverage check is answering, after it read the run as covered, moves the
+// generation, so the masker read before the check is not adopted: the check runs again, finds the run fenced,
+// and the upload ends as uncovered.
+func TestBuildMaskingBody_ErasureDuringTheCoverageCheckFailsTheUpload(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	const secret = "erased-recording-secret"
+	e := newMaskErasure(t, reg, runID, secret)
+	calls := 0
+	guard := func() bool {
+		calls++
+		covered := e.covered()
+		if calls == 2 { // refresh's first check; the first is fill's, before the read
+			e.apply()
+		}
+		return covered
+	}
+	src := &scriptReader{steps: []func() (string, error){
+		func() (string, error) { return "start " + secret + " tail", io.EOF },
+	}}
+	body := buildGuardedMaskingBody(src, reg, runID, guard)
+	saveUncovered(t, runID, func(s *recording.FSStore) error {
+		return s.SaveCast(context.Background(), runID.String(), body)
+	})
+}
