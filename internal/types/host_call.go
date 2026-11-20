@@ -16,9 +16,10 @@ import (
 // method and path until a person decides. The approval names the host, the
 // method and the path in normal form (NormalizeRequestPath), never the query or
 // the body: a yes covers every request with that host, method and path for the
-// rest of the run in that proxy, and a no refuses them all. The proxy that
-// raises the approval and the control plane that checks it compute the key
-// here, so they cannot disagree.
+// rest of the run in that proxy, and a no refuses them all. A person may instead
+// answer once, for the one held request, when the proxy that raised it says it
+// can keep to that (AcceptsOnce). The proxy that raises the approval and the
+// control plane that checks it compute the key here, so they cannot disagree.
 
 // HostCallScope is the requested_scope of a tool_call approval for one host
 // rule hold. It is known structurally by call_sha256 together with host
@@ -33,6 +34,10 @@ type HostCallScope struct {
 	CallSHA256 string `json:"call_sha256"`
 	// HoldSeconds is how long the proxy holds the open request for the answer.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
+	// AcceptsOnce is written by the control plane alone, never in a raise's requested_scope: the proxy
+	// that raised the approval said it spends a "once" answer on the one held request, so a person may
+	// answer once. A proxy from before it reads every yes as one for the run, so its rows never carry it.
+	AcceptsOnce bool `json:"accepts_once,omitempty"`
 }
 
 // HostCallKey is the identity of one held host, method and path: the hex

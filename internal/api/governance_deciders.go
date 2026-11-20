@@ -126,18 +126,20 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 }
 
 // decidersHostHoldWarning is the save warning for an egress_domain rule whose max_scope is below run.
-const decidersHostHoldWarning = "Host rule holds are egress_domain approvals decided for the rest of the run, " +
-	"so with max_scope %q no one, security included, can decide them and they wait until they time out: " +
-	"set max_scope to run for egress_domain"
+const decidersHostHoldWarning = "Host rule holds are egress_domain approvals. With max_scope %q they can be decided " +
+	"only for the one held request, and one raised by a proxy from an earlier release cannot be decided by anyone, " +
+	"security included, and waits until it times out. Set max_scope to run for egress_domain to decide them for the " +
+	"rest of the run."
 
 // decidersSaveWarnings is what a deciders save still tells its admin, on the 200 or on a held write's 202
-// (its pending_change); the save stands and the decision rule is unchanged. A host rule hold is an egress_domain approval (deciderKindOf) that is decided
-// for the rest of the run (hostCallDecisionRule), so a rule naming egress_domain that caps max_scope below run
-// leaves everyone unable to answer one: the cap binds security too (capScopeToRule, decision_scope_above_rule).
-// An empty who changes nothing, so it warns as well. A child's empty max_scope under a capped parent is
-// refused at save (DeciderRuleWithin), and a parent's cap warns at the parent's own save. No other kind needs more
-// than once: an MCP call, a kubectl write, a download and an Azure DevOps escalation are decided once, and a
-// credential decision with no scope passes any cap.
+// (its pending_change); the save stands and the decision rule is unchanged. A host rule hold is an egress_domain
+// approval (deciderKindOf) decided for the rest of the run, or once when its proxy accepts once
+// (hostCallDecisionRule), so a rule naming egress_domain that caps max_scope below run allows only once on a hold,
+// and leaves everyone unable to answer one from an earlier proxy: the cap binds security too (capScopeToRule,
+// decision_scope_above_rule). An empty who changes nothing, so it warns as well. A child's empty max_scope under a
+// capped parent is refused at save (DeciderRuleWithin), and a parent's cap warns at the parent's own save. No other
+// kind needs more than once: an MCP call, a kubectl write, a download and an Azure DevOps escalation are decided
+// once, and a credential decision with no scope passes any cap.
 func decidersSaveWarnings(rules []types.DeciderRule) []string {
 	rule, ok := types.DeciderRuleFor(rules, types.DeciderKindEgressDomain)
 	if !ok || rule.MaxScope == "" || scopeRank(rule.MaxScope) >= scopeRank(types.ScopeRun) {

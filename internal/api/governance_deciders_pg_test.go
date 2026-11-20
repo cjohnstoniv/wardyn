@@ -641,8 +641,9 @@ func TestDecidersBoundaryLockHeldRefusedAtApproval(t *testing.T) {
 }
 
 // TestDecidersSaveWarnsWhenHostHoldsOutOfReach: an egress_domain rule whose max_scope is below run saves
-// with 200 and a warning, since no one, security included, can answer a host rule hold (decided for the
-// run) under it; a rule at run, or one that does not name egress_domain, saves with none.
+// with 200 and a warning, since under it a host rule hold is decided once at most, and one from an earlier
+// release's proxy by no one, security included; a rule at run, or one that does not name egress_domain,
+// saves with none.
 func TestDecidersSaveWarnsWhenHostHoldsOutOfReach(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	save := func(rule map[string]any) types.UnitDeciders {

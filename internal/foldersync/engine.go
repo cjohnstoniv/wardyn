@@ -287,7 +287,9 @@ type passView struct {
 // sides are listed still saves what it finished, so the next pass resumes from
 // there, and returns its report with the error (cut).
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
-	if err := ctx.Err(); err != nil { // a pass asked for after Ctrl-C does nothing
+	// A pass asked for after the context ended does not start: with nothing to move, the remote listing can
+	// answer before it notices the cancel, and the pass would read as complete.
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	rep := NewReport()

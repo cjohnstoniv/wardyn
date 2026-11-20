@@ -962,4 +962,22 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     await userEvent.click(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE }));
     expect(approveMock).toHaveBeenCalledWith("h1", "approved live");
   });
+
+  it("a held host request whose proxy accepts once is approved once by Just this request", async () => {
+    listApprovalsMock.mockResolvedValue([
+      pending({
+        id: "h2",
+        kind: "tool_call",
+        requested_scope: { host: "api.example.com", method: "POST", path: "/admin", call_sha256: "ab".padEnd(64, "0"), accepts_once: true },
+      }),
+    ]);
+    render(
+      <OperatorProvider operator securityOperator principal="dana@acme.example">
+        <LiveApprovals runId="r1" />
+      </OperatorProvider>,
+    );
+    const card = await screen.findByTestId("host-call-card");
+    await userEvent.click(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE_ONCE }));
+    expect(approveMock).toHaveBeenCalledWith("h2", "approved live", { scope: "once" });
+  });
 });

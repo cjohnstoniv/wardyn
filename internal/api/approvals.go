@@ -353,7 +353,7 @@ func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap
 	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok { // one kubectl write is decided once (approvals_kube_call.go)
 		return scope, false
 	}
-	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // a host rule hold is decided for the run (approvals_host_call.go)
+	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // a host rule hold is decided for the run, or once (approvals_host_call.go)
 		return scope, false
 	}
 	if !isADO && !isMCP && !isKube && !isHost && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
@@ -507,6 +507,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	dv, scope, ok := s.deciderForDecide(w, r, id, ap, &run, &haveRun, scope)
 	if !ok {
 		return
+	}
+	if scope == "" && isHostCallRow(ap) { // a bodyless host rule hold no cap made once is decided for the run (hostCallDecisionRule)
+		scope = types.ScopeRun
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by

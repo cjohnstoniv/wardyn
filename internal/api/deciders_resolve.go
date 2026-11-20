@@ -385,7 +385,8 @@ func scopeRank(sc types.ApprovalScope) int {
 // capScopeToRule is the rule's max_scope over a decision's scope, for every decider. Under a rule the cap is
 // at most run, so always (which persists the host onto the workspace beyond the run) is always refused. A
 // decision sent with no scope keeps the kind's default unless an egress default (the run) reaches past the
-// cap, when it is decided once. A wider explicit scope is refused (403 decision_scope_above_rule).
+// cap, when it is decided once: an egress_domain request's, or a host rule hold's whose proxy accepts once
+// (hostCallDecisionRule). A wider explicit scope is refused (403 decision_scope_above_rule).
 func (s *Server) capScopeToRule(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, v deciderVerdict, scope types.ApprovalScope) (types.ApprovalScope, bool) {
 	if v.rule == nil {
 		return scope, true
@@ -395,7 +396,7 @@ func (s *Server) capScopeToRule(w http.ResponseWriter, r *http.Request, id uuid.
 		limit = v.rule.MaxScope
 	}
 	if scope == "" {
-		if ap.Kind == types.ApprovalEgressDomain && scopeRank(limit) < scopeRank(types.ScopeRun) {
+		if (ap.Kind == types.ApprovalEgressDomain || hostCallAcceptsOnce(ap)) && scopeRank(limit) < scopeRank(types.ScopeRun) {
 			return types.ScopeOnce, true
 		}
 		return scope, true

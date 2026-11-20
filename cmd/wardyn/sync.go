@@ -298,6 +298,9 @@ func portOr22(port string) string {
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
 	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
+		if !first && ctx.Err() != nil {
+			return nil // --watch stopped between passes, as the wait below does
+		}
 		sess.report(syncPassReport{Started: true})
 		rep, err := sy.Pass(ctx)
 		if err != nil {
