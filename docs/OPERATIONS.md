@@ -635,11 +635,24 @@ commands are the ones in "Back them up" and "Restore them", and in
   - `'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary writes) are correctly read as not in
     force.
 
-- Completeness survives an outage too.
-  - When a Postgres write fails, the event is not dropped: it is fsync'd, one JSON line at a time, to a local
-    append-only spool (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
-    [`internal/api/auditspool.go`](../internal/api/auditspool.go)).
-  - And a background drain replays it into Postgres once the store recovers.
+- A failed Postgres write falls back to a local spool, under conditions.
+  - When a Postgres write fails and the spool is available, the event is fsync'd, one JSON line at a time, to a local
+    append-only spool (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl` —
+    [`internal/api/auditspool.go`](../internal/api/auditspool.go)), and a background drain replays it into Postgres once
+    the store recovers.
+  - It catches the event only if the spool is available and its own write succeeds. It does not guarantee that no event
+    is lost.
+  - An empty environment value is ignored, so `WARDYN_AUDIT_SPOOL=` keeps the default path. Only the flag `-audit-spool=`
+    (empty) disables the spool. With no spool a failed write is logged only (`AUDIT WRITE FAILED`).
+  - A spool that cannot be opened at boot is also absent: one WARN, `audit spool unavailable (failed audit writes will
+    be logged only)`, and wardynd carries on.
+  - When the append itself fails (a full disk, a failed write or fsync), wardynd logs
+    `AUDIT FALLBACK SPOOL FAILED (EVENT LOST)` at ERROR with the action. That event is not durably kept (a failed
+    fsync can still leave its line on disk): alert on that line.
+  - A populated or drained spool, or an offline receipt, does not prove that no event was lost. Reconcile an outage
+    window with `GET /audit/chain/verify` and the `wardyn_audit_spool_lines` gauge.
+  - Strict audit (`WARDYN_AUDIT_STRICT`) is separate: it refuses a covered change (`503 audit_unavailable`) when its
+    intent row cannot first be written to the store. It does not make event capture complete.
   - The spool is per-process by design: the fallback for one pod's failed write, each `wardynd` draining its own back
     on recovery (see [High availability](#high-availability)).
 
@@ -896,7 +909,7 @@ row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
 - That comparison, not the sweep, is the control.
 - The qualifier is load-bearing, because the hashes are computed by the write itself.
 - An event written while Postgres is down still reaches your sinks, but unchained, and the drain does not re-stream
-  it — see "Completeness survives an outage too" above.
+  it — see "A failed Postgres write falls back to a local spool, under conditions" above.
 - Signed checkpoints and receipts are the next rung: see [Signed checkpoints and receipts](#signed-checkpoints-and-receipts).
 
 **Verifying.** Operator-invoked, never automatic:
