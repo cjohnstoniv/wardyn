@@ -16,6 +16,20 @@ import (
 // assistantTargetKey, as the egress baseline's is.
 const govKindAssistantSettings = "assistant_settings"
 
+// assistantLocalModeMsg answers a widening in local mode, where no second super admin can decide it.
+const assistantLocalModeMsg = "This change would be held for a second super admin, and local mode authenticates nobody, so no one could decide it. Configure SSO to widen the assistant settings." // PROPOSED
+
+// assistantHoldDecidable reports whether a held widening could ever be decided, answering 503 itself when
+// not. A widening is held whatever WARDYN_GOVERNANCE_SECOND_HUMAN says, so unlike governanceWriteMode this
+// refuses in local mode with the switch off too. The admin token stays the way past it, as there.
+func (s *Server) assistantHoldDecidable(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.LocalMode && !isAdminTokenCaller(r) {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonGovernanceSecondHumanLocalMode, assistantLocalModeMsg)
+		return false
+	}
+	return true
+}
+
 // assistantWidens reports whether after lets the assistant do anything before did not: a purpose or the
 // run-history switch turned on, a never-sent kind removed, a provider marked, a purpose or a model added to
 // a mark, or a model list emptied (which falls back to the harness model). A change that only turns

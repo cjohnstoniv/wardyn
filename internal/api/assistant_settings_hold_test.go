@@ -207,3 +207,43 @@ func TestAssistantSettingsApplyAfterTheBlockChangedIsStale(t *testing.T) {
 		t.Fatalf("a stale approval changed the block %+v or wrote a row", got)
 	}
 }
+
+// A held widening needs a second super admin, and local mode authenticates nobody, so there it is refused 503
+// at once, with the switch on or off. The admin token stays the way past, as governanceWriteMode lets it.
+func TestAssistantHoldDecidableInLocalMode(t *testing.T) {
+	human := func() *http.Request {
+		return govCovHumanReq(http.MethodPut, "/x", "sub-super", "super@corp.example", oidc.RoleAdmin)
+	}
+	adminTok := func() *http.Request { return httptest.NewRequest(http.MethodPut, "/x", nil) }
+	for _, c := range []struct {
+		name     string
+		local    bool
+		switchOn string
+		req      func() *http.Request
+		want     bool
+	}{
+		{"not local mode, a human", false, "false", human, true},
+		{"not local mode, switch on, a human", false, "true", human, true},
+		{"local mode, switch off, a human", true, "false", human, false},
+		{"local mode, switch on, a human", true, "true", human, false},
+		{"local mode, the admin token", true, "false", adminTok, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(envGovernanceSecondHuman, c.switchOn)
+			s := &Server{cfg: Config{LocalMode: c.local}}
+			w := httptest.NewRecorder()
+			if got := s.assistantHoldDecidable(w, c.req()); got != c.want {
+				t.Fatalf("assistantHoldDecidable = %v, want %v", got, c.want)
+			}
+			if c.want {
+				if w.Body.Len() != 0 {
+					t.Errorf("a decidable hold wrote a body: %s", w.Body.String())
+				}
+				return
+			}
+			if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonGovernanceSecondHumanLocalMode {
+				t.Errorf("refusal = %d %q, want 503 %q", w.Code, errorReason(w), reasonGovernanceSecondHumanLocalMode)
+			}
+		})
+	}
+}

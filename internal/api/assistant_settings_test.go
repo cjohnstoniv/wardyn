@@ -58,6 +58,7 @@ func TestAssistantSettingsPutNeedsIfMatch(t *testing.T) {
 	srv, fake, _ := egressBaselineServer(t, types.SiteConfig{})
 	admin := ssoSession(t, "sub-a", "a@corp.example", oidc.RoleAdmin)
 	wantReason(t, doSSO(t, srv, http.MethodPut, assistantSettingsPath, admin, `{}`), http.StatusPreconditionRequired, reasonAssistantSettingsInvalid)
+	wantReason(t, doSSOIfMatch(t, srv, http.MethodPut, assistantSettingsPath, admin, "*", `{}`), http.StatusPreconditionRequired, reasonAssistantSettingsInvalid)
 	wantReason(t, doSSOIfMatch(t, srv, http.MethodPut, assistantSettingsPath, admin, `"stale"`, `{}`), http.StatusPreconditionFailed, reasonAssistantSettingsInvalid)
 	if fake.putSeen != nil {
 		t.Fatal("a refused write reached the store")
