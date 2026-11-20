@@ -17,7 +17,7 @@ import (
 // refused only when they name two grants.
 func (c *Config) refuseHostKeyCollisions() error {
 	var errs []error
-	collide := func(field, what string, entries []string, key func(string) (string, bool)) {
+	collide := func(field, what string, entries []string, key func(string) (string, bool), show ...func(string) string) {
 		seen := map[string]string{}
 		for _, e := range slices.Sorted(slices.Values(entries)) {
 			k, ok := key(e)
@@ -25,7 +25,11 @@ func (c *Config) refuseHostKeyCollisions() error {
 				continue
 			}
 			if first, dup := seen[k]; dup {
-				errs = append(errs, fmt.Errorf("config: %s: %q and %q name one %s; keep one", field, first, e, what))
+				name := func(e string) string { return fmt.Sprintf("%q", e) }
+				if len(show) > 0 {
+					name = show[0]
+				}
+				errs = append(errs, fmt.Errorf("config: %s: %s and %s name one %s; keep one", field, name(first), name(e), what))
 				continue
 			}
 			seen[k] = e
@@ -40,7 +44,7 @@ func (c *Config) refuseHostKeyCollisions() error {
 	collide("local_models", "host and port", slices.Collect(maps.Keys(c.LocalModels)), func(raw string) (string, bool) {
 		k, _, ok := localModelURLKey(raw)
 		return k, ok
-	})
+	}, localModelRef) // a key is a URL: named by its host alone
 	for j, rt := range c.ViaOrgRoutes {
 		for i, o := range c.ViaOrgRoutes[:j] {
 			if hostKey(o.Host) == hostKey(rt.Host) && o.GrantID != rt.GrantID {
