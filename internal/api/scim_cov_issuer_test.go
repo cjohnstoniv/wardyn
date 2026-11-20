@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -136,5 +137,136 @@ func TestSCIMCovGroupMembersIgnoreAForeignIssuerAndTenant(t *testing.T) {
 	}
 	if slices.Contains(st.calls, "StartGroupRemoval") || len(st.jobs) != 0 {
 		t.Errorf("a foreign removal started a ledger: calls %v jobs %v", st.calls, st.jobs)
+	}
+}
+
+// scimCovForeignHolds seeds a group that still holds a user of the endpoint's own, one of another issuer and one
+// of another tenant (as an earlier build let them join), each with a token of its own principal.
+func scimCovForeignHolds(st *scimCovStore) (g store.ScimGroup, own, fIssuer, fTenant store.PrincipalIdentity, foreignTokens []uuid.UUID) {
+	own, fIssuer, fTenant, _ = scimCovIssuerRows(st)
+	g = st.addGroup("g-held", "Held", own.ID, fIssuer.ID, fTenant.ID)
+	for _, p := range []string{fIssuer.Principal, fTenant.Principal} {
+		foreignTokens = append(foreignTokens, scimCovTokenIn(st, p, nil, nil))
+	}
+	return g, own, fIssuer, fTenant, foreignTokens
+}
+
+// wantNoForeignEffect fails when anything about a foreign identity was started, cut, revoked or audited.
+func (e *scimCovEnv) wantNoForeignEffect(t *testing.T, st *scimCovStore, tokens []uuid.UUID, foreign ...store.PrincipalIdentity) {
+	t.Helper()
+	for _, tok := range tokens {
+		if st.tokenRevoked(tok) {
+			t.Errorf("a foreign member's token %v was revoked", tok)
+		}
+	}
+	revoked, cut := e.rev.snapshot()
+	for _, f := range foreign {
+		for _, c := range append(revoked, cut...) {
+			if strings.Contains(c, f.Principal) || strings.Contains(c, f.EmailLower) || strings.Contains(c, f.ID.String()) {
+				t.Errorf("a cut or revoke names foreign %s: %q", f.Principal, c)
+			}
+		}
+		for _, ev := range e.h.audit.snapshot() {
+			if ev.Target == f.ID.String() || ev.Target == f.Principal {
+				t.Errorf("an audit row names foreign %s: %s %s", f.Principal, ev.Action, ev.Target)
+			}
+		}
+	}
+}
+
+// A foreign member the group still holds is left alone by a remove-all PATCH and by a group DELETE, while the
+// endpoint's own member is removed: only the own member opens a ledger.
+func TestSCIMCovRetainedForeignMembersAreNotRemoved(t *testing.T) {
+	for _, c := range []struct {
+		name, method, body string
+	}{
+		{"remove all", http.MethodPatch, scimCovPatch(`{"op":"Remove","path":"members"}`)},
+		{"delete group", http.MethodDelete, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newSCIMCovStore()
+			g, own, fIssuer, fTenant, tokens := scimCovForeignHolds(st)
+			e := newSCIMCovEnv(t, st)
+
+			w := e.scim(c.method, "/scim/v2/Groups/"+g.ID.String(), c.body)
+			if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+				t.Fatalf("%s = %d: %s", c.method, w.Code, w.Body.String())
+			}
+			if got := st.callCount("StartGroupRemoval"); got != 1 {
+				t.Errorf("StartGroupRemoval ran %d times, want once, for the own member", got)
+			}
+			if steps := st.pendingSteps(own.ID, store.JobKindGroupRemove); len(steps) != 0 {
+				t.Errorf("the own member's removal is pending: %v", steps)
+			}
+			e.wantNoForeignEffect(t, st, tokens, fIssuer, fTenant)
+		})
+	}
+}
+
+// The sweeper's resume of a pending removal that belongs to a foreign identity does nothing for it: it is not
+// resumed, and nothing is cut, revoked or audited. As for an absent identity, the ledger row is left as it is.
+func TestSCIMCovSweeperResumeOfAForeignRemovalDoesNothing(t *testing.T) {
+	for _, foreign := range []string{"issuer", "tenant"} {
+		t.Run(foreign, func(t *testing.T) {
+			st := newSCIMCovStore()
+			_, fIssuer, fTenant, _ := scimCovIssuerRows(st)
+			target := fIssuer
+			if foreign == "tenant" {
+				target = fTenant
+			}
+			tok := scimCovTokenIn(st, target.Principal, nil, nil)
+			g := st.addGroup("g-resume", "Resume")
+			st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: target.ID, Kind: store.JobKindGroupRemove, Step: store.JobStepAuditDeprovision, Target: g.ID.String()})
+			e := newSCIMCovEnv(t, st)
+
+			if err := e.srv.removeGroupMember(context.Background(), st, g, target.ID, scimSweeperSlot, true); err != nil {
+				t.Fatalf("removeGroupMember = %v, want nil", err)
+			}
+			if got := st.callCount("ResumeGroupRemoval") + st.callCount("StartGroupRemoval"); got != 0 {
+				t.Errorf("a ledger was resumed or started %d times", got)
+			}
+			if len(st.jobs) != 1 || st.jobs[0].Done {
+				t.Errorf("the ledger row changed: %+v", st.jobs)
+			}
+			e.wantNoForeignEffect(t, st, []uuid.UUID{tok}, target)
+		})
+	}
+}
+
+// One failed read of a member must not hold back the removal of the others named in the request: the request
+// answers a retryable failure, the member whose read failed stays a member for the retry, the other is removed,
+// and the retry finishes the first.
+func TestSCIMCovAFailedMemberReadDoesNotSuppressOtherNamedRemovals(t *testing.T) {
+	st := newSCIMCovStore()
+	p1, p2 := scimCovPerson(st, "sub-p1"), scimCovPerson(st, "sub-p2")
+	g := st.addGroup(scimCovGroupExternal, "Engineering", p1.ID, p2.ID)
+	tok1, tok2 := scimCovTokenIn(st, "sub-p1", nil, nil), scimCovTokenIn(st, "sub-p2", nil, nil)
+	e := newSCIMCovEnv(t, st)
+	path := "/scim/v2/Groups/" + g.ID.String()
+	body := scimCovPatch(scimCovGroupRemove(p1.ID.String(), p2.ID.String()))
+
+	st.failAfter("GetIdentity", errSCIMCovBoom, 0)
+	scimCovWantRetry(t, e.scim(http.MethodPatch, path, body), "secret-dsn")
+	if got := st.groupMembers(g.ID); !slices.Equal(got, []uuid.UUID{p1.ID}) {
+		t.Errorf("members after the failed request = %v, want only the first, left for the retry", got)
+	}
+	if !st.tokenRevoked(tok2) || st.tokenRevoked(tok1) || len(st.pendingSteps(p2.ID, store.JobKindGroupRemove)) != 0 {
+		t.Errorf("second member done = %t, first revoked = %t, second pending %v", st.tokenRevoked(tok2), st.tokenRevoked(tok1), st.pendingSteps(p2.ID, store.JobKindGroupRemove))
+	}
+	if got := len(e.auditRows("scim.group.member_remove")); got != 1 {
+		t.Errorf("scim.group.member_remove rows = %d, want the second member's only", got)
+	}
+
+	if w := e.scim(http.MethodPatch, path, body); w.Code != http.StatusOK {
+		t.Fatalf("retry = %d %s", w.Code, w.Body.String())
+	}
+	first := 0
+	for _, ev := range e.auditRows("scim.group.member_remove") {
+		if ev.Target == p1.ID.String() {
+			first++
+		}
+	}
+	if !st.tokenRevoked(tok1) || first != 1 || len(st.pendingSteps(p1.ID, store.JobKindGroupRemove)) != 0 {
+		t.Errorf("after the retry: first revoked = %t, its rows %d, pending %v", st.tokenRevoked(tok1), first, st.pendingSteps(p1.ID, store.JobKindGroupRemove))
 	}
 }

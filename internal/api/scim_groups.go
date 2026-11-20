@@ -237,15 +237,12 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 				errs = append(errs, err)
 			}
 		case scim.OpRemove:
-			var ids []uuid.UUID
-			var err error
+			ids := memberIdentities(members)
 			if members == nil {
-				ids, err = st.GroupRemovalIdentities(ctx, g.ID)
-			} else {
-				ids, err = s.ownMembers(ctx, st, memberIdentities(members))
-			}
-			if err != nil {
-				errs = append(errs, err)
+				var err error
+				if ids, err = st.GroupRemovalIdentities(ctx, g.ID); err != nil {
+					errs = append(errs, err)
+				}
 			}
 			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot))
 		}
@@ -329,6 +326,12 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	}
 	if err != nil {
 		return err
+	}
+	// An identity of another issuer or tenant is, as an absent one is, nobody this endpoint removes: nothing
+	// is started, resumed, cut, revoked or audited. A pending ledger row it already holds is left as it is,
+	// as an absent identity's is, and the sweeper's later pass finds nothing to do for it.
+	if !s.scimOwns(ident) {
+		return nil
 	}
 	if resume {
 		if ok, err := st.ResumeGroupRemoval(ctx, g.ID, identityID); err != nil || !ok {
