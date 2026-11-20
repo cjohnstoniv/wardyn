@@ -137,7 +137,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 // need is erased with the rest. It says nothing of whether the credentials are erased, since the same text is on
 // a failure that stopped before they were (the mask fence). A revoke that did not finish erases nothing instead
 // (errADORevokeUnfinished).
-const erasureTokensNotRevoked = "Wardyn could not confirm that every token it created for this person's runs was revoked. A token that was not revoked works until it expires; to end it sooner, revoke it in Azure DevOps."
+const erasureTokensNotRevoked = "Wardyn could not confirm that every token it created for this person's runs was revoked. A token whose revoke failed may still work until it expires; to end it sooner, revoke it in Azure DevOps."
 
 // tokensNotRevokedOf is the two keys a credentials step set before it failed (err is the orchestrator's),
 // so the failure's audit row still says a token may work; nil when the step did not say so.
