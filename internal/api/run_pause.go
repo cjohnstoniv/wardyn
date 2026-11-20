@@ -399,8 +399,8 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 }
 
 // runLive reports whether run, read under its operation lock, is one a person's presence may resume: RUNNING and not
-// kept. resumeRun thaws the sandbox with no state check of its own, and a run that ended, or was kept, since an
-// earlier read may keep its sandbox for a computer folder's pass back.
+// kept. resumeRun refuses a run that is not (errResumeRunNotLive), as stampPresence and thawForExec do before it:
+// a run that ended, or was kept, since an earlier read may keep its sandbox for a computer folder's pass back.
 func runLive(run types.AgentRun) bool { return run.State == types.RunRunning && !runIsKept(run) }
 
 // noteAgentActive moves the presence clock for the agent's own activity: an
@@ -512,6 +512,11 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
 }
 
+// errResumeRunNotLive is resumeRun's answer for a run that is no longer RUNNING, or is kept: it thaws nothing,
+// clears nothing and writes no row. A kill or stop that won the terminal write while the run was paused leaves
+// its pause mark, and the sandbox when the stop failed to remove it, for a later request-closed resume to find.
+var errResumeRunNotLive = errors.New("the run is no longer running")
+
 // errResumedSandboxGone is resumeRun's answer when the thaw succeeded but the
 // sandbox is no longer running: a thaw of a missing container is a no-op
 // success, so it is the status re-read that tells the two apart.
@@ -524,9 +529,13 @@ var errResumedSandboxGone = errors.New("the run's sandbox is not running")
 // leave a frozen agent nobody knows about. The re-read keeps a vanished sandbox from
 // reading as a resumed run: its pause stays until the watcher or the
 // reconciler settles the run. The owner's authority is re-checked before the
-// thaw (resumeRefusal): a refusal thaws nothing.
+// thaw (resumeRefusal): a refusal thaws nothing. run is the row its caller read under the run's operation lock,
+// and a run that is not live (runLive) is refused first, before any thaw, clear or row.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,
 	actorType types.ActorType, principal, reason string) error {
+	if !runLive(run) {
+		return errResumeRunNotLive
+	}
 	data := map[string]any{"reason": reason, "paused_reason": run.PausedReason, "paused_at": run.PausedAt}
 	if err := s.resumeRefusal(ctx, run, actorType, principal, data); err != nil {
 		return err
