@@ -186,6 +186,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | Remote-hosted or organization runner removed from an organization pool | the pool carries a use policy | **super admin only** |
 | Runner trust class change (`PUT /runners/{id}/trust`) | the class changes | security admin or super admin |
 | Run node record (`POST /runs/{id}/node-record`) | the held run shows a reused node name or no causal association, or four-eyes is on | security admin or super admin |
+| The assistant's settings (`PUT /assistant/settings`, see [admin-only-writes.md](admin-only-writes.md)) | the change lets the assistant do more: a purpose or the run-history switch turned on, a provider marked, a purpose or a model added to a mark, a model list emptied, or a never-sent kind removed. A change that only turns things off applies at once | **super admin only** |
 
 Exempt, so applied directly:
 

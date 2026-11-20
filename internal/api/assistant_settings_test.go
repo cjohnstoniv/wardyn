@@ -53,6 +53,7 @@ func TestAssistantSettingsAreASuperAdminDoor(t *testing.T) {
 	}
 }
 
+// If-Match is required: no header is a 428 and a mismatch a 412, and neither writes anything.
 func TestAssistantSettingsPutNeedsIfMatch(t *testing.T) {
 	srv, fake, _ := egressBaselineServer(t, types.SiteConfig{})
 	admin := ssoSession(t, "sub-a", "a@corp.example", oidc.RoleAdmin)
@@ -239,5 +240,38 @@ func TestMeAssistantIsOpenToAMemberAndKeepsAnOffAssistantQuiet(t *testing.T) {
 		if w := doSSO(t, srv, http.MethodGet, "/api/v1/me/assistant"+q, member, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("GET %q = %d, want 400", q, w.Code)
 		}
+	}
+}
+
+// GET /me/assistant asks the same "Available to" grant start does: of two marked providers a person granted
+// one is ready on that one, a person granted neither is denied by their unit, and a super admin is exempt.
+func TestMeAssistantAppliesTheProviderGrant(t *testing.T) {
+	// A local model server with no token needs no credential, so only the grant decides.
+	first := assistantTestProvider("first", "uid-first", types.ModelProviderLocalModel, "m1")
+	second := assistantTestProvider("second", "uid-second", types.ModelProviderLocalModel, "m2")
+	site := assistantSiteConfig(&types.AssistantSettings{Compose: true,
+		Providers: []types.AssistantProviderMark{assistantTestMark("first", true, false), assistantTestMark("second", true, false)}}, first, second)
+	cs := func() *capStore {
+		return &capStore{
+			restricted: map[string]map[string]bool{capModelProvider: {"first": true, "second": true}},
+			grants: []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectUser, Subject: "sub-second",
+				Capability: capModelProvider, Value: "second", Effect: types.CapabilityAllow}},
+		}
+	}
+	for _, tc := range []struct {
+		name, sub, role, wantState, wantProvider string
+	}{
+		{"granted only the second", "sub-second", oidc.RoleUser, types.AssistantReady, "second"},
+		{"granted none", "sub-none", oidc.RoleUser, types.AssistantUnitDenies, ""},
+		{"a super admin is exempt", "sub-admin", oidc.RoleAdmin, types.AssistantReady, "first"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := modelProvidersStatusSrv(t, site, cs())
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/me/assistant?purpose=compose", ssoSession(t, tc.sub, tc.sub+"@corp.example", tc.role), "")
+			var got availabilityAnswer
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.State != tc.wantState || got.ProviderID != tc.wantProvider {
+				t.Fatalf("GET = %d %s (%v), want %s on %q", w.Code, w.Body, err, tc.wantState, tc.wantProvider)
+			}
+		})
 	}
 }

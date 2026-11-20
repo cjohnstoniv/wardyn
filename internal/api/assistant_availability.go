@@ -112,7 +112,8 @@ func providerDisplayName(p types.ModelProvider) string {
 }
 
 // handleGetMyAssistant is GET /api/v1/me/assistant?purpose=compose|review, open to any signed-in person. It
-// reads only: the person's ceiling, the stored block and whether they hold a credential for a provider.
+// reads only: the person's ceiling and provider grants, the stored block and whether they hold a credential
+// for a provider.
 func (s *Server) handleGetMyAssistant(w http.ResponseWriter, r *http.Request) {
 	purpose := types.AssistantPurpose(r.URL.Query().Get("purpose"))
 	if !purpose.Valid() {
@@ -137,6 +138,22 @@ func (s *Server) handleGetMyAssistant(w http.ResponseWriter, r *http.Request) {
 	var deny, allowed []string
 	if !ceiling.Operator {
 		deny, allowed = ceiling.Limits.DenyModelProviders, modelLimitOf(ceiling).models
+	}
+	// A provider the person is not granted ("Available to") is one start would refuse, so it counts as
+	// denied, asked of the helper dispatch asks.
+	for _, m := range sc.Assistant.Providers {
+		p, ok := modelProviderByID(sc.ModelProviders, m.ProviderID)
+		if !ok || p.UID == "" {
+			continue
+		}
+		granted, gerr := s.capSeamAllowed(ctx, capModelProvider, p.ID)
+		if gerr != nil {
+			writeServerError(w, r, "resolve model provider grant", gerr)
+			return
+		}
+		if !granted {
+			deny = append(slices.Clone(deny), p.UID)
+		}
 	}
 	owner := runIdentitySubject(ctx, principalFromRequest(r))
 	statusCtx := secretstore.WithPurpose(ctx, secretstore.PurposeStatus)
