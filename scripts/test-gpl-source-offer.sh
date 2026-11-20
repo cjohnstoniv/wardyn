@@ -121,7 +121,8 @@ matrix wardynd > "$M/.github/workflows/release.yml"; echo '{"source":{"type":"im
 out="$(offer)" || fail "the generator must succeed with no repacked package"
 case "$out" in *"None of these packages are modified by Wardyn."*) ;; *) fail "with no repacked package the offer must keep its 'None of these packages are modified' sentence" ;; esac
 case "$out" in *"Modified by Wardyn"*) fail "with no repacked package the offer must not carry a modified-package section" ;; esac
-cmp -s <(awk '/^## /{exit} {print}' <<<"$out") "$ROOT/scripts/test-gpl-source-offer.d/preamble-unmodified.md" \
+# $(...) drops trailing newlines on both sides, so the fixture needs no blank last line.
+cmp -s <(printf '%s\n' "$(awk '/^## /{exit} {print}' <<<"$out")") <(printf '%s\n' "$(cat "$ROOT/scripts/test-gpl-source-offer.d/preamble-unmodified.md")") \
   || fail "the no-modification preamble must stay byte-identical to scripts/test-gpl-source-offer.d/preamble-unmodified.md"
 echo "ok  no repacked package: wording and preamble unchanged"
 
