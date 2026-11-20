@@ -143,7 +143,7 @@ func (s *Server) unitWriteAsHeld(ctx context.Context, targetKey string, after js
 	if msg != "" {
 		return types.GovernanceChange{}, errors.New(msg)
 	}
-	all, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	all, err := s.unitRowsForWrite(ctx)
 	if err != nil {
 		return types.GovernanceChange{}, err
 	}

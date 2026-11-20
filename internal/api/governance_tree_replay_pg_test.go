@@ -117,7 +117,11 @@ func atTreeStage(t *testing.T, e *govEnv, stage string, write func()) (wait func
 		}
 		fired = true
 		go func() { defer close(done); write() }()
-		waitWriteOrGraphWaiter(t, e, done)
+		// The seam runs on the goroutine that holds the replay's transaction, so pg_locks is polled from
+		// another: a second connection asked for on this one is the nested acquire the pool guard stops.
+		polled := make(chan struct{})
+		go func() { defer close(polled); waitWriteOrGraphWaiter(t, e, done) }()
+		<-polled
 	}
 	return func() {
 		t.Helper()
