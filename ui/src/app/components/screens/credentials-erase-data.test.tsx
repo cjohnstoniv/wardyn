@@ -217,7 +217,7 @@ describe("Erase someone's data (M4)", () => {
   });
 
   it("says beside the result when an Azure DevOps token the erasure tried to revoke may still work", async () => {
-    const detail = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked.";
+    const detail = "Wardyn could not confirm that every token it created for this person's runs was revoked.";
     erasePersonMock.mockResolvedValue({
       person: "sub-ana",
       scopes: [],

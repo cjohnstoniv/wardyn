@@ -265,7 +265,7 @@ describe("erasing a listed person (design F-5)", () => {
   });
 
   it("says when an Azure DevOps token the credentials erase tried to revoke may still work", async () => {
-    const detail = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked.";
+    const detail = "Wardyn could not confirm that every token it created for this person's runs was revoked.";
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockResolvedValue({ count: 1, tokens_revocation_failed: true, detail });
     renderScreen();
