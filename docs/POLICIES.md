@@ -533,6 +533,8 @@ What the check does and does not settle:
 |---|---|
 | `always_deny` | Hard-deny the unknown domain and log it. No approval is ever raised. |
 | `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held; a stalled control plane delays the request by at most 5 s. |
+| | While an approval is pending, a retry waits for a rate-limited status check. A request that joins a check already in progress can still see the earlier pending state; retry again after that response. |
+| | With the control plane responding, starting a new check waits at most about a quarter second. Waiting and the check share the existing timeout. |
 | `wait_for_review` | Raise a pending approval and **hold the connection** until it is decided or the hold deadline passes (`first_use_hold_seconds`, default 30s; at most `max_holds` concurrent holds, default 16). |
 | | Approved in time, the same in-flight request completes; on deadline it fails closed (403) with the approval still pending. |
 
