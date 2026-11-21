@@ -832,11 +832,9 @@ export default function App() {
                 // logout's own 401 (a session already dead) and any read still
                 // in flight must open neither the dialog nor the gate's notice.
                 //
-                // The signed-out hold stays up through the logout (which alone
-                // passes it, core.ts WfetchInit.endsSession) and drops with
-                // resetReauth below, once the logout has settled.
-                // A notification that names a person must not outlive this sign-in on the gate that follows.
-                clearAccountToasts();
+                // The signed-out hold stays up through the logout (which alone passes it,
+                // core.ts WfetchInit.endsSession) and drops with resetReauth below, once the logout has settled.
+                clearAccountToasts(); // a notification naming a person must not outlive this sign-in
                 signingOutRef.current = true;
                 signedOutHereRef.current = true;
                 setSignedOutHold(true);

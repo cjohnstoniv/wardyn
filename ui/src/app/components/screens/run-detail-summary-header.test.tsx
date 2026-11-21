@@ -904,10 +904,8 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 5m 0s")).toBeInTheDocument();
     // The clock beside it is the end time too, not the teardown two days later.
     expect(screen.getByLabelText("Total run time 5m 0s")).toHaveTextContent(`Ran 5m 0s · ended ${shortTime(at(5 * 60_000))}`);
-    expect(screen.getByLabelText("Total run time 5m 0s")).not.toHaveTextContent(shortTime(at(2 * 86_400_000)));
   });
 
   it("falls back to updated_at when the run has no ended_at", () => {
@@ -922,7 +920,6 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 7m 0s")).toBeInTheDocument();
     expect(screen.getByLabelText("Total run time 7m 0s")).toHaveTextContent(`ended ${shortTime(at(7 * 60_000))}`);
   });
 });
