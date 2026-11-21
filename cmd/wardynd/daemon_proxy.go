@@ -65,9 +65,15 @@ const (
 	// lists a host but no daemon proxy exists to send it to.
 	daemonProxyAlwaysNoProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but no daemon proxy " +
 		"is configured (WARDYN_DAEMON_PROXY_URL, WARDYN_DAEMON_PROXY_SECRET or HTTPS_PROXY); set one or unset the list"
-	// daemonProxyAlwaysEntryRefusal is the BOOT REFUSAL for one unusable entry. %q is the
-	// entry as typed (a host name, never a credential); %s says why.
-	daemonProxyAlwaysEntryRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS entry %q is %s — " +
+	// daemonProxyAlwaysEnvProxyRefusal is the BOOT REFUSAL when HTTPS_PROXY, the only proxy
+	// the list can use, is not an address the transport can dial. It never carries the value.
+	daemonProxyAlwaysEnvProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but HTTPS_PROXY (or " +
+		"https_proxy) is not a usable proxy address; without one those hosts would be reached directly. Fix it, or set " +
+		"WARDYN_DAEMON_PROXY_URL"
+	// daemonProxyAlwaysEntryRefusal is the BOOT REFUSAL for one unusable entry. %d is its
+	// 1-based position and %s says why. Never the entry's text: a pasted proxy URL carries a
+	// credential, and the refusal is written to the daemon log.
+	daemonProxyAlwaysEntryRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS entry %d is %s — " +
 		"the list takes exact host names that wardynd reaches directly today, nothing else"
 )
 
@@ -335,7 +341,7 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 		skip[normalizeProxyHost(h)] = struct{}{}
 	}
 	out := map[string]struct{}{}
-	for _, entry := range strings.Split(*raw, ",") {
+	for i, entry := range strings.Split(*raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
@@ -354,11 +360,33 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
 		}
 		if why != "" {
-			return nil, fmt.Errorf(daemonProxyAlwaysEntryRefusal, entry, why)
+			return nil, fmt.Errorf(daemonProxyAlwaysEntryRefusal, i+1, why)
 		}
 		out[host] = struct{}{}
 	}
 	return out, nil
+}
+
+// parseEnvironmentProxy reads an HTTPS_PROXY value the way x/net's httpproxy does: a
+// URL with a host, or the host:port shorthand (no "://"), which httpproxy retries with
+// "http://" in front. It accepts only what the transport can dial (an http, https or
+// socks5 scheme and a host), and refuses what httpproxy would turn into a proxy that
+// does not exist, such as a value with "://" that is not a URL.
+func parseEnvironmentProxy(raw string) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	if (err != nil || u.Scheme == "" || u.Host == "") && !strings.Contains(raw, "://") {
+		if u2, err2 := url.Parse("http://" + raw); err2 == nil && (u2.Path == "" || u2.Path == "/") {
+			u, err = u2, nil
+		}
+	}
+	if err != nil || u.Hostname() == "" {
+		return nil, false
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return u, true
+	}
+	return nil, false
 }
 
 // normalizeProxyHost lower-cases a host and drops one trailing dot, the form a
@@ -385,25 +413,32 @@ func sortedHosts(set map[string]struct{}) []string {
 // hosts wardynd reaches directly, routes as it did before the list existed.
 //
 // The always hosts go to daemonProxy (WARDYN_DAEMON_PROXY_URL or _SECRET) or,
-// when that is nil, to HTTPS_PROXY. With neither, boot is refused. An empty
+// when that is nil, to HTTPS_PROXY. With neither, or an HTTPS_PROXY that is not a
+// usable address, boot is refused; a listed host never goes direct. An empty
 // list returns nil: the request uses the shared transport.
 func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[string]struct{}) (http.RoundTripper, error) {
 	if len(always) == 0 {
 		return nil, nil
 	}
-	via := func(*url.URL) (*url.URL, error) { return daemonProxy, nil }
-	if daemonProxy == nil {
+	// The proxy is resolved and validated here, once, so a listed host is sent to a
+	// usable proxy or boot is refused: httpproxy's own function drops a value it
+	// cannot parse and then answers "direct".
+	proxy := daemonProxy
+	if proxy == nil {
 		env := httpproxy.FromEnvironment().HTTPSProxy
 		if env == "" {
 			return nil, errors.New(daemonProxyAlwaysNoProxyRefusal)
 		}
-		via = (&httpproxy.Config{HTTPSProxy: env}).ProxyFunc()
+		var ok bool
+		if proxy, ok = parseEnvironmentProxy(env); !ok {
+			return nil, errors.New(daemonProxyAlwaysEnvProxyRefusal)
+		}
 	}
 	rest := tr.Proxy
 	clone := tr.Clone()
 	clone.Proxy = func(req *http.Request) (*url.URL, error) {
 		if _, ok := always[normalizeProxyHost(req.URL.Hostname())]; ok {
-			return via(req.URL)
+			return proxy, nil
 		}
 		if rest == nil {
 			return nil, nil

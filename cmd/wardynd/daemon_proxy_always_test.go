@@ -193,3 +193,125 @@ func TestDaemonProxyAlways_OtherCallsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// httpproxy drops an HTTPS_PROXY it cannot parse and then answers "direct", so a listed host would
+// bypass the proxy it was listed for. Boot refuses instead, and never prints the value.
+func TestDaemonProxyAlways_RefusesUnparsableEnvironmentProxy(t *testing.T) {
+	for _, bad := range []string{"http://bad host:3128", "://proxy", "%zz", "http://proxy:notaport", "ftp://proxy.corp.example:21"} {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", bad)
+		grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example"))
+		if err == nil || !strings.Contains(err.Error(), "HTTPS_PROXY") || !strings.Contains(err.Error(), "WARDYN_DAEMON_PROXY_ALWAYS") {
+			t.Errorf("HTTPS_PROXY=%q: bootDaemonProxy = %v, %v; want a refusal naming HTTPS_PROXY", bad, grant, err)
+		} else if strings.Contains(err.Error(), bad) {
+			t.Errorf("HTTPS_PROXY=%q: the refusal echoes the value: %v", bad, err)
+		}
+	}
+	// Lower case is the same variable to the environment reader.
+	clearProxyEnv(t)
+	t.Setenv("https_proxy", "http://bad host:3128")
+	if _, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example")); err == nil {
+		t.Error("https_proxy=http://bad host: bootDaemonProxy succeeded, want a refusal")
+	}
+	// The same value with the list empty changes nothing: no refusal, no grant transport.
+	grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", ""))
+	if err != nil || grant != nil {
+		t.Errorf("empty list with HTTPS_PROXY=bad: %v, %v; want nil, nil", grant, err)
+	}
+}
+
+// The host:port shorthand httpproxy accepts (a value with no scheme) keeps working.
+func TestDaemonProxyAlways_AcceptsHostPortShorthand(t *testing.T) {
+	for raw, want := range map[string]string{
+		"proxy.corp.example:3128":         "http://proxy.corp.example:3128",
+		"localhost:3128":                  "http://localhost:3128",
+		"10.0.0.9:8080":                   "http://10.0.0.9:8080",
+		"https://proxy.corp.example:3129": "https://proxy.corp.example:3129",
+	} {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", raw)
+		grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example"))
+		if err != nil {
+			t.Errorf("HTTPS_PROXY=%q: %v", raw, err)
+			continue
+		}
+		if got := proxyFor(t, grant, "https://login.corp.example/token"); got != want {
+			t.Errorf("HTTPS_PROXY=%q: grant transport sends login.corp.example to %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// In every configuration that boots, a listed host's Proxy function answers a URL, never nil:
+// not under NO_PROXY=*, not with the daemon proxy bypassing it, not with the standard
+// library's own function (which answers nil for an unusable value) as the shared one.
+func TestDaemonProxyAlways_ListedHostNeverDirect(t *testing.T) {
+	envFn := func(r *http.Request) (*url.URL, error) { return httpproxy.FromEnvironment().ProxyFunc()(r.URL) }
+	cases := map[string]struct {
+		env     map[string]string
+		proxy   string
+		noProxy string
+		shared  func(*http.Request) (*url.URL, error)
+	}{
+		"daemon proxy, bypassed":       {proxy: "http://proxy.corp.example:3128", noProxy: "corp.example", shared: freshTransport().Proxy},
+		"daemon proxy, no_proxy star":  {proxy: "http://proxy.corp.example:3128", noProxy: "*", shared: freshTransport().Proxy},
+		"environment, listed in NO":    {env: map[string]string{"HTTPS_PROXY": "http://e.corp.example:3128", "NO_PROXY": "login.corp.example"}, shared: envFn},
+		"environment, no_proxy star":   {env: map[string]string{"https_proxy": "e.corp.example:3128", "no_proxy": "*"}, shared: envFn},
+		"environment, nil shared func": {env: map[string]string{"HTTPS_PROXY": "http://e.corp.example:3128"}, shared: nil},
+	}
+	for name, c := range cases {
+		clearProxyEnv(t)
+		for k, v := range c.env {
+			t.Setenv(k, v)
+		}
+		grant, err := bootDaemonProxy(&http.Transport{Proxy: c.shared}, alwaysFlags(c.proxy, c.noProxy, "login.corp.example,Idp.Corp.Example."))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		for _, target := range []string{"https://login.corp.example/t", "https://login.corp.example:8443/t", "https://LOGIN.corp.example./t", "http://idp.corp.example/t"} {
+			if got := proxyFor(t, grant, target); got == "" {
+				t.Errorf("%s: a listed host, %s, goes direct", name, target)
+			}
+		}
+	}
+	// And the configuration that would send it direct does not boot.
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://bad host")
+	if grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example")); err == nil {
+		t.Errorf("unusable HTTPS_PROXY booted with a grant transport %v", grant)
+	}
+}
+
+// The refusal is written to the daemon log, so it names an entry by position and reason, never by
+// its text: a proxy URL pasted into the list carries a credential.
+func TestDaemonProxyAlways_RefusalOmitsEntryText(t *testing.T) {
+	clearProxyEnv(t)
+	cases := []struct{ list, wantPosition string }{
+		{"http://user:MARKER-7f3a@proxy.example:3128", "entry 1 "},
+		{"login.corp.example, http://user:MARKER-7f3a@proxy.example:3128", "entry 2 "},
+		{"login.corp.example,*.MARKER-7f3a.example", "entry 2 "},
+		{"login.corp.example,,LocalHost", "entry 3 "},
+		{"MARKER-7f3a@host.example", "entry 1 "},
+	}
+	for _, c := range cases {
+		_, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", c.list))
+		if err == nil {
+			t.Errorf("%q: boot succeeded, want a refusal", c.list)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "WARDYN_DAEMON_PROXY_ALWAYS") || !strings.Contains(msg, c.wantPosition) {
+			t.Errorf("%q: refusal %q does not name the variable and %q", c.list, msg, c.wantPosition)
+		}
+		for _, leak := range []string{"MARKER-7f3a", "user:", "proxy.example", "LocalHost"} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("%q: refusal %q carries entry text %q", c.list, msg, leak)
+			}
+		}
+	}
+	// The unusable-proxy refusal names the variable, not its value.
+	t.Setenv("HTTPS_PROXY", "http://user:MARKER-7f3a@bad host:3128")
+	if _, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example")); err == nil || strings.Contains(err.Error(), "MARKER-7f3a") {
+		t.Errorf("unusable HTTPS_PROXY: err = %v, want a refusal without the value", err)
+	}
+}
