@@ -342,6 +342,9 @@ describe("PolicySummary host marks", () => {
     "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.";
   const TUNNEL_MEANING =
     "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
+  const PARTLY = "Partly inspected";
+  const PARTLY_MEANING =
+    "Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.";
   const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
   const ALLOW_ALL_TEXT = "Allow-all egress (block-list only)";
   const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
@@ -353,8 +356,10 @@ describe("PolicySummary host marks", () => {
     expect(SUMMARY.inspectedMeaning).toBe(INSPECTED_MEANING);
     expect(SUMMARY.tunnelOnlyMeaning).toBe(TUNNEL_MEANING);
     expect(SUMMARY.tunnelOnlyAllowAll).toBe(ALLOW_ALL_LINE);
+    expect(SUMMARY.partlyInspected).toBe(PARTLY);
+    expect(SUMMARY.partlyInspectedMeaning).toBe(PARTLY_MEANING);
     const cli = readFileSync(join(__dirname, "../../../../../../cmd/wardyn/run_policy.go"), "utf8");
-    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(cli).toContain(`"${s}"`);
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE, PARTLY, PARTLY_MEANING]) expect(cli).toContain(`"${s}"`);
   });
 
   it("puts each chip on its own host, and one meaning line per mark present", () => {
@@ -365,6 +370,27 @@ describe("PolicySummary host marks", () => {
     expect(within(row("pypi.org")).queryByText(INSPECTED)).toBeNull();
     expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
     expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("marks a wildcard Partly inspected beside a tunneled sibling, and names what is opened", () => {
+    const wild = { allowed_domains: ["*.corp.example", "build.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    render(
+      <PolicySummary
+        spec={wild}
+        hostMarks={{
+          inspected: ["artifacts.corp.example"],
+          partial: { "*.corp.example": ["artifacts.corp.example", "git.corp.example:8443"] },
+          terminated: ["artifacts.corp.example", "git.corp.example:8443"],
+          outside: [],
+        }}
+      />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(screen.getByText("Opens artifacts.corp.example, git.corp.example:8443")).toBeInTheDocument();
+    expect(within(row("build.corp.example")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    for (const s of [PARTLY_MEANING, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.getByText(s)).toBeInTheDocument();
   });
 
   it("explains only the marks present", () => {

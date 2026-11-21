@@ -37,10 +37,12 @@ const (
 	runPolicyShared = "This run used an organization component's shared secret. This is a record of the run, not a policy to reuse: Wardyn refuses a policy that sets shared. Select the component again on the new run."
 	runPolicyHeader = "Changed when the run started"
 
-	// The host marks (#2956). The console's SUMMARY in policy-tab-copy.ts holds the same five strings.
+	// The host marks (#2956). The console's SUMMARY in policy-tab-copy.ts holds the same strings.
 	runPolicyInspected          = "Inspected"
+	runPolicyPartlyInspected    = "Partly inspected"
 	runPolicyTunnelOnly         = "Tunnel only"
 	runPolicyInspectedMeaning   = "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate."
+	runPolicyPartlyMeaning      = "Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread."
 	runPolicyTunnelOnlyMeaning  = "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here."
 	runPolicyTunnelOnlyAllowAll = "Hosts not listed as Inspected pass through unread."
 )
@@ -149,7 +151,7 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 	return lines
 }
 
-// runPolicyHostLines marks each allowed host Inspected or Tunnel only, then each host the proxy opens
+// runPolicyHostLines marks each allowed host Inspected, Partly inspected (with the destinations opened) or Tunnel only, then each host the proxy opens
 // outside the allowlist as Inspected, then says what each mark means. Nothing for a run that recorded
 // no marks. Under allow-all, the hosts the proxy opens outside the allowlist as Inspected, then the one
 // line that says every host not listed passes through unread.
@@ -167,10 +169,12 @@ func runPolicyHostLines(v sdk.RunPolicyView) []string {
 		}
 		return append(lines, runPolicyTunnelOnlyAllowAll)
 	}
-	var inspected, tunnel bool
+	var inspected, partly, tunnel bool
 	for _, host := range v.Spec.AllowedDomains {
 		mark := runPolicyTunnelOnly
-		if slices.Contains(v.HostMarks.Inspected, host) {
+		if subset, ok := v.HostMarks.Partial[host]; ok && len(subset) > 0 {
+			mark, partly = runPolicyPartlyInspected+" (opens "+strings.Join(subset, ", ")+")", true
+		} else if slices.Contains(v.HostMarks.Inspected, host) {
 			mark, inspected = runPolicyInspected, true
 		} else {
 			tunnel = true
@@ -183,6 +187,9 @@ func runPolicyHostLines(v sdk.RunPolicyView) []string {
 	}
 	if inspected {
 		lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
+	}
+	if partly {
+		lines = append(lines, runPolicyPartlyInspected+": "+runPolicyPartlyMeaning)
 	}
 	if tunnel {
 		lines = append(lines, runPolicyTunnelOnly+": "+runPolicyTunnelOnlyMeaning)

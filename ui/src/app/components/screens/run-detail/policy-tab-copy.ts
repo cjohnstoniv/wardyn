@@ -157,11 +157,15 @@ export const SUMMARY = {
   blockedHosts: "Blocked hosts",
   otherHost: "Any other host",
   requestTypes: "Request types",
-  // The host marks (#2956, mock R13). cmd/wardyn/run_policy.go holds the same five strings.
+  // The host marks (#2956, mock R13). cmd/wardyn/run_policy.go holds the same strings.
   inspected: "Inspected",
+  partlyInspected: "Partly inspected",
   tunnelOnly: "Tunnel only",
   inspectedMeaning:
     "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.",
+  partlyInspectedMeaning:
+    "Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.",
+  opens: (hosts: string) => `Opens ${hosts}`,
   tunnelOnlyMeaning:
     "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.",
   tunnelOnlyAllowAll: "Hosts not listed as Inspected pass through unread.",

@@ -295,6 +295,31 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a wildcard opened in part is Partly inspected, with what is opened, beside a tunneled sibling", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.Spec.AllowedDomains = []string{"*.corp.example", "build.corp.example", "artifacts.corp.example", "git.corp.example"}
+			v.HostMarks = &sdk.RunPolicyHostMarks{
+				Inspected:  []string{"artifacts.corp.example"},
+				Partial:    map[string][]string{"*.corp.example": {"artifacts.corp.example", "git.corp.example:8443"}, "git.corp.example": {"git.corp.example:8443"}},
+				Terminated: []string{"artifacts.corp.example", "git.corp.example:8443"},
+			}
+		})
+		for _, want := range []string{
+			"# *.corp.example: Partly inspected (opens artifacts.corp.example, git.corp.example:8443)\n",
+			"# build.corp.example: Tunnel only\n",
+			"# artifacts.corp.example: Inspected\n",
+			"# git.corp.example: Partly inspected (opens git.corp.example:8443)\n",
+			"# Partly inspected: Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.\n",
+			"# Tunnel only: Wardyn passes this traffic through",
+		} {
+			if !strings.Contains(head, want) {
+				t.Errorf("missing %q in:\n%s", want, head)
+			}
+		}
+		if strings.Contains(head, "# *.corp.example: Inspected") {
+			t.Errorf("a wildcard opened in part was marked Inspected:\n%s", head)
+		}
+	})
 	t.Run("a host the proxy opens outside the allowlist comes after the allowlist, as Inspected", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {
 			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com"}, Outside: []string{"api.github.com"}}
