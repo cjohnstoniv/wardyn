@@ -2295,7 +2295,7 @@ func (s *authzStore) CountActiveRunsBy(_ context.Context, createdBy string) (int
 	return n, nil
 }
 
-func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page) ([]types.AgentRun, error) {
+func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []types.AgentRun{}

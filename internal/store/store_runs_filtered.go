@@ -9,8 +9,11 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -45,6 +48,25 @@ type RunFilter struct {
 	// Query ILIKE-searches title/task/repo/created_by. Raw — the store
 	// escapes '%', '_' and '\' itself.
 	Query string
+	// Scope, when set, keeps only the runs whose unit is in it. It applies to the list and to
+	// the hidden-run counts alike, so no count includes a run outside it.
+	Scope *RunUnitScope
+}
+
+// RunUnitScope is a set of units a run list is limited to: the subtree a portal's pin names. A run with
+// no unit (a NULL unit_id) counts as the Default unit. An empty set matches no run.
+type RunUnitScope struct {
+	IDs []uuid.UUID
+}
+
+// sql is the scope's condition, its two values bound onto args.
+func (c *RunUnitScope) sql(args *[]any) string {
+	ids := make([]uuid.UUID, len(c.IDs))
+	copy(ids, c.IDs)
+	hasDefault := slices.Contains(ids, DefaultUnitID)
+	idsArg := bindArg(args, ids)
+	defArg := bindArg(args, hasDefault)
+	return "(unit_id = ANY(" + idsArg + "::uuid[]) OR (unit_id IS NULL AND " + defArg + "::boolean))"
 }
 
 // runLiveSQL is TRUE for a row the end-time window must never apply to: not
@@ -105,6 +127,9 @@ func statusSQL(status string, nonTerminal string) string {
 // "hidden" always means "matched, hidden only by a carve-out".
 func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	var clauses []string
+	if f.Scope != nil {
+		clauses = append(clauses, f.Scope.sql(args))
+	}
 	if f.Owner != "" {
 		owner := bindArg(args, f.Owner)
 		if f.WithSponsored {

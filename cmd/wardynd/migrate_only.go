@@ -173,7 +173,7 @@ func otherClients(ctx context.Context, conn *pgxpool.Conn) ([]string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT pid, COALESCE(usename::text, ''), COALESCE(application_name, '')
 		FROM pg_stat_activity
-		WHERE datname = current_database() AND pid <> pg_backend_pid() AND (backend_type = 'client backend' OR (backend_type IS NULL AND usename IS NOT NULL))
+		WHERE datname = current_database() AND pid <> pg_backend_pid() AND `+db.OtherClientSQL+`
 		ORDER BY pid`)
 	if err != nil {
 		return nil, fmt.Errorf("list other connections: %w", err)
