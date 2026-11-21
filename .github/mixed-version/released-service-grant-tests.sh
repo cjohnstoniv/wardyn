@@ -27,7 +27,7 @@ pids=()
 
 cleanup() {
 	local rc=$?
-	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null
+	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null || :
 	if [ "$rc" -ne 0 ]; then
 		set +eu
 		echo "::group::diagnostics"
