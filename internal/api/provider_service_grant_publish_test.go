@@ -1690,9 +1690,6 @@ func TestServiceGrant_PermitsBoundRequestsAndRowsAcrossGrants(t *testing.T) {
 	if tok, err := f.pubTokenFor(grants[4], serviceGrantTriggerResolve); err != nil || tok.token != t5.token {
 		t.Fatalf("the fifth grant's answer = %q, %v; want its token with five minutes left", tok.token, err)
 	}
-	if elapsed := time.Since(started); elapsed >= 1000*time.Millisecond {
-		t.Fatalf("the refusals took %v, want them inside the 1200 ms token bound that the held requests live under", elapsed)
-	}
 	if _, ok := f.pubStatus(grants[3].UID); ok || f.pubFailed(grants[3].UID) {
 		t.Fatal("the refused grant has a status row or a failed entry")
 	}
@@ -1709,6 +1706,10 @@ func TestServiceGrant_PermitsBoundRequestsAndRowsAcrossGrants(t *testing.T) {
 	// Step 2: the release lets the three requests fail; their callers do not wait for the held settles.
 	releaseBarrier()
 	releasedAt := time.Now()
+	// The refusals and the barrier's release both come inside the 1200 ms token bound the held requests live under.
+	if elapsed := releasedAt.Sub(started); elapsed >= 1000*time.Millisecond {
+		t.Fatalf("the refusals and the barrier's release took %v from the first resolve, want under 1000 ms", elapsed)
+	}
 	for i, ch := range held {
 		r := pubRecvWithin(t, ch, time.Until(releasedAt.Add(300*time.Millisecond)), fmt.Sprintf("held grant %d", i+1))
 		if se := svcErr(t, r.err); se.reason != "invalid_client" {

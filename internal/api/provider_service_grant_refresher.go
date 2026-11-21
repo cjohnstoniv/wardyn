@@ -114,7 +114,8 @@ func (s *Server) serviceGrantPass(ctx context.Context) {
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(p types.ModelProvider) {
-			defer func() { <-sem; wg.Done(); s.endServiceGrantAttempt(p.UID) }()
+			// Done is the last cleanup step: the pass returns only after every worker has freed its row's slot.
+			defer func() { s.endServiceGrantAttempt(p.UID); <-sem; wg.Done() }()
 			_, _ = s.serviceGrantToken(ctx, p, "", serviceGrantTriggerRefresh)
 		}(p)
 	}
