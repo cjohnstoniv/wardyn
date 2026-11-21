@@ -367,9 +367,11 @@ type portalVerifier struct {
 	lastUsed         atomic.Int64
 
 	// Test hooks: afterPrepare runs once an exchange is through prepare; beforeDrop runs once a key fetch that
-	// broke a rule has been reported and before its drop is decided.
+	// broke a rule has dropped the keys and before the discovery record's drop is decided; afterPublish runs once a
+	// refresh has published discovery and before it reserves the key fetch.
 	afterPrepare func()
 	beforeDrop   func()
+	afterPublish func()
 
 	onFail func(PortalRefreshFailure)
 
@@ -401,13 +403,15 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 	})
 	v.ks.onFail = func(source string, err error, at portalKeyAt) {
 		cause := portalFetchCause(err)
-		v.reportFailure(source, cause)
 		if cause != portalCauseUnreachable {
+			// The key set has already dropped the keys and their address; the discovery record goes too, before the
+			// failure is reported. A document or address that breaks a rule is never kept as the last good one.
 			if v.beforeDrop != nil {
 				v.beforeDrop()
 			}
-			v.dropForCause(cause, at) // a document or address that breaks a rule is never kept as the last good one
+			v.dropForCause(cause, at)
 		}
+		v.reportFailure(source, cause)
 	}
 	v.ks.onOK = func() { v.settle("") } // keys loaded by either path reopen a verifier whose discovery is healthy
 	v.idv = gooidc.NewVerifier(issuer, v.ks, &gooidc.Config{SkipClientIDCheck: true, SupportedSigningAlgs: []string{string(jose.RS256)}})
@@ -528,6 +532,9 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 	v.disc, v.discOKAt, v.discFailed, v.standing = &disc, now, false, ""
 	v.ks.setURL(disc.fetchURL)
 	v.mu.Unlock()
+	if v.afterPublish != nil {
+		v.afterPublish()
+	}
 	out, wait, err := v.ks.ensure(context.Background(), "scheduled") // the fetch itself is bounded by the key set
 	switch {
 	case out == portalEnsureCurrent:
@@ -565,8 +572,8 @@ func (v *portalVerifier) settle(cause string) {
 }
 
 // dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
-// verifier under the cause until a refresh passes, but only while the key set is still in the state the failure
-// was recorded at: a failure never drops a discovery or keys published after it.
+// verifier under the cause until a refresh passes, but only while no verified discovery has been published since
+// the failure was recorded: a newer discovery supersedes it, and a key fetch or reservation alone never does.
 func (v *portalVerifier) dropForCause(cause string, at portalKeyAt) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -581,8 +588,9 @@ func (v *portalVerifier) setDown(cause string) { v.down.Store(&cause) }
 
 // recheck is the success-point test: it reads the current health and key map again, without waiting for a
 // refresh, and refuses a token that was verified under a state that has since failed or lost the key. An
-// outage is the same 503 as a refused-at-the-door token, with the rest of the retry interval as Retry-After; a
-// key a successful refresh withdrew is refused as a removed key is, and nothing is fetched early.
+// outage is the same 503 as a refused-at-the-door token, with the rest of the retry interval as Retry-After; so is
+// a key map dropped for a changed address whose keys are not loaded yet (keys_cooldown); a key a successful
+// refresh withdrew is refused as a removed key is, and nothing is fetched early.
 func (v *portalVerifier) recheck(box *portalBox) PortalRefusal {
 	cause := ""
 	if c := v.down.Load(); c != nil {
@@ -593,6 +601,8 @@ func (v *portalVerifier) recheck(box *portalBox) PortalRefusal {
 			cause = portalCauseIssuerDown
 		case portalKeyWithdrawn:
 			return tokenRefusal(SubjectTokenInvalid)
+		case portalKeyPending:
+			cause = portalCauseKeysCooldown
 		}
 	}
 	if cause == "" {

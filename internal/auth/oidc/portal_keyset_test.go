@@ -578,21 +578,35 @@ func TestPortalKeySet_ScheduledAndUnknownKidShareOneBudget(t *testing.T) {
 	})
 	t.Run("a scheduled fetch in flight is joined by an unknown kid", func(t *testing.T) {
 		ks, g, _ := setup()
+		waiting := make(chan struct{})
+		var once sync.Once
+		ks.beforeWait = func() { once.Do(func() { close(waiting) }) }
 		sched := startEnsure(ks)
 		g.waitStarted(keysURL)
 		got := make(chan portalKeyLookup, 1)
 		go func() { got <- ks.lookup(context.Background(), "k1", portalFresh{}) }()
-		// The lookup must be waiting on the fetch in flight, not starting its own.
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-waiting: // the lookup is waiting on a fetch: answer only now, so it cannot find the key unfetched
+		case <-time.After(5 * time.Second):
+			t.Fatal("the lookup never waited on a fetch")
+		}
+		g.gate(keysURL) <- gatedAnswer{kid: "k1"}
+		sched.wait(t)
+		select {
+		case r := <-got:
+			if !r.found {
+				t.Fatalf("the joined lookup did not find the key: %+v", r)
+			}
+		case u := <-g.started:
+			t.Fatalf("a second fetch started for %q", u)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the joined lookup never answered")
+		}
+		// The lookup joined the fetch in flight: no second fetch ever started.
 		select {
 		case u := <-g.started:
 			t.Fatalf("a second fetch started for %q", u)
 		default:
-		}
-		g.gate(keysURL) <- gatedAnswer{kid: "k1"}
-		sched.wait(t)
-		if r := <-got; !r.found {
-			t.Fatalf("the joined lookup did not find the key: %+v", r)
 		}
 	})
 	t.Run("a scheduled fetch inside the budget after an unknown-kid failure is cooling", func(t *testing.T) {
