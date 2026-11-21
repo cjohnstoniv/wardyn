@@ -632,14 +632,9 @@ func run() error {
 	attachLoginGrantSink(feats.authn, srv)
 	srv.LogGrantSwitches(bootCtx)
 
-	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
-	// before anything is served. A no-op when the file is unset.
-	if err := srv.SeedSiteConfig(bootCtx, knobs.siteConfigSeed); err != nil {
-		return err
-	}
-
-	// The remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
-	if err := srv.BootstrapRunnerPools(bootCtx); err != nil {
+	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE (a no-op when the file is
+	// unset), then the remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
+	if err := seedBootState(bootCtx, srv, knobs.siteConfigSeed); err != nil {
 		return err
 	}
 
