@@ -5,43 +5,48 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
-// AuditEventKey is one audit event as the shared table keys it: its time and its id.
+// AuditEventKey names one audit event by its fixed event time and id.
 type AuditEventKey struct {
 	ID uuid.UUID
 	At time.Time
 }
 
-// AuditEventsStored reports which of want the shared audit table holds, matched on (time, id) so the read uses
-// the table's time index. Each key's At is normalised to UTC microseconds, the table's precision, and the map
-// holds the normalised key of each event found. It reads the committed table, so an event that only waits in a
-// replica's local spool, or that a recorder said it accepted, never counts.
+// AuditEventsStored reports which of the wanted events the shared audit table holds, matched on the event time
+// and the id together as the replay lookup is (InsertAuditEvent), so each partition can use its time index. A key
+// is in the result, as true, only when the committed table has a row with that time and that id; an absent one
+// is left out. Times are compared and returned at microsecond precision in UTC. It reads the committed table, so
+// an event that only waits in a replica's local spool, or that a recorder said it accepted, never counts. A
+// caller that owes events settles only when every key it expects is present.
 func (s PG) AuditEventsStored(ctx context.Context, want []AuditEventKey) (map[AuditEventKey]bool, error) {
 	ids := make([]uuid.UUID, len(want))
 	ats := make([]time.Time, len(want))
 	for i, k := range want {
 		ids[i], ats[i] = k.ID, k.At.UTC().Truncate(time.Microsecond)
 	}
-	keys, err := collect(ctx, s.Pool, "list", "stored audit events", `
-		SELECT a.id, a."time"
-		  FROM unnest($1::uuid[], $2::timestamptz[]) AS w(id, at)
-		  JOIN audit_events a ON a."time" = w.at AND a.id = w.id`, []any{ids, ats},
-		func(r pgx.Row) (AuditEventKey, error) {
-			var k AuditEventKey
-			err := r.Scan(&k.ID, &k.At)
-			return k, err
-		})
+	rows, err := s.Pool.Query(ctx, `
+		SELECT k.id, k.at FROM unnest($1::uuid[], $2::timestamptz[]) AS k(id, at)
+		 WHERE EXISTS (SELECT 1 FROM audit_events e WHERE e."time" = k.at AND e.id = k.id)`, ids, ats)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: list stored audit events: %w", err)
 	}
-	out := make(map[AuditEventKey]bool, len(keys))
-	for _, k := range keys {
-		out[AuditEventKey{ID: k.ID, At: k.At.UTC().Truncate(time.Microsecond)}] = true
+	defer rows.Close()
+	out := make(map[AuditEventKey]bool, len(want))
+	for rows.Next() {
+		var k AuditEventKey
+		if err := rows.Scan(&k.ID, &k.At); err != nil {
+			return nil, fmt.Errorf("store: scan stored audit events: %w", err)
+		}
+		k.At = k.At.UTC().Truncate(time.Microsecond)
+		out[k] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list stored audit events: %w", err)
 	}
 	return out, nil
 }
