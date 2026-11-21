@@ -239,7 +239,7 @@ func (p *PortalIssuers) VerifyDetail(ctx context.Context, reg PortalRegistration
 		return PortalSubject{}, PortalRefusal{Reason: SubjectTokenTypeMismatch, Class: PortalRefusedRequest}
 	}
 	// Only RS256 is ever verified: HS*, none and anything else is refused before a key is looked at.
-	if jws, err := jose.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256}); err != nil || len(jws.Signatures) != 1 {
+	if jws, err := jose.ParseSignedCompact(raw, []jose.SignatureAlgorithm{jose.RS256}); err != nil || len(jws.Signatures) != 1 {
 		return PortalSubject{}, tokenRefusal(SubjectTokenInvalid)
 	}
 	v, err := p.verifierFor(reg)

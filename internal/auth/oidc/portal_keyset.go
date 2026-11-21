@@ -448,7 +448,7 @@ func portalProtectedTyp(raw string) (portalHeaderTyp, bool) {
 // VerifySignature implements the go-oidc key set interface for RS256 tokens.
 func (ks *portalKeySet) VerifySignature(ctx context.Context, raw string) ([]byte, error) {
 	box := portalBoxFrom(ctx)
-	jws, err := jose.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256})
+	jws, err := jose.ParseSignedCompact(raw, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil || len(jws.Signatures) != 1 {
 		return nil, errPortalBadToken
 	}
