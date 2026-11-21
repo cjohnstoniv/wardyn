@@ -87,6 +87,7 @@ func normalizeProviderOIDC(o *types.ProviderOIDC) {
 	for i := range o.Scopes {
 		o.Scopes[i] = strings.TrimSpace(o.Scopes[i])
 	}
+	normalizeServiceGrant(o.ServiceGrant)
 }
 
 // validateProviderOIDC holds a row's `oidc` block to its rules. allowHTTP is the test-endpoint
@@ -137,7 +138,7 @@ func validateProviderOIDC(mp types.ModelProvider, allowHTTP bool) error {
 			return atField("oidc.scopes", fmt.Errorf(mp400OIDCNoIDTokenScope, mp.ID))
 		}
 	}
-	return nil
+	return validateServiceGrant(mp)
 }
 
 // oidcAddress is a row's sign-in authority and client: what an old refresh token must never be

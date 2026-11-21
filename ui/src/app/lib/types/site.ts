@@ -311,6 +311,22 @@ export interface ProviderOIDC {
   // Set through the API or the policy file only: false signs in against an authority that grants no openid
   // (identity_binding "none" only). Absent is true. The editor shows no control for it and keeps what is stored.
   require_id_token?: boolean;
+  // Set through the API or the policy file only (Go's types.ProviderServiceGrant): the client credentials a
+  // listed service identity's runs get a token with. The editor shows no control for it and keeps what is stored.
+  service_grant?: ProviderServiceGrant;
+}
+
+// A provider's service grant. The client's secret is never part of it: it is written through its own route.
+export interface ProviderServiceGrant {
+  grant_type: "client_credentials";
+  token_url: string;
+  client_id: string;
+  scope?: string;
+  audience?: string;
+  // client_secret_basic (also absent) or client_secret_post.
+  client_auth?: "client_secret_basic" | "client_secret_post" | (string & {});
+  // The service principals (service:<name>) that may use the grant.
+  service_identities: string[];
 }
 
 // One provider. No credential lives here — each person supplies their own.

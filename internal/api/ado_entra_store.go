@@ -688,8 +688,8 @@ type adoEntraTokenResponse struct {
 
 // tokenAuthority is where, and as whom, one token request is made. An Entra
 // application derives one (ADOEntraConfig.tokenAuthority); an endpoint's own
-// authority (endpoint_oidc.go) builds its own. Only the authorization_code and
-// refresh_token grants are ever posted through it, and never client_credentials.
+// authority (endpoint_oidc.go) builds its own. postToken posts only the authorization_code and refresh_token
+// grants; the one client_credentials request is a provider service grant's mint (provider_service_grant_mint.go).
 type tokenAuthority struct {
 	tokenURL     string
 	clientID     string
@@ -737,6 +737,29 @@ func (s *Server) postEntraToken(ctx context.Context, cfg ADOEntraConfig, ec entr
 // WARDYN_DAEMON_PROXY_URL when set, exactly like every other wardynd-side
 // egress in this package.
 func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Values) (adoEntraTokenResponse, error) {
+	status, out, err := doTokenRequest(ctx, http.DefaultTransport, ta, form)
+	if err != nil {
+		return out, err
+	}
+	if out.Error != "" {
+		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
+			// The console's own application is refused; the stored sign-ins are kept,
+			// so the operator has to learn it from the log.
+			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
+				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
+		}
+		return out, classifyADOEntraError(out.Error, out.ErrorDescription)
+	}
+	if status < 200 || status > 299 || out.AccessToken == "" || out.ExpiresIn <= 0 {
+		return out, fmt.Errorf("%w: unusable token response (status %d)", ErrADOEntraUnavailable, status)
+	}
+	return out, nil
+}
+
+// doTokenRequest posts one token request through rt and decodes the answer: the HTTP status, the whole
+// response and today's transport, read and parse errors, none of it classified. postToken classifies it for
+// the sign-in lanes; the service grant's mint projects it itself and drops what it must not keep.
+func doTokenRequest(ctx context.Context, rt http.RoundTripper, ta tokenAuthority, form url.Values) (int, adoEntraTokenResponse, error) {
 	var out adoEntraTokenResponse
 	if !ta.basicAuth {
 		form.Set("client_id", ta.clientID)
@@ -746,7 +769,7 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ta.tokenURL, bytes.NewReader([]byte(form.Encode())))
 	if err != nil {
-		return out, fmt.Errorf("%w: build token request: %w", ErrADOEntraUnavailable, err)
+		return 0, out, fmt.Errorf("%w: build token request: %w", ErrADOEntraUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if ta.basicAuth {
@@ -758,13 +781,13 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	// 307/308. The endpoint does not redirect, so a 3xx is answered as the
 	// unusable response it is.
 	client := &http.Client{
-		Transport:     http.DefaultTransport,
+		Transport:     rt,
 		Timeout:       adoEntraRedeemTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return out, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
+		return 0, out, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// Bounded read: the body is a handful of fields, and an unbounded read from
@@ -772,26 +795,14 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	// memory.
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<18))
 	if rerr != nil {
-		return out, fmt.Errorf("%w: read token response: %w", ErrADOEntraUnavailable, rerr)
+		return resp.StatusCode, out, fmt.Errorf("%w: read token response: %w", ErrADOEntraUnavailable, rerr)
 	}
 	// An unparseable body is UNAVAILABLE, never a dead credential: only an
 	// error the authority actually named may retire one.
 	if uerr := json.Unmarshal(raw, &out); uerr != nil {
-		return out, fmt.Errorf("%w: parse token response (status %d): %w", ErrADOEntraUnavailable, resp.StatusCode, uerr)
+		return resp.StatusCode, out, fmt.Errorf("%w: parse token response (status %d): %w", ErrADOEntraUnavailable, resp.StatusCode, uerr)
 	}
-	if out.Error != "" {
-		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
-			// The console's own application is refused; the stored sign-ins are kept,
-			// so the operator has to learn it from the log.
-			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
-				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
-		}
-		return out, classifyADOEntraError(out.Error, out.ErrorDescription)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 || out.AccessToken == "" || out.ExpiresIn <= 0 {
-		return out, fmt.Errorf("%w: unusable token response (status %d)", ErrADOEntraUnavailable, resp.StatusCode)
-	}
-	return out, nil
+	return resp.StatusCode, out, nil
 }
 
 // classifyADOEntraError maps an authority refusal onto one of this lane's four

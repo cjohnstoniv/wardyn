@@ -171,7 +171,8 @@ func (s *Server) queueOwnerSignIn(ctx context.Context, e store.RunQueueEntry, la
 		return ""
 	}
 	_, d, err := s.providerLiveness(ctx, p, req.Agent, runIdentitySubject(ctx, e.Owner), false)
-	if err != nil || !d.credential {
+	// A service grant that cannot mint is no wait for a person's sign-in: the start meets the grant's own refusal.
+	if err != nil || !d.credential || d.serviceGrant {
 		return ""
 	}
 	return runnerpool.WaitOwnerSignIn
