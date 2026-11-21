@@ -288,10 +288,10 @@ case "$1" in
 esac
 STUB
 chmod +x "$WORK/chk/bin/docker"
-runcheck() { # WANT(0|1) REVISION REF_NAME VERSION FAIL-ENTRYPOINT-SUBSTRING NAME
+runcheck() { # WANT(0|1) REVISION REF_NAME VERSION FAIL-ENTRYPOINT-SUBSTRING NAME [BYTES-OF-THE-COPIED-FILES]
   rm -rf "$WORK/chk/tmp"; mkdir "$WORK/chk/tmp"; local rc=0
   PATH="$WORK/chk/bin:$PATH" RUNNER_TEMP="$WORK/chk/tmp" IMAGE_REF=img@sha256:x REVISION="$2" REF_NAME="$3" \
-    STUB_VERSION="$4" STUB_FAIL="$5" STUB_BYTES="stamped $2" bash "$WORK/check.sh" >"$WORK/chk/out" 2>&1 || rc=$?
+    STUB_VERSION="$4" STUB_FAIL="$5" STUB_BYTES="${7-stamped $2}" bash "$WORK/check.sh" >"$WORK/chk/out" 2>&1 || rc=$?
   if [ "$1" = 0 ] && [ "$rc" -ne 0 ]; then fail "image check refused a good case ($6): $(cat "$WORK/chk/out")"; fi
   if [ "$1" = 1 ] && [ "$rc" -eq 0 ]; then fail "image check accepted a bad case: $6"; fi
 }
@@ -301,6 +301,7 @@ runcheck 1 "$sha" main "0.10.1+111111111" "/host/wardyn" "branch, the host CLI f
 runcheck 1 "$sha" main "" "" "branch, empty output"
 runcheck 1 "$sha" main "0.10.1" "" "branch, bare version"
 runcheck 1 "$sha" main "0.10.1+222222222" "" "branch, another commit"
+runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, a copied-out binary without the commit" "no stamp in these bytes"
 runcheck 0 "" v0.4.4 "0.4.4" "" "tag, the release version"
 runcheck 1 "" v0.4.4 "0.4.4" "/usr/local/bin/wardyn" "tag, the in-container CLI fails"
 runcheck 1 "" v0.4.4 "0.4.4" "/host/wardyn" "tag, the host CLI fails"
