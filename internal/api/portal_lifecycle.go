@@ -84,11 +84,13 @@ func (s *Server) portalAuthority(ctx context.Context, ident store.PrincipalIdent
 	if !ok || !strings.HasPrefix(ident.Principal, ident.Issuer+":") {
 		return errNotPortalOwned
 	}
-	pg, ok := s.cfg.Store.(store.PG)
+	binder, ok := s.cfg.Store.(interface {
+		PortalIssuerKeyBound(ctx context.Context, issuerKey string) (bool, error)
+	})
 	if !ok {
 		return errNotPortalOwned
 	}
-	bound, err := store.IssuerKeyBoundQ(ctx, pg.Pool, k)
+	bound, err := binder.PortalIssuerKeyBound(ctx, k)
 	if err != nil {
 		return err
 	}

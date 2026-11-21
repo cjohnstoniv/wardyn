@@ -60,11 +60,12 @@ func markPortalLifecycle(ctx context.Context, q Querier) error {
 // blanked, in one statement under the lifecycle marker) and records the purge's last step as pending, in one
 // transaction that holds the row FOR UPDATE. It reports whether this call marked it.
 //
-// The conditions are decided under the lock. Nothing is written, and false is returned, for a row that is
-// not a portal person's (its issuer is not a bound portal issuer's, or its principal is not that issuer's), one already purged (a retry of an unfinished purge), and, in PortalPurgeScheduled
-// mode, one that is not due under its own suspension: a person reactivated after the sweep selected them, or
-// suspended again with a later deadline. In PortalPurgeExplicit mode a row that is not deactivated is
-// ErrPersonNotSuspended, so a reactivation that committed first wins. An unknown id is ErrNotFound.
+// The conditions are decided under the lock. A row that is not a bound portal issuer's person (its issuer has no
+// binding, or its principal is not that issuer's) is ErrNotPortalPerson, in both modes, and nothing is written.
+// Nothing is written, and false is returned, for a row already purged (a retry of an unfinished purge) and, in
+// PortalPurgeScheduled mode, one that is not due under its own suspension: a person reactivated after the sweep
+// selected them, or suspended again with a later deadline. In PortalPurgeExplicit mode a row that is not
+// deactivated is ErrPersonNotSuspended, so a reactivation that committed first wins. An unknown id is ErrNotFound.
 func (s PG) MarkPortalIdentityPurged(ctx context.Context, id uuid.UUID, mode PortalPurgeMode) (bool, error) {
 	if mode != PortalPurgeScheduled && mode != PortalPurgeExplicit {
 		return false, fmt.Errorf("store: mark portal identity purged: unknown mode %d", mode)
@@ -92,7 +93,9 @@ func (s PG) MarkPortalIdentityPurged(ctx context.Context, id uuid.UUID, mode Por
 		return false, fmt.Errorf("store: lock portal identity: %w", err)
 	}
 	switch {
-	case !owned || purged:
+	case !owned:
+		return false, ErrNotPortalPerson
+	case purged:
 		return false, nil
 	case mode == PortalPurgeScheduled && !due:
 		return false, nil

@@ -190,3 +190,8 @@ type PortalIssuerRegistryStore interface {
 }
 
 var _ PortalIssuerRegistryStore = PG{}
+
+// PortalIssuerKeyBound is IssuerKeyBoundQ on the store's own pool: whether a binding exists for issuerKey.
+func (s PG) PortalIssuerKeyBound(ctx context.Context, issuerKey string) (bool, error) {
+	return IssuerKeyBoundQ(ctx, s.Pool, issuerKey)
+}

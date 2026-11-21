@@ -53,3 +53,7 @@ var ErrIssuerInUse = fmt.Errorf("%w: the issuer binding is in use", ErrConflict)
 // ErrPersonNotSuspended refuses a portal purge of a person who is not (or no longer) suspended, or, for the
 // scheduled mode, not due under their own suspension.
 var ErrPersonNotSuspended = errors.New("store: the person is not suspended")
+
+// ErrNotPortalPerson is a purge mark that found the locked row is not a bound portal issuer's person (its issuer has no
+// binding, or its principal is not that issuer's): nothing was written.
+var ErrNotPortalPerson = errors.New("store: the row is not a bound portal issuer's person")

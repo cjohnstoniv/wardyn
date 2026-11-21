@@ -39,9 +39,15 @@ func (s *Server) purgePortalIdentity(ctx context.Context, st portalLifecycleStor
 }
 
 // markPortalPurge is the locked mark of a purge (store.MarkPortalIdentityPurged) and whether the steps go on:
-// a scheduled purge that the lock found not due, owned or suspended any more stops, with no error.
+// a scheduled purge that the lock found not due, not owned or not suspended any more stops, with no error. An
+// explicit purge of a row the lock found is not a bound portal's person is store.ErrNotPortalPerson.
 func markPortalPurge(ctx context.Context, st portalLifecycleStore, id uuid.UUID, mode store.PortalPurgeMode) (bool, error) {
 	marked, err := st.MarkPortalIdentityPurged(ctx, id, mode)
+	if errors.Is(err, store.ErrNotPortalPerson) && mode == store.PortalPurgeScheduled {
+		// The sweep leaves a row that is not a bound portal's person alone, as it leaves one that is not due.
+		warnNotPortalOwned(ctx, id)
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -148,11 +154,17 @@ func (s *Server) handlePurgePortalPerson(w http.ResponseWriter, r *http.Request)
 		err = s.finishPortalPurge(ctx, st, ident.ID, o)
 	case errors.Is(err, store.ErrPersonNotSuspended):
 		s.denyPortalPerson(r, "person.purge", ident.Principal, reasonPersonNotSuspended)
+	case errors.Is(err, store.ErrNotPortalPerson):
+		s.denyPortalPerson(r, "person.purge", ident.Principal, reasonPortalPersonOnly)
 	}
 	switch {
 	case errors.Is(err, store.ErrPersonNotSuspended):
 		// A reactivation that committed first wins.
 		writeErrorReason(w, http.StatusConflict, reasonPersonNotSuspended, "the person is not suspended: suspend them first, then purge")
+		return
+	case errors.Is(err, store.ErrNotPortalPerson):
+		// Ownership was lost between the route's read and the locked mark: an explicit refusal, never a purge row.
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPortalPersonOnly, "the principal is not a person of a bound issuer portal, so nothing was purged")
 		return
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonPersonNotFound, "no such portal person")
