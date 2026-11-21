@@ -8,6 +8,17 @@ name: Mixed version (0.10.1 replica beside this tree)
 #      rolling sample has seen the old one, and nothing is switched on;
 #   2. the same call with confirm_listed_sessions succeeds, and its audit row names the old replica's own session;
 #      and the veto stays refused for the unconfirmed call until then.
+# Then, on issuer-portal state seeded into the shared database (.github/mixed-version/portal-artifacts.sh):
+#   3. the old server's own entry points refuse every issuer-portal artifact, beside a legacy portal it still
+#      serves, and its revoke of an issuer portal ends that portal's grant on the new server;
+#   4. runs queued through this tree's own launch path, then taken by the old worker with the new replica scaled
+#      to zero: it ends the issuer-portal one before binding any authority, with the start-failed hint, and
+#      dispatches nothing, and it binds and starts the console-portal one;
+#   5. the old server's sign-in callback, against a fake issuer the job starts, refuses an issuer-portal person
+#      the way 0.10.1 does (a redirect to auth_error=sign_in_refused, no session, an auth.fail row naming
+#      reserved_principal), and signs in an ordinary person;
+#   6. the service-grant tests that need the released v0.10.1 wardynd and CLI run against them
+#      (.github/mixed-version/released-service-grant-tests.sh).
 # It is not a supported runtime, it only shows the fence. Dispatch it, or call it from the train.
 
 on:
@@ -29,11 +40,14 @@ permissions:
 jobs:
   mixed-version:
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       NS: wardyn-mixed
       OLD_IMAGE: ghcr.io/cjohnstoniv/wardynd
       OLD_TAG: ${{ inputs.old_image_tag || '0.10.1' }}
+      # The v0.10.1 index digest the release record lists: the 0.10.1 case (the default, and what the train
+      # runs) runs exactly that image, whatever the tag points at now. Another tag runs unpinned.
+      OLD_DIGEST: ${{ (inputs.old_image_tag || '0.10.1') == '0.10.1' && 'sha256:4435df7c2f2aca67f161b085fcb7b4db54bae8ea6dbb0ffadcf15df92354c079' || '' }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - name: Free disk for the images and the kind node
@@ -91,7 +105,12 @@ jobs:
         run: |
           set -euo pipefail
           kind load docker-image wardyn/wardynd:kind-test wardyn/wardyn-proxy:local --name wardyn-mixed
-          docker pull "${OLD_IMAGE}:${OLD_TAG}"
+          if [ -n "$OLD_DIGEST" ]; then
+            docker pull "${OLD_IMAGE}@${OLD_DIGEST}"
+            docker tag "${OLD_IMAGE}@${OLD_DIGEST}" "${OLD_IMAGE}:${OLD_TAG}"
+          else
+            docker pull "${OLD_IMAGE}:${OLD_TAG}"
+          fi
           kind load docker-image "${OLD_IMAGE}:${OLD_TAG}" --name wardyn-mixed
       - name: Postgres, one age key and one admin token for both replicas
         run: |
@@ -120,11 +139,15 @@ jobs:
           set -euo pipefail
           helm install old ./deploy/helm/wardyn --namespace "$NS" \
             -f .github/mixed-version/values.yaml \
-            --set image.repository="$OLD_IMAGE" --set image.tag="$OLD_TAG" \
+            --set image.repository="$OLD_IMAGE" --set image.tag="$OLD_TAG" --set image.digest="$OLD_DIGEST" \
             --set auth.adminToken.value="$ADMIN_TOKEN" \
             --set 'extraEnv[0].name=WARDYN_ALLOW_UNKNOWN_MIGRATIONS' --set-string 'extraEnv[0].value=true'
           kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=300s || {
             kubectl -n "$NS" logs deployment/old-wardyn --tail=100; exit 1; }
+          if [ -n "$OLD_DIGEST" ]; then
+            image=$(kubectl -n "$NS" get deployment/old-wardyn -o jsonpath='{.spec.template.spec.containers[0].image}')
+            [ "$image" = "${OLD_IMAGE}:${OLD_TAG}@${OLD_DIGEST}" ] || { echo "::error::the old replica runs '$image', not ${OLD_IMAGE}:${OLD_TAG}@${OLD_DIGEST}"; exit 1; }
+          fi
       - name: Find the old replica's database session
         run: |
           set -euo pipefail
@@ -174,6 +197,24 @@ jobs:
           # A second call finds it already on.
           code=$(call '{"old_servers_stopped":true}')
           [ "$code" = 200 ] && jq -e '.already_activated == true' /tmp/out.json >/dev/null || { echo "::error::a repeat activation answered $code $(cat /tmp/out.json)"; exit 1; }
+      - name: Seed issuer-portal artifacts into the shared database
+        run: bash .github/mixed-version/portal-artifacts.sh seed
+      - name: The old server refuses every issuer-portal artifact, and still serves a legacy portal
+        run: bash .github/mixed-version/portal-artifacts.sh old-refusals
+      - name: The old server's revoke of an issuer portal ends its grant on the new server
+        run: bash .github/mixed-version/portal-artifacts.sh old-revoke
+      # It scales the new replica to zero, so only the old worker can take the row.
+      - name: The old worker ends a queued issuer-portal run and never starts it, and starts a console-portal one
+        run: bash .github/mixed-version/portal-artifacts.sh old-worker
+      # Last of the cluster checks: it upgrades the old replica in place with a sign-in issuer.
+      - name: The old server's sign-in callback refuses an issuer-portal person, and signs in an ordinary one
+        run: bash .github/mixed-version/portal-artifacts.sh old-callback
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: The service-grant tests against the released v0.10.1 wardynd and CLI
+        run: bash .github/mixed-version/released-service-grant-tests.sh
       - name: Logs on failure
         if: failure()
         run: |
