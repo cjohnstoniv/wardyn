@@ -107,7 +107,8 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   }, [mayRead, runId]);
   const applyEnded = React.useCallback((ended: SupportGrantView) => {
     appliedSeq.current = ++readSeq.current;
-    setStatus((prev) => ({ ...prev, open: null, ended }));
+    // The end closes the grant it names: a different grant that is open on the run now stays shown.
+    setStatus((prev) => ({ ...prev, open: prev?.open?.grant === ended.grant ? null : (prev?.open ?? null), ended }));
   }, []);
   React.useEffect(() => {
     void refresh();

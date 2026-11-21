@@ -243,6 +243,31 @@ describe("support strip: the banner", () => {
     expect(screen.queryByRole("button", { name: "End now" })).toBeNull();
   });
 
+  it("a late end for one grant keeps a different open grant", async () => {
+    const endedA = active({ state: "ended", end_reason: "revoked" });
+    const b = active({ grant: "g-2", helper: "pat" });
+    let release: (g: SupportGrantView) => void = () => {};
+    api.end.mockReturnValueOnce(
+      new Promise<SupportGrantView>((res) => {
+        release = res;
+      }),
+    );
+    api.status
+      .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: active() })
+      .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: b })
+      .mockRejectedValueOnce(new Error("status unavailable"));
+    const user = userEvent.setup();
+    mount({ principal: "maya" });
+    await user.click(await screen.findByRole("button", { name: "End now" })); // ends g-1, response held
+    await user.click(screen.getByRole("button", { name: "read again" })); // g-2 is now open
+    await waitFor(() => expect(screen.getByTestId("support-active").textContent).toContain("pat"));
+    await act(async () => release(endedA));
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
+    expect(screen.queryByTestId("support-ended")).toBeNull();
+    expect(screen.getByTestId("support-active").textContent).toContain("pat");
+    expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
+  });
+
   it("shows the ended line with Close, and Close is remembered for that grant", async () => {
     answer({ open: null, ended: active({ state: "ended", end_reason: "expired" }) });
     const user = userEvent.setup();
