@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -89,36 +88,26 @@ type leaverOrigin struct {
 	portal bool
 }
 
-// staleTail is store.ErrSuperseded when a portal tail's suspension is no longer the identity's, read before a side
-// effect that cannot itself be made conditional on it. Nil for SCIM, outside a bound tail, and on a store that
-// cannot say.
-func (o leaverOrigin) staleTail(ctx context.Context, st any, id uuid.UUID) error {
+// portalLedger is the guarded ledger writes (store.PortalSuspensionLedger) and the bound they are made at, for a
+// portal tail bound to identity id. It is false for SCIM, outside a bound tail, and for a store that has none.
+func (o leaverOrigin) portalLedger(ctx context.Context, st any, id uuid.UUID) (store.PortalSuspensionLedger, time.Time, bool) {
 	b, bound := suspensionBound(ctx)
-	cur, can := st.(store.SuspensionCurrentReader)
+	led, can := st.(store.PortalSuspensionLedger)
 	if !o.portal || !bound || !can || b.id != id {
-		return nil
+		return nil, time.Time{}, false
 	}
-	current, err := cur.SuspensionCurrent(ctx, id, b.at)
-	if err != nil {
-		return err
-	}
-	if !current {
-		return store.ErrSuperseded
-	}
-	return nil
+	return led, b.at, true
 }
 
 // pinStepEvent fixes the id and time of the audit row a portal step writes on the step's ledger row, the first
-// writer's winning, and marks ctx as a replay, so a second writer of the same step adds no row. Other origins
-// are untouched.
+// writer's winning, and marks ctx as a replay, so a second writer of the same step adds no row. key names the row
+// the caller read (key.ID): a row a later suspension replaced is store.ErrSuperseded, and nothing is pinned or
+// written. Other origins are untouched.
 func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
 	if !o.portal {
 		return ctx, nil
 	}
 	evID, at, err := st.PinDeprovisionEvent(ctx, id, kind, key, uuid.New(), now)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ctx, store.ErrSuperseded
-	}
 	if err != nil {
 		return ctx, err
 	}
@@ -735,13 +724,24 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			case !ok:
 				add = append(add, key)
 			case j.Done:
-				if err := st.ReopenDeprovisionJob(ctx, id, store.JobKindSuspend, key); err != nil {
+				if led, at, guarded := o.portalLedger(ctx, st, id); guarded {
+					// The row this pass read, and only while its suspension is still the identity's: a later
+					// suspension's finished row is not reopened by a pass that read an earlier one's.
+					key.ID = j.ID
+					if err := led.ReopenSuspensionJobAt(ctx, id, key, at); err != nil {
+						return err
+					}
+				} else if err := st.ReopenDeprovisionJob(ctx, id, store.JobKindSuspend, key); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, add); err != nil {
+	if led, at, guarded := o.portalLedger(ctx, st, id); guarded {
+		if err := led.EnsureSuspensionJobsAt(ctx, id, add, at); err != nil {
+			return err
+		}
+	} else if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, add); err != nil {
 		return err
 	}
 	if jobs, err = st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend); err != nil {
@@ -767,6 +767,9 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			continue
 		}
 		key := store.JobKey{Step: j.Step, Target: j.Target}
+		if o.portal {
+			key.ID = j.ID
+		}
 		if spared[runID] {
 			// A run the database stamped after the tail's bound, read while the person is active again, was made
 			// after a reactivation: the suspension never owed its kill, so its row, whether this pass or an earlier
@@ -775,9 +778,12 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
 			continue
 		}
-		if err := o.staleTail(ctx, st, id); err != nil {
-			errs = append(errs, err)
-			continue
+		if led, at, guarded := o.portalLedger(ctx, st, id); guarded {
+			// Before any runner I/O: the row is still the one this pass read, pending, under the current suspension.
+			if err := led.ClaimSuspensionJobAt(ctx, id, key, at); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		if err := s.teardownRun(ctx, o, st, runID); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
@@ -885,6 +891,9 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 			continue
 		}
 		key := store.JobKey{Step: row.step}
+		if j, ok := jobByKey(jobs, row.step, ""); ok && o.portal {
+			key.ID = j.ID
+		}
 		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
 		rctx, err := o.pinStepEvent(ctx, st, s.cfg.Now().UTC(), id, store.JobKindSuspend, key, &ev)
 		if err != nil {

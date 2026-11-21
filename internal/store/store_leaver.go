@@ -622,14 +622,19 @@ func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind
 	return nil
 }
 
-// PinDeprovisionEvent — see LeaverStore. A reopened row is a new occurrence and holds no pin.
+// PinDeprovisionEvent — see LeaverStore. A reopened row is a new occurrence and holds no pin. With k.ID set, the pin
+// is made on that row only: a row a later suspension replaced is ErrSuperseded and nothing is pinned.
 func (s PG) PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error) {
 	var gotID uuid.UUID
 	var gotAt time.Time
-	if err := s.Pool.QueryRow(ctx, `
+	err := s.Pool.QueryRow(ctx, `
 		UPDATE deprovision_jobs SET audit_event_id = COALESCE(audit_event_id, $5), audit_event_at = COALESCE(audit_event_at, $6)
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4
-		RETURNING audit_event_id, audit_event_at`, identityID, kind, k.Step, k.Target, id, at).Scan(&gotID, &gotAt); err != nil {
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($7::uuid IS NULL OR id = $7)
+		RETURNING audit_event_id, audit_event_at`, identityID, kind, k.Step, k.Target, id, at, k.occurrence()).Scan(&gotID, &gotAt)
+	if errors.Is(err, pgx.ErrNoRows) && k.ID != uuid.Nil {
+		return uuid.Nil, time.Time{}, ErrSuperseded
+	}
+	if err != nil {
 		return uuid.Nil, time.Time{}, fmt.Errorf("store: pin deprovision event: %w", err)
 	}
 	return gotID, gotAt, nil

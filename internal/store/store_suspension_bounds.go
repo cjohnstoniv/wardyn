@@ -26,10 +26,26 @@ type SuspensionBounds interface {
 	FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error
 }
 
-// SuspensionCurrentReader says whether a suspension tail is still the one the identity carries: what a side effect
-// that cannot be made conditional itself (a run teardown) reads first, so a stale tail applies none.
-type SuspensionCurrentReader interface {
-	SuspensionCurrent(ctx context.Context, identity uuid.UUID, at time.Time) (bool, error)
+// PortalSuspensionLedger is the ledger writes of a portal suspension's tail, each conditional in its own statement on
+// the suspension still being the identity's (the test FinishSuspensionJobAt applies) and, where a row is named, on
+// the row's own id (JobKey.ID), so a tail that read an earlier suspension's ledger changes nothing of a later one's
+// and claims nothing of it. A write it may not make is ErrSuperseded.
+type PortalSuspensionLedger interface {
+	// EnsureSuspensionJobsAt adds the keys as pending rows, leaving rows that exist as they are.
+	EnsureSuspensionJobsAt(ctx context.Context, identity uuid.UUID, keys []JobKey, at time.Time) error
+	// ReopenSuspensionJobAt makes the named row pending again (its audit pin cleared).
+	ReopenSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error
+	// ClaimSuspensionJobAt is the check a tail makes before it acts outside the database for a row: the row is
+	// still the one it read, still pending, under the current suspension.
+	ClaimSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error
+}
+
+// suspensionCurrentSQL is the test FinishSuspensionJobAt applies, with the identity as $1 and the bound as the
+// parameter named by at (for example "$5").
+func suspensionCurrentSQL(at string) string {
+	return `EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1 AND (i.deactivated_at = ` + at + ` OR (i.deactivated_at IS NULL
+		        AND EXISTS (SELECT 1 FROM deprovision_jobs c WHERE c.identity_id = $1 AND c.kind = 'suspend' AND c.step = 'cutoff' AND c.target = ''
+		                     AND c.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM ` + at + `::timestamptz) * 1000000)::bigint)))))`
 }
 
 // personActiveSQL: the identity ($3) a suspension tail works for is active again. Only then is a row stamped
@@ -98,7 +114,8 @@ func (s PG) SubCutSince(ctx context.Context, identity uuid.UUID, sub string, at 
 // none of its steps, also once the person is active again. Nor does it close one, while the identity stays
 // deactivated or once it is active again, after a suspension of another identity deactivated it at another
 // instant: that suspension keeps this ledger but drops its record, and a pass bound to that instant owes more than
-// this tail did. A step the tail may not close, or whose row a later suspension replaced, is ErrSuperseded.
+// this tail did. A step the tail may not close, or whose row a later suspension replaced (k.ID, when set, names the
+// row the tail read), is ErrSuperseded.
 func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error {
 	if detail == nil {
 		detail = map[string]int{}
@@ -106,11 +123,9 @@ func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k Job
 	raw, _ := json.Marshal(detail)
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE deprovision_jobs SET state = 'done', attempts = attempts + 1, last_error = '', detail = $4, updated_at = now()
-		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3
-		   AND EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1 AND (i.deactivated_at = $5 OR (i.deactivated_at IS NULL
-		                AND EXISTS (SELECT 1 FROM deprovision_jobs c WHERE c.identity_id = $1 AND c.kind = 'suspend' AND c.step = 'cutoff' AND c.target = ''
-		                             AND c.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM $5::timestamptz) * 1000000)::bigint)))))`,
-		identity, k.Step, k.Target, raw, at)
+		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($6::uuid IS NULL OR id = $6)
+		   AND `+suspensionCurrentSQL("$5"),
+		identity, k.Step, k.Target, raw, at, k.occurrence())
 	if err != nil {
 		return fmt.Errorf("store: finish suspension job: %w", err)
 	}
@@ -120,18 +135,51 @@ func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k Job
 	return nil
 }
 
-// SuspensionCurrent is whether the suspension that deactivated identity at at is still the identity's: it is
-// deactivated at at, or it is active again and the ledger's cutoff step still records at (FinishSuspensionJobAt's
-// own test). A later suspension, which deactivates at another instant and records it, makes every tail bound to an
-// earlier one stale.
-func (s PG) SuspensionCurrent(ctx context.Context, identity uuid.UUID, at time.Time) (bool, error) {
-	var current bool
-	if err := s.Pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1 AND (i.deactivated_at = $2 OR (i.deactivated_at IS NULL
-		        AND EXISTS (SELECT 1 FROM deprovision_jobs c WHERE c.identity_id = $1 AND c.kind = 'suspend' AND c.step = 'cutoff' AND c.target = ''
-		                     AND c.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM $2::timestamptz) * 1000000)::bigint)))))`,
-		identity, at).Scan(&current); err != nil {
-		return false, fmt.Errorf("store: read the current suspension: %w", err)
+// EnsureSuspensionJobsAt — see PortalSuspensionLedger.
+func (s PG) EnsureSuspensionJobsAt(ctx context.Context, identity uuid.UUID, keys []JobKey, at time.Time) error {
+	for _, k := range keys {
+		var current bool
+		if err := s.Pool.QueryRow(ctx, `
+			WITH cur AS (SELECT `+suspensionCurrentSQL("$4")+` AS ok),
+			     ins AS (INSERT INTO deprovision_jobs (identity_id, kind, step, target)
+			             SELECT $1::uuid, 'suspend', $2::text, $3::text FROM cur WHERE ok
+			             ON CONFLICT (identity_id, kind, step, target) DO NOTHING RETURNING 1)
+			SELECT ok FROM cur`, identity, k.Step, k.Target, at).Scan(&current); err != nil {
+			return fmt.Errorf("store: ensure suspension job: %w", err)
+		}
+		if !current {
+			return ErrSuperseded
+		}
 	}
-	return current, nil
+	return nil
+}
+
+// ReopenSuspensionJobAt — see PortalSuspensionLedger.
+func (s PG) ReopenSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, updated_at = now()
+		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4)
+		   AND `+suspensionCurrentSQL("$5"), identity, k.Step, k.Target, k.occurrence(), at)
+	if err != nil {
+		return fmt.Errorf("store: reopen suspension job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSuperseded
+	}
+	return nil
+}
+
+// ClaimSuspensionJobAt — see PortalSuspensionLedger.
+func (s PG) ClaimSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE deprovision_jobs SET updated_at = now()
+		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4) AND state = 'pending'
+		   AND `+suspensionCurrentSQL("$5"), identity, k.Step, k.Target, k.occurrence(), at)
+	if err != nil {
+		return fmt.Errorf("store: claim suspension job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSuperseded
+	}
+	return nil
 }

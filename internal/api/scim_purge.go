@@ -524,7 +524,8 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 	if err != nil {
 		return err
 	}
-	if j, ok := jobByKey(jobs, store.JobStepAuditDeprovision, ""); ok && j.Done {
+	j, found := jobByKey(jobs, store.JobStepAuditDeprovision, "")
+	if found && j.Done {
 		return nil
 	}
 	counts := map[string]int{}
@@ -556,6 +557,9 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 		return err
 	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
+	if found && o.portal {
+		key.ID = j.ID
+	}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
