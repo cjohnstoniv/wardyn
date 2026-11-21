@@ -50,6 +50,10 @@ func driveTeamFlipRefusal(grants int) (code int, reason, msg string) {
 		"team cannot change while the drive is allocated to %s: remove its allocations first", pluralDriveSubjects(grants))
 }
 
+// driveGrantTeamChangedMsg is the 409 an allocation gets when the drive's team setting changed between the check
+// teamDriveGrantAllowed made and the write, so the store refused it under the drive's lock.
+const driveGrantTeamChangedMsg = "this drive's team setting changed while the allocation was being written, so it no longer takes this allocation; read the drive again and send the allocation again"
+
 // teamDriveGrantAllowed holds an allocation to its drive's team rule
 // (types.ValidateTeamDriveGrant), answering 400 itself when it is refused. A
 // drive that does not exist is left to the write, which answers 404.

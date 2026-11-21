@@ -893,6 +893,10 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// allocations table the admin is looking at already lists every override,
 	// and a name read here would be a second, later answer from a read the
 	// refusal does not need.
+	if errors.Is(err, store.ErrDriveGrantTeamRule) {
+		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict, driveGrantTeamChangedMsg)
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict, driveGrantConflictMsg(g, homeOverrideStated))
 		return

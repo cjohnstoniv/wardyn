@@ -105,6 +105,23 @@ func lockPortalAllocation(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant
 	return nil
 }
 
+// lockDriveForGrant is the check every other allocation is written under, held to the write's commit: the drive is read
+// FOR SHARE and the allocation held to its team rule (types.ValidateTeamDriveGrant). The drive row's lock conflicts with
+// a drive edit's, so an edit that changes the drive's team mode commits wholly before the check, and the allocation is
+// then refused against the mode the drive now has, or waits for the write. Without it the foreign key is the only thing
+// the write takes, and an allocation the API judged against the old mode is stored on the new one: a person's allocation on
+// a team drive, which no run mounts. ErrNotFound for an unknown drive, as the foreign key answers.
+func lockDriveForGrant(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant) error {
+	d, err := scanUserDrive(tx.QueryRow(ctx, `SELECT `+userDriveCols+` FROM user_drives WHERE id = $1 FOR SHARE`, g.DriveID))
+	if err != nil {
+		return err
+	}
+	if err := types.ValidateTeamDriveGrant(d, g); err != nil {
+		return fmt.Errorf("%w: %s", ErrDriveGrantTeamRule, err)
+	}
+	return nil
+}
+
 // driveEditNeedsPortalCheck reports whether a write of d could break a portal's allocation of it: d is not a team
 // drive (a stale edit that read the drive before it became one), has a second place, or has a backend the portal's
 // folder cannot be on.
