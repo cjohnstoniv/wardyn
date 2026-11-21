@@ -318,9 +318,15 @@ SQL
 	[ "$state" = FAILED ] || fail "run $portal_run is $state after 300 s, want FAILED"
 	[ "$(no_other_sessions)" = 0 ] || fail "a session other than the old replica's joined the database during the wait"
 	[ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)" ] || fail "a new-replica pod came back"
-	local hint
-	hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$portal_run'")
-	[ "$hint" = "$START_FAILED_HINT" ] || fail "run $portal_run failure_hint is '$hint', want '$START_FAILED_HINT'"
+	# 0.10.1 writes the terminal state before the hint, and the refusal's audit row after both, so each is
+	# waited for on its own.
+	local hint=""
+	for _ in $(seq 1 30); do
+		hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$portal_run'")
+		[ "$hint" = "$START_FAILED_HINT" ] && break
+		sleep 2
+	done
+	[ "$hint" = "$START_FAILED_HINT" ] || fail "run $portal_run failure_hint is '$hint' after 60 s, want '$START_FAILED_HINT'"
 	echo "ok: run $portal_run is FAILED with the start-failed hint"
 	[ "$(psqlc "SELECT count(*) FROM run_queue WHERE run_id = '$portal_run'")" = 0 ] || fail "run $portal_run still has a queue row"
 	[ "$(psqlc "SELECT sandbox_ref FROM agent_runs WHERE id = '$portal_run'")" = "" ] || fail "run $portal_run has a sandbox_ref"
@@ -329,8 +335,16 @@ SQL
 	[ "$n" = 0 ] || fail "$n cluster object(s) name run $portal_run"
 	echo "ok: no pod or job names run $portal_run"
 	pf old-wardyn 18081
-	code=$(req queue-audit -H "$(admin)" "$OLD/api/v1/audit?action=run.queue.start&target=$portal_run")
-	expect "old audit read" 200 "$code" queue-audit
+	local refused=0
+	for _ in $(seq 1 24); do
+		code=$(req queue-audit -H "$(admin)" "$OLD/api/v1/audit?action=run.queue.start&target=$portal_run")
+		if [ "$code" = 200 ] && jq -e 'any(.[]; .outcome == "failure" and .data.reason == "queue_start_refused")' "$T/queue-audit.json" >/dev/null; then
+			refused=1
+			break
+		fi
+		sleep 5
+	done
+	[ "$refused" = 1 ] || fail "the old server shows no run.queue.start refusal for run $portal_run within 120 s (last answer $code): $(head -c 600 "$T/queue-audit.json")"
 	# Its one row is written before any authority is bound, so it carries no portal.
 	jqok "one run.queue.start failure (queue_start_refused) with no portal on it, and no success" queue-audit \
 		'([.[] | select(.outcome == "failure" and .data.reason == "queue_start_refused" and .data.via == null)] | length == 1)
@@ -352,21 +366,23 @@ SQL
 	echo "ok: run $legacy_run left the queue as $state"
 }
 
-# sign_in <jar> <sub> <email>: one browser sign-in at the old server through the fake issuer, on the jar's
-# cookies. Prints the callback's status and Location; run it in this shell, so its own failure ends the step.
+# sign_in <dir> <sub> <email>: one browser sign-in at the old server through the fake issuer, on the cookie jar
+# <dir>/jar. Every header file stays in <dir>, the private directory beside the jar, never in $T, which the
+# diagnostics print; an error names the status and path only, never a cookie or a redirect's query. Writes the
+# callback's status and Location to <dir>/signin.out; run it in this shell, so its own failure ends the step.
 sign_in() {
-	local jar=$1 sub=$2 email=$3 loc code
-	code=$(curl -sS -o /dev/null -D "$T/login.hdr" -c "$jar" -b "$jar" -w '%{http_code}' "$OLD/auth/login")
+	local dir=$1 sub=$2 email=$3 loc code
+	code=$(curl -sS -o /dev/null -D "$dir/login.hdr" -c "$dir/jar" -b "$dir/jar" -w '%{http_code}' "$OLD/auth/login")
 	[ "$code" = 302 ] || fail "GET /auth/login answered $code, want 302"
-	loc=$(sed -n 's/^[Ll]ocation: *//p' "$T/login.hdr" | tr -d '\r')
-	case "$loc" in "$ISSUER/authorize?"*) ;; *) fail "/auth/login sent the browser to '$loc', not the fake issuer" ;; esac
+	loc=$(sed -n 's/^[Ll]ocation: *//p' "$dir/login.hdr" | tr -d '\r')
+	case "$loc" in "$ISSUER/authorize?"*) ;; *) fail "/auth/login sent the browser to ${loc%%\?*}, want $ISSUER/authorize" ;; esac
 	loc="$loc&mv_sub=$(jq -rn --arg v "$sub" '$v|@uri')&mv_email=$(jq -rn --arg v "$email" '$v|@uri')"
-	code=$(curl -sS -o /dev/null -D "$T/authorize.hdr" -w '%{http_code}' "$loc")
-	[ "$code" = 302 ] || fail "the fake issuer's /authorize answered $code, want 302"
-	loc=$(sed -n 's/^[Ll]ocation: *//p' "$T/authorize.hdr" | tr -d '\r')
-	case "$loc" in "$OLD/auth/callback?"*) ;; *) fail "the fake issuer sent the browser to '$loc', not the old server's callback" ;; esac
-	code=$(curl -sS -o /dev/null -D "$T/callback.hdr" -c "$jar" -b "$jar" -w '%{http_code}' "$loc")
-	printf '%s %s\n' "$code" "$(sed -n 's/^[Ll]ocation: *//p' "$T/callback.hdr" | tr -d '\r')"
+	code=$(curl -sS -o /dev/null -D "$dir/authorize.hdr" -w '%{http_code}' "$loc")
+	[ "$code" = 302 ] || fail "GET $ISSUER/authorize answered $code, want 302"
+	loc=$(sed -n 's/^[Ll]ocation: *//p' "$dir/authorize.hdr" | tr -d '\r')
+	case "$loc" in "$OLD/auth/callback?"*) ;; *) fail "the fake issuer sent the browser to ${loc%%\?*}, want $OLD/auth/callback" ;; esac
+	code=$(curl -sS -o /dev/null -D "$dir/callback.hdr" -c "$dir/jar" -b "$dir/jar" -w '%{http_code}' "$loc")
+	printf '%s %s\n' "$code" "$(sed -n 's/^[Ll]ocation: *//p' "$dir/callback.hdr" | tr -d '\r')" >"$dir/signin.out"
 }
 
 # live_session <jar>: the jar holds an unexpired wardyn_session cookie (curl drops one the server expired).
@@ -383,7 +399,7 @@ old_callback() {
 	gw=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}' | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -n1)
 	[ -n "$gw" ] || fail "the kind network has no IPv4 gateway"
 	ISSUER="http://$gw:5556"
-	# The key and the cookie jars stay out of $T, which the diagnostics print.
+	# The key, the cookie jar and every sign-in header file stay out of $T, which the diagnostics print.
 	keydir=$(mktemp -d "$RUNNER_TEMP/oidc.XXXXXX")
 	chmod 700 "$keydir"
 	openssl genrsa -out "$keydir/key.pem" 2048 2>/dev/null
@@ -406,10 +422,10 @@ old_callback() {
 	jar="$keydir/jar"
 
 	: >"$jar"
-	sign_in "$jar" "$PERSON" person-1@mixed-version.invalid >"$T/signin.out"
-	read -r code loc <"$T/signin.out"
-	[ "$code" = 302 ] || fail "the callback for the portal person's subject answered $code, want 302: $(cat "$T/callback.hdr")"
-	[ "$loc" = "/?auth_error=sign_in_refused" ] || fail "the callback for the portal person's subject sent the browser to '$loc', want /?auth_error=sign_in_refused"
+	sign_in "$keydir" "$PERSON" person-1@mixed-version.invalid
+	read -r code loc <"$keydir/signin.out"
+	[ "$code" = 302 ] || fail "GET $OLD/auth/callback for the portal person's subject answered $code, want 302"
+	[ "$loc" = "/?auth_error=sign_in_refused" ] || fail "GET $OLD/auth/callback for the portal person's subject sent the browser to ${loc%%\?*} (query withheld), want /?auth_error=sign_in_refused"
 	echo "ok: callback with subject $PERSON -> 302 $loc"
 	! live_session "$jar" || fail "the refused callback left a live wardyn_session cookie"
 	echo "ok: no live session after the refused callback"
@@ -420,11 +436,11 @@ old_callback() {
 		'[.[] | select(.target == "/auth/callback" and .outcome == "failure" and .data.reason == "reserved_principal")] | length == 1'
 
 	: >"$jar"
-	sign_in "$jar" "$control" person@mixed-version.invalid >"$T/signin.out"
-	read -r code loc <"$T/signin.out"
-	[ "$code" = 302 ] || fail "the callback for an ordinary subject answered $code, want 302: $(cat "$T/callback.hdr")"
-	case "$loc" in "" | *auth_error*) fail "the callback for an ordinary subject sent the browser to '$loc'" ;; esac
-	echo "ok: callback with subject $control -> 302 $loc"
+	sign_in "$keydir" "$control" person@mixed-version.invalid
+	read -r code loc <"$keydir/signin.out"
+	[ "$code" = 302 ] || fail "GET $OLD/auth/callback for an ordinary subject answered $code, want 302"
+	case "$loc" in "" | *auth_error*) fail "GET $OLD/auth/callback for an ordinary subject sent the browser to ${loc%%\?*} (query withheld), want a page without auth_error" ;; esac
+	echo "ok: callback with subject $control -> 302 ${loc%%\?*}"
 	live_session "$jar" || fail "the ordinary sign-in set no wardyn_session cookie"
 	code=$(req me-control -b "$jar" "$OLD/api/v1/me")
 	expect "old /me on the ordinary sign-in's session" 200 "$code" me-control
