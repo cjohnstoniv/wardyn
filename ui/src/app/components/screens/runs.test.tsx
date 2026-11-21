@@ -479,6 +479,25 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         });
       });
 
+      it("the Workspace control lists the service page's workspaces, and picking one asks for it", async () => {
+        const inB = run({ id: "svc-b", task: "Service in B", shape: "application", agent: "", repo: "acme/b", service: { restart: "on_failure" } });
+        listRunsFilteredMock.mockImplementation((f: { service?: boolean; workspace?: string }) =>
+          Promise.resolve(
+            f.service
+              ? { runs: !f.workspace || f.workspace === "acme/b" ? [inB] : [], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
+              : { runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 },
+          ),
+        );
+        renderScreen(undefined, "/runs?segment=services");
+        await screen.findByText("Service in B");
+        fireEvent.click(within(await screen.findByRole("search")).getByRole("combobox", { name: "Workspace" }));
+        fireEvent.click(await screen.findByRole("option", { name: "acme/b" }));
+        await waitFor(() =>
+          expect(listRunsFilteredMock).toHaveBeenLastCalledWith(expect.objectContaining({ service: true, workspace: "acme/b" })),
+        );
+        await screen.findByText("Service in B");
+      });
+
       it("the plain page's counts read at least N on a cut-short page, and Services is exact once picked", async () => {
         serverSide();
         renderScreen();
