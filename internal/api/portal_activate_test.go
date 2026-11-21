@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -154,10 +155,22 @@ func TestPortalActivationMonitor_RunReachesObservedSample(t *testing.T) {
 func TestPortalIssuersActivate_BodyNamingMarkRefused(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, audit := newSiteConfigHarness(t, fake)
-	for _, key := range []string{store.PortalIssuersActivatedKey, store.PortalActivationKey} {
-		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+key+`":"x"}`)
+	record, err := json.Marshal(store.PortalActivation{ActorType: string(types.ActorHuman), Actor: "ops@example.com", Sessions: []string{},
+		ActivateEventID: uuid.New(), EventAt: time.Now().UTC().Truncate(time.Microsecond)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each value is well formed for its key, so only the key can be what the decoder refuses.
+	for key, value := range map[string]string{
+		store.PortalIssuersActivatedKey: `"` + time.Now().UTC().Format(time.RFC3339) + `"`,
+		store.PortalActivationKey:       string(record),
+	} {
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+key+`":`+value+`}`)
 		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRequestInvalid {
 			t.Fatalf("a body naming %s = %d %s, want 400 %s", key, w.Code, w.Body, reasonSiteConfigRequestInvalid)
+		}
+		if body := w.Body.String(); !strings.Contains(body, "unknown field") || !strings.Contains(body, key) {
+			t.Errorf("the refusal for %s = %s, want it to name the key as an unknown field", key, body)
 		}
 	}
 	if rows := audit.snapshot(); fake.putSeen != nil || len(rows) != 0 {
