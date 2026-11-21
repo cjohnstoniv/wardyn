@@ -67,6 +67,20 @@ type portalActivationMonitor struct {
 	last    time.Time
 	samples []portalSample
 	seen    map[portalAlarmKey]bool
+	unsent  bool // the activation's audit rows were owed and not yet delivered at the last attempt
+}
+
+// owed reports whether the activation's audit rows are still undelivered, so the monitor retries soon.
+func (m *portalActivationMonitor) owed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unsent
+}
+
+func (m *portalActivationMonitor) setOwed(v bool) {
+	m.mu.Lock()
+	m.unsent = v
+	m.mu.Unlock()
 }
 
 // record adds a sample taken at now and drops what is older than the window.
@@ -141,7 +155,7 @@ func (s *Server) RunPortalActivationMonitor(ctx context.Context) {
 	for {
 		activated, _ := s.portalMonitorStep(ctx, s.cfg.Now().UTC())
 		wait := portalSampleEvery
-		if activated {
+		if activated && !s.portalMonitor().owed() {
 			wait = portalAlarmEvery
 		}
 		select {
@@ -163,6 +177,9 @@ func (s *Server) portalMonitorStep(ctx context.Context, now time.Time) (bool, er
 	if err != nil {
 		slog.WarnContext(ctx, "portal activation: read the switch", slog.Any("err", err))
 		return false, err
+	}
+	if activated {
+		s.deliverPortalActivation(ctx, ps)
 	}
 	sessions, err := ps.UntaggedClientSessions(ctx)
 	if err != nil {
@@ -246,7 +263,7 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	actorType, actor := actorFromRequest(r)
-	won, err := ps.ActivatePortalIssuers(r.Context(), actor, names)
+	won, err := ps.ActivatePortalIssuersAs(r.Context(), store.PortalActivation{ActorType: string(actorType), Actor: actor, Sessions: names})
 	if err != nil {
 		writeServerError(w, r, "switch issuer portals on", err)
 		return
@@ -256,11 +273,48 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusOK, map[string]any{"activated": true, "already_activated": true})
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "portal_issuers.activate", "portal_issuers", "success",
-		mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(suspects)})))
-	if len(suspects) > 0 {
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "portal_issuers.activate_override", "portal_issuers", "success",
-			mustJSON(map[string]any{"sessions": names})))
-	}
+	// The record is committed with the mark; a delivery that fails here is retried by every replica's monitor.
+	s.deliverPortalActivation(r.Context(), ps)
 	writeJSON(w, http.StatusOK, map[string]any{"activated": true, "overridden_sessions": len(suspects)})
+}
+
+// deliverPortalActivation delivers the activation's audit rows when they are still owed, from the record the
+// winning write committed: the actor, the sessions the operator overrode and each event's fixed id and time.
+// Every delivery, by the activating request or any replica's monitor, is a replay of the same events
+// (store.WithAuditReplay), so the audit table keeps one row each however often it runs. The record is marked
+// delivered only after every row was accepted; a row that was not leaves it owed for the next tick.
+func (s *Server) deliverPortalActivation(ctx context.Context, ps store.PortalActivationStore) {
+	rec, owed, err := ps.PendingPortalActivation(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "portal activation: read the owed audit rows", slog.Any("err", err))
+		s.portalMonitor().setOwed(true)
+		return
+	}
+	if !owed {
+		s.portalMonitor().setOwed(false)
+		return
+	}
+	ctx = store.WithAuditReplay(ctx)
+	actorType := types.ActorType(rec.ActorType)
+	activate := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate", "portal_issuers", "success",
+		mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(rec.Sessions)}))
+	activate.ID, activate.Time = rec.ActivateEventID, rec.EventAt
+	delivered := s.recordAuditDurably(ctx, activate)
+	if delivered && len(rec.Sessions) > 0 {
+		override := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate_override", "portal_issuers", "success",
+			mustJSON(map[string]any{"sessions": rec.Sessions}))
+		override.ID, override.Time = rec.OverrideEventID, rec.EventAt
+		delivered = s.recordAuditDurably(ctx, override)
+	}
+	if !delivered {
+		slog.WarnContext(ctx, "portal activation: the audit rows were not accepted, they stay owed")
+		s.portalMonitor().setOwed(true)
+		return
+	}
+	if _, err := ps.MarkPortalActivationAudited(ctx); err != nil {
+		slog.WarnContext(ctx, "portal activation: mark the audit rows delivered", slog.Any("err", err))
+		s.portalMonitor().setOwed(true)
+		return
+	}
+	s.portalMonitor().setOwed(false)
 }

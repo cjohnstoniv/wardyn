@@ -5,10 +5,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,14 +23,31 @@ type activationStore struct {
 	on       bool
 	lose     bool // another caller's write set the mark first
 	sessions []types.ClientSession
+	rec      *store.PortalActivation // the committed record, as the winning write stored it
+	marked   bool
 }
 
 func (s *activationStore) PortalIssuersActivated(context.Context) (bool, error) { return s.on, nil }
-func (s *activationStore) ActivatePortalIssuers(context.Context, string, []string) (bool, error) {
+func (s *activationStore) ActivatePortalIssuersAs(_ context.Context, a store.PortalActivation) (bool, error) {
 	if s.lose {
 		return false, nil
 	}
 	s.on = true
+	a.ActivateEventID, a.EventAt = uuid.New(), time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+	if len(a.Sessions) > 0 {
+		a.OverrideEventID = uuid.New()
+	}
+	s.rec = &a
+	return true, nil
+}
+func (s *activationStore) PendingPortalActivation(context.Context) (store.PortalActivation, bool, error) {
+	if s.rec == nil || s.marked {
+		return store.PortalActivation{}, false, nil
+	}
+	return *s.rec, true, nil
+}
+func (s *activationStore) MarkPortalActivationAudited(context.Context) (bool, error) {
+	s.marked = true
 	return true, nil
 }
 func (s *activationStore) UntaggedClientSessions(context.Context) ([]types.ClientSession, error) {
@@ -108,11 +128,86 @@ func TestPortalActivationMonitor_RunReachesObservedSample(t *testing.T) {
 func TestPortalIssuersActivate_BodyNamingMarkRefused(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, audit := newSiteConfigHarness(t, fake)
-	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+store.PortalIssuersActivatedKey+`":"2026-01-01T00:00:00Z"}`)
-	if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRequestInvalid {
-		t.Fatalf("a body naming the mark = %d %s, want 400 %s", w.Code, w.Body, reasonSiteConfigRequestInvalid)
+	for _, key := range []string{store.PortalIssuersActivatedKey, store.PortalActivationKey} {
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+key+`":"2026-01-01T00:00:00Z"}`)
+		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRequestInvalid {
+			t.Fatalf("a body naming %s = %d %s, want 400 %s", key, w.Code, w.Body, reasonSiteConfigRequestInvalid)
+		}
 	}
 	if fake.putSeen != nil || len(audit.events) != 0 {
 		t.Errorf("the refused body reached the store (%+v) or the audit (%d rows)", fake.putSeen, len(audit.events))
+	}
+}
+
+// downAudit is an audit recorder that refuses every event while down is set, as an audit store that is out.
+type downAudit struct {
+	recRecorder
+	down bool
+}
+
+func (d *downAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if d.down {
+		return errors.New("the audit store is down")
+	}
+	return d.recRecorder.Record(ctx, ev)
+}
+
+// The replay decision. A committed activation whose rows were not accepted stays owed and the monitor retries
+// it soon; once accepted it is delivered with the record's own ids, time, actor and sessions and marked, and a
+// later tick owes and writes nothing. A record with no overridden session owes one row, not two; with nothing
+// committed nothing is written.
+func TestPortalActivationDelivery_ReplaysTheCommittedRecordOnce(t *testing.T) {
+	fake := &activationStore{}
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, fake))
+	rec := &downAudit{down: true}
+	srv.cfg.Audit = rec
+
+	srv.deliverPortalActivation(context.Background(), fake)
+	if n := len(rec.snapshot()); n != 0 || srv.portalMonitor().owed() {
+		t.Fatalf("with nothing committed: %d rows, owed %v; want 0 and not owed", n, srv.portalMonitor().owed())
+	}
+
+	if won, err := fake.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{
+		ActorType: string(types.ActorHuman), Actor: "ops@example.com", Sessions: []string{"billing-job@10.0.0.9"}}); err != nil || !won {
+		t.Fatalf("seed the committed activation = %v, %v", won, err)
+	}
+	srv.deliverPortalActivation(context.Background(), fake)
+	if fake.marked || !srv.portalMonitor().owed() {
+		t.Fatalf("rows refused by the audit store: marked %v, owed %v; want unmarked and owed", fake.marked, srv.portalMonitor().owed())
+	}
+
+	rec.down = false
+	srv.deliverPortalActivation(context.Background(), fake)
+	got := rec.snapshot()
+	if !fake.marked || srv.portalMonitor().owed() || len(got) != 2 {
+		t.Fatalf("after the audit store returned: marked %v, owed %v, %d rows; want marked, not owed, 2 rows", fake.marked, srv.portalMonitor().owed(), len(got))
+	}
+	for i, want := range []struct {
+		action string
+		id     uuid.UUID
+	}{{"portal_issuers.activate", fake.rec.ActivateEventID}, {"portal_issuers.activate_override", fake.rec.OverrideEventID}} {
+		ev := got[i]
+		if ev.Action != want.action || ev.ID != want.id || !ev.Time.Equal(fake.rec.EventAt) || ev.Actor != "ops@example.com" || ev.ActorType != types.ActorHuman {
+			t.Errorf("row %d = %s id %s time %s actor %s/%s; want %s id %s time %s actor human/ops@example.com",
+				i, ev.Action, ev.ID, ev.Time, ev.ActorType, ev.Actor, want.action, want.id, fake.rec.EventAt)
+		}
+	}
+	if !strings.Contains(string(got[1].Data), "billing-job@10.0.0.9") {
+		t.Errorf("the override row's data %s does not name the overridden session", got[1].Data)
+	}
+	srv.deliverPortalActivation(context.Background(), fake)
+	if n := len(rec.snapshot()); n != 2 {
+		t.Errorf("a tick after delivery wrote %d more rows, want none", n-2)
+	}
+
+	plain := &activationStore{}
+	psrv := New(baseTestConfig(h, plain))
+	prec := &downAudit{}
+	psrv.cfg.Audit = prec
+	_, _ = plain.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{ActorType: string(types.ActorHuman), Actor: "ops@example.com"})
+	psrv.deliverPortalActivation(context.Background(), plain)
+	if n := len(prec.snapshot()); n != 1 || !plain.marked {
+		t.Errorf("an activation with no override owes %d rows (marked %v), want 1 and marked", n, plain.marked)
 	}
 }
