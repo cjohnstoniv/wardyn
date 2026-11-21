@@ -169,14 +169,14 @@ func TestPortalSubjectRuling_OldInvalidGrantRemovable_PG(t *testing.T) {
 		t.Fatalf("removing the old row = %v, want it removed", err)
 	}
 
-	m, err := st.UpsertRoleMapping(ctx, types.RoleMapping{Value: "removable-" + uuid.NewString(), Role: "member", CreatedBy: "admin@example.com"})
+	m, err := st.UpsertRoleMapping(ctx, types.RoleMapping{Value: "removable-" + uuid.NewString(), Role: "user", UserType: "standard", CreatedBy: "admin@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE role_mappings SET value = $2 WHERE id = $1`, m.ID, person); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.UpsertRoleMapping(ctx, types.RoleMapping{Value: person, Role: "member", CreatedBy: "admin@example.com"}); !errors.Is(err, store.ErrDelegatePersonNotAllowed) {
+	if _, err := st.UpsertRoleMapping(ctx, types.RoleMapping{Value: person, Role: "user", UserType: "standard", CreatedBy: "admin@example.com"}); !errors.Is(err, store.ErrDelegatePersonNotAllowed) {
 		t.Fatalf("writing a role mapping for a portal person = %v, want ErrDelegatePersonNotAllowed", err)
 	}
 	if err := st.DeleteRoleMapping(ctx, m.ID); err != nil {

@@ -62,11 +62,11 @@ func TestMigrationPortalIssuer_Additive_PG(t *testing.T) {
 			t.Errorf("%s has %d rows after the migration, want 0", table, n)
 		}
 	}
-	if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_trigger WHERE tgname = 'principal_identities_portal_lifecycle' AND NOT tgisinternal`); n != 1 {
+	if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_trigger WHERE tgname = 'principal_identities_portal_lifecycle' AND NOT tgisinternal AND tgrelid = 'principal_identities'::regclass`); n != 1 {
 		t.Errorf("%d lifecycle triggers, want 1", n)
 	}
 	for _, c := range []string{"delegates_max_subject_token_age", "delegates_grant_ttl", "delegates_required_claim_shape", "delegates_admission_shape"} {
-		if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_constraint WHERE conname = $1`, c); n != 1 {
+		if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_constraint WHERE conname = $1 AND conrelid = 'delegates'::regclass`, c); n != 1 {
 			t.Errorf("constraint %s present %d times, want 1", c, n)
 		}
 	}
@@ -75,7 +75,7 @@ func TestMigrationPortalIssuer_Additive_PG(t *testing.T) {
 	if _, err := pool.Exec(ctx, readMigration(t, portalIssuerMigration)); err != nil {
 		t.Fatalf("running %s again: %v", portalIssuerMigration, err)
 	}
-	if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_trigger WHERE tgname = 'principal_identities_portal_lifecycle' AND NOT tgisinternal`); n != 1 {
+	if n := pgScalar[int](t, pool, `SELECT count(*) FROM pg_trigger WHERE tgname = 'principal_identities_portal_lifecycle' AND NOT tgisinternal AND tgrelid = 'principal_identities'::regclass`); n != 1 {
 		t.Errorf("%d lifecycle triggers after the second run, want 1", n)
 	}
 }
