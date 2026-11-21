@@ -299,10 +299,17 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 		t.Fatalf("operator write = %d %q", w.Code, w.Body.String())
 	}
 	// The route is write-only: a read is refused as a method the route does not have, and says nothing of the value.
-	if w := f.do(http.MethodGet, f.secretPath("corp-a"), f.admin, nil); w.Code != http.StatusMethodNotAllowed ||
-		strings.Contains(w.Body.String(), svcClientSecret) || !strings.Contains(w.Header().Get("Allow"), http.MethodPut) ||
-		strings.Contains(w.Header().Get("Allow"), http.MethodGet) {
-		t.Errorf("GET on the write-only secret route = %d (Allow %q), want 405 with no read method", w.Code, w.Header().Get("Allow"))
+	// The router adds one Allow value per method in map order, so every value is read, not only the first.
+	w := f.do(http.MethodGet, f.secretPath("corp-a"), f.admin, nil)
+	allow := map[string]bool{}
+	for _, v := range w.Header().Values("Allow") {
+		for _, m := range strings.Split(v, ",") {
+			allow[strings.TrimSpace(m)] = true
+		}
+	}
+	if w.Code != http.StatusMethodNotAllowed || strings.Contains(w.Body.String(), svcClientSecret) ||
+		!allow[http.MethodPut] || !allow[http.MethodDelete] || allow[http.MethodGet] {
+		t.Errorf("GET on the write-only secret route = %d (Allow %v), want 405 allowing PUT and DELETE, not GET", w.Code, w.Header().Values("Allow"))
 	}
 	// A write with no grant is 409.
 	nb := body
