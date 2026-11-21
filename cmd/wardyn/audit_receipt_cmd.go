@@ -25,7 +25,7 @@ import (
 // Exit codes of `wardyn audit verify`. Everything else follows the CLI's own contract.
 const (
 	verifyExitFailed   = 1 // a check failed
-	verifyExitUsage    = 2 // the bundle or the keys could not be read
+	verifyExitUsage    = 2 // the bundle or the keys could not be read, a flag was wrong, or the report could not be written
 	verifyExitWithheld = 3 // nothing failed, but an event's content was not checked at this tier
 )
 
@@ -240,7 +240,7 @@ func auditVerifyCmd() *cobra.Command {
 		Short: "Check a receipt or checkpoint export offline against pinned keys",
 		Long: "Check a file from `wardyn audit receipt` or `wardyn audit checkpoints` with the public keys in --keys,\n" +
 			"from `wardyn audit keys`. Nothing is fetched. Exit 0: every receipted row is what was signed. Exit 1:\n" +
-			"a check failed (the line names the seq and the reason). Exit 2: the bundle or keys could not be read.\n" +
+			"a check failed (the line names the seq and the reason). Exit 2: bad usage, the bundle or keys could not be read, or the report could not be written.\n" +
 			"Exit 3: nothing failed, but some events were served without host detail for your role, so they are\n" +
 			"linked into the signed list and their content was not checked: the first line says how many.",
 		Args: cobra.ArbitraryArgs,
@@ -263,24 +263,38 @@ func auditVerifyCmd() *cobra.Command {
 				return usageError(fmt.Errorf("bundle: %w", err))
 			}
 			rep := auditreceipt.VerifyBundle(b, keys)
+			var writeErr error
 			if asJSON {
 				if err := emitJSON(cmd.OutOrStdout(), rep); err != nil {
 					return err
 				}
 			} else {
-				printVerifyReport(cmd.OutOrStdout(), rep)
+				writeErr = printVerifyReport(cmd.OutOrStdout(), rep)
 			}
+			// A verdict keeps its own code whether or not the report reached its destination; the write failure
+			// is added to its message. A verified or incomplete-free report that was not written is not a success.
+			var verdict *exitError
 			switch {
 			case !rep.OK():
-				return &exitError{code: verifyExitFailed, err: fmt.Errorf("audit verify: %d check(s) failed", len(rep.Failures))}
+				verdict = &exitError{code: verifyExitFailed, err: fmt.Errorf("audit verify: %d check(s) failed", len(rep.Failures))}
 			case !rep.Complete():
-				return &exitError{code: verifyExitWithheld, err: fmt.Errorf("audit verify: %d event(s) were not checked at your role", rep.Withheld())}
+				verdict = &exitError{code: verifyExitWithheld, err: fmt.Errorf("audit verify: %d event(s) were not checked at your role", rep.Withheld())}
 			}
-			return nil
+			switch {
+			case writeErr == nil && verdict == nil:
+				return nil
+			case writeErr == nil:
+				return verdict
+			case verdict == nil:
+				return &exitError{code: verifyExitUsage, err: fmt.Errorf("audit verify: the report was not written: %w", writeErr)}
+			}
+			verdict.err = fmt.Errorf("%w; the report was not fully written: %v", verdict.err, writeErr)
+			return verdict
 		},
 	}
 	cmd.Flags().StringVar(&keysPath, "keys", "", "public keys file from `wardyn audit keys`, saved where the control plane cannot change it")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the full report as JSON")
+	usageExitsTwo(cmd)
 	return cmd
 }
 
@@ -296,8 +310,10 @@ func readJSONFile(path string, v any) error {
 }
 
 // printVerifyReport writes the verdict: the withheld count first when there is one, then each checkpoint, event
-// and policy line, every failure with its seq and reason, and the bottom line.
-func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
+// and policy line, every failure with its seq and reason, and the bottom line. It returns the first write error,
+// after which it writes nothing more.
+func printVerifyReport(out io.Writer, rep auditreceipt.Report) error {
+	w := &firstErrWriter{w: out}
 	if n := rep.Withheld(); n > 0 {
 		fmt.Fprintf(w, "%d event(s) withheld: linked into the signed list, content not re-hashed at your role\n", n)
 	}
@@ -350,4 +366,20 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 	default:
 		fmt.Fprintln(w, "OK")
 	}
+	return w.err
+}
+
+// firstErrWriter remembers the first error of w and swallows every write after it.
+type firstErrWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (f *firstErrWriter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return len(p), nil
+	}
+	n, err := f.w.Write(p)
+	f.err = err
+	return n, err
 }

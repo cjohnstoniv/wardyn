@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -385,5 +386,60 @@ func TestPrintVerifyReportEscapesTheBundlesText(t *testing.T) {
 	got := buf.String()
 	if strings.ContainsAny(got, "\x1b\r\x07") || strings.Count(got, "\n") != 6 || strings.Contains(got, "\nVERIFIED") || strings.Contains(got, "\nevent seq 3") {
 		t.Fatalf("report = %q, want every field escaped onto its own line", got)
+	}
+}
+
+// A flag the command does not know, or gives a bad value, is bad usage (exit 2), never the 1 of a failed check; a
+// real verification failure is still 1.
+func TestAuditVerify_FlagErrorsExitTwo(t *testing.T) {
+	f := newReceiptFixture(t)
+	for name, args := range map[string][]string{
+		"unknown flag":      {"audit", "verify", f.bundle, "--keys", f.keys, "--no-such-flag"},
+		"bad boolean value": {"audit", "verify", f.bundle, "--keys", f.keys, "--json=maybe"},
+		"keys without path": {"audit", "verify", f.bundle, "--keys"},
+	} {
+		if _, _, code := runAudit(t, args...); code != 2 {
+			t.Errorf("%s: exit %d, want 2", name, code)
+		}
+	}
+	tampered := f.b
+	tampered.Checkpoints = append([]auditreceipt.Checkpoint(nil), f.b.Checkpoints...)
+	ev := tampered.Checkpoints[1].Events[0]
+	ev.Row.Action = "run.rewritten"
+	tampered.Checkpoints[1].Events = []auditreceipt.Event{ev}
+	f.writeBundle(t, tampered)
+	if _, _, code := runAudit(t, "audit", "verify", f.bundle, "--keys", f.keys); code != 1 {
+		t.Errorf("an edited row: exit %d, want 1", code)
+	}
+}
+
+// The text report's write errors are not dropped: a report that cannot be written is not exit 0, and a failed
+// verification keeps its own code while naming the write failure.
+func TestAuditVerify_TextWriteFailure(t *testing.T) {
+	f := newReceiptFixture(t)
+	run := func() error {
+		root := rootCmd()
+		root.SetArgs([]string{"audit", "verify", f.bundle, "--keys", f.keys})
+		root.SetOut(failingWriter{})
+		root.SetErr(io.Discard)
+		return root.Execute()
+	}
+	err := run()
+	if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "no space left on device") {
+		t.Fatalf("a valid bundle, report unwritable: %v (exit %d), want exit 2 naming the write error", err, exitCodeFor(err))
+	}
+	tampered := f.b
+	tampered.Checkpoints = append([]auditreceipt.Checkpoint(nil), f.b.Checkpoints...)
+	ev := tampered.Checkpoints[1].Events[0]
+	ev.Row.Action = "run.rewritten"
+	tampered.Checkpoints[1].Events = []auditreceipt.Event{ev}
+	f.writeBundle(t, tampered)
+	err = run()
+	if err == nil || exitCodeFor(err) != 1 || !strings.Contains(err.Error(), "check(s) failed") || !strings.Contains(err.Error(), "no space left on device") {
+		t.Fatalf("a failed bundle, report unwritable: %v (exit %d), want exit 1 naming both", err, exitCodeFor(err))
+	}
+	var buf bytes.Buffer
+	if err := printVerifyReport(&buf, auditreceipt.Report{Format: auditreceipt.ReceiptFormat}); err != nil {
+		t.Errorf("a writable report returned %v", err)
 	}
 }
