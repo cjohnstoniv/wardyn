@@ -38,8 +38,9 @@ func portalInternalHostList(raw string) []string {
 
 // portalIssuerOptions is the verifier set's deployment side: the reserved-name predicate every human door
 // asks (api.PortalReservedCheck, for this server's local operator), the listed internal hosts and their CA
-// bundle, and failed refreshes counted on counter. An unreadable or empty CA file refuses the boot: the
-// operator named a bundle, and verifying against fewer roots than they meant must not pass silently.
+// bundle, and failed refreshes counted on counter. An unreadable CA file refuses the boot, and so does a
+// non-empty one that holds no certificate (oidc.NewPortalIssuers): the operator named a bundle, and verifying
+// against fewer roots than they meant must not pass silently. An empty file adds no roots and does not refuse.
 func portalIssuerOptions(hosts, caFile, localOperator string, counter *api.PortalRefreshFailures) (oidc.PortalIssuersOptions, error) {
 	opts := oidc.PortalIssuersOptions{
 		Reserved:         api.PortalReservedCheck(localOperator),
