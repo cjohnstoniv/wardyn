@@ -1577,10 +1577,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
-  (only live runs with no end), `service=1` (only service runs, applied before paging), `workspace`
+  (only live runs with no end), `service=1` (only runs started with Keep it running, which carry a service spec; applied before paging), `workspace`
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
-- `sponsored=exclude` drops a sponsor's service runs from their own list; no-op where already left out.
+- `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers
