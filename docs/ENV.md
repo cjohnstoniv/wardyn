@@ -1584,7 +1584,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background, sign-in or workspace task, and not in local mode.
 - A helper enters governed. The run's profile, the channel switches and the data-out rule apply as for its owner.
 - A request left unanswered for 15 minutes lapses. The run ending, the helper signing out and the owner being revoked each end the grant.
-- Every request, answer and end is audited as `support.request`, `support.accept`, `support.decline` and `support.end`.
+- Requests, answers and ends are audited as `support.request`, `support.accept`, `support.decline` and `support.end`. The grant ends even when its `support.end` row is not written: a row lost because wardynd stopped, or because the audit sink and spool refused it, right after the end is not retried.
 - `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
 - Needs migration `0293_run_support_grants`.
 - A value that is not a bool exits 2 at boot.
