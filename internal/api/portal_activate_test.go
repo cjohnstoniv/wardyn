@@ -27,7 +27,12 @@ type activationStore struct {
 	sessions []types.ClientSession
 	rec      *store.PortalActivation // the committed record, as the winning write stored it
 	settled  bool
-	landed   func(uuid.UUID) bool // whether the shared audit table holds the event
+	stored   func(uuid.UUID) (time.Time, bool) // the shared audit table's time for an event, if it holds it
+}
+
+func (s *activationStore) holds(id uuid.UUID) bool {
+	at, ok := s.stored(id)
+	return ok && at.Equal(s.rec.EventAt)
 }
 
 func (s *activationStore) PortalIssuersActivated(context.Context) (bool, error) { return s.on, nil }
@@ -49,18 +54,23 @@ func (s *activationStore) PendingPortalActivation(context.Context) (store.Portal
 	}
 	return *s.rec, true, nil
 }
-func (s *activationStore) PortalActivationLanded(context.Context) (bool, bool, error) {
-	if s.rec == nil || s.settled || s.landed == nil {
-		return false, false, nil
+func (s *activationStore) AuditEventsStored(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]time.Time, error) {
+	out := map[uuid.UUID]time.Time{}
+	if s.stored != nil {
+		for _, id := range ids {
+			if at, ok := s.stored(id); ok {
+				out[id] = at
+			}
+		}
 	}
-	return s.landed(s.rec.ActivateEventID), s.landed(s.rec.OverrideEventID), nil
+	return out, nil
 }
 
 // SettlePortalActivation settles only when both events are in the audit table, and drops the raw record, as the
 // store's one statement does.
 func (s *activationStore) SettlePortalActivation(context.Context) (bool, error) {
-	if s.rec == nil || s.settled || s.landed == nil || !s.landed(s.rec.ActivateEventID) ||
-		(len(s.rec.Sessions) > 0 && !s.landed(s.rec.OverrideEventID)) {
+	if s.rec == nil || s.settled || s.stored == nil || !s.holds(s.rec.ActivateEventID) ||
+		(len(s.rec.Sessions) > 0 && !s.holds(s.rec.OverrideEventID)) {
 		return false, nil
 	}
 	s.settled, s.rec = true, &store.PortalActivation{}
@@ -168,12 +178,17 @@ func (a *sharedAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 }
 
 func (a *sharedAudit) has(id uuid.UUID) bool {
+	_, ok := a.timeOf(id)
+	return ok
+}
+
+func (a *sharedAudit) timeOf(id uuid.UUID) (time.Time, bool) {
 	for _, ev := range a.snapshot() {
 		if ev.ID == id {
-			return true
+			return ev.Time, true
 		}
 	}
-	return false
+	return time.Time{}, false
 }
 
 // localSpoolAudit is a replica whose store write fails for the held event ids and whose local spool takes
@@ -207,7 +222,7 @@ func TestPortalActivationDelivery_SettlesOnlyWhatTheSharedTableHolds(t *testing.
 		h := newHarness(t)
 		clock := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
 		table := &sharedAudit{}
-		fake.landed = table.has
+		fake.stored = table.timeOf
 		newServer := func(rec audit.Recorder) *Server {
 			srv := New(baseTestConfig(h, fake))
 			srv.cfg.Audit = rec
@@ -269,7 +284,7 @@ func TestPortalActivationDelivery_SettlesOnlyWhatTheSharedTableHolds(t *testing.
 	// An activation with no overridden session owes one row.
 	plain := &activationStore{}
 	plainTable := &sharedAudit{}
-	plain.landed = plainTable.has
+	plain.stored = plainTable.timeOf
 	psrv := New(baseTestConfig(newHarness(t), plain))
 	psrv.cfg.Audit = plainTable
 	_, _ = plain.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{ActorType: string(types.ActorHuman), Actor: "ops@example.com"})
