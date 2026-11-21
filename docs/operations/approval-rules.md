@@ -28,7 +28,7 @@ Any other value exits 2 at boot. The switch is env-only, so turning it on needs 
 
 The dry run writes nothing, not even an audit row.
 
-- Each `PENDING` approval the rule matches runs the dry-run decide path: `would_approve`, or `skip` with the gate's reason. A row past its wait budget that the expiry sweep has not yet moved is `skip` with `approval_already_decided`, as a real decision would refuse it.
+- Each `PENDING` approval the rule matches runs the dry-run decide path: `would_approve`, or `skip` with the gate's reason.
 - Approvals from the last 7 days are matched on the rule's predicates only, labelled `predicate_match`. `recent_truncated` says the look back stopped at 1,000 rows.
 
 ## Rule

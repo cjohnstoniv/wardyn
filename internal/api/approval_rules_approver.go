@@ -233,16 +233,6 @@ func (s *Server) policyDryRunStop(w http.ResponseWriter, r *http.Request, ap typ
 	if !ok || !d.dryRun {
 		return false
 	}
-	// Decide's conditional update refuses a row at or past its expiry, by the database's clock; so does this.
-	now, err := s.dbNow(r.Context())
-	if err != nil {
-		writeServerError(w, r, "read the database's clock", err)
-		return true
-	}
-	if ap.ExpiresAt != nil && !now.Before(*ap.ExpiresAt) {
-		writeErrorReason(w, http.StatusConflict, reasonApprovalAlreadyDecided, "approval already decided")
-		return true
-	}
 	s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, types.ActorSystem, policyActor(d), "approval.policy.would_approve", ap.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": ap.ID, "kind": ap.Kind, "decision_scope": scope, "policy": d.m})))
 	writeJSON(w, http.StatusOK, map[string]bool{"would_approve": true})

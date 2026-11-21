@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -97,42 +96,5 @@ func TestApprovalRuleListAnswersTheSwitch(t *testing.T) {
 	}
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Rules) != 1 || body.Switch != approvalRulesDryRun {
 		t.Fatalf("list = %d %s", w.Code, w.Body)
-	}
-}
-
-// TestApprovalRuleDryRunHonoursTheWaitBudget: a pending row at or past its expiry, which the sweep has not yet
-// moved, is skipped as already decided, as Decide's conditional update would refuse it; one still ahead of it, or
-// with no expiry, would be approved. The clock is the server's, which a store with no database clock stands in for.
-func TestApprovalRuleDryRunHonoursTheWaitBudget(t *testing.T) {
-	t.Setenv(envApprovalRules, approvalRulesOn)
-	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
-	at := func(d time.Duration) *time.Time { return new(now.Add(d)) }
-	for _, c := range []struct {
-		name    string
-		expires *time.Time
-		want    string
-	}{
-		{"expired a minute ago", at(-time.Minute), "skip/" + reasonApprovalAlreadyDecided},
-		{"expires at this instant", at(0), "skip/" + reasonApprovalAlreadyDecided},
-		{"expires a minute ahead", at(time.Minute), "would_approve/"},
-		{"no expiry", nil, "would_approve/"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			f := newRuleFix(t)
-			f.srv.cfg.Now = func() time.Time { return now }
-			ap, err := f.aps.Request(context.Background(), types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalToolCall,
-				RequestedScope: json.RawMessage(ruleToolScope), ExpiresAt: c.expires})
-			if err != nil {
-				t.Fatal(err)
-			}
-			w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
-			var rep approvalRuleReport
-			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rep) != nil || len(rep.Pending) != 1 {
-				t.Fatalf("dry run = %d %s", w.Code, w.Body)
-			}
-			if got := rep.Pending[0].Outcome + "/" + rep.Pending[0].Reason; got != c.want || rep.Pending[0].ApprovalID != ap.ID {
-				t.Fatalf("outcome = %s; want %s", got, c.want)
-			}
-		})
 	}
 }
