@@ -154,8 +154,9 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if opts.Reserved == nil {
 		return nil, errors.New("portal issuers: a reserved-name check is required")
 	}
-	if pp := opts.Proxy; pp != nil {
-		if pp.URL == nil || !portalProxySchemes[pp.URL.Scheme] || pp.URL.Hostname() == "" || pp.Listed == nil {
+	proxy := portalProxyCanonical(opts.Proxy)
+	if proxy != nil { // converted first: a host that converts to nothing is empty here, as it is to net/http
+		if proxy.URL == nil || !portalProxySchemes[proxy.URL.Scheme] || proxy.URL.Hostname() == "" || proxy.Listed == nil {
 			return nil, errors.New("portal issuers: the daemon proxy route is incomplete")
 		}
 	}
@@ -163,7 +164,7 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial, proxy: portalProxyCanonical(opts.Proxy)}
+	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial, proxy: proxy}
 	for _, h := range opts.InternalHosts {
 		if a := portalListedAuthority(h); a != "" {
 			pn.internalHosts[a] = true

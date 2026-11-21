@@ -1661,10 +1661,11 @@ func TestPortalIssuers_ProxyOptionValidated(t *testing.T) {
 	listed := func(string) (bool, error) { return false, nil }
 	reserved := func(string) bool { return false }
 	for name, pp := range map[string]*PortalProxy{
-		"no url":         {Listed: listed},
-		"another scheme": {URL: &url.URL{Scheme: "ftp", Host: "proxy.corp.example:21"}, Listed: listed},
-		"no host":        {URL: &url.URL{Scheme: "http", Host: ":3128"}, Listed: listed},
-		"no matcher":     {URL: &url.URL{Scheme: "http", Host: "proxy.corp.example:3128", User: url.UserPassword("u", "MARKER")}},
+		"no url":                 {Listed: listed},
+		"another scheme":         {URL: &url.URL{Scheme: "ftp", Host: "proxy.corp.example:21"}, Listed: listed},
+		"no host":                {URL: &url.URL{Scheme: "http", Host: ":3128"}, Listed: listed},
+		"no host once converted": {URL: &url.URL{Scheme: "http", Host: "\u00ad:3128"}, Listed: listed}, // a soft hyphen converts to nothing
+		"no matcher":             {URL: &url.URL{Scheme: "http", Host: "proxy.corp.example:3128", User: url.UserPassword("u", "MARKER")}},
 	} {
 		_, err := NewPortalIssuers(PortalIssuersOptions{Reserved: reserved, Proxy: pp})
 		if err == nil || err.Error() != "portal issuers: the daemon proxy route is incomplete" {
