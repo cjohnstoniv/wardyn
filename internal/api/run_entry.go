@@ -224,6 +224,9 @@ func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid
 // never was one, and wrong for a session that provably was. An absent grant, or
 // one under another portal, has ended.
 func (s *Server) delegationLive(ctx context.Context, via types.DelegationVia) (time.Time, entryVerdict) {
+	if expires, v, found := s.portalGrantLive(ctx, via); found {
+		return expires, v
+	}
 	ds, ok := s.cfg.Store.(store.DelegateStore)
 	if !ok {
 		slog.ErrorContext(ctx, "wardynd: a portal-derived session cannot be checked: the store has no portal capability")
