@@ -268,6 +268,30 @@ describe("support strip: the banner", () => {
     expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
   });
 
+  it("a late end keeps a newer ended grant", async () => {
+    const endedA = active({ state: "ended", end_reason: "revoked", ended_at: aheadByHours(-0.05) });
+    const endedB = grant({ grant: "g-2", state: "ended", end_reason: "lapsed", ended_at: aheadByHours(-0.01) });
+    let release: (g: SupportGrantView) => void = () => {};
+    api.end.mockReturnValueOnce(
+      new Promise<SupportGrantView>((res) => {
+        release = res;
+      }),
+    );
+    api.status
+      .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: active() })
+      .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: null, ended: endedB })
+      .mockRejectedValueOnce(new Error("status unavailable"));
+    const user = userEvent.setup();
+    mount({ principal: "maya" });
+    await user.click(await screen.findByRole("button", { name: "End now" })); // ends g-1, response held
+    await user.click(screen.getByRole("button", { name: "read again" })); // g-2 came and went
+    expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
+    await act(async () => release(endedA));
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("support-ended").textContent).toContain("Nobody answered");
+    expect(screen.getByTestId("support-ended").textContent).not.toContain("you ended it");
+  });
+
   it("shows the ended line with Close, and Close is remembered for that grant", async () => {
     answer({ open: null, ended: active({ state: "ended", end_reason: "expired" }) });
     const user = userEvent.setup();

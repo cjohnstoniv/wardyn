@@ -53,6 +53,13 @@ const wasClosed = (grant: string): boolean => {
   }
 };
 
+const time = (t?: string): number => (t ? Date.parse(t) || 0 : 0);
+
+/** True when grant a ended later than grant b by the server's order: ended_at, then requested_at (equal is not newer). */
+function endedLater(a: SupportGrantView, b: SupportGrantView): boolean {
+  return time(a.ended_at) !== time(b.ended_at) ? time(a.ended_at) > time(b.ended_at) : time(a.requested_at) > time(b.requested_at);
+}
+
 export interface RunSupport {
   /** The setup answer carries support_sessions: the console draws anything at all. */
   on: boolean;
@@ -108,7 +115,12 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   const applyEnded = React.useCallback((ended: SupportGrantView) => {
     appliedSeq.current = ++readSeq.current;
     // The end closes the grant it names: a different grant that is open on the run now stays shown.
-    setStatus((prev) => ({ ...prev, open: prev?.open?.grant === ended.grant ? null : (prev?.open ?? null), ended }));
+    // A different ended grant already shown stays when it ended later than this confirmation.
+    setStatus((prev) => ({
+      ...prev,
+      open: prev?.open?.grant === ended.grant ? null : (prev?.open ?? null),
+      ended: prev?.ended && prev.ended.grant !== ended.grant && endedLater(prev.ended, ended) ? prev.ended : ended,
+    }));
   }, []);
   React.useEffect(() => {
     void refresh();
