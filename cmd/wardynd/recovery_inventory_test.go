@@ -216,3 +216,32 @@ func TestRecoveryManifest_KeysNameThePlatformRecipientAndKeyNames(t *testing.T) 
 		t.Fatalf("the Transit mount's default is named with no Transit key: %v", names)
 	}
 }
+
+// A rehearsal run with the right age key and a different valid platform key file reports the fingerprint
+// mismatch, and a manifest that predates the platform recipient skips the comparison.
+func TestCheckFingerprint_PlatformRecipient(t *testing.T) {
+	ageID, platform, other := mustAgeIdentity(t), mustAgeIdentity(t), mustAgeIdentity(t)
+	set := rehearseSet{AgeRecipient: ageID.Recipient().String(), PlatformRecipient: platform.Recipient().String()}
+	for _, c := range []struct {
+		name     string
+		set      rehearseSet
+		platform string
+		want     string
+	}{
+		{"same platform key", set, platform.Recipient().String(), ""},
+		{"different platform key", set, other.Recipient().String(), "WARDYN_PLATFORM_KEY_FILE"},
+		{"platform file unset here", set, "", "WARDYN_PLATFORM_KEY_FILE"},
+		{"manifest without a platform recipient", rehearseSet{AgeRecipient: set.AgeRecipient}, other.Recipient().String(), ""},
+	} {
+		got := checkFingerprint(c.set, ageID, c.platform, "")
+		switch {
+		case c.want == "" && got != nil:
+			t.Errorf("%s: got %+v, want no check", c.name, got)
+		case c.want != "" && (got == nil || got.Name != "key fingerprint" || got.Result != resultFail || !strings.Contains(got.Detail, c.want)):
+			t.Errorf("%s: got %+v, want a failing key fingerprint naming %s", c.name, got, c.want)
+		}
+	}
+	if got := checkFingerprint(set, other, platform.Recipient().String(), ""); got == nil || !strings.Contains(got.Detail, "WARDYN_AGE_KEY") {
+		t.Errorf("a different age key is reported first: %+v", got)
+	}
+}
