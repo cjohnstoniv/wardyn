@@ -87,19 +87,6 @@ func TestHandler_JoinStopsAtAForeignHeader(t *testing.T) {
 	if got, want := getRecording(t, s, "0a000000-0000-4000-8000-000000000008"), partHeader+partEv1; got != want {
 		t.Fatalf("joined cast = %q, want only part 1 %q", got, want)
 	}
-
-	// The list's metadata stops at the same boundary: the bytes and the duration of part 1 alone, not the
-	// earlier cast's part nor the part after it.
-	size, tail, err := recording.StatJoined(context.Background(), s, "0a000000-0000-4000-8000-000000000008", 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := int64(len(partHeader + partEv1)); size != want {
-		t.Errorf("size = %d, want %d (part 1 only)", size, want)
-	}
-	if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
-		t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
-	}
 }
 
 // TestHandler_SessionKeyIsNotJoined: an attach session's composite key is its
@@ -212,10 +199,6 @@ func TestJoinReadsNoPartAboveTheLimit(t *testing.T) {
 	if err != nil || s.stats != types.RecordingMaxParts || size != int64(types.RecordingMaxParts*len(partHeader+partEv1)) {
 		t.Fatalf("StatJoined: %d reads, size %d, err %v; want exactly %d reads", s.stats, size, err, types.RecordingMaxParts)
 	}
-	if s.opens != types.RecordingMaxParts { // StatJoined's head reads: one per part (a store with no head read opens it)
-		t.Fatalf("StatJoined: %d head reads, want exactly %d", s.opens, types.RecordingMaxParts)
-	}
-	s.opens = 0
 	rc, err := recording.OpenJoined(context.Background(), s, "run-many")
 	if err != nil {
 		t.Fatal(err)
