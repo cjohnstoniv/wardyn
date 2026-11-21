@@ -25,8 +25,9 @@ import (
 // Hosted-only: a change to a portal that starts while an exchange is inside one of its locked transactions.
 // A session on a pool of its own holds a table in SHARE mode, so the exchange's next insert into it waits
 // after its lock on the binding (FOR KEY SHARE) and on the portal row (FOR SHARE) is taken: portal_grants
-// parks the grant write. The change runs on another pool and must wait for the exchange; once the hold is
-// released the exchange's transaction commits first, and the outcome is the plan's for that order. The other order, the change committing first, is
+// parks the grant write, principal_identities parks a first-ever person's identity write. The change runs on
+// another pool and must wait for the exchange; once the hold is released the exchange's transaction commits
+// first, and the outcome is the plan's for that order. The other order, the change committing first, is
 // TestPortalExchange_AdmissionOrRevokeRacesWrite_PG.
 
 // lockWait bounds every wait in these tests.
@@ -312,6 +313,94 @@ func TestPortalExchange_ChangeWaitsForLockedGrantWrite_PG(t *testing.T) {
 			t.Fatalf("binding rows after a refused retirement = %d, want 1", n)
 		}
 	})
+}
+
+// TestPortalExchange_ChangeWaitsForLockedIdentityWrite_PG parks a first-ever person's exchange after its
+// locked portal read and before its identity insert. A second hold, on principal_groups, then parks the
+// exchange between its identity commit and its grant transaction, so the change commits in that gap and
+// what exists there is read before the grant transaction runs.
+func TestPortalExchange_ChangeWaitsForLockedIdentityWrite_PG(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(ctx context.Context, side *pgxpool.Pool, d types.Delegate) error
+		landed string // counts 1 once the change has committed; empty for the refused retirement
+		status int
+		code   string
+		grants int
+	}{
+		{name: "revoke waits on the portal row; the identity stays and grants nothing",
+			change: func(ctx context.Context, side *pgxpool.Pool, d types.Delegate) error {
+				_, _, err := store.NewPG(side).RevokeDelegate(ctx, d.ID, time.Now(), false)
+				return err
+			},
+			landed: `SELECT count(*) FROM delegates WHERE id = $1 AND revoked_at IS NOT NULL AND admission_rev >= $2`,
+			status: http.StatusUnauthorized, code: "invalid_client", grants: 0},
+		{name: "narrowing waits on the portal row; the grant transaction sees the new revision",
+			change: func(ctx context.Context, side *pgxpool.Pool, d types.Delegate) error {
+				return store.NewPG(side).UpdateDelegateAdmissionQ(ctx, side, d.ID,
+					types.PortalAdmission{PortalManaged: true}, types.PortalAdmission{Group: "portal-users"})
+			},
+			landed: `SELECT count(*) FROM delegates WHERE id = $1 AND admission_rev > $2`,
+			status: http.StatusServiceUnavailable, code: "temporarily_unavailable", grants: 0},
+		{name: "retirement waits on the binding and is refused once the identity exists",
+			change: func(ctx context.Context, side *pgxpool.Pool, d types.Delegate) error {
+				return portalRetire(ctx, side, d.IssuerKey)
+			},
+			status: http.StatusOK, code: "access_token", grants: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExchPG(t)
+			d, cred := e.portal(t, portalTestIssuer, nil)
+			r := e.newLockRig(t)
+			idHold := r.hold("principal_identities")
+			groupsHold := r.hold("principal_groups")
+			pid, result, exchDone := r.parkExchange(e, idHold, d, cred)
+			if n := r.countOn(groupsHold, `SELECT count(*) FROM principal_identities WHERE introduced_by = $1`, d.ID); n != 0 {
+				t.Fatalf("identity rows while the first identity write waits = %d, want 0", n)
+			}
+			side := r.pool()
+			changed := r.changeWaits(idHold, pid, func(ctx context.Context) error { return tc.change(ctx, side, d) })
+			idHold.release()
+			err := withinPortal(t, changed, "the change")
+			if tc.landed == "" {
+				if !errors.Is(err, store.ErrIssuerInUse) {
+					t.Fatalf("retire after the identity committed: %v, want ErrIssuerInUse", err)
+				}
+			} else if err != nil {
+				t.Fatalf("change after the identity committed: %v", err)
+			}
+			if _, ok := r.waiterOn(groupsHold, groupsHold.pid, exchDone, lockWait); !ok {
+				t.Fatal("the exchange did not reach its sign-in record write after the identity committed")
+			}
+			// Between the two transactions: the identity is there, no grant is, and the change has landed.
+			if n := r.countOn(groupsHold, `SELECT count(*) FROM principal_identities WHERE introduced_by = $1`, d.ID); n != 1 {
+				t.Fatalf("identity rows after the identity commit = %d, want 1", n)
+			}
+			if n := r.countOn(groupsHold, `SELECT count(*) FROM portal_grants WHERE delegate_id = $1`, d.ID); n != 0 {
+				t.Fatalf("grant rows before the grant transaction = %d, want 0", n)
+			}
+			if tc.landed != "" {
+				if n := r.countOn(groupsHold, tc.landed, d.ID, d.AdmissionRev); n != 1 {
+					t.Fatal("the change did not commit while the exchange waited between its transactions")
+				}
+			}
+			groupsHold.release()
+			w := withinPortal(t, result, "the exchange")
+			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatalf("exchange after the change = %d %s, want %d %s", w.Code, w.Body, tc.status, tc.code)
+			}
+			if n := e.count(t, `SELECT count(*) FROM principal_identities WHERE introduced_by = $1`, d.ID); n != 1 {
+				t.Fatalf("identity rows at the end = %d, want 1", n)
+			}
+			if n := e.count(t, `SELECT count(*) FROM portal_grants WHERE delegate_id = $1`, d.ID); n != tc.grants {
+				t.Fatalf("grant rows at the end = %d, want %d", n, tc.grants)
+			}
+			if n := e.count(t, `SELECT count(*) FROM portal_issuers WHERE issuer_key = $1`, d.IssuerKey); n != 1 {
+				t.Fatalf("binding rows at the end = %d, want 1", n)
+			}
+		})
+	}
 }
 
 // TestPortalExchange_FailedLockObservationCleansUp_PG fails an observation while a change still waits on a
