@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -224,8 +225,9 @@ const memberDriveByRunEnd = "run_never_started"
 // the owner-starting check, then the substrate's reclaim. The drive is a member drive like any other and
 // the owner's other runs can attach it, so a drive one of them holds is left in place, and the refusal is
 // audited by that delete as it audits its own, never as an already-absent object. A run that has no kept
-// drive, a drive some other run kept, and a drive another delete holds are left alone. Best effort: a
-// failure is logged and the drive stays, as it did before.
+// drive, a drive some other run kept, and a drive another delete holds are left alone, and so is a drive one
+// of the owner's runs created after this one ended may have attached (beginKeptDriveDelete): it is theirs now.
+// Best effort: a failure is logged and the drive stays, as it did before.
 func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
@@ -246,9 +248,9 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 		}
 		return
 	}
-	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
+	d, started, err := s.beginKeptDriveDelete(ctx, ms, id)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) && !errors.Is(err, store.ErrKeptDriveAttachable) {
 			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
 		return
@@ -256,6 +258,18 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
 		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
 	}
+}
+
+// beginKeptDriveDelete takes the tombstone of a kept drive's delete. The drive became offered to the owner's other
+// runs when the run it was kept from ended, and this cleanup can run well after that (a pool removal ends many
+// waiting runs at once and cleans them up one at a time), so it is decided in the statement that takes the
+// tombstone: a drive another run of the owner may have attached is left as it is, with no tombstone, and the
+// owner keeps it. A store without that statement takes the plain admin delete.
+func (s *Server) beginKeptDriveDelete(ctx context.Context, ms store.MemberDriveStore, id uuid.UUID) (types.UserDrive, time.Time, error) {
+	if ks, ok := s.cfg.Store.(store.KeptDriveReclaimStore); ok {
+		return ks.BeginKeptDriveReclaim(ctx, id)
+	}
+	return ms.BeginMemberDriveDeleteAdmin(ctx, id)
 }
 
 // dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, is
