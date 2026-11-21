@@ -775,3 +775,48 @@ func TestStreamCut_CleanSwitchedCloseSkipsFinish(t *testing.T) {
 		t.Errorf("%d flush or deadline calls reached the server's writer after the hijack", n)
 	}
 }
+
+// TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket: the cut lands while the server's Hijack is
+// flushing the buffered 101 (as websocket.Accept leaves it) to a client that is not reading. The flush ends at
+// once, the connection is closed, and it is never registered.
+func TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket(t *testing.T) {
+	conns := make(chan *stallConn, 4)
+	result := make(chan error, 1)
+	cuts := make(chan *streamCut, 1)
+	srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
+		sc := <-conns
+		ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
+		cuts <- c
+		c.watch(ctx, time.Now().Add(200*time.Millisecond), time.Hour, time.Second, func(context.Context) error { return errTestRevoked })
+		defer c.End()
+		sc.stall(true)
+		cw.WriteHeader(http.StatusSwitchingProtocols)
+		_, _, err := cw.(http.Hijacker).Hijack()
+		result <- err
+	})
+	raw := dialUpgrade(t, srv)
+	defer raw.Close()
+	start := time.Now()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("a hijack whose flush the cut interrupted returned a connection")
+		}
+		if d := time.Since(start); d > 600*time.Millisecond {
+			t.Errorf("the hijack's flush ended %v after the request, want at the cut (200ms)", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the hijack's flush outlived the cut")
+	}
+	cut := <-cuts
+	cut.mu.Lock()
+	registered := cut.conn != nil
+	cut.mu.Unlock()
+	if registered {
+		t.Error("a connection switched after the cut was registered")
+	}
+	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.Copy(io.Discard, raw); isTimeout(err) {
+		t.Error("the connection is still open")
+	}
+}

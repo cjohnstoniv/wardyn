@@ -54,6 +54,9 @@ const (
 var (
 	streamOpWriteNS      atomic.Int64
 	streamCutNoInterrupt atomic.Bool
+	// streamCutHijackHook runs as a switch begins, before anything is checked: tests only, so a cut can be
+	// landed between a backend's 101 and the hijack.
+	streamCutHijackHook atomic.Pointer[func(*streamCut)]
 )
 
 // streamPast is a deadline already passed: a pending or later write returns at once.
@@ -393,6 +396,9 @@ func (w *cutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // bufio.ReadWriter, whose reader stays the server's (it may hold bytes already read).
 func (w *cutWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	c := w.c
+	if hook := streamCutHijackHook.Load(); hook != nil {
+		(*hook)(c)
+	}
 	if err := c.begin(); err != nil {
 		return nil, nil, err
 	}
