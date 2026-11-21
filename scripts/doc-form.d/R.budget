@@ -68,7 +68,8 @@ RELEASING.md=6293 share=35 # 6293 measured (+10: keep PRERELEASE=auto, as verify
 # ROADMAP.md 2055 = 2020 + 35, measured: the v0.10.0-rc.26 Shipped row.
 # ROADMAP.md 2097 = 2055 + 42, measured: the v0.10.0 Shipped row.
 # ROADMAP.md 2099 = 2097 + 2, measured: the rc.1 to rc.13 row's own label.
-ROADMAP.md=2099 share=5
+# ROADMAP.md 2140 = 2099 + 41, measured: the v0.10.1 Shipped row.
+ROADMAP.md=2140 share=5
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6881 share=35 # -9 (internal wording removed), measured
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
