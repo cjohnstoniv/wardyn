@@ -503,6 +503,19 @@ func TestUIIssuerPortal_AdmissionReadHeldPastBound(t *testing.T) {
 	}
 }
 
+// TestUIIssuerPortal_TicketForAMissingRunRefused: a ticket whose run is gone is a bad ticket (403), not an
+// outage (503).
+func TestUIIssuerPortal_TicketForAMissingRunRefused(t *testing.T) {
+	rig := newIssuerUIRig(t, closingBackend("app"))
+	tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+	rig.store.sshMemStore.mu.Lock()
+	delete(rig.store.runs, rig.run.ID)
+	rig.store.sshMemStore.mu.Unlock()
+	if rec := rig.enterWith(tok); rec.Code != http.StatusForbidden {
+		t.Fatalf("a ticket for a missing run: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
 // TestUIIssuerPortal_TicketAdmissionReadHeldPastBound: the store holds the redemption's identity read; the enter
 // is answered 503 at the bound, not held with the store.
 func TestUIIssuerPortal_TicketAdmissionReadHeldPastBound(t *testing.T) {

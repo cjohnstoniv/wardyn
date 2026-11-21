@@ -57,9 +57,13 @@ func (s *Server) issuerPortalPersonHolds(ctx context.Context, principal string, 
 }
 
 // issuerPortalTicketHolds is issuerPortalPersonHolds for a ticket, on the run as it stands now, as a verdict:
-// the refusal's reason is the verdict, so a refusal is the bad-ticket answer and an outage a 503.
+// the refusal's reason is the verdict, so a refusal is the bad-ticket answer and an outage a 503. A run that is
+// gone is a bad ticket (403), as on every other ticket's path, never an outage.
 func (s *Server) issuerPortalTicketHolds(ctx context.Context, ta ticketActor, runID uuid.UUID) entryVerdict {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return verdictInvalid
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: an issuer-portal ticket's run could not be read", "run_id", runID, "err", err)
 		return verdictRevocationUnavailable
