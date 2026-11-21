@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,41 +22,142 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Hosted-only: a change to a portal that starts while an exchange is inside its locked grant transaction. A
-// session on a pool of its own holds portal_grants in SHARE mode, so the exchange's grant INSERT waits after
-// its lock on the binding (FOR KEY SHARE) and on the portal row (FOR SHARE) is taken. The change runs on a
-// third pool and must wait for the exchange; once the hold is released the exchange commits first, and the
-// outcome is the plan's for that order. The other order, the change committing first, is
+// Hosted-only: a change to a portal that starts while an exchange is inside one of its locked transactions.
+// A session on a pool of its own holds a table in SHARE mode, so the exchange's next insert into it waits
+// after its lock on the binding (FOR KEY SHARE) and on the portal row (FOR SHARE) is taken: portal_grants
+// parks the grant write. The change runs on another pool and must wait for the exchange; once the hold is
+// released the exchange's transaction commits first, and the outcome is the plan's for that order. The other order, the change committing first, is
 // TestPortalExchange_AdmissionOrRevokeRacesWrite_PG.
 
 // lockWait bounds every wait in these tests.
 const lockWait = 15 * time.Second
 
-// sidePool is another pool on the harness's database, for a transaction held apart from the server's.
-func (e *exchPG) sidePool(t *testing.T) *pgxpool.Pool {
+// lockRig owns what one lock test opens beside the harness: side pools, holding transactions and goroutines.
+// Its cleanup is registered before any of them, so it runs before the harness's own. It releases every hold
+// first, then joins the goroutines, cancelling their statements if they have not ended within lockWait,
+// and closes the pools only once every goroutine has ended. A failure at any step therefore never leaves a
+// pool's Close waiting on a connection whose statement waits on a hold that is still queued to release.
+type lockRig struct {
+	t      *testing.T
+	dsn    string
+	ctx    context.Context // bounds every statement the rig's goroutines and observations run
+	cancel context.CancelFunc
+	pools  []*pgxpool.Pool
+	holds  []*lockHold
+	wg     sync.WaitGroup
+	joined bool
+}
+
+// lockHold is a transaction on a pool of its own that holds one table in SHARE mode.
+type lockHold struct {
+	tx       pgx.Tx
+	pid      int32
+	released bool
+}
+
+func (e *exchPG) newLockRig(t *testing.T) *lockRig {
 	t.Helper()
-	p, err := db.Connect(context.Background(), e.pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*lockWait)
+	r := &lockRig{t: t, dsn: e.pool.Config().ConnString(), ctx: ctx, cancel: cancel}
+	t.Cleanup(r.close)
+	return r
+}
+
+func (r *lockRig) close() {
+	for i := len(r.holds) - 1; i >= 0; i-- {
+		r.holds[i].release()
 	}
-	t.Cleanup(p.Close)
+	joined := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+	case <-time.After(lockWait):
+		r.cancel()
+		select {
+		case <-joined:
+		case <-time.After(lockWait):
+			// The pools stay open: closing them would wait on that goroutine's connection.
+			r.t.Errorf("a goroutine of the lock test did not end within %v of its statements' cancel", lockWait)
+			return
+		}
+	}
+	r.cancel()
+	r.joined = true
+	for _, p := range r.pools {
+		p.Close()
+	}
+}
+
+func (h *lockHold) release() {
+	if h.released {
+		return
+	}
+	h.released = true
+	ctx, cancel := context.WithTimeout(context.Background(), lockWait)
+	defer cancel()
+	_ = h.tx.Rollback(ctx)
+}
+
+// pool is another pool on the harness's database, closed by the rig's cleanup.
+func (r *lockRig) pool() *pgxpool.Pool {
+	r.t.Helper()
+	p, err := db.Connect(r.ctx, r.dsn)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.pools = append(r.pools, p)
 	return p
 }
 
-// exchangeLockWaiter waits, reading through q, until a backend is waiting on pid, and returns the first such backend.
-// It stops early when done closes. It reads pg_locks, which is live on every read, not pg_stat_activity,
-// whose snapshot a transaction keeps.
-func exchangeLockWaiter(t *testing.T, q pgx.Tx, pid int32, done <-chan struct{}) (int32, bool) {
-	t.Helper()
-	deadline := time.Now().Add(lockWait)
+// hold takes table in SHARE mode in a transaction on a pool of its own, so the next insert into it waits.
+func (r *lockRig) hold(table string) *lockHold {
+	r.t.Helper()
+	tx, err := r.pool().BeginTx(r.ctx, pgx.TxOptions{})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	h := &lockHold{tx: tx}
+	r.holds = append(r.holds, h)
+	if err := tx.QueryRow(r.ctx, `SELECT pg_backend_pid()`).Scan(&h.pid); err != nil {
+		r.t.Fatal(err)
+	}
+	if _, err := tx.Exec(r.ctx, `LOCK TABLE `+table+` IN SHARE MODE`); err != nil {
+		r.t.Fatal(err)
+	}
+	return h
+}
+
+// countOn counts through h's transaction, so the test goroutine never takes a second connection of one pool.
+func (r *lockRig) countOn(h *lockHold, q string, args ...any) int {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(r.ctx, lockWait)
+	defer cancel()
+	var n int
+	if err := h.tx.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+		r.t.Fatal(err)
+	}
+	return n
+}
+
+// waiterOn reads through h until a backend waits on pid, and returns the first such backend. It gives up,
+// with false, when done closes or bound passes first; every read has a deadline of its own. It reads
+// pg_locks, which is live on every read, not pg_stat_activity, whose snapshot a transaction keeps.
+func (r *lockRig) waiterOn(h *lockHold, pid int32, done <-chan struct{}, bound time.Duration) (int32, bool) {
+	r.t.Helper()
+	deadline := time.Now().Add(bound)
 	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(r.ctx, time.Second)
 		var waiter int32
-		err := q.QueryRow(context.Background(), `SELECT pid FROM pg_locks WHERE NOT granted AND pid IS NOT NULL AND $1 = ANY(pg_blocking_pids(pid)) ORDER BY pid LIMIT 1`, pid).Scan(&waiter)
+		err := h.tx.QueryRow(ctx, `SELECT pid FROM pg_locks WHERE NOT granted AND pid IS NOT NULL AND $1 = ANY(pg_blocking_pids(pid)) ORDER BY pid LIMIT 1`, pid).Scan(&waiter)
+		cancel()
 		if err == nil {
 			return waiter, true
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatal(err)
+			r.t.Fatalf("read the lock waiters: %v", err)
 		}
 		select {
 		case <-done:
@@ -66,62 +168,56 @@ func exchangeLockWaiter(t *testing.T, q pgx.Tx, pid int32, done <-chan struct{})
 	return 0, false
 }
 
-// parkedExchange starts an exchange through portal d and returns once it waits inside its grant transaction,
-// with the exchange's backend, its result channel, the holding transaction (every later wait is read through
-// it, so the test goroutine never takes a second connection of one pool) and the release of the hold.
-func (e *exchPG) parkedExchange(t *testing.T, d types.Delegate, cred string) (exchPID int32, result <-chan *httptest.ResponseRecorder, hold pgx.Tx, release func()) {
-	t.Helper()
-	ctx := context.Background()
-	tx, err := e.sidePool(t).Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	released := false
-	release = func() {
-		if !released {
-			released = true
-			_ = tx.Rollback(ctx)
-		}
-	}
-	t.Cleanup(release)
-	var holdPID int32
-	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holdPID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `LOCK TABLE portal_grants IN SHARE MODE`); err != nil {
-		t.Fatal(err)
-	}
-	out := make(chan *httptest.ResponseRecorder, 1)
+// runOn runs f on a goroutine the rig joins, under the rig's context, and returns its result and a channel
+// closed when it ends.
+func runOn[T any](r *lockRig, f func(ctx context.Context) T) (<-chan T, <-chan struct{}) {
+	out := make(chan T, 1)
 	done := make(chan struct{})
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		defer close(done)
-		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {"subject-token"}, "subject_token_type": {tokenTypeAccessToken}}
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode()))
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		r.SetBasicAuth(d.ID.String(), cred)
-		w := httptest.NewRecorder()
-		e.h.srv.Handler().ServeHTTP(w, r)
-		out <- w
+		out <- f(r.ctx)
 	}()
-	exchPID, ok := exchangeLockWaiter(t, tx, holdPID, done)
-	if !ok {
-		release()
-		t.Fatalf("the exchange never waited inside its grant transaction (it answered %d)", withinPortal(t, out, "the exchange").Code)
-	}
-	return exchPID, out, tx, release
+	return out, done
 }
 
-// waitsOnExchange starts change on its own goroutine and fails unless it waits on the parked exchange.
-func waitsOnExchange(t *testing.T, hold pgx.Tx, exchPID int32, change func() error) <-chan error {
-	t.Helper()
-	res := make(chan error, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		res <- change()
-	}()
-	if _, ok := exchangeLockWaiter(t, hold, exchPID, done); !ok {
-		t.Fatalf("the change did not wait for the exchange inside its locked transaction (it returned %v)", withinPortal(t, res, "the change"))
+// parkExchange starts an exchange through portal d and returns once its backend waits on h, with that
+// backend, the exchange's result and a channel closed when it ends.
+func (r *lockRig) parkExchange(e *exchPG, h *lockHold, d types.Delegate, cred string) (int32, <-chan *httptest.ResponseRecorder, <-chan struct{}) {
+	r.t.Helper()
+	out, done := runOn(r, func(ctx context.Context) *httptest.ResponseRecorder {
+		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {"subject-token"}, "subject_token_type": {tokenTypeAccessToken}}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode())).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth(d.ID.String(), cred)
+		w := httptest.NewRecorder()
+		e.h.srv.Handler().ServeHTTP(w, req)
+		return w
+	})
+	pid, ok := r.waiterOn(h, h.pid, done, lockWait)
+	if !ok {
+		select {
+		case w := <-out:
+			r.t.Fatalf("the exchange never waited on the hold: it answered %d %s", w.Code, w.Body)
+		default:
+			r.t.Fatalf("the exchange never waited on the hold within %v", lockWait)
+		}
+	}
+	return pid, out, done
+}
+
+// changeWaits starts change on a goroutine and fails unless it waits on the exchange's backend.
+func (r *lockRig) changeWaits(h *lockHold, exchPID int32, change func(ctx context.Context) error) <-chan error {
+	r.t.Helper()
+	res, done := runOn(r, change)
+	if _, ok := r.waiterOn(h, exchPID, done, lockWait); !ok {
+		select {
+		case err := <-res:
+			r.t.Fatalf("the change did not wait for the exchange inside its locked transaction (it returned %v)", err)
+		default:
+			r.t.Fatalf("no wait of the change on the exchange was seen within %v", lockWait)
+		}
 	}
 	return res
 }
@@ -138,18 +234,35 @@ func withinPortal[T any](t *testing.T, c <-chan T, what string) T {
 	}
 }
 
+// portalRetire retires the portal's issuer binding as an operator's retirement does, under the registry lock.
+func portalRetire(ctx context.Context, side *pgxpool.Pool, key string) error {
+	tx, err := side.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := store.LockPortalIssuerRegistry(ctx, tx); err != nil {
+		return err
+	}
+	if err := store.NewPG(side).RetirePortalIssuerQ(ctx, tx, key, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func TestPortalExchange_ChangeWaitsForLockedGrantWrite_PG(t *testing.T) {
-	ctx := context.Background()
 	t.Run("revoke waits on the portal row and ends the grant", func(t *testing.T) {
 		e := newExchPG(t)
 		d, cred := e.portal(t, portalTestIssuer, nil)
-		pid, result, hold, release := e.parkedExchange(t, d, cred)
-		side := e.sidePool(t)
-		changed := waitsOnExchange(t, hold, pid, func() error {
+		r := e.newLockRig(t)
+		h := r.hold("portal_grants")
+		pid, result, _ := r.parkExchange(e, h, d, cred)
+		side := r.pool()
+		changed := r.changeWaits(h, pid, func(ctx context.Context) error {
 			_, _, err := store.NewPG(side).RevokeDelegate(ctx, d.ID, time.Now(), false)
 			return err
 		})
-		release()
+		h.release()
 		w := withinPortal(t, result, "the exchange")
 		tok, _ := portalToken(t, w)
 		if err := withinPortal(t, changed, "the revoke"); err != nil {
@@ -162,13 +275,15 @@ func TestPortalExchange_ChangeWaitsForLockedGrantWrite_PG(t *testing.T) {
 	t.Run("narrowing waits on the portal row and the grant runs to its end", func(t *testing.T) {
 		e := newExchPG(t)
 		d, cred := e.portal(t, portalTestIssuer, nil)
-		pid, result, hold, release := e.parkedExchange(t, d, cred)
-		side := e.sidePool(t)
-		changed := waitsOnExchange(t, hold, pid, func() error {
+		r := e.newLockRig(t)
+		h := r.hold("portal_grants")
+		pid, result, _ := r.parkExchange(e, h, d, cred)
+		side := r.pool()
+		changed := r.changeWaits(h, pid, func(ctx context.Context) error {
 			return store.NewPG(side).UpdateDelegateAdmissionQ(ctx, side, d.ID,
 				types.PortalAdmission{PortalManaged: true}, types.PortalAdmission{Group: "portal-users"})
 		})
-		release()
+		h.release()
 		tok, _ := portalToken(t, withinPortal(t, result, "the exchange"))
 		if err := withinPortal(t, changed, "the narrowing"); err != nil {
 			t.Fatalf("narrow after the exchange: %v", err)
@@ -183,23 +298,12 @@ func TestPortalExchange_ChangeWaitsForLockedGrantWrite_PG(t *testing.T) {
 	t.Run("retirement waits on the binding and is refused", func(t *testing.T) {
 		e := newExchPG(t)
 		d, cred := e.portal(t, portalTestIssuer, nil)
-		pid, result, hold, release := e.parkedExchange(t, d, cred)
-		side := e.sidePool(t)
-		changed := waitsOnExchange(t, hold, pid, func() error {
-			tx, err := side.BeginTx(ctx, pgx.TxOptions{})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = tx.Rollback(ctx) }()
-			if err := store.LockPortalIssuerRegistry(ctx, tx); err != nil {
-				return err
-			}
-			if err := store.NewPG(side).RetirePortalIssuerQ(ctx, tx, d.IssuerKey, nil); err != nil {
-				return err
-			}
-			return tx.Commit(ctx)
-		})
-		release()
+		r := e.newLockRig(t)
+		h := r.hold("portal_grants")
+		pid, result, _ := r.parkExchange(e, h, d, cred)
+		side := r.pool()
+		changed := r.changeWaits(h, pid, func(ctx context.Context) error { return portalRetire(ctx, side, d.IssuerKey) })
+		h.release()
 		portalToken(t, withinPortal(t, result, "the exchange"))
 		if err := withinPortal(t, changed, "the retirement"); !errors.Is(err, store.ErrIssuerInUse) {
 			t.Fatalf("retire under a committed exchange: %v, want ErrIssuerInUse", err)
@@ -208,4 +312,68 @@ func TestPortalExchange_ChangeWaitsForLockedGrantWrite_PG(t *testing.T) {
 			t.Fatalf("binding rows after a refused retirement = %d, want 1", n)
 		}
 	})
+}
+
+// TestPortalExchange_FailedLockObservationCleansUp_PG fails an observation while a change still waits on a
+// parked exchange, then leaves the subtest. Its cleanup must release the hold before it closes a pool: the
+// exchange then commits, the change after it, both goroutines end and every side pool closes, all within
+// the tests' bounds.
+func TestPortalExchange_FailedLockObservationCleansUp_PG(t *testing.T) {
+	e := newExchPG(t)
+	d, cred := e.portal(t, portalTestIssuer, nil)
+	var rig *lockRig
+	var result <-chan *httptest.ResponseRecorder
+	var changed <-chan error
+	start := time.Now()
+	t.Run("observation fails while the change waits", func(t *testing.T) {
+		rig = e.newLockRig(t)
+		h := rig.hold("portal_grants")
+		pid, out, _ := rig.parkExchange(e, h, d, cred)
+		result = out
+		side := rig.pool()
+		res, done := runOn(rig, func(ctx context.Context) error {
+			_, _, err := store.NewPG(side).RevokeDelegate(ctx, d.ID, time.Now(), false)
+			return err
+		})
+		changed = res
+		if _, ok := rig.waiterOn(h, pid, done, lockWait); !ok {
+			t.Fatal("the revoke did not wait on the parked exchange")
+		}
+		// No backend has pid 0, so this observation runs out its bound while the revoke still waits.
+		if _, ok := rig.waiterOn(h, 0, done, 200*time.Millisecond); ok {
+			t.Fatal("an observation of pid 0 saw a waiter")
+		}
+		select {
+		case err := <-res:
+			t.Fatalf("the revoke ended while the exchange held the portal row: %v", err)
+		default:
+		}
+	})
+	if rig == nil || !rig.joined {
+		t.Fatal("the rig's cleanup did not join its goroutines")
+	}
+	if took := time.Since(start); took > 3*lockWait {
+		t.Fatalf("the subtest and its cleanup took %v, want under %v", took, 3*lockWait)
+	}
+	select {
+	case w := <-result:
+		portalToken(t, w)
+	default:
+		t.Fatal("the exchange had not answered when the cleanup returned")
+	}
+	select {
+	case err := <-changed:
+		if err != nil {
+			t.Fatalf("the revoke after the release: %v", err)
+		}
+	default:
+		t.Fatal("the revoke had not returned when the cleanup returned")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lockWait)
+	defer cancel()
+	for i, p := range rig.pools {
+		if err := p.Ping(ctx); err == nil {
+			t.Fatalf("side pool %d still open after the cleanup", i)
+		}
+	}
 }
