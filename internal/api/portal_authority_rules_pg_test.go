@@ -100,6 +100,25 @@ func TestPortalAdmission_ChangeHeldAndAudited_PG(t *testing.T) {
 	}
 }
 
+// A group the exchange could never match (an embedded control character, a case it would fold) is refused at the
+// edit, before the live rule or its revision changes, and nothing is held for approval.
+func TestPortalAdmission_InvalidGroupRefusedBeforeChange_PG(t *testing.T) {
+	e := newGovEnv(t)
+	d := seedIssuerPortal(t, e.pg, nil, withClaim("tenant", "env-a"))
+	cur := types.PortalAdmission{PortalManaged: true, RequiredClaim: d.RequiredClaim}
+	for _, group := range []string{"bad\u0007group", "Mixed Case"} {
+		next := types.PortalAdmission{Group: group, RequiredClaim: d.RequiredClaim}
+		w := e.call(e.super, http.MethodPut, "/api/v1/admin/delegates/"+d.ID.String()+"/admission", admissionBody(next, cur))
+		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonDelegateGroupInvalid {
+			t.Errorf("group %q = %d %s, want 422 %s", group, w.Code, w.Body, reasonDelegateGroupInvalid)
+		}
+	}
+	got, err := e.pg.GetDelegateByID(context.Background(), d.ID)
+	if err != nil || got.Group != "" || !got.PortalManagedAdmission || got.AdmissionRev != d.AdmissionRev {
+		t.Errorf("the live rule after the refused edits = group %q managed %v rev %d (%v), want it untouched", got.Group, got.PortalManagedAdmission, got.AdmissionRev, err)
+	}
+}
+
 // The audit rows of a change carry the claim names and whether a group is set, never a value; the held change
 // itself shows the value to the approver.
 func TestPortalAdmission_AuditCarriesNamesNotValues_PG(t *testing.T) {

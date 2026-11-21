@@ -38,16 +38,17 @@ func init() {
 var issuerKeyRE = regexp.MustCompile(`^[a-z2-7]{26}$`)
 
 const (
-	portalIssuerNotFoundMsg = "No issuer binding has that key."
-	portalIssuerInUseMsg    = "That issuer binding is in use: a portal, a person, a grant or a stored rule still names it. Only a binding that never admitted anyone can be retired."
-	admissionStaleMsg       = "The portal's admission rule changed since you read it. Read it again and resubmit."
-	admissionNotPortalMsg   = "Only an issuer portal has an admission rule."
-	admissionGroupOrFlagMsg = "Name a group, or set portal_managed_admission to say the portal chooses its own users."
-	admissionFlagGroupMsg   = "portal_managed_admission cannot be set while a group is named."
-	admissionClaimReserved  = "That claim name already has a meaning and cannot be matched."
-	admissionClaimHalfMsg   = "A claim match needs both a claim and a value."
-	admissionClaimShapeMsg  = "The claim must be 1-64 characters of letters, digits and _ . : -, and the value 1-256 bytes of printable text."
-	admissionExpectedMsg    = "Send expected, the admission rule you read."
+	portalIssuerNotFoundMsg  = "No issuer binding has that key."
+	portalIssuerInUseMsg     = "That issuer binding is in use: a portal, a person, a grant or a stored rule still names it. Only a binding that never admitted anyone can be retired."
+	admissionStaleMsg        = "The portal's admission rule changed since you read it. Read it again and resubmit."
+	admissionNotPortalMsg    = "Only an issuer portal has an admission rule."
+	admissionGroupOrFlagMsg  = "Name a group, or set portal_managed_admission to say the portal chooses its own users."
+	admissionGroupInvalidMsg = "group: printable ASCII"
+	admissionFlagGroupMsg    = "portal_managed_admission cannot be set while a group is named."
+	admissionClaimReserved   = "That claim name already has a meaning and cannot be matched."
+	admissionClaimHalfMsg    = "A claim match needs both a claim and a value."
+	admissionClaimShapeMsg   = "The claim must be 1-64 characters of letters, digits and _ . : -, and the value 1-256 bytes of printable text."
+	admissionExpectedMsg     = "Send expected, the admission rule you read."
 )
 
 // portalRetireView is the reviewer's view of a held retirement.
@@ -212,6 +213,10 @@ func validatePortalAdmission(a types.PortalAdmission, groupsClaim string) (statu
 		return http.StatusUnprocessableEntity, reasonDelegateGroupOrPortalManaged, admissionGroupOrFlagMsg, false
 	case a.Group != "" && a.PortalManaged:
 		return http.StatusUnprocessableEntity, reasonDelegatePortalManagedWithGroup, admissionFlagGroupMsg, false
+	}
+	if canon, ok := types.CanonicalGroupSubject(a.Group); a.Group != "" && (!ok || canon != a.Group) {
+		// The rule registration applies, and the exchange's own: a group that is not canonical can never match.
+		return http.StatusUnprocessableEntity, reasonDelegateGroupInvalid, admissionGroupInvalidMsg, false
 	}
 	c := a.RequiredClaim
 	if c == nil {
