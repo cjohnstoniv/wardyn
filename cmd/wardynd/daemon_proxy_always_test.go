@@ -223,10 +223,12 @@ func TestDaemonProxyAlways_RefusesUnparsableEnvironmentProxy(t *testing.T) {
 // The host:port shorthand httpproxy accepts (a value with no scheme) keeps working.
 func TestDaemonProxyAlways_AcceptsHostPortShorthand(t *testing.T) {
 	for raw, want := range map[string]string{
-		"proxy.corp.example:3128":         "http://proxy.corp.example:3128",
-		"localhost:3128":                  "http://localhost:3128",
-		"10.0.0.9:8080":                   "http://10.0.0.9:8080",
-		"https://proxy.corp.example:3129": "https://proxy.corp.example:3129",
+		"proxy.corp.example:3128":           "http://proxy.corp.example:3128",
+		"localhost:3128":                    "http://localhost:3128",
+		"10.0.0.9:8080":                     "http://10.0.0.9:8080",
+		"https://proxy.corp.example:3129":   "https://proxy.corp.example:3129",
+		"socks5://proxy.corp.example:1080":  "socks5://proxy.corp.example:1080",
+		"socks5h://proxy.corp.example:1080": "socks5h://proxy.corp.example:1080",
 	} {
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", raw)
@@ -313,5 +315,31 @@ func TestDaemonProxyAlways_RefusalOmitsEntryText(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://user:MARKER-7f3a@bad host:3128")
 	if _, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example")); err == nil || strings.Contains(err.Error(), "MARKER-7f3a") {
 		t.Errorf("unusable HTTPS_PROXY: err = %v, want a refusal without the value", err)
+	}
+}
+
+// An entry that is not a whole host name can never match a request host, and its text could be
+// private: boot refuses it by position and reason, and the log line only ever carries validated names.
+func TestDaemonProxyAlways_RefusesNonHostnameEntry(t *testing.T) {
+	clearProxyEnv(t)
+	long := strings.Repeat("a", 64) + ".example"
+	for _, entry := range []string{
+		"login.corp.example?MARKER-q1", "login.corp.example#MARKER-f1", "login corp.example", "login..corp.example",
+		"-bad.example", "bad-.example", long, strings.Repeat("a.", 130) + "example", "log\u00efn.example", "under_score.example", ".",
+	} {
+		_, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", "ok.example,"+entry))
+		if err == nil {
+			t.Errorf("%.30q: boot succeeded, want a refusal", entry)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "WARDYN_DAEMON_PROXY_ALWAYS entry 2 ") || strings.Contains(msg, "MARKER") || strings.Contains(msg, entry) {
+			t.Errorf("%.30q: refusal %q must name entry 2 and carry no entry text", entry, msg)
+		}
+	}
+	// Valid names, including a single label and punycode, boot.
+	grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", "login.corp.example,idp,xn--lgin-6qa.example,a-1.b-2.example."))
+	if err != nil || grant == nil {
+		t.Errorf("valid names: %v, %v; want a grant transport", grant, err)
 	}
 }

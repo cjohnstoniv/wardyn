@@ -353,8 +353,8 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 			why = "an IP address"
 		case host == "localhost":
 			why = "localhost"
-		case strings.ContainsAny(host, ":/@*") || strings.HasPrefix(host, "."):
-			why = "not an exact host name (no port, path, suffix or wildcard)"
+		case !isFullHostName(host):
+			why = "not an exact host name (no port, path, suffix, wildcard or other text)"
 		}
 		if _, ok := skip[host]; ok && why == "" {
 			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
@@ -387,6 +387,28 @@ func parseEnvironmentProxy(raw string) (*url.URL, bool) {
 		return u, true
 	}
 	return nil, false
+}
+
+// isFullHostName reports whether host (already lower-cased, one trailing dot removed) is a
+// DNS host name: 1 to 253 characters in dot-separated labels of 1 to 63 characters from
+// a-z, 0-9 and "-", none starting or ending with "-". A single label is allowed: the list
+// takes exact host names, and a cluster-internal name has no dot. An internationalised
+// name is listed in its punycode form.
+func isFullHostName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			if c := label[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // normalizeProxyHost lower-cases a host and drops one trailing dot, the form a
