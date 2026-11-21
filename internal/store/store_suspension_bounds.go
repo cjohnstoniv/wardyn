@@ -45,8 +45,8 @@ type PortalSuspensionLedger interface {
 	// asks for one, made in one transaction that first locks the named row: pending, of the identity's current
 	// suspension, with the id the tail read. A row it may not claim is ErrSuperseded and nothing is written, so a
 	// replacement cannot land between the check and the transition, and the intent is the one of the claim that won.
-	// A run leaving the queue leaves it in that transaction. A run already KILLED (a repair) is claimed with no
-	// write to it, and only once no other claim of the row is live (ErrKillHeld); the claim also pins the row's
+	// A run leaving the queue leaves it in that transaction. A run already KILLED (a repair) is claimed with only its
+	// updated_at stamped, and only once no other claim of the row is live (ErrKillHeld); the claim also pins the row's
 	// receipt id and time, so every claim of one occurrence writes the same run.kill event.
 	ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time, kill RunKill) (KillClaim, error)
 	// ReleaseSuspensionKillAt ends the claim a failed teardown leaves on the row, so its retry need not wait out
@@ -247,7 +247,11 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 		out.From = kill.From
 		switch {
 		case kill.From == types.RunKilled:
-			out.Applied = true // a repair: the run is already the occurrence's, and is not written again
+			// A repair: the run is already the occurrence's, so its state is not written again, but the claim stamps
+			// it, which is the grace the kill-tail recovery sweep reads before it takes a KILLED run's teardown.
+			var tag pgconn.CommandTag
+			tag, err = q.Exec(ctx, `UPDATE agent_runs SET updated_at = now() WHERE id = $1 AND state = $2`, kill.RunID, string(types.RunKilled))
+			out.Applied = err == nil && tag.RowsAffected() > 0
 			if was != nil {
 				out.From = types.RunState(*was) // killed from the state the first claim killed it from
 			}
