@@ -31,10 +31,9 @@ import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
 import { AddPersonDialog } from "./add-person-dialog";
 import { PersonDrawer } from "./person-drawer";
-import { personState, roleLabel, STATE_LABEL, type PersonState } from "./people-format";
+import { personState, roleLabel, STATE_LABEL, STATE_TONE } from "./people-format";
 
 const PAGE_SIZE = 50;
-const STATE_TONE: Record<PersonState, "success" | "warning" | "neutral"> = { active: "success", deactivated: "warning", never: "neutral" };
 type StateFilter = "all" | "active" | "deactivated";
 
 // The access panel's own fetch, the same one the Getting Started People step owns. Only the super

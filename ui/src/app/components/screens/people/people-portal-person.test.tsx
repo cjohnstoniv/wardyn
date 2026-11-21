@@ -6,7 +6,7 @@
 // A portal person on the People page: the issuer and internal address columns, the role, and no
 // suspend or purge control. The strings are written out so a drift in the copy module fails here.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { PersonSummary } from "../../../lib/types";
@@ -112,5 +112,50 @@ describe("a portal person on the people page", () => {
     for (const name of [/suspend/i, /reactivate/i, /purge/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
+  });
+
+  async function openDrawer(label: string) {
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: label }));
+    return within(await screen.findByRole("dialog"));
+  }
+
+  it("shows the state in the drawer for an active, a deactivated and a never-signed-in portal person", async () => {
+    const left = person({ ...PORTAL, principal: "delegate:person:k1:sub-jo", email: "jo@example.com", deactivated_at: new Date().toISOString() });
+    const fresh = person({ ...PORTAL, principal: "delegate:person:k1:sub-kim", email: "kim@example.com", last_signed_in_at: undefined });
+    ROWS.push(left, fresh);
+    try {
+      expect((await openDrawer("sam@example.com")).getByText("Active")).toBeInTheDocument();
+      cleanup();
+      expect((await openDrawer("jo@example.com")).getByText("Deactivated")).toBeInTheDocument();
+      cleanup();
+      expect((await openDrawer("kim@example.com")).getByText("Never signed in")).toBeInTheDocument();
+    } finally {
+      ROWS.splice(2, 2);
+    }
+  });
+
+  it("says the issuer address is used when a portal person has no internal address", async () => {
+    const jo = person({ ...PORTAL, principal: "delegate:person:k2:sub-jo", email: "jo@example.com", internal_address: undefined, issuer: "https://login.example.org" });
+    ROWS.push(jo);
+    try {
+      const drawer = await openDrawer("jo@example.com");
+      expect(drawer.getByText("https://login.example.org")).toBeInTheDocument();
+      expect(drawer.getByText("None set; the issuer address is used")).toBeInTheDocument();
+    } finally {
+      ROWS.splice(2, 1);
+    }
+  });
+
+  it("offers the token invitation for a workforce person and not for a portal person", async () => {
+    const workforce = await openDrawer("ana@example.com");
+    expect(workforce.getByText(/To let them create a token, invite them with/)).toBeInTheDocument();
+    expect(workforce.getByText("wardyn person invite -- 'sub-ana'")).toBeInTheDocument();
+    cleanup();
+    const portal = await openDrawer("sam@example.com");
+    expect(portal.getByText("Portal person")).toBeInTheDocument();
+    expect(portal.queryByText(/To let them create a token/)).toBeNull();
+    expect(portal.queryByText(/wardyn person invite/)).toBeNull();
   });
 });
