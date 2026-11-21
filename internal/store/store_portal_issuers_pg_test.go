@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -207,13 +208,14 @@ func uiAppsJSON(key string) string {
 
 // uiWriters are the durable writers of the policy documents the ruling reads: a policy's spec on create and
 // on update, a preset's inline policy and its policy overlay, a template's intent inline policy, a standalone
-// unit's ceiling, and a composed unit's overlay. The first two and the unit documents go through the real
-// marshalling of their types, whose caller carries a character Go escapes ("&" as \u0026); the preset and
-// template documents are raw JSON with the prefix itself escaped.
+// unit's ceiling, and a composed unit's overlay (on the Default unit, as the schema wants a parent with every
+// overlay). The typed documents carry a real portal principal; the preset and template documents are raw
+// JSON with the prefix itself escaped, which is where an escape changes what a text search finds.
 func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	callerAmp := func(key string) string { return "user:" + types.PortalPrincipal(key, "alice") + "&x" }
+	callerOf := func(key string) string { return "user:" + types.PortalPrincipal(key, "alice") }
+	parent := store.DefaultUnitID
 	specWith := func(caller string) types.RunPolicySpec {
 		return types.RunPolicySpec{UIApps: []types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{caller}}}}
 	}
@@ -240,7 +242,7 @@ func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 	}
 	return []uiWriter{
 		{"CreatePolicy", "run_policies.spec", func(key string) error {
-			_, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "p-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: specWith(callerAmp(key))})
+			_, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "p-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: specWith(callerOf(key))})
 			return err
 		}},
 		{"UpdatePolicy", "run_policies.spec", func(key string) error {
@@ -248,7 +250,7 @@ func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 			if err != nil {
 				return err
 			}
-			_, err = st.UpdatePolicy(ctx, base.ID, base.UpdatedAt, base.Name, specWith(callerAmp(key)))
+			_, err = st.UpdatePolicy(ctx, base.ID, base.UpdatedAt, base.Name, specWith(callerOf(key)))
 			return err
 		}},
 		{"PutLaunchPreset inline_policy", "launch_presets.request", func(key string) error {
@@ -264,10 +266,10 @@ func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 			return err
 		}},
 		{"WriteGovernanceUnitQ ceiling", "governance_units.ceiling", func(key string) error {
-			return unit(types.GovernanceUnit{Ceiling: specWith(callerAmp(key))})
+			return unit(types.GovernanceUnit{Ceiling: specWith(callerOf(key))})
 		}},
 		{"WriteGovernanceUnitQ composed overlay", "governance_units.overlay", func(key string) error {
-			return unit(types.GovernanceUnit{Overlay: &types.CeilingOverlay{UIApps: &[]types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{callerAmp(key)}}}}})
+			return unit(types.GovernanceUnit{ParentID: &parent, Overlay: &types.CeilingOverlay{UIApps: &[]types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{callerOf(key)}}}}})
 		}},
 	}
 }
@@ -289,20 +291,39 @@ func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
 		}
 		return p
 	}
+	installWriteGate(t, pool)
 	for _, w := range uiWriters(st, pool) {
 		t.Run(w.name, func(t *testing.T) {
 			if err := w.write(unbound); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
 				t.Errorf("a caller of an unbound issuer = %v, want ErrDelegatePersonUnknownPortal", err)
 			}
 
-			// The write commits first: the retirement's census finds the row it wrote.
+			// The write is in flight first: it holds the binding FOR KEY SHARE and is parked in its insert, the
+			// retirement starts and waits for it, and when the write commits the retirement's census finds it.
 			first := revokedPortal()
-			if err := w.write(first.Key); err != nil {
+			gate := holdWriteGate(t, pool)
+			wrote := make(chan error, 1)
+			go func() { wrote <- w.write(first.Key) }()
+			untilBlockedBy(t, pool, pidOf(t, gate), 1)
+			writer := sessionBlockedBy(t, pool, pidOf(t, gate))
+			retire1, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = retire1.Rollback(ctx) })
+			retired := make(chan error, 1)
+			go func() { retired <- st.RetirePortalIssuerQ(ctx, retire1, first.Key) }()
+			untilBlockedBy(t, pool, writer, 1)
+			if err := gate.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-wrote; err != nil {
 				t.Fatalf("a caller of a bound issuer = %v", err)
 			}
-			if err := st.RetirePortalIssuerQ(ctx, pool, first.Key); !errors.Is(err, store.ErrIssuerInUse) {
-				t.Errorf("retirement after the write = %v, want ErrIssuerInUse", err)
+			if err := <-retired; !errors.Is(err, store.ErrIssuerInUse) {
+				t.Errorf("retirement behind the write = %v, want ErrIssuerInUse", err)
 			}
+			_ = retire1.Rollback(ctx)
 			if hits, err := store.NamespaceCensusQ(ctx, pool, first.Key); err != nil || hits[w.census] < 1 {
 				t.Errorf("census after the write = %v, %v; want %s found", hits, err, w.census)
 			}
@@ -319,7 +340,7 @@ func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() { done <- w.write(inflight.Key) }()
-			untilBlocked(t, pool)
+			untilBlockedBy(t, pool, pidOf(t, retire), 1)
 			if err := retire.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -449,4 +470,54 @@ func TestPortalSubjectRuling_RetireRacesPolicyCaller_PG(t *testing.T) {
 			t.Fatalf("round %d: the policy write returned %v and the retirement %v; exactly one must succeed", round, writeErr, retireErr)
 		}
 	}
+}
+
+// writeGateKey is the advisory lock the test gate trigger waits on.
+const writeGateKey = 7770001
+
+// installWriteGate puts a trigger on the four tables that store a policy document: a row that names a portal
+// person waits for the advisory lock writeGateKey before it is written. A test that holds the lock (holdWriteGate)
+// parks a real write inside its transaction, after the write took the issuer binding FOR KEY SHARE and before it
+// commits; with the lock free the trigger passes at once.
+func installWriteGate(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	stmts := []string{`CREATE FUNCTION wardyn_test_write_gate() RETURNS trigger LANGUAGE plpgsql AS $g$
+		BEGIN
+			IF NEW::text ILIKE '%delegate:person:%' THEN PERFORM pg_advisory_xact_lock(7770001); END IF;
+			RETURN NEW;
+		END $g$`}
+	for _, table := range []string{"run_policies", "launch_presets", "run_template_revisions", "governance_units"} {
+		stmts = append(stmts, `CREATE TRIGGER wardyn_test_write_gate BEFORE INSERT OR UPDATE ON `+table+` FOR EACH ROW EXECUTE FUNCTION wardyn_test_write_gate()`)
+	}
+	for _, stmt := range stmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("install the write gate: %v", err)
+		}
+	}
+}
+
+// holdWriteGate opens a transaction that holds the gate's lock until the test commits it.
+func holdWriteGate(t *testing.T, pool *pgxpool.Pool) pgx.Tx {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(writeGateKey)); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+
+// sessionBlockedBy is the process id of the one session waiting on holder.
+func sessionBlockedBy(t *testing.T, pool *pgxpool.Pool, holder int) int {
+	t.Helper()
+	var pid int
+	if err := pool.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder).Scan(&pid); err != nil {
+		t.Fatalf("the session waiting on %d: %v", holder, err)
+	}
+	return pid
 }
