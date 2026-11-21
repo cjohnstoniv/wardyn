@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-21
+
 ### Added
 
 - A super admin can ask to help inside someone else's running run, in the console or with `wardyn run support`, and the run's owner decides which doors the helper may use (terminal, commands, files, port forwarding, web apps or desktop) and for 15, 30 or 60 minutes. Help cannot be extended: more time is a new request. The feature is off unless `WARDYN_SUPPORT_SESSIONS` is on. Requests, answers and ends are audited as `support.request`, `support.accept`, `support.decline` and `support.end`. The grant ends even when its `support.end` row is not written: a row lost because wardynd stopped, or because the audit sink and spool refused it, right after the end is not retried. Migration `0293_run_support_grants` adds the grant record.
