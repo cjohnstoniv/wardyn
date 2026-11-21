@@ -24,17 +24,18 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 |---|---|---|
 | `audit/<spool name>`, `.consumed`, `.quarantine` | The audit spool and its two sidecars; any may be absent | `WARDYN_AUDIT_SPOOL` and its siblings |
 | `recordings/` | Casts; only under `WARDYN_RECORDING_STORE=fs`. The `pg` store is in the dump | `WARDYN_RECORDING_DIR` |
-| `drives/<drive id>/<home>/` | One directory per drive object | The Docker volume, `host_path` subtree or claim of that drive |
+| `drives/<drive id>/<home>/` | One directory per drive object | The Docker volume, `host_path` subtree or claim of that drive; for `mac_disk`, its image on the Mac |
 | `manifest.json` | Written by the manifest verb, mode `0600`, never overwritten | |
 
 - Keys are never in the set. The manifest holds the age recipient (public), the `WARDYN_KEK` mode and a row count per key class.
 - The manifest names a drive by id, home and object name, with no subject field. A managed home is a hash, but a `host_path` home built from the `sub` or `email_local` template is the person's claim, so such a manifest names people.
+- A `mac_disk` drive's bytes sit on one Mac only. The inventory lists them as `mac_disk_images`: the Mac (`home_runner_id`) and the image, `<object name>.img` in `macos-vm.noindex/drives/`. Put each image in `drives/<drive id>/<home>/`; a drive with no directory is not in the set.
 - Where each item lives per deployment: [Recovery set by deployment](../OPERATIONS.md#recovery-set-by-deployment).
 
 ## Take a set
 
 1. Stop the writer, then take the dump or snapshot as [Back them up](../OPERATIONS.md#back-them-up) says.
-2. Copy the spool, its sidecars, any `fs` recordings and the drive objects into a new, empty directory in the layout above.
+2. Copy the spool, its sidecars, any `fs` recordings and the drive objects into a new, empty directory in the layout above. Quiesce each `mac_disk` drive's writers first, then copy its image sparse (`cp -c`, or `rsync --sparse`).
 3. Write the manifest with the writer still stopped. The verb refuses while any other client is connected.
 
    ```sh
@@ -46,7 +47,7 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 ## Rehearse a set
 
 1. Load the dump, or restore the snapshot, into a scratch database. Never into the live one.
-2. Restore the set into a new directory.
+2. Restore the set into a new directory. Every file of a rehearsal stays under that scratch directory, `mac_disk` images included: the check never needs the Mac, and a live Mac's image is never overwritten.
 3. Run the rehearsal with the deployment's key settings in the environment and the scratch database in `WARDYN_REHEARSE_PG_DSN`. The DSN is an environment variable and not a flag, so a password never shows in the process list.
 
    ```sh
@@ -56,6 +57,8 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 
 4. Read the JSON report and the exit code.
 5. Drop the scratch database and remove the restored directory yourself.
+
+A real recovery of a `mac_disk` drive is a separate act, not a rehearsal step. Name the Mac with `home_runner_id`, quiesce its writers so no run has the disk attached, and put the image from the set at `macos-vm.noindex/drives/<object name>.img` on that Mac only, never over a working image.
 
 On Compose and the managed desktop, run the verbs with `docker compose run --rm wardynd`, the set mounted, and stop the converge job first. On Helm, use the pod below.
 
