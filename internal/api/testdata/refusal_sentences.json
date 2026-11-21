@@ -6,6 +6,11 @@
   },
   {
     "reason": "admin_surface",
+    "target": "\"drive.grant.portal\"",
+    "sentence": "portalDriveAllocationAdminMsg"
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"governance.unit.\" + e.field",
     "sentence": "e.sentence"
   },
@@ -283,6 +288,11 @@
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "drive_not_allocated_to_portal",
+    "target": "\"runs.drive\"",
+    "sentence": "portalDriveNotAllocatedMsg"
   },
   {
     "reason": "drive_not_found",
