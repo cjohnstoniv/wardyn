@@ -400,7 +400,7 @@ describe("WorkspaceDetailScreen — image row: three honest variants, never a /b
     expect(screen.getByText("Built as written — we don't modify it.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Rebuild" }));
     await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1", true));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Rebuild started for "payments"'));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Rebuild in progress for "payments"'));
   });
 
   it("Rebuild says nothing was rebuilt when the server answers done, and why on none", async () => {

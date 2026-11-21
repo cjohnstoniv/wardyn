@@ -198,6 +198,29 @@ function WorkspaceDetail({ id }: { id: string }) {
   const inFlight = !!ws && (isRecording(ws) || cleanVerdictMayMove(ws, Date.now()));
   usePoll(() => load(false), POLL_MS, !(id && inFlight));
 
+  // A build the server reports as running is followed to its end, so the page can say how it ended and a second
+  // click cannot read as a second start. Unreadable is its own state: the build's outcome is not known.
+  const [following, setFollowing] = React.useState(false);
+  const [statusUnreadable, setStatusUnreadable] = React.useState(false);
+  const followBuild = () =>
+    workspacesApi
+      .getWorkspaceBuild(id)
+      .then((b) => {
+        if (!onScreen.current) return;
+        setStatusUnreadable(false);
+        if (b.state === "building") return;
+        setFollowing(false);
+        const name = ws?.name ?? id;
+        if (b.state === "failed") toast.error(WORKSPACE_COPY_EXTRA.REBUILD_FAILED(name), { description: b.detail });
+        else if (b.state === "done") toast.success(WORKSPACE_COPY_EXTRA.REBUILT(name));
+        else toast.warning(`"${name}" was not rebuilt.`, { description: b.detail });
+        void load(false);
+      })
+      .catch(() => {
+        if (onScreen.current) setStatusUnreadable(true);
+      });
+  usePoll(followBuild, POLL_MS, !following);
+
   const rebuild = async () => {
     if (!ws) return;
     setRebuilding(true);
@@ -205,8 +228,10 @@ function WorkspaceDetail({ id }: { id: string }) {
       // The toast says what the server did: a 200 done or nothing_to_build
       // built nothing, and none means this server has no image builder.
       const res = await workspacesApi.buildWorkspace(ws.id, true);
-      if (res.state === "building") toast.success(`Rebuild started for "${ws.name}"`);
-      else if (res.state === "done" || res.state === "nothing_to_build") toast.info(`Nothing to rebuild for "${ws.name}".`, { description: res.detail });
+      if (res.state === "building") {
+        toast.info(WORKSPACE_COPY_EXTRA.REBUILD_IN_PROGRESS + ` for "${ws.name}"`);
+        setFollowing(true);
+      } else if (res.state === "done" || res.state === "nothing_to_build") toast.info(`Nothing to rebuild for "${ws.name}".`, { description: res.detail });
       else if (res.state === "none") toast.warning(`"${ws.name}" was not rebuilt.`, { description: res.detail });
       else toast.error("Failed to start the rebuild", { description: res.detail });
       void load(false);
@@ -500,9 +525,16 @@ function WorkspaceDetail({ id }: { id: string }) {
             <p className="mt-0.5 text-meta text-muted-foreground">{image.blurb}</p>
           </div>
           {image.rebuildable && (
-            <Button size="sm" variant="outline" disabled={!canMutate || rebuilding} onClick={() => void rebuild()}>
-              Rebuild
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button size="sm" variant="outline" disabled={!canMutate || rebuilding || following} onClick={() => void rebuild()}>
+                Rebuild
+              </Button>
+              {following && (
+                <span role="status" className="text-meta text-muted-foreground">
+                  {statusUnreadable ? WORKSPACE_COPY_EXTRA.REBUILD_STATUS_UNREADABLE : WORKSPACE_COPY_EXTRA.REBUILD_IN_PROGRESS}
+                </span>
+              )}
+            </div>
           )}
         </div>
 
