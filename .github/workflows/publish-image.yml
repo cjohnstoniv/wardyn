@@ -181,8 +181,11 @@ jobs:
             tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
           fi
           {
-            echo "tags<<TAGEOF"
-            printf '%s\n' "${tags[@]}"
+            # The build pushes only the per-commit tag. The moving and release-named tags are applied after the
+            # image has been checked and signed, so a bad image never becomes :latest.
+            echo "first_tag=${tags[0]}"
+            echo "later_tags<<TAGEOF"
+            printf '%s\n' "${tags[@]:1}"
             echo "TAGEOF"
             # The commit stamped into the binaries; empty on a tag ref, which keeps the bare version.
             if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
@@ -202,7 +205,7 @@ jobs:
           # then report <version>+<commit>. Empty on a tag ref, which keeps the bare version.
           build-args: |
             REVISION=${{ steps.tags.outputs.revision }}
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.tags.outputs.first_tag }}
       # The per-commit image must report the commit it was built from, in every binary a person can run: the
       # in-container CLI, the daemon (its /healthz reads the same internal/version string) and the host CLIs
       # that scripts/up.sh installs as bin/wardyn. A tag ref keeps the bare version.
@@ -256,3 +259,18 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
+      # Only now do :latest and the other names move, each pointing at the digest that was checked and signed.
+      # Copying an index by digest keeps its digest, which is asserted so the signature covers every name.
+      - name: Point the remaining tags at the signed image
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          LATER_TAGS: ${{ steps.tags.outputs.later_tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            docker buildx imagetools create --tag "$t" "$IMAGE_REF"
+            now="$(docker buildx imagetools inspect "$t" --format '{{.Manifest.Digest}}')"
+            [ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
+          done <<< "$LATER_TAGS"

@@ -157,6 +157,25 @@ df="$ROOT/deploy/compose/Dockerfile.wardynd"
 [ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
 grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the linux/amd64 host CLI from the image"
 
+# Moving tags: the build pushes only the per-commit tag; :latest and the other names are applied by a later step, after
+# the image has been checked and signed, and each must resolve to the signed digest.
+runtags "$sha" ""
+grep -qx 'first_tag=ghcr.io/cjohnstoniv/wardynd:sha-1111111' "$out" || fail "the tags step did not output the per-commit tag as first_tag: $(cat "$out")"
+awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out" | grep -qx 'ghcr.io/cjohnstoniv/wardynd:latest' || fail "later_tags does not hold :latest for main's tip"
+! awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out" | grep -q 'sha-1111111' || fail "later_tags repeats the per-commit tag"
+step_line() { grep -n "^      - name: $1\$" "$PI" | head -1 | cut -d: -f1 || true; }
+b_line="$(grep -n '^        id: build$' "$PI" | head -1 | cut -d: -f1 || true)"
+c_line="$(step_line 'Check the image reports its revision')"
+g_line="$(step_line 'Sign the pushed image (keyless, by digest)')"
+r_line="$(step_line 'Point the remaining tags at the signed image')"
+[ -n "$b_line" ] && [ -n "$c_line" ] && [ -n "$g_line" ] && [ -n "$r_line" ] || fail "publish-image.yml lacks the build, check, sign or retag step"
+[ "$b_line" -lt "$c_line" ] && [ "$c_line" -lt "$g_line" ] && [ "$g_line" -lt "$r_line" ] || fail "publish-image.yml must build, check, sign, then retag, in that order"
+shallow='^ {0,6}[^ ]' # the next line leaves the tags value: no second tag under it
+grep -A1 '^          tags: ' "$PI" | sed -n '1,2p' | { IFS= read -r l1; IFS= read -r l2; [ "$l1" = '          tags: ${{ steps.tags.outputs.first_tag }}' ] && [[ "$l2" =~ $shallow ]]; } || fail "the build pushes more than the per-commit tag"
+[ "$(grep -c 'imagetools create' "$PI")" -eq 1 ] && [ "$(grep -n 'imagetools create' "$PI" | cut -d: -f1)" -gt "$g_line" ] || fail "a tag is applied outside the retag step that follows the signature"
+grep -q 'imagetools create --tag "\$t" "\$IMAGE_REF"' "$PI" || fail "the retag step does not copy the signed digest"
+grep -q 'want the signed' "$PI" || fail "the retag step does not check each tag's digest against the signed one"
+
 # Publisher guard: a job that holds packages or id-token write (its own permissions block, or the workflow's when it has
 # none) must not execute a file taken out of the image on the runner. The image is unsigned until that job signs it, so
 # a binary it carries runs only inside a container (run_in_image), never as a host process there. Prints each offending
