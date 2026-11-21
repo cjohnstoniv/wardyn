@@ -785,7 +785,14 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 				errs = append(errs, err)
 				continue
 			}
-			failed := errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err))
+			// The failure is the attempt's own: it names the claim this attempt acquired, none when the error came
+			// before any claim (the run could not be read, the claim statement failed), and the row takes it only
+			// while that is still the row's claim and the row is pending.
+			fkey := key
+			if g, ok := killGuardOf(tctx); ok {
+				fkey.Claim = killClaimOf(g)
+			}
+			failed := errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, fkey, err))
 			if g, ok := killGuardOf(tctx); ok && !errors.Is(err, store.ErrSuperseded) {
 				// A teardown that failed after its claim leaves the claim for its retry to take at once.
 				failed = errors.Join(failed, g.led.ReleaseSuspensionKillAt(ctx, id, key, killClaimOf(g)))

@@ -150,9 +150,10 @@ var errStepSettled = errors.New("the step was finished by another worker")
 // second writer of the same step, on any replica, writes the same event and adds no row. key names the row the
 // caller read and must carry its id; in a bound suspension tail the pin also requires, in the same statement,
 // that the row belongs to the suspension the tail is bound to. A row a later suspension replaced is
-// store.ErrSuperseded, and nothing is pinned or written. The payload is held sealed under a human actor's audit
-// key (sealPinned); once that key is erased the replay keeps the pinned id and time and writes the caller's own
-// actor and data. Other origins are untouched.
+// store.ErrSuperseded, and nothing is pinned or written. A step another worker finished meanwhile is
+// errStepSettled, whether or not it ever pinned an event, and nothing is written to it. The payload is held sealed
+// under a human actor's audit key (sealPinned); once that key is erased the replay keeps the pinned id and time,
+// is attributed to the system as "erased", and keeps the caller's data. Other origins are untouched.
 func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
 	if !o.portal {
 		return ctx, nil
