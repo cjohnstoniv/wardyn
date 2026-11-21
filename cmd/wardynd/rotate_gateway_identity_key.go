@@ -85,7 +85,7 @@ func withRotationStore(f *bootFlags, mode string, other bool, rotate func(ctx co
 	defer cancel()
 	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancelConn()
-	pool, err := db.Connect(connCtx, *f.dsn)
+	pool, err := db.Connect(connCtx, *f.dsn, toolDBOption("rotate-gateway-identity-key"))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

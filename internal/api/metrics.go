@@ -535,6 +535,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) MetricsText(ctx context.Context) []byte {
 	var body bytes.Buffer
 	s.metrics.write(&body)
+	s.cfg.PortalRefreshFailures.write(&body)
 	s.writeHealthGauges(ctx, &body)
 	s.writeFleetGauges(ctx, &body)
 	s.writeQueueGauges(ctx, &body)

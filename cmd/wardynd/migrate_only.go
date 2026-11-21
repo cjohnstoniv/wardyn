@@ -109,7 +109,7 @@ func acquireMigrateOnly(ctx context.Context, dsn string, connectTimeout time.Dur
 func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration, verb string) (*migrateOnlySession, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	pool, err := db.Connect(connectCtx, dsn)
+	pool, err := db.Connect(connectCtx, dsn, toolDBOption("migrate"))
 	if err != nil {
 		return nil, &exitCodeError{code: exitMigrateFailed, err: fmt.Errorf("connect db: %w", err)}
 	}

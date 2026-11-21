@@ -176,7 +176,7 @@ func (s *rehearseSession) afterQuiet(ctx context.Context, c targetChecks) error 
 func liveReachable(ctx context.Context, dsn string) error {
 	cctx, cancel := context.WithTimeout(ctx, rehearseConnectTTL)
 	defer cancel()
-	pool, err := db.Connect(cctx, dsn)
+	pool, err := db.Connect(cctx, dsn, toolDBOption("recovery"))
 	if err != nil {
 		return refusedTo(rehearseVerb, "T2 live reachable: WARDYN_PG_DSN does not connect (%v). T3 needs live: run the rehearsal while the deployment is up", err)
 	}
@@ -197,7 +197,7 @@ func (s *rehearseSession) lockVisibility(ctx context.Context, c targetChecks) er
 	key := int64(binary.BigEndian.Uint64(raw[:]))
 	cctx, cancel := context.WithTimeout(ctx, rehearseConnectTTL)
 	defer cancel()
-	live, err := db.Connect(cctx, c.liveDSN)
+	live, err := db.Connect(cctx, c.liveDSN, toolDBOption("recovery"))
 	if err != nil {
 		return refusedTo(rehearseVerb, "T3 lock visibility: live does not connect (%v)", err)
 	}
