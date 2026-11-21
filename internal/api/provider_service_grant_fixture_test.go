@@ -63,6 +63,8 @@ type svcReq struct {
 	Header http.Header
 	Form   url.Values
 	Raw    string
+	// Deadline is the request context's deadline (zero when it has none).
+	Deadline time.Time
 }
 
 // svcAnswer is what the scripted identity provider does with a request. Zero means the default success.
@@ -95,6 +97,7 @@ func (i *svcIdP) RoundTrip(req *http.Request) (*http.Response, error) {
 	raw, _ := io.ReadAll(req.Body)
 	form, _ := url.ParseQuery(string(raw))
 	r := svcReq{Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone(), Form: form, Raw: string(raw)}
+	r.Deadline, _ = req.Context().Deadline()
 	i.mu.Lock()
 	i.reqs = append(i.reqs, r)
 	n, fn := len(i.reqs), i.respond
@@ -144,6 +147,8 @@ type svcSecrets struct {
 	// putPartial makes Put store the value and then answer ErrRowNotWritten: the value reached the external
 	// store but its row was not written.
 	putPartial bool
+	// revDeadlines are the context deadlines Revision was called with, in order (zero when none).
+	revDeadlines []time.Time
 	// hold runs before each operation, outside the store's lock; it may block.
 	hold  func(op, name string)
 	calls []string
@@ -222,9 +227,11 @@ func (s *svcSecrets) revOf(name string) string {
 }
 
 // Revision implements secretstore.Revisioned.
-func (s *svcSecrets) Revision(_ context.Context, name string) (string, error) {
+func (s *svcSecrets) Revision(ctx context.Context, name string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dl, _ := ctx.Deadline()
+	s.revDeadlines = append(s.revDeadlines, dl)
 	if s.noRev {
 		return "", secretstore.ErrNoRevision
 	}
@@ -284,6 +291,14 @@ func (s *svcSecrets) set(name string, v []byte) {
 	defer s.mu.Unlock()
 	s.m[name] = append([]byte(nil), v...)
 	s.rev[name]++
+}
+
+// rotateInPlace writes a value in the store itself, as a rotation in the external store does: the value changes
+// and the revision the database keeps for it does not, so no revision check can see it.
+func (s *svcSecrets) rotateInPlace(name string, v []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[name] = append([]byte(nil), v...)
 }
 
 func (s *svcSecrets) has(name string) bool {

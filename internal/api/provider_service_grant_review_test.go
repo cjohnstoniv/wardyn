@@ -728,3 +728,33 @@ func TestServiceGrant_RecordGoneAtReadStaysFinalOverInconclusiveRereads(t *testi
 		})
 	}
 }
+
+// A token that answers late in the token request's window is still published: the publish reads run under a bound
+// of their own, never the time the request left over.
+func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
+	f := newSvcFixWithSecret(t)
+	f.idp.mu.Lock()
+	f.idp.respond = func(n int, _ svcReq) svcAnswer {
+		f.clock.Advance(9500 * time.Millisecond) // the answer comes 9.5 s into the request's 10 s
+		return svcOK(n, 3600)
+	}
+	f.idp.mu.Unlock()
+	f.sec.mu.Lock()
+	f.sec.revDeadlines = nil
+	f.sec.mu.Unlock()
+	tok, err := f.token(serviceGrantTriggerRefresh)
+	if err != nil || tok.token != svcToken(1) || !f.cached() {
+		t.Fatalf("late answer = %q, %v, cached %v; want the token published", tok.token, err, f.cached())
+	}
+	reqs := f.idp.requests()
+	f.sec.mu.Lock()
+	dls := append([]time.Time(nil), f.sec.revDeadlines...)
+	f.sec.mu.Unlock()
+	if len(reqs) != 1 || reqs[0].Deadline.IsZero() || len(dls) == 0 {
+		t.Fatalf("token requests %d (deadline set %v), revision reads %d", len(reqs), len(reqs) == 1 && !reqs[0].Deadline.IsZero(), len(dls))
+	}
+	if pub := dls[len(dls)-1]; pub.IsZero() || pub.Equal(reqs[0].Deadline) || time.Until(pub) > serviceGrantPublishBound {
+		t.Fatalf("the publish read's deadline %v against the token request's %v: want a bound of its own, at most %v",
+			pub, reqs[0].Deadline, serviceGrantPublishBound)
+	}
+}

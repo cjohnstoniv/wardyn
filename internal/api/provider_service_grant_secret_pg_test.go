@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -286,24 +287,37 @@ func TestServiceGrant_DirectRotationOverlappingDeleteFailsClosed_PG(t *testing.T
 	f.seedOne()
 	row := f.row("corp-a")
 	name := f.secretNameOf("corp-a")
-	// A rotation written in the store while the grant's removal is deleting: the mint answers gone, or the
-	// record is kept; no request ever reaches an identity provider with a value of the removed grant.
-	var armed atomic.Bool
-	armed.Store(true)
+	// A rotation written in the store itself while the grant's removal deletes the record. It moves no revision,
+	// so the removal's revision-guarded delete removes the rotated record too: that fails closed, the mint answers
+	// gone, final and definitive, and no request reaches an identity provider.
+	var fired atomic.Bool
+	var revAtDelete string
 	f.sec.mu.Lock()
+	revBefore := f.sec.revOf(name)
 	f.sec.hold = func(op, n string) {
-		if op == "delete" && n == name && armed.CompareAndSwap(true, false) {
-			f.sec.set(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: row.BaseURL, ClientSecret: svcSecretTwo}))
+		if op == "delete" && n == name && fired.CompareAndSwap(false, true) {
+			f.sec.rotateInPlace(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: row.BaseURL, ClientSecret: svcSecretTwo}))
+			f.sec.mu.Lock()
+			revAtDelete = f.sec.revOf(name)
+			f.sec.mu.Unlock()
 		}
 	}
 	f.sec.mu.Unlock()
-	if w := f.do(http.MethodDelete, f.secretPath("corp-a"), f.admin, nil); w.Code != http.StatusConflict && w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE = %d %s", w.Code, w.Body.String())
-	}
-	f.removeGrant("corp-a")
 	before := f.idp.count()
-	if _, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.row("corp-a")), "", serviceGrantTriggerRefresh); err == nil {
-		t.Fatal("a mint for a removed grant succeeded")
+	f.removeGrant("corp-a")
+	if !fired.Load() {
+		t.Fatal("the grant's removal never deleted the record: the rotation did not overlap it")
+	}
+	if revAtDelete != revBefore || revBefore == "" {
+		t.Fatalf("the revision the delete saw = %q, want the stored %q: a rotation in the store moves none", revAtDelete, revBefore)
+	}
+	if f.sec.has(name) {
+		t.Fatal("the rotated record outlived the removal's delete")
+	}
+	_, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.row("corp-a")), "", serviceGrantTriggerRefresh)
+	var se *serviceGrantError
+	if !errors.As(err, &se) || se.reason != svcReasonSecretGone || !se.definitive || !se.final || se.sent {
+		t.Fatalf("the mint after the removal = %v (%+v), want a final, definitive %s that sent nothing", err, se, svcReasonSecretGone)
 	}
 	if f.idp.count() != before {
 		t.Fatalf("a request reached the identity provider after the removal (%d new)", f.idp.count()-before)

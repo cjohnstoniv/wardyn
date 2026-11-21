@@ -224,7 +224,8 @@ func TestServiceGrant_DelayedDeleteKeepsNewerRecord_PG(t *testing.T) {
 // Each answer the store's revision read can give, at the retry route and in the worker, with the claims in the
 // database.
 func TestServiceGrantCleanup_EachRevisionAnswer_PG(t *testing.T) {
-	f := newSvcPG(t, true)
+	clock := &svcClock{t: time.Now().UTC()}
+	f := newSvcPGClocked(t, true, clock)
 	claimed := func(uid string) bool { return slices.Contains(f.claimUIDs(), uid) }
 	// Absence settles with no delete.
 	uid := f.claimFor("corp-b")
@@ -267,8 +268,18 @@ func TestServiceGrantCleanup_EachRevisionAnswer_PG(t *testing.T) {
 		t.Fatalf("no revision: %d %s, %d deletes, claimed %v; want 409, zero Delete calls, the claim kept",
 			w.Code, w.Body.String(), f.sec.callsOf("delete")-before, claimed(uid))
 	}
-	// The worker does the same.
+	// The worker does the same, once the failed attempts' backoff has run out so that it attempts the claim.
+	clock.Advance(serviceGrantCleanupBackoffMx + time.Second)
+	f.sec.mu.Lock()
+	reads := len(f.sec.revDeadlines)
+	f.sec.mu.Unlock()
 	f.srv.serviceGrantCleanupPass(context.Background())
+	f.sec.mu.Lock()
+	attempted := len(f.sec.revDeadlines) > reads
+	f.sec.mu.Unlock()
+	if !attempted {
+		t.Fatal("the worker pass made no attempt on the claim: its revision was never read")
+	}
 	if f.sec.callsOf("delete") != before || !claimed(uid) {
 		t.Fatalf("the worker deleted on a store with no revision: %d deletes", f.sec.callsOf("delete")-before)
 	}
