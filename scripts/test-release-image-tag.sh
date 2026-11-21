@@ -155,7 +155,49 @@ df="$ROOT/deploy/compose/Dockerfile.wardynd"
 # wardynd, the in-container wardyn, the fallback host CLI and the per-platform host CLIs: four go build commands.
 [ "$(grep -c 'internal/version.buildRevision=\${REVISION}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp buildRevision into wardynd and every wardyn build"
 [ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
-grep -q 'host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the extracted linux/amd64 host CLI"
+grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the linux/amd64 host CLI from the image"
+grep -q -- '--network none' "$PI" || fail "the image check does not run the image's binaries without a network"
+
+# Publisher guard: a job that holds packages or id-token write (its own permissions block, or the workflow's when it has
+# none) must not execute a file taken out of the image on the runner. The image is unsigned until that job signs it, so
+# a binary it carries runs only inside a container (run_in_image), never as a host process there. Prints each offending
+# line and exits 1; reads the workflow on stdin.
+publisher_host_exec_guard() {
+  awk '
+    function flush() { if (job != "" && priv && bad != "") { print job ": " bad; found = 1 } }
+    /^permissions:/ { top = 1; next }
+    /^[A-Za-z]/ { top = 0 }
+    top && /^  (packages|id-token): write/ { wfwrite = 1 }
+    /^jobs:/ { injobs = 1; next }
+    injobs && /^  [A-Za-z0-9_-]+:$/ { flush(); job = $1; own = 0; ownwrite = 0; priv = 0; bad = ""; next }
+    injobs && /^    permissions:/ { own = 1; next }
+    injobs && own && /^      (packages|id-token): write/ { ownwrite = 1 }
+    injobs { priv = ownwrite || (!own && wfwrite) }
+    /^[[:space:]]*#/ { next }
+    injobs && (/chmod[[:space:]]+\+x/ || /\$RUNNER_TEMP\/[A-Za-z0-9._\/-]*"?[[:space:]]+(version|--)/ || /\$\("?\$RUNNER_TEMP\//) { if (bad == "") bad = $0 }
+    END { flush(); exit found }
+  '
+}
+publisher_host_exec_guard < "$PI" || fail "publish-image.yml has a publishing job that executes a file taken from the image on the runner (lines above)"
+# The guard has to see the shape it exists for: the image check once chmod-ed the extracted host CLI and ran it on the runner.
+cat > "$WORK/old-shape.yml" <<'OLD'
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+jobs:
+  publish-image:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check the image reports its revision
+        run: |
+          docker cp "$cid:/host/." "$RUNNER_TEMP/host"
+          chmod +x "$RUNNER_TEMP/host/wardyn-linux-amd64"
+          got="$("$RUNNER_TEMP/host/wardyn-linux-amd64" version)"
+OLD
+if publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null; then fail "the publisher guard accepts a runner-side run of an extracted CLI"; fi
+sed -i '/^    runs-on/a\    permissions:\n      contents: read' "$WORK/old-shape.yml"
+publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null || fail "the publisher guard refuses a job that holds no write permission"
 
 # release.yml: no job that can write to the repository or mint the signing identity executes a binary built from
 # the tree, and no step whose env holds the Apple secrets executes one either.

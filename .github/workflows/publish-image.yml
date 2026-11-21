@@ -220,18 +220,25 @@ jobs:
               case "$2" in *+*) echo "::error::$1 printed '$2', want the bare version on a tag ref"; exit 1;; esac
             fi
           }
-          reports "wardyn in the image" "$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/wardyn "$IMAGE_REF" version)"
-          cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
-          mkdir "$RUNNER_TEMP/host"
-          docker cp "$cid:/host/." "$RUNNER_TEMP/host"
-          docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
-          docker rm "$cid" >/dev/null
-          chmod +x "$RUNNER_TEMP/host/wardyn-linux-amd64"
-          got="$("$RUNNER_TEMP/host/wardyn-linux-amd64" version)"
-          reports "the extracted linux/amd64 host CLI" "$got"
+          # Every binary is run inside the image it came from, pulled by digest, with no network, no host
+          # mount and no credentials: this job is logged in to the registry and holds the packages and signing
+          # permissions, so nothing taken from the unsigned image may run on the runner itself.
+          run_in_image() {
+            docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
+          }
+          reports "wardyn in the image" "$(run_in_image /usr/local/bin/wardyn)"
+          got="$(run_in_image /host/wardyn-linux-amd64)"
+          reports "the linux/amd64 host CLI in the image" "$got"
           if [ -n "$REVISION" ]; then
-            # The host CLIs are built with -trimpath, which leaves the linker flags out of the build info, so look
-            # for the stamped commit itself: nothing but the stamp puts those 40 characters in a binary.
+            # The files are copied out and read as data only, never executed here. The host CLIs are built
+            # with -trimpath, which leaves the linker flags out of the build info, so look for the stamped
+            # commit itself: nothing but the stamp puts those 40 characters in a binary.
+            cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
+            mkdir "$RUNNER_TEMP/host"
+            docker cp "$cid:/host/." "$RUNNER_TEMP/host"
+            docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+            docker rm "$cid" >/dev/null
             for f in "$RUNNER_TEMP/wardynd" "$RUNNER_TEMP"/host/wardyn*; do
               grep -aqF "$REVISION" "$f" \
                 || { echo "::error::$(basename "$f") was not stamped with revision ${REVISION}"; exit 1; }
