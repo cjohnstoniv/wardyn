@@ -217,11 +217,13 @@ func (p *Proxy) askHostCall(ctx context.Context, scope types.HostCallScope) (uui
 	case err != nil:
 		return uuid.Nil, hostCallRefused("the request for an approval could not be raised", hostCallNoAskText)
 	}
-	id := p.hostCalls.install(scope.CallSHA256, got)
-	if id == uuid.Nil {
-		return uuid.Nil, hostCallRefused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
+	if id := p.hostCalls.install(scope.CallSHA256, got); id != uuid.Nil {
+		return id, nil
 	}
-	return id, nil
+	// The raise joined an approval a person decided once before it was filed, and another waiting request
+	// spent it: that answer is this request's too (pollHostCall), so a once no refuses it and a once yes
+	// already taken asks again.
+	return got, nil
 }
 
 // pollHostCall waits on approval id for the scope's key: true once a person approved it for this request.

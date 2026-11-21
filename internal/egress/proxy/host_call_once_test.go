@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,5 +244,88 @@ func TestHostCallRaiseReadsOnAnEarlierControlPlane(t *testing.T) {
 		if json.Unmarshal(raw, &says) != nil || !says.AcceptsOnce || earlier.Kind != types.ApprovalToolCall {
 			t.Errorf("%s: want a tool_call raise with accepts_once beside requested_scope", raw)
 		}
+	}
+}
+
+// hcLateRaise holds the first raise's answer until a second raise has reached the control plane, so both
+// requests ask before either files the approval, and holds the second raise's answer until late is closed.
+type hcLateRaise struct {
+	cp    *hcCP
+	next  http.RoundTripper
+	late  chan struct{}
+	posts atomic.Int32
+}
+
+func (l *hcLateRaise) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := l.next.RoundTrip(r)
+	if r.Method != http.MethodPost {
+		return resp, err
+	}
+	switch l.posts.Add(1) {
+	case 1:
+		for _, raises, _ := l.cp.counts(); raises < 2; _, raises, _ = l.cp.counts() {
+			time.Sleep(time.Millisecond)
+		}
+	case 2:
+		select {
+		case <-l.late:
+		case <-r.Context().Done(): // the request ended first
+		}
+	}
+	return resp, err
+}
+
+// TestHostCallOnceAnswersARaiseThatJoinedLate: of two identical requests that both asked, the one whose
+// raise was answered only after a person decided the shared approval once, and after the other request
+// spent that answer, still takes it: a once no refuses it as declined, and a once yes already taken
+// makes it ask again. Neither is answered that Wardyn could not ask a person.
+func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
+	for _, state := range []types.ApprovalState{types.ApprovalDenied, types.ApprovalApproved} {
+		t.Run(string(state), func(t *testing.T) {
+			p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+			cp := newHCCP(t, p)
+			hostCallSecond = time.Second
+			late := &hcLateRaise{cp: cp, next: cp.srv.Client().Transport, late: make(chan struct{})}
+			p.approval = newApprovalClient(cp.srv.URL, newTokenSource("tok"), p.runID, &http.Client{Transport: late})
+			d1, c1 := hcGo(p, "/admin")
+			d2, c2 := hcGo(p, "/admin")
+			defer c1()
+			defer c2()
+			hcWait(t, "both requests to ask", func() bool { rows, raises, _ := cp.counts(); return rows == 1 && raises == 2 })
+			cp.decideAllAs(state, types.ScopeOnce)
+			var first hcResult
+			var other chan hcResult
+			select {
+			case first = <-d1:
+				other = d2
+			case first = <-d2:
+				other = d1
+			case <-time.After(5 * time.Second):
+				t.Fatal("the request that filed the approval was not answered")
+			}
+			if first.sent != (state == types.ApprovalApproved) {
+				t.Fatalf("the request that filed the approval: sent=%v %d %v", first.sent, first.rec.Code, first.rec.Header())
+			}
+			close(late.late)
+			if state == types.ApprovalApproved {
+				hcWait(t, "the late request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+				c1()
+				c2()
+				if res := hcOutcome(t, other); res.sent {
+					t.Fatal("the late request went on under a spent once yes")
+				}
+				return
+			}
+			res := hcOutcome(t, other)
+			if res.sent || res.rec.Code != http.StatusForbidden || !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+				t.Fatalf("the late request: sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+			}
+			if rows, _, _ := cp.counts(); rows != 1 {
+				t.Errorf("approval rows = %d, want 1: the late request must not ask again", rows)
+			}
+			if n := strings.Count(buf.String(), `"rule_source":"`+ruleSourceHostRuleApprovalDenied+`"`); n != 2 {
+				t.Errorf("approval-denied rows = %d, want 2", n)
+			}
+		})
 	}
 }
