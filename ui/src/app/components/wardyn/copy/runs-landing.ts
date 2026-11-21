@@ -43,6 +43,10 @@ export const RUNS_AGED_WINDOW_LABEL: Record<string, string> = {
 
 /** The list answered a full page and more matched: said under the sections so a missing row is never read as absent. */
 export const runsTruncatedNote = (limit: number): string => `Showing the newest ${limit} runs. Narrow the filters to see the rest.`;
+export const RUNS_LOOK_FURTHER = "Look further back";
+// A segment with nothing in a page that was cut short: not "none yet", only "none so far".
+export const runsSegmentPartialTitle = (read: number): string => `None in the newest ${read} runs`;
+export const RUNS_SEGMENT_PARTIAL_BODY = "Older runs have not been read yet. Look further back to keep searching.";
 
 export const RUNS_SHOW_30 = "Show the last 30 days";
 export const RUNS_INCLUDE_KILLED = "Include killed";

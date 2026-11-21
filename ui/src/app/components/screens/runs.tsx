@@ -61,6 +61,9 @@ import {
   RUNS_SECTION,
   RUNS_SEGMENTS,
   RUNS_SHOW_30,
+  RUNS_LOOK_FURTHER,
+  RUNS_SEGMENT_PARTIAL_BODY,
+  runsSegmentPartialTitle,
   runsTruncatedNote,
   runsAgedNote,
   runsViewSaved,
@@ -100,6 +103,9 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [truncated, setTruncated] = React.useState(false);
+  // Pages read past the first on request ("Look further back"). The poll keeps replacing the first page only.
+  const [more, setMore] = React.useState<{ runs: AgentRun[]; truncated: boolean } | null>(null);
+  const [readingMore, setReadingMore] = React.useState(false);
   // Every run the caller owns, as of the last fetch no filter narrowed: a search, a status or a
   // workspace filter changes the rows shown, not how many runs there are.
   const [owned, setOwned] = React.useState<{ n: number; more: boolean } | null>(null);
@@ -125,20 +131,24 @@ export function RunsScreen() {
   // land after, and overwrite, a newer one's. Each call gets the next id;
   // only the fetch whose id is still current when it settles is applied.
   const requestIdRef = React.useRef(0);
+  const serverFilter = React.useMemo(
+    () => ({
+      view,
+      // Only meaningful in the Admin view (H-4) — the User view forces
+      // owner=me server-side regardless, so this never sends it there.
+      owner: adminView ? runsFilterToServerOwner(filters.scope) : undefined,
+      status: runsFilterToServerStatus(filters.status),
+      endedWithin: filters.endedWithin,
+      includeKilled: filters.includeKilled,
+      workspace: filters.workspace === "all" ? undefined : filters.workspace,
+      q: filters.q || undefined,
+    }),
+    [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q],
+  );
   const fetchRuns = React.useCallback(() => {
     const id = ++requestIdRef.current;
     return api
-      .listRunsFiltered({
-        view,
-        // Only meaningful in the Admin view (H-4) — the User view forces
-        // owner=me server-side regardless, so this never sends it there.
-        owner: adminView ? runsFilterToServerOwner(filters.scope) : undefined,
-        status: runsFilterToServerStatus(filters.status),
-        endedWithin: filters.endedWithin,
-        includeKilled: filters.includeKilled,
-        workspace: filters.workspace === "all" ? undefined : filters.workspace,
-        q: filters.q || undefined,
-      })
+      .listRunsFiltered(serverFilter)
       .then(
         (res) => {
           if (requestIdRef.current !== id) return; // superseded — ignore
@@ -157,11 +167,12 @@ export function RunsScreen() {
           throw err; // let load()'s own catch below turn this into "error"
         },
       );
-  }, [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
+  }, [serverFilter, adminView, filters.q, filters.status, filters.workspace]);
 
   const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
+    setMore(null);
     fetchRuns().catch((e) => {
       setLoadMessage(failureSentence(e));
       setStatus("error");
@@ -213,16 +224,31 @@ export function RunsScreen() {
   usePoll(loadSetupStatus, SETUP_POLL_MS, !!shellStatus || !!setupStatus?.unreachable);
 
   // R17-N3: the segment narrows the fetched rows here; its counts follow the other filters.
-  const counts = React.useMemo(() => segmentCounts(runsList), [runsList]);
-  const shownRuns = React.useMemo(() => filterBySegment(runsList, filters.segment), [runsList, filters.segment]);
+  const allRuns = React.useMemo(() => {
+    if (!more) return runsList;
+    const seen = new Set(runsList.map((r) => r.id));
+    return [...runsList, ...more.runs.filter((r) => !seen.has(r.id))];
+  }, [runsList, more]);
+  const pageTruncated = more ? more.truncated : truncated;
+  const readCount = more ? allRuns.length : LIST_LIMIT;
+  const readMore = React.useCallback(() => {
+    setReadingMore(true);
+    api
+      .listRunsFiltered({ ...serverFilter, offset: allRuns.length })
+      .then((res) => setMore({ runs: [...(more?.runs ?? []), ...res.runs], truncated: res.truncated }))
+      .catch(() => {})
+      .finally(() => setReadingMore(false));
+  }, [serverFilter, allRuns.length, more]);
+  const counts = React.useMemo(() => segmentCounts(allRuns), [allRuns]);
+  const shownRuns = React.useMemo(() => filterBySegment(allRuns, filters.segment), [allRuns, filters.segment]);
   const sections: RunSections = React.useMemo(() => sectionRuns(shownRuns), [shownRuns]);
   const workspaceOptions = React.useMemo(
     () => {
-      const labels = runsList.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
+      const labels = allRuns.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
       if (filters.workspace !== "all") labels.push(filters.workspace);
       return Array.from(new Set(labels)).sort();
     },
-    [runsList, filters.workspace],
+    [allRuns, filters.workspace],
   );
 
   // scope only ever narrows anything in the Admin view (H-4) — a stray
@@ -255,7 +281,9 @@ export function RunsScreen() {
   const noMatch = status === "ready" && !trueEmpty && shownRuns.length === 0 && (nothingHidden || activeFilter || filters.segment !== "all");
   // A segment's own empty state (Services is the approved one): none of that shape, and no other filter or hidden
   // run to blame.
-  const segmentEmpty = noMatch && filters.segment !== "all" && !activeFilter && nothingHidden ? SEGMENT_EMPTY[filters.segment] : undefined;
+  // A first page that was cut short cannot say the segment is empty: the run it wants may be on a later page.
+  const segmentEmpty = noMatch && filters.segment !== "all" && !activeFilter && nothingHidden && !pageTruncated ? SEGMENT_EMPTY[filters.segment] : undefined;
+  const segmentPartial = noMatch && filters.segment !== "all" && !activeFilter && nothingHidden && pageTruncated;
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(effectiveFilters);
 
@@ -314,7 +342,7 @@ export function RunsScreen() {
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
             runCount={shownRuns.length}
-            runsTruncated={truncated}
+            runsTruncated={pageTruncated}
             onChange={setFilters}
             onSelectView={(search) =>
               setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })
@@ -330,6 +358,19 @@ export function RunsScreen() {
           ) : segmentEmpty ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
               <EmptyState icon={HeartPulse} title={segmentEmpty} />
+            </div>
+          ) : segmentPartial ? (
+            <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
+              <EmptyState
+                icon={HeartPulse}
+                title={runsSegmentPartialTitle(readCount)}
+                description={RUNS_SEGMENT_PARTIAL_BODY}
+                action={
+                  <Button variant="outline" onClick={readMore} disabled={readingMore}>
+                    {RUNS_LOOK_FURTHER}
+                  </Button>
+                }
+              />
             </div>
           ) : noMatch ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
@@ -384,7 +425,14 @@ export function RunsScreen() {
                 onShow30={() => setFilters({ ...filters, endedWithin: "30d" })}
                 onIncludeKilled={() => setFilters({ ...filters, includeKilled: true })}
               />
-              {truncated && <p className="text-meta text-muted-foreground">{runsTruncatedNote(LIST_LIMIT)}</p>}
+              {pageTruncated && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="text-meta text-muted-foreground">{runsTruncatedNote(readCount)}</p>
+                  <Button variant="outline" size="sm" onClick={readMore} disabled={readingMore}>
+                    {RUNS_LOOK_FURTHER}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </>
