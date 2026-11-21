@@ -280,6 +280,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q.run.State = types.RunQueued
+	// The waiting row carries the unit the launch resolved to, as the queue row does, so a portal pin and a
+	// unit scope read the waiting run in its own unit; the start stamps it again.
+	if u := q.f.ceiling.Unit; u != nil {
+		id := u.ID
+		q.run.UnitID = &id
+	}
 	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
 	// that dies after the commit leaves no promotable run without its authority.
 	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -70,7 +71,7 @@ func (e *queueEnv) issuerQueued(t *testing.T, pool types.RunnerPool, f issuerQue
 		'delegate', $4::text, 'grant', 'portal:' || $5::text) WHERE run_id = $1`,
 		run.ID, f.principal, f.portal.UserType, f.portal.ID.String(), uuid.NewString())
 	// The run row froze its creator's type at launch; a portal person's launch would have frozen the portal's.
-	e.exec(`UPDATE agent_runs SET user_type = $2, unit_id = $3 WHERE id = $1`, run.ID, f.portal.UserType, f.portal.RunInUnder)
+	e.exec(`UPDATE agent_runs SET user_type = $2 WHERE id = $1`, run.ID, f.portal.UserType)
 	return run
 }
 
@@ -85,8 +86,8 @@ func (e *queueEnv) portalType(t *testing.T) string {
 }
 
 // A queued issuer-portal launch starts as role user under the portal row's own, distinct user type: the
-// console's role mappings are never read, whatever they would derive for the empty email and groups, and the
-// started run carries the portal's type.
+// console's role mappings are never read, whatever they would derive for the empty email and groups. That the
+// start acts as the portal's type is proved by the type-specific capability decision of the next test.
 func TestPG_QueuePortalIssuerLaunch_NoConsoleRoleRead(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Busy", 1)
@@ -101,21 +102,9 @@ func TestPG_QueuePortalIssuerLaunch_NoConsoleRoleRead(t *testing.T) {
 	if n := spy.roleReads.Load(); n != 0 {
 		t.Errorf("the start read the console role mappings %d times, want none", n)
 	}
-	if started.UserType != kind {
-		t.Errorf("the started run's user type = %q, want the portal's %q", started.UserType, kind)
-	}
-	rows := e.audits(started.ID, "run.queue.start")
+	rows := e.waitAudit(started.ID, "run.queue.start")
 	if len(rows) != 1 || rows[0].Outcome != "success" {
 		t.Fatalf("run.queue.start rows = %+v, want one success", rows)
-	}
-	// The launch's own run.create row predates the type the fixture froze on the run, so a row that names it
-	// is the start's.
-	carried := false
-	for _, ev := range e.audits(started.ID, "run.create") {
-		carried = carried || strings.Contains(string(ev.Data), `"user_type":"`+kind+`"`)
-	}
-	if !carried {
-		t.Errorf("no run.create row of the started run carries the portal's user type %q", kind)
 	}
 }
 
@@ -207,12 +196,33 @@ func TestPortalDisable_QueuedRunStillStarts_PG(t *testing.T) {
 	}
 }
 
-// The start checks the run's unit against the pin on the tree as it stands: two runs wait in children of the pin,
-// one child is reparented out from under the pin while they wait, and that run ends portal_unit_scope while the
-// run in the child that stayed starts.
+// portalBearer issues an identity for person on portal d and mints one grant, returning the principal and the
+// bearer a request through the real delegated lane carries.
+func (e *queueEnv) portalBearer(t *testing.T, d types.Delegate, person string) (string, string) {
+	t.Helper()
+	ctx := context.Background()
+	principal := types.PortalPrincipal(d.IssuerKey, person)
+	if _, _, err := e.pg.IssuePortalIdentity(ctx, principal, d.IssuerKey, "", d.Issuer, d.ID, d.AdmissionRev); err != nil {
+		t.Fatal(err)
+	}
+	raw := delegatedTokenPrefix + uuid.NewString()
+	if _, _, err := e.pg.MintPortalGrant(ctx, types.PortalGrant{DelegateID: d.ID, Principal: principal, UserType: d.UserType,
+		SubjectIssuedAt: time.Now().UTC()}, raw, time.Now().Add(time.Hour), 10*time.Minute, d.AdmissionRev); err != nil {
+		t.Fatal(err)
+	}
+	return principal, raw
+}
+
+// A portal person's launch waits in a child unit of the portal's pin, through the normal create route: the
+// waiting run is read and listed in the unit the launch froze (not the Default unit a missing row unit would
+// mean). One child is then reparented out from under the pin during the wait: that person's run is refused on
+// read, and ends portal_unit_scope at its start, while the run in the child that stayed starts.
 func TestPortalPin_QueuedStartRechecksCurrentTree_PG(t *testing.T) {
 	e := newQueueEnv(t)
 	ctx := context.Background()
+	if _, err := e.pg.ActivatePortalIssuers(ctx, "test", nil); err != nil {
+		t.Fatal(err)
+	}
 	pool := e.cappedPool("Busy", 2)
 	root := func(name string) types.GovernanceUnit {
 		u, err := e.pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{ID: uuid.New(), Name: name, CreatedBy: "seed",
@@ -222,7 +232,7 @@ func TestPortalPin_QueuedStartRechecksCurrentTree_PG(t *testing.T) {
 		}
 		return u
 	}
-	child := func(name string, parent uuid.UUID, id uuid.UUID) types.GovernanceUnit {
+	child := func(name string, parent, id uuid.UUID) types.GovernanceUnit {
 		u, err := e.pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{ID: id, Name: name, ParentID: &parent, Overlay: &types.CeilingOverlay{}, CreatedBy: "seed"})
 		if err != nil {
 			t.Fatal(err)
@@ -232,16 +242,45 @@ func TestPortalPin_QueuedStartRechecksCurrentTree_PG(t *testing.T) {
 	pin, outside := root("pin"), root("outside")
 	stayer, mover := child("stayer", pin.ID, uuid.New()), child("mover", pin.ID, uuid.New())
 	f := e.issuerPortal(t, &pin.ID)
+	place := func(person string, unit types.GovernanceUnit) (string, string) {
+		principal, bearer := e.portalBearer(t, f.portal, person)
+		if _, err := e.pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser,
+			Subject: types.CanonicalUserSubject(principal), UnitID: unit.ID, Priority: 1, Home: true}); err != nil {
+			t.Fatal(err)
+		}
+		return principal, bearer
+	}
+	_, stayTok := place("stays", stayer)
+	_, moveTok := place("moves", mover)
 	first, second := e.occupy(pool), e.occupy(pool)
-	stays, moved := e.issuerQueued(t, pool, f), e.issuerQueued(t, pool, f)
-	e.exec(`UPDATE agent_runs SET unit_id = $2 WHERE id = $1`, stays.ID, stayer.ID)
-	e.exec(`UPDATE agent_runs SET unit_id = $2 WHERE id = $1`, moved.ID, mover.ID)
-	// Both are in the pin as queued; the tree changes during the wait.
-	child("mover", outside.ID, mover.ID)
+	launch := func(bearer string) uuid.UUID {
+		w := do(t, e.srv, http.MethodPost, "/api/v1/runs", bearer, endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`))
+		var out queuedLaunchAnswer
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusCreated || out.State != types.RunQueued {
+			t.Fatalf("a portal person's launch into a full pool = %d %s, want 201 QUEUED", w.Code, w.Body)
+		}
+		return out.ID
+	}
+	stays, moves := launch(stayTok), launch(moveTok)
+	for _, c := range []struct {
+		bearer string
+		id     uuid.UUID
+	}{{stayTok, stays}, {moveTok, moves}} {
+		if w := do(t, e.srv, http.MethodGet, "/api/v1/runs/"+c.id.String(), c.bearer, ""); w.Code != http.StatusOK {
+			t.Fatalf("a waiting run read through its own portal = %d %s, want 200", w.Code, w.Body)
+		}
+		if w := do(t, e.srv, http.MethodGet, "/api/v1/runs", c.bearer, ""); !strings.Contains(w.Body.String(), c.id.String()) {
+			t.Fatalf("a waiting run is missing from its person's list: %s", w.Body)
+		}
+	}
+	child("mover", outside.ID, mover.ID) // reparented out from under the pin while both wait
+	if w := do(t, e.srv, http.MethodGet, "/api/v1/runs/"+moves.String(), moveTok, ""); w.Code != http.StatusForbidden || errorReason(w) != "portal_unit_scope" {
+		t.Errorf("a waiting run whose unit left the pin, read = %d %s, want 403 portal_unit_scope", w.Code, w.Body)
+	}
 	e.free(first)
 	e.free(second)
-	e.waitStarted(stays.ID)
-	if got := e.waitFailed(moved.ID); got.StatusDetail != "queue: portal_unit_scope" || got.FailureHint != queuePortalUnitScopeHint {
+	e.waitStarted(stays)
+	if got := e.waitFailed(moves); got.StatusDetail != "queue: portal_unit_scope" || got.FailureHint != queuePortalUnitScopeHint {
 		t.Errorf("a run whose unit was reparented out of the pin = %s %q %q", got.State, got.StatusDetail, got.FailureHint)
 	}
 }

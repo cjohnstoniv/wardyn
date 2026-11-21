@@ -290,8 +290,8 @@ const (
 // queuePortalIssuerRole is queueCurrentRole for an issuer-portal person's launch (the stored authority marks
 // it). The role stays user and is never derived. No role mapping or user-type-from-mapping is read: the user
 // type is the live portal row's, and must still exist. The portal row must be live (queueOwnerStanding), the
-// principal must be one of that portal's people (the reverse check), and the run's unit must still be under
-// the portal's pin in the tree as it stands.
+// principal must be one of that portal's people (the reverse check), and the unit the launch froze must still
+// be under the portal's pin in the tree as it stands (the resolved context is then held to it by sameUnit).
 func (s *Server) queuePortalIssuerRole(st *queuedStart) *queueEnd {
 	a := st.auth
 	failed := &queueEnd{hint: queueStartFailedHint}
@@ -331,7 +331,7 @@ func (s *Server) queuePortalIssuerRole(st *queuedStart) *queueEnd {
 	switch {
 	case refusal != nil:
 		return failed
-	case !pin.holds(st.run.UnitID):
+	case !pin.holds(st.launch.UnitID): // the unit frozen at enqueue; the row's own unit is stamped by the start
 		return &queueEnd{token: queueEndPortalUnitScope, hint: queuePortalUnitScopeHint}
 	}
 	a.Role, a.UserType = oidc.RoleUser, d.UserType
