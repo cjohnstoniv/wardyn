@@ -317,6 +317,8 @@ type svcStore struct {
 	settles    int
 	// getErr, when set, is asked before each configuration read; an error fails the read.
 	getErr func() error
+	// docErr, when set, is asked before each read of the grant keys and claims; an error fails the read.
+	docErr func() error
 }
 
 func (s *svcStore) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
@@ -370,6 +372,14 @@ func (s *svcStore) PutSiteConfigGrants(ctx context.Context, cfg types.SiteConfig
 }
 
 func (s *svcStore) ServiceGrantDoc(ctx context.Context) (store.ServiceGrantDoc, error) {
+	s.gmu.Lock()
+	derr := s.docErr
+	s.gmu.Unlock()
+	if derr != nil {
+		if err := derr(); err != nil {
+			return store.ServiceGrantDoc{}, err
+		}
+	}
 	sc, _ := s.azA3Store.GetSiteConfig(ctx) // the grant keys read separately from the roster: getErr does not fail them
 	doc := store.ServiceGrantDoc{Grants: map[string]types.ProviderServiceGrant{}, Cleanups: map[string]store.ServiceGrantCleanup{}}
 	if sc.ModelProviders != nil {

@@ -444,19 +444,34 @@ func TestServiceGrant_GetShowsReferenceOnly(t *testing.T) {
 	if w := f.writeSecret("corp-a", svcClientSecret); w.Code != http.StatusNoContent {
 		t.Fatalf("secret write: %d %s", w.Code, w.Body.String())
 	}
-	f.mint("corp-a")
+	if _, err := f.mint("corp-a"); err != nil {
+		t.Fatal(err)
+	}
+	uid := f.uid("corp-a")
 	for _, path := range []string{"/model-providers", "/site-config"} {
 		w := f.do(http.MethodGet, path, f.admin, nil)
-		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), svcClientSecret) {
-			t.Fatalf("GET %s = %d, secret leaked %v", path, w.Code, strings.Contains(w.Body.String(), svcClientSecret))
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"corp-a"`) {
+			t.Fatalf("GET %s = %d %.200s, want 200 with the seeded provider", path, w.Code, w.Body.String())
 		}
-		if strings.Contains(w.Body.String(), "written_at") {
-			t.Errorf("GET %s shows when the secret was written", path)
+		for _, leak := range []string{svcClientSecret, "written_at", `"client_secret":`, `"v":1`} {
+			if strings.Contains(w.Body.String(), leak) {
+				t.Errorf("GET %s shows %q", path, leak)
+			}
 		}
 	}
+	// The model-provider read names the derived reference and nothing else about the secret.
+	var read struct {
+		Providers []struct {
+			ID string `json:"id"`
+		} `json:"providers"`
+		ServiceGrants map[string]types.ServiceGrantStatus `json:"service_grants"`
+	}
 	w := f.do(http.MethodGet, "/model-providers", f.admin, nil)
-	if !strings.Contains(w.Body.String(), serviceGrantSecretName(f.uid("corp-a"))) {
-		t.Errorf("GET /model-providers does not show the derived client_secret_ref")
+	if err := json.Unmarshal(w.Body.Bytes(), &read); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := read.ServiceGrants["corp-a"]; got.ClientSecretRef != serviceGrantSecretName(uid) || got.ClientID != svcClientID {
+		t.Fatalf("service_grants[corp-a] = %+v, want client %s and the derived reference %s", got, svcClientID, serviceGrantSecretName(uid))
 	}
 }
 

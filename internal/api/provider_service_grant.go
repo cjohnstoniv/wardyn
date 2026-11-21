@@ -85,12 +85,22 @@ type serviceGrantError struct {
 	oauthError string
 	httpStatus int
 	egress     string
+	// final marks a withdrawal observed with authority (the secret gone, or its predecessor retiring): no
+	// later read may weaken it, so settlement carries it through unchanged.
+	final bool
 }
 
 func (e *serviceGrantError) Error() string { return "service grant: " + e.reason }
 
 func svcFail(reason string, definitive bool) *serviceGrantError {
 	return &serviceGrantError{reason: reason, definitive: definitive}
+}
+
+// svcGone is the final, definitive refusal of a withdrawn credential.
+func svcGone() *serviceGrantError {
+	e := svcFail(svcReasonSecretGone, true)
+	e.final = true
+	return e
 }
 
 // serviceGrantMinted is a token the caller may hand out, with its own expiry.
@@ -277,7 +287,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	}
 	if revOK && rev == "" {
 		s.dropServiceGrantCache(p.UID)
-		return s.serviceGrantFailure(ctx, p, digest, rev, started, attempt, svcFail(svcReasonSecretGone, true))
+		return s.serviceGrantFailure(ctx, p, digest, rev, started, attempt, svcGone())
 	}
 	if hit, ok := s.cachedServiceGrantToken(p.UID, digest, rev, revOK, serviceGrantReuseMargin); ok {
 		return hit, nil
@@ -310,7 +320,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 // secret has been written.
 func (s *Server) serviceGrantWhileRetiring(ctx context.Context, p types.ModelProvider, digest string, started time.Time) (serviceGrantMinted, error) {
 	s.dropServiceGrantCache(p.UID)
-	e := svcFail(svcReasonSecretGone, true)
+	e := svcGone()
 	s.writeServiceGrantStatus(ctx, p, digest, started, nil, e)
 	return serviceGrantMinted{}, e
 }
@@ -349,7 +359,9 @@ func (s *Server) serviceGrantPacedFailure(uid, digest, rev, trigger string) (ser
 // serviceGrantFailure records a failed attempt and answers: a cached token with more than a minute left, minted
 // under the current digest and revision, is still returned unless the secret is gone; otherwise the error.
 func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider, digest, rev string, started time.Time, gen uint64, e *serviceGrantError) (serviceGrantMinted, error) {
-	if e.reason != svcReasonNotActivated {
+	if e.final {
+		s.dropServiceGrantCache(p.UID) // a withdrawal seen with authority is not looked at again
+	} else if e.reason != svcReasonNotActivated {
 		// What was read before the request may be gone: look again before a status row is written or a cached
 		// token is served. Authoritative absence evicts and refuses; a moved revision gets the one retry; a
 		// changed row is drift; a failed read serves nothing from the cache.
@@ -365,18 +377,15 @@ func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider,
 			// A replacement committed with its predecessor's claim while this attempt ran: whatever the
 			// provider said, nothing from the old generation is served and the refusal is definitive.
 			s.dropServiceGrantCache(p.UID)
-			e = svcFail(svcReasonSecretGone, true)
+			e = svcGone()
 		case rerr == nil && liveOK && liveRev == "":
 			s.dropServiceGrantCache(p.UID)
-			e = svcFail(svcReasonSecretGone, true)
+			e = svcGone()
 		case derr != nil || gerr != nil:
 			// An unreadable configuration is not a withdrawal: retryable, and nothing from the cache is served.
 			return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 		case rerr != nil:
 			return serviceGrantMinted{}, e
-		case liveOK && liveRev == "":
-			s.dropServiceGrantCache(p.UID)
-			e = svcFail(svcReasonSecretGone, true)
 		case liveOK && liveRev != rev:
 			return serviceGrantMinted{}, errServiceGrantRevisionMoved
 		}
@@ -474,7 +483,10 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 		return serviceGrantMinted{}, errServiceGrantDrift
 	case gerr == nil && retiring:
 		superseded()
-		return serviceGrantMinted{}, svcFail(svcReasonSecretGone, true)
+		return serviceGrantMinted{}, svcGone()
+	case rerr == nil && liveOK && liveRev == "":
+		superseded()
+		return serviceGrantMinted{}, svcGone() // an authoritative empty revision stands when another read failed
 	case derr != nil || gerr != nil:
 		superseded()
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)

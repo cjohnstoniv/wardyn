@@ -298,11 +298,11 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	if w := f.do(http.MethodPut, f.secretPath("corp-a"), f.admin, body); w.Code != http.StatusNoContent || strings.Contains(w.Body.String(), svcClientSecret) {
 		t.Fatalf("operator write = %d %q", w.Code, w.Body.String())
 	}
-	for _, path := range []string{f.secretPath("corp-a"), "/model-providers", "/site-config", "/setup/status"} {
-		w := f.do(http.MethodGet, path, f.admin, nil)
-		if strings.Contains(w.Body.String(), svcClientSecret) {
-			t.Errorf("GET %s returns the secret's bytes", path)
-		}
+	// The route is write-only: a read is refused as a method the route does not have, and says nothing of the value.
+	if w := f.do(http.MethodGet, f.secretPath("corp-a"), f.admin, nil); w.Code != http.StatusMethodNotAllowed ||
+		strings.Contains(w.Body.String(), svcClientSecret) || !strings.Contains(w.Header().Get("Allow"), http.MethodPut) ||
+		strings.Contains(w.Header().Get("Allow"), http.MethodGet) {
+		t.Errorf("GET on the write-only secret route = %d (Allow %q), want 405 with no read method", w.Code, w.Header().Get("Allow"))
 	}
 	// A write with no grant is 409.
 	nb := body

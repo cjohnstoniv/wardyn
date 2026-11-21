@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -526,5 +527,154 @@ func TestPostToken_ExistingCallersUnchanged(t *testing.T) {
 	answer = `{"error":"invalid_client"}`
 	if _, err = s.postToken(context.Background(), ta, form()); !errors.Is(err, ErrADOEntraUnavailable) {
 		t.Fatalf("invalid_client = %v, want unavailable, the sign-ins kept", err)
+	}
+}
+
+// CX-372, every combination: one outcome per attempt, the strongest of what was read. A withdrawal seen with
+// authority (a pending claim, a gone secret, a removed row) is final whatever else failed to read; an
+// unreadable read with no withdrawal beside it is transient; with neither the attempt's own result stands.
+func TestServiceGrant_OutcomeIsTheStrongestOfTheReads(t *testing.T) {
+	type read int
+	const (
+		fine read = iota
+		withdrawn
+		unreadable
+	)
+	for _, upstream := range []string{"success", "transient"} {
+		for _, claim := range []read{fine, withdrawn, unreadable} {
+			for _, secret := range []read{fine, withdrawn, unreadable} {
+				for _, roster := range []read{fine, withdrawn, unreadable} {
+					name := fmt.Sprintf("upstream=%s claim=%d secret=%d roster=%d", upstream, claim, secret, roster)
+					f := newSvcFixWithSecret(t)
+					f.mustToken(serviceGrantTriggerRefresh)
+					f.clock.Advance(55 * time.Minute) // the cached token is due, and still serves as the fallback
+					var flip atomic.Bool
+					f.st.getErr = func() error {
+						if flip.Load() && roster == unreadable {
+							return errSvcDown
+						}
+						return nil
+					}
+					f.st.docErr = func() error {
+						if flip.Load() && claim == unreadable {
+							return errSvcDown
+						}
+						return nil
+					}
+					f.idp.respond = func(n int, _ svcReq) svcAnswer {
+						flip.Store(true)
+						if claim == withdrawn {
+							f.putClaim(f.uid)
+						}
+						switch secret {
+						case withdrawn:
+							f.sec.mu.Lock()
+							delete(f.sec.m, f.secretName())
+							f.sec.rev[f.secretName()]++
+							f.sec.mu.Unlock()
+						case unreadable:
+							f.sec.mu.Lock()
+							f.sec.revErr = errSvcDown
+							f.sec.mu.Unlock()
+						}
+						if roster == withdrawn {
+							f.setRow(func(p *types.ModelProvider) { p.Disabled = true })
+						}
+						if upstream == "transient" {
+							return svcAnswer{Status: 503, Body: `{}`}
+						}
+						return svcAnswer{}
+					}
+					got, err := f.token(serviceGrantTriggerRefresh)
+					var se *serviceGrantError
+					decisive := errors.Is(err, errServiceGrantDrift) || (errors.As(err, &se) && se.definitive)
+					wantDecisive := claim == withdrawn || secret == withdrawn || roster == withdrawn
+					anyUnreadable := claim == unreadable || secret == unreadable || roster == unreadable
+					switch {
+					case wantDecisive:
+						if !decisive || got.token != "" {
+							t.Errorf("%s: %q, %v; want the definitive refusal", name, got.token, err)
+						}
+						if (claim == withdrawn || secret == withdrawn) && f.cached() && roster != withdrawn {
+							t.Errorf("%s: the withdrawn credential's cache entry survived", name)
+						}
+					case anyUnreadable:
+						if err == nil || decisive || got.token != "" {
+							t.Errorf("%s: %q, %v; want a transient refusal and no token", name, got.token, err)
+						}
+					default:
+						if err != nil || got.token == "" {
+							t.Errorf("%s: %q, %v; want a token", name, got.token, err)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// CX-372, the successful upstream path: the claim is seen at publication; the settlement's later reads fail.
+// The withdrawal is final, the cache is evicted, and the resolve answers the definitive refusal, so the proxy
+// stops serving its previous header.
+func TestServiceGrant_WithdrawalSeenAtPublicationSurvivesFailedConfirmationReads(t *testing.T) {
+	f := newSvcFixWithSecret(t)
+	plan, _, _, ok := f.dispatch(t)
+	if !ok {
+		t.Fatal("dispatch refused")
+	}
+	if code, _ := f.svcResolve(plan); code != http.StatusOK {
+		t.Fatalf("first resolve: %d", code)
+	}
+	f.clock.Advance(55 * time.Minute) // a warm previous header, due for renewal
+	var flip atomic.Bool
+	var reads atomic.Int32
+	f.st.docErr = func() error {
+		if flip.Load() && reads.Add(1) > 1 {
+			return errSvcDown // the first read after the upstream answer finds the claim; later ones fail
+		}
+		return nil
+	}
+	f.st.getErr = func() error {
+		if flip.Load() {
+			return errSvcDown
+		}
+		return nil
+	}
+	f.idp.respond = func(int, svcReq) svcAnswer {
+		f.putClaim(f.uid)
+		flip.Store(true)
+		return svcAnswer{} // the upstream succeeds
+	}
+	code, body := f.svcResolve(plan)
+	if code != http.StatusFailedDependency || body["reason"] != reasonServiceGrantRefused {
+		t.Fatalf("resolve = %d %v, want the definitive 424 %s", code, body, reasonServiceGrantRefused)
+	}
+	if f.cached() {
+		t.Error("the withdrawn credential is still cached")
+	}
+	// The empty revision seen at publication stands when the other reads fail.
+	g := newSvcFixWithSecret(t)
+	g.mustToken(serviceGrantTriggerRefresh)
+	g.clock.Advance(55 * time.Minute)
+	var on atomic.Bool
+	g.st.getErr = func() error {
+		if on.Load() {
+			return errSvcDown
+		}
+		return nil
+	}
+	g.st.docErr = g.st.getErr
+	g.idp.respond = func(int, svcReq) svcAnswer {
+		on.Store(true)
+		g.sec.mu.Lock()
+		delete(g.sec.m, g.secretName())
+		g.sec.rev[g.secretName()]++
+		g.sec.mu.Unlock()
+		return svcAnswer{}
+	}
+	got, err := g.token(serviceGrantTriggerRefresh)
+	var se *serviceGrantError
+	if !errors.As(err, &se) || !se.definitive || se.reason != svcReasonSecretGone || got.token != "" || g.cached() {
+		t.Fatalf("empty revision at publication = %q, %v, cached %v; want the final secret_gone", got.token, err, g.cached())
 	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -85,9 +86,19 @@ func TestServiceGrant_SecretWriteRefusesChangedDestination_PG(t *testing.T) {
 
 func TestServiceGrant_SecretNameReservedAtEverySink(t *testing.T) {
 	f := newSvcFix(t)
-	name := f.secretName()
-	if !nameSinkReservedSecret(name) {
-		t.Fatalf("%s is not reserved at the secret sinks", name)
+	name := f.secretName() // the generated name, not a literal
+	// Every guard a secret name passes through: the broker's (exported predicate, which wraps
+	// reservedBrokerSecret), the api's four. A change to any one pattern alone must fail here.
+	for guard, reserved := range map[string]func(string) bool{
+		"broker.ReservedSecretName (reservedBrokerSecret)": broker.ReservedSecretName,
+		"reservedSecret":         reservedSecret,
+		"sinkReservedSecret":     sinkReservedSecret,
+		"nameSinkReservedSecret": nameSinkReservedSecret,
+		"secretsAPIReserved":     secretsAPIReserved,
+	} {
+		if !reserved(name) {
+			t.Errorf("%s does not reserve the generated service grant secret name %q", guard, name)
+		}
 	}
 	p := f.provider()
 	p.OIDC.ClientSecretRef = name
