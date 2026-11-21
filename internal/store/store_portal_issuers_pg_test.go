@@ -536,7 +536,7 @@ func TestPortalIssuersActivate_ConcurrentActivationsOneWinner_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = winner.Rollback(ctx) }()
-	const stamp = "2001-02-03T04:05:06.000007Z"
+	stamp := time.Now().UTC().Add(-time.Hour).Format("2006-01-02T15:04:05") + ".000007Z"
 	if _, err := winner.Exec(ctx, `INSERT INTO site_config (singleton, config, updated_at) VALUES (true, jsonb_build_object($1::text, $2::text), now())`,
 		store.PortalIssuersActivatedKey, stamp); err != nil {
 		t.Fatal(err)
