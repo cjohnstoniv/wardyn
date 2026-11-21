@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,19 @@ func svcHoldFirst(t *testing.T, idp *svcIdP) func() {
 	}
 	idp.mu.Unlock()
 	return free
+}
+
+// removeGrant is DELETE .../service-grant as an admin, then a check that the stored grant is gone: a PUT that
+// leaves the grant out keeps it, so only this route removes it.
+func (f *svcPG) removeGrant(id string) {
+	f.t.Helper()
+	uid := f.uid(id)
+	if w := f.do(http.MethodDelete, "/model-providers/"+id+"/service-grant", f.admin, nil); w.Code/100 != 2 {
+		f.t.Fatalf("remove %s's grant: %d %s", id, w.Code, w.Body.String())
+	}
+	if p := f.row(id); (p.OIDC != nil && p.OIDC.ServiceGrant != nil) || slices.Contains(f.storedGrantUIDs(), uid) {
+		f.t.Fatalf("%s's grant is still stored after its removal", id)
+	}
 }
 
 func TestServiceGrant_SecretWriteRefusesChangedDestination_PG(t *testing.T) {
@@ -109,9 +123,7 @@ func TestServiceGrant_SecretRemovalOnOneReplicaEvictsOnAnother_PG(t *testing.T) 
 	if _, err := b.tokenOf("corp-a", serviceGrantTriggerRefresh); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.put(svcPGRow("corp-a", false)); w.Code/100 != 2 {
-		t.Fatalf("remove the grant on A: %d %s", w.Code, w.Body.String())
-	}
+	f.removeGrant("corp-a")
 	b.srv.reconcileServiceGrantMasks(ctx)
 	b.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(24 * time.Hour))
 	if svcMasked(b.srv, svcClientSecret) {
@@ -246,17 +258,19 @@ func TestServiceGrant_RecordOverlapsNeverCrossDestinations_PG(t *testing.T) {
 	if w := g.put(svcPGRow("corp-a", true)); w.Code/100 != 2 {
 		t.Fatalf("seed: %d %s", w.Code, w.Body.String())
 	}
-	done := make(chan struct{}, 2)
+	done := make(chan int, 2)
 	for _, v := range []string{svcSecretTwo, svcSecretThree} {
 		body := g.secretBody("corp-a", v)
 		go func() {
-			defer func() { done <- struct{}{} }()
-			doSSO(t, g.srv, http.MethodPut, "/api/v1"+g.secretPath("corp-a"), g.admin, string(mustJSON(body)))
+			done <- doSSO(t, g.srv, http.MethodPut, "/api/v1"+g.secretPath("corp-a"), g.admin, string(mustJSON(body))).Code
 		}()
 	}
 	for range 2 {
 		select {
-		case <-done:
+		case code := <-done:
+			if code != http.StatusNoContent {
+				t.Fatalf("an overlapping write answered %d, want both stored", code)
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for the overlapping writes")
 		}
@@ -286,9 +300,7 @@ func TestServiceGrant_DirectRotationOverlappingDeleteFailsClosed_PG(t *testing.T
 	if w := f.do(http.MethodDelete, f.secretPath("corp-a"), f.admin, nil); w.Code != http.StatusConflict && w.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s", w.Code, w.Body.String())
 	}
-	if w := f.put(svcPGRow("corp-a", false)); w.Code/100 != 2 {
-		t.Fatalf("remove the grant: %d %s", w.Code, w.Body.String())
-	}
+	f.removeGrant("corp-a")
 	before := f.idp.count()
 	if _, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.row("corp-a")), "", serviceGrantTriggerRefresh); err == nil {
 		t.Fatal("a mint for a removed grant succeeded")
@@ -327,8 +339,26 @@ func TestServiceGrant_FailedRotationKeepsGrantMinting_PG(t *testing.T) {
 	if s := lastSecret(); s != svcClientSecret {
 		t.Fatalf("after a failed rotation the mint sent %q, want the old record's value", s)
 	}
-	// A value that reached the store although the write failed leaves the new one live.
-	f.sec.set(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: f.row("corp-a").BaseURL, ClientSecret: svcSecretTwo}))
+	// The documented partial write: the value reaches the store and the row is not written. The route answers
+	// the failure, and the value now live is masked at once, before any mint.
+	f.sec.mu.Lock()
+	f.sec.putPartial = true
+	f.sec.mu.Unlock()
+	sent := f.idp.count()
+	if w := f.writeSecret("corp-a", svcSecretTwo); w.Code < 500 {
+		t.Fatalf("a partial write answered %d, want the failure", w.Code)
+	}
+	f.sec.mu.Lock()
+	f.sec.putPartial = false
+	f.sec.mu.Unlock()
+	if !svcMasked(f.srv, svcSecretTwo) || f.idp.count() != sent {
+		t.Fatalf("after the partial write: new value masked %v, %d requests sent; want it masked before any mint",
+			svcMasked(f.srv, svcSecretTwo), f.idp.count()-sent)
+	}
+	if raw, _ := f.sec.Get(context.Background(), name); !strings.Contains(string(raw), svcSecretTwo) {
+		t.Fatal("setup: the partial write did not leave the new value in the store")
+	}
+	f.srv.dropServiceGrantCache(uid)
 	if _, err := f.tokenOf("corp-a", serviceGrantTriggerResolve); err != nil {
 		t.Fatal(err)
 	}

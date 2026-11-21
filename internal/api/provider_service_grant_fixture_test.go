@@ -141,6 +141,9 @@ type svcSecrets struct {
 	getErr error
 	putErr error
 	delErr error
+	// putPartial makes Put store the value and then answer ErrRowNotWritten: the value reached the external
+	// store but its row was not written.
+	putPartial bool
 	// hold runs before each operation, outside the store's lock; it may block.
 	hold  func(op, name string)
 	calls []string
@@ -173,6 +176,9 @@ func (s *svcSecrets) Put(ctx context.Context, name string, v []byte) error {
 	}
 	s.m[name] = append([]byte(nil), v...)
 	s.rev[name]++
+	if s.putPartial {
+		return secretstore.ErrRowNotWritten
+	}
 	return nil
 }
 
