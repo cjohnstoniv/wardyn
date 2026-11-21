@@ -65,7 +65,7 @@ func (f *svcFix) cached() bool {
 	return ok
 }
 
-// CX-364: the owner is removed while a renewal fails transiently. The failed renewal still repeats the
+// The owner is removed while a renewal fails transiently. The failed renewal still repeats the
 // owner check, so the answer is the 403 that makes the proxy drop its last good header, not a 503 it rides out.
 func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	f := newSvcFixWithSecret(t)
@@ -96,7 +96,7 @@ func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	}
 }
 
-// CX-364: a configuration that cannot be read, alone, withdraws nothing: 503 on the resolve, and no 403
+// A configuration that cannot be read, alone, withdraws nothing: 503 on the resolve, and no 403
 // anywhere on the mint path.
 func TestServiceGrant_ConfigReadErrorDoesNotWithdraw(t *testing.T) {
 	f := newSvcFixWithSecret(t)
@@ -134,7 +134,7 @@ func TestServiceGrant_ConfigReadErrorDoesNotWithdraw(t *testing.T) {
 	}
 }
 
-// CX-372: a replacement grant on a uid whose predecessor is not yet retired serves nothing from the old
+// A replacement grant on a uid whose predecessor is not yet retired serves nothing from the old
 // generation on any replica, whether the cleanup is held or has failed; it serves again only after the claim is
 // settled and a fresh secret is written.
 func TestServiceGrant_ReplacementUnavailableUntilPredecessorRetired(t *testing.T) {
@@ -178,7 +178,7 @@ func TestServiceGrant_ReplacementUnavailableUntilPredecessorRetired(t *testing.T
 	}
 }
 
-// CX-372: a claim committed while a renewal fails. (a) with a usable cached token and (b) without one, the
+// A claim committed while a renewal fails. (a) with a usable cached token and (b) without one, the
 // answer is the definitive 424 refusal, and the cached token is dropped.
 func TestServiceGrant_ClaimCommittedDuringFailedRenewalIsDefinitive(t *testing.T) {
 	for _, withCache := range []bool{true, false} {
@@ -209,7 +209,7 @@ func TestServiceGrant_ClaimCommittedDuringFailedRenewalIsDefinitive(t *testing.T
 	}
 }
 
-// CX-368: the final locked step compares the claim's identity. A claim that another attempt settled, and a
+// The final locked step compares the claim's identity. A claim that another attempt settled, and a
 // secret written since, is no pending claim; a replacement claim is never settled or audited as its predecessor.
 func TestServiceGrant_CleanupSettlesOnlyItsOwnClaim(t *testing.T) {
 	ctx := context.Background()
@@ -251,7 +251,7 @@ func TestServiceGrant_CleanupSettlesOnlyItsOwnClaim(t *testing.T) {
 	}
 }
 
-// CX-374: an old failure that finishes after a newer success records nothing, in memory or in the status row,
+// An old failure that finishes after a newer success records nothing, in memory or in the status row,
 // and the refresher does not see a failure come back.
 func TestServiceGrant_OldFailureAfterNewerSuccessIsDropped(t *testing.T) {
 	f := newSvcFixWithSecret(t)
@@ -283,7 +283,7 @@ func TestServiceGrant_OldFailureAfterNewerSuccessIsDropped(t *testing.T) {
 	}
 }
 
-// CX-374: concurrent waiters on one failing flight record one failure and one status write.
+// Concurrent waiters on one failing flight record one failure and one status write.
 func TestServiceGrant_FailedFlightRecordsOneFailure(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	release := make(chan struct{})
@@ -311,7 +311,7 @@ func TestServiceGrant_FailedFlightRecordsOneFailure(t *testing.T) {
 	}
 }
 
-// CX-372, mixed outcomes: a pending claim that was read is decisive evidence against the old credential, and
+// Mixed outcomes: a pending claim that was read is decisive evidence against the old credential, and
 // an unreadable roster beside it, at settlement or at the final resolve, changes nothing about the answer.
 func TestServiceGrant_ConfirmedWithdrawalSurvivesAFailedRead(t *testing.T) {
 	// (a) The claim read finds the claim, the roster read fails: the settlement is definitive.
@@ -530,7 +530,7 @@ func TestPostToken_ExistingCallersUnchanged(t *testing.T) {
 	}
 }
 
-// CX-372, every combination: one outcome per attempt, the strongest of what was read. A withdrawal seen with
+// Every combination: one outcome per attempt, the strongest of what was read. A withdrawal seen with
 // authority (a pending claim, a gone secret, a removed row) is final whatever else failed to read; an
 // unreadable read with no withdrawal beside it is transient; with neither the attempt's own result stands.
 func TestServiceGrant_OutcomeIsTheStrongestOfTheReads(t *testing.T) {
@@ -613,7 +613,7 @@ func TestServiceGrant_OutcomeIsTheStrongestOfTheReads(t *testing.T) {
 	}
 }
 
-// CX-372, the successful upstream path: the claim is seen at publication; the settlement's later reads fail.
+// The successful upstream path: the claim is seen at publication; the settlement's later reads fail.
 // The withdrawal is final, the cache is evicted, and the resolve answers the definitive refusal, so the proxy
 // stops serving its previous header.
 func TestServiceGrant_WithdrawalSeenAtPublicationSurvivesFailedConfirmationReads(t *testing.T) {
