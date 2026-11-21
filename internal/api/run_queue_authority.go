@@ -282,6 +282,7 @@ func narrowRole(launched, derived string) string {
 const (
 	queueEndUserTypeUnknown   = "user_type_unknown"
 	queueEndPortalUnitScope   = "portal_unit_scope"
+	queueEndPortalRunScope    = "portal_run_scope"
 	queueUserTypeUnknownHint  = "The user type this portal gives its people no longer exists, so this run was not started."
 	queuePortalUnitScopeHint  = "This run's unit is no longer under the portal's unit, so it was not started."
 	queuePortalPrincipalError = "Queue portal start: the principal is not one of the portal's people"
@@ -312,6 +313,11 @@ func (s *Server) queuePortalIssuerRole(st *queuedStart) *queueEnd {
 	if d.Issuer == "" || d.IssuerKey == "" || !strings.HasPrefix(a.Sub, types.PortalPersonPrefix+d.IssuerKey+":") {
 		slog.ErrorContext(st.base, queuePortalPrincipalError, slog.String("run_id", st.run.ID.String()), slog.String("delegate", d.ID.String()))
 		return failed
+	}
+	// A run that mounted a portal's drive belongs to the portal that created it: its row's creator (immutable) must be
+	// the portal the stored authority names, or the replay would resolve one portal's drive and attribute it to the other.
+	if st.run.PortalDrives && (st.run.CreatedVia == nil || *st.run.CreatedVia != via.Delegate) {
+		return &queueEnd{token: queueEndPortalRunScope, hint: portalRunScopeMsg}
 	}
 	userTypes, err := s.cfg.Store.ListUserTypes(st.ctx)
 	if err != nil {
