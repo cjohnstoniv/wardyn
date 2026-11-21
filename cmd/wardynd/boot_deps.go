@@ -81,14 +81,14 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 	}
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()
-	pool, err := db.Connect(connectCtx, dsn)
+	pool, err := db.Connect(connectCtx, dsn, serverDBOption())
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}
 	migrateCtx, cancelMigrate := context.WithTimeout(rootCtx, migrateTimeout)
 	defer cancelMigrate()
 	if mDSN := strings.TrimSpace(migrateDSN); mDSN != "" {
-		mpool, merr := db.Connect(connectCtx, mDSN)
+		mpool, merr := db.Connect(connectCtx, mDSN, serverDBOption())
 		if merr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("connect migrate db: %w", merr)

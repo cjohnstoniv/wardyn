@@ -121,7 +121,7 @@ func secretStoreMaintenance(f *bootFlags) error {
 	ctx := context.Background()
 	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancel()
-	pool, err := db.Connect(connCtx, *f.dsn)
+	pool, err := db.Connect(connCtx, *f.dsn, toolDBOption("migrate-secrets"))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
