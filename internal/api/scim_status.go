@@ -96,7 +96,7 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		return labels[id], nil
 	}
 
-	deactivated, err := st.ListDeactivatedIdentities(ctx, scimStatusListCap)
+	deactivated, err := st.ListDeactivatedIdentities(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimStatusListCap)
 	if err != nil {
 		writeServerError(w, r, "list deactivated identities", err)
 		return
@@ -108,7 +108,7 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	failures, err := st.ListDeprovisionFailures(ctx, scimStatusListCap)
+	failures, err := st.ListDeprovisionFailures(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimStatusListCap)
 	if err != nil {
 		writeServerError(w, r, "list deprovision failures", err)
 		return

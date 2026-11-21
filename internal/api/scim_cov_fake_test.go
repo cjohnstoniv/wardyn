@@ -50,8 +50,10 @@ type scimCovStore struct {
 	grants     []types.UserDriveGrant
 	drives     []types.UserDriveListItem
 
-	pending       []store.PendingLeaver
-	failures      []store.DeprovisionFailure
+	pending  []store.PendingLeaver
+	failures []store.DeprovisionFailure
+	// scoped is the issuer and tenant each scoped status listing was called with, by method name.
+	scoped        map[string][2]string
 	grantsDeleted int64
 	assignDeleted int64
 	poolsNarrowed int64
@@ -729,12 +731,21 @@ func (s *scimCovStore) HeldEmails(context.Context, uuid.UUID, []string, []string
 	return nil, nil
 }
 
-func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]store.PrincipalIdentity, error) {
+// recordScope notes the issuer and tenant a listing was scoped to; the caller holds s.mu.
+func (s *scimCovStore) recordScope(method, issuer, tenant string) {
+	if s.scoped == nil {
+		s.scoped = map[string][2]string{}
+	}
+	s.scoped[method] = [2]string{issuer, tenant}
+}
+
+func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, issuer, tenant string, _ int) ([]store.PrincipalIdentity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("ListDeactivatedIdentities"); err != nil {
 		return nil, err
 	}
+	s.recordScope("ListDeactivatedIdentities", issuer, tenant)
 	var out []store.PrincipalIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.DeactivatedAt != nil && i.PurgedAt == nil {
@@ -744,12 +755,13 @@ func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]st
 	return out, nil
 }
 
-func (s *scimCovStore) ListDeprovisionFailures(_ context.Context, _ int) ([]store.DeprovisionFailure, error) {
+func (s *scimCovStore) ListDeprovisionFailures(_ context.Context, issuer, tenant string, _ int) ([]store.DeprovisionFailure, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("ListDeprovisionFailures"); err != nil {
 		return nil, err
 	}
+	s.recordScope("ListDeprovisionFailures", issuer, tenant)
 	return slices.Clone(s.failures), nil
 }
 
