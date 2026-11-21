@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -82,6 +83,47 @@ type leaverOrigin struct {
 	purgeReason string
 	// keepWorkspaces leaves a purged person's workspaces with them, where the origin has a setting for it.
 	keepWorkspaces bool
+	// portal marks a portal person's lifecycle. Its tail pins one audit event per step on the ledger row, so a
+	// request and a sweep, or a retry after the write, record a step once, and it reads that its suspension is
+	// still the identity's before it tears a run down. SCIM does neither.
+	portal bool
+}
+
+// staleTail is store.ErrSuperseded when a portal tail's suspension is no longer the identity's, read before a side
+// effect that cannot itself be made conditional on it. Nil for SCIM, outside a bound tail, and on a store that
+// cannot say.
+func (o leaverOrigin) staleTail(ctx context.Context, st any, id uuid.UUID) error {
+	b, bound := suspensionBound(ctx)
+	cur, can := st.(store.SuspensionCurrentReader)
+	if !o.portal || !bound || !can || b.id != id {
+		return nil
+	}
+	current, err := cur.SuspensionCurrent(ctx, id, b.at)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return store.ErrSuperseded
+	}
+	return nil
+}
+
+// pinStepEvent fixes the id and time of the audit row a portal step writes on the step's ledger row, the first
+// writer's winning, and marks ctx as a replay, so a second writer of the same step adds no row. Other origins
+// are untouched.
+func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
+	if !o.portal {
+		return ctx, nil
+	}
+	evID, at, err := st.PinDeprovisionEvent(ctx, id, kind, key, uuid.New(), now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ctx, store.ErrSuperseded
+	}
+	if err != nil {
+		return ctx, err
+	}
+	ev.ID, ev.Time = evID, at
+	return store.WithAuditReplay(ctx), nil
 }
 
 // scimOrigin is the origin of every SCIM suspension and purge: exactly the values the steps named before they
@@ -398,6 +440,10 @@ type suspensionBoundKey struct{}
 type suspensionBoundOf struct {
 	id uuid.UUID
 	at time.Time
+	// portal marks a portal person's tail, whose one principal step one already cut in the transaction that
+	// deactivated it: the tail writes no cut of its own (cutSub), since a read of whether to cut and the write
+	// are two statements, and a reactivation with a fresh exchange can land between them.
+	portal bool
 }
 
 // withSuspensionBound marks ctx as the tail of the suspension that deactivated identity id at at, on the
@@ -410,6 +456,11 @@ type suspensionBoundOf struct {
 // from before.
 func withSuspensionBound(ctx context.Context, id uuid.UUID, at time.Time) context.Context {
 	return context.WithValue(ctx, suspensionBoundKey{}, suspensionBoundOf{id: id, at: at})
+}
+
+// withPortalSuspensionBound is withSuspensionBound for the tail of a portal person's suspension.
+func withPortalSuspensionBound(ctx context.Context, id uuid.UUID, at time.Time) context.Context {
+	return context.WithValue(ctx, suspensionBoundKey{}, suspensionBoundOf{id: id, at: at, portal: true})
 }
 
 func suspensionBound(ctx context.Context) (suspensionBoundOf, bool) {
@@ -445,6 +496,9 @@ func tokensMadeAfterBound(ctx context.Context, st any, ids []uuid.UUID) (map[uui
 // cut and gets it.
 func (s *Server) cutSub(ctx context.Context, sub string) error {
 	if b, ok := suspensionBound(ctx); ok {
+		if b.portal {
+			return nil
+		}
 		if sb, can := s.cfg.Store.(store.SuspensionBounds); can {
 			cut, err := sb.SubCutSince(ctx, b.id, sub, b.at)
 			if err != nil || cut {
@@ -721,6 +775,10 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
 			continue
 		}
+		if err := o.staleTail(ctx, st, id); err != nil {
+			errs = append(errs, err)
+			continue
+		}
 		if err := s.teardownRun(ctx, o, st, runID); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
@@ -828,7 +886,12 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 		}
 		key := store.JobKey{Step: row.step}
 		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
-		if err := s.recordAuditStrict(ctx, ev); err != nil {
+		rctx, err := o.pinStepEvent(ctx, st, s.cfg.Now().UTC(), id, store.JobKindSuspend, key, &ev)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := s.recordAuditStrict(rctx, ev); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}

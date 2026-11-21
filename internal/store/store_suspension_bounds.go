@@ -26,6 +26,12 @@ type SuspensionBounds interface {
 	FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error
 }
 
+// SuspensionCurrentReader says whether a suspension tail is still the one the identity carries: what a side effect
+// that cannot be made conditional itself (a run teardown) reads first, so a stale tail applies none.
+type SuspensionCurrentReader interface {
+	SuspensionCurrent(ctx context.Context, identity uuid.UUID, at time.Time) (bool, error)
+}
+
 // personActiveSQL: the identity ($3) a suspension tail works for is active again. Only then is a row stamped
 // after the tail's bound one a reactivated person made, and only then is a form's session cut not written
 // again; while the person is deactivated nothing is spared, since not every insert is refused then (a service
@@ -112,4 +118,20 @@ func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k Job
 		return ErrSuperseded
 	}
 	return nil
+}
+
+// SuspensionCurrent is whether the suspension that deactivated identity at at is still the identity's: it is
+// deactivated at at, or it is active again and the ledger's cutoff step still records at (FinishSuspensionJobAt's
+// own test). A later suspension, which deactivates at another instant and records it, makes every tail bound to an
+// earlier one stale.
+func (s PG) SuspensionCurrent(ctx context.Context, identity uuid.UUID, at time.Time) (bool, error) {
+	var current bool
+	if err := s.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1 AND (i.deactivated_at = $2 OR (i.deactivated_at IS NULL
+		        AND EXISTS (SELECT 1 FROM deprovision_jobs c WHERE c.identity_id = $1 AND c.kind = 'suspend' AND c.step = 'cutoff' AND c.target = ''
+		                     AND c.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM $2::timestamptz) * 1000000)::bigint)))))`,
+		identity, at).Scan(&current); err != nil {
+		return false, fmt.Errorf("store: read the current suspension: %w", err)
+	}
+	return current, nil
 }

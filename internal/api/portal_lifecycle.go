@@ -56,7 +56,7 @@ func (s *Server) portalLifecycleStore() (portalLifecycleStore, bool) {
 // person is the workforce default, handing them to the operator: WARDYN_SCIM_LEAVER_WORKSPACES is a SCIM
 // setting and is not read here.
 func portalOrigin(actorType types.ActorType, actor string) leaverOrigin {
-	return leaverOrigin{actorType: actorType, actor: actor, killReason: "person_suspend", deactivateAction: "identity.deactivate", purgeReason: "person_purge"}
+	return leaverOrigin{actorType: actorType, actor: actor, killReason: "person_suspend", deactivateAction: "identity.deactivate", purgeReason: "person_purge", portal: true}
 }
 
 // portalSweepOrigin is the origin of the portal sweep's work.
@@ -132,7 +132,7 @@ func (s *Server) runPortalSuspension(ctx context.Context, st portalLifecycleStor
 	// Every tail is bound to the deactivation step one left, the first request's too: a reactivation can commit as
 	// soon as step one releases the row, and what the person makes after it is not this suspension's.
 	if ident.DeactivatedAt != nil {
-		ctx = withSuspensionBound(ctx, id, *ident.DeactivatedAt)
+		ctx = withPortalSuspensionBound(ctx, id, *ident.DeactivatedAt)
 	}
 	stepErr := errors.Join(
 		s.sweepStep(ctx, st, id, ident, forms),

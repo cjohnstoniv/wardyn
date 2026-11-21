@@ -577,7 +577,11 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 		data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 	}
 	ev := s.auditEvent(nil, o.actorType, o.actor, "person.deprovision", id.String(), "success", mustJSON(data))
-	if err := s.recordAuditStrict(ctx, ev); err != nil {
+	rctx, err := o.pinStepEvent(ctx, st, s.cfg.Now().UTC(), id, store.JobKindPurge, key, &ev)
+	if err != nil {
+		return err
+	}
+	if err := s.recordAuditStrict(rctx, ev); err != nil {
 		return errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, err))
 	}
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)
