@@ -576,7 +576,8 @@ func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSH
 // principal and returns the stored record (201). POST /api/v1/me/ssh-keys.
 // Fails closed on the server: 422 for private-key material, more than one key,
 // or an admin-token caller on an SSO deployment (such a key could never
-// authorize a human's run); 409 when the fingerprint is already registered.
+// authorize a human's run); 409 when the fingerprint is already registered,
+// unless the caller already holds the key cap, which answers 422 first.
 func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.SSHPublicKey, error) {
 	var out types.SSHPublicKey
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
