@@ -590,7 +590,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 | Times | `exp` present and ahead; `nbf`, if present, not ahead; `iat` a number at most 60 seconds ahead and no older than the maximum age. |
 | Grant end | The earlier of `iat` plus the maximum age and `exp` must leave at least 5 seconds, or the token is stale. |
 | Access token | `cid` is the registered client id; `scp` holds every required scope; `aud` is exactly the one audience; `uid` is present. |
-| ID token | `aud` is exactly the client id; `azp`, if present, is it too; a header `typ` is `JWT`; no `cid`, `scp`, `scope` or `client_id` claim; `sub` is present. |
+| ID token | `aud` is exactly the client id; `azp`, if present, is it too; a header `typ`, if present, is `JWT`; no `cid`, `scp`, `scope` or `client_id` claim; `sub` is present. |
 | Person | The id is 1 to 128 printable ASCII characters. A `sub` or id that is a reserved name is refused `reserved_principal`. |
 | Admission | The `required_claim`, the group, and for an ID token the email domains. A miss is `subject_token_claim_mismatch`, `outside_scope`, `email_verified_absent`, `email_unverified` or `email_domain`. |
 
