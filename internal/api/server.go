@@ -781,7 +781,10 @@ type Server struct {
 	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
 	// the walk hashes the org's whole log over the run's lifetime, so a second check is refused, not queued. Zero value is ready to use.
 	recordingChainWalk sync.Mutex
-	profileSynth       atomic.Int32 // profile syntheses running on this replica (profile.go); each holds a run's audit trail in memory
+	// portalActivation is this replica's rolling sample of the database's other clients and its alarm's memory
+	// (portal_issuer_activate.go). Zero value is ready to use.
+	portalActivation portalActivationMonitor
+	profileSynth     atomic.Int32 // profile syntheses running on this replica (profile.go); each holds a run's audit trail in memory
 	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
 	sshUnbound atomic.Bool
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).

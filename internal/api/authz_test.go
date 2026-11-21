@@ -1081,6 +1081,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
 	"GET /api/v1/admin/delegates":         {class: classSecurity},
 	"DELETE /api/v1/admin/delegates/{id}": {class: classSecurity},
+	// The issuer-portal registry: the switch-on, a binding's retirement and a portal's admission rule are
+	// the super admin's alone (portal_issuer_activate.go, portal_issuer_governance.go).
+	"POST /api/v1/admin/portal-issuers/activate": {class: classAdmin},
+	"DELETE /api/v1/admin/portal-issuers/{k}":    {class: classAdmin},
+	"PUT /api/v1/admin/delegates/{id}/admission": {class: classAdmin},
 
 	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
