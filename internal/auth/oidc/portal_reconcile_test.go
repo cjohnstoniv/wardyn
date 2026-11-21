@@ -5,7 +5,6 @@ package oidc
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -31,8 +30,13 @@ func pauseAfterPrepare(t *testing.T, h *portalHarness, raw string) *pausedExchan
 	}
 	x := &pausedExchange{t: t, resume: make(chan struct{}), done: make(chan PortalRefusal, 1)}
 	paused := make(chan struct{})
-	var once sync.Once
-	v.afterPrepare = func() { once.Do(func() { close(paused); <-x.resume }) }
+	var first atomic.Bool // not a sync.Once: a second exchange must pass while the first is held
+	v.afterPrepare = func() {
+		if first.CompareAndSwap(false, true) {
+			close(paused)
+			<-x.resume
+		}
+	}
 	go func() {
 		_, r := h.pi.VerifyDetail(context.Background(), h.reg, raw, portalProfileType(h.reg.TokenProfile))
 		x.done <- r
@@ -242,7 +246,7 @@ func TestPortalDrop_OldFailureKeepsSameAddressRecoveryInFlight(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the old exchange never answered")
 	}
-	if _, _, failed := v.ks.state(); !failed {
+	if okAt, _, failed := v.ks.state(); !okAt.IsZero() && !failed {
 		t.Fatal("the verifier opened before the current keys loaded")
 	}
 	releaseKeys()
@@ -334,32 +338,231 @@ func TestPortalDrop_OldFailureKeepsSameAddressDiscovery(t *testing.T) {
 	}
 }
 
-func TestPortalKeySet_ReservationSupersedesOldFailure(t *testing.T) {
+func TestPortalKeySet_RuleFailureNeedsFreshDiscovery(t *testing.T) {
 	portalTestKeys(t)
 	const keysURL = "https://idp.test/keys"
 	g := newGatedKeys(t)
 	clk := newPortalClock()
 	ks := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
-	ats := make(chan portalKeyAt, 1)
-	ks.onFail = func(_ string, _ error, at portalKeyAt) { ats <- at }
+	type seen struct {
+		at     portalKeyAt
+		url    string
+		keys   int
+		failed bool
+	}
+	seenAt := make(chan seen, 2)
+	ks.onFail = func(_ string, _ error, at portalKeyAt) {
+		ks.mu.RLock()
+		seenAt <- seen{at: at, url: ks.url, keys: len(ks.keys), failed: ks.failed}
+		ks.mu.RUnlock()
+	}
 	ks.setURL(keysURL)
+	warm := startEnsure(ks)
+	g.waitStarted(keysURL)
+	g.gate(keysURL) <- gatedAnswer{kid: "k1"}
+	warm.wait(t)
+	clk.Advance(portalKeyCooldown + time.Second)
 	first := startEnsure(ks)
 	g.waitStarted(keysURL)
-	g.gate(keysURL) <- gatedAnswer{err: errors.New("refused")}
+	g.gate(keysURL) <- gatedAnswer{err: &portalFetchError{cause: portalCauseAddressRefused}}
 	first.wait(t)
-	at := <-ats
-	// The old failure's drop has not run yet; after the budget a new fetch is reserved for the same address.
+	got := <-seenAt
+	// By the time the failure is reported the keys and their address are already gone.
+	if got.url != "" || got.keys != 0 || !got.failed {
+		t.Fatalf("at the report: url %q, %d keys, failed %v; want no address, no keys, failed", got.url, got.keys, got.failed)
+	}
+	// A key-only reservation after the budget has no address to fetch and does not supersede the failure.
 	clk.Advance(portalKeyCooldown + time.Second)
 	next := startEnsure(ks)
-	g.waitStarted(keysURL)
-	if ks.dropAt(at) {
-		t.Fatal("an old failure dropped the set after a newer fetch was reserved")
+	g.waitStarted("")
+	g.gate("") <- gatedAnswer{err: &portalFetchError{cause: portalCauseUnreachable, detail: "no keys address"}}
+	next.wait(t)
+	<-seenAt
+	if !ks.dropAt(got.at) {
+		t.Fatal("a key-only reservation superseded a failure that broke a rule")
 	}
-	g.gate(keysURL) <- gatedAnswer{kid: "k1"}
-	if r := next.wait(t); r.out != portalEnsureFetched || r.err != nil {
-		t.Fatalf("the reserved fetch: %+v", r)
+	// A verified discovery published after the failure does supersede it.
+	ks2 := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
+	ks2.setURL(keysURL)
+	at := portalKeyAt{epoch: ks2.epoch}
+	ks2.setURL(keysURL)
+	if ks2.dropAt(at) {
+		t.Fatal("a failure dropped the set after a newer discovery was published")
 	}
-	if kids, okAt, _, failed := ks.kids(); len(kids) != 1 || okAt.IsZero() || failed {
-		t.Fatalf("kids %v okAt %v failed %v, want the reserved fetch's keys", kids, okAt, failed)
+}
+
+func TestPortalRecovery_RuleFailureNeedsFreshDiscovery(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	h.idp.set(func(f *fakeIdP) {
+		f.override = func(w http.ResponseWriter, r *http.Request) bool {
+			w.Header().Set("Connection", "close") // every request resolves and dials again
+			return false
+		}
+	})
+	warmPortal(h)
+	h.idp.publish(t, "k2", 1)
+	v, _ := h.pi.verifierFor(h.reg)
+	held, resume := make(chan struct{}), make(chan struct{})
+	var dropOnce, resumeOnce sync.Once
+	releaseDrop := func() { resumeOnce.Do(func() { close(resume) }) }
+	t.Cleanup(releaseDrop)
+	v.beforeDrop = func() { dropOnce.Do(func() { close(held); <-resume }) }
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	// An exchange is through prepare while the verifier is healthy and has not reached its key yet.
+	late := pauseAfterPrepare(t, h, h.kidToken("k2", 1))
+	h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} })
+	old := make(chan PortalRefusal, 1)
+	oldTok := h.kidToken("k2", 1)
+	go func() {
+		_, r := h.pi.VerifyDetail(context.Background(), h.reg, oldTok, PortalTokenTypeAccess)
+		old <- r
+	}()
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refused key fetch never reached its drop")
 	}
+	// The address is healthy again and the budget has passed, but no discovery has run: the late exchange's
+	// key-only fetch must not reuse the refused address, and nothing is admitted.
+	h.setLookup(func(string) []net.IP { return []net.IP{portalPublicIP} })
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	disc, keys := h.idp.hits()
+	if r := late.release(); r.Reason != PortalIssuerUnavailable {
+		t.Fatalf("the late exchange got %+v, want 503: a key-only fetch reopened a refused address", r)
+	}
+	if d, k := h.idp.hits(); d != disc || k != keys {
+		t.Fatalf("(%d, %d) fetches by the key-only attempt, want none (%d, %d)", d, k, disc, keys)
+	}
+	releaseDrop()
+	select {
+	case r := <-old:
+		if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseAddressRefused {
+			t.Fatalf("the old exchange got %+v, want its own address_refused", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old exchange never answered")
+	}
+	// Closed under the rule's cause until a fresh discovery passes.
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	h.mustAdmit(h.kidToken("k2", 1))
+	if d, _ := h.idp.hits(); d != disc+1 {
+		t.Fatalf("%d discovery fetches, want one more (%d) before anything was admitted", d, disc+1)
+	}
+}
+
+func TestPortalRecheck_HeldPastSelectionDuringAddressChangeIs503(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	var holdKeys atomic.Bool
+	keysArrived, keysRelease := make(chan struct{}), make(chan struct{})
+	var keysOnce, keysRelOnce sync.Once
+	releaseKeys := func() { keysRelOnce.Do(func() { close(keysRelease) }) }
+	t.Cleanup(releaseKeys)
+	h.idp.set(func(f *fakeIdP) {
+		f.override = func(w http.ResponseWriter, r *http.Request) bool {
+			if holdKeys.Load() && strings.HasSuffix(r.URL.Path, "/v2/keys") {
+				keysOnce.Do(func() { close(keysArrived); <-keysRelease })
+			}
+			return false
+		}
+	})
+	warmPortal(h)
+	v, _ := h.pi.verifierFor(h.reg)
+	selected, resume := make(chan struct{}), make(chan struct{})
+	var selOnce, resumeOnce sync.Once
+	releaseSel := func() { resumeOnce.Do(func() { close(resume) }) }
+	t.Cleanup(releaseSel)
+	v.ks.afterSelect = func() { selOnce.Do(func() { close(selected); <-resume }) }
+	wait := func(c <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			t.Fatal(what)
+		}
+	}
+	verifyAsync := func(raw string) <-chan PortalRefusal {
+		c := make(chan PortalRefusal, 1)
+		go func() {
+			_, r := h.pi.VerifyDetail(context.Background(), h.reg, raw, PortalTokenTypeAccess)
+			c <- r
+		}()
+		return c
+	}
+	answer := func(c <-chan PortalRefusal, what string) PortalRefusal {
+		t.Helper()
+		select {
+		case r := <-c:
+			return r
+		case <-time.After(5 * time.Second):
+			t.Fatal(what)
+			return PortalRefusal{}
+		}
+	}
+	h.clock.Advance(59*time.Minute + 50*time.Second)
+	held := verifyAsync(h.token(h.accessClaims()))
+	wait(selected, "the exchange never selected its key")
+	// Discovery moves the keys address: the keys are dropped and the new address's fetch is held at the provider.
+	h.idp.set(func(f *fakeIdP) { f.jwksURI = h.reg.Issuer + "/v2/keys" })
+	holdKeys.Store(true)
+	h.clock.Advance(20 * time.Second)
+	recovery := verifyAsync(h.token(h.accessClaims()))
+	wait(keysArrived, "the new address's key fetch never reached the provider")
+	// The held exchange's valid token is answered 503 keys_cooldown, not 400: its keys are pending, not removed.
+	releaseSel()
+	if r := answer(held, "the held exchange never answered"); r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseKeysCooldown || r.Class != PortalRefusedUnavailable {
+		t.Fatalf("the held exchange got %+v, want 503 cause %q", r, portalCauseKeysCooldown)
+	}
+	releaseKeys()
+	if r := answer(recovery, "the recovery's exchange never answered"); !r.OK() {
+		t.Fatalf("the recovery's exchange was refused: %+v", r)
+	}
+	h.mustAdmit(h.token(h.accessClaims()))
+}
+
+func TestPortalLookup_KeysDroppedAfterOwnFetchArePending(t *testing.T) {
+	t.Run("the fetch the exchange's refresh made, then a refused discovery", func(t *testing.T) {
+		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+		// A cold exchange: its prepare runs the refresh that fetches the keys, then it is held before its key.
+		x := pauseAfterPrepare(t, h, h.token(h.accessClaims()))
+		h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
+		h.clock.Advance(time.Hour)
+		h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+		// The held exchange's own fetch answered, but the keys it brought are gone: 503, not 400.
+		if r := x.release(); r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseKeysCooldown {
+			t.Fatalf("the held exchange got %+v, want 503 cause %q", r, portalCauseKeysCooldown)
+		}
+	})
+	t.Run("the fetch the lookup waited on, then an address change", func(t *testing.T) {
+		portalTestKeys(t)
+		const urlA, urlB = "https://idp.test/a/keys", "https://idp.test/b/keys"
+		g := newGatedKeys(t)
+		clk := newPortalClock()
+		ks := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
+		ks.setURL(urlA)
+		ks.onOK = func() { ks.setURL(urlB) } // the address changes after the fetch lands, before the lookup reads
+		got := make(chan portalKeyLookup, 1)
+		go func() { got <- ks.lookup(context.Background(), "k1", portalFresh{}) }()
+		g.waitStarted(urlA)
+		g.gate(urlA) <- gatedAnswer{kid: "k1"}
+		select {
+		case r := <-got:
+			if r.found || r.fault == nil || r.fault.cause != portalCauseKeysCooldown {
+				t.Fatalf("lookup = %+v (fault %+v), want a keys_cooldown fault", r, r.fault)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the lookup never answered")
+		}
+	})
+	t.Run("a key a successful fetch removed is still a plain refusal", func(t *testing.T) {
+		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+		warmPortal(h)
+		h.idp.unpublish("k1")
+		h.idp.publish(t, "k2", 1)
+		h.clock.Advance(portalKeyCooldown + time.Second)
+		h.mustAdmit(h.kidToken("k2", 1)) // a successful fetch that no longer lists k1
+		if r := h.wantRefusal(h.token(h.accessClaims()), SubjectTokenInvalid); r.Class != PortalRefusedToken {
+			t.Fatalf("class = %v, want a token refusal", r.Class)
+		}
+	})
 }

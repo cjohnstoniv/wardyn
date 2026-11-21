@@ -165,21 +165,21 @@ func TestPortalVerifier_RefreshFailureHook(t *testing.T) {
 }
 
 func TestPortalRefresh_EachRequestHasItsOwnBound(t *testing.T) {
-	// Discovery and the key fetch each finish inside the 1 s bound but together run longer than it. The refresh
+	// Discovery and the key fetch each finish inside the 2 s bound but together run longer than it. The refresh
 	// succeeds, the verifier is healthy, and the next exchange for a known key is admitted without a fetch.
-	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) { o.fetchTimeout = time.Second })
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) { o.fetchTimeout = 2 * time.Second })
 	h.idp.set(func(f *fakeIdP) {
-		f.keyDelay = 600 * time.Millisecond
+		f.keyDelay = 1200 * time.Millisecond
 		f.override = func(w http.ResponseWriter, r *http.Request) bool {
 			if strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
-				time.Sleep(600 * time.Millisecond)
+				time.Sleep(1200 * time.Millisecond)
 			}
 			return false
 		}
 	})
 	start := time.Now()
 	h.mustAdmit(h.token(h.accessClaims()))
-	if took := time.Since(start); took < 1100*time.Millisecond {
+	if took := time.Since(start); took < 2200*time.Millisecond {
 		t.Fatalf("the refresh took %v: the test no longer runs longer than one bound", took)
 	}
 	disc, keys := h.idp.hits()
