@@ -294,8 +294,19 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 		}
 		opts := s.attachOptionsFor(runID, h, writer)
 
+		// An issuer portal's first opening starts before its dispatch time (attachDispatchBy): no
+		// Runner.Attach is started at or after it, and its timer fires at the earlier of the two bounds.
+		by, gated := attachDispatchBy(ctx)
+		gated = gated && !h.execOpened
+		if gated && !time.Now().Before(by) {
+			return errAttachTimedOut
+		}
 		actx, acancel := context.WithCancel(ctx)
-		timer := time.AfterFunc(s.attachPrepareEvery(), acancel)
+		every := s.attachPrepareEvery()
+		if gated {
+			actx, every = runner.WithStartCutoff(actx, by), min(every, time.Until(by))
+		}
+		timer := time.AfterFunc(every, acancel)
 		sess, err := startFresh(s, actx, runID, attachLiveRunWords, s.attachPrepareEvery(),
 			func(ctx context.Context, run types.AgentRun) (runner.Session, error) {
 				return s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
@@ -322,6 +333,10 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 			_ = sess.Close() // promoted while attaching: open again in the new role
 			acancel()
 			continue
+		case gated && !time.Now().Before(by): // installed only before the dispatch time, before any frame
+			_ = sess.Close()
+			acancel()
+			return errAttachTimedOut
 		}
 		old, ok := h.mux.install(sess, opts.Cols, opts.Rows)
 		if !ok {

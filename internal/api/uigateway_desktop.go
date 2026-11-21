@@ -450,10 +450,18 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseUnreachable, "no runner configured; UI apps unavailable")
 		return
 	}
+	// An issuer portal's stream starts nothing in the sandbox at or after its dispatch time, its check's start
+	// plus uiDispatchFresh: not the thaw, not the dial (uigateway_dispatch.go).
+	by, gated := checkStart.Add(uiDispatchFresh), issuerPortalPerson(sess.Via, sess.Principal)
+	past := func() bool { return gated && !time.Now().Before(by) }
 	// A watch is not a person entering: it neither resumes the run nor stamps presence nor keeps the run alive.
 	watch := sess.backgroundWatch()
+	if past() {
+		_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
+		return
+	}
 	if !watch {
-		if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+		if s.desktopThaw(ctx, run, sess, gated, by) != nil {
 			_ = c.Close(desktopCloseUnreachable, "run is paused and could not be resumed; try again")
 			return
 		}
@@ -466,7 +474,11 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	defer release()
 	// The display is dialed under the run's start lock, on the run as it stands there, a watch's too: a run that
 	// ended since the check above opens no display.
-	h, err := s.lockStart(ctx, sess.Run)
+	sctx, budget := ctx, execStartBudget
+	if gated {
+		sctx = runner.WithStartCutoff(ctx, by) // the lock's wait ends then, and a runner's start CALL is refused after it
+	}
+	h, err := s.lockStart(sctx, sess.Run)
 	if err != nil {
 		_ = c.Close(desktopCloseUnreachable, lockUnavailableMsg)
 		return
@@ -476,7 +488,15 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(code, why)
 		return
 	}
-	display, err := startAdmitted(s, ctx, h, execStartBudget,
+	if gated {
+		if past() { // no dial is started with no time left
+			h.release()
+			_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
+			return
+		}
+		budget = min(budget, time.Until(by))
+	}
+	display, err := startAdmitted(s, sctx, h, budget,
 		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
 		func(d io.ReadWriteCloser) { _ = d.Close() })
 	switch {
@@ -488,6 +508,10 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer func() { _ = display.Close() }()
+	if past() { // installed only before the dispatch time: no frame is relayed from a display returned late
+		_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
+		return
+	}
 
 	if !watch {
 		go s.attachKeepalive(ctx, sess.Run)
@@ -826,3 +850,14 @@ func (f *wsFramed) Read(p []byte) (int, error) {
 }
 
 func (f *wsFramed) Close() error { return f.raw.Close() }
+
+// desktopThaw is a desktop stream's thaw; for an issuer portal's stream (gated) it runs under a context that
+// ends at its dispatch time by.
+func (s *Server) desktopThaw(ctx context.Context, run types.AgentRun, sess uiSession, gated bool, by time.Time) error {
+	if gated {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(runner.WithStartCutoff(ctx, by), by)
+		defer cancel()
+	}
+	return s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence")
+}

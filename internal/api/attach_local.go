@@ -49,6 +49,9 @@ const (
 	localAttachNotYourRunner = "not_your_runner"
 	localAttachRunnerTooOld  = "runner_too_old"
 	localAttachRunnerOffline = "runner_offline"
+	// localAttachIssuerPortal: an issuer portal's ticket attaches through the organisation only, whose opening is
+	// bounded by the ticket's dispatch time (attachDispatchBy).
+	localAttachIssuerPortal = "issuer_portal"
 )
 
 // localAttachSub is the part of a runner's substrate a local attach uses.
@@ -110,6 +113,9 @@ func (s *Server) localAttachCheck(r *http.Request, run types.AgentRun) (localAtt
 		return localAttachTarget{}, localAttachFlagOff
 	}
 	ta, ok := ticketActorFromContext(r.Context())
+	if ok && issuerPortalPerson(ta.via, ta.principal) {
+		return localAttachTarget{}, localAttachIssuerPortal
+	}
 	if !ok || s.cfg.LocalMode || run.OperatorOwned || ta.actorType != types.ActorHuman || ta.principal == "" ||
 		ta.principal != run.CreatedBy || run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return localAttachTarget{}, localAttachNotYourRunner
