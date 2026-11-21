@@ -91,7 +91,7 @@ type portalKeyFetch struct {
 	stale  bool // the address changed while it ran: its answer was discarded
 }
 
-// portalKeyAt names the recovery generation a failure was recorded at.
+// portalKeyAt names the discovery generation a failure was recorded at.
 type portalKeyAt struct{ epoch uint64 }
 
 // portalKeySet is Wardyn's own key set for one verifier. It fetches only on an unknown kid it has not seen
@@ -107,6 +107,8 @@ type portalKeySet struct {
 	onOK func()
 	// afterSelect is a test hook, called once a key is selected and before the signature is checked.
 	afterSelect func()
+	// beforeWait is a test hook, called once a lookup is about to wait on a fetch.
+	beforeWait func()
 
 	mu        sync.RWMutex
 	keys      map[string]jose.JSONWebKey
@@ -120,8 +122,9 @@ type portalKeySet struct {
 	inflight  *portalKeyFetch
 	url       string // the keys address the set belongs to
 	urlGen    uint64 // bumped whenever the address changes or is dropped
-	// epoch is the recovery generation: bumped by every discovery publish (setURL, even of the same address), every
-	// fetch reservation, every key replacement and every drop. A failure's drop stands only at its own epoch.
+	// epoch is the discovery generation: bumped by every verified discovery published (setURL, even of the same
+	// address) and every drop. A key fetch or reservation never moves it, so only a newer discovery supersedes the
+	// drop of a failure that broke a rule.
 	epoch uint64
 }
 
@@ -134,7 +137,6 @@ func (ks *portalKeySet) startLocked(source string) *portalKeyFetch {
 	f := &portalKeyFetch{done: make(chan struct{}), urlGen: ks.urlGen, url: ks.url}
 	ks.inflight = f
 	ks.attemptAt = ks.clock()
-	ks.epoch++
 	go ks.run(f, source)
 	return f
 }
@@ -155,6 +157,12 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 	ks.seq++
 	var at portalKeyAt
 	if err != nil {
+		if portalFetchCause(err) != portalCauseUnreachable {
+			// The fetch broke a rule: the keys and their address go now, under this lock and before anything is
+			// reported, so no key fetch can use the address again. Only a fresh verified discovery sets one.
+			ks.url = ""
+			ks.dropLocked()
+		}
 		ks.lastErr, ks.failed = err, true
 		at = portalKeyAt{epoch: ks.epoch}
 	} else {
@@ -170,7 +178,6 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 		}
 		ks.keys, ks.removed, ks.okAt, ks.lastErr, ks.failed = next, removed, ks.clock(), nil, false
 		ks.gen++
-		ks.epoch++
 	}
 	if ks.inflight == f {
 		ks.inflight = nil
@@ -254,9 +261,10 @@ func (ks *portalKeySet) drop() {
 	ks.dropLocked()
 }
 
-// dropAt is drop for a failure recorded at at: it forgets the keys only if nothing has advanced the recovery
-// generation since, so an old failure never drops a newer discovery, a newer fetch in flight or newer keys. The
-// check and the drop are one critical section. It reports whether it dropped.
+// dropAt is drop for a failure recorded at at: it forgets the keys only if no verified discovery has been
+// published since (nor a drop made), so an old failure never drops a newer discovery or the keys and fetch that
+// discovery started; a key fetch or reservation alone never supersedes it. The check and the drop are one critical
+// section. It reports whether it dropped.
 func (ks *portalKeySet) dropAt(at portalKeyAt) bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
@@ -283,10 +291,12 @@ const (
 	portalKeyStillGood portalKeyCheck = iota
 	portalKeyUnhealthy
 	portalKeyWithdrawn
+	portalKeyPending // the key map was dropped since and the current address's keys are not loaded yet
 )
 
 // recheck is the success-point test of an exchange that selected key sel (kid) from generation gen: the key set
-// must not have failed since, and if the key map was replaced since, the same key must still be in it.
+// must not have failed since; if the key map was dropped since, the exchange waits for the current keys; and if
+// it was replaced by a successful fetch, the same key must still be in it.
 func (ks *portalKeySet) recheck(kid string, sel jose.JSONWebKey, gen uint64) portalKeyCheck {
 	ks.mu.RLock()
 	defer ks.mu.RUnlock()
@@ -295,6 +305,9 @@ func (ks *portalKeySet) recheck(kid string, sel jose.JSONWebKey, gen uint64) por
 	}
 	if ks.gen == gen {
 		return portalKeyStillGood
+	}
+	if ks.okAt.IsZero() {
+		return portalKeyPending
 	}
 	cur, ok := ks.keys[kid]
 	if !ok {
@@ -347,7 +360,7 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 	ks.mu.Lock()
 	k, ok = ks.keys[kid]
 	gone = ks.removed[kid]
-	seq, lastErr, attemptAt, gen := ks.seq, ks.lastErr, ks.attemptAt, ks.gen
+	seq, lastErr, attemptAt, gen, okAt := ks.seq, ks.lastErr, ks.attemptAt, ks.gen, ks.okAt
 	f := ks.inflight
 	if ok || gone {
 		ks.mu.Unlock()
@@ -356,10 +369,15 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 	if f == nil {
 		switch {
 		case seq != seq0 || (fresh.has && seq == fresh.seq):
-			// A fetch finished that this request waited for or took part in: its answer is this request's answer.
+			// A fetch finished that this request waited for or took part in: its answer is this request's answer,
+			// unless the keys were dropped since, when the request waits for the current address's keys.
+			retry := max(attemptAt.Add(portalKeyCooldown).Sub(ks.clock()), 0)
 			ks.mu.Unlock()
 			if lastErr != nil {
 				return portalKeyLookup{fault: &portalKeyFault{cause: portalKeysFaultCause(lastErr)}}
+			}
+			if okAt.IsZero() {
+				return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseKeysCooldown, retryAfter: retry}}
 			}
 			return portalKeyLookup{}
 		case !attemptAt.IsZero() && attemptAt.Add(portalKeyCooldown).After(ks.clock()):
@@ -369,6 +387,9 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 		f = ks.startLocked("unknown_kid")
 	}
 	ks.mu.Unlock()
+	if ks.beforeWait != nil {
+		ks.beforeWait()
+	}
 	select {
 	case <-f.done:
 	case <-ctx.Done():
@@ -382,8 +403,12 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 	}
 	ks.mu.RLock()
 	k, ok = ks.keys[kid]
-	gen = ks.gen
+	gen, okAt = ks.gen, ks.okAt
 	ks.mu.RUnlock()
+	if !ok && okAt.IsZero() {
+		// The keys were dropped after the fetch: wait for the current address's keys.
+		return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseKeysCooldown, retryAfter: ks.cooldownLeft()}}
+	}
 	return portalKeyLookup{key: k, gen: gen, found: ok}
 }
 
