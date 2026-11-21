@@ -5,6 +5,7 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -33,6 +34,8 @@ type runDrive struct {
 	// macOS marks a macOS VM run's drive: target stays the container path the
 	// overlap checks and the mount read, and shownTarget is the guest's.
 	macOS bool
+	// portal marks a drive the run's issuer portal was allocated (run_drives_portal.go).
+	portal bool
 }
 
 // shownTarget is the path a person is told the drive is at: the guest's on a
@@ -80,6 +83,18 @@ func driveSelectionRefusal(req createRunRequest) *runRefusal {
 // refuse rather than shadow each other.
 func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, ceiling governanceCeiling) ([]runDrive, *runRefusal) {
 	macOS := types.MachineKind(req.MachineKind).IsMacOSVM()
+	if len(req.Drives) == 0 && (req.Drive == nil || !req.Drive.Enabled) {
+		return nil, nil // nothing asked for: no store read
+	}
+	// A run through an issuer portal reaches only that portal's own allocations: the person's catalogue is not read, and the
+	// legacy flag is refused, in the one answer a portal's drives[] entry gets (run_drives_portal.go).
+	portal, viaPortal, portalRefusal := s.issuerPortalOf(r.Context())
+	if portalRefusal != nil {
+		return nil, portalRefusal
+	}
+	if len(req.Drives) == 0 && viaPortal {
+		return nil, portalDriveDenied() // the legacy flag is the person's own drive, which a portal does not reach
+	}
 	if len(req.Drives) == 0 {
 		resolved, refusal := s.authorizeRequestDrive(r, req, ceiling)
 		if resolved == nil {
@@ -90,7 +105,13 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	if refusal := s.driveDoorsRefusal(r, ceiling); refusal != nil {
 		return nil, refusal
 	}
-	reach, err := s.reachableDrives(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
+	reachable := s.reachableDrives
+	if viaPortal {
+		reachable = func(ctx context.Context, maxMiB int) ([]reachableDrive, error) {
+			return s.portalReachableDrives(ctx, portal, maxMiB)
+		}
+	}
+	reach, err := reachable(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
 	if err != nil {
 		return nil, driveRunError(err)
 	}
@@ -98,6 +119,9 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	for _, a := range req.Drives {
 		i := slices.IndexFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID.String() == a.DriveID })
 		if i < 0 || reach[i].held {
+			if viaPortal {
+				return nil, portalDriveDenied()
+			}
 			// The row carries no id (authz.Datum records no sentence), so
 			// another person's drive and an id that names nothing leave the
 			// same row; only the 422 body echoes the id as sent. A kept work
@@ -118,7 +142,7 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 			msg := driveTargetConflictMsg(out[j].resolved.Drive.Name, d.winner.Drive.Name, d.target())
 			return nil, driveDenied(authz.Deny(authz.ReasonDriveTargetConflict, "runs.drive", msg), msg)
 		}
-		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID, macOS: macOS})
+		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID, macOS: macOS, portal: viaPortal})
 	}
 	return out, driveKindMixRefusal(out)
 }

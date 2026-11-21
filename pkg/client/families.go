@@ -780,6 +780,9 @@ type DriveRequest struct {
 // Additional the drive is allocated BESIDE the subject's others, keyed on
 // (subject_type, subject, drive_id).
 type DriveGrantRequest struct {
+	// SubjectType is user, group, all or user_type, or portal: a super admin's allocation of a team drive to an
+	// issuer portal, which names the portal by its id in canonical lowercase form in Subject, needs Additional, and
+	// answers with the folder's object_name.
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`

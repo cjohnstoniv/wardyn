@@ -432,6 +432,9 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d, refuseIfAllocated)
+	if portalDriveEditRefused(w, err) {
+		return
+	}
 	// The three 409s are three because they have three remedies. All
 	// of them wrap store.ErrConflict, so the STATUS is already right and the
 	// SENTENCE is what must differ: collapsing the two arms below into "a user
@@ -695,37 +698,6 @@ type driveRehome struct {
 	subjects  int
 }
 
-// driveGrantConflictMsg is the ONE store.ErrConflict this write can raise, told
-// apart by the request's own tri-state rather than by a second read.
-//
-// The two causes are mutually exclusive by construction, which is what makes
-// this a decision and not a guess (see PG.UpsertUserDriveGrant): the
-// uniqueness guard short-circuits on an EMPTY home_override and an unstated one
-// is always empty, while the re-home guard is disabled outright by a stated
-// one. So exactly one of them can have fired.
-//
-// The RE-HOME half takes 409 for driveRehomeGuard's reason — "the state of this
-// resource makes that unsafe" — and names the act rather than the field, because
-// an admin who sent a priority edit has no idea they were about to move
-// somebody's storage. Re-sending the name they want is the confirmation; "" is
-// how they clear it deliberately.
-//
-// The UNIQUENESS half names NO subject, for handleDeleteUserDrive's reason: the
-// allocations table the admin is looking at already lists every override, and a
-// name read here would be a second, later answer from a read the refusal does
-// not need.
-func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) string {
-	if !homeOverrideStated {
-		return "this allocation pins a directory name and your request did not mention home_override — writing it " +
-			"would CLEAR that name, so this subject's next run would mount a different object and the one holding " +
-			"their work would be left behind with nothing in Wardyn naming it. Re-send with home_override set to " +
-			"the name you want kept, or to \"\" to drop it deliberately"
-	}
-	return fmt.Sprintf("another allocation on this drive already uses the "+
-		"directory name %q — a directory name is one person's, which is why a group allocation may not "+
-		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
-}
-
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still
 // ALLOCATED.
 //
@@ -890,7 +862,11 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, removed, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated, req.Additional)
+	upsert := s.upsertUserDriveGrantAs
+	if g.SubjectType == types.DriveSubjectPortal {
+		upsert = s.upsertPortalDriveGrant
+	}
+	saved, removed, done, err := upsert(w, r, g, homeOverrideStated, req.Additional)
 	if done {
 		return
 	}

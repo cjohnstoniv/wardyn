@@ -310,6 +310,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
+	case errors.Is(err, store.ErrPortalRevoked):
+		writePortalRevoked(w)
+		return
 	case errors.Is(err, store.ErrRunCreateKeySuperseded):
 		writeRunCreateKeyInFlight(w)
 		return
