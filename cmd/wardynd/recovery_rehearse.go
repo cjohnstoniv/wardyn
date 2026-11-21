@@ -53,6 +53,9 @@ type rehearseSet struct {
 	Source    dsnIdentity
 	// AgeRecipient is the manifest's fingerprint of WARDYN_AGE_KEY, "" when the deployment has none.
 	AgeRecipient string
+	// PlatformRecipient is the manifest's fingerprint of WARDYN_PLATFORM_KEY_FILE, "" when the set was
+	// taken without one or by a writer that did not record it.
+	PlatformRecipient string
 	// KEKMode is the manifest's KEK mode, "" to skip the comparison.
 	KEKMode string
 	// KeyClasses is the row count per key class at manifest time.
@@ -203,7 +206,7 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 	if err := sess.pair(ctx, set, root); err != nil {
 		return err
 	}
-	store, id, err := rehearseKeyStore(ctx, f)
+	store, id, platformRecipient, err := rehearseKeyStore(ctx, f)
 	if err != nil {
 		return err
 	}
@@ -220,7 +223,7 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 	}
 	rep.add(rehearseCheck{Name: "pairing", Result: resultPass, Detail: "audit head matches the manifest"})
 
-	if c := checkFingerprint(set, id, kekModeOf(f)); c != nil {
+	if c := checkFingerprint(set, id, platformRecipient, kekModeOf(f)); c != nil {
 		rep.Checks = append([]rehearseCheck{*c}, rep.Checks...)
 	}
 	chain, err := sess.chainSweep(ctx)
@@ -308,18 +311,22 @@ func (s *rehearseSession) chainSweep(ctx context.Context) (rehearseCheck, error)
 	return c, nil
 }
 
-// checkFingerprint compares the age recipient the manifest recorded with the one in this process:
-// a different key is reported before any row is tried.
-func checkFingerprint(set rehearseSet, id *age.X25519Identity, kekMode string) *rehearseCheck {
+// checkFingerprint compares the age and platform recipients the manifest recorded with the ones in this
+// process (platformRecipient is "" with no platform key file): a different key is reported before any
+// row is tried. A manifest with no platform recipient skips that comparison.
+func checkFingerprint(set rehearseSet, id *age.X25519Identity, platformRecipient, kekMode string) *rehearseCheck {
 	switch {
 	case set.KEKMode != "" && set.KEKMode != kekMode:
 		return &rehearseCheck{Name: "key fingerprint", Result: resultFail,
 			Detail: fmt.Sprintf("WARDYN_KEK is %q here and %q in the manifest: this is not the key configuration the set was taken under", kekMode, set.KEKMode)}
-	case set.AgeRecipient == "" || id == nil || id.Recipient().String() == set.AgeRecipient:
-		return nil
+	case set.AgeRecipient != "" && id != nil && id.Recipient().String() != set.AgeRecipient:
+		return &rehearseCheck{Name: "key fingerprint", Result: resultFail,
+			Detail: "WARDYN_AGE_KEY is not the key the set was taken under: its recipient differs from the manifest's"}
+	case set.PlatformRecipient != "" && platformRecipient != set.PlatformRecipient:
+		return &rehearseCheck{Name: "key fingerprint", Result: resultFail,
+			Detail: "WARDYN_PLATFORM_KEY_FILE is not the key file the set was taken under: it is unset here or its recipient differs from the manifest's"}
 	}
-	return &rehearseCheck{Name: "key fingerprint", Result: resultFail,
-		Detail: "WARDYN_AGE_KEY is not the key the set was taken under: its recipient differs from the manifest's"}
+	return nil
 }
 
 func keyUseCheck(set rehearseSet, use keyUseResult) rehearseCheck {

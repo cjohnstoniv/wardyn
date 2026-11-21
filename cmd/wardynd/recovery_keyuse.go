@@ -20,31 +20,36 @@ import (
 // leaves this file as anything but a count and a row reference.
 
 // rehearseKeyStore is the pg secret store built from the deployment's key configuration with no
-// pool, and the age identity pre-envelope rows open under (nil with none). It never converts a row:
+// pool, the age identity pre-envelope rows open under (nil with none) and the platform key file's
+// recipient ("" with none). It never converts a row:
 // that is what newSecretStore does, and the target is read-only. A deployment with no key at all
 // refuses here rather than mint an ephemeral one that would fail every row for the wrong reason.
-func rehearseKeyStore(ctx context.Context, f *bootFlags) (*secretstorepg.Store, *age.X25519Identity, error) {
+func rehearseKeyStore(ctx context.Context, f *bootFlags) (*secretstorepg.Store, *age.X25519Identity, string, error) {
 	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
+	}
+	platformRecipient := ""
+	if platform != nil {
+		platformRecipient = platform.Recipient().String()
 	}
 	c, err := buildStoreClients(ctx, f)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	storeMode := *f.secretStoreSel != "" && *f.secretStoreSel != "pg"
 	if *f.ageKey == "" && !storeMode && !(c.kek != nil && c.kekWrites) {
-		return nil, nil, errors.New("-recovery-rehearse needs the deployment's keys: set WARDYN_AGE_KEY (or WARDYN_KEK and its settings), the same as the deployment that wrote the set")
+		return nil, nil, "", errors.New("-recovery-rehearse needs the deployment's keys: set WARDYN_AGE_KEY (or WARDYN_KEK and its settings), the same as the deployment that wrote the set")
 	}
 	s, id, err := unconvertedSecretStore(nil, *f.ageKey, platform, *f.secretStoreSel, c)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
-		return nil, nil, fmt.Errorf("secret store %q has no rows to open", s.Name())
+		return nil, nil, "", fmt.Errorf("secret store %q has no rows to open", s.Name())
 	}
-	return ps, id, nil
+	return ps, id, platformRecipient, nil
 }
 
 // keyUseResult is what opening every row found. Classes counts rows per key class, the figure the

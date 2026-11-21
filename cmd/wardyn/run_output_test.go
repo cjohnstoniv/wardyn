@@ -140,8 +140,8 @@ func TestRunOutput_TailQuery(t *testing.T) {
 }
 
 func TestEscapeControls(t *testing.T) {
-	got := escapeControls("a\n\r\tb\x1b]52;c;AAAA\x07\x1b[31m\u009b\xff")
-	want := `a` + "\n\r\t" + `b\x1b]52;c;AAAA\x07\x1b[31m\x9b\xff`
+	got := escapeControls("a\n\r\tb\x1b]52;c;AAAA\x07\x1b[31m\u009b\xff\x7f")
+	want := `a` + "\n\r\t" + `b\x1b]52;c;AAAA\x07\x1b[31m\x9b\xff\x7f`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

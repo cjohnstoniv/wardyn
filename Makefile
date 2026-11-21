@@ -122,6 +122,7 @@ agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e
 CLAUDE_CODE_IMAGE ?=
 agent-image-claude-code-multiarch: ## Build + push the claude-code agent image for linux/amd64 and linux/arm64
 	@test -n "$(CLAUDE_CODE_IMAGE)" || { echo "set CLAUDE_CODE_IMAGE=<registry>/<repo>:<tag> (a multi-platform image is pushed, not loaded)" >&2; exit 2; }
+	@test "$(AWS_CLI_INSTALL)" != staged || { echo "AWS_CLI_INSTALL=staged copies the one staged AWS CLI zip (deploy/images/aws-sso/awscliv2-bin) into BOTH platforms, and a zip is one architecture's. Leave AWS_CLI_INSTALL unset so each platform downloads and verifies its own, or build each architecture separately with agent-images-core." >&2; exit 2; }
 	@test ! -f deploy/images/claude-code/claude-bin || { echo "deploy/images/claude-code/claude-bin is staged: it is one architecture's binary and would be installed into BOTH platforms. Remove it so each platform fetches its own, or build each architecture separately." >&2; exit 2; }
 	docker buildx build $(DOCKER_BUILD_ARGS) --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile -t $(CLAUDE_CODE_IMAGE) --push .
 	@echo "Pushed $(CLAUDE_CODE_IMAGE); check it: docker buildx imagetools inspect $(CLAUDE_CODE_IMAGE)"
@@ -751,6 +752,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
+	./scripts/test-multiarch-staged-refusal.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-overlay-proof.sh
