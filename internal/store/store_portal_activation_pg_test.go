@@ -48,6 +48,10 @@ func viewerStore(t *testing.T, pool *pgxpool.Pool) store.PG {
 		t.Fatal(err)
 	}
 	t.Cleanup(viewerPool.Close)
+	// Open the viewer's connection now, so a count taken later by either role does not add a session of its own.
+	if err := viewerPool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
 	return store.NewPG(viewerPool)
 }
 
@@ -134,6 +138,8 @@ func TestPortalIssuersActivate_UnlabelledClientIsReported_PG(t *testing.T) {
 		}
 		return n
 	}
+	count(st) // both pools hold their one connection before either baseline is taken
+	count(viewer)
 	ownerBefore, viewerBefore := count(st), count(viewer)
 	heldSession(t, pool, "")
 	if got := count(st); got != ownerBefore+1 {

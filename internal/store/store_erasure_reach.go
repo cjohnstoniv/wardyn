@@ -101,6 +101,13 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 	}
 	var deleted int64
 	err := s.inTx(ctx, func(q Querier) error {
+		// A portal person's identity rows FOR UPDATE first, in id order, so a mint that writes a grant and its
+		// history (it holds the row FOR SHARE) either commits before this and is deleted whole, or waits for
+		// this commit and writes both after it. The erase takes no other lock a mint holds.
+		if _, err := q.Exec(ctx, `SELECT id FROM principal_identities WHERE principal = ANY($1) AND starts_with(issuer, $2)
+			ORDER BY id FOR UPDATE`, principals, types.PortalPersonPrefix); err != nil {
+			return err
+		}
 		for _, stmt := range []string{
 			`DELETE FROM delegated_tokens WHERE principal = ANY($1)`,
 			`DELETE FROM portal_grants WHERE principal = ANY($1)`,
