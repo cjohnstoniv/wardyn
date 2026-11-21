@@ -68,6 +68,31 @@ type scimStore interface {
 	store.PrincipalDirectoryStore
 }
 
+// leaverOrigin is who a leaver's shared steps act as and what they record: the actor of every audit row and
+// kill, the kill reason, the action of the deactivation row and what a purge does with the person's
+// workspaces. The SCIM entry points pass scimOrigin; the portal's pass their own.
+type leaverOrigin struct {
+	actorType types.ActorType
+	actor     string
+	// killReason is the reason a run killed for the person carries.
+	killReason string
+	// deactivateAction is the action of the suspension's deactivation row.
+	deactivateAction string
+	// purgeReason is the reason a workspace handed to the operator by a purge carries.
+	purgeReason string
+	// keepWorkspaces leaves a purged person's workspaces with them, where the origin has a setting for it.
+	keepWorkspaces bool
+}
+
+// scimOrigin is the origin of every SCIM suspension and purge: exactly the values the steps named before they
+// took one, so no SCIM audit row or outcome changes.
+func (s *Server) scimOrigin() leaverOrigin {
+	return leaverOrigin{
+		actorType: types.ActorSystem, actor: scimActor, killReason: "scim_suspend", deactivateAction: "scim.user.deactivate",
+		purgeReason: "scim_purge", keepWorkspaces: s.cfg.SCIM != nil && s.cfg.SCIM.KeepWorkspaces,
+	}
+}
+
 // leaverForms are every form a person is known by.
 type leaverForms struct {
 	// bound are the principals whose identity rows the suspension deactivates: what a sign-in
@@ -214,12 +239,12 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 // deprovisionForms is leaverForms for a suspension or a purge of kind. Forms with a refusal reach no one:
 // the step stops before it touches anything and leaves a person.deprovision row saying why, and the
 // request answers 5xx so the identity provider retries.
-func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string) (leaverForms, error) {
+func (s *Server) deprovisionForms(ctx context.Context, o leaverOrigin, st scimStore, ident store.PrincipalIdentity, kind string) (leaverForms, error) {
 	forms, err := s.leaverForms(ctx, st, ident)
 	if forms.refusal == "" {
 		return forms, err
 	}
-	_, err = s.refuseDeprovision(ctx, ident, kind, forms.refusal, err, false)
+	_, err = s.refuseDeprovision(ctx, o, ident, kind, forms.refusal, err, false)
 	return forms, err
 }
 
@@ -228,12 +253,12 @@ func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store
 // recorded is a step the ledger already holds pending with this reason: its row was written when it first
 // stopped, so a retry answers the same without another. owed names the ledger step that must keep the row
 // owed (oweRefusalAudit) when neither the store nor the audit spool accepted it, and is empty otherwise.
-func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error, recorded bool) (owed string, _ error) {
+func (s *Server) refuseDeprovision(ctx context.Context, o leaverOrigin, ident store.PrincipalIdentity, kind, reason string, err error, recorded bool) (owed string, _ error) {
 	outcome := "failure"
 	if err == nil {
 		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
 	}
-	if recorded || s.recordDeprovisionRefusal(ctx, ident, kind, outcome, reason, "") {
+	if recorded || s.recordDeprovisionRefusal(ctx, o, ident, kind, outcome, reason, "") {
 		return "", err
 	}
 	return store.JobStepRefusalAudit + outcome + "/" + reason, err
@@ -241,19 +266,19 @@ func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIde
 
 // recordDeprovisionRefusal writes the person.deprovision row of a refused step, naming the unproved form when a purge
 // stopped on one, and says whether it was durably accepted.
-func (s *Server) recordDeprovisionRefusal(ctx context.Context, ident store.PrincipalIdentity, kind, outcome, reason, unproved string) bool {
-	return s.recordDeprovisionRefusalAs(ctx, ident, kind, outcome, reason, unproved, uuid.Nil, time.Time{})
+func (s *Server) recordDeprovisionRefusal(ctx context.Context, o leaverOrigin, ident store.PrincipalIdentity, kind, outcome, reason, unproved string) bool {
+	return s.recordDeprovisionRefusalAs(ctx, o, ident, kind, outcome, reason, unproved, uuid.Nil, time.Time{})
 }
 
 // recordDeprovisionRefusalAs is recordDeprovisionRefusal for an owed row: with a non-zero id the event
 // carries that id and time, the pair the ledger pinned (PinDeprovisionEvent), so every replay of one
 // obligation is the same event, and the store appends it only once (store.WithAuditReplay).
-func (s *Server) recordDeprovisionRefusalAs(ctx context.Context, ident store.PrincipalIdentity, kind, outcome, reason, unproved string, id uuid.UUID, at time.Time) bool {
+func (s *Server) recordDeprovisionRefusalAs(ctx context.Context, o leaverOrigin, ident store.PrincipalIdentity, kind, outcome, reason, unproved string, id uuid.UUID, at time.Time) bool {
 	data := map[string]any{"kind": kind, "reason": reason}
 	if unproved != "" {
 		data["unproved"] = unproved
 	}
-	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome, mustJSON(data))
+	ev := s.auditEvent(nil, o.actorType, o.actor, "person.deprovision", ident.ID.String(), outcome, mustJSON(data))
 	if id != uuid.Nil {
 		ev.ID, ev.Time = id, at
 		ctx = store.WithAuditReplay(ctx)
@@ -281,7 +306,7 @@ func oweRefusalAudit(ctx context.Context, st scimStore, id uuid.UUID, kind strin
 // event id and time (the first drain pins them on the ledger row), and the audit table keeps one row
 // per id and time for these writes (store.WithAuditReplay), so a failing completion write or a second
 // drainer adds no row. The audit sinks may still see a repeat.
-func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string, jobs []store.DeprovisionJob) error {
+func (s *Server) drainRefusalAudits(ctx context.Context, o leaverOrigin, st scimStore, ident store.PrincipalIdentity, kind string, jobs []store.DeprovisionJob) error {
 	var errs []error
 	for _, j := range jobs {
 		owed, ok := strings.CutPrefix(j.Step, store.JobStepRefusalAudit)
@@ -302,7 +327,7 @@ func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident sto
 				continue
 			}
 		}
-		if s.recordDeprovisionRefusalAs(ctx, ident, kind, outcome, reason, unproved, id, at) {
+		if s.recordDeprovisionRefusalAs(ctx, o, ident, kind, outcome, reason, unproved, id, at) {
 			errs = append(errs, st.FinishDeprovisionJob(ctx, ident.ID, kind, key, nil))
 		} else {
 			errs = append(errs, st.FailDeprovisionJob(ctx, ident.ID, kind, key, errRefusalAuditOwed))
@@ -472,7 +497,7 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 	}
 	stepErr := errors.Join(
 		s.sweepStep(ctx, st, id, ident, forms),
-		s.killStep(ctx, st, id, forms.targets),
+		s.killStep(ctx, s.scimOrigin(), st, id, forms.targets),
 	)
 	// A suspension begun after a reactivation owns the ledger now (finishStep): it finishes and audits itself.
 	if superseded(ctx, stepErr, id) {
@@ -482,7 +507,7 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 		slog.WarnContext(ctx, "api: a suspension step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", stepErr))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, stepErr)
 	}
-	if err := unlessSuperseded(ctx, s.auditSuspension(ctx, st, id, slot, forms.notErased), id); err != nil {
+	if err := unlessSuperseded(ctx, s.auditSuspension(ctx, s.scimOrigin(), st, id, slot, forms.notErased), id); err != nil {
 		slog.WarnContext(ctx, "api: a suspension's audit rows were not written and stay pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
@@ -507,15 +532,16 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID,
 	if err != nil && forms.refusal == "" {
 		return ident, forms, nil, err
 	}
+	o := s.scimOrigin()
 	jobs, jobsErr := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if jobsErr != nil {
 		if forms.refusal != "" {
-			_, err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, false)
+			_, err = s.refuseDeprovision(ctx, o, ident, store.JobKindSuspend, forms.refusal, err, false)
 		}
 		return ident, forms, nil, errors.Join(err, jobsErr)
 	}
 	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the cut.
-	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindSuspend, jobs); err != nil {
+	if err := s.drainRefusalAudits(ctx, o, st, ident, store.JobKindSuspend, jobs); err != nil {
 		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", id.String()), slog.Any("err", err))
 	}
 	cutoff, ok := jobByKey(jobs, store.JobStepCutoff, "")
@@ -535,7 +561,7 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID,
 		again := ident.DeactivatedAt != nil && ok && !cutoff.Done && cutoff.LastError == forms.refusal &&
 			cutoff.Detail[store.CutoffDetailBound] == bound && cutoff.Detail["sessions_cut"] == len(proven)
 		var owed string
-		owed, err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, again)
+		owed, err = s.refuseDeprovision(ctx, o, ident, store.JobKindSuspend, forms.refusal, err, again)
 		if owed != "" {
 			err = errors.Join(err, oweRefusalAudit(ctx, st, id, store.JobKindSuspend, store.JobKey{Step: owed}))
 		}
@@ -632,7 +658,7 @@ func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverFor
 // too: the identity goes sponsor_inactive with the person, and its runs end with theirs. A failed read of
 // those identities, or of one identity's runs, never holds back the person's own runs: they are killed, and
 // the step fails, so the ledger's audit rows stay pending and the retry reads the identities again.
-func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
+func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id uuid.UUID, targets []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
@@ -695,7 +721,7 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
 			continue
 		}
-		if err := s.teardownRun(ctx, st, runID); err != nil {
+		if err := s.teardownRun(ctx, o, st, runID); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
@@ -729,14 +755,14 @@ func (s *Server) sponsoredServicePrincipals(ctx context.Context, sponsors []stri
 	return out, nil
 }
 
-// teardownRun is a suspension's teardownRunAs, as the SCIM actor: the reason is the person's suspension, or
+// teardownRun is a suspension's teardownRunAs, as the origin's actor: the reason is the person's suspension, or
 // for a service identity's run the sponsor's.
-func (s *Server) teardownRun(ctx context.Context, _ scimStore, runID uuid.UUID) error {
-	return s.teardownRunAs(ctx, runID, types.ActorSystem, scimActor, func(run types.AgentRun) string {
+func (s *Server) teardownRun(ctx context.Context, o leaverOrigin, _ scimStore, runID uuid.UUID) error {
+	return s.teardownRunAs(ctx, runID, o.actorType, o.actor, func(run types.AgentRun) string {
 		if isServicePrincipal(run.CreatedBy) {
 			return killReasonServiceSponsorInactive
 		}
-		return "scim_suspend"
+		return o.killReason
 	})
 }
 
@@ -769,9 +795,9 @@ func (s *Server) teardownRunAs(ctx context.Context, runID uuid.UUID, killerType 
 	return fmt.Errorf("run %s kept changing state under the kill", runID)
 }
 
-// auditSuspension writes scim.user.deactivate and person.deprovision, each once, after every other
+// auditSuspension writes the origin's deactivation row (scim.user.deactivate for SCIM) and person.deprovision, each once, after every other
 // step is done. A failed write leaves its row pending, so the retry writes it.
-func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string, alsoNamed []string) error {
+func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimStore, id uuid.UUID, slot string, alsoNamed []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
@@ -786,7 +812,7 @@ func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID
 		step, action string
 		data         map[string]any
 	}{
-		{jobStepAuditDeact, "scim.user.deactivate", map[string]any{"slot": slot}},
+		{jobStepAuditDeact, o.deactivateAction, map[string]any{"slot": slot}},
 		{jobStepAuditDeprov, "person.deprovision", map[string]any{
 			"kind": store.JobKindSuspend, "sessions_cut": counts["sessions_cut"], "tokens_revoked": counts["tokens_revoked"],
 			"keys_deleted": counts["keys_deleted"], "runs_killed": counts["runs_killed"],
@@ -801,7 +827,7 @@ func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID
 			continue
 		}
 		key := store.JobKey{Step: row.step}
-		ev := s.auditEvent(nil, types.ActorSystem, scimActor, row.action, id.String(), "success", mustJSON(row.data))
+		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
 		if err := s.recordAuditStrict(ctx, ev); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
