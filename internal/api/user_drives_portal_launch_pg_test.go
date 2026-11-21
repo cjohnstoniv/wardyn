@@ -153,7 +153,7 @@ func (e *portalLaunchEnv) dispatchedMount(run, drive uuid.UUID) types.DriveMount
 	return got
 }
 
-// The adopter's first test: a person of the portal launches with the portal's drive and gets one run that
+// The first test: a person of the portal launches with the portal's drive and gets one run that
 // mounts it read-only (the allocation never said members_can_write), recorded as a portal drive run, with the
 // mount row naming the person, the portal and the drive.
 func TestPortalTeamDrive_PortalRunMountsReadOnly_PG(t *testing.T) {
