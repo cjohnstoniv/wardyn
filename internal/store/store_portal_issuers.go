@@ -98,18 +98,24 @@ func PortalIssuersQ(ctx context.Context, q Querier) ([]types.PortalIssuer, error
 
 // RetirePortalIssuerQ deletes the binding for issuerKey when nothing uses it. The caller holds the registry
 // lock. It takes the binding row FOR UPDATE, so it waits for every exchange write and allow-row write that holds
-// it FOR KEY SHARE and every later one waits for it, then re-checks under that lock and refuses with
-// ErrIssuerInUse unless: no live portal names the key, no identity row has the issuer delegate:person:<k>, no
-// grant has a principal under it, and the namespace census finds nothing for it. So only a binding that never
-// admitted anyone can go. An unknown key is ErrNotFound.
-func (s PG) RetirePortalIssuerQ(ctx context.Context, q Querier, issuerKey string) error {
-	var locked string
-	err := q.QueryRow(ctx, `SELECT issuer_key FROM portal_issuers WHERE issuer_key = $1 FOR UPDATE`, issuerKey).Scan(&locked)
-	if errors.Is(err, pgx.ErrNoRows) {
+// it FOR KEY SHARE and every later one waits for it. When want is not nil, the locked row must still be the
+// record the caller decided on: created_at, issuer, internal_issuer_norm and person_id_claim must equal want's,
+// or it returns ErrStaleCompare before any use check, so a binding retired and registered again under another
+// address since the decision is left alone. It then re-checks under that lock and refuses with ErrIssuerInUse
+// unless: no live portal names the key, no identity row has the issuer delegate:person:<k>, no grant has a
+// principal under it, and the namespace census finds nothing for it. So only a binding that never admitted
+// anyone can go. An unknown key is ErrNotFound. A nil want skips the record comparison.
+func (s PG) RetirePortalIssuerQ(ctx context.Context, q Querier, issuerKey string, want *types.PortalIssuer) error {
+	cur, err := scanPortalIssuer(q.QueryRow(ctx, `SELECT `+portalIssuerCols+` FROM portal_issuers WHERE issuer_key = $1 FOR UPDATE`, issuerKey))
+	if errors.Is(err, ErrNotFound) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("store: lock issuer binding: %w", err)
+	}
+	if want != nil && (!cur.CreatedAt.Equal(want.CreatedAt) || cur.Issuer != want.Issuer ||
+		cur.InternalIssuerNorm != want.InternalIssuerNorm || cur.PersonIDClaim != want.PersonIDClaim) {
+		return ErrStaleCompare
 	}
 	var inUse bool
 	err = q.QueryRow(ctx, `
@@ -176,7 +182,7 @@ func (s PG) ConsoleIssuersQ(ctx context.Context, q Querier) ([]types.ConsoleIssu
 // PortalIssuerRegistryStore is the registry's surface for the registration, retirement and boot paths.
 type PortalIssuerRegistryStore interface {
 	BindPortalIssuerQ(ctx context.Context, q Querier, issuer, internalNorm, personIDClaim, by string) (types.PortalIssuer, error)
-	RetirePortalIssuerQ(ctx context.Context, q Querier, issuerKey string) error
+	RetirePortalIssuerQ(ctx context.Context, q Querier, issuerKey string, want *types.PortalIssuer) error
 	RecordConsoleIssuerQ(ctx context.Context, q Querier, issuer, replica string) error
 	ConsoleIssuersQ(ctx context.Context, q Querier) ([]types.ConsoleIssuer, error)
 	UpdateDelegateAdmissionQ(ctx context.Context, q Querier, id uuid.UUID, expected, next types.PortalAdmission) error

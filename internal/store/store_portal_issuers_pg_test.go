@@ -73,7 +73,7 @@ func TestPortalIssuerBinding_RetireRacesFirstIntroduction_PG(t *testing.T) {
 	if _, _, err := st.RevokeDelegate(ctx, a.Delegate.ID, time.Now().UTC(), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RetirePortalIssuerQ(ctx, pool, a.Key); !errors.Is(err, store.ErrIssuerInUse) {
+	if err := st.RetirePortalIssuerQ(ctx, pool, a.Key, nil); !errors.Is(err, store.ErrIssuerInUse) {
 		t.Fatalf("retire after an introduction = %v, want ErrIssuerInUse", err)
 	}
 	if n := rowCount(t, pool, `SELECT count(*) FROM portal_issuers WHERE issuer_key = $1`, a.Key); n != 1 {
@@ -90,7 +90,7 @@ func TestPortalIssuerBinding_RetireRacesFirstIntroduction_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := st.RetirePortalIssuerQ(ctx, tx, b.Key); err != nil {
+	if err := st.RetirePortalIssuerQ(ctx, tx, b.Key, nil); err != nil {
 		t.Fatalf("retire of an unused binding = %v", err)
 	}
 	done := make(chan error, 1)
@@ -108,7 +108,7 @@ func TestPortalIssuerBinding_RetireRacesFirstIntroduction_PG(t *testing.T) {
 	if n := rowCount(t, pool, `SELECT count(*) FROM principal_identities WHERE issuer = $1`, types.PortalPersonPrefix+b.Key); n != 0 {
 		t.Fatalf("%d identities under a retired binding, want 0", n)
 	}
-	if err := st.RetirePortalIssuerQ(ctx, pool, b.Key); !errors.Is(err, store.ErrNotFound) {
+	if err := st.RetirePortalIssuerQ(ctx, pool, b.Key, nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("second retire = %v, want ErrNotFound", err)
 	}
 }
@@ -132,13 +132,13 @@ func TestPortalIssuerBinding_RetiredKeyUnknownToAllowRows_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The grant just written is a census hit, so the binding is in use; remove it, then retire.
-	if err := st.RetirePortalIssuerQ(ctx, pool, p.Key); !errors.Is(err, store.ErrIssuerInUse) {
+	if err := st.RetirePortalIssuerQ(ctx, pool, p.Key, nil); !errors.Is(err, store.ErrIssuerInUse) {
 		t.Fatalf("retire with an allow row = %v, want ErrIssuerInUse", err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM capability_grants WHERE subject = $1`, person); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RetirePortalIssuerQ(ctx, pool, p.Key); err != nil {
+	if err := st.RetirePortalIssuerQ(ctx, pool, p.Key, nil); err != nil {
 		t.Fatalf("retire after the row went = %v", err)
 	}
 	if _, err := store.UpsertCapabilityGrantQ(ctx, pool, capabilityGrantFor(person)); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
@@ -313,7 +313,7 @@ func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = retire1.Rollback(ctx) })
 			retired := make(chan error, 1)
-			go func() { retired <- st.RetirePortalIssuerQ(ctx, retire1, first.Key) }()
+			go func() { retired <- st.RetirePortalIssuerQ(ctx, retire1, first.Key, nil) }()
 			untilBlockedBy(t, pool, writer, 1)
 			if err := gate.Commit(ctx); err != nil {
 				t.Fatal(err)
@@ -336,7 +336,7 @@ func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = retire.Rollback(ctx) })
-			if err := st.RetirePortalIssuerQ(ctx, retire, inflight.Key); err != nil {
+			if err := st.RetirePortalIssuerQ(ctx, retire, inflight.Key, nil); err != nil {
 				t.Fatalf("retirement with no row: %v", err)
 			}
 			done := make(chan error, 1)
@@ -354,7 +354,7 @@ func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
 
 			// The retirement commits first: the write is refused.
 			gone := revokedPortal()
-			if err := st.RetirePortalIssuerQ(ctx, pool, gone.Key); err != nil {
+			if err := st.RetirePortalIssuerQ(ctx, pool, gone.Key, nil); err != nil {
 				t.Fatalf("retirement with no row: %v", err)
 			}
 			if err := w.write(gone.Key); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
@@ -388,8 +388,8 @@ func TestPortalIssuersActivate_MarkSurvivesWholeDocumentSaves_PG(t *testing.T) {
 	if n := rowCount(t, pool, `SELECT count(*) FROM site_config`); n != 0 {
 		t.Fatalf("%d site_config rows on a fresh database, want 0", n)
 	}
-	if err := st.ActivatePortalIssuers(ctx, "admin@example.com", nil); err != nil {
-		t.Fatal(err)
+	if activated, err := st.ActivatePortalIssuers(ctx, "admin@example.com", nil); err != nil || !activated {
+		t.Fatalf("the first activation = %v, %v; want it reported as the one that set the mark", activated, err)
 	}
 	first := markOf()
 	if first == "" {
@@ -418,8 +418,8 @@ func TestPortalIssuersActivate_MarkSurvivesWholeDocumentSaves_PG(t *testing.T) {
 	}
 
 	time.Sleep(20 * time.Millisecond)
-	if err := st.ActivatePortalIssuers(ctx, "admin@example.com", nil); err != nil {
-		t.Fatal(err)
+	if activated, err := st.ActivatePortalIssuers(ctx, "admin@example.com", nil); err != nil || activated {
+		t.Fatalf("a second activation = %v, %v; want it reported as not the one that set the mark", activated, err)
 	}
 	if got := markOf(); got != first {
 		t.Fatalf("a second activation moved the mark to %q, want %q", got, first)
@@ -458,7 +458,7 @@ func TestPortalSubjectRuling_RetireRacesPolicyCaller_PG(t *testing.T) {
 				return
 			}
 			defer func() { _ = tx.Rollback(ctx) }()
-			if retireErr = st.RetirePortalIssuerQ(ctx, tx, p.Key); retireErr == nil {
+			if retireErr = st.RetirePortalIssuerQ(ctx, tx, p.Key, nil); retireErr == nil {
 				retireErr = tx.Commit(ctx)
 			}
 		}()
@@ -521,4 +521,139 @@ func sessionBlockedBy(t *testing.T, pool *pgxpool.Pool, holder int) int {
 		t.Fatalf("the session waiting on %d: %v", holder, err)
 	}
 	return pid
+}
+
+// Two activations at once: exactly one is told it set the mark, and the stored time is the one that call wrote
+// (the other's statement changed nothing). The race is forced: a transaction holds the mark's insert open,
+// the store call waits on it, and the row is then committed.
+func TestPortalIssuersActivate_ConcurrentActivationsOneWinner_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+
+	// The winner is a transaction that wrote the mark and has not committed; the store call waits behind it.
+	winner, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = winner.Rollback(ctx) }()
+	const stamp = "2001-02-03T04:05:06.000007Z"
+	if _, err := winner.Exec(ctx, `INSERT INTO site_config (singleton, config, updated_at) VALUES (true, jsonb_build_object($1::text, $2::text), now())`,
+		store.PortalIssuersActivatedKey, stamp); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		activated bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		activated, err := st.ActivatePortalIssuers(ctx, "admin@example.com", nil)
+		done <- result{activated, err}
+	}()
+	untilBlockedBy(t, pool, pidOf(t, winner), 1)
+	if err := winner.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.err != nil || r.activated {
+		t.Fatalf("the activation that lost = %v, %v; want it reported as not the one that set the mark", r.activated, r.err)
+	}
+	var stored string
+	if err := pool.QueryRow(ctx, `SELECT config ->> $1 FROM site_config WHERE singleton`, store.PortalIssuersActivatedKey).Scan(&stored); err != nil || stored != stamp {
+		t.Fatalf("stored time = %q, %v; want the winner's %q", stored, err, stamp)
+	}
+}
+
+// Two activations started together on a fresh database: exactly one is told it set the mark.
+func TestPortalIssuersActivate_TwoStartedTogetherOneWinner_PG(t *testing.T) {
+	st2, _ := isolatedStore(t)
+	ctx := context.Background()
+	type result struct {
+		activated bool
+		err       error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-start
+			activated, err := st2.ActivatePortalIssuers(ctx, "admin@example.com", nil)
+			results <- result{activated, err}
+		}()
+	}
+	close(start)
+	wins := 0
+	for range 2 {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if r.activated {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("%d of two concurrent activations were told they set the mark, want exactly 1", wins)
+	}
+}
+
+// A portal revoked between an admission proposal and its decision takes no edit: the update is ErrStaleCompare
+// and the revision does not move.
+func TestUpdateDelegateAdmission_RevokedPortalIsStale_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	was := types.PortalAdmission{Group: p.Delegate.Group, PortalManaged: true}
+	next := types.PortalAdmission{Group: p.Delegate.Group, PortalManaged: false}
+	rev := func() int {
+		return rowCount(t, pool, `SELECT admission_rev FROM delegates WHERE id = $1`, p.Delegate.ID)
+	}
+	before := rev()
+
+	if _, _, err := st.RevokeDelegate(ctx, p.Delegate.ID, time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateDelegateAdmissionQ(ctx, pool, p.Delegate.ID, was, next); !errors.Is(err, store.ErrStaleCompare) {
+		t.Fatalf("update on a revoked portal = %v, want ErrStaleCompare", err)
+	}
+	if after := rev(); after != before {
+		t.Errorf("admission_rev = %d after the refused update, want %d", after, before)
+	}
+	if managed := rowCount(t, pool, `SELECT (portal_managed_admission)::int FROM delegates WHERE id = $1`, p.Delegate.ID); managed != 1 {
+		t.Errorf("portal_managed_admission changed on a revoked portal")
+	}
+}
+
+// A retirement decided on one binding record leaves a replacement alone: after the first binding is retired and
+// the same issuer is registered again with a different internal address, the held decision carrying the old
+// record is ErrStaleCompare and the replacement stays. A decision carrying the current record retires it.
+func TestRetirePortalIssuer_StaleRecordLeavesReplacement_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	issuer := "https://idp-" + uuid.NewString() + ".example.com"
+	old, err := st.BindPortalIssuerQ(ctx, pool, issuer, "https://internal-old-"+uuid.NewString()+".example.com", "uid", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := old // the record the decision was made on
+
+	if err := st.RetirePortalIssuerQ(ctx, pool, old.IssuerKey, &old); err != nil {
+		t.Fatalf("retire with the current record = %v", err)
+	}
+	replacement, err := st.BindPortalIssuerQ(ctx, pool, issuer, "https://internal-new-"+uuid.NewString()+".example.com", "uid", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.IssuerKey != held.IssuerKey || replacement.InternalIssuerNorm == held.InternalIssuerNorm {
+		t.Fatalf("replacement %+v should share the key and differ in address from %+v", replacement, held)
+	}
+
+	if err := st.RetirePortalIssuerQ(ctx, pool, held.IssuerKey, &held); !errors.Is(err, store.ErrStaleCompare) {
+		t.Fatalf("retire with the old record = %v, want ErrStaleCompare", err)
+	}
+	if bound, err := store.IssuerKeyBoundQ(ctx, pool, replacement.IssuerKey); err != nil || !bound {
+		t.Fatalf("replacement after the stale retire: bound=%v err=%v, want it kept", bound, err)
+	}
+	if err := st.RetirePortalIssuerQ(ctx, pool, replacement.IssuerKey, &replacement); err != nil {
+		t.Fatalf("retire with the replacement's own record = %v", err)
+	}
 }

@@ -34,7 +34,7 @@ const PortalSessionUnknown = "unknown"
 // PortalActivationStore is the activation's store surface, optional like the other portal stores.
 type PortalActivationStore interface {
 	PortalIssuersActivated(ctx context.Context) (bool, error)
-	ActivatePortalIssuers(ctx context.Context, by string, override []string) error
+	ActivatePortalIssuers(ctx context.Context, by string, override []string) (activated bool, err error)
 	UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error)
 }
 
@@ -55,20 +55,24 @@ func (s PG) PortalIssuersActivated(ctx context.Context) (bool, error) {
 // stored (an UPDATE alone would report success and store nothing), and on a row that exists sets the key only
 // when it is absent, so a second activation keeps the first time. Nothing clears it.
 //
+// activated is true only when this call set the mark, so of two concurrent activations exactly one is told it
+// did and its time is the stored one.
+//
 // by and override name the actor and the sessions the operator overrode. They belong to the audit rows the
 // caller writes (portal_issuers.activate, portal_issuers.activate_override); the document keeps only the time,
 // because it is read by code that knows no other key.
-func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []string) error {
+func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []string) (activated bool, err error) {
 	_, _ = by, override
-	if _, err := s.Pool.Exec(ctx, `
+	tag, err := s.Pool.Exec(ctx, `
 		INSERT INTO site_config (singleton, config, updated_at)
 		VALUES (true, jsonb_build_object($1::text, to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')), now())
 		ON CONFLICT (singleton) DO UPDATE
 			SET config = site_config.config || EXCLUDED.config, updated_at = now()
-			WHERE NOT (site_config.config ? $1::text)`, PortalIssuersActivatedKey); err != nil {
-		return fmt.Errorf("store: activate portal issuers: %w", err)
+			WHERE NOT (site_config.config ? $1::text)`, PortalIssuersActivatedKey)
+	if err != nil {
+		return false, fmt.Errorf("store: activate portal issuers: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // UntaggedClientSessions is every other client session on this database that does not carry a wardynd label of
