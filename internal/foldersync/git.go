@@ -45,6 +45,12 @@ type GitSent struct {
 
 // laptopGit runs git in the laptop's synced directory.
 func laptopGit(ctx context.Context, root string, args ...string) (string, error) {
+	out, err := laptopGitRaw(ctx, root, args...)
+	return strings.TrimSpace(out), err
+}
+
+// laptopGitRaw is laptopGit with the output as git wrote it, for NUL-separated names.
+func laptopGitRaw(ctx context.Context, root string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
 	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
@@ -53,7 +59,7 @@ func laptopGit(ctx context.Context, root string, args ...string) (string, error)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", args[0], err, Shown(strings.TrimSpace(errb.String())))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
 }
 
 // sandboxGit runs script in the sandbox over a gateway exec channel and returns
@@ -117,6 +123,9 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
 		return nil
 	}
+	if err := checkHistoryAllowed(ctx, root, branch, sy.Opts.OrgDeny); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(sy.StateFile), "laptop-*.bundle")
 	if err != nil {
 		return err
@@ -143,6 +152,56 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 		where = "a new repository, with " + branch + " checked out over the synced files"
 	}
 	fmt.Fprintf(w, "git: sent %s at %s to the sandbox as %s\n", branch, head[:12], where)
+	return nil
+}
+
+// HistoryDeniedError is --git refusing a branch whose history holds a path the
+// organisation's sync patterns leave out. A bundle carries every commit's files
+// whole, so the patterns cannot be applied to it.
+type HistoryDeniedError struct{ Branch, Path, Pattern string }
+
+func (e *HistoryDeniedError) Error() string {
+	return fmt.Sprintf("--git did not send %s: its history holds %s, which your organisation's sync pattern %s leaves out of a sync, and a git bundle carries every committed file. "+
+		"The working-tree sync is not affected. To send the branch, remove that path from its history, or ask your operator to change the pattern",
+		Shown(e.Branch), Shown(e.Path), Shown(e.Pattern))
+}
+
+// checkHistoryAllowed refuses to bundle branch when any path in its history, in
+// any commit or in the tip's tree, is one the organisation's patterns deny,
+// tested as a pass tests it: each directory above the file, then the file.
+func checkHistoryAllowed(ctx context.Context, root, branch string, orgDeny []string) error {
+	if len(orgDeny) == 0 {
+		return nil
+	}
+	ref := "refs/heads/" + branch
+	// -m diffs a merge against each parent and --no-renames keeps a rename's old
+	// name, so a path a commit removed or moved is listed too.
+	changed, err := laptopGitRaw(ctx, root, "log", "-z", "--format=", "--name-only", "-m", "--no-renames", ref, "--")
+	if err != nil {
+		return err
+	}
+	tip, err := laptopGitRaw(ctx, root, "ls-tree", "-r", "-z", "--name-only", ref, "--")
+	if err != nil {
+		return err
+	}
+	ig := newSyncIgnore(orgDeny)
+	seen := map[string]bool{}
+	for _, name := range strings.Split(changed+"\x00"+tip, "\x00") {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		for i, c := range name {
+			if c == '/' {
+				if pat, denied := ig.orgDeniedBy(name[:i], true); denied {
+					return &HistoryDeniedError{Branch: branch, Path: name, Pattern: pat}
+				}
+			}
+		}
+		if pat, denied := ig.orgDeniedBy(name, false); denied {
+			return &HistoryDeniedError{Branch: branch, Path: name, Pattern: pat}
+		}
+	}
 	return nil
 }
 

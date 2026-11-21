@@ -95,7 +95,10 @@ refs/remotes/laptop/<branch>. --pull-commits brings the sandbox's commits
 since then back as a bundle and fetches them into the branch
 wardyn/sync-<run-id> here, for you to review; your working tree and other
 branches are never touched. Both need the top of a git work tree, and both
-run git in the sandbox over an SSH exec channel.
+run git in the sandbox over an SSH exec channel. A bundle carries every
+committed file whole, so if your organisation set patterns and any path in the
+branch's history, in any commit, matches one, --git sends nothing and says
+which path and pattern; the working-tree sync is not affected.
 
 --remote-dir (default /home/agent/work) must exist in the sandbox. The
 directory is where the transfer starts, not a boundary: the sandbox's sftp
@@ -327,7 +330,12 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer,
 				if ctx.Err() != nil {
 					return errors.New("sync: interrupted")
 				}
-				return fmt.Errorf("sync: %w", err)
+				var denied *foldersync.HistoryDeniedError
+				if !f.watch || !errors.As(err, &denied) {
+					return fmt.Errorf("sync: %w", err)
+				}
+				// The refused history is the only thing lost: --watch keeps the working tree syncing.
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", err)
 			}
 		}
 		if !f.watch {

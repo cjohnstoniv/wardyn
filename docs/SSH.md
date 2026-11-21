@@ -41,7 +41,7 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 
 - The key is scoped to **your own principal** — there is no admin view of another human's keys, and `DELETE` on a key you don't own 404s exactly like a nonexistent one (no existence leak).
 - The fingerprint returned (and shown in the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public by design** — it identifies the server/key, it authenticates no one, so showing it is not a disclosure.
-- Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message:
+- Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message.:
   - it does not confirm the key exists under a DIFFERENT account, only that this exact `POST` didn't take.
 
 ### Reclaiming a squatted fingerprint
@@ -269,6 +269,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - A laptop delete or rename reaches the sandbox only for a file this sync sent and the sandbox left unchanged. A sandbox edit is kept and listed as a conflict. An empty, unreadable or ignored laptop directory deletes nothing.
 - A sandbox delete removes a laptop file only under `--pull-deletes`, if the laptop copy is unchanged. Deletes are listed first, capped by `--max-pull-deletes` (20; over it, none), and moved into `~/.local/state/wardyn/sync/<run-id>-deleted/`.
 - `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
+- `--git` refuses the branch if any path in its history, in any commit, matches a `WARDYN_SYNC_DENY` pattern, because a bundle carries whole commits. The error names the first such path and its pattern; the working-tree sync is not affected. Remove the path from the history, or change the pattern, to send the branch.
 - `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
 - A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed. Only a runner's pass back keeps a conflict copy ([hybrid laptops](operations/hybrid-laptops.md)).

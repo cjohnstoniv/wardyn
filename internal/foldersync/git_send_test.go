@@ -6,6 +6,7 @@
 package foldersync
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -761,4 +762,44 @@ func snapshot(p string) string {
 	}
 	b, _ := os.ReadFile(filepath.Join(p, "HEAD"))
 	return "directory, HEAD " + strconv.Quote(string(b))
+}
+
+// --git refuses a branch whose history holds a path the organisation's patterns
+// leave out, even one a later commit removed or renamed away, and sends one
+// that holds none.
+func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) {
+	g := newGitRig(t)
+	ctx := t.Context()
+	if err := checkHistoryAllowed(ctx, g.lap, "feature/x", []string{"*.pem", "secrets/"}); err != nil {
+		t.Fatalf("a history with no matching path: %v; want it sent", err)
+	}
+	g.write(filepath.Join(g.lap, "secrets"), "notes.txt", "synthetic\n")
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", ".")
+	g.run(g.lap, "commit", "-q", "-m", "add")
+	g.run(g.lap, "mv", "old.pem", "kept.txt")
+	g.run(g.lap, "rm", "-q", "-r", "secrets")
+	g.run(g.lap, "commit", "-q", "-m", "remove and rename")
+	if st := g.run(g.lap, "ls-files"); st != "kept.txt\nmain.go" {
+		t.Fatalf("the tip holds %q; the matching paths must be only in earlier commits", st)
+	}
+	for _, c := range []struct {
+		deny              []string
+		wantPath, wantPat string
+	}{
+		{[]string{"*.pem"}, "old.pem", "*.pem"},
+		{[]string{"secrets/"}, "secrets/notes.txt", "secrets/"},
+		{[]string{"*.pem", "!old.pem"}, "", ""},
+		{[]string{"kept.txt"}, "kept.txt", "kept.txt"},
+		{nil, "", ""},
+	} {
+		err := checkHistoryAllowed(ctx, g.lap, "feature/x", c.deny)
+		var denied *HistoryDeniedError
+		switch {
+		case c.wantPath == "" && err != nil:
+			t.Errorf("deny %q: %v; want the history sent", c.deny, err)
+		case c.wantPath != "" && (!errors.As(err, &denied) || denied.Path != c.wantPath || denied.Pattern != c.wantPat):
+			t.Errorf("deny %q: got %v; want a refusal naming %s and %s", c.deny, err, c.wantPath, c.wantPat)
+		}
+	}
 }
