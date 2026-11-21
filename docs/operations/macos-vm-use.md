@@ -25,7 +25,7 @@ Needed first:
 
 ## Keeping the machine
 
-A run's VM is deleted when the run ends. To keep it on your own Mac, an admin turns on `macos_vm.allow_kept_machines`, which is off by default. An idle machine is deleted after `macos_vm.kept_machine_idle_days` (30 by default, 1 to 90). `macos_vm.max_kept_machines_per_person` caps how many one person keeps (1 by default, 1 to 4).
+A run's VM is deleted when the run ends. To keep it on your own Mac, an admin turns on `macos_vm.allow_kept_machines`, which is off by default. An idle machine is deleted after `macos_vm.kept_machine_idle_days` (30 by default, 1 to 90). `macos_vm.max_kept_machines_per_person` caps how many one person keeps (1 by default, 1 to 4). A machine counts until its record is deleted or expires.
 
 | To | Run |
 |---|---|
@@ -34,7 +34,7 @@ A run's VM is deleted when the run ends. To keep it on your own Mac, an admin tu
 | Start from it again, from the Mac's current base | The same, with `--fresh`. This deletes what is on the machine |
 | List your kept machines | `wardyn machines` (`--json` for JSON) |
 | Delete one, with its files, tools and sign-ins | `wardyn machines delete <id\|name>`. It asks first; without a terminal, add `--yes` |
-| List, update or delete one from the Mac itself | `wardyn-runnerd macos-vm machines`, with `update <id>` or `delete <id>` |
+| List, update or delete one from the Mac itself | `wardyn-runnerd macos-vm machines`, with `update <id>` or `delete <id>`. This leaves the organisation's record; remove it with `wardyn machines delete` |
 
 - In the console, New run and Review offer keeping the machine or resuming a kept one. The run page's Machine card shows the machine as it is now, and Your settings lists your kept machines with their idle days.
 - A resumed machine is kept again when the run stops. A machine a run holds is in use and cannot be deleted.
@@ -92,7 +92,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 ### When a limit is 0
 
 - **The Mac's disk limit is `0`.** `macos_vm_kept_disk_limit_gb` of `0` turns kept machines off on that Mac. A keep is refused, and so is a resume: the Mac answers "This Mac doesn't keep machines." Machines already there are still listed and can still be deleted, and they still expire.
-- **The per-person limit.** `macos_vm.max_kept_machines_per_person` is 1 to 4, and 0 or an unset value reads 1. At the limit, a keep is refused (`kept_machine_person_limit`) and a resume still works.
+- **The per-person limit.** `macos_vm.max_kept_machines_per_person` is 1 to 4, and 0 or an unset value reads 1. At the limit, a keep is refused (`kept_machine_person_limit`) and a resume still works. A delete from the Mac itself leaves the record, which still counts.
 - **The site switch.** With `macos_vm.allow_kept_machines` off, a keep and a resume are both refused (`kept_machine_site_off`).
 
 ### The tools update of a kept machine

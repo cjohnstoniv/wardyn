@@ -452,7 +452,7 @@ func deleteKept(out io.Writer, r keptRow) error {
 		fmt.Fprintf(out, "machine %s was already gone\n", r.label())
 		return nil
 	}
-	fmt.Fprintf(out, "deleted kept machine %s (%s); the organisation's record goes on the next report\n", r.label(), r.key)
+	fmt.Fprintf(out, "deleted kept machine %s (%s) from this Mac. The organisation's record of it stays, and still counts against your kept-machine limit, until you run 'wardyn machines delete <name or id>' (find it with 'wardyn machines')\n", r.label(), r.key)
 	return nil
 }
 
