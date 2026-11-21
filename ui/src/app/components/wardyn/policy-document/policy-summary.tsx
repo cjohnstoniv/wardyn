@@ -218,7 +218,7 @@ function summarize(
     // An entry opened only in part is followed by a quieter line naming the destinations that are opened.
     const hosts = entries(allowed ?? [], "allowed_domains").flatMap((v): Value[] => {
       if (!hostMarks || !v.text || v.mark === "removed") return [v];
-      const subset = Object.hasOwn(partial, v.text) ? partial[v.text] : undefined;
+      const subset = Object.prototype.hasOwnProperty.call(partial, v.text) ? partial[v.text] : undefined;
       if (subset && subset.length > 0) return [{ ...v, end: partlyChip }, text(SUMMARY.opens(subset.join(", ")), { note: true })];
       return [{ ...v, end: hostChip(inspected.has(v.text)) }];
     });

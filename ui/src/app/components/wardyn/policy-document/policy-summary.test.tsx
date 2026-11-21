@@ -393,6 +393,14 @@ describe("PolicySummary host marks", () => {
     for (const s of [PARTLY_MEANING, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.getByText(s)).toBeInTheDocument();
   });
 
+  it("a host named like an inherited object key is not read as partial", () => {
+    const keys = { allowed_domains: ["constructor", "toString", "pypi.org"] } as RunPolicySpec;
+    render(<PolicySummary spec={keys} hostMarks={{ inspected: [], partial: { "pypi.org": ["pypi.org:8443"] }, terminated: [], outside: [] }} />);
+    expect(within(row("constructor")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("toString")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("pypi.org")).getByText(PARTLY)).toBeInTheDocument();
+  });
+
   it("explains only the marks present", () => {
     render(<PolicySummary spec={spec} hostMarks={{ inspected: [], terminated: [], outside: [] }} />);
     expect(screen.getAllByText(TUNNEL)).toHaveLength(3); // two hosts and the meaning line's chip
