@@ -169,6 +169,25 @@ func (s PG) PendingPortalIntroductions(ctx context.Context, limit int) ([]Portal
 		})
 }
 
+// PendingPortalIntroductionFor is identity's own introduction event when it was committed and never marked delivered, and false when none is owed.
+func (s PG) PendingPortalIntroductionFor(ctx context.Context, identity uuid.UUID) (PortalIntroduction, bool, error) {
+	var p PortalIntroduction
+	err := s.Pool.QueryRow(ctx, `
+		SELECT i.id, i.principal, substr(i.issuer, $2::int + 1), i.introduced_by, i.introduced_issuer,
+		       i.introduction_event_id, i.introduction_event_at
+		  FROM principal_identities i
+		 WHERE i.id = $1 AND starts_with(i.issuer, $3) AND i.introduction_event_id IS NOT NULL AND i.introduction_audited_at IS NULL`,
+		identity, len(types.PortalPersonPrefix), types.PortalPersonPrefix).
+		Scan(&p.IdentityID, &p.Principal, &p.IssuerKey, &p.PortalID, &p.Issuer, &p.EventID, &p.EventAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortalIntroduction{}, false, nil
+	}
+	if err != nil {
+		return PortalIntroduction{}, false, fmt.Errorf("store: pending portal introduction for: %w", err)
+	}
+	return p, true, nil
+}
+
 // MarkPortalIntroductionAudited records that the introduction event of identity id was delivered, where it
 // was not yet, and reports whether this call did. A crash after the append and before this leads to one more
 // replay, which adds no row.

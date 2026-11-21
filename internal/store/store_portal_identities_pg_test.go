@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -183,6 +184,52 @@ func TestPendingPortalIntroductions_ReemitFromPersistedFields_PG(t *testing.T) {
 	}
 	if marked, err := st.MarkPortalIntroductionAudited(context.Background(), id); err != nil || marked {
 		t.Fatalf("second mark = %v, %v; want false, nil", marked, err)
+	}
+}
+
+// One person's own owed introduction is found directly, however many older introductions are owed ahead of
+// it, and is gone once delivered; an id that is not a portal person's is never owed.
+func TestPendingPortalIntroductionFor_FindsOwnBehindBacklog_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	for i := 0; i < 101; i++ {
+		issueFor(t, st, p, fmt.Sprintf("backlog-%03d", i))
+	}
+	target, _ := issueFor(t, st, p, "target")
+	if _, ok := pendingFor(t, st, target); ok {
+		t.Fatal("the target is inside the first 100 pending rows, so the backlog proves nothing")
+	}
+
+	got, ok, err := st.PendingPortalIntroductionFor(ctx, target)
+	if err != nil || !ok {
+		t.Fatalf("PendingPortalIntroductionFor = %+v, %v, %v; want the target's introduction", got, ok, err)
+	}
+	var wantID uuid.UUID
+	var wantAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT introduction_event_id, introduction_event_at FROM principal_identities WHERE id = $1`, target).Scan(&wantID, &wantAt); err != nil {
+		t.Fatal(err)
+	}
+	if got.IdentityID != target || got.EventID != wantID || !got.EventAt.Equal(wantAt) || got.Principal != types.PortalPrincipal(p.Key, "target") ||
+		got.IssuerKey != p.Key || got.PortalID != p.Delegate.ID || got.Issuer != p.Issuer {
+		t.Fatalf("introduction = %+v, want the stored event %v at %v", got, wantID, wantAt)
+	}
+
+	if marked, err := st.MarkPortalIntroductionAudited(ctx, target); err != nil || !marked {
+		t.Fatalf("mark = %v, %v", marked, err)
+	}
+	if got, ok, err := st.PendingPortalIntroductionFor(ctx, target); err != nil || ok {
+		t.Fatalf("after delivery = %+v, %v, %v; want false", got, ok, err)
+	}
+
+	var workforce uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('wf-sub', 'https://workforce.example.com', 'wf@example.com') RETURNING id`).Scan(&workforce); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uuid.UUID{workforce, uuid.New()} {
+		if got, ok, err := st.PendingPortalIntroductionFor(ctx, id); err != nil || ok {
+			t.Fatalf("PendingPortalIntroductionFor(%v) = %+v, %v, %v; want false", id, got, ok, err)
+		}
 	}
 }
 
