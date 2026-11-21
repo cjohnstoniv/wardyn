@@ -45,6 +45,9 @@ type ScimGroup struct {
 // ScimGroupStore is optional, like LeaverStore: callers type-assert it.
 type ScimGroupStore interface {
 	CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error)
+	// CreateScimGroupWithMembers stores a group and records identities as its members in one transaction: a
+	// failure leaves no group, so the create can be retried. An externalId a group holds is ErrScimGroupExists.
+	CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, error)
 	GetScimGroup(ctx context.Context, id uuid.UUID) (ScimGroup, error)
 	SearchScimGroups(ctx context.Context, attr, value string, limit int) ([]ScimGroup, error)
 	RenameScimGroup(ctx context.Context, id uuid.UUID, displayName string) error
@@ -69,6 +72,12 @@ var _ ScimGroupStore = PG{}
 
 const scimGroupCols = `id, external_id, display_name, created_at`
 
+// scimAddMembersSQL takes the group id, the identity ids and the time.
+const scimAddMembersSQL = `
+		INSERT INTO scim_group_members (group_id, identity_id, added_at)
+		SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
+		ON CONFLICT DO NOTHING`
+
 func scanScimGroup(r pgx.Row) (ScimGroup, error) {
 	var g ScimGroup
 	err := r.Scan(&g.ID, &g.ExternalID, &g.DisplayName, &g.CreatedAt)
@@ -81,7 +90,18 @@ func scanScimGroup(r pgx.Row) (ScimGroup, error) {
 // CreateScimGroup stores a group. An externalId any group already holds, in any case, is
 // ErrScimGroupExists.
 func (s PG) CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error) {
-	g, err := scanScimGroup(s.Pool.QueryRow(ctx, `
+	return s.CreateScimGroupWithMembers(ctx, externalID, displayName, nil, now)
+}
+
+// CreateScimGroupWithMembers stores a group and its initial members in one transaction; an id that names
+// no identity row is skipped, as AddScimGroupMembers skips it.
+func (s PG) CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	g, err := scanScimGroup(tx.QueryRow(ctx, `
 		INSERT INTO scim_groups (external_id, display_name, created_at) VALUES ($1, $2, $3)
 		RETURNING `+scimGroupCols, strings.TrimSpace(externalID), displayName, now))
 	var pgErr *pgconn.PgError
@@ -89,6 +109,14 @@ func (s PG) CreateScimGroup(ctx context.Context, externalID, displayName string,
 		return ScimGroup{}, ErrScimGroupExists
 	}
 	if err != nil {
+		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+	}
+	if len(identities) > 0 {
+		if _, err := tx.Exec(ctx, scimAddMembersSQL, g.ID, identities, now); err != nil {
+			return ScimGroup{}, fmt.Errorf("store: add scim group members: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
 	}
 	return g, nil
@@ -140,10 +168,7 @@ func (s PG) ScimGroupMembers(ctx context.Context, id uuid.UUID) ([]uuid.UUID, er
 // AddScimGroupMembers records each identity as a member, leaving one already recorded as it is and
 // skipping an id that names no identity row.
 func (s PG) AddScimGroupMembers(ctx context.Context, id uuid.UUID, identities []uuid.UUID, now time.Time) error {
-	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO scim_group_members (group_id, identity_id, added_at)
-		SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
-		ON CONFLICT DO NOTHING`, id, identities, now); err != nil {
+	if _, err := s.Pool.Exec(ctx, scimAddMembersSQL, id, identities, now); err != nil {
 		return fmt.Errorf("store: add scim group members: %w", err)
 	}
 	return nil

@@ -183,16 +183,18 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
-	g, err := st.CreateScimGroup(ctx, in.ExternalID, in.DisplayName, now)
+	// The members are read before anything is written, and the group and its members commit together: a
+	// failure at either step leaves no group, so the identity provider's retry with the same externalId is
+	// not a conflict. A 409 is only a group that really exists.
+	own, err := s.ownMembers(ctx, st, memberIdentities(in.Members))
+	if err != nil {
+		s.scimServerError(w, r, "create the group", err)
+		return
+	}
+	g, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
 	if errors.Is(err, store.ErrScimGroupExists) {
 		writeSCIMError(w, scim.NewError(http.StatusConflict, "uniqueness", "a group with this externalId already exists"))
 		return
-	}
-	if err == nil {
-		var own []uuid.UUID
-		if own, err = s.ownMembers(ctx, st, memberIdentities(in.Members)); err == nil {
-			err = st.AddScimGroupMembers(ctx, g.ID, own, now)
-		}
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)

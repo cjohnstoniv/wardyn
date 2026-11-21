@@ -163,6 +163,19 @@ func TestSCIMCovCreateGroupStoreFailures(t *testing.T) {
 	}
 }
 
+// A member write that fails leaves no group: the retry with the same externalId is created, not a 409.
+func TestSCIMCovCreateGroupMemberFailureLeavesNoGroup(t *testing.T) {
+	st := newSCIMCovStore()
+	e := newSCIMCovEnv(t, st)
+	body := `{"externalId":"g1","displayName":"G"}`
+	st.failNext("AddScimGroupMembers", errSCIMCovBoom, 1)
+	scimCovWantRetry(t, e.scim(http.MethodPost, "/scim/v2/Groups", body), "secret-dsn")
+	if w := e.scim(http.MethodPost, "/scim/v2/Groups", body); w.Code != http.StatusCreated {
+		t.Fatalf("the retry = %d %s, want 201", w.Code, w.Body.String())
+	}
+	scimCovWantError(t, e.scim(http.MethodPost, "/scim/v2/Groups", body), http.StatusConflict, "uniqueness")
+}
+
 func TestSCIMCovPatchGroupRefusals(t *testing.T) {
 	st := newSCIMCovStore()
 	g := st.addGroup(scimCovGroupExternal, "Engineering")
