@@ -312,14 +312,14 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	// it is a resume hint, and a full replay is never wrong.
 	after, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	openedAt := s.cfg.Now().UTC()
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("X-Accel-Buffering", "no")
 	ctx, w, cut, stop, refusal := s.runEventsIssuerCut(r, w, id, principal, admitted, admittedAt)
 	defer stop()
 	if refusal != nil {
-		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
+		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg) // with a refusal's headers, not the stream's
 		return
 	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
 	deadline := rc.SetWriteDeadline
 	if cut != nil {
