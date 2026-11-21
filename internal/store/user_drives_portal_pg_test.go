@@ -752,38 +752,60 @@ func holdPause(t fixtureT, pool *pgxpool.Pool) (release func()) {
 }
 
 // failedFixtureT is a test that has failed: Fatal stops the goroutine that called it, as testing.T's does, and the
-// cleanups it was given are run by the test, in the order testing runs them.
+// cleanups it was given are run by unwind, in the order testing runs them. It is shared by the fixtures' goroutines, so
+// it serialises their registrations, and a cleanup registered after unwind (a fixture still being set up when the test
+// stopped) runs at once, as a safety net must.
 type failedFixtureT struct {
+	mu       sync.Mutex
 	cleanups []func()
+	closed   bool
 }
 
-// lockedT is failedFixtureT shared by two goroutines, which serialise the cleanups they register.
-type lockedT struct {
-	*failedFixtureT
-	mu *sync.Mutex
+func (f *failedFixtureT) Helper() {}
+func (f *failedFixtureT) Cleanup(fn func()) {
+	f.mu.Lock()
+	closed := f.closed
+	if !closed {
+		f.cleanups = append(f.cleanups, fn)
+	}
+	f.mu.Unlock()
+	if closed {
+		fn()
+	}
 }
-
-func (l *lockedT) Cleanup(fn func()) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.failedFixtureT.Cleanup(fn)
-}
-
-func (f *failedFixtureT) Helper()           {}
-func (f *failedFixtureT) Cleanup(fn func()) { f.cleanups = append(f.cleanups, fn) }
-func (f *failedFixtureT) Fatal(...any)      { runtime.Goexit() }
+func (f *failedFixtureT) Fatal(...any) { runtime.Goexit() }
 func (f *failedFixtureT) unwind() {
-	for i := len(f.cleanups) - 1; i >= 0; i-- {
-		f.cleanups[i]()
+	f.mu.Lock()
+	f.closed = true
+	cleanups := f.cleanups
+	f.cleanups = nil
+	f.mu.Unlock()
+	for i := len(cleanups) - 1; i >= 0; i-- {
+		cleanups[i]()
 	}
 }
 
 // A test that stops on a failed observation lets go of the locks its fixtures hold: the pause lock and a portal row held
-// as a revoke holds it are held, the test fails on its first observation, and once its cleanups have run both locks are
-// free, so no later case and no pool close waits on them.
+// as a revoke holds it are held, a third fixture fails part way through its setup (its transaction is open, its first
+// statement fails), the test fails on its first observation, and once its cleanups have run both locks are free and no
+// connection is checked out, so no later case and no pool close waits on them. The real test registers the same unwind
+// as a cleanup of its own, after waiting a bounded time for the fixtures' goroutines, so a Fatal of its own (a timeout, a
+// lock found free) lets go too: unwind is idempotent, so running it twice is the normal path.
 func TestPG_PortalRunFixtures_FailedObservationUnwinds(t *testing.T) {
 	st, pool := isolatedStore(t)
 	portal := newIssuerPortal(t, st, "").Delegate
+	ft := &failedFixtureT{}
+	var workers []<-chan struct{}
+	// Registered before any fixture exists, so it runs before the pool's own cleanup whatever happens below.
+	t.Cleanup(func() {
+		for _, done := range workers {
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+			}
+		}
+		ft.unwind()
+	})
 	free := func(sql string, args ...any) bool {
 		var ok bool
 		onAnotherGoroutine(t, func() {
@@ -798,35 +820,52 @@ func TestPG_PortalRunFixtures_FailedObservationUnwinds(t *testing.T) {
 	const pauseFree = `SELECT pg_try_advisory_xact_lock(7770042)`
 	const rowFree = `SELECT EXISTS (SELECT 1 FROM delegates WHERE id = $1 FOR UPDATE SKIP LOCKED)`
 	// One goroutine per fixture: the pool guard fails a goroutine that holds a connection and asks for another.
-	ft := &failedFixtureT{}
-	var mu sync.Mutex
-	locked := func(f func(fixtureT)) <-chan struct{} {
+	locked := func(f func(fixtureT)) {
 		done := make(chan struct{})
+		workers = append(workers, done)
 		go func() {
 			defer close(done)
-			f(&lockedT{failedFixtureT: ft, mu: &mu})
+			f(ft)
 			ft.Fatal("the observation failed")
 		}()
-		return done
 	}
-	held := []<-chan struct{}{
-		locked(func(f fixtureT) { holdPause(f, pool) }),
-		locked(func(f fixtureT) { holdPortalRow(f, pool, portal.ID, true) }),
-	}
-	for _, done := range held {
+	locked(func(f fixtureT) { holdPause(f, pool) })
+	locked(func(f fixtureT) { holdPortalRow(f, pool, portal.ID, true) })
+	locked(func(f fixtureT) { holdTx(f, pool, `SELECT 1 FROM zz_no_such_table`) })
+	for _, done := range workers {
 		select {
 		case <-done:
 		case <-time.After(30 * time.Second):
 			t.Fatal("a failed test's goroutine did not stop within 30 seconds")
 		}
 	}
-	// The goroutines have stopped but their cleanups have not run: both locks are still held here.
+	// The goroutines have stopped but their cleanups have not run: both locks are still held here, and the three
+	// transactions (the failed setup's among them) still hold their connections.
 	if free(pauseFree) || free(rowFree, portal.ID) {
 		t.Fatal("a lock the fixtures should hold was free before the cleanups ran")
+	}
+	if n := pool.Stat().AcquiredConns(); n < 3 {
+		t.Errorf("%d connection(s) checked out before the cleanups, want at least the 3 the fixtures hold", n)
 	}
 	ft.unwind()
 	if !free(pauseFree) || !free(rowFree, portal.ID) {
 		t.Error("a lock a failed test's fixture held was still held after its cleanups ran")
+	}
+	if n := pool.Stat().AcquiredConns(); n != 0 {
+		t.Errorf("%d connection(s) still checked out after the cleanups, want none", n)
+	}
+	// A fixture whose setup is still running when the test has stopped is let go of as soon as it registers.
+	late := &failedFixtureT{}
+	late.unwind()
+	let := make(chan struct{})
+	go func() { defer close(let); holdPause(late, pool); late.Fatal("late fixture") }()
+	select {
+	case <-let:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a fixture set up after the unwind did not stop within 30 seconds")
+	}
+	if !free(pauseFree) {
+		t.Error("a fixture registered after the unwind kept its lock")
 	}
 }
 
