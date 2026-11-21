@@ -134,3 +134,46 @@ func runMountsPortalDrive(drives []runDrive) bool {
 func writePortalRevoked(w http.ResponseWriter) {
 	writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 }
+
+// portalDriveModesCtxKey carries, on a queued run's start, the modes its portal drives were admitted with.
+type portalDriveModesCtxKey struct{}
+
+// portalDriveModes is the effective mode of each portal drive of drives by drive id, true for read-only: what a
+// queued run is admitted with (queuedLaunch.DriveModes). nil when no drive came through a portal.
+func portalDriveModes(drives []runDrive) map[string]bool {
+	var out map[string]bool
+	for _, d := range drives {
+		if !d.portal || d.id == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[d.id] = d.readOnly()
+	}
+	return out
+}
+
+// withPortalDriveModes marks ctx as the start of a queued run admitted with modes (nil is none recorded).
+func withPortalDriveModes(ctx context.Context, modes map[string]bool) context.Context {
+	if modes == nil {
+		modes = map[string]bool{}
+	}
+	return context.WithValue(ctx, portalDriveModesCtxKey{}, modes)
+}
+
+// portalDriveModeCap is the read_only a portal drive mounts with, given the request's own (asked): outside a queued
+// start it is asked unchanged. At a queued start the fresh resolution never widens what the run was admitted with, so
+// a drive admitted read-only, or one the launch recorded no mode for, mounts read-only whatever the allocation says
+// now; a drive admitted writable keeps the fresh resolution, which still narrows to read-only if the allocation did.
+func portalDriveModeCap(ctx context.Context, drive string, asked *bool) *bool {
+	modes, queued := ctx.Value(portalDriveModesCtxKey{}).(map[string]bool)
+	if !queued {
+		return asked
+	}
+	if readOnly, recorded := modes[drive]; recorded && !readOnly {
+		return asked
+	}
+	ro := true
+	return &ro
+}

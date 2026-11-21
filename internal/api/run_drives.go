@@ -142,7 +142,11 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 			msg := driveTargetConflictMsg(out[j].resolved.Drive.Name, d.winner.Drive.Name, d.target())
 			return nil, driveDenied(authz.Deny(authz.ReasonDriveTargetConflict, "runs.drive", msg), msg)
 		}
-		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID, macOS: macOS, portal: viaPortal})
+		narrow := a.ReadOnly
+		if viaPortal {
+			narrow = portalDriveModeCap(r.Context(), a.DriveID, narrow)
+		}
+		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: narrow, legacy: d.legacy, id: a.DriveID, macOS: macOS, portal: viaPortal})
 	}
 	return out, driveKindMixRefusal(out)
 }

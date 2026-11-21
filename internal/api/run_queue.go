@@ -120,6 +120,11 @@ type queuedLaunch struct {
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
+	// DriveModes is the effective mode each portal drive of the run was admitted with, by drive id: true is
+	// read-only. The start holds the fresh resolution to it (portalDriveModeCap), so an allocation that became
+	// writable while the run waited never widens it. A launch with no entry for one of its portal drives
+	// starts that drive read-only.
+	DriveModes map[string]bool `json:"drive_modes,omitempty"`
 }
 
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
@@ -510,6 +515,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
 	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
+	launch.DriveModes = portalDriveModes(q.f.drives)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id
