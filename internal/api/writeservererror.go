@@ -92,6 +92,12 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonUserTypeUnknown), userTypeUnknownMsg)
 		return
 	}
+	// An admin-written person list the store refused for a portal person (a role it cannot hold, or an issuer
+	// with no portal, as a retirement that committed after the handler's own check leaves it) is a ruling,
+	// 422 with its registered reason, whichever handler's write it was.
+	if writePortalRulingError(w, err) {
+		return
+	}
 	slog.ErrorContext(r.Context(), "api: "+msg,
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),

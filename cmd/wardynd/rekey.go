@@ -113,7 +113,7 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	ctx := context.Background()
 	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancel()
-	pool, err := db.Connect(connCtx, *f.dsn)
+	pool, err := db.Connect(connCtx, *f.dsn, toolDBOption("rekey"))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
