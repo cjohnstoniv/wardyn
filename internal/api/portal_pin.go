@@ -57,7 +57,7 @@ func (s *Server) portalPinOf(ctx context.Context) (portalPin, *runRefusal) {
 	}
 	if d.RunInUnder == nil {
 		// An issuer portal is registered with a pin or not at all: a row without one reaches nothing.
-		return portalPin{applies: true, name: portalNoPinName}, nil
+		return portalPin{applies: true}, nil
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {
@@ -109,6 +109,9 @@ func (p portalPin) scope() *store.RunUnitScope {
 
 // refusal is the 403 for a run outside the pin: the create refusal's reason and sentence.
 func (p portalPin) refusal() *runRefusal {
+	if p.unit == uuid.Nil { // an issuer row with no pin
+		return runError(http.StatusForbidden, reasonPortalUnitScope, portalNoPinMsg)
+	}
 	return runError(http.StatusForbidden, reasonPortalUnitScope, fmt.Sprintf(portalUnitScopeMsg, p.name))
 }
 

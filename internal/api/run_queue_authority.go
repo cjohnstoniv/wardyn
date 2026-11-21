@@ -284,7 +284,7 @@ const (
 	queueEndPortalUnitScope   = "portal_unit_scope"
 	queueUserTypeUnknownHint  = "The user type this portal gives its people no longer exists, so this run was not started."
 	queuePortalUnitScopeHint  = "This run's unit is no longer under the portal's unit, so it was not started."
-	queuePortalPrincipalError = "queue portal start: the principal is not one of the portal's people"
+	queuePortalPrincipalError = "Queue portal start: the principal is not one of the portal's people"
 )
 
 // queuePortalIssuerRole is queueCurrentRole for an issuer-portal person's launch (the stored authority marks

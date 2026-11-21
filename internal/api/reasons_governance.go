@@ -120,7 +120,7 @@ const (
 	reasonPortalIssuerNotFound            = "portal_issuer_not_found"             // no binding has that key
 	reasonDelegateAdmissionStale          = "delegate_admission_stale"            // the portal's admission rule is no longer the one the change expected
 
-	// Shared with the registration lane, which refuses the same cases at registration (D5).
+	// Shared with the registration lane, which refuses the same cases at registration.
 	reasonDelegateGroupOrPortalManaged     = "delegate_group_or_portal_managed"     // no group needs portal_managed_admission
 	reasonDelegatePortalManagedWithGroup   = "delegate_portal_managed_with_group"   // portal_managed_admission with a group
 	reasonDelegatePortalManagedNeedsIssuer = "delegate_portal_managed_needs_issuer" // an admission rule on a console portal

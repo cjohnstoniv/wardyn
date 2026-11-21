@@ -106,7 +106,7 @@ func uiAppPortalKeys(apps []types.UIApp) ([]string, error) {
 	return slices.Compact(keys), nil
 }
 
-// ruleUIAppCallers is the ruling for a policy spec's UI-app callers (D1): a `user:delegate:person:<k>:...`
+// ruleUIAppCallers is the ruling for a policy spec's UI-app callers: a `user:delegate:person:<k>:...`
 // caller whose issuer key has no binding is refused. It runs beside the spec validator at every site that
 // stores a spec or starts a run, and the store write rules the same callers again in its own transaction,
 // so a retirement that commits between the two is still caught.

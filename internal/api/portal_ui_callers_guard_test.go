@@ -22,7 +22,7 @@ type uiSpecSite struct {
 	exempt  string
 }
 
-// uiSpecSites is D1's table of validation sites (PLAN-0102 r16). A site that is not here, or that is here and
+// uiSpecSites is the table of validation sites. A site that is not here, or that is here and
 // no longer calls a validator reaching validateUIApps, fails the guard, so a new or moved site is classified.
 var uiSpecSites = map[string]uiSpecSite{
 	"decodePolicyRequest":         {ruledBy: []string{"handleCreatePolicy", "handleUpdatePolicy"}},
@@ -81,7 +81,7 @@ func uiSpecCallGraph(t *testing.T, dir string) map[string]map[string]bool {
 	return calls
 }
 
-// Every function that calls a validate* function reaching validateUIApps is classified in D1's table: ruled by a
+// Every function that calls a validate* function reaching validateUIApps is classified in the table: ruled by a
 // named function that calls a UI-app caller ruling, or exempt with a reason.
 func TestPortalSubjectRuling_EveryUISpecValidationRuled(t *testing.T) {
 	calls := uiSpecCallGraph(t, ".")
@@ -118,7 +118,7 @@ func TestPortalSubjectRuling_EveryUISpecValidationRuled(t *testing.T) {
 	sort.Strings(names)
 	for _, fn := range names {
 		if _, ok := uiSpecSites[fn]; !ok {
-			t.Errorf("%s calls a validator that reaches validateUIApps and is not in the D1 table: rule its callers (ruleUIAppCallers) or exempt it with a reason", fn)
+			t.Errorf("%s calls a validator that reaches validateUIApps and is not in the table: rule its callers (ruleUIAppCallers) or exempt it with a reason", fn)
 		}
 	}
 	for fn, site := range uiSpecSites {

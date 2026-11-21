@@ -25,7 +25,7 @@ import (
 
 const (
 	portalUnitScopeMsg       = "This portal starts runs only in %s and the units below it. Choose a context there."
-	portalNoPinName          = "its pin (this portal has none set)"
+	portalNoPinMsg           = "This portal has no unit pin, so it starts no runs. Ask an administrator to set one."
 	portalUnitUnavailableMsg = "This portal's unit could not be checked right now. Try again shortly."
 	portalUnitInvalidMsg     = "The run_in_under field must name an existing governance unit, by id or exact name."
 )
@@ -59,7 +59,7 @@ func (s *Server) portalUnitRefusal(ctx context.Context, ceiling governanceCeilin
 			return nil
 		}
 		// An issuer portal is registered with a pin or not at all; a row without one fails closed.
-		return runError(http.StatusForbidden, reasonPortalUnitScope, fmt.Sprintf(portalUnitScopeMsg, portalNoPinName))
+		return runError(http.StatusForbidden, reasonPortalUnitScope, portalNoPinMsg)
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {

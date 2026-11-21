@@ -43,7 +43,7 @@ const (
 	admissionStaleMsg        = "The portal's admission rule changed since you read it. Read it again and resubmit."
 	admissionNotPortalMsg    = "Only an issuer portal has an admission rule."
 	admissionGroupOrFlagMsg  = "Name a group, or set portal_managed_admission to say the portal chooses its own users."
-	admissionGroupInvalidMsg = "group: printable ASCII"
+	admissionGroupInvalidMsg = "The group must be a canonical group name: printable ASCII, as registration requires."
 	admissionFlagGroupMsg    = "portal_managed_admission cannot be set while a group is named."
 	admissionClaimReserved   = "That claim name already has a meaning and cannot be matched."
 	admissionClaimHalfMsg    = "A claim match needs both a claim and a value."
@@ -51,7 +51,7 @@ const (
 	admissionExpectedMsg     = "Send expected, the admission rule you read."
 )
 
-// portalRetireView is the reviewer's view of a held retirement.
+// portalRetireView is the approver's view of a held retirement.
 type portalRetireView struct {
 	IssuerKey string `json:"issuer_key"`
 	Issuer    string `json:"issuer"`
@@ -199,12 +199,12 @@ type admissionChangePayload struct {
 	Next        types.PortalAdmission `json:"next"`
 }
 
-// reservedAdmissionClaims are the claim names that already mean something to the exchange (D5).
+// reservedAdmissionClaims are the claim names that already mean something to the exchange.
 var reservedAdmissionClaims = []string{"iss", "sub", "aud", "exp", "iat", "nbf", "jti", "cid", "uid", "scp", "scope", "client_id", "azp", "auth_time", "ver", "groups"}
 
 var admissionClaimNameRE = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 
-// validatePortalAdmission is the admission rules of an issuer portal (D5): a group or the explicit
+// validatePortalAdmission is the admission rules of an issuer portal: a group or the explicit
 // portal-managed flag but not both, and one claim match that is whole, well named and not reserved. It
 // returns the refusal's status, reason and sentence, or ok.
 func validatePortalAdmission(a types.PortalAdmission, groupsClaim string) (status int, reason, msg string, ok bool) {
@@ -240,7 +240,7 @@ func admissionOf(d types.Delegate) types.PortalAdmission {
 	return types.PortalAdmission{Group: d.Group, PortalManaged: d.PortalManagedAdmission, RequiredClaim: d.RequiredClaim}
 }
 
-// admissionView is the reviewer's view of a rule: the claim's value is shown, because the approver must see
+// admissionView is the approver's view of a rule: the claim's value is shown, because the approver must see
 // what they approve. An audit row never carries it (admissionAudit).
 func admissionView(a types.PortalAdmission) map[string]any {
 	v := map[string]any{"group": a.Group, "portal_managed_admission": a.PortalManaged}
