@@ -322,7 +322,7 @@ func TestMachinesDeleteRemovesFolderAndLock(t *testing.T) {
 	if _, err := os.Lstat(other); err != nil {
 		t.Errorf("another machine went with it: %v", err)
 	}
-	if want := "deleted kept machine dev (" + macvm.RunKey(id.String()) + ") from this Mac. The organisation's record of it stays, and still counts against your kept-machine limit, until you run 'wardyn machines delete <name or id>' (find it with 'wardyn machines')\n"; out.String() != want {
+	if want := "deleted kept machine dev (" + macvm.RunKey(id.String()) + ") from this Mac. Its organisation record still counts towards your kept-machine limit. Find it with 'wardyn machines' and request removal with 'wardyn machines delete <name or id>'.\n"; out.String() != want {
 		t.Errorf("printed %q, want %q", out.String(), want)
 	}
 }
