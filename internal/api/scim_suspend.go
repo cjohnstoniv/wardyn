@@ -99,59 +99,6 @@ func (o leaverOrigin) portalLedger(ctx context.Context, st any, id uuid.UUID) (s
 	return led, b.at, true
 }
 
-// errStepSettled is a step another worker finished while this one went to pin its event: nothing is left to write.
-var errStepSettled = errors.New("the step was finished by another worker")
-
-// pinStepEvent fixes the audit event a portal step writes on the step's ledger row, the first attempt's winning
-// whole: its id, time, actor and data. ev is rewritten to what the row holds, and ctx is marked as a replay, so a
-// second writer of the same step, on any replica, writes the same event and adds no row. key names the row the
-// caller read and must carry its id; in a bound suspension tail the pin also requires, in the same statement,
-// that the row belongs to the suspension the tail is bound to. A row a later suspension replaced is
-// store.ErrSuperseded, and nothing is pinned or written. The payload is held sealed under a human actor's audit
-// key (sealPinned); once that key is erased the replay keeps the pinned id and time and writes the caller's own
-// actor and data. Other origins are untouched.
-func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
-	if !o.portal {
-		return ctx, nil
-	}
-	pinner, ok := st.(store.PortalEventPinner)
-	if !ok {
-		return ctx, errors.New("the store cannot pin a portal step's audit event")
-	}
-	payload, err := s.sealPinned(ctx, pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
-	if err != nil {
-		return ctx, err
-	}
-	var bound *time.Time
-	if b, in := suspensionBound(ctx); in && kind == store.JobKindSuspend && b.id == id {
-		bound = &b.at
-	}
-	held, err := pinner.PinPortalEvent(ctx, id, kind, key, uuid.New(), now, payload, bound)
-	if err != nil {
-		return ctx, err
-	}
-	if held.Done {
-		return ctx, errStepSettled
-	}
-	ev.ID, ev.Time = held.ID, held.At
-	p, state, err := s.openPinned(ctx, held.Payload)
-	if err != nil {
-		return ctx, err
-	}
-	switch state {
-	case pinOpen:
-		ev.ActorType, ev.Actor, ev.Data = p.ActorType, p.Actor, p.Data
-	case pinErased:
-		// The first attempt's actor is gone with their key. The event keeps its id and time, which are the first
-		// attempt's, so it is not credited to the retrying caller, who did not act then; their own request has its own
-		// receipt at its own time.
-		ev.ActorType, ev.Actor = types.ActorSystem, pinnedErasedActor
-	default:
-		ev.ActorType, ev.Actor = types.ActorSystem, portalLifecycleActor
-	}
-	return store.WithAuditReplay(ctx), nil
-}
-
 // scimOrigin is the origin of every SCIM suspension and purge: exactly the values the steps named before they
 // took one, so no SCIM audit row or outcome changes.
 func (s *Server) scimOrigin() leaverOrigin {
@@ -995,29 +942,4 @@ func (s *Server) recordAuditStrict(ctx context.Context, ev types.AuditEvent) err
 		return err
 	}
 	return nil
-}
-
-// errAuditHeldBySpool is a portal step's audit row that only this replica's local spool holds: not in the shared
-// table yet, so the step does not settle on it.
-var errAuditHeldBySpool = errors.New("the audit row is held by this replica's spool and is not in the shared audit table yet")
-
-// recordAuditStepEvent writes a step's audit row. A portal step settles in the shared ledger only once the row is
-// in the shared audit table: a row the audit spool took is not enough, since the spool is one replica's, and losing
-// it would leave a done step with no stored receipt for any other replica to write. A recorder that answers
-// audit.ErrSpooled leaves the step pending here; one that answers nil is not trusted either (a sealing recorder can
-// append to the spool alone and answer nil), so the step's finish itself requires the pinned id and time in the
-// audit table, in the statement that marks it done (store.ErrReceiptNotStored). Either way the retry replays the
-// same pinned event, which adds no row once the table has it. Other origins keep recordAuditStrict.
-func (s *Server) recordAuditStepEvent(ctx context.Context, o leaverOrigin, ev types.AuditEvent) error {
-	if !o.portal {
-		return s.recordAuditStrict(ctx, ev)
-	}
-	if s.cfg.Audit == nil {
-		return nil
-	}
-	err := s.cfg.Audit.Record(ctx, ev)
-	if errors.Is(err, audit.ErrSpooled) {
-		return errAuditHeldBySpool
-	}
-	return err
 }
