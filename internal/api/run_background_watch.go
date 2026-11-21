@@ -81,7 +81,11 @@ func (s *Server) backgroundWatchRefusal(ctx context.Context, run types.AgentRun)
 	if rf := s.backgroundWatchProfileRefusal(ctx, run); rf != nil {
 		return rf
 	}
-	if s.macOSDesktopSignInsOff(ctx, run) {
+	// On an issuer portal's opening a roster that cannot be read is its own answer, the retryable 503
+	// (runRefusal.write), never "sign-ins off"; anywhere else it refuses as off.
+	if off, err := s.macOSDesktopSignInsOffRead(ctx, run); err != nil && issuerOpeningIn(ctx) {
+		return runServerError("read the agents' sign-in roster", err)
+	} else if off {
 		return runError(http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
 	}
 	if !run.DesktopForcedViewOnly() {
@@ -226,7 +230,20 @@ func ticketOpensBackgroundWatch(ta ticketActor, app string) bool {
 // here because a ticket outlives them by up to its lifetime, and mayEnterRun, because the sponsor arm passed
 // uiTicketMayEnter. True when it has answered.
 func (s *Server) uiBackgroundDoorRefused(w http.ResponseWriter, r *http.Request, rf *runRefusal, run types.AgentRun, app string, ta ticketActor) bool {
-	if s.uiAppIsInbound(r.Context(), run.ID, app) {
+	// An issuer portal's ticket reads under its opening deadline and tells a policy it could not read from an
+	// app that is not inbound: the retryable 503. wctx carries its ticket so the watch's reads say the same.
+	wctx := r.Context()
+	if !ta.admitBy.IsZero() {
+		wctx = withTicketActor(wctx, ta)
+		_, inbound, err := s.inboundAppRead(wctx, run.ID, app)
+		if err != nil {
+			refuseIssuerOpeningUnread(wctx, w, "inbound apps", uiSessionUnverifiableMsg, err)
+			return true
+		}
+		if inbound {
+			return false
+		}
+	} else if s.uiAppIsInbound(r.Context(), run.ID, app) {
 		return false
 	}
 	if !ticketOpensBackgroundWatch(ta, app) {
@@ -239,7 +256,7 @@ func (s *Server) uiBackgroundDoorRefused(w http.ResponseWriter, r *http.Request,
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return true
 	}
-	refused := s.backgroundWatchRefusal(r.Context(), run)
+	refused := s.backgroundWatchRefusal(wctx, run)
 	if refused == nil {
 		return false
 	}

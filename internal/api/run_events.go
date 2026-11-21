@@ -15,7 +15,9 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -70,6 +72,10 @@ type runEventHub struct {
 	// runEventsWrite for one server, so a test need not wait real seconds; zero
 	// means the constant.
 	beat, hold, write time.Duration
+	// onBatch, when set, runs at the top of each batch of an issuer portal's stream, after its wake: tests only.
+	onBatch func(*streamCut)
+	// onSetup, when set, runs as an issuer portal's stream is set up, after its authorization: tests only.
+	onSetup func()
 	// streams counts each principal's open streams (maxRunEventStreams).
 	streams map[runEventStreamer]int
 	// publish, when set, sends the events this replica itself emits to the others
@@ -284,7 +290,12 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
+	// An issuer portal's stream is bounded from admission: its opening reads are bounded, and its first
+	// re-check is timed from here (runEventsIssuerCut).
+	admitted, admittedAt := time.Now(), s.cfg.Now().UTC()
+	ar, endOpening, issuer := s.runEventsOpening(r)
+	run, ok := s.runEventsOpeningRun(w, ar, id, issuer)
+	endOpening()
 	if !ok {
 		return
 	}
@@ -301,10 +312,20 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	// it is a resume hint, and a full replay is never wrong.
 	after, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	openedAt := s.cfg.Now().UTC()
+	ctx, w, cut, stop, refusal := s.runEventsIssuerCut(r, w, id, principal, admitted, admittedAt)
+	defer stop()
+	if refusal != nil {
+		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg) // with a refusal's headers, not the stream's
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
-	daemon := r.Context()
+	deadline := rc.SetWriteDeadline
+	if cut != nil {
+		deadline = cut.SetWriteDeadline // refused once the stream is cut or ended: the batch stops
+	}
+	daemon := ctx
 	if s.cfg.BaseCtx != nil {
 		daemon = s.cfg.BaseCtx
 	}
@@ -316,10 +337,15 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	s.runEvents.settle(id, run.State)
 	for {
 		evs, wake, ended := s.runEvents.since(id, after)
+		if cut != nil && s.runEvents.onBatch != nil {
+			s.runEvents.onBatch(cut)
+		}
 		// The server sets no write deadline (boot_serve.go), so each batch sets
 		// its own (runEventsWrite) and clears it before the wait: an HTTP/2
 		// deadline resets the stream even while nothing is being written.
-		_ = rc.SetWriteDeadline(time.Now().Add(cmp.Or(s.runEvents.write, runEventsWrite)))
+		if err := deadline(time.Now().Add(cmp.Or(s.runEvents.write, runEventsWrite))); err != nil && cut != nil {
+			return
+		}
 		for _, ev := range evs {
 			data, _ := json.Marshal(ev)
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data); err != nil {
@@ -330,19 +356,25 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 		if err := rc.Flush(); err != nil || ended {
 			return
 		}
-		_ = rc.SetWriteDeadline(time.Time{})
+		if err := deadline(time.Time{}); err != nil && cut != nil {
+			return
+		}
 		select {
 		case <-wake:
 		case <-beat.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r) {
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 				return
 			}
-			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
+			// An issuer portal's stream is checked beside it, by its cut's watch (runEventsIssuerCut).
+			if cut == nil && (s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r)) {
+				return
+			}
+			if cur, err := s.cfg.Store.GetRun(ctx, id); err == nil {
 				s.runEvents.settle(id, cur.State)
 			}
 		case <-hold.C:
 			return
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-daemon.Done():
 			return
@@ -400,4 +432,126 @@ func (s *Server) delegationEndedSince(r *http.Request) bool {
 	}
 	_, err := ds.GetDelegatedTokenByRaw(r.Context(), tok, s.cfg.Now().UTC())
 	return err != nil
+}
+
+// runEventsOpening is r with its authorization reads bounded by supportWatchWait for an issuer portal's
+// stream, and r as it is for any other; the func ends the bound.
+func (s *Server) runEventsOpening(r *http.Request) (*http.Request, func(), bool) {
+	via, delegated := audit.DelegationFrom(r.Context())
+	if _, principal := actorFromRequest(r); !delegated || !issuerPortalPerson(&via, principal) {
+		return r, func() {}, false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), issuerAdmitBound())
+	return r.WithContext(ctx), cancel, true
+}
+
+// runEventsOpeningRun is the read gate (getRunAuthorizedBy) of an event stream's opening. An issuer portal's
+// stream reads its run itself, under the opening's bound: a run that does not exist is the read gate's own 404,
+// and a read that fails or runs out the retryable 503, never a 500.
+func (s *Server) runEventsOpeningRun(w http.ResponseWriter, r *http.Request, id uuid.UUID, issuer bool) (types.AgentRun, bool) {
+	if !issuer {
+		return s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
+	}
+	run, gone, ok := s.issuerOpeningRun(r.Context(), w, id, runEventsUnverifiableMsg)
+	if gone {
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
+	}
+	if !ok || !s.authorizeLoadedRun(w, r, run, s.ownsRunOrSponsorOrAdmin) {
+		return types.AgentRun{}, false
+	}
+	return run, true
+}
+
+// runEventsIssuerCut is the guarded cut over an issuer portal's event stream, and ctx, w and a no-op stop for
+// any other request. The stream ends at its grant's end, and its authority runs beside it, every beat from
+// admitted, each lookup bounded by supportWatchWait: the grant (its portal's revoke included), the person's
+// session cutoff since admittedAt, the person's identity and the portal's pin on the current tree. A check that
+// fails cuts the stream, a blocked write included, so it ends within one beat and the bound of the event
+// (20 s). A setup that took a beat or longer is checked afresh before any event goes, and a refusal of that
+// check, or of the grant's read, is returned to be answered instead of the stream.
+func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runID uuid.UUID, principal string, admitted, admittedAt time.Time) (context.Context, http.ResponseWriter, *streamCut, func(), *uiDialError) {
+	via, delegated := audit.DelegationFrom(r.Context())
+	if !delegated || !issuerPortalPerson(&via, principal) {
+		return r.Context(), w, nil, func() {}, nil
+	}
+	if s.runEvents.onSetup != nil {
+		s.runEvents.onSetup()
+	}
+	every := cmp.Or(s.runEvents.beat, runEventsBeat)
+	bound := time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
+	check := func(lctx context.Context) error {
+		return s.runEventsIssuerHolds(lctx, principal, via, runID, admittedAt)
+	}
+	none := func() {}
+	lctx, lcancel := context.WithTimeout(r.Context(), bound)
+	end, v := s.delegationLive(lctx, via)
+	var err error
+	if v == verdictOK && time.Since(admitted) >= every {
+		err = check(lctx)
+	}
+	lcancel()
+	switch {
+	case errors.Is(err, errRunEventsRunGone): // the run went during setup: the read gate's own 404
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusNotFound, reason: reasonRunNotFound, msg: "run not found"}
+	case v.unavailable() || (err != nil && !errors.Is(err, errRunEventsAuthorityEnded)):
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusServiceUnavailable, reason: uiDeniedReasonRevocationUnavailable, msg: runEventsUnverifiableMsg}
+	case v != verdictOK || err != nil:
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusForbidden, reason: uiDeniedReasonRevoked, msg: runEventsNoLongerAuthorizedMsg}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	cut := newStreamCut(w, time.Now().Add(end.Sub(s.cfg.Now())), cancel)
+	cut.watch(ctx, admitted.Add(every), every, bound, check)
+	return ctx, cut.Writer(w), cut, func() {
+		defer cancel()
+		cut.End()
+	}, nil
+}
+
+// The answers to an issuer portal's stream whose setup check refused or could not be made.
+const (
+	runEventsNoLongerAuthorizedMsg = "This event stream is no longer authorized; open it again"
+	runEventsUnverifiableMsg       = "Could not verify this event stream; try again"
+)
+
+// The answers of an issuer portal's event-stream check that are not a pass: its authority refused, a lookup
+// that could not answer, and the run no longer there. An open stream ends on any of them; an opening answers
+// 403, 503 and 404 for them.
+var (
+	errRunEventsAuthorityEnded = errors.New("api: this event stream is no longer authorized")
+	errRunEventsUnverifiable   = errors.New("api: this event stream's authority could not be read")
+	errRunEventsRunGone        = errors.New("api: this event stream's run no longer exists")
+)
+
+// runEventsIssuerHolds is one tick of an issuer portal's event stream: the person's session cutoff as the
+// keepalive reads it, the grant in portal_grants, and the person's identity and the portal's pin over the run
+// read fresh. Anything but a live answer ends the stream; the reconnect re-authenticates.
+func (s *Server) runEventsIssuerHolds(ctx context.Context, principal string, via types.DelegationVia, runID uuid.UUID, openedAt time.Time) error {
+	if s.cfg.SessionRevocations != nil {
+		revoked, err := s.admittedRevoked(ctx, principal, openedAt)
+		if err != nil {
+			return errRunEventsUnverifiable
+		}
+		if revoked {
+			return errRunEventsAuthorityEnded
+		}
+	}
+	if _, v := s.delegationLive(ctx, via); v.unavailable() {
+		return errRunEventsUnverifiable
+	} else if v != verdictOK {
+		return errRunEventsAuthorityEnded
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return errRunEventsRunGone
+	}
+	if err != nil {
+		return errRunEventsUnverifiable
+	}
+	if de := s.issuerPortalPersonHolds(ctx, principal, via, run); de != nil {
+		if de.status == http.StatusServiceUnavailable {
+			return errRunEventsUnverifiable
+		}
+		return errRunEventsAuthorityEnded
+	}
+	return nil
 }
