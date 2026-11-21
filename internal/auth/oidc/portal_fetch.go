@@ -291,17 +291,21 @@ func portalDiscover(ctx context.Context, client *http.Client, issuer, internalIs
 		}
 		base = internalIssuer
 	}
-	var doc struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
-	}
+	// The document is read by its exact member names: a differently cased spelling is never a substitute for a
+	// missing or contradicting canonical member.
+	var doc map[string]json.RawMessage
 	if err := portalGetJSON(ctx, client, strings.TrimSuffix(base, "/")+"/.well-known/openid-configuration", &doc); err != nil {
 		return portalDiscovery{}, err
 	}
-	if doc.Issuer != issuer {
+	docIssuer, okIssuer := portalClaims(doc).str("issuer")
+	docKeys, okKeys := portalClaims(doc).str("jwks_uri")
+	if !okIssuer || docIssuer != issuer {
 		return portalDiscovery{}, &portalFetchError{cause: portalCauseIssuerMismatch}
 	}
-	keys, err := url.Parse(doc.JWKSURI)
+	if !okKeys {
+		return portalDiscovery{}, &portalFetchError{cause: portalCauseKeysOffOrigin}
+	}
+	keys, err := url.Parse(docKeys)
 	if err != nil || keys.Scheme != "https" || keys.User != nil || keys.Fragment != "" || portalAuthority(keys) != portalAuthority(pub) {
 		return portalDiscovery{}, &portalFetchError{cause: portalCauseKeysOffOrigin}
 	}
@@ -309,7 +313,7 @@ func portalDiscover(ctx context.Context, client *http.Client, issuer, internalIs
 	if internal != nil {
 		fetch.Host = internal.Host
 	}
-	return portalDiscovery{jwksURL: doc.JWKSURI, fetchURL: fetch.String()}, nil
+	return portalDiscovery{jwksURL: docKeys, fetchURL: fetch.String()}, nil
 }
 
 // portalAllowedAuthorities is the set of destinations a verifier may reach: the issuer's authority, or with an

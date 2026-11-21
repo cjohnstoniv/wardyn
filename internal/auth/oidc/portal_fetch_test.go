@@ -492,16 +492,32 @@ func TestPortalFetch_StalledHandshakeClosesSocket(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, ln.Addr().String())
 		}
 	})
-	// The caller gives up long before the handshake deadline; the socket must still be closed by Wardyn.
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	tok := h.token(h.accessClaims()) // prepared first, so the caller's clock starts only once the request does
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	start := time.Now()
-	_, r := h.pi.VerifyDetail(ctx, h.reg, h.token(h.accessClaims()), PortalTokenTypeAccess)
-	if r.Reason != PortalIssuerUnavailable {
-		t.Fatalf("refusal = %+v", r)
+	done := make(chan PortalRefusal, 1)
+	go func() {
+		_, r := h.pi.VerifyDetail(ctx, h.reg, tok, PortalTokenTypeAccess)
+		done <- r
+	}()
+	var srv net.Conn
+	select {
+	case srv = <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the listener")
 	}
-	srv := <-accepted
 	defer srv.Close()
+	start := time.Now()
+	// The caller gives up while the handshake is stalled; the socket must still be closed by Wardyn.
+	cancel()
+	select {
+	case r := <-done:
+		if r.Reason != PortalIssuerUnavailable {
+			t.Fatalf("refusal = %+v", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller did not return after cancelling")
+	}
 	_ = srv.SetReadDeadline(time.Now().Add(3 * time.Second))
 	buf := make([]byte, 4096)
 	for {
@@ -514,5 +530,45 @@ func TestPortalFetch_StalledHandshakeClosesSocket(t *testing.T) {
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("the socket closed after %v, want about the 300 ms deadline", d)
+	}
+}
+
+func TestPortalDiscovery_RequiresExactMembers(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string // %[1]s is the issuer, %[2]s the keys address
+		want string
+	}{
+		{"control", `{"issuer":%[1]q,"jwks_uri":%[2]q}`, ""},
+		{"canonical issuer missing, Issuer present", `{"Issuer":%[1]q,"jwks_uri":%[2]q}`, portalCauseIssuerMismatch},
+		{"canonical issuer wrong, Issuer right", `{"issuer":"https://other.example.org","Issuer":%[1]q,"jwks_uri":%[2]q}`, portalCauseIssuerMismatch},
+		{"canonical issuer wrong, ISSUER right after", `{"issuer":"https://other.example.org","ISSUER":%[1]q,"jwks_uri":%[2]q}`, portalCauseIssuerMismatch},
+		{"issuer not a string", `{"issuer":[%[1]q],"jwks_uri":%[2]q}`, portalCauseIssuerMismatch},
+		{"canonical jwks_uri missing, JWKS_URI present", `{"issuer":%[1]q,"JWKS_URI":%[2]q}`, portalCauseKeysOffOrigin},
+		{"canonical jwks_uri off origin, Jwks_Uri right", `{"issuer":%[1]q,"jwks_uri":"https://other.example.org/keys","Jwks_Uri":%[2]q}`, portalCauseKeysOffOrigin},
+		{"jwks_uri not a string", `{"issuer":%[1]q,"jwks_uri":5}`, portalCauseKeysOffOrigin},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+			body := fmt.Sprintf(c.doc, h.reg.Issuer, h.reg.Issuer+"/keys")
+			h.idp.set(func(f *fakeIdP) {
+				f.override = func(w http.ResponseWriter, r *http.Request) bool {
+					if strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
+						_, _ = w.Write([]byte(body))
+						return true
+					}
+					return false
+				}
+			})
+			if c.want == "" {
+				h.mustAdmit(h.token(h.accessClaims()))
+				return
+			}
+			h.wantUnavailable(h.token(h.accessClaims()), c.want)
+			if _, keys := h.idp.hits(); keys != 0 {
+				t.Fatal("keys were fetched from a document that failed the exact-member rule")
+			}
+		})
 	}
 }

@@ -364,3 +364,108 @@ func TestPortalFreshness_SignedEndIsEarlierOfIatPlusMaxAgeAndExp(t *testing.T) {
 		})
 	}
 }
+
+func TestPortalProfile_ListClaimsNeedEveryElementAString(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	for name, scp := range map[string]any{
+		"null element":   []any{"wardyn.run", nil},
+		"number element": []any{"wardyn.run", 5},
+		"object element": []any{"wardyn.run", map[string]string{"a": "b"}},
+		"null only":      []any{nil},
+	} {
+		t.Run("scp "+name, func(t *testing.T) {
+			c := h.accessClaims()
+			c["scp"] = scp
+			h.wantRefusal(h.token(c), SubjectTokenScopeMissing)
+		})
+	}
+	for name, aud := range map[string]any{"null element": []any{nil}, "one null and the audience": []any{"api://wardyn", nil}} {
+		t.Run("aud "+name, func(t *testing.T) {
+			c := h.accessClaims()
+			c["aud"] = aud
+			h.wantRefusal(h.token(c), SubjectTokenAudienceMismatch)
+		})
+	}
+	c := h.accessClaims()
+	c["scp"] = []any{"wardyn.run", "extra"}
+	h.mustAdmit(h.token(c))
+}
+
+func TestPortalProfile_IDTokenTypHeaderPresence(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	reg := h.idRegistration()
+	for name, typ := range map[string]any{"empty string": "", "boolean": true, "number": 5, "lower case": "jwt", "other": "at+jwt"} {
+		t.Run(name, func(t *testing.T) {
+			_, r := h.verifyReg(reg, h.mint("k1", 0, h.idClaims(), map[jose.HeaderKey]any{jose.HeaderType: typ}))
+			if r.Reason != SubjectTokenNotIDToken {
+				t.Fatalf("typ %v: %+v, want a refusal as not an ID token", typ, r)
+			}
+		})
+	}
+	if _, r := h.verifyReg(reg, h.token(h.idClaims())); !r.OK() {
+		t.Fatalf("an absent typ was refused: %+v", r)
+	}
+	if _, r := h.verifyReg(reg, h.mint("k1", 0, h.idClaims(), map[jose.HeaderKey]any{jose.HeaderType: "JWT"})); !r.OK() {
+		t.Fatalf("typ JWT was refused: %+v", r)
+	}
+	// The access-token profile never reads the header.
+	h.mustAdmit(h.mint("k1", 0, h.accessClaims(), map[jose.HeaderKey]any{jose.HeaderType: true}))
+	h.mustAdmit(h.mint("k1", 0, h.accessClaims(), map[jose.HeaderKey]any{jose.HeaderType: "at+jwt"}))
+}
+
+func TestPortalAdmission_IDTokenEmailDomain(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	reg := h.idRegistration()
+	reg.EmailDomains = []string{"example.org"}
+	with := func(mutate func(c map[string]any)) string {
+		c := h.idClaims()
+		mutate(c)
+		return h.token(c)
+	}
+	cases := []struct {
+		name   string
+		mutate func(c map[string]any)
+		want   string
+	}{
+		{"address in the list", func(c map[string]any) {}, ""},
+		{"domain in another case", func(c map[string]any) { c["email"] = "Alice@EXAMPLE.org" }, ""},
+		{"address out of the list", func(c map[string]any) { c["email"] = "alice@other.example" }, DenialEmailDomain},
+		{"subdomain is not the domain", func(c map[string]any) { c["email"] = "alice@sub.example.org" }, DenialEmailDomain},
+		{"look-alike non-ASCII domain", func(c map[string]any) { c["email"] = "alice@examplе.org" }, DenialEmailDomain},
+		{"no email", func(c map[string]any) { delete(c, "email") }, DenialEmailDomain},
+		{"email not a string", func(c map[string]any) { c["email"] = 5 }, DenialEmailDomain},
+		{"email_verified absent", func(c map[string]any) { delete(c, "email_verified") }, DenialEmailVerifiedAbsent},
+		{"email_verified false", func(c map[string]any) { c["email_verified"] = false }, DenialEmailUnverified},
+		{"email_verified as a string", func(c map[string]any) { c["email_verified"] = "true" }, DenialEmailUnverified},
+		{"email_verified a number", func(c map[string]any) { c["email_verified"] = 1 }, DenialEmailUnverified},
+		{"email_verified null", func(c map[string]any) { c["email_verified"] = nil }, DenialEmailUnverified},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			subj, r := h.verifyReg(reg, with(c.mutate))
+			if r.Reason != c.want {
+				t.Fatalf("refusal = %+v, want %q", r, c.want)
+			}
+			if c.want == "" && (subj.Email != "alice@example.org" && c.name == "address in the list" || !subj.EmailVerified) {
+				t.Fatalf("subject = %+v", subj)
+			}
+			if c.want != "" && r.Class != PortalRefusedAdmission {
+				t.Fatalf("class = %v, want an admission refusal", r.Class)
+			}
+		})
+	}
+	// No rule configured: neither field is needed.
+	none := h.idRegistration()
+	if _, r := h.verifyReg(none, with(func(c map[string]any) { delete(c, "email_verified"); c["email"] = "x@elsewhere.test" })); !r.OK() {
+		t.Fatalf("a portal with no domain list refused on email: %+v", r)
+	}
+	// The access-token profile has no verified email and never reads these claims, even with a list set.
+	acc := h.reg
+	acc.EmailDomains = []string{"example.org"}
+	c := h.accessClaims()
+	c["email"], c["email_verified"] = "x@elsewhere.test", false
+	subj, r := h.verifyReg(acc, h.token(c))
+	if !r.OK() || subj.Email != "" || subj.EmailVerified {
+		t.Fatalf("access-token subject = %+v, %+v: the email field must not be read", subj, r)
+	}
+}

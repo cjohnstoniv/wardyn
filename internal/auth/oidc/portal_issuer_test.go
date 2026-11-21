@@ -69,6 +69,12 @@ func portalGuardViolations(t *testing.T, name string, src any) []string {
 			if id, ok := x.X.(*ast.Ident); ok && x.Sel.Name == "Config" && configPkg[id.Name] {
 				okSel[x.Sel] = true
 			}
+		case *ast.AssignStmt:
+			for _, lhs := range x.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Now" {
+					out = append(out, name+": go-oidc Now assignment at "+fset.Position(sel.Pos()).String())
+				}
+			}
 		case *ast.KeyValueExpr:
 			if id, ok := x.Key.(*ast.Ident); ok && id.Name == "Now" {
 				out = append(out, name+": go-oidc Now field at "+fset.Position(id.Pos()).String())
@@ -110,20 +116,27 @@ func TestPortalIssuer_GuardNamesNoConsoleConfig(t *testing.T) {
 	planted := `package x
 import gooidc "github.com/coreos/go-oidc/v3/oidc"
 import other "example.com/other"
+import "time"
 var ok = &gooidc.Config{SkipClientIDCheck: true}
+var clock = time.Now
+func okNow() time.Time { n := time.Now(); return n }
 var bad1 = &gooidc.Config{Now: nil, SkipExpiryCheck: true}
 type bad2 Config
 var bad3 other.Config
 var cfg int
 func f() { admit(); deriveLogin() }
+func g(c *gooidc.Config) { c.Now = nil }
 `
 	got := portalGuardViolations(t, "planted.go", planted)
-	for _, want := range []string{"Now", "SkipExpiryCheck", "Config at planted.go:6", "Config at planted.go:7", "cfg", "admit", "deriveLogin"} {
+	for _, want := range []string{"go-oidc Now field", "go-oidc Now assignment at planted.go:13", "SkipExpiryCheck", "Config at planted.go:9", "Config at planted.go:10", "cfg", "admit", "deriveLogin"} {
 		if !slices.ContainsFunc(got, func(s string) bool { return strings.Contains(s, want) }) {
 			t.Errorf("planted source: no violation mentions %q in %v", want, got)
 		}
 	}
-	if slices.ContainsFunc(got, func(s string) bool { return strings.Contains(s, "planted.go:4") }) {
+	// The clock seams, time.Now and a Wardyn clock field, are not flagged.
+	if slices.ContainsFunc(got, func(s string) bool {
+		return strings.Contains(s, "planted.go:5") || strings.Contains(s, "planted.go:6") || strings.Contains(s, "planted.go:7")
+	}) {
 		t.Errorf("a go-oidc Config literal with no weakening field was flagged: %v", got)
 	}
 }

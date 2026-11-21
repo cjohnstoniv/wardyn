@@ -70,7 +70,33 @@ func (c portalClaims) str(name string) (string, bool) {
 	return s, true
 }
 
-// strList reads a claim that must be a JSON array of strings.
+// strictStrList reads a claim that must be a JSON array whose every element is a JSON string: a null or any
+// other element makes the whole claim unusable.
+func (c portalClaims) strictStrList(name string) ([]string, bool) {
+	raw, ok := c[name]
+	if !ok || len(raw) == 0 || raw[0] != '[' {
+		return nil, false
+	}
+	var elems []json.RawMessage
+	if json.Unmarshal(raw, &elems) != nil {
+		return nil, false
+	}
+	out := make([]string, 0, len(elems))
+	for _, e := range elems {
+		if len(e) == 0 || e[0] != '"' {
+			return nil, false
+		}
+		var s string
+		if json.Unmarshal(e, &s) != nil {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// strList reads a claim that must be a JSON array of strings, tolerantly: an element that is not a string
+// decodes as empty. Group admission uses it, and drops empty names.
 func (c portalClaims) strList(name string) ([]string, bool) {
 	raw, ok := c[name]
 	if !ok || len(raw) == 0 || raw[0] != '[' {
@@ -88,7 +114,7 @@ func (c portalClaims) audience() ([]string, bool) {
 	if s, ok := c.str("aud"); ok {
 		return []string{s}, true
 	}
-	return c.strList("aud")
+	return c.strictStrList("aud")
 }
 
 // date reads a NumericDate claim. ok is false for a missing claim, a string, a non-finite or negative number,
@@ -123,7 +149,7 @@ func (reg PortalRegistration) checkAccessToken(c portalClaims) (string, string) 
 	if cid, ok := c.str("cid"); !ok || cid != reg.ClientID {
 		return "", SubjectTokenCIDMismatch
 	}
-	if scp, ok := c.strList("scp"); !ok || !portalHasAll(scp, reg.RequiredScopes) {
+	if scp, ok := c.strictStrList("scp"); !ok || !portalHasAll(scp, reg.RequiredScopes) {
 		return "", SubjectTokenScopeMissing
 	}
 	if aud, ok := c.audience(); !ok || len(aud) != 1 || aud[0] != reg.Audience {
@@ -138,7 +164,7 @@ func (reg PortalRegistration) checkAccessToken(c portalClaims) (string, string) 
 
 // checkIDToken applies the ID-token profile's rules, with its absence checks as a second guard, and returns the
 // person id.
-func (reg PortalRegistration) checkIDToken(c portalClaims, headerTyp string) (string, string) {
+func (reg PortalRegistration) checkIDToken(c portalClaims, headerTyp portalHeaderTyp) (string, string) {
 	if aud, ok := c.audience(); !ok || len(aud) != 1 || aud[0] != reg.ClientID {
 		return "", SubjectTokenAudienceMismatch
 	}
@@ -147,7 +173,7 @@ func (reg PortalRegistration) checkIDToken(c portalClaims, headerTyp string) (st
 			return "", SubjectTokenAudienceMismatch
 		}
 	}
-	if headerTyp != "" && headerTyp != "JWT" {
+	if headerTyp.present && (!headerTyp.isString || headerTyp.value != "JWT") {
 		return "", SubjectTokenNotIDToken
 	}
 	for _, name := range []string{"cid", "scp", "scope", "client_id"} {
