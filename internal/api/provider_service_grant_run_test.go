@@ -34,7 +34,9 @@ func resolvedToken(t *testing.T, body map[string]any) string {
 	return strings.TrimPrefix(v, "Bearer ")
 }
 
-func TestServiceGrant_PresetRunUnderServiceIdentity_NoCredentialPut_PG(t *testing.T) {
+// The direct-helper form of the preset launch test, kept for diagnosis: the in-memory run, dispatched and
+// resolved by the helpers alone.
+func TestServiceGrant_RunUnderServiceIdentityDirect_NoCredentialPut(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	plan, env, _, ok := f.dispatch(t)
 	if !ok || len(plan.injections) != 1 {
@@ -58,7 +60,8 @@ func TestServiceGrant_PresetRunUnderServiceIdentity_NoCredentialPut_PG(t *testin
 	}
 }
 
-func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMint_PG(t *testing.T) {
+// The direct-helper form of the first launch test, kept for diagnosis.
+func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMintDirect(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	if f.idp.count() != 0 || f.cached() {
 		t.Fatal("setup: a mint ran before the launch")
@@ -246,67 +249,6 @@ func TestServiceGrant_NotListedRefused(t *testing.T) {
 	code, body := g.svcResolve(plan)
 	if code != http.StatusForbidden || body["reason"] != reasonServiceGrantNotListed {
 		t.Fatalf("resolve after removal = %d %v, want 403 %s", code, body, reasonServiceGrantNotListed)
-	}
-}
-
-// pendingResolve starts a resolve whose mint the identity provider holds, runs edit, then releases it.
-func (f *svcFix) pendingResolve(plan dispatchLLMPlan, edit func()) (int, map[string]any) {
-	f.srv.dropServiceGrantCache(f.uid)
-	release := make(chan struct{})
-	f.idp.respond = func(int, svcReq) svcAnswer { return svcAnswer{Status: 200, Body: svcOK(9, 3600).Body, Block: release} }
-	before := f.idp.count()
-	type res struct {
-		code int
-		body map[string]any
-	}
-	out := make(chan res, 1)
-	go func() { c, b := f.svcResolve(plan); out <- res{c, b} }()
-	for f.idp.count() == before {
-		time.Sleep(time.Millisecond)
-	}
-	edit()
-	close(release)
-	r := <-out
-	return r.code, r.body
-}
-
-func TestServiceGrant_EditDuringPendingResolveReturnsNoNewBearer_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	plan, _, _, _ := f.dispatch(t)
-	code, body := f.pendingResolve(plan, func() {
-		f.setRow(func(p *types.ModelProvider) {
-			g := *p.OIDC.ServiceGrant
-			g.Audience = "api://other"
-			o := *p.OIDC
-			o.ServiceGrant = &g
-			p.OIDC = &o
-		})
-	})
-	if code != http.StatusForbidden || body["reason"] != reasonScopeChanged {
-		t.Fatalf("resolve across an edit = %d %v, want 403 scope_changed", code, body)
-	}
-	if v, _ := body["value"].(string); v != "" || strings.Contains(f.auditAll(), svcToken(9)) {
-		t.Error("a bearer made under the old settings was returned or audited")
-	}
-}
-
-func TestServiceGrant_ListRemovalDuringPendingResolveRefused_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	plan, _, _, _ := f.dispatch(t)
-	code, body := f.pendingResolve(plan, func() {
-		f.setRow(func(p *types.ModelProvider) {
-			g := *p.OIDC.ServiceGrant
-			g.ServiceIdentities = []string{"service:other"}
-			o := *p.OIDC
-			o.ServiceGrant = &g
-			p.OIDC = &o
-		})
-	})
-	if code != http.StatusForbidden || body["reason"] != reasonServiceGrantNotListed {
-		t.Fatalf("resolve across a list removal = %d %v, want 403 %s", code, body, reasonServiceGrantNotListed)
-	}
-	if v, _ := body["value"].(string); v != "" {
-		t.Error("a bearer came back with the refusal")
 	}
 }
 
