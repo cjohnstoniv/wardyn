@@ -80,8 +80,8 @@ func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMintDirect(t *testing.T) {
 // The proxy's resolves and the refresher's passes across one token's life, run in phases: the sandbox's first
 // request at 0, 2.5 and 4.9 minutes after the first mint, crossed with the refresher's passes at 0, 30 and 59
 // seconds into each minute, and once with 16 slow rows queued ahead of the healthy one in the refresher. The
-// proxy side follows the injector's own rule (internal/egress/proxy/inject.go:269-273): a sandbox request reuses
-// the installed header until five minutes before the lease, then resolves again.
+// proxy side follows the injector's own rule (proxy.injector.resolveCtx with injectRefreshMargin): a sandbox
+// request reuses the installed header until five minutes before the lease, then resolves again.
 func TestServiceGrant_RunSpansTokenExpiry(t *testing.T) {
 	for _, first := range []time.Duration{0, 150 * time.Second, 294 * time.Second} {
 		for _, pass := range []time.Duration{0, 30 * time.Second, 59 * time.Second} {
@@ -97,11 +97,16 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	issued := map[string]time.Time{}
 	var mu sync.Mutex
 	release := make(chan struct{})
+	entered := make(chan struct{}, 16) // one per slow row's token request, sent before it blocks
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	f.idp.mu.Lock()
 	f.idp.respond = func(n int, r svcReq) svcAnswer {
 		if strings.Contains(r.URL, "hang-") {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
 			return svcAnswer{Status: 200, Block: release}
 		}
 		mu.Lock()
@@ -161,6 +166,13 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 					t.Error("the stuck pass did not end after its providers were released")
 				}
 			})
+			// Saturated before the clock moves on: every worker is inside a slow row's token request.
+			for w := range serviceGrantPassWorkers {
+				svcAwait(t, entered, fmt.Sprintf("pass worker %d to enter a slow row", w+1))
+			}
+			if n := f.svcHealthyRequests(); n != 1 {
+				t.Fatalf("token requests for the healthy row with every worker held = %d, want only dispatch's", n)
+			}
 			continue
 		case !ev.resolve:
 			f.srv.serviceGrantPass(context.Background())
@@ -201,12 +213,7 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	if len(handed) != 2 {
 		t.Fatalf("tokens handed to the proxy = %d, want the first and its replacement", len(handed))
 	}
-	var healthy int
-	for _, r := range f.idp.requests() {
-		if strings.Contains(r.URL, "//idp.example.test") {
-			healthy++
-		}
-	}
+	healthy := f.svcHealthyRequests()
 	var rows int
 	for _, ev := range f.mintRows() {
 		if strings.Contains(string(ev.Data), `"provider_uid":"`+uid+`"`) {
@@ -219,6 +226,17 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	if resolves < 2 {
 		t.Fatalf("the proxy resolved %d times, want at least the first and the renewal", resolves)
 	}
+}
+
+// svcHealthyRequests counts the token requests sent for the fixture's own row.
+func (f *svcFix) svcHealthyRequests() int {
+	var n int
+	for _, r := range f.idp.requests() {
+		if strings.Contains(r.URL, "//idp.example.test") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestServiceGrant_TwoRunsAnHourApart(t *testing.T) {
@@ -236,29 +254,6 @@ func TestServiceGrant_TwoRunsAnHourApart(t *testing.T) {
 	code, second := f.svcResolve(plan2)
 	if code != http.StatusOK || resolvedToken(t, second) == resolvedToken(t, first) {
 		t.Fatalf("second run's resolve = %d %v, want a new token", code, second)
-	}
-}
-
-// The proxy renews a header five minutes before its credential expires; here the renewal is its resolve at that
-// moment, which must return a token that outlives the old one.
-func TestServiceGrant_ProxyRenewsAcrossExpiry(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	plan, _, _, _ := f.dispatch(t)
-	code, first := f.svcResolve(plan)
-	if code != http.StatusOK {
-		t.Fatalf("first resolve: %d", code)
-	}
-	ms, _ := first["credential_expires_at"].(float64)
-	exp := time.UnixMilli(int64(ms))
-	f.clock.Advance(exp.Add(-5 * time.Minute).Sub(f.clock.Now())) // the proxy's renewal moment
-	code, renewed := f.svcResolve(plan)
-	if code != http.StatusOK || resolvedToken(t, renewed) == resolvedToken(t, first) {
-		t.Fatalf("renewal = %d %v, want a replacement token", code, renewed)
-	}
-	ms2, _ := renewed["credential_expires_at"].(float64)
-	exp2 := time.UnixMilli(int64(ms2))
-	if !exp2.After(exp) {
-		t.Errorf("the renewed credential expires %v, not after the old %v", exp2, exp)
 	}
 }
 
