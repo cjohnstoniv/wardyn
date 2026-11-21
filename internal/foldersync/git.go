@@ -46,9 +46,29 @@ type GitSent struct {
 
 // laptopGit runs git in the laptop's synced directory.
 func laptopGit(ctx context.Context, root string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
-	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	return gitIn(ctx, root, laptopEnv(), args...)
+}
+
+// laptopEnv is the laptop's own environment, as its git sees it.
+func laptopEnv() []string {
+	return append(cliutil.ScrubChildEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+}
+
+// cleanGitEnv is an environment in which git reads no configuration but the repository's own, no
+// replace ref, no hook and nothing from a GIT_* variable the laptop set: home is an empty directory.
+func cleanGitEnv(home string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_NO_REPLACE_OBJECTS=1", "GIT_TERMINAL_PROMPT=0"}
+	if v := os.Getenv("SYSTEMROOT"); v != "" {
+		env = append(env, "SYSTEMROOT="+v)
+	}
+	return env
+}
+
+// gitIn runs git in dir with exactly env.
+func gitIn(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -57,13 +77,14 @@ func laptopGit(ctx context.Context, root string, args ...string) (string, error)
 	return strings.TrimSpace(out.String()), nil
 }
 
-// laptopGitNames runs git in the laptop's synced directory and hands visit each NUL-terminated name it
+// laptopGitNames runs git in dir (with stdin as its input, if any) and hands visit each NUL-terminated name it
 // prints, as it prints it, so a long history is never held whole. A visit error stops git and is returned.
-func laptopGitNames(ctx context.Context, root string, visit func(name string) error, args ...string) error {
+func laptopGitNames(ctx context.Context, root string, env []string, stdin io.Reader, visit func(name string) error, args ...string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	cmd.Env = append(cliutil.ScrubChildEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = env
+	cmd.Stdin = stdin
 	var errb strings.Builder
 	cmd.Stderr = &errb
 	out, err := cmd.StdoutPipe()
@@ -152,29 +173,19 @@ func GitCheck(ctx context.Context, sy *Syncer, root string) error {
 // gets a fresh repository with the branch checked out over the synced files; one
 // that has a repository gets the branch as refs/remotes/laptop/<branch>.
 func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID, root string) error {
-	branch, err := laptopGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil {
-		return errors.New("--git needs a branch checked out on this computer (HEAD is detached)")
-	}
-	if !syncGitBranch.MatchString(branch) || strings.Contains(branch, "..") {
-		return fmt.Errorf("--git does not send the branch name %s: use letters, digits, '.', '_', '-' and '/'", Shown(branch))
-	}
-	head, err := laptopGit(ctx, root, "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
-	if sent := sy.State.GitSent; sent != nil && *sent == (GitSent{Branch: branch, Commit: head}) {
-		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
-		return nil
-	}
 	tmp, err := os.CreateTemp(filepath.Dir(sy.StateFile), "laptop-*.bundle")
 	if err != nil {
 		return err
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
-	if err := makeCheckedBundle(ctx, root, branch, head, tmp.Name(), sy.Opts.OrgDeny); err != nil {
+	branch, head, sent, err := bundleCurrentBranch(ctx, root, tmp.Name(), sy.State.GitSent, sy.Opts.OrgDeny)
+	if err != nil {
 		return err
+	}
+	if sent {
+		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
+		return nil
 	}
 	remote := syncGitBundlePath(runID, "laptop")
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
@@ -196,6 +207,32 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	return nil
 }
 
+// bundleCurrentBranch reads the branch and head to send and writes their checked bundle to path, unless
+// already is that branch at that head (sent is then true and nothing is written). A branch that moves
+// while its bundle is made is read and bundled once more; a second move is the caller's error.
+func bundleCurrentBranch(ctx context.Context, root, path string, already *GitSent, orgDeny []string) (branch, head string, sent bool, err error) {
+	for try := 0; ; try++ {
+		branch, err = laptopGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+		if err != nil {
+			return "", "", false, errors.New("--git needs a branch checked out on this computer (HEAD is detached)")
+		}
+		if !syncGitBranch.MatchString(branch) || strings.Contains(branch, "..") {
+			return "", "", false, fmt.Errorf("--git does not send the branch name %s: use letters, digits, '.', '_', '-' and '/'", Shown(branch))
+		}
+		if head, err = laptopGit(ctx, root, "rev-parse", "HEAD"); err != nil {
+			return "", "", false, err
+		}
+		if already != nil && *already == (GitSent{Branch: branch, Commit: head}) {
+			return branch, head, true, nil
+		}
+		err = makeCheckedBundle(ctx, root, branch, head, path, orgDeny)
+		var moved *branchMovedError
+		if !errors.As(err, &moved) || try > 0 {
+			return branch, head, false, err
+		}
+	}
+}
+
 // makeCheckedBundle writes branch's bundle to path and refuses it unless it carries exactly head and nothing
 // the organisation's patterns leave out. The branch name can move at any moment, so the bundle is made
 // first, its one advertised tip is read back from the file itself, and the history scanned is that
@@ -214,10 +251,46 @@ func makeCheckedBundle(ctx context.Context, root, branch, head, path string, org
 		return fmt.Errorf("--git did not send %s: the bundle does not advertise exactly %s (%s)", Shown(branch), ref, Shown(heads))
 	}
 	if tip != head {
-		return fmt.Errorf("--git did not send %s: it moved from %s to %s while the bundle was made; run the sync again", Shown(branch), head[:12], tip[:12])
+		return &branchMovedError{fmt.Sprintf("--git did not send %s: it moved from %s to %s while the bundle was made; run the sync again", Shown(branch), head[:12], tip[:12])}
 	}
-	return checkHistoryAllowed(ctx, root, branch, tip, orgDeny)
+	if len(orgDeny) == 0 {
+		return nil
+	}
+	if shallow, _ := laptopGit(ctx, root, "rev-parse", "--is-shallow-repository"); shallow == "true" {
+		return fmt.Errorf("--git did not send %s: this repository is a shallow clone, so its history cannot be checked against your organisation's sync patterns; run git fetch --unshallow and send again", Shown(branch))
+	}
+	return checkBundleAllowed(ctx, path, branch, tip, orgDeny)
 }
+
+// checkBundleAllowed reads the bundle at path, the file that is sent, in an empty repository of its own,
+// so nothing in the laptop's checkout (a replace ref, a graft, a config) changes what is inspected: the
+// scan sees the commits the bundle's pack carries. The repository is removed on every path.
+func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny []string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "wardyn-bundle-scan-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	env := cleanGitEnv(dir)
+	repo := filepath.Join(dir, "scan.git")
+	if _, err := gitIn(ctx, dir, env, "init", "--bare", "-q", repo); err != nil {
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if _, err := gitIn(ctx, repo, env, "-c", "core.hooksPath="+os.DevNull, "fetch", "-q", "--no-tags", abs, ref+":"+ref); err != nil {
+		return fmt.Errorf("--git did not send %s: its bundle could not be read back to check its history: %w", Shown(branch), err)
+	}
+	return checkHistoryAllowed(ctx, repo, branch, tip, orgDeny)
+}
+
+// branchMovedError is a branch that moved between the head SendGit read and the bundle's tip.
+type branchMovedError struct{ msg string }
+
+func (e *branchMovedError) Error() string { return e.msg }
 
 // HistoryDeniedError is --git refusing a branch whose history holds a path the
 // organisation's sync patterns leave out. A bundle carries every commit's files
@@ -237,8 +310,8 @@ func (e *HistoryDeniedError) Error() string {
 // Every path in any commit's tree was added by some commit against a parent (or sits in the root), so the
 // additions of each commit, a merge against each parent, name them all, a removed or renamed-away one
 // included (--no-renames keeps a rename as a delete and an add); the tip's tree is read as a second net.
-// log.diffMerges and log.showRoot are pinned because the user's git config changes what a merge or the
-// root lists.
+// The listing is plumbing, rev-list into diff-tree, because git log prints what a user's config asks it
+// to (a signature's text, a merge's format) among the names.
 func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny []string) error {
 	if len(orgDeny) == 0 {
 		return nil
@@ -262,11 +335,30 @@ func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny 
 		}
 		return nil
 	}
-	if err := laptopGitNames(ctx, root, visit, "-c", "log.diffMerges=separate", "-c", "log.showRoot=true",
-		"log", "-z", "--format=", "--name-only", "-m", "--root", "--diff-filter=A", "--no-renames", tip, "--"); err != nil {
+	env := cleanGitEnv(os.TempDir())
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rev := exec.CommandContext(ctx, "git", "-C", root, "rev-list", tip, "--")
+	rev.Env = env
+	var revErr strings.Builder
+	rev.Stderr = &revErr
+	commits, err := rev.StdoutPipe()
+	if err != nil {
 		return err
 	}
-	return laptopGitNames(ctx, root, visit, "ls-tree", "-r", "-z", "--name-only", tip, "--")
+	if err := rev.Start(); err != nil {
+		return err
+	}
+	if err := laptopGitNames(ctx, root, env, commits, visit, "diff-tree", "--stdin", "-z", "-r", "-m", "--root", "--no-renames",
+		"--ignore-submodules=none", "--diff-filter=A", "--name-only", "--no-commit-id"); err != nil {
+		cancel()
+		_ = rev.Wait()
+		return err
+	}
+	if err := rev.Wait(); err != nil {
+		return fmt.Errorf("git rev-list: %w: %s", err, Shown(strings.TrimSpace(revErr.String())))
+	}
+	return laptopGitNames(ctx, root, env, nil, visit, "ls-tree", "-r", "-z", "--name-only", tip, "--")
 }
 
 // sendGitIncomplete marks a .git a send is still setting up: it is made before
