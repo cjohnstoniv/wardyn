@@ -150,9 +150,7 @@ func newSinkReceivers(t *testing.T) (*sinkReceivers, string) {
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		rc.mu.Lock()
-		for _, line := range bytes.Split(bytes.TrimSpace(body), []byte("\n")) {
-			rc.webhook = append(rc.webhook, line)
-		}
+		rc.webhook = append(rc.webhook, bytes.Split(bytes.TrimSpace(body), []byte("\n"))...)
 		rc.mu.Unlock()
 	}))
 	t.Cleanup(hook.Close)
