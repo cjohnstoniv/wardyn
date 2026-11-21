@@ -2260,9 +2260,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Subdomains are **not** included: `login.corp.example` never covers `x.login.corp.example` or `corp.example`.
 - `WARDYN_DAEMON_NO_PROXY` matches as `x/net/http/httpproxy` does: `corp.example` covers it and its subdomains, `.corp.example` or `*.corp.example` only the subdomains, `*` all.
 - Boot refuses an entry that is an IP address, a numeric name such as `127.1`, `localhost`, or not a host name.
-- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a link-local endpoint.
+- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a link-local endpoint. It is compared in its IDNA-ASCII form, so a Unicode spelling of either side matches; one that does not convert refuses boot.
 - A refusal names the variable and the entry's position, never its text.
-- Boot also refuses with no proxy, or an `HTTPS_PROXY` that is not usable, so a listed host is never sent direct.
+- Boot also refuses with no proxy, or an `HTTPS_PROXY` that is not usable, or a proxy port outside 1 to 65535, so a listed host is never sent direct.
 - Every mode that installs the daemon transport refuses too, key rotation, rewrap and recovery rehearsal included, as for a malformed `WARDYN_DAEMON_PROXY_URL`.
 
 ### `WARDYN_DEMO_VIDEO_BASE_URL`
