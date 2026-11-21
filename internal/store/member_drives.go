@@ -189,66 +189,18 @@ func (s PG) BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (type
 	return s.beginMemberDriveDelete(ctx, "", id)
 }
 
-// ErrKeptDriveAttachable is BeginKeptDriveReclaim's answer for a kept drive that one of the owner's other runs
-// may have attached: the drive stays, and no tombstone is left on it.
-var ErrKeptDriveAttachable = errors.New("store: a later run of the owner may have attached the kept drive")
-
-// keptDriveUnattachedSQL is the condition, over a user_drives row d, that the run the drive was kept from
-// exists and no run of the owner other than it was created at or after the moment it ended. That is when the
-// drive became offered to the owner's other runs (reachableDrive.held), so no run created before it could
-// attach the drive and one created after it may have written to it. A drive with no run behind it is not
-// unattached: nothing then says otherwise. The owner compares as MemberDriveOwnerStarting does, so it never
-// misses the owner's own runs.
-const keptDriveUnattachedSQL = `EXISTS (SELECT 1 FROM agent_runs k WHERE k.id = d.kept_from_run)
-	  AND NOT EXISTS (SELECT 1 FROM agent_runs k JOIN agent_runs r ON r.id <> k.id
-	      AND (btrim(r.created_by) = d.owner_subject OR lower(btrim(r.created_by)) = d.owner_subject)
-	      AND r.created_at >= k.ended_at
-	    WHERE k.id = d.kept_from_run)`
-
-// beginKeptDriveReclaimSQL is beginMemberDriveDeleteSQL for any owner, for a drive a run kept, with
-// keptDriveUnattachedSQL as one more condition on the tombstone. The condition and the tombstone are one
-// statement, so a cleanup that was decided long before it runs cannot delete a drive a later run was handed:
-// the run is either seen here, and the drive is left untouched, or it is created after the tombstone, which
-// dispatch's re-read of the run's member drives refuses (memberDrivesStillThere).
-const beginKeptDriveReclaimSQL = `UPDATE user_drives d SET delete_started_at = now()
-	WHERE d.id = $1 AND d.owner_subject <> '' AND d.kept_from_run IS NOT NULL
-	  AND (d.delete_started_at IS NULL OR d.delete_started_at < now() - interval '` + memberDriveTakeover + `')
-	  AND ` + keptDriveUnattachedSQL + `
-	RETURNING ` + driveRowCols
-
-// KeptDriveReclaimStore is the optional store capability behind the drop of the drive a run that never started
-// kept: the tombstone of a member drive's delete, taken only for a drive no other run of the owner may have had.
-type KeptDriveReclaimStore interface {
-	// BeginKeptDriveReclaim is BeginMemberDriveDeleteAdmin for a kept drive. ErrNotFound when it is gone,
-	// ErrMemberDriveBusy when another delete holds it, ErrKeptDriveAttachable when another run of the owner may
-	// have attached it, in which case it is left as it was.
-	BeginKeptDriveReclaim(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
-}
-
-var _ KeptDriveReclaimStore = PG{}
-
-func (s PG) BeginKeptDriveReclaim(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error) {
-	d, err := scanDriveRow(s.Pool.QueryRow(ctx, beginKeptDriveReclaimSQL, id))
-	if err == nil {
-		return d, *d.DeleteStartedAt, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return types.UserDrive{}, time.Time{}, err
-	}
-	// No row: told apart only on the failing path, with the same conditions the update had.
-	var found, attachable bool
-	err = s.Pool.QueryRow(ctx, `SELECT true, NOT (`+keptDriveUnattachedSQL+`) FROM user_drives d
-		WHERE d.id = $1 AND d.owner_subject <> '' AND d.kept_from_run IS NOT NULL`, id).Scan(&found, &attachable)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return types.UserDrive{}, time.Time{}, ErrNotFound
-	case err != nil:
-		return types.UserDrive{}, time.Time{}, fmt.Errorf("store: read kept drive: %w", err)
-	case attachable:
-		return types.UserDrive{}, time.Time{}, ErrKeptDriveAttachable
-	}
-	return types.UserDrive{}, time.Time{}, ErrMemberDriveBusy
-}
+// keptDriveHoldSQL is the data-modifying CTE every exit of a run from the queue to a terminal state carries, over
+// the rows `moved` returned: it takes the tombstone of a member drive's delete (the one BeginMemberDriveDelete
+// takes) on the drive the run kept, in the statement that ends the run. The drive is offered to the owner's other
+// runs once its run has ended, and the cleanup that deletes it runs after the end, possibly long after: a pool
+// removal ends every waiting run at once and cleans them up one at a time. The two decisions, to offer the drive
+// and to delete it, are the one decision of this statement: the drive is never offered between the end and the
+// cleanup, because it carries the tombstone from the moment the run reads as ended, and a tombstoned drive is
+// out of every run's reach (memberReachableDrives, memberDrivesStillThere). Nothing is compared by time. The
+// cleanup finishes the delete, or clears the tombstone when it keeps the drive, which is when the drive is
+// first offered.
+const keptDriveHoldSQL = `UPDATE user_drives SET delete_started_at = now()
+	WHERE owner_subject <> '' AND delete_started_at IS NULL AND kept_from_run IN (SELECT id FROM moved)`
 
 func (s PG) beginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error) {
 	d, err := scanDriveRow(s.Pool.QueryRow(ctx, beginMemberDriveDeleteSQL, id, owner))

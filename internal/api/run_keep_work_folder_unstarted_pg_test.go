@@ -11,7 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -234,68 +238,130 @@ func TestPG_KeptDriveIsOfferedOnlyOnceItsRunHasEnded(t *testing.T) {
 // reclaimCounts is the keep env's runner counting the substrate reclaims it is asked for.
 type reclaimCounts struct {
 	*keepPoolRunner
-	n *int
+	n *atomic.Int32
 }
 
 func (r reclaimCounts) ReclaimDrive(ctx context.Context, m types.DriveMount) (runner.DriveReclaimOutcome, error) {
-	*r.n++
+	r.n.Add(1)
 	return r.keepPoolRunner.ReclaimDrive(ctx, m)
 }
 
-// A pool removal ends every waiting run in one statement and their cleanups run one at a time afterwards, so a
-// cleanup can run well after its run ended, and the kept drive is offered to the owner's other runs from the
-// moment it did. A later run of the owner that asked for the drive, and finished, is why the delayed cleanup
-// must leave it: the drive may hold what that run wrote. The delete is decided in the statement that takes the
-// tombstone, so the drive stays, with no tombstone, and the owner can attach it again. With no such run the same
-// cleanup reclaims it.
-func TestPG_DelayedKeptDriveCleanupLeavesADriveALaterRunUsed(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		laterRun  bool
-		wantKept  bool
-		wantCalls int
-	}{
-		{"a later run of the owner attached it and finished", true, true, 0},
-		{"no other run of the owner was made", false, false, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e, pool := keepEnv(t, 3)
-			var calls int
-			e.srv.cfg.Runner = reclaimCounts{&keepPoolRunner{e.runner}, &calls}
-			ctx := context.Background()
-			run := e.run(e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`).ID)
-			// The run ends by the statement alone: the cleanup that follows it is the one that runs late.
-			if ended, err := e.pg.ExitQueuedRun(ctx, run.ID, types.RunFailed, "queue: runner_pool_removed", "pool removed"); err != nil || !ended {
-				t.Fatalf("ExitQueuedRun = %v %v, want the run ended", ended, err)
-			}
-			if tc.laterRun {
-				body := strings.Replace(endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`),
-					`"no_repositories_or_drives":true`, fmt.Sprintf(`"drives":[{"drive_id":%q}]`, keptWorkFolderDriveID(run.ID)), 1)
-				w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
-				if w.Code != http.StatusCreated {
-					t.Fatalf("a later run asking for the kept drive = %d %s, want 201", w.Code, w.Body)
-				}
-				var later types.AgentRun
-				if err := json.Unmarshal(w.Body.Bytes(), &later); err != nil {
-					t.Fatal(err)
-				}
-				if kw := e.admin(http.MethodPost, "/api/v1/runs/"+later.ID.String()+"/kill", ""); kw.Code != http.StatusAccepted {
-					t.Fatalf("kill = %d %s, want 202", kw.Code, kw.Body)
-				}
-			}
-			e.srv.dropUnstartedKeptDrive(ctx, run.ID) // the delayed first cleanup
-			if got := e.keptDriveExists(run); got != tc.wantKept {
-				t.Errorf("the kept drive exists = %v after the delayed cleanup, want %v", got, tc.wantKept)
-			}
-			if calls != tc.wantCalls {
-				t.Errorf("the substrate was asked to reclaim %d times, want %d", calls, tc.wantCalls)
-			}
-			if tc.wantKept {
-				d, err := e.pg.GetMemberDriveOf(ctx, types.CanonicalUserSubject(run.CreatedBy), keptWorkFolderDriveID(run.ID))
-				if err != nil || d.DeleteStartedAt != nil {
-					t.Errorf("the kept drive after the delayed cleanup = %+v, %v; want it with no tombstone, so the owner can attach it", d, err)
-				}
-			}
-		})
+// askForKeptDrive is a later run of the person asking to attach run's kept drive: the answer.
+func (e *queueEnv) askForKeptDrive(pool types.RunnerPool, run types.AgentRun) *httptest.ResponseRecorder {
+	body := strings.Replace(endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`),
+		`"no_repositories_or_drives":true`, fmt.Sprintf(`"drives":[{"drive_id":%q}]`, keptWorkFolderDriveID(run.ID)), 1)
+	return e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+}
+
+func (e *queueEnv) keptDriveTombstoned(run types.AgentRun) bool {
+	e.t.Helper()
+	var held bool
+	if err := e.poolEnv.pool.QueryRow(context.Background(),
+		`SELECT delete_started_at IS NOT NULL FROM user_drives WHERE id = $1`, keptWorkFolderDriveID(run.ID)).Scan(&held); err != nil {
+		e.t.Fatal(err)
+	}
+	return held
+}
+
+// A pool removal ends every waiting run in one statement and cleans them up one at a time afterwards, so a cleanup
+// can run well after its run ended, and a kept drive is offered to its owner's other runs once its run has ended.
+// The drive therefore carries the tombstone of its delete from the statement that ends the run: a later run that
+// asks for it before the cleanup is refused as for a drive that is not there, and the cleanup then reclaims it.
+// Nothing is decided by comparing times: the stored creation time of a queued run is the application's clock
+// translated back, so it is no evidence of which of two events came first.
+func TestPG_KeptDriveIsHeldFromTheEndOfItsRunUntilItsCleanup(t *testing.T) {
+	e, pool := keepEnv(t, 3)
+	var calls atomic.Int32
+	e.srv.cfg.Runner = reclaimCounts{&keepPoolRunner{e.runner}, &calls}
+	ctx := context.Background()
+	run := e.run(e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`).ID)
+	if e.keptDriveTombstoned(run) {
+		t.Fatal("the drive of a run still waiting carries a tombstone")
+	}
+	// The run ends by the statement alone: the cleanup that follows it is the one that runs late.
+	if ended, err := e.pg.ExitQueuedRun(ctx, run.ID, types.RunFailed, "queue: runner_pool_removed", "pool removed"); err != nil || !ended {
+		t.Fatalf("ExitQueuedRun = %v %v, want the run ended", ended, err)
+	}
+	if !e.keptDriveTombstoned(run) {
+		t.Fatal("the kept drive carries no tombstone the moment its run ended, so a later run could be offered it before the cleanup")
+	}
+	if w := e.askForKeptDrive(pool, run); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(authz.ReasonDriveNotFound)) {
+		t.Fatalf("a later run asking for the kept drive before its cleanup = %d %s, want 422 drive_not_found", w.Code, w.Body)
+	}
+	e.srv.dropUnstartedKeptDrive(ctx, run.ID) // the delayed first cleanup
+	if e.keptDriveExists(run) || calls.Load() != 1 {
+		t.Errorf("after the cleanup the kept drive exists = %v with %d reclaims, want it gone with one", e.keptDriveExists(run), calls.Load())
+	}
+}
+
+// A later run asks for each kept drive while its delayed cleanup runs: whichever finishes first, a run that was
+// admitted with a drive never loses it.
+func TestPG_KeptDriveCleanupRacingALaterRunsAdmission(t *testing.T) {
+	const drives = 6
+	e, pool := keepEnv(t, drives)
+	ctx := context.Background()
+	var runs []types.AgentRun
+	for i := 0; i < drives; i++ {
+		run := e.run(e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`).ID)
+		if ended, err := e.pg.ExitQueuedRun(ctx, run.ID, types.RunFailed, "queue: runner_pool_removed", "pool removed"); err != nil || !ended {
+			t.Fatalf("ExitQueuedRun = %v %v, want the run ended", ended, err)
+		}
+		runs = append(runs, run)
+	}
+	codes := make([]int, drives)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i, run := range runs {
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; codes[i] = e.askForKeptDrive(pool, run).Code }()
+		go func() { defer wg.Done(); <-start; e.srv.dropUnstartedKeptDrive(ctx, run.ID) }()
+	}
+	close(start)
+	wg.Wait()
+	for i, run := range runs {
+		if codes[i] == http.StatusCreated && !e.keptDriveExists(run) {
+			t.Errorf("drive %d: a later run was admitted with it and the cleanup deleted it", i)
+		}
+		if codes[i] != http.StatusCreated && codes[i] != http.StatusUnprocessableEntity {
+			t.Errorf("drive %d: the later run's answer is %d, want 201 or 422", i, codes[i])
+		}
+	}
+}
+
+// A drive the cleanup keeps, because the substrate has it mounted or its owner has a run starting, has its tombstone
+// cleared and is offered from then on: a later run attaches it, starts and gets it mounted. The drive stays.
+func TestPG_KeptDriveTheCleanupKeepsIsAttachableByALaterRun(t *testing.T) {
+	e, pool := keepEnv(t, 3)
+	ctx := context.Background()
+	e.srv.cfg.Runner = reclaimInUse{&keepPoolRunner{e.runner}}
+	run := e.run(e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`).ID)
+	if ended, err := e.pg.ExitQueuedRun(ctx, run.ID, types.RunFailed, "queue: runner_pool_removed", "pool removed"); err != nil || !ended {
+		t.Fatalf("ExitQueuedRun = %v %v, want the run ended", ended, err)
+	}
+	e.srv.dropUnstartedKeptDrive(ctx, run.ID)
+	if !e.keptDriveExists(run) || e.keptDriveTombstoned(run) {
+		t.Fatalf("the drive the substrate refused to reclaim exists = %v, tombstoned = %v; want it kept with no tombstone", e.keptDriveExists(run), e.keptDriveTombstoned(run))
+	}
+	w := e.askForKeptDrive(pool, run)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("a later run asking for the kept drive after the cleanup kept it = %d %s, want 201", w.Code, w.Body)
+	}
+	var later types.AgentRun
+	if err := json.Unmarshal(w.Body.Bytes(), &later); err != nil {
+		t.Fatal(err)
+	}
+	var occupant uuid.UUID
+	if err := e.poolEnv.pool.QueryRow(ctx, `SELECT id FROM agent_runs WHERE created_by = 'occupant'`).Scan(&occupant); err != nil {
+		t.Fatal(err)
+	}
+	e.free(e.run(occupant))
+	e.sweep()
+	e.waitStarted(later.ID)
+	mounted := false
+	for _, m := range e.specFor(later.ID).Drives {
+		mounted = mounted || m.DriveID == keptWorkFolderDriveID(run.ID)
+	}
+	if !mounted || !e.keptDriveExists(run) {
+		t.Errorf("the later run mounted the kept drive = %v, the drive exists = %v; want both", mounted, e.keptDriveExists(run))
 	}
 }
