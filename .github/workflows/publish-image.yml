@@ -203,26 +203,39 @@ jobs:
           build-args: |
             REVISION=${{ steps.tags.outputs.revision }}
           tags: ${{ steps.tags.outputs.tags }}
-      # The per-commit image must report the commit it was built from, in the CLI and in the daemon (the
-      # daemon's /healthz reads the same internal/version string). A tag ref keeps the bare version.
+      # The per-commit image must report the commit it was built from, in every binary a person can run: the
+      # in-container CLI, the daemon (its /healthz reads the same internal/version string) and the host CLIs
+      # that scripts/up.sh installs as bin/wardyn. A tag ref keeps the bare version.
       - name: Check the image reports its revision
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
           REVISION: ${{ steps.tags.outputs.revision }}
         run: |
           set -euo pipefail
-          got="$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/wardyn "$IMAGE_REF" version)"
+          # reports NAME VERSION: a version ends in +<9 characters of the commit>, or is bare on a tag ref.
+          reports() {
+            if [ -n "$REVISION" ]; then
+              case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '$2', want it to end in +${REVISION::9}"; exit 1;; esac
+            else
+              case "$2" in *+*) echo "::error::$1 printed '$2', want the bare version on a tag ref"; exit 1;; esac
+            fi
+          }
+          reports "wardyn in the image" "$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/wardyn "$IMAGE_REF" version)"
+          cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
+          mkdir "$RUNNER_TEMP/host"
+          docker cp "$cid:/host/." "$RUNNER_TEMP/host"
+          docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+          docker rm "$cid" >/dev/null
+          chmod +x "$RUNNER_TEMP/host/wardyn-linux-amd64"
+          got="$("$RUNNER_TEMP/host/wardyn-linux-amd64" version)"
+          reports "the extracted linux/amd64 host CLI" "$got"
           if [ -n "$REVISION" ]; then
-            case "$got" in *"+${REVISION::9}") ;; *) echo "::error::wardyn version printed '$got', want it to end in +${REVISION::9}"; exit 1;; esac
-          else
-            case "$got" in *+*) echo "::error::wardyn version printed '$got', want the bare version on a tag ref"; exit 1;; esac
-          fi
-          if [ -n "$REVISION" ]; then
-            cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
-            docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
-            docker rm "$cid" >/dev/null
-            grep -aqF "internal/version.buildRevision=${REVISION}" "$RUNNER_TEMP/wardynd" \
-              || { echo "::error::the wardynd binary was not stamped with revision ${REVISION}"; exit 1; }
+            # The host CLIs are built with -trimpath, which leaves the linker flags out of the build info, so look
+            # for the stamped commit itself: nothing but the stamp puts those 40 characters in a binary.
+            for f in "$RUNNER_TEMP/wardynd" "$RUNNER_TEMP"/host/wardyn*; do
+              grep -aqF "$REVISION" "$f" \
+                || { echo "::error::$(basename "$f") was not stamped with revision ${REVISION}"; exit 1; }
+            done
           fi
           echo "image reports: $got"
       # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>

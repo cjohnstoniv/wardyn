@@ -150,9 +150,12 @@ REFN=v0.4.4 runtags "$sha" "" tag
 grep -qx 'revision=' "$out" || fail "a tag ref did not output an empty revision: $(cat "$out")"
 grep -Eq '^            REVISION=\$\{\{ steps\.tags\.outputs\.revision \}\}$' "$PI" || fail "publish-image.yml does not pass REVISION from the tags step to the build"
 grep -q '^      - name: Check the image reports its revision$' "$PI" || fail "publish-image.yml has no step that checks the built image's revision"
-grep -q 'buildRevision=\${REVISION}' "$PI" || fail "the image check does not look for the stamped revision"
+grep -q 'grep -aqF "\$REVISION"' "$PI" || fail "the image check does not look for the stamped revision in the binaries"
 df="$ROOT/deploy/compose/Dockerfile.wardynd"
-[ "$(grep -c 'internal/version.buildRevision=\${REVISION}' "$df")" -eq 2 ] || fail "Dockerfile.wardynd does not stamp buildRevision into both wardynd and wardyn"
+# wardynd, the in-container wardyn, the fallback host CLI and the per-platform host CLIs: four go build commands.
+[ "$(grep -c 'internal/version.buildRevision=\${REVISION}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp buildRevision into wardynd and every wardyn build"
+[ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
+grep -q 'host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the extracted linux/amd64 host CLI"
 
 # release.yml: no job that can write to the repository or mint the signing identity executes a binary built from
 # the tree, and no step whose env holds the Apple secrets executes one either.
