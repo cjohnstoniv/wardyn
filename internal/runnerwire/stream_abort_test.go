@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -776,9 +777,22 @@ func TestRunnerwireStream_AbortDropsPendingData(t *testing.T) {
 	t.Run("CreditAfterManyDrops", func(t *testing.T) {
 		r := newAbortRig(t, PeerConfig{})
 		y, yFar := r.open(t)
-		go func() { _, _ = io.Copy(io.Discard, yFar) }()
+		// Every byte y sends is counted once the far end's Read has returned it, so its consumed credit is
+		// recorded before y closes; a read racing the close could leave up to ConnWindow/4-1 bytes withheld.
+		var read atomic.Int64
+		go func() {
+			b := make([]byte, MaxDataFrame)
+			for {
+				n, err := yFar.Read(b)
+				read.Add(int64(n))
+				if err != nil {
+					return
+				}
+			}
+		}()
 		start := avail(r.org.connSend)
-		for i := range ConnWindow/MaxDataFrame + 4 {
+		drops := ConnWindow/MaxDataFrame + 4
+		for i := range drops {
 			x, _ := r.open(t)
 			entered, release := r.oc.stall(dataOf(y.ID()))
 			yRes := writeAsync(y, []byte{1})
@@ -798,6 +812,7 @@ func TestRunnerwireStream_AbortDropsPendingData(t *testing.T) {
 		if yw := awaitWrite(t, yRes, "y's Write after the drops"); yw.err != nil || yw.n != MaxDataFrame {
 			t.Fatalf("y's Write after the drops = %d, %v", yw.n, yw.err)
 		}
+		waitFor(t, 3*time.Second, "the far end to read all of y's bytes", func() bool { return read.Load() == int64(drops+MaxDataFrame) })
 		_ = y.Close()
 		waitFor(t, 3*time.Second, "the connection window to come back whole", func() bool { return avail(r.org.connSend) == start })
 	})
