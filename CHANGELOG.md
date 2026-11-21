@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-11-21
+
 ### Added
 
 - Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
