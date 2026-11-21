@@ -1,0 +1,20 @@
+# Values both releases of .github/workflows/mixed-version.yml install with (the same file, so the old replica
+# and the new one are configured alike). WARDYN_HA needs the Kubernetes runner: the chart refuses to render
+# ha.enabled without it, and wardynd refuses to boot with it on any other runner.
+ha:
+  enabled: true
+k8s:
+  enabled: true
+  # Built from deploy/compose/Dockerfile.proxy and loaded into kind by the job; the runner refuses to
+  # construct without one, though this job launches no run.
+  proxyImage: wardyn/wardyn-proxy:local
+  # This job launches no run and the namespace holds only Postgres and the two replicas, so the chart's
+  # shared-namespace warning does not apply.
+  allowRunsInReleaseNamespace: true
+serviceAccount:
+  automount: true
+secrets:
+  ageKeyFromSecret: true
+env:
+  # HA does not support the per-pod filesystem recording store.
+  WARDYN_RECORDING_STORE: pg

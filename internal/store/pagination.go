@@ -259,7 +259,7 @@ func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page,
 	}
 	q, args := p.appendTo(`
 		SELECT `+runCols+`
-		FROM agent_runs WHERE `+where+` ORDER BY created_at DESC`, args)
+		FROM agent_runs WHERE `+where+` ORDER BY created_at DESC, id DESC`, args)
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
 

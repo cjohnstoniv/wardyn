@@ -224,6 +224,13 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for this request on this store backend")
 		return
 	}
+	// An issuer portal's list, its hidden counts and its pages are limited to the units under its pin,
+	// in SQL (portal_pin.go).
+	pin, refused := s.portalPinOf(r.Context())
+	if refused.write(s, w, r) {
+		return
+	}
+	params.filter.Scope = pin.scope()
 	adminView := params.view == "admin"
 
 	// #1197: status=needs reads the attention projection, which no SQL
