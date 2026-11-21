@@ -250,50 +250,6 @@ func TestServiceGrantCleanup_BoundedPassAndBackoff(t *testing.T) {
 	}
 }
 
-func TestServiceGrantCleanup_EachRevisionAnswer_PG(t *testing.T) {
-	// Absence settles with no delete.
-	f := newSvcFix(t)
-	uid := f.addClaim(0)
-	name := serviceGrantSecretName(uid)
-	f.sec.mu.Lock()
-	delete(f.sec.m, name)
-	f.sec.rev[name]++
-	f.sec.mu.Unlock()
-	if res := f.retry(uid); res.Code != http.StatusNoContent || f.sec.callsOf("delete") != 0 || len(f.claims()) != 0 {
-		t.Fatalf("absence: %d, %d deletes, %d claims; want 204, none, none", res.Code, f.sec.callsOf("delete"), len(f.claims()))
-	}
-	// The claim's own revision deletes, guarded, and settles.
-	uid = f.addClaim(1)
-	if res := f.retry(uid); res.Code != http.StatusNoContent || f.sec.has(serviceGrantSecretName(uid)) || len(f.claims()) != 0 {
-		t.Fatalf("own revision: %d, record kept %v, %d claims", res.Code, f.sec.has(serviceGrantSecretName(uid)), len(f.claims()))
-	}
-	// Another revision keeps the claim, deletes nothing and answers 409 revision_changed.
-	uid = f.addClaim(2)
-	f.sec.set(serviceGrantSecretName(uid), []byte(`{"v":1,"written":"outside"}`))
-	before := f.sec.callsOf("delete")
-	res := f.retry(uid)
-	if res.Code != http.StatusConflict || !strings.Contains(res.Body, reasonServiceGrantCleanupRevisionChanged) || f.sec.callsOf("delete") != before || len(f.claims()) != 1 {
-		t.Fatalf("another revision: %d %s, %d deletes, %d claims", res.Code, res.Body, f.sec.callsOf("delete")-before, len(f.claims()))
-	}
-	// A read error keeps the claim.
-	f.sec.revErr = errSvcDown
-	if res = f.retry(uid); res.Code != http.StatusServiceUnavailable || len(f.claims()) != 1 || f.sec.callsOf("delete") != before {
-		t.Fatalf("read error: %d, %d claims, %d deletes", res.Code, len(f.claims()), f.sec.callsOf("delete")-before)
-	}
-	// A store that keeps no revision (r16 L1): zero Delete calls, the claim kept, 409 cleanup_unsupported.
-	f.sec.revErr = nil
-	f.sec.noRev = true
-	if res = f.retry(uid); res.Code != http.StatusConflict || !strings.Contains(res.Body, reasonServiceGrantCleanupUnsupported) ||
-		f.sec.callsOf("delete") != before || len(f.claims()) != 1 {
-		t.Fatalf("no revision: %d %s, %d deletes, %d claims; want 409, zero Delete calls, the claim kept", res.Code, res.Body, f.sec.callsOf("delete")-before, len(f.claims()))
-	}
-	// The worker does the same.
-	f.srv.serviceGrantCleanupPass(context.Background())
-	if f.sec.callsOf("delete") != before || len(f.claims()) != 1 {
-		t.Fatalf("the worker deleted on a store with no revision: %d deletes", f.sec.callsOf("delete")-before)
-	}
-}
-
 func TestServiceGrant_OverlappingRetriesSettleOnce(t *testing.T) {
 	f := newSvcFix(t)
 	uid := f.addClaim(0)

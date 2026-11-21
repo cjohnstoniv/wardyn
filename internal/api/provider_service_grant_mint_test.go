@@ -367,58 +367,6 @@ func TestServiceGrant_ConcurrentResolvesMintOnce(t *testing.T) {
 	}
 }
 
-func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	f.srv.cfg.Audit = f.audit
-	f.mustToken(serviceGrantTriggerRefresh)
-	rows := f.mintRows()
-	if len(rows) != 1 || rows[0].Outcome != "success" || f.idp.count() != 1 {
-		t.Fatalf("after one success: %d rows, %d requests", len(rows), f.idp.count())
-	}
-	data := string(rows[0].Data)
-	for _, want := range []string{`"client_id":"svc-client"`, `"expires_at"`, `"trigger":"refresh"`} {
-		if !strings.Contains(data, want) {
-			t.Errorf("success row %s lacks %s", data, want)
-		}
-	}
-	if strings.Contains(data, "previous_valid_until") {
-		t.Errorf("a success row carries previous_valid_until: %s", data)
-	}
-	f.idp.respond = func(int, svcReq) svcAnswer {
-		return svcAnswer{Status: 400, Body: `{"error":"invalid_scope","error_description":"secret words svc-client-secret-0001-abcdefgh"}`}
-	}
-	f.clock.Advance(55 * time.Minute)
-	if _, err := f.token(serviceGrantTriggerRefresh); err != nil {
-		t.Fatalf("the cached token should cover the failure: %v", err)
-	}
-	f.clock.Advance(10 * time.Minute) // expired: the next failure holds no earlier token
-	_, _ = f.token(serviceGrantTriggerRefresh)
-	rows = f.mintRows()
-	if len(rows) != 3 || f.idp.count() != 3 {
-		t.Fatalf("rows = %d, requests = %d, want one row per request sent (3)", len(rows), f.idp.count())
-	}
-	if d := string(rows[1].Data); rows[1].Outcome != "failure" || !strings.Contains(d, `"reason":"invalid_scope"`) || !strings.Contains(d, `"oauth_error":"invalid_scope"`) ||
-		!strings.Contains(d, `"http_status":400`) || !strings.Contains(d, `"client_id":"svc-client"`) || !strings.Contains(d, "previous_valid_until") {
-		t.Errorf("failure row with a live earlier token = %s", d)
-	}
-	if d := string(rows[2].Data); strings.Contains(d, "previous_valid_until") {
-		t.Errorf("a failure row after the token expired names previous_valid_until: %s", d)
-	}
-	f.idp.respond = func(int, svcReq) svcAnswer { return svcAnswer{Status: 400, Body: `{"error":"made_up_code_xyz"}`} }
-	f.clock.Advance(2 * time.Minute)
-	_, _ = f.token(serviceGrantTriggerRefresh)
-	last := string(f.mintRows()[3].Data)
-	all := f.auditAll()
-	for _, leak := range []string{svcClientSecret, svcToken(1), "secret words", "made_up_code_xyz", "error_description"} {
-		if strings.Contains(all, leak) {
-			t.Errorf("an audit row carries %q", leak)
-		}
-	}
-	if !strings.Contains(last, `"oauth_error":"other"`) {
-		t.Errorf("an unrecognised error code was not recorded as other: %s", last)
-	}
-}
-
 func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.idp.respond = func(int, svcReq) svcAnswer {

@@ -9,6 +9,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,26 +104,45 @@ func TestServiceGrantCleanup_HeldDeleteLeavesRefreshAndHeartbeat_PG(t *testing.T
 		t.Fatal("setup: corp-a is not due on the second process")
 	}
 	sent := r.idp.count()
+	// The heartbeat's stamp is read after the heartbeat and before the pass may run: the pass's own status
+	// write also moves seen_at, so a reading after it would not show the heartbeat did anything.
+	beat, pass := make(chan struct{}), make(chan struct{})
+	var passOnce sync.Once
+	t.Cleanup(func() { passOnce.Do(func() { close(pass) }) })
 	finished := make(chan int, 1)
 	go func() {
 		ctx := context.Background()
 		r.srv.serviceGrantHeartbeat(ctx)
+		close(beat)
+		if !svcWaited(pass) {
+			t.Error("the pass was never let run")
+		}
 		r.srv.serviceGrantPass(ctx)
 		finished <- r.put(svcPGRow("corp-a", true)).Code
 	}()
+	select {
+	case <-beat:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second process's heartbeat waited for a held external delete")
+	}
+	beatAt := f.seenAt(replica)
+	if n := r.idp.count() - sent; n != 0 {
+		t.Fatalf("%d token requests before the pass ran; the heartbeat must send none", n)
+	}
+	passOnce.Do(func() { close(pass) })
 	select {
 	case code := <-finished:
 		if code/100 != 2 {
 			t.Fatalf("the second process's provider save = %d while the delete is held, want it committed", code)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("the second process's heartbeat, refresh or save waited for a held external delete")
+		t.Fatal("the second process's refresh or save waited for a held external delete")
 	}
 	if n := r.idp.count() - sent; n != 1 {
 		t.Errorf("the second process sent %d token requests for the due row while the delete was held, want 1", n)
 	}
-	if after := f.seenAt(replica); !after.After(baseline) {
-		t.Errorf("the second process's heartbeat did not advance past its own baseline (%v then %v)", baseline, after)
+	if !beatAt.After(baseline) {
+		t.Errorf("the second process's heartbeat did not advance seen_at past its own baseline (%v then %v)", baseline, beatAt)
 	}
 	row, ok := f.pgStatus("corp-a", replica)
 	if !ok || row.Outcome != "ok" || !row.AttemptedAt.After(first.AttemptedAt) || row.LastOKAt == nil ||
@@ -185,4 +206,70 @@ func (f *svcPG) pgStatus(id, replica string) (store.ServiceGrantStatusRow, bool)
 		}
 	}
 	return store.ServiceGrantStatusRow{}, false
+}
+
+// The earlier removal's delete runs with the revision it read; a record written since has another one, so the
+// retry keeps the newer record and the claim.
+func TestServiceGrant_DelayedDeleteKeepsNewerRecord_PG(t *testing.T) {
+	f := newSvcPG(t, true)
+	uid := f.claimFor("corp-b")
+	name := serviceGrantSecretName(uid)
+	f.sec.set(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: "https://new.corp.example", ClientSecret: svcSecretTwo}))
+	if w := f.retry(uid); w.Code != http.StatusConflict || !f.sec.has(name) || !slices.Contains(f.claimUIDs(), uid) {
+		t.Fatalf("a delayed delete with the earlier revision: %d, record kept %v, claims %v; want the newer record and the claim kept",
+			w.Code, f.sec.has(name), f.claimUIDs())
+	}
+}
+
+// Each answer the store's revision read can give, at the retry route and in the worker, with the claims in the
+// database.
+func TestServiceGrantCleanup_EachRevisionAnswer_PG(t *testing.T) {
+	f := newSvcPG(t, true)
+	claimed := func(uid string) bool { return slices.Contains(f.claimUIDs(), uid) }
+	// Absence settles with no delete.
+	uid := f.claimFor("corp-b")
+	name := serviceGrantSecretName(uid)
+	f.sec.mu.Lock()
+	delete(f.sec.m, name)
+	f.sec.rev[name]++
+	f.sec.mu.Unlock()
+	before := f.sec.callsOf("delete")
+	if w := f.retry(uid); w.Code != http.StatusNoContent || f.sec.callsOf("delete") != before || claimed(uid) {
+		t.Fatalf("absence: %d, %d deletes, claimed %v; want 204, none, settled", w.Code, f.sec.callsOf("delete")-before, claimed(uid))
+	}
+	// The claim's own revision deletes, guarded, and settles.
+	uid = f.claimFor("corp-c")
+	if w := f.retry(uid); w.Code != http.StatusNoContent || f.sec.has(serviceGrantSecretName(uid)) || claimed(uid) {
+		t.Fatalf("own revision: %d, record kept %v, claimed %v", w.Code, f.sec.has(serviceGrantSecretName(uid)), claimed(uid))
+	}
+	// Another revision keeps the claim, deletes nothing and answers 409 revision_changed.
+	uid = f.claimFor("corp-d")
+	f.sec.set(serviceGrantSecretName(uid), []byte(`{"v":1,"written":"outside"}`))
+	before = f.sec.callsOf("delete")
+	w := f.retry(uid)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonServiceGrantCleanupRevisionChanged) ||
+		f.sec.callsOf("delete") != before || !claimed(uid) {
+		t.Fatalf("another revision: %d %s, %d deletes, claimed %v", w.Code, w.Body.String(), f.sec.callsOf("delete")-before, claimed(uid))
+	}
+	// A read error keeps the claim.
+	f.sec.mu.Lock()
+	f.sec.revErr = errSvcDown
+	f.sec.mu.Unlock()
+	if w = f.retry(uid); w.Code != http.StatusServiceUnavailable || !claimed(uid) || f.sec.callsOf("delete") != before {
+		t.Fatalf("read error: %d, claimed %v, %d deletes", w.Code, claimed(uid), f.sec.callsOf("delete")-before)
+	}
+	// A store that keeps no revision: zero Delete calls, the claim kept, 409 cleanup_unsupported.
+	f.sec.mu.Lock()
+	f.sec.revErr, f.sec.noRev = nil, true
+	f.sec.mu.Unlock()
+	if w = f.retry(uid); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonServiceGrantCleanupUnsupported) ||
+		f.sec.callsOf("delete") != before || !claimed(uid) {
+		t.Fatalf("no revision: %d %s, %d deletes, claimed %v; want 409, zero Delete calls, the claim kept",
+			w.Code, w.Body.String(), f.sec.callsOf("delete")-before, claimed(uid))
+	}
+	// The worker does the same.
+	f.srv.serviceGrantCleanupPass(context.Background())
+	if f.sec.callsOf("delete") != before || !claimed(uid) {
+		t.Fatalf("the worker deleted on a store with no revision: %d deletes", f.sec.callsOf("delete")-before)
+	}
 }

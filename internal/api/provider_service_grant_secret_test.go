@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -46,42 +45,6 @@ func (f *svcFix) replica() *Server {
 	cfg := f.srv.cfg
 	cfg.MaskRegistry = secretmask.NewRegistry()
 	return &Server{cfg: cfg}
-}
-
-func TestServiceGrant_SecretWriteRefusesChangedDestination_PG(t *testing.T) {
-	f := newSvcFix(t)
-	cases := []struct {
-		name  string
-		edit  func(*putServiceGrantSecretRequest)
-		wants []string // what the new audit row must name: both hosts of the changed pair
-	}{
-		{"token_url", func(b *putServiceGrantSecretRequest) { b.TokenURL = "https://other-idp.example.test/token" },
-			[]string{"body_token_host", "other-idp.example.test", "token_host", "idp.example.test"}},
-		{"client_id", func(b *putServiceGrantSecretRequest) { b.ClientID = "another-client" }, []string{"client_id"}},
-		{"base_url", func(b *putServiceGrantSecretRequest) { b.BaseURL = "https://other-gw.corp.example" },
-			[]string{"body_base_host", "other-gw.corp.example", "base_host"}},
-	}
-	for i, c := range cases {
-		body := f.putSecretBody(svcClientSecret)
-		c.edit(&body)
-		w := f.serve(http.MethodPut, f.secretPath(), body)
-		if w.Code != http.StatusConflict || svcBody(t, w)["reason"] != reasonServiceGrantDestinationChanged || f.sec.has(f.secretName()) {
-			t.Fatalf("%s: %d %s, record stored %v; want 409 and nothing stored", c.name, w.Code, w.Body.String(), f.sec.has(f.secretName()))
-		}
-		rows := f.audit.find("model_provider.service_grant.secret_write")
-		if len(rows) != i+1 {
-			t.Fatalf("%s: audit rows = %d, want %d, one new row per refusal", c.name, len(rows), i+1)
-		}
-		d := string(rows[len(rows)-1].Data) // this case's own row, whatever order the cases ran in
-		for _, want := range c.wants {
-			if !strings.Contains(d, want) {
-				t.Errorf("%s: its audit row %s lacks %q", c.name, d, want)
-			}
-		}
-	}
-	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcClientSecret)); w.Code != http.StatusNoContent || !f.sec.has(f.secretName()) {
-		t.Fatalf("the right destination: %d %s", w.Code, w.Body.String())
-	}
 }
 
 func TestServiceGrant_SecretNameReservedAtEverySink(t *testing.T) {
@@ -275,38 +238,6 @@ func TestServiceGrant_ReconcileKeepsFreshlyAddedGrant(t *testing.T) {
 	}
 }
 
-func TestServiceGrant_SecretRemovalOnOneReplicaEvictsOnAnother_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	b := f.replica()
-	f.mustToken(serviceGrantTriggerRefresh)
-	if _, err := b.serviceGrantToken(context.Background(), f.provider(), "", serviceGrantTriggerRefresh); err != nil {
-		t.Fatal(err)
-	}
-	if !svcMasked(b, svcClientSecret) {
-		t.Fatal("B does not mask the secret after its mint")
-	}
-	// The secret's DELETE on A: B's next pass retires its mask, swept after the grace.
-	if w := f.serve(http.MethodDelete, f.secretPath(), nil); w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE on A: %d", w.Code)
-	}
-	b.reconcileServiceGrantMasks(context.Background())
-	b.cfg.MaskRegistry.SweepGlobals(f.clock.Now().Add(24 * time.Hour))
-	if svcMasked(b, svcClientSecret) {
-		t.Error("B still masks a secret deleted on A")
-	}
-	// Separately: the grant removed on A.
-	f.writeSecret(svcClientSecret)
-	if _, err := b.serviceGrantToken(context.Background(), f.provider(), "", serviceGrantTriggerRefresh); err != nil {
-		t.Fatal(err)
-	}
-	f.setRow(func(p *types.ModelProvider) { p.OIDC.ServiceGrant = nil })
-	b.reconcileServiceGrantMasks(context.Background())
-	b.cfg.MaskRegistry.SweepGlobals(f.clock.Now().Add(24 * time.Hour))
-	if svcMasked(b, svcClientSecret) {
-		t.Error("B still masks the secret of a grant removed on A")
-	}
-}
-
 func TestServiceGrant_RevisionThreeAnswers(t *testing.T) {
 	// An error: the mint is unavailable and no request is sent.
 	f := newSvcFixWithSecret(t)
@@ -357,94 +288,6 @@ func TestServiceGrant_ExternalStoreValueUsedAtNextMint(t *testing.T) {
 	}
 }
 
-func TestServiceGrant_SharedSecretRotationRemintsWithinATick_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	b := f.replica()
-	ctx := context.Background()
-	f.srv.serviceGrantPass(ctx)
-	b.serviceGrantPass(ctx)
-	if f.idp.count() != 2 {
-		t.Fatalf("setup: %d requests", f.idp.count())
-	}
-	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code != http.StatusNoContent {
-		t.Fatalf("rotation: %d", w.Code)
-	}
-	b.serviceGrantPass(ctx) // within one tick of the rotation
-	reqs := f.idp.requests()
-	if len(reqs) != 3 {
-		t.Fatalf("requests = %d, want B's pass to mint again", len(reqs))
-	}
-	if _, secret := svcBasic(t, reqs[2].Header.Get("Authorization")); secret != svcSecretTwo {
-		t.Fatalf("B's new mint used %q, want the rotated secret", secret)
-	}
-}
-
-func TestServiceGrant_SecretDeletedStopsServing_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	f.mustToken(serviceGrantTriggerRefresh)
-	if w := f.serve(http.MethodDelete, f.secretPath(), nil); w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE: %d", w.Code)
-	}
-	got, err := f.token(serviceGrantTriggerResolve)
-	if se := svcErr(t, err); se.reason != svcReasonSecretGone || got.token != "" {
-		t.Fatalf("after the delete: %q, %+v, want secret_gone and no token", got.token, se)
-	}
-	f.srv.svcGrant.mu.Lock()
-	_, cached := f.srv.svcGrant.cache[f.uid]
-	f.srv.svcGrant.mu.Unlock()
-	if cached {
-		t.Error("the token is still cached")
-	}
-}
-
-func TestServiceGrant_RotateWhileMintPending_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	release := make(chan struct{})
-	f.idp.respond = func(n int, _ svcReq) svcAnswer {
-		a := svcOK(n, 3600)
-		if n == 1 {
-			a.Block = release
-		}
-		return a
-	}
-	type res struct {
-		tok serviceGrantMinted
-		err error
-	}
-	out := make(chan res, 1)
-	go func() { tok, err := f.token(serviceGrantTriggerResolve); out <- res{tok, err} }()
-	for f.idp.count() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	f.sec.set(f.secretName(), mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: f.provider().BaseURL, ClientSecret: svcSecretTwo}))
-	close(release)
-	r := <-out
-	if r.err != nil || r.tok.token != svcToken(2) {
-		t.Fatalf("the caller got %q, %v, want the token minted under the new revision", r.tok.token, r.err)
-	}
-	if f.idp.count() != 2 {
-		t.Fatalf("requests = %d, want 2", f.idp.count())
-	}
-	rows := f.mintRows()
-	if len(rows) != 2 || !strings.Contains(string(rows[0].Data), `"superseded":true`) || strings.Contains(string(rows[1].Data), "superseded") {
-		t.Fatalf("mint rows = %d; want two, the first marked superseded", len(rows))
-	}
-	row, _ := f.st.statusOf(f.uid, f.srv.svcGrant.replica())
-	if row.Outcome != "ok" || row.ValidUntil == nil {
-		t.Errorf("status = %+v, want the second mint's", row)
-	}
-	// The old token is never cached or returned, yet stays masked until it expires.
-	f.srv.svcGrant.mu.Lock()
-	cached := f.srv.svcGrant.cache[f.uid].token
-	f.srv.svcGrant.mu.Unlock()
-	if cached != svcToken(2) {
-		t.Errorf("cached token = %q", cached)
-	}
-	if !f.masked(svcToken(1)) {
-		t.Error("the superseded token is not masked")
-	}
-}
-
 func TestServiceGrant_SupersededTokenStaysMaskedToItsExpiry(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	release := make(chan struct{})
@@ -470,117 +313,6 @@ func TestServiceGrant_SupersededTokenStaysMaskedToItsExpiry(t *testing.T) {
 	f.srv.cfg.MaskRegistry.SweepGlobals(f.clock.Now().Add(24 * time.Hour))
 	if f.masked(svcToken(1)) {
 		t.Error("the superseded token is masked after its expiry and grace")
-	}
-}
-
-func TestServiceGrant_RecordOverlapsNeverCrossDestinations_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	// A mint held open while the secret is deleted, the address changed and a new secret written for it.
-	release := make(chan struct{})
-	f.idp.respond = func(n int, _ svcReq) svcAnswer {
-		a := svcOK(n, 3600)
-		if n == 1 {
-			a.Block = release
-		}
-		return a
-	}
-	out := make(chan struct{})
-	go func() { defer close(out); _, _ = f.token(serviceGrantTriggerResolve) }()
-	for f.idp.count() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	f.serve(http.MethodDelete, f.secretPath(), nil)
-	f.setRow(func(p *types.ModelProvider) { p.OIDC.ServiceGrant.TokenURL = "https://idp-b.example.test/token" })
-	f.writeSecret(svcSecretTwo)
-	close(release)
-	<-out
-	if _, err := f.token(serviceGrantTriggerResolve); err != nil {
-		t.Fatalf("mint under the new destination: %v", err)
-	}
-	// Each request carried only the credential written for its own destination.
-	for _, r := range f.idp.requests() {
-		_, secret := svcBasic(t, r.Header.Get("Authorization"))
-		switch {
-		case strings.Contains(r.URL, "idp-b.") && secret != svcSecretTwo, strings.Contains(r.URL, "//idp.example.test") && secret != svcClientSecret:
-			t.Errorf("request to %s carried %q: a credential crossed destinations", r.URL, secret)
-		}
-	}
-	// Two overlapping writes of the route end with one whole record.
-	g := newSvcFix(t)
-	done := make(chan struct{}, 2)
-	for _, v := range []string{svcSecretTwo, svcSecretThree} {
-		go func() { g.serve(http.MethodPut, g.secretPath(), g.putSecretBody(v)); done <- struct{}{} }()
-	}
-	<-done
-	<-done
-	raw, _ := g.sec.Get(context.Background(), g.secretName())
-	if rec, ok := parseServiceGrantRecord(raw); !ok || (rec.ClientSecret != svcSecretTwo && rec.ClientSecret != svcSecretThree) || rec.TokenURL != svcTokenURL {
-		t.Fatalf("record after two overlapping writes = %s", raw)
-	}
-}
-
-func TestServiceGrant_DelayedDeleteKeepsNewerRecord_PG(t *testing.T) {
-	f := newSvcFix(t)
-	uid := f.addClaim(0)
-	name := serviceGrantSecretName(uid)
-	// The earlier removal's delete runs with the revision it read; a record written since has another one.
-	f.sec.set(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: "https://new.corp.example", ClientSecret: svcSecretTwo}))
-	if res := f.retry(uid); res.Code != http.StatusConflict || !f.sec.has(name) {
-		t.Fatalf("a delayed delete with the earlier revision: %d, record kept %v, want the newer record kept", res.Code, f.sec.has(name))
-	}
-}
-
-func TestServiceGrant_DirectRotationOverlappingDeleteFailsClosed_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	// A rotation written in the store while the grant's removal is deleting: the mint answers gone, or the
-	// record is kept; no request ever reaches an identity provider with a value of the removed grant.
-	f.sec.hold = func(op, _ string) {
-		if op == "delete" {
-			f.sec.hold = nil
-			f.sec.set(f.secretName(), mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: f.provider().BaseURL, ClientSecret: svcSecretTwo}))
-		}
-	}
-	w := f.serve(http.MethodDelete, f.secretPath(), nil)
-	if w.Code != http.StatusConflict && w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE = %d %s", w.Code, w.Body.String())
-	}
-	f.setRow(func(p *types.ModelProvider) { p.OIDC.ServiceGrant = nil })
-	before := f.idp.count()
-	if _, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.provider()), "", serviceGrantTriggerRefresh); err == nil {
-		t.Fatal("a mint for a removed grant succeeded")
-	}
-	if f.idp.count() != before {
-		t.Fatalf("a request reached the identity provider after the removal (%d new)", f.idp.count()-before)
-	}
-}
-
-func TestServiceGrant_FailedRotationKeepsGrantMinting_PG(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	f.mustToken(serviceGrantTriggerRefresh)
-	// A Put that fails leaves the old record: the next mint uses it.
-	f.sec.putErr = errSvcDown
-	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code < 500 {
-		t.Fatalf("a failing put answered %d", w.Code)
-	}
-	f.sec.putErr = nil
-	f.srv.dropServiceGrantCache(f.uid)
-	f.mustToken(serviceGrantTriggerResolve)
-	reqs := f.idp.requests()
-	if _, secret := svcBasic(t, reqs[len(reqs)-1].Header.Get("Authorization")); secret != svcClientSecret {
-		t.Fatalf("after a failed rotation the mint sent %q, want the old record's value", secret)
-	}
-	// A Put whose value reached the store but whose row was not written (ErrRowNotWritten) leaves the new one live.
-	f.sec.mu.Lock()
-	f.sec.putErr = nil
-	f.sec.mu.Unlock()
-	f.sec.set(f.secretName(), mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: f.provider().BaseURL, ClientSecret: svcSecretTwo}))
-	f.mustToken(serviceGrantTriggerResolve)
-	reqs = f.idp.requests()
-	if _, secret := svcBasic(t, reqs[len(reqs)-1].Header.Get("Authorization")); secret != svcSecretTwo {
-		t.Fatalf("with the new record live the mint sent %q", secret)
-	}
-	if !strings.Contains(reqs[len(reqs)-1].URL, "idp.example.test") {
-		t.Errorf("the value was sent to %s, not its own destination", reqs[len(reqs)-1].URL)
 	}
 }
 

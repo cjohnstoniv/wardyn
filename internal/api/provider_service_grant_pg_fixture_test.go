@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,6 +39,12 @@ type svcPG struct {
 // newSvcPG builds the fixture over a throwaway database. activated is the 0.10.2 switch-on.
 func newSvcPG(t *testing.T, activated bool) *svcPG {
 	t.Helper()
+	return newSvcPGClocked(t, activated, nil)
+}
+
+// newSvcPGClocked is newSvcPG with the server reading clock when it is set.
+func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
+	t.Helper()
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -56,6 +63,9 @@ func newSvcPG(t *testing.T, activated bool) *svcPG {
 	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), f.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
+	if clock != nil {
+		cfg.Now = clock.Now
+	}
 	f.srv = New(cfg)
 	f.admin = ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	f.person = ssoSession(t, "sub-person", "person@corp.example", oidc.RoleUser)
@@ -249,4 +259,71 @@ func (f *svcPG) oldWriterSave(cfg types.SiteConfig) {
 		`UPDATE site_config SET config = (config - $1::text[]) || $2::jsonb WHERE singleton`, declared, raw); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// secretNameOf is the derived record name of row id's grant.
+func (f *svcPG) secretNameOf(id string) string { return serviceGrantSecretName(f.uid(id)) }
+
+// secretBody is the secret route's body for row id's present destination.
+func (f *svcPG) secretBody(id, value string) putServiceGrantSecretRequest {
+	p := f.row(id)
+	return putServiceGrantSecretRequest{Value: value, TokenURL: p.OIDC.ServiceGrant.TokenURL, ClientID: p.OIDC.ServiceGrant.ClientID, BaseURL: p.BaseURL}
+}
+
+// tokenOf asks this server for row id's token, as trigger would.
+func (f *svcPG) tokenOf(id, trigger string) (serviceGrantMinted, error) {
+	f.t.Helper()
+	return f.srv.serviceGrantToken(context.Background(), f.row(id), "", trigger)
+}
+
+// cachedOn is s's cached token for uid.
+func cachedOn(s *Server, uid string) (serviceGrantCached, bool) {
+	s.svcGrant.mu.Lock()
+	defer s.svcGrant.mu.Unlock()
+	c, ok := s.svcGrant.cache[uid]
+	return c, ok
+}
+
+// seedOne stores corp-a with a grant and writes its secret through the route.
+func (f *svcPG) seedOne() {
+	f.t.Helper()
+	if w := f.put(svcPGRow("corp-a", true)); w.Code/100 != 2 {
+		f.t.Fatalf("seed corp-a: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.writeSecret("corp-a", svcClientSecret); w.Code != http.StatusNoContent {
+		f.t.Fatalf("seed corp-a's secret: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// claimFor adds row id with a grant and a secret beside corp-a, then removes it while its external delete
+// fails, so a stored claim is left on its uid. It returns that uid.
+func (f *svcPG) claimFor(id string) string {
+	f.t.Helper()
+	if w := f.put(svcPGRow("corp-a", true), svcPGRow(id, true)); w.Code/100 != 2 {
+		f.t.Fatalf("add %s: %d %s", id, w.Code, w.Body.String())
+	}
+	if w := f.writeSecret(id, svcClientSecret); w.Code != http.StatusNoContent {
+		f.t.Fatalf("secret of %s: %d %s", id, w.Code, w.Body.String())
+	}
+	uid := f.uid(id)
+	f.sec.mu.Lock()
+	f.sec.delErr = errSvcDown
+	f.sec.mu.Unlock()
+	w := f.put(svcPGRow("corp-a", true))
+	f.sec.mu.Lock()
+	f.sec.delErr = nil
+	f.sec.mu.Unlock()
+	if w.Code/100 != 2 {
+		f.t.Fatalf("remove %s: %d %s", id, w.Code, w.Body.String())
+	}
+	if !slices.Contains(f.claimUIDs(), uid) {
+		f.t.Fatalf("no stored claim on %s's uid after its delete failed: %v", id, f.claimUIDs())
+	}
+	return uid
+}
+
+// retry is POST /service-grant-cleanups/{uid}/retry as an admin.
+func (f *svcPG) retry(uid string) *httptest.ResponseRecorder {
+	f.t.Helper()
+	return f.do(http.MethodPost, "/service-grant-cleanups/"+uid+"/retry", f.admin, nil)
 }
