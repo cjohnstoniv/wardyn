@@ -278,6 +278,118 @@ if publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null; then fail "the 
 sed -i '/^    runs-on/a\    permissions:\n      contents: read' "$WORK/old-shape.yml"
 publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null || fail "the publisher guard refuses a job that holds no write permission"
 PIN_REQUIRE=1 publisher_pin_guard < "$PI" || fail "the publishing job in publish-image.yml handles the image outside the pinned lines (lines above)"
+
+# The publishing job's steps and what they run are pinned whole, so a line added to a step or a step added to the job
+# fails until this test is edited with it. The list of step starts drops the ref after an action's name (a version
+# bump is not a change), and each run block is compared with its comments and blank lines dropped and every line
+# trimmed. The pin guard above names the lines that touch the copied-out files; this is the check that nothing else
+# was added next to them.
+publisher_step_starts() { awk '/^  publish-image:$/ { on = 1; next } /^  [A-Za-z0-9_-]+:$/ { on = 0 } on && /^      - /' | sed -E 's/@[^ ]+( #.*)?$//'; }
+publisher_run_block() { # STEP-NAME: that step's run text; reads the workflow on stdin
+  awk -v want="$1" '
+function trim(x) { sub(/^[[:space:]]+/, "", x); sub(/[[:space:]]+$/, "", x); return x }
+/^  [A-Za-z0-9_-]+:$/ { on = ($1 == "publish-image:"); cur = ""; grab = 0; next }
+!on { next }
+/^      - name: / { cur = $0; sub(/^      - name: /, "", cur); grab = 0; next }
+/^      - / { cur = ""; grab = 0; next }
+cur != want { next }
+/^        run: \|$/ { grab = 1; next }
+/^        run: / { t = $0; sub(/^        run: /, "", t); print trim(t); next }
+grab && /^          / { t = trim($0); if (t != "" && t !~ /^#/) print t; next }
+grab && trim($0) == "" { next }
+grab { grab = 0 }
+'
+}
+PIN_STEPS='      - uses: actions/checkout
+      - uses: docker/setup-qemu-action
+      - uses: docker/setup-buildx-action
+      - uses: docker/login-action
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+      - name: Compute image tags
+      - uses: sigstore/cosign-installer
+      - uses: docker/build-push-action
+      - name: Check the image reports its revision
+      - name: Sign the pushed image (keyless, by digest)
+      - name: Point the remaining tags at the signed image'
+PIN_RUN_CHECK='set -euo pipefail
+reports() {
+if [ -n "$REVISION" ]; then
+case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '"'"'$2'"'"', want it to end in +${REVISION::9}"; exit 1;; esac
+elif [ "$2" != "${REF_NAME#v}" ]; then
+echo "::error::$1 printed '"'"'$2'"'"', want the release version ${REF_NAME#v}"; exit 1
+fi
+}
+run_in_image() {
+docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+--security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
+}
+cli="$(run_in_image /usr/local/bin/wardyn)" || { echo "::error::wardyn version failed in the image"; exit 1; }
+got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI'"'"'s version command failed in the image"; exit 1; }
+reports "wardyn in the image" "$cli"
+reports "the linux/amd64 host CLI in the image" "$got"
+for arch in amd64 arm64; do
+cid="$(docker create --platform "linux/$arch" "$IMAGE_REF")"
+mkdir -p "$RUNNER_TEMP/$arch/host"
+docker cp "$cid:/host/." "$RUNNER_TEMP/$arch/host"
+docker cp "$cid:/wardynd" "$RUNNER_TEMP/$arch/wardynd"
+docker rm "$cid" >/dev/null
+expected=("$RUNNER_TEMP/$arch/wardynd" "$RUNNER_TEMP/$arch/host/wardyn")
+for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+expected+=("$RUNNER_TEMP/$arch/host/wardyn-$platform")
+done
+for f in "${expected[@]}"; do
+if [ -L "$f" ] || [ ! -f "$f" ]; then
+echo "::error::$(basename "$f") is missing from the linux/$arch image or is not a regular file"; exit 1
+fi
+if [ -n "$REVISION" ]; then
+grep -aqF "$REVISION" "$f" \
+|| { echo "::error::$(basename "$f") in the linux/$arch image was not stamped with revision ${REVISION}"; exit 1; }
+fi
+done
+done
+echo "image reports: $got"'
+PIN_RUN_SIGN='cosign sign --yes "${IMAGE_REF}"'
+PIN_RUN_RETAG='set -euo pipefail
+while IFS= read -r t; do
+[ -n "$t" ] || continue
+docker buildx imagetools create --tag "$t" "$IMAGE_REF"
+now="$(docker buildx imagetools inspect "$t" --format '"'"'{{.Manifest.Digest}}'"'"')"
+[ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
+done <<< "$LATER_TAGS"'
+publisher_whole_pin() { # reads the workflow on stdin; prints each difference, exits 1 on any
+  local wf rc=0 pair name want got
+  wf="$(cat)"
+  got="$(publisher_step_starts <<<"$wf")"
+  [ "$got" = "$PIN_STEPS" ] || { echo "the publishing job's steps are not the pinned list: $got"; rc=1; }
+  for pair in 'Check the image reports its revision|PIN_RUN_CHECK' 'Sign the pushed image (keyless, by digest)|PIN_RUN_SIGN' 'Point the remaining tags at the signed image|PIN_RUN_RETAG'; do
+    name="${pair%%|*}"; want="${pair##*|}"; got="$(publisher_run_block "$name" <<<"$wf")"
+    [ "$got" = "${!want}" ] || { echo "the run block of '$name' is not the pinned text"; rc=1; }
+  done
+  return $rc
+}
+publisher_whole_pin < "$PI" || fail "publish-image.yml's publishing job differs from the pinned steps and run blocks (lines above)"
+# Lines that run a copied-out file by a spelling the pin guard does not name, and a step added to the job, each
+# added to a copy of the real workflow: each must fail, and a comment or a version bump of an action must not.
+plant() { # NAME AFTER LINE...: the workflow with LINE added after the first line that contains AFTER
+  local name="$1" after="$2"; shift 2
+  ADD="$(printf '%s\n' "$@")" AFTER="$after" awk '{ print } !done && index($0, ENVIRON["AFTER"]) { print ENVIRON["ADD"]; done = 1 }' "$PI" > "$WORK/plant-$name.yml"
+  cmp -s "$PI" "$WORK/plant-$name.yml" && fail "the plant $name did not change the workflow"
+  return 0
+}
+plant p1 'for f in "${expected[@]}"; do' '              "${expected[0]}" version >/dev/null 2>&1 || true'
+plant p2 'docker rm "$cid"' '            for g in "${expected[@]}"; do if "$g" version >/dev/null 2>&1; then :; fi; done'
+plant p3 'docker rm "$cid"' '            /home/runner/work/_temp/amd64/wardynd version >/dev/null 2>&1 || true'
+plant p4 'docker rm "$cid"' '            (cd /home/runner/work/_temp/amd64 && ./wardynd version) || true'
+plant p5 'cosign sign --yes' '      - run: /home/runner/work/_temp/arm64/host/wardyn-linux-amd64 version || true'
+plant p6 'cosign sign --yes' '      - name: Look' '        run: echo hi'
+for n in p1 p2 p3 p4 p5 p6; do
+  if publisher_whole_pin < "$WORK/plant-$n.yml" >/dev/null; then fail "the whole-block pin accepts the plant $n"; fi
+done
+plant c1 'docker rm "$cid"' '            # a comment'
+publisher_whole_pin < "$WORK/plant-c1.yml" >/dev/null || fail "the whole-block pin refuses an added comment"
+sed -E 's|(uses: docker/setup-qemu-action)@[0-9a-f]+ # v4|\1@0123456789abcdef0123456789abcdef01234567 # v5|' "$PI" > "$WORK/plant-c2.yml"
+cmp -s "$PI" "$WORK/plant-c2.yml" && fail "the version-bump control did not change the workflow"
+publisher_whole_pin < "$WORK/plant-c2.yml" >/dev/null || fail "the whole-block pin refuses a version bump of an action"
 # One fixture per way the unsigned image's bytes could reach the runner again; each must fail its guard, and the
 # workflow as it stands must pass both (above).
 mkfix() { # NAME BODY: a workflow whose publishing job runs BODY
