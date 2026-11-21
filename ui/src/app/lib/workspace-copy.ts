@@ -56,13 +56,6 @@ export const C = {
 // Shipped copy, frozen by #206 — not part of the byte-parity `C` export above
 // (workspace-copy.test.ts's byte-checks parse only `C`).
 export const WORKSPACE_DETAIL_EXTRA = {
-  // The image rebuild, followed until it ends. A second POST while one runs answers the same "building", so the
-  // page says one is in progress rather than that another started, and tells a status that cannot be read apart
-  // from a build that failed.
-  REBUILD_IN_PROGRESS: "Rebuild in progress",
-  REBUILD_STATUS_UNREADABLE: "Rebuild in progress. Its status cannot be read right now, so it may already have ended; retrying.",
-  REBUILT: (name: string) => `Rebuilt "${name}"`,
-  REBUILD_FAILED: (name: string) => `Rebuild of "${name}" failed`,
   // The delete confirm, one string for the list's menu and the detail page: the
   // same Store.DeleteWorkspace removes the row with its requirements and
   // recorded sessions, so both dialogs must say so.
