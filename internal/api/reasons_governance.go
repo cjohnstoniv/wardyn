@@ -113,8 +113,6 @@ const (
 // The issuer-portal authority reasons (portal_issuer_activate.go, portal_issuer_governance.go, policy_ui_callers.go), here to keep
 // reasons_routes.go under the 1000-line gate.
 const (
-	reasonDelegatePersonUnknownPortal = "delegate_person_unknown_portal" // a person list names a portal person whose issuer has no binding (shared with the store-ruling mapping)
-
 	reasonPortalIssuersStatementRequired  = "portal_issuers_statement_required"   // the activation needs old_servers_stopped: true
 	reasonPortalIssuersOldServerSuspected = "portal_issuers_old_server_suspected" // another client of the database is not a 0.10.2 wardynd; the answer lists it
 	reasonPortalIssuersSampleWarming      = "portal_issuers_sample_warming"       // this replica has not sampled the database for two minutes yet
