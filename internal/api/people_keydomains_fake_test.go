@@ -293,6 +293,8 @@ func TestPeopleList_RoleReadFailuresAreServerErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := newDirectoryFake()
+			// The role reads are made only for a page that holds a workforce person.
+			st.page = store.PeopleDirectoryPage{People: []store.PersonListing{{Principal: "a-sub", Email: "a@corp.example"}}}
 			mutate(st.roleMapStore)
 			srv, _ := peopleServer(t, st, newAccessAuth(t, map[string]string{"a@corp.example": oidc.RoleUser}, oidc.RoleUser, nil, nil))
 			if w := do(t, srv, http.MethodGet, "/api/v1/people", adminToken, ""); w.Code != http.StatusInternalServerError {
