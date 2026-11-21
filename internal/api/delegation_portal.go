@@ -219,7 +219,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		return
 	}
 	if !exists {
-		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, "user_type_unknown", nil)
+		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, string(authz.ReasonUserTypeUnknown), nil)
 		return
 	}
 	// A display value for the People page only: the email claim of an ID token, the login name of an access
