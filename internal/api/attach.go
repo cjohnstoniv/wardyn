@@ -290,8 +290,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
-	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock included, runs
-	// under the opening deadline; one that fails or runs out is the retryable 503.
+	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock and the runtime's
+	// thaw included, runs under what is left of the opening deadline, by design: one that fails or runs out is
+	// the retryable 503, and a thaw the deadline ends leaves the run paused with a settle record for the
+	// pause sweep (resumeRun), so the next try starts from a paused run.
 	if err := s.thawForExec(actx, run, principalType, principal, "presence"); err != nil {
 		if !admit.admitBy.IsZero() {
 			refuseIssuerOpeningUnread(actx, w, "thaw", attachUnverifiableMsg, err)
@@ -301,8 +303,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// transport=local (attach_local.go) is checked only here, after every check above, thaw
-	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
-	local, ok := s.localAttachRequested(w, r, run)
+	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder. It reads under
+	// the opening deadline (ar); the socket below lives on the request.
+	local, ok := s.localAttachRequested(w, ar, run)
 	if !ok {
 		return
 	}
