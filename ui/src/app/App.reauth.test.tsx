@@ -63,7 +63,7 @@ vi.mock("./components/screens/runs", async () => {
         >
           Save note
         </button>
-        {/* A person-naming action (CX-509): one that finishes at once, and one that finishes when the test says. */}
+        {/* A person-naming action: one that finishes at once, and one that finishes when the test says. */}
         <button type="button" onClick={() => accountToast("success", "Signed dana@example.org out everywhere.", signInGeneration())}>
           Post person toast
         </button>
@@ -539,7 +539,7 @@ describe("App — a deliberate sign-out (#483)", () => {
 
   // #2100, M12: signing out ends the Wardyn session only; an SSO person is told, on the sign-in screen,
   // to leave the work account too, once the server has confirmed the sign-out.
-  describe("notifications that name a person (CX-509)", () => {
+  describe("notifications that name a person", () => {
     async function openConsole() {
       personAction.reset();
       render(
