@@ -951,3 +951,19 @@ func TestKeptFromFolderHoldsAnUnrecoveredSession(t *testing.T) {
 		t.Fatalf("a machine no session holds: %+v", k)
 	}
 }
+
+// The caps list each machine with the run whose stop wrote its record, so the organisation can tell an idle
+// report of the latest use from a cached one of an earlier use.
+func TestKeptCapsNameTheRunThatStoppedEachMachine(t *testing.T) {
+	m := keptRig(t)
+	id, plain := uuid.New(), uuid.New()
+	keptMachine(t, m, id, "dev", func(r *macvm.KeptRecord) { r.LastStopRun = "run-2" })
+	keptMachine(t, m, plain, "old", nil)
+	got := map[string]string{}
+	for _, k := range m.keptFromFolder().Machines {
+		got[k.ID] = k.StopRunID
+	}
+	if got[id.String()] != "run-2" || got[plain.String()] != "" {
+		t.Fatalf("stop runs in the caps = %v, want run-2 for the recorded stop and none for a machine with no recorded stop", got)
+	}
+}

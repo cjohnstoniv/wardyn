@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -796,6 +797,41 @@ func TestKeptNameIsRecordedKeptAndRenamed(t *testing.T) {
 	} {
 		if rec := boot(step.mode, step.name); rec.Name != step.want {
 			t.Fatalf("%s %q: the record names %q, want %q", step.mode, step.name, rec.Name, step.want)
+		}
+	}
+}
+
+// A stop records which run it was: the organisation settles an idle machine only from a record that names
+// the run it waits on, so an older stop's record never stands for a newer use.
+func TestKeptStopUpdateRecordsTheRunThatStopped(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	rec := macvm.KeptRecord{ActiveRun: "run-b", LastStopRun: "run-a", ExpiresAt: now.AddDate(0, 0, -1)}
+	if macvm.KeptStopUpdate(&rec, "run-a", now, 30) || rec.LastStopRun != "run-a" || rec.ActiveRun != "run-b" {
+		t.Fatalf("a stop of a run that no longer holds the machine changed the record: %+v", rec)
+	}
+	if !macvm.KeptStopUpdate(&rec, "run-b", now, 30) || rec.LastStopRun != "run-b" {
+		t.Fatalf("after run-b's stop: %+v, want LastStopRun run-b", rec)
+	}
+	b, err := json.Marshal(macvm.KeptRecord{ID: "m"})
+	if err != nil || strings.Contains(string(b), "last_stop_run") {
+		t.Fatalf("a record with no stop names one: %s %v", b, err)
+	}
+}
+
+// KeptExpired is the deadline the Mac itself checks under the machine's lock before an expiry-driven delete.
+func TestKeptExpired(t *testing.T) {
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		rec  macvm.KeptRecord
+		want bool
+	}{
+		"past its expiry (normal expiry)":        {macvm.KeptRecord{ExpiresAt: now.Add(-time.Hour)}, true},
+		"expiry extended by a later stop":        {macvm.KeptRecord{ExpiresAt: now.Add(24 * time.Hour), LastStopRun: "run-b"}, false},
+		"past its expiry but a session holds it": {macvm.KeptRecord{ExpiresAt: now.Add(-time.Hour), ActiveRun: "run-b"}, false},
+		"no expiry recorded":                     {macvm.KeptRecord{}, false},
+	} {
+		if got := macvm.KeptExpired(tc.rec, now); got != tc.want {
+			t.Errorf("%s: KeptExpired = %v, want %v", name, got, tc.want)
 		}
 	}
 }

@@ -104,7 +104,7 @@ func (m *macOSVMs) keptFromFolder() *runnerwire.MacVMKept {
 		out.WorstBytes += r.worst
 		out.AllocatedBytes += r.written
 		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: r.inUse, RunID: r.run,
-			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt})
+			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt, StopRunID: r.rec.LastStopRun})
 	}
 	return out
 }

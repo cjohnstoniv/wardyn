@@ -294,7 +294,7 @@ func (c *MacVMConfig) keptCheckResume(spec runner.SandboxSpec, dir string) error
 // keptExpired reports whether rec is past its expiry with no session holding it: a machine a run holds
 // never expires under it.
 func keptExpired(rec macvm.KeptRecord, now time.Time) bool {
-	return rec.ActiveRun == "" && !rec.ExpiresAt.IsZero() && now.After(rec.ExpiresAt)
+	return macvm.KeptExpired(rec, now)
 }
 
 // keptHeldBy is the run a record's ActiveRun names while that run's folder is still on the Mac: a session
@@ -532,10 +532,17 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	case err != nil:
 		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
 	}
-	gone, err := removeKept(dir, c.lockWaitOr())
+	var gone bool
+	if by == runnerwire.KeptMachineByExpiry {
+		gone, err = c.removeKeptIfExpired(dir, id)
+	} else {
+		gone, err = removeKept(dir, c.lockWaitOr())
+	}
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
 		return "", runnerwire.Refuse("docker: kept machine %s is running on this Mac", id) // nothing was removed
+	case errors.Is(err, errKeptNotExpired):
+		return "", runnerwire.Refuse("docker: kept machine %s has not expired on this Mac: its record holds a later deadline", id) // nothing was removed
 	case err != nil:
 		return "", fmt.Errorf("docker: delete kept machine %s: %w", id, err)
 	case !gone:
@@ -544,6 +551,31 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	slog.Info("docker: deleted a kept machine", slog.String("machine_id", id.String()), slog.String("by", by))
 	c.changed()
 	return runnerwire.KeptMachineDeleted, nil
+}
+
+// errKeptNotExpired is an expiry-driven delete of a machine whose own record, read under its lock, does not
+// say it has expired: it was used or stopped after the organisation last heard.
+var errKeptNotExpired = errors.New("docker: the kept machine's record has not expired")
+
+// removeKeptIfExpired is removeKept for a delete the organisation started because the machine expired: under
+// the machine's lock it reads the record's own deadline and removes the folder only if that has passed with
+// no session holding the machine. The organisation's view of the deadline may be older than a stop the Mac
+// has written since. No folder is false with no error, as removeKept; a folder whose record is gone or
+// belongs to another machine is left to the sweep, which reads the same record.
+func (c *MacVMConfig) removeKeptIfExpired(dir string, id uuid.UUID) (bool, error) {
+	unlock, err := macvm.LockKeptWait(dir, c.lockWaitOr())
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	rec, err := macvm.ReadKept(dir, id.String())
+	switch {
+	case err != nil:
+		return false, err
+	case c.keptHeldBy(rec) != "" || !keptExpired(rec, c.keptClock()):
+		return false, errKeptNotExpired
+	}
+	return removeKeptHeld(dir)
 }
 
 // keptFolder is one kept machine folder on this Mac, with its record.
@@ -710,7 +742,7 @@ func (d *Driver) KeptMachines() (*runnerwire.MacVMKept, error) {
 		// use even once its run folder is gone: until recoverKept clears it and writes the new deadline, its
 		// expiry is the boot's, and the organisation must not keep or expire the machine by it.
 		run := cmp.Or(runs[f.rec.ID], f.rec.ActiveRun)
-		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
+		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt, StopRunID: f.rec.LastStopRun}
 		out.WorstBytes += keptWorstOf(f.dir)
 		out.AllocatedBytes += n
 		out.Machines = append(out.Machines, m)

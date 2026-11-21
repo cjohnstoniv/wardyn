@@ -30,7 +30,7 @@ const (
 	keptMachineByOwner         = "owner"
 	keptMachineByAdmin         = "admin"
 	keptMachineByErasure       = "erasure"
-	keptMachineByExpiry        = "expiry"
+	keptMachineByExpiry        = runnerwire.KeptMachineByExpiry
 	keptMachineByNonOwnerKill  = "non_owner_kill"
 	keptMachineByRevokedRunner = "revoked_runner"
 )
@@ -362,6 +362,12 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 	on, listed := inv[m.ID.String()]
 	switch {
 	case listed && !on.InUse:
+		// The report settles this run's use only if this run's stop wrote it. An older inventory, one the
+		// runner reused after a failed read, or one from a runner that does not name the stop describes some
+		// earlier use, and its deadline would expire a machine a later run has just used.
+		if !on.ObservesStopOf(m.RunID.String()) {
+			return nil
+		}
 		exp := on.ExpiresAt
 		if exp.IsZero() {
 			exp = s.keptMachineExpiry(ctx) // a listing with no expiry is not one that has passed

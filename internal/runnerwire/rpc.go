@@ -100,6 +100,11 @@ const (
 // KeptMachineOpDelete is kept_machine's one op.
 const KeptMachineOpDelete = "delete"
 
+// KeptMachineByExpiry is the By of a delete the organisation starts because the machine's deadline has
+// passed. The Mac checks its own record's deadline under the machine's lock before it removes the folder; every
+// other By is a person's or an operator's decision and is not rechecked.
+const KeptMachineByExpiry = "expiry"
+
 // KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
 // erasure, expiry or a revoked runner.
 type KeptMachineArgs struct {

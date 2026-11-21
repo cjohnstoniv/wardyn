@@ -64,3 +64,35 @@ func TestKeptMachineInventoryCarriesItsRun(t *testing.T) {
 		t.Fatalf("round trip %+v", out.Machines)
 	}
 }
+
+// An idle report settles a run's use only when that run's stop wrote it: an older stop's report, one a runner
+// reused after a failed read, one from a runner that names no stop, and one of a machine in use settle nothing.
+func TestKeptMachineObservesStopOf(t *testing.T) {
+	const older, current, later = "run-1", "run-2", "run-3"
+	for name, tc := range map[string]struct {
+		report MacVMKeptMachine
+		run    string
+		want   bool
+	}{
+		"the current run's own stop":                   {MacVMKeptMachine{StopRunID: current}, current, true},
+		"an older cached idle report":                  {MacVMKeptMachine{StopRunID: older}, current, false},
+		"a later completed use":                        {MacVMKeptMachine{StopRunID: current}, later, false},
+		"an unversioned report from an older runner":   {MacVMKeptMachine{}, current, false},
+		"the stop of the run, but the machine is busy": {MacVMKeptMachine{StopRunID: current, InUse: true}, current, false},
+		"no run asked":                                 {MacVMKeptMachine{}, "", false},
+	} {
+		if got := tc.report.ObservesStopOf(tc.run); got != tc.want {
+			t.Errorf("%s: ObservesStopOf = %v, want %v", name, got, tc.want)
+		}
+	}
+	b, err := json.Marshal(MacVMKeptMachine{ID: "m", StopRunID: current})
+	if err != nil || !strings.Contains(string(b), `"stop_run_id":"run-2"`) {
+		t.Fatalf("inventory JSON %s, %v", b, err)
+	}
+	if b, _ = json.Marshal(MacVMKeptMachine{ID: "m"}); strings.Contains(string(b), "stop_run_id") {
+		t.Fatalf("an unversioned report names a stop: %s", b)
+	}
+	if KeptMachineByExpiry != "expiry" {
+		t.Fatalf("KeptMachineByExpiry = %q", KeptMachineByExpiry)
+	}
+}

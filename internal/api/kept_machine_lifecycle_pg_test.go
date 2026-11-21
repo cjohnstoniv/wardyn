@@ -528,7 +528,7 @@ func TestInventoryKeepsAMachineWhoseStopReportNeverCame(t *testing.T) {
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	exp := time.Now().Add(20 * 24 * time.Hour).UTC().Truncate(time.Second)
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 7 << 30, ExpiresAt: exp})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 7 << 30, StopRunID: k.run.ID.String(), ExpiresAt: exp})
 	k.sweep(t)
 	got, _ := k.row(t, m.ID)
 	if got.State != types.KeptMachineKept || got.Scrubbed || got.DiskBytes != 7<<30 || !got.ExpiresAt.Equal(exp) {
@@ -558,7 +558,7 @@ func TestReconcileIgnoresAnotherRunnersInventory(t *testing.T) {
 	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 0 || len(macB.asked()) != 0 {
 		t.Fatalf("machine.keep %v, Mac B asked %v; want neither", keeps, macB.asked())
 	}
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 2 << 30, ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 2 << 30, StopRunID: k.run.ID.String(), ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
 	k.sweep(t)
 	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || got.DiskBytes != 2<<30 {
 		t.Fatalf("after Mac A's own inventory: %+v; want kept at A's size", got)
