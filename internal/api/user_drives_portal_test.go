@@ -172,6 +172,23 @@ func TestPortalTeamDrive_ConsolePortalKeepsTheMemberPath(t *testing.T) {
 	}
 }
 
+// A row written around the admin routes (the database refuses two drives of one slug, so this is a resolver fixture, not
+// a reachable state) that gives a portal two drives with one folder name is refused together at the run, 422
+// drive_target_conflict, and the refusal is audited as every drive refusal is.
+func TestPortalTeamDrive_TargetConflictRefusedAtRun(t *testing.T) {
+	f := newPortalDriveFixture(t)
+	second := portalAllocation("portal data", f.one, false) // the same slug as "Portal Data": one target
+	f.st.rows[f.one] = []store.UserDriveWinner{f.allocated, second}
+	ctx := viaPortal(driveMemberCtx(nil, false), f.one)
+	drives, ref := authorizeDrives(f.srv, ctx, drivesRequest(f.allocated.Drive.ID.String(), second.Drive.ID.String()))
+	if ref == nil || drives != nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(authz.ReasonDriveTargetConflict) {
+		t.Errorf("two portal drives on one target = %+v, %+v; want 422 drive_target_conflict and no drives", drives, ref)
+	}
+	if drives, ref := authorizeDrives(f.srv, ctx, drivesRequest(f.allocated.Drive.ID.String())); ref != nil || len(drives) != 1 {
+		t.Errorf("one of them alone = %+v, %+v; want it mounted", drives, ref)
+	}
+}
+
 // A person who reaches a drive through no portal, or through a console portal, is answered exactly as before the
 // portal rule: the same mounted drive for a group's allocation and the same 422 for an id that names nothing or
 // another portal's drive, compared with a server whose store has no portal reads at all.

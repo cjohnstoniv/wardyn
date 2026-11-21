@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -259,17 +261,23 @@ func TestPortalTeamDrive_RunningRunKeepsMount_PG(t *testing.T) {
 	}
 }
 
-// Two of the portal's drives whose names make one folder name are refused together at the run, and nothing is
-// created.
-func TestPortalTeamDrive_SlugCollisionRefusedAtRun_PG(t *testing.T) {
+// The database refuses what the run's collision check defends against: two drives whose names make one slug cannot both
+// be written, so a portal can never be allocated two drives with one folder name through the admin routes. The refusal
+// is the production uniqueness constraint, and the second write leaves no row. The run's own defensive check, for a row
+// written around it, is TestPortalTeamDrive_TargetConflictRefusedAtRun with a resolver fixture.
+func TestPortalTeamDrive_SlugCollisionRefusedAtWrite_PG(t *testing.T) {
 	e := newPortalLaunchEnv(t, 5)
-	a, b := e.teamDrive("Team Data", true), e.teamDrive("team data", true)
-	_, w := e.launch(a, b)
-	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != string(authz.ReasonDriveTargetConflict) {
-		t.Fatalf("two drives on one folder name = %d %s, want 422 drive_target_conflict", w.Code, w.Body)
+	first := e.teamDrive("Team Data", true)
+	_, err := e.pg.UpsertUserDrive(context.Background(), types.UserDrive{Name: "team data", Backend: types.DriveBackendDockerVolume,
+		HomeTemplate: types.HomeTemplateHash, Writable: true, Reclaim: types.DriveReclaimRetain, Team: true, CreatedBy: "admin@example.com"}, false)
+	if !errors.Is(err, store.ErrDriveSlugConflict) {
+		t.Fatalf("a second drive with the same slug: err = %v, want ErrDriveSlugConflict", err)
 	}
-	if n := e.count(`SELECT count(*) FROM agent_runs WHERE created_via = $1`, e.portal.ID); n != 0 {
-		t.Errorf("%d run(s) created by the refused launch, want none", n)
+	if n := e.count(`SELECT count(*) FROM user_drives WHERE name_slug = $1`, types.DriveSlug(first.Name)); n != 1 {
+		t.Errorf("%d drive rows with the slug, want the first alone", n)
+	}
+	if _, w := e.launch(first); w.Code != http.StatusCreated {
+		t.Errorf("the one drive's launch = %d %s, want 201", w.Code, w.Body)
 	}
 }
 

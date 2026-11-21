@@ -119,9 +119,22 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 		s.grantsAppear = nil
 	}
 	if refuseIfAllocated {
-		// As the store's statement counts them: a portal's allocation only when the write moves the backend.
+		// As the store's statement judges them (driveMovesAnAllocationPred): an allocation counts when this write moves its object.
+		before, held := s.drives[d.ID]
 		for _, g := range s.grants {
-			if g.DriveID == d.ID && (g.SubjectType != types.DriveSubjectPortal || s.drives[d.ID].Backend != d.Backend) {
+			if g.DriveID != d.ID || !held {
+				continue
+			}
+			slugMoves := before.ObjectScheme != types.DriveObjectSchemeID && types.DriveSlug(before.Name) != types.DriveSlug(d.Name)
+			moves := before.Backend != d.Backend
+			switch {
+			case g.SubjectType == types.DriveSubjectPortal:
+			case before.Team:
+				moves = moves || (d.Backend == types.DriveBackendHostPath && before.HostRoot != d.HostRoot) || slugMoves
+			default:
+				moves = moves || before.HostRoot != d.HostRoot || before.HomeTemplate != d.HomeTemplate || slugMoves
+			}
+			if moves {
 				return types.UserDrive{}, store.ErrDriveAllocated
 			}
 		}

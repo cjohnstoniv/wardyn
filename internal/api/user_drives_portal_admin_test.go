@@ -199,13 +199,13 @@ func TestPortalDriveAllocation_UnmarkTeamRefusedWhileHeld(t *testing.T) {
 	}
 }
 
-// rehomeFixture is the portal admin fixture holding portals portal allocations and people group allocations of its
-// team drive, with a PUT caller that answers the drive's own body with a new name and home template.
-func rehomeFixture(t *testing.T, portals, people int) (*portalGrantStore, *recRecorder, types.UserDrive, func(name, query string) *httptest.ResponseRecorder) {
+// rehomeFixture is the portal admin fixture on a static claim (Kubernetes target, which accepts both the hash and the sub
+// home template) holding portals portal allocations and people group allocations of its team drive, named under scheme,
+// with a PUT caller that sends the drive back with a new name and home template.
+func rehomeFixture(t *testing.T, portals, people int, scheme types.DriveObjectScheme) (*portalGrantStore, *recRecorder, types.UserDrive, func(name string, template types.HomeTemplate, query string) *httptest.ResponseRecorder) {
 	t.Helper()
 	srv, st, d := portalAdminFixture(t)
-	// A static claim, which accepts both the hash and the sub home template, on a deployment that dispatches to Kubernetes.
-	d.Backend = types.DriveBackendK8sPVCStatic
+	d.Backend, d.ObjectScheme = types.DriveBackendK8sPVCStatic, scheme
 	st.drives[d.ID] = d
 	srv.cfg.RunnerTarget = d.Backend.RunnerTarget()
 	rec := &recRecorder{}
@@ -218,69 +218,89 @@ func rehomeFixture(t *testing.T, portals, people int) (*portalGrantStore, *recRe
 		g := types.UserDriveGrant{ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: fmt.Sprintf("grp-%d", i), DriveID: d.ID, Enabled: true}
 		st.grants[g.ID] = g
 	}
-	return st, rec, d, func(name, query string) *httptest.ResponseRecorder {
+	return st, rec, d, func(name string, template types.HomeTemplate, query string) *httptest.ResponseRecorder {
 		return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String()+query,
-			`{"name":"`+name+`","backend":"k8s_pvc_static","team":true,"home_template":"sub"}`, map[string]string{"id": d.ID.String()})
+			`{"name":"`+name+`","backend":"k8s_pvc_static","team":true,"home_template":"`+string(template)+`"}`, map[string]string{"id": d.ID.String()})
 	}
 }
 
-// A drive held by portals alone is edited without a re-home confirmation: its folders are named by the portal and
-// drive ids, so a rename and a home template change move none of them, and the audit row claims no move.
-func TestPortalDriveRehome_PortalOnlyEditIsAcknowledged(t *testing.T) {
-	st, rec, d, put := rehomeFixture(t, 2, 0)
-	w := put("Team Data Renamed", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("a rename and template change of a portal-only drive = %d %s, want 200 with no confirmation", w.Code, w.Body)
-	}
-	if got := st.drives[d.ID]; got.Name != "Team Data Renamed" || got.HomeTemplate != types.HomeTemplateSub {
-		t.Errorf("stored drive = %+v, want the edit written", got)
-	}
-	data := driveAuditData(t, rec, "drive.write")
-	if data["rehomed"] != false || data["rehomed_subjects"] != nil || data["rehomed_fields"] != nil {
-		t.Errorf("drive.write = %v, want rehomed false with no subjects or fields", data)
+// On a production (ID-named) static team drive a home template change names no storage for a group (the team folder is
+// named by the drive id) and none for a portal (named by the portal and drive ids), so it is written with no
+// confirmation and an audit row that claims no move, whatever mix of portals and groups holds the drive. A rename does
+// the same under the ID scheme, since the name is not in the object name.
+func TestPortalDriveRehome_NoStorageMovedIsAcknowledged(t *testing.T) {
+	for _, c := range []struct {
+		label          string
+		portals, group int
+	}{{"portals only", 2, 0}, {"portals and a group", 2, 1}, {"a group only", 0, 1}} {
+		st, rec, d, put := rehomeFixture(t, c.portals, c.group, types.DriveObjectSchemeID)
+		w := put("Team Data Renamed", types.HomeTemplateSub, "")
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: a rename and template change = %d %s, want 200 with no confirmation", c.label, w.Code, w.Body)
+			continue
+		}
+		if got := st.drives[d.ID]; got.Name != "Team Data Renamed" || got.HomeTemplate != types.HomeTemplateSub {
+			t.Errorf("%s: stored drive = %+v, want the edit written", c.label, got)
+		}
+		data := driveAuditData(t, rec, "drive.write")
+		if data["rehomed"] != false || data["rehomed_subjects"] != nil || data["rehomed_fields"] != nil {
+			t.Errorf("%s: drive.write = %v, want rehomed false with no subjects or fields", c.label, data)
+		}
 	}
 }
 
-// With people and portals on one drive, only the people's allocations are re-homed: the refusal and the confirmed
-// audit row count them and name the fields, never the portals.
+// Under the legacy slug scheme the name is in a group's object name, so a rename moves the group's folder and not the
+// portals': the refusal and the confirmed audit row count the group alone and name the name, never the template.
 func TestPortalDriveRehome_MixedGrantsCountOnlyWhatMoves(t *testing.T) {
-	st, rec, d, put := rehomeFixture(t, 2, 1)
-	w := put("Team Data Renamed", "")
+	st, rec, d, put := rehomeFixture(t, 2, 1, types.DriveObjectSchemeSlug)
+	w := put("Team Data Renamed", types.HomeTemplateSub, "")
 	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveRehomeInvalid ||
-		!strings.Contains(w.Body.String(), "allocated to 1 subject and this change re-homes it") {
-		t.Fatalf("mixed edit = %d %s, want 409 naming 1 subject", w.Code, w.Body)
+		!strings.Contains(w.Body.String(), "allocated to 1 subject and this change re-homes it") ||
+		strings.Contains(w.Body.String(), "home_template") {
+		t.Fatalf("mixed edit = %d %s, want 409 naming 1 subject and the name only", w.Code, w.Body)
 	}
 	if st.drives[d.ID].Name != d.Name {
 		t.Errorf("the refused edit wrote %q", st.drives[d.ID].Name)
 	}
-	if w = put("Team Data Renamed", "?confirm=rehome"); w.Code != http.StatusOK {
+	if w = put("Team Data Renamed", types.HomeTemplateSub, "?confirm=rehome"); w.Code != http.StatusOK {
 		t.Fatalf("confirmed mixed edit = %d %s, want 200", w.Code, w.Body)
 	}
 	data := driveAuditData(t, rec, "drive.write")
-	if data["rehomed"] != true || data["rehomed_subjects"] != float64(1) {
-		t.Errorf("drive.write = %v, want rehomed true for 1 subject", data)
+	if data["rehomed"] != true || data["rehomed_subjects"] != float64(1) ||
+		!reflect.DeepEqual(data["rehomed_fields"], []any{`name "Team Data" → "Team Data Renamed"`}) {
+		t.Errorf("drive.write = %v, want rehomed true for 1 subject through the name alone", data)
 	}
 }
 
-// What moves, by allocation kind: a person or group's folder is named by all five identity fields, a portal's by the
-// backend alone, so a backend change moves every allocation and the rest move the people only.
+// What moves, by allocation kind and drive: an ordinary drive's person or group allocation is named by all five identity
+// fields; a team drive's group by the backend, a host path's root and, under the slug scheme, the name; a portal's by
+// the backend alone.
 func TestPortalDriveRehome_AllocationsThatMove(t *testing.T) {
-	name, backend := `name "a" → "b"`, `backend "docker_volume" → "k8s_pvc_static"`
+	name, template := `name "a" → "b"`, `home_template "hash" → "sub"`
+	root := `host_root "/a" → "/b"`
+	backend := `backend "docker_volume" → "k8s_pvc_static"`
+	item := func(team bool, b types.DriveBackend, people, portals int) types.UserDriveListItem {
+		return types.UserDriveListItem{UserDrive: types.UserDrive{Team: team, Backend: b}, GrantCount: people + portals, PortalGrantCount: portals}
+	}
+	same := func(b types.DriveBackend) types.UserDrive { return types.UserDrive{Backend: b} }
 	for _, c := range []struct {
-		label          string
-		people, portal int
-		changes        []string
-		wantMoved      int
-		wantChanges    []string
+		label       string
+		before      types.UserDriveListItem
+		after       types.UserDrive
+		changes     []string
+		wantMoved   int
+		wantChanges []string
 	}{
-		{"portals only, a rename", 0, 2, []string{name}, 0, nil},
-		{"portals only, a backend change", 0, 2, []string{name, backend}, 2, []string{backend}},
-		{"people and portals, a rename", 1, 2, []string{name}, 1, []string{name}},
-		{"people and portals, a backend change", 1, 2, []string{name, backend}, 3, []string{name, backend}},
-		{"people only, a rename", 2, 0, []string{name}, 2, []string{name}},
+		{"team, portals only, template and name", item(true, types.DriveBackendK8sPVCStatic, 0, 2), same(types.DriveBackendK8sPVCStatic), []string{template, name}, 0, nil},
+		{"team, a group and portals, template only", item(true, types.DriveBackendK8sPVCStatic, 1, 2), same(types.DriveBackendK8sPVCStatic), []string{template}, 0, nil},
+		{"team, a group and portals, name (slug scheme)", item(true, types.DriveBackendK8sPVCStatic, 1, 2), same(types.DriveBackendK8sPVCStatic), []string{template, name}, 1, []string{name}},
+		{"team, a group and portals, backend", item(true, types.DriveBackendDockerVolume, 1, 2), same(types.DriveBackendK8sPVCStatic), []string{backend}, 3, []string{backend}},
+		{"team, portals only, backend", item(true, types.DriveBackendDockerVolume, 0, 2), same(types.DriveBackendK8sPVCStatic), []string{backend, template}, 2, []string{backend}},
+		{"team on a docker volume, a group, host root", item(true, types.DriveBackendDockerVolume, 1, 0), same(types.DriveBackendDockerVolume), []string{root}, 0, nil},
+		{"team on a host path, a group, host root", item(true, types.DriveBackendHostPath, 1, 0), same(types.DriveBackendHostPath), []string{root}, 1, []string{root}},
+		{"ordinary drive, people, template", item(false, types.DriveBackendDockerVolume, 2, 0), same(types.DriveBackendDockerVolume), []string{template}, 2, []string{template}},
 	} {
-		item := types.UserDriveListItem{GrantCount: c.people + c.portal, PortalGrantCount: c.portal}
-		moved, changes := driveRehomedAllocations(item, c.changes)
+		moved, changes := driveRehomedAllocations(c.before, c.after, c.changes)
 		if moved != c.wantMoved || !reflect.DeepEqual(changes, c.wantChanges) {
 			t.Errorf("%s: moved %d %v, want %d %v", c.label, moved, changes, c.wantMoved, c.wantChanges)
 		}
