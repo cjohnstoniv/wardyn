@@ -334,13 +334,15 @@ type portalActivation interface {
 // exists, issuer portals are switched on, console sign-in is configured and the issuer is not its issuer. A
 // non-nil error is a failed read, not a refusal.
 //
-// readType is false inside a decision transaction, where lockPortalReferences reads the type on that
-// transaction and holds it; an unlocked read here would take a second pool connection and could go stale.
-func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate, readType bool) (*registrationRefusal, error) {
+// decision is the decision transaction, or nil outside one. Inside one, lockPortalReferences reads the type
+// on that transaction and holds it, and the activation is read on it too: a read through the pool would take a
+// second connection while the decision holds one, so concurrent decisions could exhaust the pool and wait on
+// each other.
+func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate, decision store.Querier) (*registrationRefusal, error) {
 	if s.cfg.OIDC != nil && isOwnClientID(d.IdPClientID, s.cfg.OIDC.ClientID()) {
 		return unprocessable(reasonDelegateClientIDIsPortal, "idp_client_id", "idp_client_id: must be the portal's own client, not this deployment's"), nil
 	}
-	if readType {
+	if decision == nil {
 		known, err := s.userTypeExists(ctx, d.UserType)
 		if err != nil {
 			return nil, err
@@ -353,7 +355,13 @@ func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate, 
 	if !ok {
 		return refuseRegistration(http.StatusNotImplemented, reasonDelegationStoreUnavailable, "", "issuer portals require the Postgres store backend"), nil
 	}
-	on, err := act.PortalIssuersActivated(ctx)
+	var on bool
+	var err error
+	if decision == nil {
+		on, err = act.PortalIssuersActivated(ctx)
+	} else {
+		on, err = portalIssuersActivatedOn(ctx, decision)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +377,17 @@ func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate, 
 			"issuer: this is the console's own issuer, which a portal may not also be"), nil
 	}
 	return nil, nil
+}
+
+// portalIssuersActivatedOn is store.PG.PortalIssuersActivated read on q, the decision's own transaction. The
+// mark is never cleared, so the read takes no lock.
+func portalIssuersActivatedOn(ctx context.Context, q store.Querier) (bool, error) {
+	var on bool
+	if err := q.QueryRow(ctx, `SELECT COALESCE((SELECT config ? $1::text FROM site_config WHERE singleton), false)`,
+		store.PortalIssuersActivatedKey).Scan(&on); err != nil {
+		return false, fmt.Errorf("read portal issuer activation: %w", err)
+	}
+	return on, nil
 }
 
 // hashPortalCredential is the SHA-256 digest a portal row keeps of its credential, as the store's own
@@ -530,7 +549,7 @@ func (s *Server) registerIssuerDelegate(w http.ResponseWriter, r *http.Request, 
 	}
 	d.RunInUnder = pin
 	ctx := r.Context()
-	ref, err := s.portalDeploymentRefusal(ctx, d, true)
+	ref, err := s.portalDeploymentRefusal(ctx, d, nil)
 	if err != nil {
 		writeServerError(w, r, "register issuer portal", err)
 		return
@@ -618,6 +637,19 @@ func delegateDiffViewOf(d types.Delegate) *delegateDiffView {
 	return v
 }
 
+// portalManagedNote is the sentence a registration's review diff and its delegate.create audit row carry when
+// the portal alone chooses its people: portal-managed admission with no required claim. Wardyn then has no
+// signal of its own that the portal chose the wrong person.
+const portalManagedNote = "The portal chooses who can use it. Anyone it selects who meets the token requirements can act as a user in the pinned unit."
+
+// portalManagedNotes is the review diff's notes for a registration: the portal-managed sentence, or none.
+func portalManagedNotes(d types.Delegate) []string {
+	if d.PortalManagedAdmission && d.RequiredClaim == nil {
+		return []string{portalManagedNote}
+	}
+	return nil
+}
+
 // delegateAbsent is a held registration's base state: the portal did not exist when it was proposed.
 type delegateAbsent struct {
 	ID     uuid.UUID `json:"id"`
@@ -644,7 +676,7 @@ func (s *Server) holdDelegate(w http.ResponseWriter, r *http.Request, reg portal
 	after := delegateDiffViewOf(d)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindDelegate, op: "create", key: d.ID.String(), payload: heldDelegate{Delegate: d, Digest: digest},
-		after: after, changed: changedPaths(nil, after), baseState: delegateAbsent{ID: d.ID, Absent: true},
+		after: after, changed: changedPaths(nil, after), notes: portalManagedNotes(d), baseState: delegateAbsent{ID: d.ID, Absent: true},
 		answer: func(w http.ResponseWriter, saved types.GovernanceChange) {
 			w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
 			writeJSON(w, http.StatusAccepted, map[string]any{
@@ -673,7 +705,7 @@ func applyDelegateChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if d.RunInUnder == nil {
 		return govApplied{}, unprocessable(reasonDelegateIssuerPinRequired, "run_in_under", "run_in_under: required").decided()
 	}
-	ref, err := s.portalDeploymentRefusal(ctx, d, false)
+	ref, err := s.portalDeploymentRefusal(ctx, d, q)
 	if err != nil {
 		return govApplied{}, err
 	}
@@ -719,6 +751,9 @@ func portalCreateAudit(d types.Delegate) map[string]any {
 	}
 	if d.RunInUnder != nil {
 		data["run_in_under"] = d.RunInUnder.String()
+	}
+	if notes := portalManagedNotes(d); len(notes) > 0 {
+		data["note"] = notes[0]
 	}
 	return data
 }
