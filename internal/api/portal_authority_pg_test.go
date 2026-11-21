@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -55,16 +57,27 @@ func (l *portalLife) scimLeavesPortalRowAlone(t *testing.T) {
 		t.Fatalf("control: the person has no pending ledger rows:\n%s", before)
 	}
 	srv := l.h.srv
-	_ = srv.suspendIdentity(ctx, l.st, id, "primary")
-	for _, requireDue := range []bool{true, false} {
-		if purged, err := srv.purgeIdentity(ctx, l.st, id, "primary", requireDue); purged {
-			t.Errorf("purgeIdentity(requireDue %v) purged a portal person (err %v)", requireDue, err)
-		}
+	// Each old entry point answers with what it answers for an identity of another issuer, which is no error and
+	// no work: suspendIdentity, finishPurge, drainOwedRefusals and the sweep return nil; the due-only purge reports
+	// that it purged nothing; the unconditional purge reports true, as it does for every row it is asked to finish,
+	// and its finish step leaves the foreign row alone.
+	if err := srv.suspendIdentity(ctx, l.st, id, "primary"); err != nil {
+		t.Errorf("suspendIdentity = %v, want nil", err)
 	}
-	_ = srv.finishPurge(ctx, l.st, id, "primary")
-	_ = srv.drainOwedRefusals(ctx, l.st, store.PendingRefusalAudit{IdentityID: id, Kind: store.JobKindSuspend})
+	if purged, err := srv.purgeIdentity(ctx, l.st, id, "primary", true); purged || err != nil {
+		t.Errorf("purgeIdentity(requireDue) = %v, %v; want false, nil", purged, err)
+	}
+	if purged, err := srv.purgeIdentity(ctx, l.st, id, "primary", false); !purged || err != nil {
+		t.Errorf("purgeIdentity(unconditional) = %v, %v; want true, nil", purged, err)
+	}
+	if err := srv.finishPurge(ctx, l.st, id, "primary"); err != nil {
+		t.Errorf("finishPurge = %v, want nil", err)
+	}
+	if err := srv.drainOwedRefusals(ctx, l.st, store.PendingRefusalAudit{IdentityID: id, Kind: store.JobKindSuspend}); err != nil {
+		t.Errorf("drainOwedRefusals = %v, want nil", err)
+	}
 	if err := srv.SweepSCIMPurge(ctx); err != nil {
-		t.Errorf("SCIM sweep: %v", err)
+		t.Errorf("SCIM sweep = %v, want nil", err)
 	}
 	if after := l.portalState(t, principal); after != before {
 		t.Errorf("a SCIM path changed the portal person:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -266,8 +279,57 @@ func TestPortalSweep_NeverSelectsWorkforceRows_PG(t *testing.T) {
 	}
 }
 
-// The origin argument on the shared helpers changes nothing for SCIM: one SCIM suspension and purge write the
-// same audit rows as before, by actor, action, outcome and the data keys that name the origin.
+// auditShape is one audit data value with only what varies normalised: an id is "<id>", a time "<time>", a count
+// "#", and a list or an absent list "[]". Strings and booleans stay exact.
+func auditShape(v any) string {
+	switch x := v.(type) {
+	case string:
+		if _, err := uuid.Parse(x); err == nil {
+			return "<id>"
+		}
+		if _, err := time.Parse(time.RFC3339Nano, x); err == nil {
+			return "<time>"
+		}
+		return fmt.Sprintf("%q", x)
+	case float64:
+		return "#"
+	case bool:
+		return fmt.Sprint(x)
+	case nil, []any:
+		return "[]"
+	}
+	return "{}"
+}
+
+// scimAuditRows is every audit row of the named actions as one normalised line each: action, actor type, actor,
+// outcome, the target (an id is "<id>") and the data as key=shape pairs. only, when it names a row's action,
+// keeps just those keys, for a row whose other keys depend on the run; keys in varies are left out for every row,
+// since whether they appear depends on what the person owned.
+func scimAuditRows(events []types.AuditEvent, actions []string, only map[string][]string, varies []string) []string {
+	var out []string
+	for _, ev := range events {
+		if !slices.Contains(actions, ev.Action) {
+			continue
+		}
+		data := map[string]any{}
+		_ = json.Unmarshal(ev.Data, &data)
+		var kv []string
+		for k, v := range data {
+			if slices.Contains(varies, k) || (only[ev.Action] != nil && !slices.Contains(only[ev.Action], k)) {
+				continue
+			}
+			kv = append(kv, k+"="+auditShape(v))
+		}
+		slices.Sort(kv)
+		out = append(out, fmt.Sprintf("%s|%s|%s|%s|%s|%s", ev.Action, ev.ActorType, ev.Actor, ev.Outcome, auditShape(ev.Target), strings.Join(kv, ",")))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// The origin argument on the shared helpers changes nothing for SCIM: one SCIM suspension and one purge write the
+// complete set of audit rows they wrote before it, by action, actor, outcome, target and every data key with its
+// value or, for a count, its type. The fixture below is the pre-origin behaviour written out by key.
 func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	e := newSCIMEnv(t)
 	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
@@ -278,36 +340,28 @@ func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	if e.runState(run) != types.RunKilled {
 		t.Fatalf("control: the run is %s", e.runState(run))
 	}
-	keep := map[string]bool{"slot": true, "kind": true, "reason": true, "from_owner": true}
-	var got []string
-	for _, ev := range e.b.h.audit.snapshot() {
-		switch ev.Action {
-		case "scim.user.deactivate", "run.kill", "workspace.reassign", "person.deprovision", "identity.deactivate":
-			data := map[string]any{}
-			_ = json.Unmarshal(ev.Data, &data)
-			var kv []string
-			for k, v := range data {
-				if keep[k] {
-					kv = append(kv, fmt.Sprintf("%s=%v", k, v))
-				}
-			}
-			slices.Sort(kv)
-			got = append(got, fmt.Sprintf("%s|%s|%s|%s|%s", ev.Action, ev.ActorType, ev.Actor, ev.Outcome, strings.Join(kv, ",")))
-		}
-	}
-	slices.Sort(got)
+	got := scimAuditRows(e.b.h.audit.snapshot(),
+		[]string{"scim.user.deactivate", "run.kill", "workspace.reassign", "person.deprovision", "identity.deactivate"},
+		map[string][]string{"run.kill": {"reason"}},
+		[]string{"member_drive_ids", "kept_machine_ids", "not_erased", "also_named", "tokens_revocation_failed", "detail"})
 	want := []string{
-		"person.deprovision|system|wardyn/scim|success|kind=purge",
-		"person.deprovision|system|wardyn/scim|success|kind=suspend",
-		"run.kill|system|wardyn/scim|success|reason=scim_suspend",
-		"scim.user.deactivate|system|wardyn/scim|success|slot=primary",
-		"workspace.reassign|system|wardyn/scim|success|from_owner=" + purgeSub + ",reason=scim_purge",
+		"person.deprovision|system|wardyn/scim|success|<id>|assignments_deleted=#,components_erased=#,credentials_erased=#,drives=[],email_rows_kept=#,granted_drives=[],grants_deleted=#," +
+			"invitations_cleared=#,invitations_deleted=#,kind=\"purge\",live_left=#,masks_fenced=#,pools_emptied=#,pools_narrowed=#,runner_pools_deleted=#,service_identities_cleared=#," +
+			"templates_erased=#,workspaces_reassigned=#",
+		"person.deprovision|system|wardyn/scim|success|<id>|keys_deleted=#,kind=\"suspend\",runs_killed=#,sessions_cut=#,tokens_revoked=#",
+		"run.kill|system|wardyn/scim|success|<id>|reason=\"scim_suspend\"",
+		"scim.user.deactivate|system|wardyn/scim|success|<id>|slot=\"primary\"",
+		"workspace.reassign|system|wardyn/scim|success|<id>|from_owner=\"" + purgeSub + "\",reason=\"scim_purge\"",
 	}
+	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("SCIM audit rows:\n got %q\nwant %q", got, want)
+		t.Errorf("SCIM audit rows:\n got:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
-	if o := e.b.srv.scimOrigin(); o != (leaverOrigin{actorType: types.ActorSystem, actor: scimActor, killReason: "scim_suspend",
-		deactivateAction: "scim.user.deactivate", purgeReason: "scim_purge"}) {
+	// The origin the SCIM paths use, field by field: the actor, the kill reason, the deactivation action, the
+	// purge reason, workspaces kept under the keep setting, and no portal tail behaviour.
+	o := e.b.srv.scimOrigin()
+	if o.actorType != types.ActorSystem || o.actor != scimActor || o.killReason != "scim_suspend" || o.deactivateAction != "scim.user.deactivate" ||
+		o.purgeReason != "scim_purge" || o.portal {
 		t.Errorf("scimOrigin() = %+v", o)
 	}
 }
