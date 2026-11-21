@@ -1472,6 +1472,7 @@ The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/p
 | `person_not_suspended` | (409): a purge needs a suspended person. |
 | `person_purged` | (409): the purge is permanent; suspend and reactivate are refused. |
 | `portal_lifecycle_incomplete` | (503): steps are still pending. Retry; the portal sweep also finishes them. |
+| `portal_purge_deadline_operator_only` | (403): only a super admin may suspend with a purge deadline. |
 | `portal_person_param_invalid` | (400, 422): `issuer` or `person_id` is missing, or `purge_after_seconds` is out of range. |
 
 ## Pending approval (governance writes)

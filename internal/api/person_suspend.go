@@ -17,7 +17,8 @@ import (
 )
 
 // The admin routes of a portal person's lifecycle: POST /people/{principal}/suspend (security tier),
-// /reactivate and /purge (super admin), and the status view. They work only on delegate:person: principals; a
+// /reactivate and /purge (super admin), and the status view. A suspend with a purge deadline is the permanent
+// purge scheduled, so that needs the super admin too. They work only on delegate:person: principals; a
 // console person gets 422. Because a person is one per issuer and provider id, one suspend reaches them through
 // every portal. They are API-only in 0.10.2: the People page shows the state and has no button for them.
 
@@ -27,8 +28,8 @@ const maxPortalPurgeAfter = 10 * 365 * 24 * time.Hour
 
 // suspendPortalPersonRequest is the optional body of a suspend.
 type suspendPortalPersonRequest struct {
-	// PurgeAfterSeconds schedules the permanent purge that long after the suspension. Absent or 0 means no
-	// deadline.
+	// PurgeAfterSeconds schedules the permanent purge that long after the suspension; only a super admin may set
+	// it above 0, as for an explicit purge. Absent or 0 means no deadline.
 	PurgeAfterSeconds int64 `json:"purge_after_seconds"`
 }
 
@@ -104,7 +105,8 @@ func (s *Server) writePortalPersonState(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// handleSuspendPortalPerson is POST /people/{principal}/suspend, security tier. It writes a person.suspend row,
+// handleSuspendPortalPerson is POST /people/{principal}/suspend, security tier; a positive purge_after_seconds
+// needs the super admin, checked before anything is written (403 portal_purge_deadline_operator_only). It writes a person.suspend row,
 // then runs the portal's suspension with the caller as the origin: the person's grants are deleted in the same
 // transaction as the deactivation, so a grant stops at its next request, and every run of theirs is killed.
 // The request answers 503 until every step is done, so a retry finishes it.
@@ -123,6 +125,11 @@ func (s *Server) handleSuspendPortalPerson(w http.ResponseWriter, r *http.Reques
 			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 			return
 		}
+	}
+	if req.PurgeAfterSeconds > 0 && !s.isOperator(r.Context()) {
+		s.denyPortalPerson(r, "person.suspend", ident.Principal, reasonPortalPurgeDeadlineOperatorOnly)
+		writeErrorReason(w, http.StatusForbidden, reasonPortalPurgeDeadlineOperatorOnly, "only a super admin may schedule a purge: suspend without purge_after_seconds, or ask a super admin")
+		return
 	}
 	if req.PurgeAfterSeconds < 0 || req.PurgeAfterSeconds > int64(maxPortalPurgeAfter/time.Second) {
 		s.denyPortalPerson(r, "person.suspend", ident.Principal, reasonPortalPersonParamInvalid)

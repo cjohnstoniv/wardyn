@@ -491,3 +491,55 @@ func TestPortalSuspend_SecondSuspensionOwnsLedger_PG(t *testing.T) {
 		t.Errorf("the first tail changed the second suspension's ledger (err %v):\n%s\n%s", err, done, after)
 	}
 }
+
+// A purge deadline is the permanent purge scheduled, so only a super admin may set one. A security admin who asks
+// for one is refused before anything changes; the same caller suspends without one; the super admin's deadline is
+// kept and the sweep purges at it.
+func TestPortalSuspend_PurgeDeadlineNeedsSuperAdmin_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, bearer := l.signIn(t, "u1")
+	id := l.ident(t, principal).ID
+	audits := len(l.h.audit.snapshot())
+	w := l.post(t, l.secAdmin, principal, "suspend", `{"purge_after_seconds": 3600}`)
+	if w.Code != http.StatusForbidden || errorReason(w) != "portal_purge_deadline_operator_only" {
+		t.Fatalf("security admin suspend with a deadline = %d %s, want 403 portal_purge_deadline_operator_only", w.Code, w.Body.String())
+	}
+	if ident := l.ident(t, principal); ident.DeactivatedAt != nil || ident.PurgeAfter != nil {
+		t.Errorf("identity after the refusal = deactivated %v, purge_after %v; want neither", ident.DeactivatedAt, ident.PurgeAfter)
+	}
+	if n := l.count(t, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1`, id); n != 0 {
+		t.Errorf("ledger rows after the refusal = %d, want 0", n)
+	}
+	if got := l.meCode(t, bearer); got != http.StatusOK {
+		t.Errorf("GET /me after the refusal = %d, want 200 (nothing was cut)", got)
+	}
+	for _, ev := range l.h.audit.snapshot()[audits:] {
+		if ev.Action != "person.suspend" || ev.Outcome != "denied" {
+			t.Errorf("the refusal wrote %s (%s)", ev.Action, ev.Outcome)
+		}
+	}
+	// The same caller suspends with no deadline, or a zero one.
+	if w := l.post(t, l.secAdmin, principal, "suspend", `{"purge_after_seconds": 0}`); w.Code != http.StatusOK {
+		t.Fatalf("security admin suspend with no deadline = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if ident := l.ident(t, principal); ident.DeactivatedAt == nil || ident.PurgeAfter != nil {
+		t.Errorf("identity = deactivated %v, purge_after %v; want deactivated with no deadline", ident.DeactivatedAt, ident.PurgeAfter)
+	}
+	// The super admin schedules one, and the sweep purges at it.
+	p2, _ := l.signIn(t, "u2")
+	if w := l.post(t, l.admin, p2, "suspend", `{"purge_after_seconds": 1}`); w.Code != http.StatusOK {
+		t.Fatalf("super admin suspend with a deadline = %d %s, want 200", w.Code, w.Body.String())
+	}
+	id2 := l.ident(t, p2).ID
+	l.waitDue(t, id2)
+	if err := l.h.srv.SweepPortalLifecycle(ctx); err != nil {
+		t.Fatalf("portal sweep: %v", err)
+	}
+	if l.ident(t, p2).PurgedAt == nil {
+		t.Error("the super admin's deadline did not purge at the sweep")
+	}
+	if l.ident(t, principal).PurgedAt != nil {
+		t.Error("the person suspended with no deadline was purged")
+	}
+}
