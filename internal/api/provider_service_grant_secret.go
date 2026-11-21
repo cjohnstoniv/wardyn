@@ -5,7 +5,7 @@ package api
 
 // A service grant's client secret record and its masks. The record is one JSON object in the operator namespace
 // under serviceGrantSecretName; every read or write of it, and the mask call that follows, is made under that
-// name's mutex, so the last value this replica applied is the newest one it has read.
+// name's lock, so the last value this replica applied is the newest one it has read.
 
 import (
 	"context"
@@ -37,7 +37,7 @@ func (s *Server) noteServiceGrantMasked(name string) {
 }
 
 // applyServiceGrantSecretMask makes value the one current mask of the record's name, retiring any other. The
-// caller holds the name's mutex.
+// caller holds the name's lock.
 func (s *Server) applyServiceGrantSecretMask(gen int64, name, value string) error {
 	if err := s.cfg.MaskRegistry.AddGlobal(gen, "", name, s.cfg.Now(), []byte(value)); err != nil {
 		return err
@@ -46,15 +46,17 @@ func (s *Server) applyServiceGrantSecretMask(gen int64, name, value string) erro
 	return nil
 }
 
-// evictServiceGrantSecretMask retires every value masked under name. The caller holds the name's mutex.
+// evictServiceGrantSecretMask retires every value masked under name. The caller holds the name's lock.
 func (s *Server) evictServiceGrantSecretMask(name string) {
 	if err := s.cfg.MaskRegistry.EvictGlobal("", name, s.cfg.Now()); err != nil {
 		slog.Warn("wardynd: could not retire a service grant secret's mask", slog.Any("err", err))
 		return
 	}
-	s.svcGrant.mu.Lock()
-	delete(s.svcGrant.masked, name)
-	s.svcGrant.mu.Unlock()
+	func() {
+		s.svcGrant.mu.Lock()
+		defer s.svcGrant.mu.Unlock()
+		delete(s.svcGrant.masked, name)
+	}()
 }
 
 // readServiceGrantRecord reads the record once and applies its client secret as the current mask. A record
@@ -64,9 +66,11 @@ func (s *Server) readServiceGrantRecord(ctx context.Context, name string) (servi
 	if !ok {
 		return serviceGrantRecord{}, svcFail(svcReasonUnavailable, false)
 	}
-	mu := s.svcGrant.nameLock(name)
-	mu.Lock()
-	defer mu.Unlock()
+	unlock, locked := s.svcGrant.lockName(ctx, name)
+	if !locked {
+		return serviceGrantRecord{}, svcFail(svcReasonUnavailable, false) // the try ended waiting: nothing is sent
+	}
+	defer unlock()
 	gen := s.serviceGrantMaskGeneration(ctx)
 	raw, err := st.Get(secretstore.WithPurpose(ctx, secretstore.PurposeServiceGrant), name)
 	if errors.Is(err, secretstore.ErrNotFound) {
@@ -90,16 +94,18 @@ func (s *Server) readServiceGrantRecord(ctx context.Context, name string) (servi
 }
 
 // putServiceGrantRecord stores one whole record and applies its secret. After a failed Put it reads the record
-// once, still under the mutex, and applies what is live: a failed write can leave either the old record or the
+// once, still under the name's lock, and applies what is live: a failed write can leave either the old record or the
 // new one in use. The caller holds the site-config document lock.
 func (s *Server) putServiceGrantRecord(ctx context.Context, name string, rec serviceGrantRecord) error {
 	st, ok := s.serviceGrantOperatorSecrets()
 	if !ok {
 		return errors.New("no secret store")
 	}
-	mu := s.svcGrant.nameLock(name)
-	mu.Lock()
-	defer mu.Unlock()
+	unlock, locked := s.svcGrant.lockName(ctx, name)
+	if !locked {
+		return ctx.Err()
+	}
+	defer unlock()
 	gen := s.serviceGrantMaskGeneration(ctx)
 	raw, err := json.Marshal(rec)
 	if err != nil {
@@ -132,9 +138,11 @@ func (s *Server) deleteServiceGrantRecord(ctx context.Context, name string, ifRe
 	if !ok {
 		return errors.New("no secret store")
 	}
-	mu := s.svcGrant.nameLock(name)
-	mu.Lock()
-	defer mu.Unlock()
+	unlock, locked := s.svcGrant.lockName(ctx, name)
+	if !locked {
+		return ctx.Err()
+	}
+	defer unlock()
 	dctx := ctx
 	if ifRev != nil {
 		dctx = secretstore.WithIfRevision(ctx, *ifRev)
@@ -150,7 +158,7 @@ func (s *Server) deleteServiceGrantRecord(ctx context.Context, name string, ifRe
 }
 
 // reconcileServiceGrantMasks retires, on this replica, the mask of every secret name it has registered that no
-// configured grant names any more or whose record is gone. It decides each name under that name's mutex and
+// configured grant names any more or whose record is gone. It decides each name under that name's lock and
 // reads the configured grants again there, so a pass that read the settings before a route added a grant never
 // retires the value the route has just applied.
 func (s *Server) reconcileServiceGrantMasks(ctx context.Context) {
@@ -167,11 +175,11 @@ func (s *Server) reconcileServiceGrantMasks(ctx context.Context) {
 }
 
 func (s *Server) reconcileServiceGrantMask(ctx context.Context, name string) {
-	mu := s.svcGrant.nameLock(name)
-	if !mu.TryLock() {
+	unlock, locked := s.svcGrant.tryLockName(name)
+	if !locked {
 		return // a read, a write or a delete of this record is in flight and applies its own mask; try the next pass
 	}
-	defer mu.Unlock()
+	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, serviceGrantStatusWriteBound)
 	defer cancel()
 	uid, _ := serviceGrantSecretUID(name)
