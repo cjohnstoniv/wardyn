@@ -1445,6 +1445,7 @@ reasons:
 | `delegate_group_or_portal_managed` / `delegate_portal_managed_with_group` / `delegate_portal_managed_needs_issuer` | (422): an issuer portal with no group must set `portal_managed_admission`; that flag cannot go with a group, and a console-issuer portal cannot set it. |
 | `delegate_claim_incomplete` / `delegate_claim_reserved` / `delegate_claim_invalid` | (422): `required_claim` names only one of claim and value, names a claim that already has a meaning, or its name or value breaks its shape. |
 | `delegate_renewal_needs_issuer` / `delegate_issuer_field_needs_issuer` | (422): `ui_session_renewal`, or another field only an issuer portal has, on a console-issuer registration. |
+| `delegate_renewal_withheld` | (422): `ui_session_renewal`, withheld in this release. |
 | `portal_issuers_statement_required` | `POST /admin/portal-issuers/activate` (422): the activation needs `old_servers_stopped: true`. |
 | `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): another client of the database is not a 0.10.2 `wardynd`. The answer lists it. |
 | `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database for two minutes yet. |
