@@ -175,28 +175,77 @@ func (j *joinedCast) Close() error {
 	return err
 }
 
-// StatJoined is StatAndTail over every part of runID's cast: the size is the
-// bytes stored across all of them, and the tail is the last part's — event
-// times run on from part to part because every part is cut from one cast file.
+// StatJoined is StatAndTail over the parts of runID's cast that OpenJoined plays: the size is the bytes stored
+// across them, and the tail is the last one's — event times run on from part to part because every part is cut
+// from one cast file. Like the replay, it ends at the first part whose header is not part 1's: that part belongs
+// to an earlier cast of the run, so after a revive its bytes and duration are not the recording's. Each part's
+// header is read with a bounded head read (castHeadProbe bytes), not the part.
 //
-// ponytail: unlike OpenJoined it does not read each part's header, so after a
-// revive it still counts an earlier cast's later parts until they are swept;
-// replay itself stays correct.
+// ponytail: a header longer than castHeadProbe is compared by its first castHeadProbe bytes.
 func StatJoined(ctx context.Context, s Store, runID string, tailBytes int64) (int64, []byte, error) {
 	size, tail, err := s.StatAndTail(ctx, runID, tailBytes)
 	if err != nil {
 		return 0, nil, err
 	}
+	head, err := headOf(ctx, s, runID)
+	if err != nil {
+		return 0, nil, err
+	}
+	header, whole := castHeaderOf(head)
+	if !whole {
+		return size, tail, nil // a cast without a complete header line was never split
+	}
 	for n := 2; n <= types.RecordingMaxParts; n++ {
-		ps, pt, err := s.StatAndTail(ctx, CastKey(runID, PartSuffix(n)), tailBytes)
+		key := CastKey(runID, PartSuffix(n))
+		ps, pt, err := s.StatAndTail(ctx, key, tailBytes)
 		if errors.Is(err, ErrNotFound) {
 			return size, tail, nil
 		}
 		if err != nil {
 			return 0, nil, err
 		}
+		ph, err := headOf(ctx, s, key)
+		if errors.Is(err, ErrNotFound) {
+			return size, tail, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if h, _ := castHeaderOf(ph); !bytes.Equal(h, header) {
+			return size, tail, nil
+		}
 		size += ps
 		tail = pt
 	}
 	return size, tail, nil
+}
+
+// castHeadProbe bounds the head read that tells which cast a part belongs to; a cast header is one short JSON line.
+const castHeadProbe = 16 << 10
+
+// castHeaderOf is the header line at the start of head, newline included, and whether it is complete: a head
+// that fills the probe without a newline counts as complete, so such a header is compared by its probe.
+func castHeaderOf(head []byte) ([]byte, bool) {
+	if i := bytes.IndexByte(head, '\n'); i >= 0 {
+		return head[:i+1], true
+	}
+	return head, len(head) >= castHeadProbe
+}
+
+// headCaster is a Store that can read the first bytes of a cast without opening it whole.
+type headCaster interface {
+	headCast(ctx context.Context, key string, n int) ([]byte, error)
+}
+
+// headOf is the first castHeadProbe bytes of the cast under key.
+func headOf(ctx context.Context, s Store, key string) ([]byte, error) {
+	if h, ok := s.(headCaster); ok {
+		return h.headCast(ctx, key, castHeadProbe)
+	}
+	rc, err := s.OpenCast(continuingReplay(ctx), key)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(io.LimitReader(rc, castHeadProbe))
 }

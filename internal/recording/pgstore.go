@@ -446,6 +446,24 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	return size, tail, nil
 }
 
+// headCast reads the first n bytes of the cast under key, sliced server-side.
+func (s *PGStore) headCast(ctx context.Context, key string, n int) ([]byte, error) {
+	if err := validKey(key); err != nil {
+		return nil, err
+	}
+	var head []byte
+	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT substring(payload from 1 for $2::int) FROM recordings WHERE cast_key = $1`, key, n).Scan(&head)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("recording: read cast head %q: %w", key, err)
+	}
+	return head, nil
+}
+
 // Sweep deletes every cast row last written more than olderThan ago, returning how many
 // rows it removed. Measured on updated_at, not created_at, so a re-saved cast is never
 // swept from under an in-progress session. Deliberately not part of the Store interface —

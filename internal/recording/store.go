@@ -564,6 +564,19 @@ func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	return size, tail, nil
 }
 
+// headCast reads the first n bytes of the cast under key.
+func (s *FSStore) headCast(ctx context.Context, key string, n int) ([]byte, error) {
+	f, lock, err := s.openCast(ctx, key)
+	if lock != nil {
+		defer lock.Close()
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, int64(n)))
+}
+
 // maxCastKeyBytes bounds a whole cast key, suffixes included. FSStore names
 // its files "<key>.cast" and "<run>.lock" and a file name holds 255 bytes, so
 // 250 is the longest key that store can name at all; PGStore takes the same
