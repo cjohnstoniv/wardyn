@@ -91,9 +91,9 @@ func streamBackend(in *inputLog) http.Handler {
 				if r.Header.Get("X-Quiet") != "" {
 					return // sends nothing
 				}
-				chunk := []byte(strings.Repeat("o", 32<<10))
-				for {
-					if _, err := conn.Write(chunk); err != nil {
+				pad := " " + strings.Repeat("o", 32<<10) + "\n"
+				for { // each frame starts with its send time (readLog.stampedAfter)
+					if _, err := io.WriteString(conn, strconv.FormatInt(time.Now().UnixNano(), 10)+pad); err != nil {
 						return
 					}
 				}
@@ -145,7 +145,7 @@ func streamBackend(in *inputLog) http.Handler {
 						return
 					default:
 					}
-					if _, err := io.WriteString(w, "o\n"); err != nil || rc.Flush() != nil {
+					if _, err := io.WriteString(w, strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"); err != nil || rc.Flush() != nil {
 						return
 					}
 					time.Sleep(5 * time.Millisecond)

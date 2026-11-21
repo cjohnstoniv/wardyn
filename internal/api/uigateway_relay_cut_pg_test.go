@@ -10,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,11 +63,27 @@ func TestUIRelayIssuerPortal_BlockedClientWriteCutOnRevoke_PG(t *testing.T) {
 	}
 }
 
-// readLog is what a viewer read: each read's time and size. done closes when its reader has returned.
+// readLog is what a viewer read: each read's time and size, and the send time the backend stamped on each frame
+// (a line that starts with its UnixNano). done closes when its reader has returned.
 type readLog struct {
-	mu    sync.Mutex
-	reads []stallWrite
-	done  chan struct{}
+	mu     sync.Mutex
+	reads  []stallWrite
+	stamps []time.Time
+	done   chan struct{}
+}
+
+// stampedAfter counts the frames the viewer read that the backend sent after t: output made after a cut, as
+// against output made before it and still draining.
+func (l *readLog) stampedAfter(t time.Time) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, s := range l.stamps {
+		if s.After(t) {
+			n++
+		}
+	}
+	return n
 }
 
 func newReadLog() *readLog { return &readLog{done: make(chan struct{})} }
@@ -86,10 +104,24 @@ func (l *readLog) after(t time.Time) int {
 func (l *readLog) readAll(r io.Reader) {
 	defer close(l.done)
 	buf := make([]byte, 32<<10)
+	var line []byte // the frame read so far
 	for {
 		n, err := r.Read(buf)
 		l.mu.Lock()
 		l.reads = append(l.reads, stallWrite{time.Now(), n})
+		for _, b := range buf[:n] {
+			if b != '\n' {
+				if len(line) < 32 { // the stamp is all that is kept of a frame
+					line = append(line, b)
+				}
+				continue
+			}
+			stamp, _, _ := strings.Cut(string(line), " ")
+			if ns, perr := strconv.ParseInt(stamp, 10, 64); perr == nil {
+				l.stamps = append(l.stamps, time.Unix(0, ns))
+			}
+			line = line[:0]
+		}
 		l.mu.Unlock()
 		if err != nil {
 			return
@@ -118,13 +150,27 @@ func duplexBody(t *testing.T, srv *httptest.Server, path string, c *http.Cookie)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, pr)
 	req.AddCookie(c)
 	go sendLines(pw)
-	resp, err := srv.Client().Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK || resp.ProtoMajor != 2 {
-		t.Fatalf("the duplex body was not admitted: %v %v", resp, err)
+	type answer struct {
+		resp *http.Response
+		err  error
 	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
+	got := make(chan answer, 1)
+	go func() {
+		resp, err := srv.Client().Do(req)
+		got <- answer{resp, err}
+	}()
+	var a answer
+	select {
+	case a = <-got:
+	case <-time.After(5 * time.Second): // the admission's bound, apart from the stream's life
+		t.Fatal("the duplex body never answered")
+	}
+	if a.err != nil || a.resp.StatusCode != http.StatusOK || a.resp.ProtoMajor != 2 {
+		t.Fatalf("the duplex body was not admitted: %v %v", a.resp, a.err)
+	}
+	t.Cleanup(func() { _ = a.resp.Body.Close() })
 	out := newReadLog()
-	go out.readAll(resp.Body)
+	go out.readAll(a.resp.Body)
 	return out
 }
 
@@ -152,7 +198,7 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 				rig := newIssuerPGRig(t, streamBackend(in), renews)
 				life := 3 * time.Second
 				if by == "revoke" {
-					life = time.Hour
+					life = 6 * time.Second // past the revoke, and short of a successor's ten minutes
 				}
 				end := rig.endIn(t, rig.grant, life)
 				c := rig.session(rig.grant)
@@ -182,21 +228,38 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					waitWithin(t, time.Second, "the backend's output reached the viewer", func() bool { return out.after(opened.Add(-time.Minute)) > 0 })
 				}
 				stop := make(chan struct{})
+				var minted, refused atomic.Int64 // the exchanges before the event
+				var evented atomic.Bool
 				go func() { // the portal keeps exchanging
 					for {
 						select {
 						case <-stop:
 							return
 						case <-time.After(300 * time.Millisecond):
-							_ = rig.mintQuiet(time.Now().Add(time.Hour)) // refused once the portal is revoked
+							err := rig.mintQuiet(time.Now().Add(time.Hour)) // refused once the portal is revoked
+							switch {
+							case evented.Load():
+							case err == nil:
+								minted.Add(1)
+							default:
+								refused.Add(1)
+							}
 						}
 					}
 				}()
 				t.Cleanup(func() { close(stop) })
+				// A successor on the stream's own chain, ending after the stream's admitted end, before the event.
+				waitWithin(t, 2*time.Second, "a successor extended the chain past the admitted end", func() bool {
+					chainEnd, _, err := rig.env.st.PortalChainLive(context.Background(), rig.d.ID, rig.principal, rig.grant.ChainID)
+					return err == nil && minted.Load() > 0 && chainEnd.After(end)
+				})
 				if by == "revoke" {
 					time.Sleep(500 * time.Millisecond)
+					evented.Store(true)
 					end = time.Now()
 					rig.revokePortal(t)
+				} else {
+					time.AfterFunc(time.Until(end), func() { evented.Store(true) })
 				}
 				at := waitEnded(t, ended, 20*time.Second, shape+" "+by)
 				if by == "end" {
@@ -206,6 +269,9 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 				}
 				if in.sentAfter(end.Add(-time.Minute)) == 0 {
 					t.Fatal("no viewer input crossed the stream at all")
+				}
+				if n := refused.Load(); n != 0 {
+					t.Errorf("%d of the portal's exchanges before the event were refused", n)
 				}
 				waitWithin(t, 5*time.Second, "the backend's reader returned", in.finished)
 				limit := at // a revoke's cut lands somewhere inside its window: the handler's end bounds it
@@ -221,8 +287,8 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					case <-time.After(5 * time.Second):
 						t.Fatal("the viewer's reader never returned")
 					}
-					if n := out.after(at.Add(relaySlack)); n != 0 {
-						t.Errorf("the viewer read %d bytes after the stream ended", n)
+					if n := out.stampedAfter(limit); n != 0 {
+						t.Errorf("the viewer read %d frames the backend sent after the stream ended", n)
 					}
 				}
 			})
