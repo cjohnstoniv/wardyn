@@ -250,9 +250,13 @@ func (p *Proxy) pollHostCall(ctx context.Context, r *http.Request, host string, 
 				if p.hostCalls.claim(key, id) {
 					return p.releaseHostCall(r, host, port, id), nil
 				}
-				var refusal *hostHoldAnswer // another waiting request took it: this one asks again
+				lost := id // another waiting request took it: this one asks again
+				var refusal *hostHoldAnswer
 				if id, refusal = p.askHostCall(ctx, scope); refusal != nil {
 					return false, refusal
+				}
+				if id == lost { // the ask named the yes it just lost: asking again would only loop
+					return false, hostCallRefused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
 				}
 				continue
 			case ar.State == types.ApprovalDenied && ar.DecisionScope == types.ScopeOnce:

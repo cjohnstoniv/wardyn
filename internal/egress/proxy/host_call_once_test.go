@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -263,7 +264,7 @@ func (l *hcLateRaise) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	switch l.posts.Add(1) {
 	case 1:
-		for _, raises, _ := l.cp.counts(); raises < 2; _, raises, _ = l.cp.counts() {
+		for _, raises, _ := l.cp.counts(); raises < 2 && r.Context().Err() == nil; _, raises, _ = l.cp.counts() {
 			time.Sleep(time.Millisecond)
 		}
 	case 2:
@@ -275,11 +276,46 @@ func (l *hcLateRaise) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
+// hcRowIDs is the approval each decision row with rule_source source names, in order: uuid.Nil for a row
+// that names none.
+func hcRowIDs(t *testing.T, buf *bytes.Buffer, source string) []uuid.UUID {
+	t.Helper()
+	var ids []uuid.UUID
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var row struct {
+			RuleSource string     `json:"rule_source"`
+			ApprovalID *uuid.UUID `json:"approval_id"`
+		}
+		if line == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode decision %q: %v", line, err)
+		}
+		if row.RuleSource == source {
+			ids = append(ids, uuid.Nil)
+			if row.ApprovalID != nil {
+				ids[len(ids)-1] = *row.ApprovalID
+			}
+		}
+	}
+	return ids
+}
+
+// row is the id of the control plane's i-th approval row.
+func (c *hcCP) row(i int) uuid.UUID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rows[i].id
+}
+
 // TestHostCallOnceAnswersARaiseThatJoinedLate: of two identical requests that both asked, the one whose
 // raise was answered only after a person decided the shared approval once, and after the other request
-// spent that answer, still takes it: a once no refuses it as declined, and a once yes already taken
-// makes it ask again. Neither is answered that Wardyn could not ask a person.
+// spent that answer, still takes it: a once no refuses it as declined on that approval, and a once yes
+// already taken makes it ask again on a new one. Neither is answered that Wardyn could not ask a person,
+// and a later identical request asks again on a new approval.
 func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
+	scope, _ := hostCallScopeOf(hrHost, "POST", "/admin")
 	for _, state := range []types.ApprovalState{types.ApprovalDenied, types.ApprovalApproved} {
 		t.Run(string(state), func(t *testing.T) {
 			p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
@@ -292,6 +328,7 @@ func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
 			defer c1()
 			defer c2()
 			hcWait(t, "both requests to ask", func() bool { rows, raises, _ := cp.counts(); return rows == 1 && raises == 2 })
+			shared := cp.row(0)
 			cp.decideAllAs(state, types.ScopeOnce)
 			var first hcResult
 			var other chan hcResult
@@ -309,10 +346,19 @@ func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
 			close(late.late)
 			if state == types.ApprovalApproved {
 				hcWait(t, "the late request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
-				c1()
-				c2()
-				if res := hcOutcome(t, other); res.sent {
-					t.Fatal("the late request went on under a spent once yes")
+				asked := cp.row(1)
+				cp.mu.Lock()
+				cp.rows[1].state, cp.rows[1].decided = types.ApprovalDenied, types.ScopeOnce
+				cp.mu.Unlock()
+				res := hcOutcome(t, other)
+				if res.sent || res.rec.Code != http.StatusForbidden || !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+					t.Fatalf("the late request: sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+				}
+				if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalApproved); !slices.Equal(got, []uuid.UUID{shared}) {
+					t.Errorf("approval-approved rows name %v, want one send, on %v", got, shared)
+				}
+				if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalDenied); !slices.Equal(got, []uuid.UUID{asked}) {
+					t.Errorf("approval-denied rows name %v, want the late request's own ask %v", got, asked)
 				}
 				return
 			}
@@ -323,9 +369,62 @@ func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
 			if rows, _, _ := cp.counts(); rows != 1 {
 				t.Errorf("approval rows = %d, want 1: the late request must not ask again", rows)
 			}
-			if n := strings.Count(buf.String(), `"rule_source":"`+ruleSourceHostRuleApprovalDenied+`"`); n != 2 {
-				t.Errorf("approval-denied rows = %d, want 2", n)
+			if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalDenied); !slices.Equal(got, []uuid.UUID{shared, shared}) {
+				t.Errorf("approval-denied rows name %v, want two, both on %v", got, shared)
+			}
+			next, stop := hcGo(p, "/admin")
+			defer stop()
+			hcWait(t, "a later identical request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+			hcWait(t, "the later request to wait on the new approval", func() bool {
+				id, _ := p.hostCalls.look(scope.CallSHA256)
+				return id == cp.row(1)
+			})
+			if cp.row(1) == shared {
+				t.Fatalf("the later request waits on the declined approval %v", shared)
+			}
+			select {
+			case res := <-next:
+				t.Fatalf("the later request was answered without a person: sent=%v %d", res.sent, res.rec.Code)
+			case <-time.After(50 * time.Millisecond):
 			}
 		})
+	}
+}
+
+// TestHostCallLostYesAskedAgainLoopsNot: a request that lost a once yes to another identical request asks
+// again. A control plane that answers that ask with the same spent yes has it refused at once, as a request
+// Wardyn could not ask about, never raising in a loop.
+func TestHostCallLostYesAskedAgainLoopsNot(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	spent := uuid.New()
+	var raises atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			raises.Add(1)
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: spent, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce})
+	}))
+	t.Cleanup(srv.Close)
+	p.approval = newApprovalClient(srv.URL, newTokenSource("tok"), p.runID, srv.Client())
+	prev := hostCallSecond
+	hostCallSecond = time.Second
+	t.Cleanup(func() { hostCallSecond = prev })
+	// Another identical request is still waiting, and has used the yes.
+	scope, _ := hostCallScopeOf(hrHost, "POST", "/admin")
+	p.hostCalls.admitKept(scope.CallSHA256)
+	defer p.hostCalls.leave(scope.CallSHA256)
+	p.hostCalls.install(scope.CallSHA256, spent)
+	p.hostCalls.claim(scope.CallSHA256, spent)
+	d, cancel := hcGo(p, "/admin")
+	defer cancel()
+	res := hcOutcome(t, d)
+	if res.sent || res.rec.Code != http.StatusForbidden || res.rec.Header().Get(egressHeaderDetail) != hostCallNoAskText {
+		t.Fatalf("sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+	}
+	if n := raises.Load(); n != 2 {
+		t.Errorf("raises = %d, want 2: the first ask, and the one answered with the lost yes", n)
+	}
+	if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalRefused); !slices.Equal(got, []uuid.UUID{uuid.Nil}) {
+		t.Errorf("approval-refused rows name %v, want one naming none", got)
 	}
 }
