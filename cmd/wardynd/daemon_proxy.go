@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -256,11 +257,12 @@ func wireDaemonProxy(tr *http.Transport, u *url.URL, noProxy string, autoBypass 
 // own existing behavior.
 //
 // The returned RoundTripper is the service grant's token-request transport
-// (bootDaemonProxy); nil means the shared transport itself.
-func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) (http.RoundTripper, error) {
+// (bootDaemonProxy); nil means the shared transport itself. The returned route
+// is the always list's, for issuer portals; nil when the list is empty.
+func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) (http.RoundTripper, *alwaysRoute, error) {
 	tr, ok := rt.(*http.Transport)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	installTrustedCA(tr, trustedCAPool)
 	return bootDaemonProxy(tr, f)
@@ -282,9 +284,10 @@ var linkLocalCredentialHosts = []string{"169.254.169.254", "169.254.170.2", "169
 // so an operator can grep for it.
 //
 // It also returns the transport for the service grant's token request
-// (serviceGrantTransport): nil when WARDYN_DAEMON_PROXY_ALWAYS is empty, which
-// leaves that request on the shared transport exactly as before.
-func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, error) {
+// (serviceGrantTransport) and the always list's route (resolveAlwaysRoute):
+// both nil when WARDYN_DAEMON_PROXY_ALWAYS is empty, which leaves that request
+// on the shared transport exactly as before and every portal fetch direct.
+func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, *alwaysRoute, error) {
 	autoBypass := []string{
 		os.Getenv("KUBERNETES_SERVICE_HOST"),
 		daemonProxyBypassHost(*f.awsSSOEndpointOverride),
@@ -294,15 +297,21 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, error
 	// agent) are reached only from the host itself, never through a proxy.
 	autoBypass = append(autoBypass, linkLocalCredentialHosts...)
 
-	always, err := parseDaemonProxyAlways(f.daemonProxyAlways, autoBypass)
+	// A portal internal issuer host is reached directly too, so the list may not name it; it is not added to
+	// the bypass list.
+	direct := slices.Clone(autoBypass)
+	if f.portalInternalHosts != nil {
+		direct = append(direct, portalInternalHostList(*f.portalInternalHosts)...)
+	}
+	always, err := parseDaemonProxyAlways(f.daemonProxyAlways, direct)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	plainURL := strings.TrimSpace(*f.daemonProxyURL)
 	secretFile := strings.TrimSpace(*f.daemonProxySecretFile)
 	if plainURL != "" && secretFile != "" {
-		return nil, errors.New(daemonProxyBothSetRefusal)
+		return nil, nil, errors.New(daemonProxyBothSetRefusal)
 	}
 
 	var effective, source string
@@ -314,7 +323,7 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, error
 		effective, err = installDaemonProxy(tr, plainURL, *f.daemonNoProxy, autoBypass...)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if effective != "" {
 		// scheme://host only — never u.String()'s full form, which could carry
@@ -334,7 +343,15 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, error
 	if effective != "" {
 		daemonProxy, _ = url.Parse(effective) // effective is u.String() of a URL parsed above
 	}
-	return serviceGrantTransport(tr, daemonProxy, always)
+	route, err := resolveAlwaysRoute(tr, daemonProxy, always)
+	if err != nil {
+		return nil, nil, err
+	}
+	grant, err := serviceGrantTransport(tr, route)
+	if err != nil {
+		return nil, nil, err
+	}
+	return grant, route, nil
 }
 
 // parseDaemonProxyAlways reads WARDYN_DAEMON_PROXY_ALWAYS: comma-separated EXACT
@@ -391,7 +408,7 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 		case host == "localhost":
 			why = "localhost"
 		case cerr == nil && protected:
-			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
+			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer, a portal internal issuer host or a link-local credential endpoint)"
 		case !isFullHostName(host):
 			why = "not an exact host name (no port, path, suffix, wildcard or other text)"
 		case numericHostName(host):
@@ -509,19 +526,30 @@ func sortedHosts(set map[string]struct{}) []string {
 	return out
 }
 
-// serviceGrantTransport is the transport of the service grant's token request:
-// a clone of the shared transport (so it keeps the trusted CA roots
-// installBootTransport put on it) whose Proxy function sends a host in always
-// to the daemon proxy, ignoring WARDYN_DAEMON_NO_PROXY and NO_PROXY, and every
-// other host wherever the shared transport's own function sends it. The shared
-// transport itself is not changed, so every other daemon call, including the
-// hosts wardynd reaches directly, routes as it did before the list existed.
-//
-// The always hosts go to daemonProxy (WARDYN_DAEMON_PROXY_URL or _SECRET) or,
-// when that is nil, to HTTPS_PROXY. With neither, or an HTTPS_PROXY that is not a
-// usable address, boot is refused; a listed host never goes direct. An empty
-// list returns nil: the request uses the shared transport.
-func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[string]struct{}) (http.RoundTripper, error) {
+// alwaysRoute is the always list with the proxy it uses: the service grant's
+// token request and an issuer portal's discovery and key fetches share it.
+type alwaysRoute struct {
+	proxy      *url.URL
+	hosts      map[string]struct{}
+	proxyRoots *x509.CertPool // an https proxy's own certificate: the shared transport's roots
+}
+
+// listed reports whether a host is on the always list, compared in the list's
+// one form (asciiProxyHost); a host that does not convert is an error.
+func (r *alwaysRoute) listed(host string) (bool, error) {
+	h, err := asciiProxyHost(host)
+	if err != nil {
+		return false, err
+	}
+	_, ok := r.hosts[h]
+	return ok, nil
+}
+
+// resolveAlwaysRoute resolves the proxy the always hosts go to:
+// daemonProxy (WARDYN_DAEMON_PROXY_URL or _SECRET) or, when that is nil,
+// HTTPS_PROXY. With neither, or an HTTPS_PROXY that is not a usable address,
+// boot is refused; a listed host never goes direct. An empty list returns nil.
+func resolveAlwaysRoute(tr *http.Transport, daemonProxy *url.URL, always map[string]struct{}) (*alwaysRoute, error) {
 	if len(always) == 0 {
 		return nil, nil
 	}
@@ -542,6 +570,28 @@ func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[
 			return nil, errors.New(daemonProxyAlwaysEnvProxyRefusal)
 		}
 	}
+	route := &alwaysRoute{proxy: proxy, hosts: always}
+	if tr.TLSClientConfig != nil {
+		route.proxyRoots = tr.TLSClientConfig.RootCAs
+	}
+	return route, nil
+}
+
+// serviceGrantTransport is the transport of the service grant's token request:
+// a clone of the shared transport (so it keeps the trusted CA roots
+// installBootTransport put on it) whose Proxy function sends a host in always
+// to the daemon proxy, ignoring WARDYN_DAEMON_NO_PROXY and NO_PROXY, and every
+// other host wherever the shared transport's own function sends it. The shared
+// transport itself is not changed, so every other daemon call, including the
+// hosts wardynd reaches directly, routes as it did before the list existed.
+//
+// The always hosts go to the route's proxy (resolveAlwaysRoute). A nil route
+// (an empty list) returns nil: the request uses the shared transport.
+func serviceGrantTransport(tr *http.Transport, route *alwaysRoute) (http.RoundTripper, error) {
+	if route == nil {
+		return nil, nil
+	}
+	proxy, always := route.proxy, route.hosts
 	rest := tr.Proxy
 	clone := tr.Clone()
 	clone.Proxy = func(req *http.Request) (*url.URL, error) {

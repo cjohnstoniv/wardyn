@@ -27,7 +27,7 @@ func swapDefaultTransport() (restore func()) {
 // the AWS KMS boot with a misleading "no credentials".
 func TestBootDaemonProxy_LinkLocalCredentialEndpointsBypass(t *testing.T) {
 	tr := freshTransport()
-	if _, err := bootDaemonProxy(tr, testBootFlags("http://proxy.corp.example:3128", "", "", "")); err != nil {
+	if _, _, err := bootDaemonProxy(tr, testBootFlags("http://proxy.corp.example:3128", "", "", "")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://kms.us-east-1.amazonaws.com/")}); err != nil || got == nil {
