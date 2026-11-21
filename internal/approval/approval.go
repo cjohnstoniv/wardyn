@@ -34,6 +34,8 @@ var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 
 // Store is the narrow persistence interface the approval FSM needs.
 type Store interface {
+	// CreateApproval persists a new approval. A zero RequestedAt means the store stamps it with its own
+	// clock (the database's, for the PG store); RequestApproval always passes zero.
 	CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error)
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	// ListExpiredPendingApprovals returns up to limit PENDING approvals whose id sorts after afterID
@@ -73,7 +75,9 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 		req.ID = uuid.New()
 	}
 	req.State = types.ApprovalPending
-	req.RequestedAt = time.Now().UTC()
+	// Zero, so the store stamps requested_at from the database clock (the rejoin stamp is the
+	// database's too), and so a caller-supplied value never survives.
+	req.RequestedAt = time.Time{}
 	req.DecidedAt = nil
 	req.DecidedBy = ""
 	req.MintedJTI = ""
@@ -103,18 +107,18 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 // RejoinStamper is the optional store method behind Rejoin. A store without it
 // leaves every bounded hold measured from requested_at.
 type RejoinStamper interface {
-	StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error)
+	StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
 }
 
 // Rejoin records that a held request re-entered the hold on approval id, which
 // must be a PENDING row of runID and kind, so Hold measures the bounded hold
-// from now. ok is false when there is no such row, or the store cannot stamp one.
+// from the store's clock. ok is false when there is no such row, or the store cannot stamp one.
 func Rejoin(ctx context.Context, st Store, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
 	rs, can := st.(RejoinStamper)
 	if !can {
 		return types.ApprovalRequest{}, false, nil
 	}
-	ap, ok, err := rs.StampApprovalRejoin(ctx, id, runID, kind, time.Now().UTC())
+	ap, ok, err := rs.StampApprovalRejoin(ctx, id, runID, kind)
 	if err != nil {
 		return types.ApprovalRequest{}, false, fmt.Errorf("approval: stamp rejoin: %w", err)
 	}
@@ -265,7 +269,10 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 // happens to meet a terminal row — that would count retries, not outcomes.
 // Kept as a separate function so every existing caller's signature is unchanged.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[string]int, error) {
-	now := time.Now().UTC()
+	now, err := sweepNow(ctx, st)
+	if err != nil {
+		return 0, map[string]int{}, err
+	}
 	cutoff := now.Add(-olderThan)
 
 	expired := 0
@@ -291,6 +298,30 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 		}
 		after = batch[len(batch)-1].ID
 	}
+}
+
+// databaseClock is the optional read of the database's clock a store offers (store.PG's DatabaseNow).
+type databaseClock interface {
+	DatabaseNow(ctx context.Context) (time.Time, error)
+}
+
+// sweepNow is the expiry sweep's now: the database's clock where the store reads it, since the database stamps
+// requested_at and the run times expires_at is computed from, so the cutoff and the rows are read on one clock. A store
+// without the read, or one that answers zero (the tests' fakes), has this process's clock stand in. A failed read is
+// returned: the sweep expires nothing this tick, and the next tick reads the clock again.
+func sweepNow(ctx context.Context, st Store) (time.Time, error) {
+	c, ok := st.(databaseClock)
+	if !ok {
+		return time.Now().UTC(), nil
+	}
+	at, err := c.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("approval: read the database clock for expiry: %w", err)
+	}
+	if at.IsZero() {
+		return time.Now().UTC(), nil
+	}
+	return at.UTC(), nil
 }
 
 // expireBatch is how many pending rows one sweep page reads.

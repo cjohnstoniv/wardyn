@@ -4,7 +4,7 @@
 package orchestrator
 
 // orchestrator_delegation_test.go is #174's orchestrator half: table tests
-// for the seven Orchestrator methods docs/TEST-GAPS.md listed as untested
+// for the seven Orchestrator methods the test-gaps report (`make test-gaps`) listed as untested
 // (AgentStatus, Attach, ExecStream, ImagePresent, Status,
 // SweepOrphanedSandboxes, Wait). Every one is a delegating pass-through —
 // resolve a substrate, forward the call — so a test that only checks "the

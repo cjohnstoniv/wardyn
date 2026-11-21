@@ -8,6 +8,9 @@ package k8s
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -242,6 +245,40 @@ func TestWarmPlaceholderHoldsNothing(t *testing.T) {
 	}
 	if s.DNSPolicy != corev1.DNSNone {
 		t.Errorf("DNS policy is %q, want None", s.DNSPolicy)
+	}
+}
+
+// A placeholder whose sleep fails must exit, not spin: with no readiness probe a running container is Ready.
+func TestWarmPlaceholderExitsWhenSleepFails(t *testing.T) {
+	d, _ := warmTestDriver(t)
+	pod, err := d.warmPlaceholderPod(context.Background(), warmTestPool("a", 1), testNamespace, 0)
+	if err != nil {
+		t.Fatalf("warmPlaceholderPod: %v", err)
+	}
+	const script = "while :; do sleep 3600 || exit; done"
+	cmd := pod.Spec.Containers[0].Command
+	if !slices.Equal(cmd, []string{"sh", "-c", script}) {
+		t.Fatalf("placeholder command is %q, want sh -c %q", cmd, script)
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh to run the command: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run := exec.CommandContext(ctx, sh, "-c", cmd[2])
+	run.Env = []string{"PATH=" + dir}
+	err = run.Run()
+	if ctx.Err() != nil {
+		t.Fatal("the placeholder kept looping after sleep failed")
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Errorf("placeholder ended with %v, want exit status 1 from the failed sleep", err)
 	}
 }
 

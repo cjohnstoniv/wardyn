@@ -127,6 +127,11 @@ var isOperatorCensus = map[string]int{
 	"govern_admin.go:runUngoverned": 1,
 	// An owner who is not an operator reads the requirement rows a workspace inherits from a source as a member does.
 	"workspace_inherited_rows.go:withholdInheritedRows": 1,
+	// Help sessions, authz only, as ungovernedCallerCensus classifies them: who may ask to help in a run (a super
+	// admin signed in as a person; every door re-checks the grant, supportMayEnter), and which refusal a super
+	// admin gets (support_not_allowed rather than the run_not_found shape). Neither admits a run policy.
+	"support_entry.go:supportCaller":         1,
+	"support_grant.go:refuseNotSupportParty": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to

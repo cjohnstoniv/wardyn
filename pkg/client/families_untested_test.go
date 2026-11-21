@@ -4,7 +4,7 @@
 package client_test
 
 // families_untested_test.go is #174's client-family half: table tests for the
-// eight *client.Client methods docs/TEST-GAPS.md listed as genuinely untested
+// eight *client.Client methods the test-gaps report (`make test-gaps`) listed as genuinely untested
 // (no test anywhere in the module reached them, per the union coverage
 // profile) — every one a thin c.do(...) wrapper, so the table only needs to
 // pin method+path+request-body-in / response-body-out for each, the same
@@ -110,7 +110,7 @@ func TestUntestedClientMethods_Table(t *testing.T) {
 					checkAuth(t, r)
 					var body map[string]string
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					if body["task_key"] != "onboard" {
+					if body["name"] != "onboard" {
 						t.Errorf("unexpected body: %v", body)
 					}
 					writeJSON(w, http.StatusAccepted, client.RecordTaskResult{

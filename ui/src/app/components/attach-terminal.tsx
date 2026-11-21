@@ -68,7 +68,9 @@ import { entryErrorMessage, mayEnterRunOrUnknown, RUN_OWNER_ONLY } from "../lib/
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
 import { DATA_OUT_RUN } from "./wardyn/copy/data-out-run";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
-import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
+import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, OWNER_JOINED_REASON, type ConnState } from "./use-attach-session";
+import { useSupportHelper } from "./wardyn/support-helper-context";
+import { SUPPORT_BANNER } from "./wardyn/copy/support";
 import { useSignedOut } from "../lib/use-signed-out";
 
 // Auth-mode detection
@@ -174,7 +176,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // refusing on a principal we do not know yet would turn away the real owner.
   // Otherwise the one entry rule (#1476): the run's person, or an admin on a
   // run no person owns.
+  // A support helper (the accepted grant opens the terminal door) is admitted by the server's support arm, over the ticket lane.
+  const supportHelper = useSupportHelper();
   const mayEnter =
+    supportHelper ||
     createdBy === undefined ||
     mayEnterRunOrUnknown({ created_by: createdBy, operator_owned: operatorOwned }, principal, operator, operatorResolved);
   // This pane's own error line: the terminal-error wording of the owner-only rule.
@@ -354,7 +359,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   useAttachSession({
     runId,
     signedOut,
-    operator,
+    // A helper's door is the ticket lane: the cookie lane is admin-only and refuses a run its admin did not start.
+    operator: operator && !supportHelper,
+    supportHelper,
     operatorResolved,
     mayEnter,
     refusal,
@@ -422,7 +429,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // the close reason: we then cannot name them, so we do not offer to end
   // "their" session — a confirm that cannot say whose session it ends is worse
   // than no button.
-  const holderPrincipal = (displaced ? takenOverBy : mode?.holder?.principal) ?? "";
+  // The run's owner took a helper's terminal: the close reason is no principal's name, so there is no one to take it back from.
+  const ownerJoined = displaced && takenOverBy === OWNER_JOINED_REASON;
+  const holderPrincipal = (ownerJoined ? "" : displaced ? takenOverBy : mode?.holder?.principal) ?? "";
 
   const doTakeover = React.useCallback(async () => {
     setConfirmTakeover(false);
@@ -677,7 +686,32 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       {/* Holder footer — only in the two states that have an action. A driving
           terminal keeps its existing chrome (every dialog embed depends on the
           panel not growing a footer it did not budget height for). */}
-      {(readOnly || displaced) && (
+      {/* A helper never draws the hints above or Take over: they watch read-only, or, once the owner joined, say so and reconnect. */}
+      {supportHelper && displaced && (
+        <div className="flex items-center gap-2 border-t border-border bg-info-subtle px-3 py-2" data-testid="support-owner-joined">
+          <div className="min-w-0 flex-1">
+            {ownerJoined && (
+              <>
+                <p className="text-sm font-medium text-foreground">{SUPPORT_BANNER.OWNER_JOINED}</p>
+                <p className="text-xs text-muted-foreground">{SUPPORT_BANNER.OWNER_DRIVING}</p>
+              </>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setTakenOverBy(null);
+              setMode(null);
+              manualReconnectRef.current();
+            }}
+          >
+            <RotateCw className="size-3.5" />
+            {SUPPORT_BANNER.RECONNECT}
+          </Button>
+        </div>
+      )}
+      {!supportHelper && (readOnly || displaced) && (
         <div className="flex items-center gap-2 border-t border-border bg-card/60 px-3 py-2">
           {/* The server's own words on failure (e.g. the 409 for taking over
               nothing), in place of the hint — there is no second line to lose. */}

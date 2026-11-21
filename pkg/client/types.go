@@ -190,18 +190,9 @@ type (
 	// accepted by PutSiteConfig.
 	SiteConfig = types.SiteConfig
 
-	// ArtifactOverride is one ecosystem's artifact-registry redirect, carried in
-	// the deprecated SiteConfig.ArtifactOverrides.
-	//
-	// Deprecated: superseded by EgressRedirect. Kept aliased so a caller that
-	// still builds the legacy shape (PutSiteConfig folds it server-side for one
-	// release) can name the element type; GetSiteConfig itself now returns this
-	// field empty.
-	ArtifactOverride = types.ArtifactOverride
-
 	// EgressRedirect is one outbound redirect (package registry or otherwise),
-	// carried in SiteConfig.EgressRedirects. Aliased for the same reason as
-	// ArtifactOverride: GetSiteConfig returns a nil slice when unconfigured, so
+	// carried in SiteConfig.EgressRedirects. Aliased so a caller can name the
+	// element type: GetSiteConfig returns a nil slice when unconfigured, so
 	// without a nameable element type a caller could not author one at all.
 	EgressRedirect = types.EgressRedirect
 
@@ -270,7 +261,7 @@ type (
 	GovernanceLimits = types.GovernanceLimits
 
 	// AutonomyRubric is GovernanceLimits.AutonomyRubric's pointed-to type.
-	// Aliased for the same reason as ArtifactOverride: without a nameable
+	// Aliased for the same reason as EgressRedirect: without a nameable
 	// type a caller could not author one at all.
 	AutonomyRubric = types.AutonomyRubric
 

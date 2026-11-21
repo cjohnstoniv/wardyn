@@ -138,6 +138,35 @@ func memberIdentities(ms []scim.Member) []uuid.UUID {
 	return out
 }
 
+// ownIdentity reads an identity and says whether it is a user of this SCIM endpoint's issuer and tenant. An
+// absent one and one of another issuer or tenant are both "not mine", with no error.
+func (s *Server) ownIdentity(ctx context.Context, st scimStore, id uuid.UUID) (store.PrincipalIdentity, bool, error) {
+	ident, err := st.GetIdentity(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return ident, false, nil
+	}
+	if err != nil {
+		return ident, false, err
+	}
+	return ident, s.scimOwns(ident), nil
+}
+
+// ownMembers keeps the identity ids that name a user of this SCIM endpoint's issuer and tenant. An id
+// of another issuer or tenant is treated as an id nobody holds: dropped, with no error.
+func (s *Server) ownMembers(ctx context.Context, st scimStore, ids []uuid.UUID) ([]uuid.UUID, error) {
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		_, mine, err := s.ownIdentity(ctx, st, id)
+		if err != nil {
+			return nil, err
+		}
+		if mine {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.scimStore(w)
 	if !ok {
@@ -160,7 +189,10 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil {
-		err = st.AddScimGroupMembers(ctx, g.ID, memberIdentities(in.Members), now)
+		var own []uuid.UUID
+		if own, err = s.ownMembers(ctx, st, memberIdentities(in.Members)); err == nil {
+			err = st.AddScimGroupMembers(ctx, g.ID, own, now)
+		}
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)
@@ -207,7 +239,11 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		members, _ := op.Value.([]scim.Member)
 		switch op.Kind {
 		case scim.OpAdd:
-			if err := st.AddScimGroupMembers(ctx, g.ID, memberIdentities(members), s.cfg.Now().UTC()); err != nil {
+			own, err := s.ownMembers(ctx, st, memberIdentities(members))
+			if err == nil {
+				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
+			}
+			if err != nil {
 				errs = append(errs, err)
 			}
 		case scim.OpRemove:
@@ -294,11 +330,11 @@ func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.S
 // (store.ResumeGroupRemoval), and drops the candidate when the person has been added back since.
 func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string, resume bool) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	ident, err := st.GetIdentity(ctx, identityID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
+	// An absent identity, and one of another issuer or tenant, is nobody this endpoint removes: nothing is
+	// started, resumed, cut, revoked or audited. A pending ledger row it already holds is left as it is, and
+	// the sweeper does not select it (PendingGroupRemovals lists only this endpoint's own people).
+	ident, mine, err := s.ownIdentity(ctx, st, identityID)
+	if err != nil || !mine {
 		return err
 	}
 	if resume {

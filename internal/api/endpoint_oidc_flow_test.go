@@ -78,6 +78,9 @@ type oidcFlow struct {
 	env   EndpointOIDCEnv
 	// gate, when set, sees every request to the authority before it is served and may hold it.
 	gate atomic.Pointer[func(*http.Request)]
+	// tokenEdit, when set, rewrites every token response the authority sends before the server and the leak
+	// sweep see it: a test drops the id_token, or swaps it for a value that could never verify.
+	tokenEdit atomic.Pointer[func(map[string]any)]
 }
 
 // newOIDCFlow wires a server whose custom_endpoint row signs people in at a fake authority. binding "" is the
@@ -107,6 +110,13 @@ func newOIDCFlow(t *testing.T, binding string) *oidcFlow {
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		var m map[string]any
 		if json.Unmarshal(body, &m) == nil {
+			if edit := f.tokenEdit.Load(); edit != nil {
+				(*edit)(m)
+				body, _ = json.Marshal(m)
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				resp.ContentLength = int64(len(body))
+				resp.Header.Set("Content-Length", fmt.Sprint(len(body)))
+			}
 			for _, k := range []string{"access_token", "refresh_token", "id_token"} {
 				if v, ok := m[k].(string); ok && v != "" {
 					f.wire.add(v)

@@ -299,7 +299,6 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	defer upstream.Close()
 
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
-	// Drive pollInterval to zero so the second request polls immediately.
 	p, _ := newTestProxy(t, types.RunPolicySpec{
 		AllowedDomains:   []string{"known.test"},
 		FirstUseApproval: types.FirstUseDenyWithReview,

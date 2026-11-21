@@ -183,6 +183,11 @@ type adoEntraBlob struct {
 	// binding still holds without another sign-in.
 	Subject    string    `json:"subject"`
 	CapturedAt time.Time `json:"captured_at"`
+	// CapturedDBAt is CapturedAt on the database's clock, read by the server that captured the sign-in
+	// (databaseStamp), so any server can compare it with a database stamp such as requested_at. Absent on a
+	// capture stored before it existed, when that clock could not be read, or after a server without the field
+	// rewrote the blob: signedInAfter then never counts it.
+	CapturedDBAt time.Time `json:"captured_db_at,omitzero"`
 	// Source names HOW this credential arrived, so a review can tell a
 	// browser sign-in from anything added later. One value today.
 	Source string `json:"source"`
@@ -205,18 +210,30 @@ type adoEntraBlob struct {
 	// clears it.
 	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
 	// Issuer and IDPSubject are an endpoint sign-in's authority and the subject it knows the person by,
-	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
+	// kept so a review can say which platform account a person connected. Entra blobs carry neither, and an
+	// endpoint sign-in captured under require_id_token false holds neither (IDTokenNotRequired).
 	Issuer     string `json:"issuer,omitempty"`
 	IDPSubject string `json:"idp_sub,omitempty"`
 	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
 	// (endpointOIDCCaptureDigest). A redemption posts the refresh token only while it matches; an endpoint
 	// sign-in without one reads as no sign-in. Entra blobs carry none.
 	CaptureDigest string `json:"capture_digest,omitempty"`
+	// IDTokenNotRequired marks an endpoint sign-in captured under require_id_token false: it holds no issuer
+	// (no identity token was read), and valid() accepts it in that issuer's place.
+	IDTokenNotRequired bool `json:"id_token_not_required,omitempty"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
 // until the person signs in again.
 func (b adoEntraBlob) signInEnded() bool { return !b.DeadAt.IsZero() }
+
+// signedInAfter reports whether b was captured after at, a database stamp (an approval's requested_at), by the
+// capture's own database stamp, whichever server reads it. A capture with no stamp never counts: its time is one
+// server's clock, which this one cannot place against the database's, so the request stays pending until a stamped
+// sign-in arrives.
+func (b adoEntraBlob) signedInAfter(at time.Time) bool {
+	return !b.CapturedDBAt.IsZero() && b.CapturedDBAt.After(at)
+}
 
 // adoEntraSourceSignIn is the only capture source in 0.7.10: the interactive
 // browser sign-in this package serves.
@@ -227,7 +244,7 @@ const adoEntraSourceSignIn = "signin"
 // deployment does not have. Not authentication — the authority is the only
 // oracle for that.
 func (b adoEntraBlob) valid() bool {
-	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "") && b.ClientID != "" && b.Subject != ""
+	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "" || b.IDTokenNotRequired) && b.ClientID != "" && b.Subject != ""
 }
 
 // adoEntraSecretName is the reserved store name holding one provider row's

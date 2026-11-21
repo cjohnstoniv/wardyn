@@ -39,13 +39,14 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the five /governance/changes routes on the unit-admin tier
+// mountGovernanceChangeRoutes registers the six /governance/changes routes on the unit-admin tier
 // (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
 // per-change approver below decides which those are. The group a mount function receives is decided
 // at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
 func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 	unit.Get("/governance/changes", s.handleListGovernanceChanges)
 	unit.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
+	unit.Get("/governance/changes/{id}/impact", s.handleGetGovernanceChangeImpact)
 	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
 	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
 	unit.Put("/governance/changes/{id}/note", s.handlePutGovernanceChangeNote)

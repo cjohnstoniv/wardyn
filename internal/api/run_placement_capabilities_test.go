@@ -334,6 +334,13 @@ func TestVerifiedLocalPaths_BoundToTheCandidateInsideItsRoots(t *testing.T) {
 	if v := verifiedLocalPaths(uuid.Nil, roots, map[string]boundLocalPath{"SandboxSpec.Drives[0]": {uuid.Nil, "/srv/dev/work"}}); len(v) != 0 {
 		t.Errorf("no candidate runner verified %v", v)
 	}
+	// A relative root verifies nothing, even a relative path under it; a root of "/" verifies every absolute path.
+	if v := verifiedLocalPaths(cand, []string{"work"}, map[string]boundLocalPath{"SandboxSpec.Mounts[0]": {cand, "work/app"}}); len(v) != 0 {
+		t.Errorf("a relative root verified %v", v)
+	}
+	if v := verifiedLocalPaths(cand, []string{"/"}, map[string]boundLocalPath{"SandboxSpec.Mounts[0]": {cand, "/srv/x"}}); !v["SandboxSpec.Mounts[0]"] {
+		t.Errorf("a root of / verified %v, want the absolute path", v)
+	}
 }
 
 // deny_placements at every door a run request meets: create, Review (preflight)

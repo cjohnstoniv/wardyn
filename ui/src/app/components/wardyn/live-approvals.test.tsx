@@ -131,11 +131,11 @@ describe("LiveApprovals", () => {
     expect(screen.queryByTestId("live-approvals")).not.toBeInTheDocument();
   });
 
-  // An api_key-shaped scope (carries `header`) is the opposite case: the
-  // secrets demos' authorized-not-issued mint is raised from INSIDE the
-  // sandbox mid-run, over the broker's own route — the same
-  // decision-visible-where-it-happens principle egress/tool_call rows already
-  // get, so it renders on the strip, titled with the host like an egress row.
+  // An api_key-shaped scope (carries `header`) is the opposite case: it is
+  // raised from INSIDE the sandbox mid-run, over the broker's own route — the
+  // same decision-visible-where-it-happens principle egress/tool_call rows
+  // already get, so it renders on the strip, titled with the host like an
+  // egress row.
   it("a pending api_key-shaped credential renders on the strip, titled with the host", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({
@@ -147,6 +147,60 @@ describe("LiveApprovals", () => {
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
     expect(within(panel).getByText(/for example\.com$/)).toBeInTheDocument();
+  });
+
+  // The demo card sets carryCredentialKinds; no other mount does, so stripCarries alone decides there.
+  describe("carryCredentialKinds", () => {
+    const gitPat = () =>
+      pending({
+        id: "cred-pat",
+        kind: "credential",
+        requested_scope: { host: "example.com", secret_name: "wardyn-demo-key" },
+      });
+
+    it("(a) without the prop, a git_pat credential is not on the strip", async () => {
+      // The egress row is the positive control: once it renders, the poll has answered, so the git_pat row's absence is
+      // the filter's doing and not a first render before the poll.
+      listApprovalsMock.mockResolvedValue([gitPat(), pending({ id: "egress-ctl", requested_scope: { host: "ctl.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      expect(await screen.findByText("Reach ctl.example")).toBeInTheDocument();
+      expect(screen.getAllByTestId("live-approval-row")).toHaveLength(1);
+      expect(screen.queryByText("Hand git a token for example.com")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("live-approval-banner-cred-pat")).not.toBeInTheDocument();
+    });
+
+    it("(b) with the prop, a git_pat credential is on the strip with its what and blast lines, and Approve is bare", async () => {
+      listApprovalsMock.mockResolvedValue([gitPat()]);
+      render(<LiveApprovals runId="r1" carryCredentialKinds={["git_pat"]} />);
+      const row = await screen.findByTestId("live-approval-row");
+      expect(within(row).getByText("Hand git a token for example.com")).toBeInTheDocument();
+      const banner = within(row).getByTestId("live-approval-banner-cred-pat");
+      expect(banner).toHaveTextContent("A stored git access token for example.com authenticates this clone");
+      expect(banner).toHaveTextContent("it stays live until you revoke it on example.com");
+
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(within(row).getByRole("button", { name: "Approve" }));
+      // A literal 2-argument call: decide refuses an explicit decision_scope on a non-egress kind.
+      expect(approveMock).toHaveBeenCalledWith("cred-pat", expect.any(String));
+      expect(approveMock.mock.calls[0]).toHaveLength(2);
+    });
+
+    it("(c) an api_key credential is carried with or without the prop, and has no banner", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({
+          id: "cred-key",
+          kind: "credential",
+          requested_scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key" },
+        }),
+      ]);
+      const { unmount } = render(<LiveApprovals runId="r1" />);
+      expect(await screen.findByTestId("live-approval-row")).toBeInTheDocument();
+      expect(screen.queryByTestId("live-approval-banner-cred-key")).not.toBeInTheDocument();
+      unmount();
+      render(<LiveApprovals runId="r1" carryCredentialKinds={["git_pat"]} />);
+      expect(await screen.findByTestId("live-approval-row")).toBeInTheDocument();
+      expect(screen.queryByTestId("live-approval-banner-cred-key")).not.toBeInTheDocument();
+    });
   });
 
   // Deny's confirm copy must own up to what the click actually refuses: a

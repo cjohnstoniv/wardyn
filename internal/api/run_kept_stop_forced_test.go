@@ -1277,7 +1277,7 @@ func TestSweepForcedStops_AnUnsettledRecordIsSettledOnceBeforeTheStop(t *testing
 // TestRunWatcherTick_ReturnsTheFirstSubPassError, so the passes before the retry find no watchers.
 type tickStore struct{ markedStore }
 
-func (tickStore) ClaimStaleRunWatchers(context.Context, string, time.Duration) ([]types.AgentRun, error) {
+func (tickStore) ClaimStaleRunWatchers(context.Context, string, time.Duration, []uuid.UUID) ([]types.AgentRun, error) {
 	return nil, errors.New("claim failed")
 }
 func (tickStore) HeartbeatRunWatcher(context.Context, uuid.UUID, string) error { return nil }

@@ -107,9 +107,8 @@ type bootFlags struct {
 	// ungoverned under the switch. The only value is "recording".
 	governAdminRunsExempt *string
 	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
-	egressPortRule *string
-	// desktopSignins is WARDYN_DESKTOP_SIGNINS (boot_desktop_signins.go).
-	desktopSignins     *string
+	egressPortRule     *string
+	desktopSignins     *string // WARDYN_DESKTOP_SIGNINS (boot_desktop_signins.go).
 	startAfterReadback *string // WARDYN_START_AFTER_READBACK (boot_start_after_readback.go).
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
@@ -426,6 +425,7 @@ type bootFlags struct {
 	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
 	// validateSSHMaxSessionsPerRun.
 	sshMaxSessionsPerRun *int
+	sshChannels          *string // validated by parseSSHChannels
 	// sshMaxConns and sshPerSource are the gateway's established-connection
 	// ceiling and per-source handshake bound.
 	sshMaxConns  *int
@@ -750,6 +750,7 @@ func parseBootFlags() *bootFlags {
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
 		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
+		sshChannels:            flagEnv("ssh-channels", "WARDYN_SSH_CHANNELS", "", "comma list of the SSH channel kinds the gateway serves: shell, exec, sftp, forward; sftp also covers wardyn sync and exec also covers POST /runs/{id}/exec. Empty (default) serves all four"),
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
 		sshPerPrincipal:        flagIntEnv("ssh-max-connections-per-principal", "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", 0, "most authenticated SSH gateway connections one person may hold, per replica (integer; 0 = 8 with single sign-on, else all of WARDYN_SSH_MAX_CONNECTIONS); one over it is told why and closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),

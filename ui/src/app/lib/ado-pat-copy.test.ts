@@ -97,7 +97,7 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.RUN_TOKEN_LINE("09:02", "17:02")).toBe("Azure DevOps token: created 09:02 · expires 17:02");
     expect(ADO_PAT.RUN_TOKEN_LINE_REVOKED("09:02", "17:02", "09:41", "run ended")).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (run ended)");
     expect(ADO_PAT.RUN_RENEWAL_FAILED("17:02")).toBe("Wardyn couldn't renew this run's token, so it stops working at 17:02. Sign in to Azure DevOps again to keep this run going.");
-    expect(ADO_PAT.RUN_REVOKE_FAILED("17:02")).toBe("Wardyn couldn't revoke this run's token. It expires at 17:02; revoke it in Azure DevOps under Personal access tokens.");
+    expect(ADO_PAT.RUN_REVOKE_FAILED("17:02")).toBe("Wardyn could not confirm the revoke of this run's token. It may still work until 17:02; revoke it in Azure DevOps under Personal access tokens.");
     expect(ADO_PAT.RUN_ACCESS_ADDED("09:20", "Contribute to pull requests")).toBe("Access added 09:20: Contribute to pull requests (new token)");
     expect(ADO_PAT.OWN_DIALOG_LEAD("wardyn-live-test", 30)).toBe("In Azure DevOps, create a token for wardyn-live-test only, with these scopes and an expiry within 30 days, then paste it here.");
     expect(ADO_PAT.OWN_TOO_LONG(30)).toBe("This token expires after the 30-day limit your administrator set.");
@@ -127,7 +127,7 @@ describe("ADO_PAT copy canon", () => {
       renewed: "renewed",
       access_added: "access added",
       expired: "expired",
-      not_revoked: "not revoked",
+      not_revoked: "revoke failed",
       revoke_pending: "revoke not confirmed",
     });
   });

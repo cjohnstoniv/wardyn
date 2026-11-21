@@ -952,5 +952,6 @@ func (s *Server) stampAuditEvent(ctx context.Context, ev types.AuditEvent) types
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)
+	ev.Data = s.stampSupportWindow(ev.RunID, ev.Data) // a run row written while a helper has the run open names the grant
 	return ev
 }

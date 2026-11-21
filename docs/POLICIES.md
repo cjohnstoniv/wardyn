@@ -509,7 +509,7 @@ What the check does and does not settle:
 
 - The branch-namespace confinement two sections up is default-**ON**, and an operator can turn it off for every run on a proxy process at once (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false`, [`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)'s `BranchNSEnforced`).
 - `git_push_any_branch: true` is the same escape hatch scoped to **one run's policy** instead.
-- A sandbox a human drives through an external tool ([docs/SSH.md](SSH.md) §6) that checks out and pushes its own branch name.
+- A sandbox a human drives through an external tool ([SSH-SCRIPTED-ACCESS.md](SSH-SCRIPTED-ACCESS.md)) that checks out and pushes its own branch name.
 - That is not the `wardyn/<run-id>/*` one `agent-run` sets up.
 - Such a sandbox gets every push refused with no way to tell that tool why.
 - Setting the field lets this run's brokered pushes land on any branch the granted token may write.
@@ -533,6 +533,8 @@ What the check does and does not settle:
 |---|---|
 | `always_deny` | Hard-deny the unknown domain and log it. No approval is ever raised. |
 | `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held; a stalled control plane delays the request by at most 5 s. |
+| | While an approval is pending, a retry waits for a rate-limited status check. A request that joins a check already in progress can still see the earlier pending state; retry again after that response. |
+| | With the control plane responding, starting a new check waits at most about a quarter second. Waiting and the check share the existing timeout. |
 | `wait_for_review` | Raise a pending approval and **hold the connection** until it is decided or the hold deadline passes (`first_use_hold_seconds`, default 30s; at most `max_holds` concurrent holds, default 16). |
 | | Approved in time, the same in-flight request completes; on deadline it fails closed (403) with the approval still pending. |
 
@@ -618,9 +620,16 @@ What the check does and does not settle:
 - Four are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push), `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers) and `no-network` (no network). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
 - `network: none` is `wall_preset: no-network`, which is `sealed` with no network at all:
   - A run that would need a host is refused `422` `no_network_needs_egress`, at create, Review and the preview alike, naming each source. A harness whose model is reached over the network is refused.
-  - The one exception is the model provider's choice. At create and Review, two refusals come first:
+  - The one exception is the model provider's choice. At create and Review, these refusals come first, in this order (the preview makes the same ones, but leaves an unnamed choice open):
+    - `model_provider` is not a provider id (`400`), or is set on a run that calls no model (`400`).
+    - The deployment's model providers cannot be read (`503`).
+    - `model_provider` names one and the deployment has none (`422`).
+    - Two attached workspaces pin different providers (`422` `workspace_pin_conflict`).
+    - The provider named or pinned is missing, turned off or not available to the harness, or a default is turned off (`422`). A pin you are not granted is `403`.
     - More than one provider serves the harness, and none is named or the default (`422`).
     - None is granted to you (`403`).
+    - The policy grants an `env_secret` that sets a model credential variable (`422`).
+    - Each other harness is judged the same way. Then an AWS sign-in on a harness that does not start the run is refused (`422` `request_field_unavailable`), and so are two harnesses whose providers share a host (`422` `harness_providers_conflict`).
   - The preview leaves that choice open and answers `no_network_needs_egress`. Your model sign-in is never read before `no_network_needs_egress`.
   - A repository to clone is a source, a brokered GitHub one too. The policy's git grants are one only with a repository, and a component only when it needs a host.
   - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
@@ -731,6 +740,7 @@ A run Wardyn starts itself (a harness sign-in capture, a source scan, a workspac
 - Only an `egress_domain` approval may carry any scope. A `credential` approval may carry `run`, the per-run credential lease ([member runs](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)); without it, it mints exactly once by construction. A `tool_call` is bounded by the composer clamp.
 - Any other scope is refused at write time (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)). Some requests set their own: an MCP call, a kubectl change and a download take only `once`, and an Azure DevOps access request `once` or `run`. A host request takes `run`, and also `once` when its row carries `accepts_once` ([host rule hold](#a-host-rule-hold-effect-hold)).
 - [Delegation](operations/delegation.md) puts each scope in a tier of consent: `always` is standing, `run` and `until` last a session, and `once` is one-time. It also says who may give each and when a running run loses it.
+- A person accepted as a helper in a run decides none of its holds raised from their request on, whatever the kind and even once help has ended (`support_helper_decision`). They are never the second human on a hold raised earlier.
 
 | Scope | Reaches | Where it lives |
 |---|---|---|
@@ -835,7 +845,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`, and `"accepts_once": true` when the proxy can keep a `once` decision.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval for the run lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline for the run refuses them all. The answer lives in the run's proxy, so a new proxy asks again.
-- A decision `once` answers only the request waiting, or the next one sent if none waits. The next request with that host, method and path asks again.
+- An approval decided `once` is spent by one waiting request, or by the next one sent if none waits; any other waiting request asks again. A decline decided `once` refuses every request already waiting on that approval. The next request with that host, method and path asks again.
 - On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
   - when it has had nothing open for 10 minutes;
   - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
@@ -885,7 +895,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, `env_secret`, or `file_secret`. Anything else is rejected. |
 | `scope` | object | — | Kind-specific; see the table below. |
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
-| `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
+| `requires_approval` | `bool` | `false` | Force a human approval before the broker mints. `api_key`: refused when a save adds or changes it, never at launch. `env_secret`, `file_secret`: refused wherever a policy is validated, a launch included. |
 | `owner_only` | `bool` | `false` | For a grant that names a stored secret, resolves it from the run owner's own row only, never the operator's; refused on `github_token` and `cloud_sts`. See [`owner_only`](#owner_only). |
 | `owner_only_refs` | `[string]` | `[]` | `owner_only` for the named secrets alone. See [`owner_only_refs`](#owner_only_refs). |
 
@@ -951,6 +961,12 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - Set it for an https-only vendor the proxy has no table for, which is the one case those rules cannot tell apart from a legitimately plaintext internal connector.
 - It is part of the pairing too, so a member cannot keep the operator's blessed `(host, secret, header, format)` and drop the TLS requirement.
 - Proxy-side injection only: Wardyn places no copy in the sandbox, though a host that echoes request headers can return the value ([CREDENTIALS.md](CREDENTIALS.md#residuals)).
+- `requires_approval` is refused when a policy, ceiling, boundary, preset, template or governance overlay save adds or changes it:
+  - every door that injects a key drops an approval-gated grant, so no run could use it;
+  - a launch that carries one, inline or by overlay, runs with the key left out;
+  - anything saved earlier, the default policy file included, still loads, runs and can be edited while that grant is unchanged, and its key is never injected;
+  - a ceiling saved before this release that requires approval on an `api_key` leaves that key out of runs, so edit the ceiling;
+  - a recording proposal is clamped to your ceiling, so a ceiling grant that requires approval makes saving the recording refuse its `api_key` until the ceiling or the grant is fixed.
 - `shared` in the scope is set by Wardyn for an organisation component's secret and never authored: every policy door refuses it.
 - Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused.
 
@@ -1174,7 +1190,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - `review` does not hold every push. A push keeps its own push rules; `blocked` refuses them all.
 - `blocked` denies drives, member drives and kept machines through the same doors as `deny_user_drive`, `deny_member_drives` and `deny_kept_machines`, so it applies where those apply: to runs under a unit, and to a kept machine's governed callers. A member's own `data_out: blocked` denies pushes but not drives or kept machines, which are governance limits.
 - A rule that cannot be read keeps content in. SSH treats it as `blocked`, the automatic bring-back is refused, and run output, the recording replay, web apps and a computer folder's bring-back answer 503 `data_out_unreadable`.
-- A run with no recorded policy, whose audit rows were pruned, carries no rule: every path, SSH included, reads it as `allowed`, except the desktop. The desktop's socket and its Files panel refuse instead, with 503 `desktop_rules_unreadable`.
+- A run keeps its rule on the run itself once it starts, so audit retention removing its policy records does not change it. A run that has not started has nothing to keep in, and every path reads it as `allowed`.
+- A run with no rule on itself and no policy record left reads as `allowed` only on its first policy generation. A run restarted or edited since (generation 2 or later) has lost the record of what it enforces, so its rule cannot be read: its computer folder is kept.
+- The upgrade leaves such a run without a rule too, never `blocked`. Restarting it or editing its egress sets its rule to `blocked`. Stores without the rule on the run are unchanged.
+- The upgrade sets `blocked` on each other existing run with no policy record left that is older than the newest record retention removed, plus a day. A run still queued, pending or starting with no sandbox is left alone. The desktop's socket and its Files panel refuse a run whose policy records were removed with 503 `desktop_rules_unreadable`.
 - Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
 - Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
 - The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app.
@@ -1217,9 +1236,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 
 **It narrows; it never widens.**
 
-- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
-- The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
-- That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
+- Routing a run to the gated lane never loosens it: a routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
+- An explicit `allow` runs that tool without asking, so a rule that allows too much removes the human decision for that tool.
+- Tools no rule names on a supervised run keep their hold default unless the policy sets a different default.
+- A member's `inline_policy` may narrow the operator's rules, never widen them: a member's rules cannot weaken the operator's ceiling.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
 - So a tool the operator denies stays denied in a run whose policy never mentioned it.
 
@@ -1648,9 +1668,9 @@ So an entry a pattern matches is judged one of two ways:
 - Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
-  - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,
+  - on a connection whose code host cannot be read (every host but github.com and Azure DevOps), a file the push does not carry is refused when Wardyn cannot establish its size;
   - so the push is refused whatever the sizes;
-  - set it to `0` on that lane, or push through a GitHub lane.
+  - use a supported connection or change the size rule: set it to `0` on that lane, or push through a GitHub or Azure DevOps lane.
 - A complete clone does not help: git never sends objects the remote already holds.
 - A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it.
 - A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`).

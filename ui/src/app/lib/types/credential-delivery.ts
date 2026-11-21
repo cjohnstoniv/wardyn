@@ -57,7 +57,7 @@ export const FIXED_CLASSES: readonly DeliveryClass[] = ["oauth_subscription", "c
 export const POSTURE_OSES = ["darwin", "windows", "linux"] as const;
 export type PostureOS = (typeof POSTURE_OSES)[number];
 
-/** Go: placement.PostureRequirement. Only valid under `runner_resident`. */
+/** Go: placement.PostureRequirement. Valid under `runner_resident`, and on `ado_minted_pat` under `via_org`. */
 export interface PostureRequirement {
   mdm_managed?: boolean;
   disk_encrypted?: boolean;

@@ -51,6 +51,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 # shellcheck source=scripts/lib/runner-limits.sh
 source "${ROOT}/scripts/lib/runner-limits.sh"
 
@@ -217,16 +219,7 @@ WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-c
 # ── api helper ────────────────────────────────────────────────────────────────
 # api METHOD PATH [JSON-BODY] -- writes the response body to $TMPDIR/resp.json,
 # prints the HTTP status code on stdout.
-api() {
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
-  else
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${TMPDIR}/resp.json" "" "$@"; }
 
 # ── 1. register the e2e principal's SSH key via the API ─────────────────────
 ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/owner_key" -C "wardyn-e2e-owner"

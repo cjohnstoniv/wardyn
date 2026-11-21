@@ -723,6 +723,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
 		CapturedAt:   now.UTC(),
+		CapturedDBAt: s.databaseStamp(ctx, now),
 		Source:       adoEntraSourceSignIn,
 	}
 	// Under the per-owner lock a renewal holds from its read to its write, so

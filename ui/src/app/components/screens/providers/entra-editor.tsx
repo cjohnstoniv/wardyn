@@ -243,8 +243,8 @@ export function EntraEditor({
             {operator && <span className="block text-meta text-muted-foreground">{E.REST_TOGGLE_HINT}</span>}
           </span>
         </div>
-        {/* Only a token Wardyn creates can be held on a runner; a token the person pastes in is theirs. */}
-        {tokenMode !== "own_pat" && (
+        {/* Only a minted token can be held on a runner or sent through the server; the server ignores both on the other modes. */}
+        {tokenMode === "minted_pat" && (
           <>
             <div className="mt-4 flex items-start gap-2.5">
               <Switch
@@ -272,6 +272,22 @@ export function EntraEditor({
                 {operator && <span className="block text-meta text-muted-foreground">{E.SANDBOX_TOGGLE_HINT}</span>}
               </span>
             </div>
+            {/* The server honours it only on a minted row (localADOGrantOrigin); a bearer row would save it and ignore it. */}
+            {tokenMode === "minted_pat" && (
+              <div className="mt-4 flex items-start gap-2.5">
+                <Switch
+                  checked={cfg.runner_via_org === true}
+                  disabled={!operator}
+                  label={E.VIA_ORG_TOGGLE}
+                  // Writes nothing rather than false, like the switches above, so an on-then-off stays clean.
+                  onChange={(on) => set({ runner_via_org: on ? true : undefined })}
+                />
+                <span>
+                  <span className="block text-body font-medium text-foreground">{E.VIA_ORG_TOGGLE}</span>
+                  {operator && <span className="block text-meta text-muted-foreground">{E.VIA_ORG_TOGGLE_HINT}</span>}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>

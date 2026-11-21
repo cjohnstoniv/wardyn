@@ -61,6 +61,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   skip_lane "run-e2e-ssh-k8s: set WARDYN_TEST_K8S=1 to run the cluster-dependent SSH e2e (skipping)."
@@ -134,16 +136,7 @@ teardown() {
 trap teardown EXIT
 
 # api METHOD PATH [JSON-BODY] -- body to $TMPDIR/resp.json, status on stdout.
-api() {
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
-  else
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${TMPDIR}/resp.json" "" "$@"; }
 
 # psql_exec SQL -- run one statement in the Postgres quickstart.sh deployed into
 # this namespace (same wardyn/wardyn credentials it wrote into the DSN

@@ -26,6 +26,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/foldersync"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -183,12 +184,8 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
-	if gw.proxy != "" && !f.advertisedProxy {
-		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
-			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))
-	}
-	if gw.fingerprint == "" {
-		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
+	if err := checkSyncGateway(gw, runID, f.advertisedProxy); err != nil {
+		return err
 	}
 	rules, err := c.GetRunSyncRules(cmd.Context(), id)
 	if err != nil {
@@ -260,6 +257,21 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	return runErr
 }
 
+// checkSyncGateway refuses a gateway sync cannot use: channels off, an unacknowledged ProxyCommand, or no host key fingerprint.
+func checkSyncGateway(gw sshGateway, runID string, advertisedProxy bool) error {
+	if err := refuseSSHChannelsOff("sync", gw); err != nil {
+		return err
+	}
+	if gw.proxy != "" && !advertisedProxy {
+		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
+			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))
+	}
+	if gw.fingerprint == "" {
+		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
+	}
+	return nil
+}
+
 // refusePlainHTTPGateway refuses a plain-http, non-loopback server: the gateway's
 // address, host key fingerprint and ProxyCommand all come from its /healthz, so
 // anyone on the path could supply all three. Shared by `run ssh` and `sync`; verb
@@ -270,7 +282,7 @@ func refusePlainHTTPGateway(verb, rawURL string) error {
 		return nil
 	}
 	host := u.Hostname()
-	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+	if loopback.Host(host) {
 		return nil
 	}
 	return fmt.Errorf("%s: %s is plain http: the gateway's address, host key fingerprint and ProxyCommand are read from its /healthz, so anyone on the path could supply all three; use https://", verb, host)

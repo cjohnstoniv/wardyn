@@ -40,6 +40,7 @@ const (
 	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400EntraRes  = "git[%d].entra.runner_resident_sandbox: it has no effect in this version, and it needs runner_resident turned on first"
+	providers400EntraOwnV = "git[%d].entra.runner_via_org: an own_pat row's token is the person's own — only a token Wardyn creates can be delivered to a runner via the organisation"
 	providers400EntraOwnR = "git[%d].entra.runner_resident: an own_pat row's token is the person's own — only a token Wardyn creates can be held on a runner"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
@@ -193,6 +194,9 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	}
 	if cfg.RunnerResident && cfg.TokenMode == types.ADOTokenModeOwnPAT {
 		return fmt.Errorf(providers400EntraOwnR, i)
+	}
+	if cfg.RunnerViaOrg && cfg.TokenMode == types.ADOTokenModeOwnPAT {
+		return fmt.Errorf(providers400EntraOwnV, i)
 	}
 	return nil
 }

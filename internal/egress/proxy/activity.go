@@ -14,8 +14,8 @@ import (
 
 // Stream activity (long-holds design rev 4, §3.3, RL-7). A decision is emitted
 // once per CONNECT, so a long download or a model stream in I/O wait looks like
-// nobody is there. The proxy therefore notes any byte moved on a tunnel or a
-// MITM stream and, at most once per activityReportEvery, tells the control
+// nobody is there. The proxy therefore notes any byte moved on a tunnel, a
+// MITM stream or a plain via_org request and, at most once per activityReportEvery, tells the control
 // plane, which moves the run's presence clock so the run is not paused under
 // it. The local routes (the toolgate's approval poll among them) are plain
 // requests, not streams, and never count.

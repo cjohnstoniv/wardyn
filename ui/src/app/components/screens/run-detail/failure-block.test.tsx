@@ -251,6 +251,72 @@ describe("RunFailureBlock", () => {
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
   });
 
+  // A kill whose sandbox was still stopping when it finished: the credentials are revoked, and the stop's
+  // result lands later on a run.kill.confirm row. No state before that row proves the stop says it stopped.
+  describe("killed with the sandbox stop still being confirmed", () => {
+    const confirming = ev("run.kill", "success", { actor: "alice", actor_type: "human", data: { sandbox_stop: "confirming" } });
+    const C1 =
+      "An operator killed this run 26m 0s in, and its credentials are revoked. The sandbox was still stopping when the kill finished, so Wardyn is confirming the stop. Until it does, the sandbox may still be live.";
+    const C2 =
+      "An operator killed this run 26m 0s in, and its credentials are revoked, but Wardyn has no record that the sandbox stopped. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.";
+    const C3 = "The run.kill.confirm row names the step that failed — read it before treating this run as contained.";
+    const SCRATCH = "Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host.";
+    const RETRY = "Ending it again re-runs the same teardown; the cascade is safe to repeat.";
+
+    it("C1: no result yet says Wardyn is confirming the stop, never that it stopped", () => {
+      render(<RunFailureBlock run={run("KILLED")} audit={[confirming]} held={{ readable: false }} onGoAudit={vi.fn()} />);
+      expect(screen.getByText(C1)).toBeInTheDocument();
+      expect(screen.getByText("This page updates when Wardyn records the result (run.kill.confirm in the audit log).")).toBeInTheDocument();
+      expect(screen.getByText(SCRATCH)).toBeInTheDocument();
+      expect(screen.getByText(UNREADABLE_LINE)).toBeInTheDocument();
+      expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+      expect(screen.queryByText(/stopped and removed|scratch is gone/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirming");
+    });
+
+    it("C2: no result once the page's wait is over says teardown is not confirmed", () => {
+      render(<RunFailureBlock run={run("KILLED")} audit={[confirming]} killConfirmWaitOver onGoAudit={vi.fn()} />);
+      expect(screen.getByText(C2)).toBeInTheDocument();
+      expect(
+        screen.getByText("The run.kill row says the stop was still being confirmed, and no run.kill.confirm row records a result."),
+      ).toBeInTheDocument();
+      expect(screen.getByText(RETRY)).toBeInTheDocument();
+      expect(screen.getByText(SCRATCH)).toBeInTheDocument();
+      expect(screen.queryByText(/stopped and removed|scratch is gone/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unconfirmed");
+    });
+
+    it("an unknown sandbox_stop value reads as unconfirmed, not stopped and removed", () => {
+      renderBlock("KILLED", [ev("run.kill", "success", { data: { sandbox_stop: "runner_revoked" } })]);
+      expect(screen.getByText(C2)).toBeInTheDocument();
+      expect(screen.getByText("The run.kill row does not record a finished stop.")).toBeInTheDocument();
+      expect(screen.queryByText(/still being confirmed/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/stopped and removed/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unconfirmed");
+    });
+
+    it("C3: a failed confirm is the partial copy, pointing at the run.kill.confirm row", () => {
+      const failed = ev("run.kill.confirm", "failure", { data: { step: "kill_sandbox", reason: "pod still terminating" } });
+      renderBlock("KILLED", [confirming, failed]);
+      expect(
+        screen.getByText(
+          "An operator killed this run 26m 0s in, and a teardown step failed. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByText(C3)).toBeInTheDocument();
+      expect(screen.queryByText("The audit row names the step that failed — read it before treating this run as contained.")).not.toBeInTheDocument();
+      expect(screen.getByText(RETRY)).toBeInTheDocument();
+      expect(screen.queryByText(/stopped and removed|scratch is gone/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+    });
+
+    it("a confirm success row is the clean copy", () => {
+      renderBlock("KILLED", [confirming, ev("run.kill.confirm", "success")]);
+      expect(screen.getByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
+    });
+  });
+
   it("a kill row with no timestamp reads the run's own end time for how far in it was, not its last update (#2521)", () => {
     const endedAt = new Date(NOW_MS - 16 * 60 * 1000).toISOString();
     const noTime = ev("run.kill", "success", { actor: "alice", actor_type: "human", time: undefined as unknown as string });

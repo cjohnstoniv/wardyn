@@ -266,7 +266,7 @@ func TestPresetInlinePolicy_UnknownADOCapabilityIsItsOwnReason(t *testing.T) {
 		AzureDevOpsCapabilities: []adoscope.Capability{"admin"}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/presets/ado", nil)
-	if (&Server{}).validatePresetRequest(w, r, "ado", req) {
+	if (&Server{cfg: Config{Store: &memPresetStore{}}}).validatePresetRequest(w, r, "ado", req) {
 		t.Fatal("a preset naming an unknown capability was accepted")
 	}
 	var got struct {

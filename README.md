@@ -25,7 +25,7 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.1/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — the script installs its own release (`WARDYN_VERSION` overrides).
@@ -77,7 +77,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 
 ### Requirements
 
-- **Docker** + `compose` v2 (Postgres rides in the compose file).
+- **Docker Engine 28 or newer** + `compose` v2 (Postgres rides in the compose file). An older engine is refused when a run's network is made, unless an explicit override is set: [Docker host run networks](docs/OPERATIONS.md#docker-host-run-networks).
   - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
 - **Go 1.27+**, **Node 22 + pnpm 9** — only to build from source: clone, then `make setup` ([CONTRIBUTING.md](CONTRIBUTING.md)). A failed image pull falls back to building from the checkout; `WARDYN_BUILD_LOCAL=1` forces it.
 - The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
@@ -180,7 +180,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 - Wardyn keeps credentials out of the sandbox wherever it can broker them, and names the kinds that enter ([SECURITY.md](SECURITY.md#which-credentials-enter-the-sandbox)).
 - Notable residuals:
   - **The model-API channel is an unavoidable data-exit path.**
-    - Prompts and tool calls are logged; nothing stops an agent encoding data into a permitted prompt.
+    - The proxy records connection and request decisions, token counts where it can meter them, and inspection summaries where on; it keeps no prompt or reply. Nothing stops an agent encoding data into a permitted prompt.
   - **Domain fronting and DNS-tunnel exfil** need TLS interception, which ships only for operator-listed hosts (off by default) — most non-LLM egress stays opaque.
   - **CC1/Fence shares the host kernel**, and the 1-hour minted-token window before revocation is minimized by TTL, never eliminated.
   - **The UI sandbox gateway defaults to a shared browser origin** across runs, separated only by a path-scoped cookie. Set a per-run origin template for any install with more than one user ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
@@ -193,7 +193,7 @@ wardyn setup status   # what's configured + the next command per unmet check
   - **`deploy/compose`** is the local 10-minute trial. It runs on a laptop without a cluster and has the Getting Started demo steps.
   - **Kubernetes** is the signed OCI chart above. See [`deploy/helm/wardyn`](deploy/helm/wardyn/README.md): `make kind-quickstart` for a one-command real-cluster install, or a production Helm install onto your own cluster. It is not yet at Compose parity (the chart README's "Known gaps").
 
-- Not built yet: SPIRE, OpenBao, tool-call egress interception (per-tool approval ships), arbitrary-domain TLS interception, an OCSF sink, SAML team SSO, and Compose's own L1 default-deny.
+- Not built yet: SPIRE, OpenBao, mediation of local tools (a remote MCP server attached through the proxy is mediated), arbitrary-domain TLS interception, an OCSF sink, SAML team SSO, and Compose's own L1 default-deny.
 - SCIM only removes leavers today and does not provision joiners ([OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)).
 - [ROADMAP.md](ROADMAP.md) has the list, and [CHANGELOG.md](CHANGELOG.md) what each release added.
 

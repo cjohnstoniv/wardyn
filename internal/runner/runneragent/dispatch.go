@@ -346,6 +346,7 @@ type refArgs struct {
 	Ref         string   `json:"ref"`
 	Argv        []string `json:"argv"`
 	AgentExecID string   `json:"agent_exec_id"`
+	Deny        []string `json:"deny"`
 	CfgJSON     []byte   `json:"cfg_json"`
 	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
 	// PolicyGeneration is runnerwire.RefArgs' and ReplaceProxyArgs': the policy generation the call acts for.
@@ -482,6 +483,23 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		return nil, endRef(ctx, sub, ref, a.PolicyGeneration)
 	case runnerwire.MethodFenceProxy:
 		return nil, fenceRef(ctx, sub, ref)
+	case runnerwire.MethodNarrowProxy:
+		n, ok := sub.(runner.ProxyNarrower)
+		if !ok {
+			return nil, runner.ErrNarrowUnsupported
+		}
+		var st runner.ProxyNarrowState
+		var err error
+		if len(a.Deny) == 0 {
+			st, err = n.ProxyNarrowState(ctx, ref)
+		} else {
+			st, err = n.NarrowProxy(ctx, ref, a.Deny)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return runnerwire.NarrowProxyResult{ConfigSHA256: st.ConfigSHA256, BaseSHA256: st.BaseSHA256,
+			LiveDenies: st.LiveDenies, Changed: st.Changed, BaseChecked: st.BaseChecked}, nil
 	case runnerwire.MethodStopProxy:
 		return nil, stopProxyRef(ctx, sub, ref, a.PolicyGeneration)
 	case runnerwire.MethodStart:

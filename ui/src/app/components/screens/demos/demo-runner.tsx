@@ -46,6 +46,9 @@ import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";
 
+// The credential kinds the demo strip carries beyond the default: the authorized-not-issued card's approval-gated git_pat.
+const DEMO_CARRIED_CREDENTIAL_KINDS = ["git_pat"] as const;
+
 // Resume seam: {demoId: runId} of demos the operator started, so a page reload
 // re-attaches to a still-RUNNING sandbox instead of orphaning it.
 const STORE_KEY = "wardyn-demo-runs";
@@ -319,6 +322,7 @@ export function DemoRunControls({
           // free by construction, same comment as above); if one ever
           // appears, a security operator still decides it.
           run={null}
+          carryCredentialKinds={DEMO_CARRIED_CREDENTIAL_KINDS}
         />
         <DemoAuditPanel runId={run.id} section={demo.section} />
         <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>

@@ -341,10 +341,12 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
 		CapturedAt:   now.UTC(),
+		CapturedDBAt: s.databaseStamp(ctx, now),
 		Source:       adoEntraSourceSignIn,
 	}
 	if ec.oidc != nil {
 		blob.TenantID, blob.Issuer, blob.IDPSubject = "", ec.oidc.issuer, ec.oidc.idpSub
+		blob.IDTokenNotRequired = !ec.oidc.row.OIDC.IDTokenRequired()
 	}
 	return entraCodeGrant{generation: generation, access: resp.AccessToken, blob: blob}, ""
 }

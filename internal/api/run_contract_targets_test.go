@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -29,7 +30,7 @@ func targetOverlapRefusalPairwise(targets []runTarget) *runRefusal {
 			}
 		}
 		for _, p := range placed {
-			if !sharesCarrier(p.carriers, t.carriers) && (pathWithin(t.target, p.target) || pathWithin(p.target, t.target)) {
+			if !sharesCarrier(p.carriers, t.carriers) && (pathutil.Within(p.target, t.target) || pathutil.Within(t.target, p.target)) {
 				return overlapRefusal(t.target, t.name, p.name, p.target)
 			}
 		}

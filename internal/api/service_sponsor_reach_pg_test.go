@@ -122,6 +122,10 @@ func (e sponsorEnv) seedRun(t *testing.T, owner string, mut func(*types.AgentRun
 	if err != nil {
 		t.Fatalf("seed run for %s: %v", owner, err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := e.st.RaiseRunDataOut(context.Background(), created.ID, types.TransferAllowed); err != nil {
+		t.Fatalf("give the run its data_out rule: %v", err)
+	}
 	return created
 }
 
@@ -639,7 +643,7 @@ func TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor(t *testing.T) {
 		{"reauth", `{"credential_source":"aws_sso"}`, types.AttentionReauth},
 	} {
 		pending := []types.ApprovalRequest{pendingRow(sponsored.ID, types.ApprovalCredentialReauth, c.scope, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if a := s.attention(req, sponsored, pending, false); a == nil || a.Kind != c.kind || a.By != types.AttentionOwner {
 			t.Errorf("%s hold on a sponsored run: attention=%+v, want {%s owner}", c.name, a, c.kind)
 		}

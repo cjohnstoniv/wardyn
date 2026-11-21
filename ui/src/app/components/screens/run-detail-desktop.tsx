@@ -20,16 +20,19 @@ import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
-import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
+import { DESKTOP_FILES, RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { MAC_WINDOW } from "../wardyn/copy/mac-window";
 import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-level";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { useSupportHelperDoors } from "../wardyn/support-helper-context";
+import { DESKTOP_TILE_DOORS, hasAnyDoor } from "../wardyn/support-helper-lanes";
 import { Chip, WidgetCard } from "../wardyn/primitives";
 import { KEEP_LIST } from "../wardyn/copy/keep-machine";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
+import { ClosedDoorsLine, ClosedLane } from "./run-detail/helper-closed-lane";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { MacWindowButton, macWindowHasButton, MacWindowRefusal } from "./run-detail/mac-window-section";
 import { DESKTOP_APP, enterUIApp, openEnterTab } from "./run-detail-ssh";
@@ -42,10 +45,17 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const resolved = useOperatorResolved();
   // The entry rule (lib/run-entry.ts, #1476), as the Attach tile's: the run's person, or an admin on a run no person
   // owns. Both hooks run unconditionally — `||` on a hook CALL would reorder them.
-  const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A helper of an open support grant (null for anyone else): they enter through the doors the owner ticked, so the
+  // tile draws for them in place of the owner rule, and only the lanes whose door is open. Never a background run's.
+  const helperDoors = useSupportHelperDoors();
+  const asHelper = !mayEnter && !!helperDoors && !isBackgroundRun(run);
+  const mayAttach = mayEnter || (asHelper && hasAnyDoor(helperDoors, DESKTOP_TILE_DOORS));
+  const desktopDoor = !asHelper || helperDoors.includes("desktop");
+  const filesDoor = !asHelper || helperDoors.includes("files");
   const running = run.state === "RUNNING";
   // A service identity's sponsor opens the desktop's apps, never its Files.
-  const sponsorOnly = resolved && sponsorOnlyEntry(run, principal, operator);
+  const sponsorOnly = resolved && !asHelper && sponsorOnlyEntry(run, principal, operator);
   const background = isBackgroundRun(run);
 
   // The UI-sandbox enter facts, from the same /healthz read the Attach tile makes. `healthAnswered` is the BODY's
@@ -65,7 +75,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   // #2972: a VM desktop's sign-ins, once the gateway can open it. A background run has none: nobody types in it.
   const signIns = useDesktopSignIns(
     run.id,
-    mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled && macOS?.desktop !== "observe" && !background,
+    !asHelper && mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled && macOS?.desktop !== "observe" && !background,
   );
 
   React.useEffect(() => {
@@ -96,6 +106,15 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const viewOnly = (macOS?.desktop === "observe" && running) || watchable;
   const desktopOn = !!uiSandbox?.enabled && !macOff;
   const uiApps = run.ui_apps ?? [];
+  // The Open desktop button, its recording line and its new-tab note: a helper needs the desktop door for them.
+  const canOpen = desktopOn && !noDoor && (!background || watchable) && desktopDoor;
+  // Files moves with the desktop, under the buttons: the same gate it had in the Attach tile (the run's person, not a
+  // sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop), plus never on a background run,
+  // which has no files door. The panel shows the run's own desktop rules.
+  const filesLane = desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running;
+  // A helper whose grant opens neither Open desktop nor a Files lane this run can draw has no lane here: no tile (empty
+  // tiles are not drawn). The tile predicate cannot see the gateway, so the card says it once /healthz has answered.
+  if (asHelper && !desktopDoor && !filesLane) return null;
   // The window on the Mac (mac_window, live macOS VM runs only): its button comes first and the desktop's turns outline.
   const windowState = running ? run.mac_window?.state : undefined;
   const windowButton = running && macWindowHasButton(run.mac_window);
@@ -130,7 +149,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const chip =
     windowState === "window_open" ? (
       <Chip tone="info">{MAC_WINDOW.openChip}</Chip>
-    ) : (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : desktopOn && (viewOnly || bgMac) ? (
+    ) : (!healthAnswered && !macOff) || noDoor || noWatchChip || !desktopDoor ? null : desktopOn && (viewOnly || bgMac) ? (
       <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
     ) : desktopOn && signIns.view?.paused ? (
       <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
@@ -144,22 +163,23 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
     <WidgetCard title={DESKTOP.title} Icon={Monitor} right={chip} grow bodyClassName="scroll-thin overflow-y-auto p-4">
       <section aria-label={DESKTOP.title}>
         <p className="mb-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
-        {running && <MacWindowButton run={run} />}
-        {desktopOn && !noDoor && (!background || watchable) && (
+        {running && !asHelper && <MacWindowButton run={run} />}
+        {!desktopDoor && <ClosedDoorsLine doors={["desktop"]} className="mt-2" />}
+        {canOpen && (
           <div className={`flex flex-wrap gap-2 ${windowWay ? "mt-4" : ""}`}>
             <Button size="sm" variant={windowButton ? "outline" : undefined} disabled={openingApp} onClick={() => void openDesktop()}>
               {openingApp ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
             </Button>
-            {!background && <DesktopSignInButton s={signIns} />}
+            {!background && !asHelper && <DesktopSignInButton s={signIns} />}
           </div>
         )}
         {/* What the screen recording keeps, once, where the desktop opens. No frames are kept while the agent is paused for a sign-in. */}
-        {desktopOn && !noDoor && (!background || watchable) && desktopRecordedAt(run) && (
+        {canOpen && desktopRecordedAt(run) && (
           <p className="mt-2 text-meta text-muted-foreground" data-testid="desktop-recorded-line">
             {!background && signIns.view?.paused ? RECORDING_DESKTOP.PAUSED : RECORDING_DESKTOP.WATCHED}
           </p>
         )}
-        {desktopOn && !background && <DesktopSignInsError s={signIns} />}
+        {desktopOn && !background && !asHelper && <DesktopSignInsError s={signIns} />}
         {healthFailed && !macOff && !noDoor && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <p role="alert" className="text-meta leading-relaxed text-muted-foreground">{RUN_VM_PAGE.gatewayUnknown}</p>
@@ -182,23 +202,21 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{windowWay ? MAC_WINDOW.watchLine : DESKTOP.observeOnlyMacOS}</p>
         )}
         {/* A window refusal sits under the line above: the browser can still watch, and this says why no window opens. */}
-        {running && <MacWindowRefusal run={run} />}
+        {running && !asHelper && <MacWindowRefusal run={run} />}
         {healthAnswered && !uiSandbox?.enabled && !macOff && !noDoor && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{offCopy(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
         )}
         <MacOSDiskNote disk={macOS?.disk} />
-        {desktopOn && !background && (
+        {desktopOn && !background && !asHelper && (
           <>
             <DesktopPausedNote s={signIns} />
             {!viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>}
           </>
         )}
-        {desktopOn && (!background || watchable) && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
-        {/* Files moves with the desktop, under the buttons: the same gate it had in the Attach tile
-            (the run's person, not a sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop),
-            plus never on a background run, which has no files door. The panel shows the run's own desktop rules. */}
-        {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
-        {desktopOn && !background && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}
+        {canOpen && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
+        {filesLane && filesDoor && <DesktopFilesPanel runId={run.id} vm />}
+        {filesLane && !filesDoor && <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />}
+        {desktopOn && !background && !asHelper && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}
       </section>
     </WidgetCard>
   );

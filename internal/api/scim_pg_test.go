@@ -1152,7 +1152,7 @@ func TestPG_SCIMSuspend_PendingWorkSurvivesCrashAfterCommit(t *testing.T) {
 	if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := e.st.PendingLeavers(ctx, scimResumeIdle, 10)
+	pending, err := e.st.PendingLeavers(ctx, e.issuer, e.tenant, scimResumeIdle, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

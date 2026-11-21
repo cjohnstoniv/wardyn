@@ -50,7 +50,7 @@
 # `--- FAIL: TestA` never matches `--- FAIL: TestAB`.
 set -euo pipefail
 
-# Timeout sizing for the workflow (docs/CI.md: at least twice the measured
+# Timeout sizing for the workflow (docs/REPO-CI.md: at least twice the measured
 # maximum, ten-minute floor). Measured locally on 2026-10-22 under gate.sh
 # (GOMAXPROCS=2, nice 19): a cold `go test -c ./internal/api` took 89 s and each
 # proof, which recompiles the package under its reverted file, 72 s. That cold

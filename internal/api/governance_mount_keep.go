@@ -119,6 +119,22 @@ func (s *Server) storedCeilingMounts(all []types.GovernanceUnit, id uuid.UUID) [
 	return nil
 }
 
+// storedCeilingGrants is the eligible grants a standalone write to profile id replaces: the stored
+// row's ceiling, or a composed row's effective one. A create holds none.
+func (s *Server) storedCeilingGrants(all []types.GovernanceUnit, id uuid.UUID) []types.GrantSpec {
+	cur, ok := unitsByID(all)[id]
+	switch {
+	case !ok:
+		return nil
+	case !cur.Composed():
+		return cur.Ceiling.EligibleGrants
+	}
+	if res := s.resolveForDiff(all, id); res != nil {
+		return res.Ceiling.EligibleGrants
+	}
+	return nil
+}
+
 // storedOverlayMounts is the keep-set of an overlay write to profile id on base: the stored overlay's
 // mounts first, then the mounts the base resolves to (the deployment default's when there is no base).
 // Stored first, so a stored overlay mount is never paired with a host path a super admin has since

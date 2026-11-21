@@ -31,7 +31,11 @@ type policyRequest = client.PolicyRequest
 // admin-gated config and a bad spec must never be persisted. Any problem is
 // returned as a human-readable message, with its wire reason, that the handler
 // surfaces with HTTP 400.
-func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (policyRequest, string, string) {
+//
+// stored reads the grants of the policy the request replaces, nil on a create; it is called only when
+// the spec holds an api_key grant that requires approval, which a save refuses unless the stored
+// policy already holds it unchanged.
+func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader, stored func() []types.GrantSpec) (policyRequest, string, string) {
 	var req policyRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return policyRequest{}, reasonPolicyRequestInvalid, msg
@@ -50,7 +54,11 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	// A read error leaves no hosts: admission refuses at launch, as for a run.
 	hosts, _ := ado.forAddresses(repos...)
 	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos, hosts)
-	if err := validateAuthoredPolicySpec(req.Spec); err != nil {
+	var held []types.GrantSpec
+	if stored != nil && hasGatedAPIKey(req.Spec.EligibleGrants) {
+		held = stored()
+	}
+	if err := validateAuthoredPolicySpecHolding(req.Spec, held); err != nil {
 		return policyRequest{}, specRefusalReason(err, reasonPolicyRequestInvalid), "invalid policy spec: " + err.Error()
 	}
 	return req, "", ""
@@ -421,7 +429,7 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
 // with the created policy, or 400 on an invalid body/spec.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
+	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()), nil)
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return
@@ -484,7 +492,13 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
+	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()), func() []types.GrantSpec {
+		prev, err := s.cfg.Store.GetPolicy(r.Context(), id)
+		if err != nil {
+			return nil
+		}
+		return prev.Spec.EligibleGrants
+	})
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return

@@ -399,6 +399,11 @@ export const ADO_ENTRA_EDITOR = {
     "Off by default. Lets the runner's proxy hold a token Wardyn mints for a run, in its memory only, where the delivery policy also allows it. Saved and audited.",
   SANDBOX_TOGGLE: "Also put the token in the sandbox (no effect in this version)",
   SANDBOX_TOGGLE_HINT: "It has no effect in this version: the sandbox holds only a placeholder either way. Needs the switch above.",
+  // A token Wardyn mints can also stay in wardynd for the run while the runner's proxy sends the traffic through the
+  // server (row.entra.runner_via_org). It applies to minted tokens only. Off by default.
+  VIA_ORG_TOGGLE: "Allow on runners via the server",
+  VIA_ORG_TOGGLE_HINT:
+    "Off by default. The runner sends the run's Azure DevOps traffic to Wardyn, which adds the token; the runner never holds it. Also needs “Keep in the organisation” for Azure DevOps tokens Wardyn mints, under Governance → Runner credentials.",
   CEILING_TITLE: "What runs may ever do",
   CEILING_LEAD:
     "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",

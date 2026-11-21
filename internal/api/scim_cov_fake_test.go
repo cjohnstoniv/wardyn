@@ -63,6 +63,8 @@ type scimCovStore struct {
 	failErr map[string]error
 	// skips is how many calls of a method pass before its armed failure applies.
 	skips map[string]int
+	// sweepRemovals makes PendingGroupRemovals list the pending removals; by default it lists none.
+	sweepRemovals bool
 	// casLost is how many UpdateRunStateIf calls answer "someone else moved the run".
 	casLost int
 
@@ -629,7 +631,7 @@ func (s *scimCovStore) PinDeprovisionEvent(_ context.Context, id uuid.UUID, kind
 
 // ---- store.LeaverStore: purge and status ----
 
-func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requireDue bool) (bool, error) {
+func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requireDue bool, issuer, tenant string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.purgeMarks = append(s.purgeMarks, requireDue)
@@ -641,7 +643,7 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 		return false, store.ErrNotFound
 	}
 	due := i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) && s.ownSuspension(i)
-	if i.PurgedAt != nil || (requireDue && !due) {
+	if !scimCovOwns(i, issuer, tenant) || i.PurgedAt != nil || (requireDue && !due) {
 		return false, nil
 	}
 	t := s.now
@@ -659,7 +661,13 @@ func (s *scimCovStore) ownSuspension(i *store.PrincipalIdentity) bool {
 	return j != nil && j.Done && i.DeactivatedAt != nil && j.Detail["deactivated_at_us"] == int(i.DeactivatedAt.UnixMicro())
 }
 
-func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.DueIdentity, error) {
+// scimCovOwns is the store's ownership predicate for the sweeper's reads and the purge mark: the issuer and,
+// when a tenant is given and the row records one, the tenant.
+func scimCovOwns(i *store.PrincipalIdentity, issuer, tenant string) bool {
+	return i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant)
+}
+
+func (s *scimCovStore) PurgeDueIdentities(_ context.Context, issuer, tenant string, _ int) ([]store.DueIdentity, error) {
 	s.mu.Lock()
 	if err := s.enter("PurgeDueIdentities"); err != nil {
 		s.mu.Unlock()
@@ -667,7 +675,7 @@ func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.Due
 	}
 	var suspended, out []store.DueIdentity
 	for _, id := range s.order {
-		if i := s.idents[id]; i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
+		if i := s.idents[id]; scimCovOwns(i, issuer, tenant) && i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
 			d := store.DueIdentity{ID: id, Suspended: s.ownSuspension(i)}
 			if d.Suspended {
 				suspended = append(suspended, d)
@@ -686,18 +694,24 @@ func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.Due
 }
 
 // PendingRefusalAudits: no fake test owes a refusal row past a request, so the sweeper finds none.
-func (s *scimCovStore) PendingRefusalAudits(context.Context, time.Duration, int) ([]store.PendingRefusalAudit, error) {
+func (s *scimCovStore) PendingRefusalAudits(context.Context, string, string, time.Duration, int) ([]store.PendingRefusalAudit, error) {
 	return nil, nil
 }
 
-func (s *scimCovStore) PendingLeavers(_ context.Context, idleFor time.Duration, limit int) ([]store.PendingLeaver, error) {
+func (s *scimCovStore) PendingLeavers(_ context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]store.PendingLeaver, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pendingArgs = append(s.pendingArgs, idleFor, time.Duration(limit))
 	if err := s.enter("PendingLeavers"); err != nil {
 		return nil, err
 	}
-	return slices.Clone(s.pending), nil
+	var out []store.PendingLeaver
+	for _, p := range s.pending {
+		if i, ok := s.idents[p.ID]; ok && scimCovOwns(i, issuer, tenant) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, principals, emails []string) (store.UserSubjectRowsDeleted, error) {
@@ -909,10 +923,34 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (s *scimCovStore) PendingGroupRemovals(context.Context, time.Duration, int) ([]store.PendingGroupRemoval, error) {
+// PendingGroupRemovals answers nothing unless sweepRemovals is set; then it lists the pending group_remove
+// pairs of a person of the issuer and tenant the way the store does (a row with no tenant matches any),
+// ordered by identity id then group id, before the limit. The idle window is not modelled.
+func (s *scimCovStore) PendingGroupRemovals(_ context.Context, issuer, tenant string, _ time.Duration, limit int) ([]store.PendingGroupRemoval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return nil, s.enter("PendingGroupRemovals")
+	if err := s.enter("PendingGroupRemovals"); err != nil || !s.sweepRemovals {
+		return nil, err
+	}
+	var out []store.PendingGroupRemoval
+	for _, j := range s.jobs {
+		g, err := uuid.Parse(j.Target)
+		i, known := s.idents[j.IdentityID]
+		if j.Kind != store.JobKindGroupRemove || j.Done || err != nil || !known || slices.Contains(s.members[g], j.IdentityID) ||
+			i.Issuer != issuer || (tenant != "" && i.TenantID != "" && i.TenantID != tenant) {
+			continue
+		}
+		if p := (store.PendingGroupRemoval{GroupID: g, IdentityID: j.IdentityID}); !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b store.PendingGroupRemoval) int {
+		return strings.Compare(a.IdentityID.String()+a.GroupID.String(), b.IdentityID.String()+b.GroupID.String())
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) GroupRemovalFailures(context.Context, int) ([]store.DeprovisionFailure, error) {

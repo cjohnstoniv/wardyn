@@ -89,6 +89,11 @@ function rowFrom(cp: ClassPolicy | undefined): RowDraft {
   };
 }
 
+// Where a posture is written and must be valid: under Store on the runner, and on an organisation's Azure DevOps
+// tokens kept in the organisation, where the connection's "via the server" switch reads it (this editor shows the
+// block only under Store on the runner).
+const postureApplies = (c: DeliveryClass, mode: EditableMode) => mode === "runner_resident" || (c === "ado_minted_pat" && mode === "via_org");
+
 const editable = DELIVERY_CLASSES.filter((c) => !READ_ONLY.includes(c));
 
 function draftFrom(policy: DeliveryPolicy): Draft {
@@ -114,7 +119,7 @@ function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
       continue;
     }
     const cp: ClassPolicy = { mode: row.mode };
-    if (row.mode === "runner_resident") {
+    if (postureApplies(c, row.mode)) {
       const os_min = osMinOf(row);
       const req = {
         ...(row.mdm && { mdm_managed: true }),
@@ -207,7 +212,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const policy = React.useMemo(() => policyFrom(draft, stored), [draft, stored]);
   const baseline = React.useMemo(() => JSON.stringify(policyFrom(draftFrom(stored), stored)), [stored]);
   const dirty = JSON.stringify(policy) !== baseline && JSON.stringify(policy) !== submittedJson;
-  const invalid = editable.some((c) => draft[c].mode === "runner_resident" && POSTURE_OSES.some((os) => versionInvalid(draft[c].os[os])));
+  const invalid = editable.some((c) => postureApplies(c, draft[c].mode) && POSTURE_OSES.some((os) => versionInvalid(draft[c].os[os])));
   // The refused draft lives on in the saved-elsewhere banner after the reload made the editor clean: leaving drops it too.
   useUnsavedGuard("runner-credentials", dirty || savedElsewhere !== null, () => savedElsewhere ?? JSON.stringify(policy, null, 2));
 

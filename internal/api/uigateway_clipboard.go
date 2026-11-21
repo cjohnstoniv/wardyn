@@ -30,7 +30,8 @@ const desktopRulesUnreadableMsg = "This run's desktop rules could not be read. T
 
 // runDesktopPolicy is one read of the run's run.policy.resolve envelope (effectiveUIApps' source):
 // its UI apps, its effective desktop rules under its data_out rule (types.WithDataOut), and that rule, all
-// from the same snapshot. A failed read, or a run with no envelope, is an error and never the defaults, which
+// from the same snapshot. The data_out rule is the run row's when it keeps one (runDataOutRule), as every
+// other door reads it. A failed read, or a run with no envelope, is an error and never the defaults, which
 // allow paste in and upload where the run's rules may block them. The defaults are only for an envelope that
 // has no desktop block.
 func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types.UIApp, types.DesktopControls, types.TransferRule, error) {
@@ -41,7 +42,15 @@ func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types
 	if !ok {
 		return nil, types.DesktopControls{}, "", errNoPolicyEnvelope
 	}
-	return envelope.UIApps, types.WithDataOut(envelope.Desktop, envelope.DataOut), envelope.DataOut.DataOut(), nil
+	dataOut := envelope.DataOut
+	stored, _, err := s.storedRunDataOut(ctx, runID)
+	if err != nil {
+		return nil, types.DesktopControls{}, "", err
+	}
+	if stored != nil {
+		dataOut = *stored
+	}
+	return envelope.UIApps, types.WithDataOut(envelope.Desktop, dataOut), dataOut.DataOut(), nil
 }
 
 // uiDesktopApp is whether app is a desktop the run's desktop rules govern: the noVNC image's

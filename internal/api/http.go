@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -287,13 +288,10 @@ func isLoopbackHost(host string) bool {
 	}
 	// A bracketed IPv6 literal with no port (e.g. "[::1]") keeps its brackets.
 	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
-	if strings.EqualFold(h, "localhost") {
-		return true
-	}
-	// ParseIP+IsLoopback covers 127.0.0.0/8 and ::1; a hostname like
-	// "127.0.0.1.attacker.com" is NOT a valid IP, so it correctly fails.
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
+	// loopback.Host compares as written, so the name is lowered first: a browser
+	// sends "localhost", a CLI the case it was given. "127.0.0.1.attacker.com" is
+	// not an IP literal, so it fails.
+	return loopback.Host(strings.ToLower(h))
 }
 
 // humanOrAdminAuth authenticates the public API with EITHER a valid OIDC SSO

@@ -627,6 +627,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// the handler (governance_changes_pg_test.go).
 	"GET /api/v1/governance/changes":               {class: classUnit},
 	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":   {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
 	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
@@ -966,6 +967,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// list names reaches it without owning the run, and no role does. The handler is the gate: anyone it
 	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
 	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
+
+	// Support sessions (support_grant.go): classMember, NOT classOwner — the helper is a super admin the owner
+	// rule would refuse, and each handler is its own gate (supportCaller, the run's owner, the grant's helper
+	// or a security operator); a caller who is none of them gets support_not_allowed or the foreign-run 404.
+	"POST /api/v1/runs/{id}/support":                 {class: classMember},
+	"GET /api/v1/runs/{id}/support":                  {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/accept":  {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/decline": {class: classMember},
+	"POST /api/v1/runs/{id}/support/{grant}/end":     {class: classMember},
 
 	// Thawing a paused run keeps its sandbox busy: a write, so not the
 	// security tier's inspect-or-stop.
@@ -1910,8 +1920,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 18 routes: GET /governance, the three unit writes, the two
-	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the five change routes.
+	// and refuses a member at the door. 19 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the six change routes.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1930,8 +1940,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 18 {
-		t.Errorf("probed %d classUnit routes, want 18", unit)
+	if unit != 19 {
+		t.Errorf("probed %d classUnit routes, want 19", unit)
 	}
 
 	var sec, super int

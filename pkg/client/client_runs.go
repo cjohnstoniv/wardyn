@@ -92,6 +92,9 @@ func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOp
 type KillRunResponse struct {
 	ID    uuid.UUID      `json:"id"`
 	State types.RunState `json:"state"`
+	// Teardown is "confirming" when the sandbox's pods were still terminating at the end of the kill's
+	// wait: the run is KILLED and Wardyn confirms the stop in the background (run.kill.confirm).
+	Teardown string `json:"teardown,omitempty"`
 }
 
 // KillRun initiates the kill sequence for a run: durable state transition
@@ -212,13 +215,13 @@ type RecordTaskResult struct {
 // RecordWorkspaceTask launches a named open (allow-all egress) recording session
 // for a workspace via the import pipeline — the operator attaches, does the real
 // activity, and stops the run to capture what it actually used.
-// POST /api/v1/workspaces/{id}/record with body {"task_key": name}. Returns 202
+// POST /api/v1/workspaces/{id}/record with body {"name": name}. Returns 202
 // with the launched run; 503 when no runner is wired; 409 while another import
 // step is live.
-func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKey string) (RecordTaskResult, error) {
+func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, name string) (RecordTaskResult, error) {
 	var out RecordTaskResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record",
-		map[string]string{"task_key": taskKey}, &out)
+		map[string]string{"name": name}, &out)
 	return out, err
 }
 

@@ -89,7 +89,7 @@ if [[ -z "${RUN}" ]]; then
   bad "no workspace-backed run found — act 5 never launched"
 else
   ok "run ${RUN}"
-  AUDIT=$(./wardyn audit --run "${RUN}" --json 2>/dev/null)
+  AUDIT=$(./wardyn audit "${RUN}" --json 2>/dev/null)
   printf '%s' "${AUDIT}" | python3 -c '
 import sys, json
 from collections import Counter

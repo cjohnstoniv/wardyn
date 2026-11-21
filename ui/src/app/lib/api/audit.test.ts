@@ -401,3 +401,98 @@ describe("erasedFieldNames", () => {
     expect(erasedFieldNames(ev({ target: "api.example.com", data: { reason: "fine" } }))).toEqual([]);
   });
 });
+
+// A kill whose sandbox was still stopping when it finished writes run.kill success with sandbox_stop
+// "confirming", and its result lands later on a run.kill.confirm row (internal/api/run_kill_confirm.go).
+// One case per row of the console's state table (E0–E8): only a row that proves the stop says confirmed.
+const FIXTURE_DAY = "2025-11-17";
+describe("runEndingFromAudit — what a KILLED run's trail proves", () => {
+  // Times are fixed, not clock-relative: the page's wait is passed in as confirmWaitOver, never read from a clock.
+  const at = (hms: string) => `${FIXTURE_DAY}T${hms}Z`;
+  const KILL_AT = at("10:00:00");
+  const kill = (outcome: AuditEvent["outcome"], data?: Record<string, unknown>, time = KILL_AT): AuditEvent =>
+    ev({ id: `kill-${time}`, time, actor_type: "human", actor: "alice", action: "run.kill", outcome, data });
+  const confirm = (outcome: AuditEvent["outcome"], time: string): AuditEvent =>
+    ev({
+      id: `confirm-${time}`,
+      time,
+      actor_type: "system",
+      actor: "wardynd",
+      action: "run.kill.confirm",
+      outcome,
+      data: outcome === "failure" ? { step: "kill_sandbox", reason: "pod still terminating" } : undefined,
+    });
+  const evidence = (events: AuditEvent[], confirmWaitOver = false) =>
+    runEndingFromAudit("KILLED", events, { confirmWaitOver })?.evidence;
+  const confirming = kill("success", { sandbox_stop: "confirming" });
+
+  it("E0: no kill row proves nothing", () => {
+    expect(evidence([])).toBe("unknown");
+    expect(evidence([], true)).toBe("unknown");
+  });
+  it("E1: a stop queued for an offline runner is queued", () => {
+    expect(evidence([kill("success", { sandbox_stop: "queued" })])).toBe("queued");
+  });
+  it("E2: a stop still being confirmed, no result yet, wait running, is confirming", () => {
+    expect(evidence([confirming])).toBe("confirming");
+  });
+  it("E3: the same once the page's wait is over is unconfirmed", () => {
+    expect(evidence([confirming], true)).toBe("unconfirmed");
+    expect(runEndingFromAudit("KILLED", [confirming], { confirmWaitOver: true })?.otherStop).toBeUndefined();
+  });
+  it("E4: a confirm success row proves the stop, whether or not the wait is over", () => {
+    expect(evidence([confirming, confirm("success", at("10:00:40"))])).toBe("confirmed");
+    expect(evidence([confirming, confirm("success", at("10:00:40"))], true)).toBe("confirmed");
+  });
+  it("E5: a confirm failure row is partial, and names the confirm row as the one that failed", () => {
+    const ending = runEndingFromAudit("KILLED", [confirming, confirm("failure", at("10:01:00"))]);
+    expect(ending).toMatchObject({ evidence: "partial", confirmFailed: true, action: "run.kill" });
+  });
+  it("E6: a success with no sandbox_stop is confirmed", () => {
+    expect(evidence([kill("success")])).toBe("confirmed");
+    expect(runEndingFromAudit("KILLED", [kill("success")])?.confirmFailed).toBeUndefined();
+  });
+  it("E7: any other sandbox_stop value fails closed to unconfirmed, never confirmed", () => {
+    expect(evidence([kill("success", { sandbox_stop: "runner_revoked" })])).toBe("unconfirmed");
+    expect(runEndingFromAudit("KILLED", [kill("success", { sandbox_stop: "runner_revoked" })])?.otherStop).toBe(true);
+    expect(evidence([kill("success", { sandbox_stop: "stopped" })])).toBe("unconfirmed");
+    expect(evidence([kill("success", { sandbox_stop: 1 })])).toBe("unconfirmed");
+  });
+  it("E8: a failed kill is partial, and a confirm row cannot lift it", () => {
+    expect(evidence([kill("failure")])).toBe("partial");
+    const ending = runEndingFromAudit("KILLED", [kill("failure"), confirm("success", at("10:00:40"))]);
+    expect(ending).toMatchObject({ evidence: "partial" });
+    expect(ending?.confirmFailed).toBeUndefined();
+  });
+
+  it("a confirm row older than the latest kill is ignored", () => {
+    const second = kill("success", { sandbox_stop: "confirming" }, at("10:05:00"));
+    expect(evidence([confirming, confirm("success", at("10:00:40")), second])).toBe("confirming");
+    expect(evidence([confirming, confirm("success", at("10:00:40")), second], true)).toBe("unconfirmed");
+  });
+  it("a second kill during a confirm: the row that lands after it counts", () => {
+    const second = kill("success", { sandbox_stop: "confirming" }, at("10:00:30"));
+    expect(evidence([confirming, second, confirm("success", at("10:00:50"))])).toBe("confirmed");
+    expect(evidence([confirming, second, confirm("failure", at("10:00:50"))])).toBe("partial");
+  });
+  it("a confirm row at the kill's own timestamp counts", () => {
+    expect(evidence([confirming, confirm("success", KILL_AT)])).toBe("confirmed");
+  });
+  it("the latest confirm row decides", () => {
+    const rows = [confirming, confirm("failure", at("10:00:40")), confirm("success", at("10:01:00"))];
+    expect(evidence(rows)).toBe("confirmed");
+  });
+  it("a confirm read that failed (no confirm rows) never gives confirmed", () => {
+    expect(evidence([confirming])).not.toBe("confirmed");
+    expect(evidence([confirming], true)).not.toBe("confirmed");
+  });
+  it("names the run.kill row that decided it, so each kill gets its own wait", () => {
+    const second = kill("success", { sandbox_stop: "confirming" }, at("10:05:00"));
+    expect(runEndingFromAudit("KILLED", [confirming, second])?.killId).toBe(`kill-${at("10:05:00")}`);
+    expect(runEndingFromAudit("KILLED", [])?.killId).toBeUndefined();
+  });
+  it("a kill row with no readable time counts no confirm row", () => {
+    const noTime = kill("success", { sandbox_stop: "confirming" }, "not a time");
+    expect(evidence([noTime, confirm("success", at("10:00:40"))])).toBe("confirming");
+  });
+});

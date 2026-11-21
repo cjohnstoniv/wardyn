@@ -161,6 +161,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | R14 | The ServiceAccount lists every Node and patches pods in its runs namespace |
 | R15 | Two kubelets under one Node name are unsupported |
 | R16 | Reusing a Node name for another machine while a run's pods remain is unsupported; runnerd records a reuse it observes and releases only by the two-person record |
+| R17 | A new run whose proxy pod is given an address still fenced for an earlier run fails at start with `relay_ip_fenced`; the cluster can give that address again until the earlier run's stop is confirmed |
 
 - R14: besides removing its finalizer, `patch` can change a running pod's image, which is the power the Role already holds through pod create, exec and ephemeral containers. A cluster that will not grant the cluster-scoped read cannot host organisation runners.
 - R16: runnerd cannot see a reuse that none of its lists samples before release. Such a holder can start the pod after release; the exposure is that namespace's ambient egress, with no renewable identity.
@@ -168,4 +169,5 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 ## Deferred
 
 - A per-run Service, `ReplaceProxy` and auto-revive. Reopening it needs a split proxy-config Secret, the Service verb in the server chart Role in the same release (chart before image), a `Config` flag, a `CheckFit` count and a renewable identity after a proxy restart.
+- A retry of a fenced address inside the runner. It needs a second proxy pod per run, with per-pod evidence, a relay refusal of one address without the run, and a decision producer per pod. A relaunch by the organisation would create a second run, which can draw the same address again.
 - Persisting deadlines on apiserver time, and a pod-lifetime state file for the renewed token: both rejected.

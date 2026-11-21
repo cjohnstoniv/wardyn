@@ -33,6 +33,11 @@ const uiRoot = path.resolve(__dirname, "../..");
 // (661 kB), so 672 kB restores ~11 kB while any lazy route leaking into the
 // eager graph still blows straight through it (the terminal-stack assertion
 // below is the primary split guard).
+//
+// Baseline from one `pnpm build` of this tree: the entry chunk (main-*.js) is 76,267 B (74 kB), because the
+// shared libraries sit in their own chunks. The whole eager graph (the entry plus every chunk index.html
+// preloads) is 754,414 B in 106 chunks. This test measures the entry chunk alone, so the 672 kB budget above
+// leaves about 598 kB of slack; the next budget change should start from 76,267 B.
 const ENTRY_BUDGET_BYTES = 672 * 1024;
 
 async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
@@ -186,7 +191,7 @@ describe("New Run copy and flow stay out of the eager chunks", () => {
 });
 
 // Vite inlines an asset under assetsInlineLimit (4096 B) as a data: URI, and the CSP's default-src 'self'
-// blocks data: images. Only the 128 and 256 px art may ship; smaller files use the SVG BarrierMark.
+// blocks data: images. Only the 128 and 256 px art may ship; smaller files use the SVG TierIllustration.
 describe("barrier art ships as files, never inlined", () => {
   it("emits no data:image/png in any chunk or asset of the app build", async () => {
     const inlined = (await buildOnce())

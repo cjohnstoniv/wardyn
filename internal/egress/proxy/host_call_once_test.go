@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,6 +101,46 @@ func TestHostCallOnceOneOfTwoWaiters(t *testing.T) {
 	c2()
 	if res := hcOutcome(t, other); res.sent {
 		t.Fatal("both waiting requests went on under one once yes")
+	}
+}
+
+// TestHostCallOnceDeclineRefusesBothWaiters: two identical requests waiting on one approval declined once are
+// both refused, the second without asking again, and a later identical request asks again.
+func TestHostCallOnceDeclineRefusesBothWaiters(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	cp := newHCCP(t, p)
+	hostCallSecond = time.Second
+	d1, c1 := hcGo(p, "/admin")
+	d2, c2 := hcGo(p, "/admin")
+	defer c1()
+	defer c2()
+	hcWait(t, "both requests to wait on one approval", func() bool {
+		rows, raises, _ := cp.counts()
+		return rows == 1 && raises >= 2
+	})
+	cp.decideAllAs(types.ApprovalDenied, types.ScopeOnce)
+	for i, d := range []chan hcResult{d1, d2} {
+		res := hcOutcome(t, d)
+		if res.sent || res.rec.Code != http.StatusForbidden {
+			t.Fatalf("waiter %d was not refused under a once decline: sent=%v %d %v", i+1, res.sent, res.rec.Code, res.rec.Header())
+		}
+		if !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+			t.Errorf("waiter %d: detail = %q", i+1, res.rec.Header().Get(egressHeaderDetail))
+		}
+	}
+	if rows, _, _ := cp.counts(); rows != 1 {
+		t.Errorf("approval rows after both refusals = %d, want 1: a refused waiter must not ask again", rows)
+	}
+	if n := strings.Count(buf.String(), `"rule_source":"`+ruleSourceHostRuleApprovalDenied+`"`); n != 2 {
+		t.Errorf("approval-denied rows = %d, want 2", n)
+	}
+	next, stop := hcGo(p, "/admin")
+	defer stop()
+	hcWait(t, "a later identical request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+	select {
+	case res := <-next:
+		t.Fatalf("the later request was answered without a person: sent=%v %d", res.sent, res.rec.Code)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -203,5 +245,186 @@ func TestHostCallRaiseReadsOnAnEarlierControlPlane(t *testing.T) {
 		if json.Unmarshal(raw, &says) != nil || !says.AcceptsOnce || earlier.Kind != types.ApprovalToolCall {
 			t.Errorf("%s: want a tool_call raise with accepts_once beside requested_scope", raw)
 		}
+	}
+}
+
+// hcLateRaise holds the first raise's answer until a second raise has reached the control plane, so both
+// requests ask before either files the approval, and holds the second raise's answer until late is closed.
+type hcLateRaise struct {
+	cp    *hcCP
+	next  http.RoundTripper
+	late  chan struct{}
+	posts atomic.Int32
+}
+
+func (l *hcLateRaise) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := l.next.RoundTrip(r)
+	if r.Method != http.MethodPost {
+		return resp, err
+	}
+	switch l.posts.Add(1) {
+	case 1:
+		for _, raises, _ := l.cp.counts(); raises < 2 && r.Context().Err() == nil; _, raises, _ = l.cp.counts() {
+			time.Sleep(time.Millisecond)
+		}
+	case 2:
+		select {
+		case <-l.late:
+		case <-r.Context().Done(): // the request ended first
+		}
+	}
+	return resp, err
+}
+
+// hcRowIDs is the approval each decision row with rule_source source names, in order: uuid.Nil for a row
+// that names none.
+func hcRowIDs(t *testing.T, buf *bytes.Buffer, source string) []uuid.UUID {
+	t.Helper()
+	var ids []uuid.UUID
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var row struct {
+			RuleSource string     `json:"rule_source"`
+			ApprovalID *uuid.UUID `json:"approval_id"`
+		}
+		if line == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode decision %q: %v", line, err)
+		}
+		if row.RuleSource == source {
+			ids = append(ids, uuid.Nil)
+			if row.ApprovalID != nil {
+				ids[len(ids)-1] = *row.ApprovalID
+			}
+		}
+	}
+	return ids
+}
+
+// row is the id of the control plane's i-th approval row.
+func (c *hcCP) row(i int) uuid.UUID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rows[i].id
+}
+
+// TestHostCallOnceAnswersARaiseThatJoinedLate: of two identical requests that both asked, the one whose
+// raise was answered only after a person decided the shared approval once, and after the other request
+// spent that answer, still takes it: a once no refuses it as declined on that approval, and a once yes
+// already taken makes it ask again on a new one. Neither is answered that Wardyn could not ask a person,
+// and a later identical request asks again on a new approval.
+func TestHostCallOnceAnswersARaiseThatJoinedLate(t *testing.T) {
+	scope, _ := hostCallScopeOf(hrHost, "POST", "/admin")
+	for _, state := range []types.ApprovalState{types.ApprovalDenied, types.ApprovalApproved} {
+		t.Run(string(state), func(t *testing.T) {
+			p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+			cp := newHCCP(t, p)
+			hostCallSecond = time.Second
+			late := &hcLateRaise{cp: cp, next: cp.srv.Client().Transport, late: make(chan struct{})}
+			p.approval = newApprovalClient(cp.srv.URL, newTokenSource("tok"), p.runID, &http.Client{Transport: late})
+			d1, c1 := hcGo(p, "/admin")
+			d2, c2 := hcGo(p, "/admin")
+			defer c1()
+			defer c2()
+			hcWait(t, "both requests to ask", func() bool { rows, raises, _ := cp.counts(); return rows == 1 && raises == 2 })
+			shared := cp.row(0)
+			cp.decideAllAs(state, types.ScopeOnce)
+			var first hcResult
+			var other chan hcResult
+			select {
+			case first = <-d1:
+				other = d2
+			case first = <-d2:
+				other = d1
+			case <-time.After(5 * time.Second):
+				t.Fatal("the request that filed the approval was not answered")
+			}
+			if first.sent != (state == types.ApprovalApproved) {
+				t.Fatalf("the request that filed the approval: sent=%v %d %v", first.sent, first.rec.Code, first.rec.Header())
+			}
+			close(late.late)
+			if state == types.ApprovalApproved {
+				hcWait(t, "the late request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+				asked := cp.row(1)
+				cp.mu.Lock()
+				cp.rows[1].state, cp.rows[1].decided = types.ApprovalDenied, types.ScopeOnce
+				cp.mu.Unlock()
+				res := hcOutcome(t, other)
+				if res.sent || res.rec.Code != http.StatusForbidden || !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+					t.Fatalf("the late request: sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+				}
+				if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalApproved); !slices.Equal(got, []uuid.UUID{shared}) {
+					t.Errorf("approval-approved rows name %v, want one send, on %v", got, shared)
+				}
+				if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalDenied); !slices.Equal(got, []uuid.UUID{asked}) {
+					t.Errorf("approval-denied rows name %v, want the late request's own ask %v", got, asked)
+				}
+				return
+			}
+			res := hcOutcome(t, other)
+			if res.sent || res.rec.Code != http.StatusForbidden || !strings.Contains(res.rec.Header().Get(egressHeaderDetail), "for this request only") {
+				t.Fatalf("the late request: sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+			}
+			if rows, _, _ := cp.counts(); rows != 1 {
+				t.Errorf("approval rows = %d, want 1: the late request must not ask again", rows)
+			}
+			if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalDenied); !slices.Equal(got, []uuid.UUID{shared, shared}) {
+				t.Errorf("approval-denied rows name %v, want two, both on %v", got, shared)
+			}
+			next, stop := hcGo(p, "/admin")
+			defer stop()
+			hcWait(t, "a later identical request to ask again", func() bool { rows, _, _ := cp.counts(); return rows == 2 })
+			hcWait(t, "the later request to wait on the new approval", func() bool {
+				id, _ := p.hostCalls.look(scope.CallSHA256)
+				return id == cp.row(1)
+			})
+			if cp.row(1) == shared {
+				t.Fatalf("the later request waits on the declined approval %v", shared)
+			}
+			select {
+			case res := <-next:
+				t.Fatalf("the later request was answered without a person: sent=%v %d", res.sent, res.rec.Code)
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
+	}
+}
+
+// TestHostCallLostYesAskedAgainLoopsNot: a request that lost a once yes to another identical request asks
+// again. A control plane that answers that ask with the same spent yes has it refused at once, as a request
+// Wardyn could not ask about, never raising in a loop.
+func TestHostCallLostYesAskedAgainLoopsNot(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	spent := uuid.New()
+	var raises atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			raises.Add(1)
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: spent, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce})
+	}))
+	t.Cleanup(srv.Close)
+	p.approval = newApprovalClient(srv.URL, newTokenSource("tok"), p.runID, srv.Client())
+	prev := hostCallSecond
+	hostCallSecond = time.Second
+	t.Cleanup(func() { hostCallSecond = prev })
+	// Another identical request is still waiting, and has used the yes.
+	scope, _ := hostCallScopeOf(hrHost, "POST", "/admin")
+	p.hostCalls.admitKept(scope.CallSHA256)
+	defer p.hostCalls.leave(scope.CallSHA256)
+	p.hostCalls.install(scope.CallSHA256, spent)
+	p.hostCalls.claim(scope.CallSHA256, spent)
+	d, cancel := hcGo(p, "/admin")
+	defer cancel()
+	res := hcOutcome(t, d)
+	if res.sent || res.rec.Code != http.StatusForbidden || res.rec.Header().Get(egressHeaderDetail) != hostCallNoAskText {
+		t.Fatalf("sent=%v %d detail=%q", res.sent, res.rec.Code, res.rec.Header().Get(egressHeaderDetail))
+	}
+	if n := raises.Load(); n != 2 {
+		t.Errorf("raises = %d, want 2: the first ask, and the one answered with the lost yes", n)
+	}
+	if got := hcRowIDs(t, buf, ruleSourceHostRuleApprovalRefused); !slices.Equal(got, []uuid.UUID{uuid.Nil}) {
+		t.Errorf("approval-refused rows name %v, want one naming none", got)
 	}
 }

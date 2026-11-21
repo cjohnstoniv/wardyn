@@ -92,6 +92,9 @@ const (
 	// MethodFenceProxy cuts a contained run's agent off every network it is attached to (RefArgs, an empty
 	// reply). Sent only to a runner whose caps carry ProxyFence.
 	MethodFenceProxy = "fence_proxy"
+	// MethodNarrowProxy adds hosts to a Kubernetes sandbox's proxy deny list in place (NarrowProxyArgs, answered with
+	// NarrowProxyResult); an empty Deny reads the list. Sent only to a runner whose caps carry ProxyNarrow.
+	MethodNarrowProxy = "narrow_proxy"
 )
 
 // KeptMachineOpDelete is kept_machine's one op.
@@ -355,6 +358,22 @@ type ReplaceProxyArgs struct {
 // new proxy was handed. A runner that predates it answers nothing, which decodes as an empty hash.
 type ReplaceProxyResult struct {
 	ConfigSHA256 string `json:"config_sha256,omitempty"`
+}
+
+// NarrowProxyArgs is narrow_proxy's input. PolicyGeneration is for the runner's log only: the list only grows.
+type NarrowProxyArgs struct {
+	Ref              string   `json:"ref"`
+	Deny             []string `json:"deny,omitempty"`
+	PolicyGeneration int      `json:"policy_generation,omitempty"`
+}
+
+// NarrowProxyResult is narrow_proxy's answer: runner.ProxyNarrowState on the wire.
+type NarrowProxyResult struct {
+	ConfigSHA256 string   `json:"config_sha256"`
+	BaseSHA256   string   `json:"base_sha256"`
+	LiveDenies   []string `json:"live_denies"`
+	Changed      bool     `json:"changed,omitempty"`
+	BaseChecked  bool     `json:"base_checked,omitempty"`
 }
 
 // SweepArgs is the crash-orphan sweep. A func cannot cross the wire, so it runs

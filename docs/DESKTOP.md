@@ -135,6 +135,11 @@ Three more the tier inherits rather than introduces:
   - recovery is operator-side — an admin or `security_admin`, which on m′ the developer explicitly is not. Once the rightful owner is verified out of band, they remove the registrant's keys with `DELETE /people/{principal}/ssh-keys` (see [Reclaiming a squatted fingerprint](SSH.md#reclaiming-a-squatted-fingerprint));
 - and compose serves the console and the UI relay on a **shared origin**, a documented residual of this topology.
 
+### Support sessions are not offered on this tier
+
+- A run on a managed laptop's local daemon takes no support helper: a support request on a local-mode run is refused `409` `support_run_ineligible`, because the daemon has one seat.
+- Its web apps, desktop and Files panel answer to the run's owner alone.
+
 ### Named gap: the browser lane is not available on this tier
 
 - `wardyn run ssh` works on a managed laptop as of 0.7.
@@ -664,8 +669,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.0|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.1|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.1|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

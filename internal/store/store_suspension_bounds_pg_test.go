@@ -369,7 +369,7 @@ func TestPG_SuspensionBounds_AnotherIdentitysSuspensionDropsTheRecordOfARowItDea
 	if c, _ := ledger(held.ID); c.Detail["deactivated_at_us"] != int(heldAt.UnixMicro()) {
 		t.Errorf("the ledger of the identity already deactivated = %+v, want its record of %v kept", c, heldAt)
 	}
-	due, err := st.PurgeDueIdentities(ctx, 50)
+	due, err := st.PurgeDueIdentities(ctx, idIssuer, idTenant, 50)
 	if err != nil {
 		t.Fatal(err)
 	}

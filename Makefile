@@ -254,11 +254,9 @@ test-docker: ## Run all Go tests with -tags docker
 	WARDYN_TEST_PG= go test -tags docker -gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
-# Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
-# from the union coverage profile. Run after cover-check when the inventory
-# should track a change; the doc states its own regeneration command, which is
-# the wiring whose absence got the last copy deleted as unmaintainable.
-test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
+# Writes test/reports/go/TEST-GAPS.md (the triaged untested-exported-func
+# inventory, gitignored) from the union coverage profile. Run after cover-check.
+test-gaps: ## Write test/reports/go/TEST-GAPS.md from test/reports/go coverage output
 	./scripts/test-gaps.sh
 
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
@@ -286,7 +284,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
 # internal/api AND test/apie2e. Parallel packages therefore race each other
-# through the DB (seen: LegacyArtifactOverridesFold vs the apie2e integrations
+# through the DB (seen: a site-config test vs the apie2e integrations
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
@@ -430,12 +428,12 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
 	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
-	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil / TestL0_DNSQueryIsRecorded / TestL0_HostAddressUnreachable (internal/runner/docker/network_test.go, dns_live_test.go), and TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce (proxy_replace_live_test.go)"
+	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil / TestL0_DNSQueryIsRecorded / TestL0_DNSResolverAfterAKeptRevive / TestL0_HostAddressUnreachable (internal/runner/docker/network_test.go, dns_live_test.go), and TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce (proxy_replace_live_test.go)"
 	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
-	@echo "surface until the next nightly run. Scoped to just these six by -run: the rest of"
+	@echo "surface until the next nightly run. Scoped to just these seven by -run: the rest of"
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
 	@echo "Run through test-report.sh (l0-docker): a rename or a skip of any of them fails the job."
-	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 10m -run '^(TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil|DNSQueryIsRecorded|HostAddressUnreachable)|TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)$$' ./internal/runner/docker/...
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 10m -run '^(TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil|DNSQueryIsRecorded|DNSResolverAfterAKeptRevive|HostAddressUnreachable)|TestReplaceProxy_Live_AgentReachesTheNewProxyAtOnce)$$' ./internal/runner/docker/...
 	@echo "Running the remote-runner internal_hosts pin (internal/api TestInternalHostsOnRunnerDocker: local dispatch -> runner wire -> the real proxy image)."
 	@echo "Through test-report.sh (internal-hosts-docker): the test's testfloor.Mark makes a skip or a rename fail the job."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh internal-hosts-docker -tags docker -timeout 10m -run '^TestInternalHostsOnRunnerDocker$$' ./internal/api/
@@ -709,6 +707,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/common_clone_present_test.sh
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
+	./scripts/lib/walk_api_test.sh
 	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-cache-prune.sh
 	./scripts/test-ci-pick-dispatched-run.sh

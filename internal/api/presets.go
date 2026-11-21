@@ -249,11 +249,18 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf("request: unknown confinement_class %q", req.Request.ConfinementClass))
 		return false
 	}
+	// A gated api_key grant the stored preset already carries is left alone by a write that does not
+	// change it: only a grant this write adds or changes is refused.
+	held := s.storedPresetGrants(r, name)
 	if req.Request.InlinePolicy != nil {
-		if err := validateAuthoredPolicySpec(*req.Request.InlinePolicy); err != nil {
+		if err := validateAuthoredPolicySpecHolding(*req.Request.InlinePolicy, held); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPresetRequestInvalid), "request: invalid inline_policy: "+err.Error())
 			return false
 		}
+	}
+	if err := authoredAPIKeyApprovalRefusal(rawEligibleGrants(req.Request.PolicyOverlay), held); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: invalid policy_overlay: "+err.Error())
+		return false
 	}
 	if !s.validateRunTextFields(w, req.Request) {
 		return false
@@ -273,6 +280,24 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 		}
 	}
 	return true
+}
+
+// storedPresetGrants is the eligible_grants the stored preset called name carries in its
+// inline_policy and policy_overlay, nil when there is none or it does not read.
+func (s *Server) storedPresetGrants(r *http.Request, name string) []types.GrantSpec {
+	p, err := s.cfg.Store.GetLaunchPreset(r.Context(), name)
+	if err != nil {
+		return nil
+	}
+	v, err := presetReadView(p)
+	if err != nil {
+		return nil
+	}
+	var held []types.GrantSpec
+	if v.Request.InlinePolicy != nil {
+		held = append(held, v.Request.InlinePolicy.EligibleGrants...)
+	}
+	return append(held, rawEligibleGrants(v.Request.PolicyOverlay)...)
 }
 
 // handlePutPreset creates or replaces a preset by name. A body identical to

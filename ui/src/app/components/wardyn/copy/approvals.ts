@@ -218,12 +218,12 @@ export function approvalScopeBadge(
     if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
     return item.decision_scope === "once" ? "Allowed once" : "Allowed for this run";
   }
-  // A held host request (B5): approving covers the method and path for the rest of the run, unless the row's proxy
-  // accepts once and the decision recorded once. An earlier row may record once though its proxy kept the answer for
-  // the run, so once alone does not narrow the badge. A denial needs no badge.
+  // A held host request (B5): approving covers the method and path for the rest of the run in this proxy, unless the
+  // row's proxy accepts once and the decision recorded once. An earlier row may record once though its proxy kept the
+  // answer for the run, so once alone does not narrow the badge. A denial needs no badge.
   if (isHostCallRequest(item)) {
     if (item.state !== "APPROVED") return undefined;
-    return item.decision_scope === "once" && item.requested_scope.accepts_once === true ? "Allowed once" : "Allowed for this run";
+    return item.decision_scope === "once" && item.requested_scope.accepts_once === true ? "Allowed once" : "Allowed in this proxy";
   }
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;

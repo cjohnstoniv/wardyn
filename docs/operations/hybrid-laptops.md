@@ -50,7 +50,7 @@
 
 - `via_org` does not carry an MCP server's header credential: a run whose MCP server uses one the organisation shares is refused on your runner (`placement_credential`).
 - An MCP server or Bedrock provider that sends your organisation's run identity runs only on the organisation's remote-hosted runners: no runner relays its token mint.
-- A run carrying one is refused on any runner, your own or your organisation's self-hosted one, at Review, preflight and create (`placement_credential`), naming every such server or provider. A key or `custom_endpoint` provider sending it is refused on its base URL first (below).
+- A run carrying one is refused on any runner, your own or your organisation's self-hosted one, at Review, preflight and create (`placement_credential`), naming every such server or provider. A key or `custom_endpoint` provider sending it is named the same way.
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
 - A claimed laptop runner's trust class is `personal`. A security operator can mark it `managed_device` (`wardyn runner trust <runner-id> managed_device --reason "<why>"`, held for a second person under four-eyes); the runner itself never sets it.
 - The delivery policy's `by_trust` sets a class's mode for one trust class, so `runner_resident` can be limited to `managed_device` runners. `via_org` is never set per trust class.
@@ -71,8 +71,15 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
-- `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
-- A `require_posture` on a class whose mode is not `runner_resident` is refused when the policy is saved (`credential_delivery_invalid`).
+- `ado_minted_pat` also needs the connection's opt-in:
+  - as `runner_resident`, its `runner_resident` and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart, and a refused fetch revokes it;
+  - as `via_org`, its `runner_via_org` and a runner of known trust class, on 0.10.1 or later. The runner never holds the token.
+  - See [Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement).
+- A run's Azure DevOps token delivered `via_org` is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes ([Azure DevOps](../AZURE-DEVOPS.md#via-the-organisation-via_org)).
+  - A withdraw revokes the run's tokens, and a write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests.
+  - A change of the runner's trust class does not affect it.
+- A paused run's requests through the organisation (`via_org`) are refused `409 run_paused` until it is resumed, for every `via_org` grant.
+- A `require_posture` on a class whose mode is not `runner_resident` (or `via_org` for `ado_minted_pat`) is refused when the policy is saved (`credential_delivery_invalid`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 - Placement judges the posture on record, the runner's last report, however old. A change on the laptop counts once the runner reports it: at every connect and within 15 minutes of a change.
@@ -377,6 +384,10 @@ What happens:
 - A forced stop of an ended run, when its lock is held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back are lost and recorded "not brought back". A runner, a virtual machine and Kubernetes in server mode stop it the same way.
 - The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped. "Not brought back" may then not be recorded.
 - A failed forced stop is retried on the next watcher tick, normally within a minute.
+  - Each retry is held to 60 seconds, but some steps keep their own budgets.
+  - Those are a Docker stop (60 seconds), the end's own teardown (90 seconds for a macOS VM run), the folder record write and each settle write (15 seconds).
+  - So one retry can run past 60 seconds by those budgets, and is still bounded.
+  - Runs whose stop is not confirmed are retried one after another, so several stuck runs make the tick longer.
 - A copy back that finds the folder busy keeps a sandbox that can be held until the pass finishes. A virtual machine, or an agent that cannot be stopped alone, is stopped at that visit and recorded "not brought back"; the same holds for such a sandbox whose last pass may still be running.
 - Update the server first, then every laptop runner: a runner from this release answers busy, and an older server reads that as an error and stops the sandbox.
 - Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.

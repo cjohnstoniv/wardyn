@@ -9,7 +9,6 @@ package httpkv
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -20,15 +19,6 @@ import (
 // (status 0), a 429 or a 5xx.
 func Transient(status int) bool {
 	return status == 0 || status == http.StatusTooManyRequests || status >= 500
-}
-
-// Loopback reports whether host is localhost or a loopback IP literal.
-func Loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // SameHost compares two host names as DNS does: ASCII letters fold and nothing

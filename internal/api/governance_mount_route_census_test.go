@@ -53,6 +53,8 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 		"changeForRead"},
 	"GET /api/v1/governance/changes/{id}": {"a held change's diff is stored rendered and re-withheld for the reader's tier by changeForRead",
 		"changeForRead"},
+	"GET /api/v1/governance/changes/{id}/impact": {"answers people, units and live-run counts from a replay; " +
+		"never serves the change's diff or ceiling", ""},
 	"GET /api/v1/governance/requests": {"each held request the caller may see (canSeeGovernanceChange) is served through changeForRead, " +
 		"as the changes list serves it; a request's diff names a unit, a person and a duration or an image, never a ceiling", "changeForRead"},
 	"GET /api/v1/governance/units/{id}/model-usage": {"the unit tree decides the subtree whose usage is summed and names its units; " +

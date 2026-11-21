@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { BoundaryReport } from "../api/boundary";
+import type { TreeDryRunPerson } from "../api/governance";
+import type { RiskItem, RiskLevel } from "./runs";
+
 // types.GovernanceChange (0.8.6, internal/types/governance_change.go) — one governance write held for a
 // second human. The body of a covered write's `202 {pending_change}` and the row of
 // GET /governance/changes. The payload, hashes and emails never reach a response.
@@ -73,4 +77,60 @@ export interface GovernanceChangeDiff {
   activates?: { unit_id: string; unit_name: string }[];
   // A legacy membership move: the units it may take someone out of.
   vacates?: { unit_id: string; unit_name: string }[];
+  // What the server read of the change at proposal: whether it widens, and the risk grade. Absent on a request
+  // kind and on a change proposed before the server wrote it; the console reads an absent review on any other
+  // kind as not_checked.
+  review?: ChangeReview;
+}
+
+// The server's reading of a proposed change.
+export type ChangeVerdict = "widens" | "narrows_held" | "not_checked";
+
+// Why a change that does not widen is still held for a person.
+export type HeldBecause = "contact" | "lock_removed" | "rename" | "legacy_shift" | "first_allowlist";
+
+// One field the change widens, with the entries it adds. field is a policy field's JSON name, "limits",
+// "member_cap" (entries are the raised keys), "members", "withheld_grants", "vcs" or "owning_unit".
+export interface ChangeWidening {
+  field: string;
+  entries?: string[];
+}
+
+// The graded risk of one side of a profile change, deterministic and never a model's.
+export interface ChangeRiskSide {
+  overall: RiskLevel;
+  items: RiskItem[];
+}
+
+export interface ChangeReview {
+  verdict: ChangeVerdict;
+  widens?: ChangeWidening[];
+  held_because?: HeldBecause[];
+  // Only for a profile create (before is null), a profile update and a unit admin's membership move.
+  risk?: { before: ChangeRiskSide | null; after: ChangeRiskSide };
+}
+
+// One live run a change would reach. title is sent only to the run's owner and to admins.
+export interface ChangeImpactRun {
+  id: string;
+  owner: string;
+  started_at: string;
+  title?: string;
+}
+
+// GET /governance/changes/{id}/impact: who and what an approval would reach, as of as_of.
+export interface ChangeImpact {
+  computed: "tree" | "boundary" | "none";
+  // Only with computed "none": the kind has no replay, the change went stale, or the viewer may not see it.
+  not_computed?: "kind" | "stale" | "refused";
+  as_of: string;
+  // computed "tree": always an array.
+  people?: TreeDryRunPerson[];
+  live_runs?: ChangeImpactRun[];
+  // Every live run the change reaches; live_runs lists at most 50.
+  live_runs_total?: number;
+  activates?: { unit_id: string; unit_name: string }[];
+  vacates?: { unit_id: string; unit_name: string }[];
+  // computed "boundary" only.
+  boundary?: BoundaryReport;
 }

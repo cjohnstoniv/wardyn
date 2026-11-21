@@ -245,6 +245,17 @@ resolves your drive the same way, in a dry run too:
 - The same holds for your own run's Azure DevOps access request or MCP call if it sets
   `WARDYN_CAPABILITY_SECOND_HUMAN=1`: then someone else must decide it.
 
+## Support sessions
+
+- When your deployment turns on [support sessions](ENV.md#wardyn_support_sessions), a super admin can ask to help inside your running run. The run page shows a banner when they ask.
+- Read their reason, tick the doors you allow (`terminal`, `commands`, `files`, `forward`, `web_apps`, `desktop`), pick 15, 30 or 60 minutes, then accept or decline. Nothing opens until you accept, and every door stays closed unless you tick it.
+- Help cannot be extended: more time needs a new request. A request nobody answers lapses after 15 minutes.
+- End now on the banner stops the helper opening anything new at once. A terminal, SSH or web session they already have open, or a command still running, closes within about 35 seconds. The helper, a security admin and the end of your run end help too.
+- The consent screen says what is recorded. A terminal is recorded as any terminal is; commands, files, forwards and web apps never are.
+- The helper cannot decide an approval your run raised after their request, even once help ends.
+- From a terminal, `wardyn run support status <run-id>` shows who asked and why, and `accept <run-id> <grant-id> --doors terminal --minutes 30`, `decline` and `end` answer it. A helper asks with `request <run-id> --doors terminal,commands --reason "..."`.
+- `request`, `accept` and `decline` need a CLI sign-in as a person. As the run's owner you may also run `status` and `end` with a personal token.
+
 ## Who approves a governance change
 
 - If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:

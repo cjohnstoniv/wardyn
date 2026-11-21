@@ -468,6 +468,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotDecidable, takeoverNotDecidableBody)
 		return
 	}
+	if s.refuseHelperDecision(w, r, ap) { // a helper decides no hold raised from their request on
+		return
+	}
 	// The Wardyn boundary bounds every decider's approve (boundary_meet.go), after the member gate so the
 	// refusal is never an existence oracle.
 	if approve && ap.Kind == types.ApprovalEgressDomain {

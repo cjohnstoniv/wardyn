@@ -116,7 +116,7 @@ func Writable(class string) bool {
 }
 
 // PostureRequirement is what a runner's reported posture (types.RunnerPosture,
-// self-reported) must meet for a runner_resident class: only on that mode.
+// self-reported) must meet for a runner_resident class, or an ado_minted_pat via_org row: only on those.
 type PostureRequirement struct {
 	MDMManaged    bool              `json:"mdm_managed,omitempty"`
 	DiskEncrypted bool              `json:"disk_encrypted,omitempty"`
@@ -265,8 +265,8 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 		if !slices.Contains(classModes[class], cp.Mode) {
 			return fmt.Errorf("%w: class %q cannot be delivered as %q (allowed: %s)", ErrInvalidPolicy, name, cp.Mode, joinModes(classModes[class]))
 		}
-		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident {
-			return fmt.Errorf("%w: class %q has require_posture without mode %q", ErrInvalidPolicy, name, ModeRunnerResident)
+		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident && !(class == ClassADOMintedPAT && cp.Mode == ModeViaOrg) {
+			return fmt.Errorf("%w: class %q has require_posture without mode %q (or %q for %q)", ErrInvalidPolicy, name, ModeRunnerResident, ModeViaOrg, ClassADOMintedPAT)
 		}
 	}
 	return nil

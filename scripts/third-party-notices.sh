@@ -38,6 +38,38 @@ mode="${1:---check}"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
+# go-licenses reports a licence URL it could not discover (a vanity host such as gopkg.in unreachable) as
+# `Unknown` and says so on stderr. That is the network, not a changed dependency: for such a row, and only
+# then, keep the committed URL. The licence is never taken from the committed row, so a licence change
+# still shows as drift. Args: $1 committed notices, $2 go-licenses stderr; stdin and stdout are go.csv.
+notices_keep_url() {
+  awk -F, -v OFS=, -v committed="$1" -v errf="$2" '
+    BEGIN {
+      pfx = "Error discovering license URL: getting file URL in library "
+      while ((getline line < errf) > 0) if (index(line, pfx)) errs[++ne] = line
+      while ((getline line < committed) > 0) {
+        n = split(line, f, "|")
+        if (n < 4) continue
+        m = f[2]; u = f[4]
+        gsub(/^ *`|` *$/, "", m); gsub(/^ +| +$/, "", u)
+        if (m != "" && u != "" && u != "Unknown" && !(m in url)) url[m] = u
+      }
+    }
+    $2 == "Unknown" && ($1 in url) {
+      for (i = 1; i <= ne; i++) if (index(errs[i], pfx $1 ":")) {
+        # Keep the URL only for the version that failed: a bumped module must still show as drift.
+        v = ""
+        if (match(errs[i], /ModuleInfo\(ctx, "[^"]*", "[^"]*"\)/)) { split(substr(errs[i], RSTART, RLENGTH), q, "\""); v = q[4] }
+        if (v == "" || !index(url[$1], "/" v "/")) continue
+        print "WARNING: notices: could not check the licence URL of " $1 " (go-licenses could not reach it); keeping the committed URL." > "/dev/stderr"
+        $2 = url[$1]
+        break
+      }
+    }
+    { print }
+  '
+}
+
 # ── Go: the production build is -tags docker,k8s ─────────────────────────────
 go_licenses() {
   GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" "$@" 2>> "$tmp/go-licenses.err"
@@ -68,12 +100,19 @@ fi
 [ -s "$tmp/go-darwin.csv" ] || { echo "ERROR: the darwin pass listed no modules. Failing closed."; exit 1; }
 # Keep only what the first pass lacks, matched by licence URL: the darwin pass reports a package where the
 # first reports its module (golang.org/x/sys/unix for golang.org/x/sys).
-awk -F, 'NR==FNR { seen[$2] = 1; next } !seen[$2]' "$tmp/go.csv" "$tmp/go-darwin.csv" > "$tmp/go-darwin-new.csv"
+# Two `Unknown` URLs must not merge two modules, so an `Unknown` is keyed by its module.
+awk -F, 'NR==FNR { seen[$2 == "Unknown" ? $1 : $2] = 1; next } !seen[$2 == "Unknown" ? $1 : $2]' "$tmp/go.csv" "$tmp/go-darwin.csv" > "$tmp/go-darwin-new.csv"
 while IFS=, read -r mod _; do
   mkdir -p "$tmp/gotexts/$(dirname "$mod")"
   cp -r "$tmp/gotexts-darwin/$mod" "$tmp/gotexts/$(dirname "$mod")/"
 done < "$tmp/go-darwin-new.csv"
 cat "$tmp/go-darwin-new.csv" >> "$tmp/go.csv"
+# A vanity host's fetchMeta failing is the network, not a changed dependency (#3246 is the sibling for a tool failure).
+if [ "$mode" = "--check" ]; then
+  git show :"$NOTICES" > "$tmp/committed.md"
+  notices_keep_url "$tmp/committed.md" "$tmp/go-licenses.err" < "$tmp/go.csv" > "$tmp/go.kept.csv"
+  mv "$tmp/go.kept.csv" "$tmp/go.csv"
+fi
 
 # ── UI: prod dependencies only ───────────────────────────────────────────────
 (cd ui && pnpm licenses list --prod --json) > "$tmp/ui.json"

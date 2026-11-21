@@ -45,6 +45,9 @@ type fakeStore struct {
 func (f *fakeStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if a.RequestedAt.IsZero() {
+		a.RequestedAt = time.Now().UTC() // the database's default, as the PG store stamps it
+	}
 	f.records = append(f.records, a)
 	return a, nil
 }
@@ -201,16 +204,42 @@ func TestRequestApproval_Dedup(t *testing.T) {
 // rejoinStore is fakeStore with the optional rejoin stamp.
 type rejoinStore struct{ *fakeStore }
 
-func (r rejoinStore) StampApprovalRejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error) {
+func (r rejoinStore) StampApprovalRejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i, a := range r.records {
 		if a.ID == id && a.RunID == runID && a.Kind == kind && a.State == types.ApprovalPending {
+			at := time.Now().UTC()
 			r.records[i].LastRejoinedAt = &at
 			return r.records[i], true, nil
 		}
 	}
 	return types.ApprovalRequest{}, false, nil
+}
+
+// requestedAtRecorder records the RequestedAt its CreateApproval was handed.
+type requestedAtRecorder struct {
+	*fakeStore
+	got time.Time
+}
+
+func (r *requestedAtRecorder) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
+	r.got = a.RequestedAt
+	return r.fakeStore.CreateApproval(ctx, a)
+}
+
+// RequestApproval hands the store a zero RequestedAt, so the store's own clock stamps the row and a
+// caller-supplied time never survives.
+func TestRequestApproval_LeavesRequestedAtToTheStore(t *testing.T) {
+	st := &requestedAtRecorder{fakeStore: &fakeStore{}}
+	req := newReq(uuid.New(), types.ApprovalEgressDomain, json.RawMessage(`{"host":"api.github.com"}`))
+	req.RequestedAt = time.Now().Add(time.Hour)
+	if _, err := approval.RequestApproval(context.Background(), st, req); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if !st.got.IsZero() {
+		t.Fatalf("CreateApproval was handed RequestedAt %v, want the zero time", st.got)
+	}
 }
 
 // A raise that deduplicates onto a PENDING row is a held request re-entering
@@ -1212,6 +1241,9 @@ func (d indexStore) CreateApproval(ctx context.Context, a types.ApprovalRequest)
 			existing.Kind == a.Kind && string(existing.RequestedScope) == string(a.RequestedScope) {
 			return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
 		}
+	}
+	if a.RequestedAt.IsZero() {
+		a.RequestedAt = time.Now().UTC()
 	}
 	d.records = append(d.records, a)
 	return a, nil

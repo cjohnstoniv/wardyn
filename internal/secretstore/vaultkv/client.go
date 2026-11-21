@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/httpkv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -113,7 +114,7 @@ func newClient(cfg Config) (*client, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return nil, fmt.Errorf("WARDYN_VAULT_ADDR %q is not an http(s) URL", cfg.Addr)
 	}
-	if u.Scheme == "http" && !httpkv.Loopback(u.Hostname()) {
+	if u.Scheme == "http" && !loopback.Host(u.Hostname()) {
 		return nil, fmt.Errorf("WARDYN_VAULT_ADDR %q is plain http:// to a non-loopback host; use https:// (credentials cross this connection)", cfg.Addr)
 	}
 	tlsCfg, err := tlsConfig(cfg.CACertFile)

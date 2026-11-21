@@ -17,7 +17,8 @@
 //   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, EditRunEgress, ExecRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
-//     OpenMacWindow, GetMacWindow, GetRunMachine
+//     OpenMacWindow, GetMacWindow, GetRunMachine, and a help session on a run (/api/v1/runs/{id}/support): RequestSupport,
+//     SupportStatus, AcceptSupport, DeclineSupport, EndSupport
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetPolicyDocument, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy

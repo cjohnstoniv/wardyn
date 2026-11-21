@@ -85,8 +85,11 @@ func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 // touching anything when it is not. Without it (DELETE) the purge is unconditional and repeatable: a
 // retry finishes the steps that are still pending and writes nothing new once they are all done.
 func (s *Server) purgeIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string, requireDue bool) (bool, error) {
+	if s.cfg.SCIM == nil {
+		return false, errNoSCIMConfig
+	}
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	marked, err := st.MarkIdentityPurged(ctx, id, requireDue)
+	marked, err := st.MarkIdentityPurged(ctx, id, requireDue, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant)
 	if err != nil {
 		return false, err
 	}
@@ -102,6 +105,15 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	}
 	ident, err := st.GetIdentity(ctx, id)
 	if err != nil {
+		return err
+	}
+	// Nothing of a foreign identity is purged: the suspension above already left it alone (suspendStepOne),
+	// and no step below runs for it.
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, id)
+			return nil
+		}
 		return err
 	}
 	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
@@ -592,6 +604,13 @@ func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.Pe
 	if err != nil {
 		return err
 	}
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, o.IdentityID)
+			return nil
+		}
+		return err
+	}
 	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
 	if err != nil {
 		return err
@@ -611,7 +630,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	var errs []error
 	if s.cfg.SCIM.PurgeAfter > 0 {
-		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
+		due, err := st.PurgeDueIdentities(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimSweepBatch)
 		errs = append(errs, err)
 		for _, d := range due {
 			// A schedule with no proof that the identity's current deactivation is its own suspension's came
@@ -629,7 +648,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			}
 		}
 	}
-	pending, err := st.PendingLeavers(ctx, scimResumeIdle, scimSweepBatch)
+	pending, err := st.PendingLeavers(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range pending {
 		if p.Purged {
@@ -640,7 +659,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	}
 	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A
 	// group deleted since still has its member's steps finished, with its external id unknown.
-	removals, err := st.PendingGroupRemovals(ctx, scimResumeIdle, scimSweepBatch)
+	removals, err := st.PendingGroupRemovals(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range removals {
 		g, err := st.GetScimGroup(ctx, p.GroupID)
@@ -657,7 +676,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
 	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
 	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
-	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
+	owed, err := st.PendingRefusalAudits(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, o := range owed {
 		errs = append(errs, s.drainOwedRefusals(ctx, st, o))

@@ -25,8 +25,8 @@ type afterLeavers struct {
 	hook func([]store.PendingLeaver)
 }
 
-func (s *afterLeavers) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]store.PendingLeaver, error) {
-	out, err := s.PG.PendingLeavers(ctx, idleFor, limit)
+func (s *afterLeavers) PendingLeavers(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]store.PendingLeaver, error) {
+	out, err := s.PG.PendingLeavers(ctx, issuer, tenant, idleFor, limit)
 	s.mu.Lock()
 	hook := s.hook
 	s.hook = nil

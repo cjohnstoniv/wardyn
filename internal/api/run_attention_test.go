@@ -56,7 +56,7 @@ func TestAttentionRules(t *testing.T) {
 	t.Run("row 1: a terminal run needs nobody", func(t *testing.T) {
 		run := types.AgentRun{ID: runID, State: types.RunCompleted, CreatedBy: "sub-admin"}
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalToolCall, `{}`, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(req, run, pending, false); got != nil {
 			t.Fatalf("attention = %+v, want nil (terminal outranks a held row)", got)
 		}
@@ -65,7 +65,7 @@ func TestAttentionRules(t *testing.T) {
 	t.Run("row 2: a lease-ended run reads as ended, not held", func(t *testing.T) {
 		run := types.AgentRun{ID: runID, State: types.RunRunning, LostReason: types.LostEnded, CreatedBy: "sub-admin"}
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalToolCall, `{}`, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(req, run, pending, false); got != nil {
 			t.Fatalf("attention = %+v, want nil (lease-ended)", got)
 		}
@@ -85,7 +85,7 @@ func TestAttentionRules(t *testing.T) {
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-admin"}
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalPushContent, `{}`, nil)}
 		pending[0].RequestedAt = time.Now().Add(-601 * time.Second) // past push_content's own 600s ceiling
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(req, run, pending, false); got != nil {
 			t.Fatalf("attention = %+v, want nil (nothing PENDING is actually held)", got)
 		}
@@ -95,7 +95,7 @@ func TestAttentionRules(t *testing.T) {
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-admin"}
 		scope := `{"lane":"azure_devops","mechanism":"entra_signin","owner":"sub-admin","provider_id":"p1"}`
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalCredentialReauth, scope, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(req, run, pending, false); got == nil || got.Kind != types.AttentionADOConsent || got.By != types.AttentionYou {
 			t.Fatalf("User view: attention = %+v, want {ado_consent you}", got)
 		}
@@ -107,7 +107,7 @@ func TestAttentionRules(t *testing.T) {
 	t.Run("row 7: any other reauth is plain reauth, owner-cleared", func(t *testing.T) {
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-admin"}
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalCredentialReauth, `{"credential_source":"aws_sso"}`, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(req, run, pending, false); got == nil || got.Kind != types.AttentionReauth || got.By != types.AttentionYou {
 			t.Fatalf("attention = %+v, want {reauth you}", got)
 		}
@@ -122,7 +122,7 @@ func TestAttentionRules(t *testing.T) {
 				scope = `{"mode":"wait_for_review"}` // credential is held the same egress way, still admin-only
 			}
 			pending := []types.ApprovalRequest{pendingRow(runID, kind, scope, nil)}
-			s.projectHolds(pending)
+			s.projectHolds(context.Background(), pending)
 			got := s.attention(memberReq, run, pending, false)
 			if got == nil || got.Kind != types.AttentionApproval || got.By != types.AttentionAdmin {
 				t.Fatalf("kind=%s: attention = %+v, want {approval admin}", kind, got)
@@ -136,7 +136,7 @@ func TestAttentionRules(t *testing.T) {
 		grantID := uuid.New()
 		scope := `{"lane":"azure_devops","grant_id":"` + grantID.String() + `","capability":"pr_create"}`
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalToolCall, scope, &grantID)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(memberReq, run, pending, false); got == nil || got.Kind != types.AttentionApproval || got.By != types.AttentionYou {
 			t.Fatalf("attention = %+v, want {approval you}", got)
 		}
@@ -147,7 +147,7 @@ func TestAttentionRules(t *testing.T) {
 		adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(adminCtx())
 		run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-admin"}
 		pending := []types.ApprovalRequest{pendingRow(runID, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		if got := s.attention(adminReq, run, pending, false); got == nil || got.By != types.AttentionAdmin {
 			t.Fatalf("attention = %+v, want by=admin (the creator cannot clear their own egress under four-eyes)", got)
 		}
@@ -162,7 +162,7 @@ func TestAttentionRules(t *testing.T) {
 		admin8 := pendingRow(runID, types.ApprovalToolCall, `{}`, nil)
 		you8 := pendingRow(runID, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
 		pending := []types.ApprovalRequest{admin8, you8}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		got := s.attention(memberReq, run, pending, false)
 		if got == nil || got.By != types.AttentionYou || got.Pending != 2 {
 			t.Fatalf("attention = %+v, want {approval you pending=2}", got)
@@ -178,7 +178,7 @@ func TestAttentionRules(t *testing.T) {
 		adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(adminCtx())
 		reauth7 := pendingRow(runID, types.ApprovalCredentialReauth, `{"credential_source":"aws_sso"}`, nil)
 		pending = []types.ApprovalRequest{reauth7, admin8, you8}
-		s.projectHolds(pending)
+		s.projectHolds(context.Background(), pending)
 		got = s.attention(adminReq, run, pending, true)
 		if got == nil || got.Kind != types.AttentionApproval || got.By != types.AttentionYou {
 			t.Fatalf("Admin view: attention = %+v, want the you-candidate (approval you) to win over reauth's owner", got)
