@@ -257,6 +257,29 @@ func TestSCIMCovStatusLastTokenSlotSurvivesASweeperBacklog(t *testing.T) {
 	}
 }
 
+// Two rows written in the same instant are told apart by the order they were written in: the audit read is
+// newest first by sequence, so the first row of either order is the newest, whichever slot it names.
+func TestSCIMCovStatusLastTokenSlotTiedTimestampsFollowAuditOrder(t *testing.T) {
+	at := scimCovNow
+	primary := scimCovAudit("scim.user.write", "x", at, `{"slot":"primary"}`)
+	next := scimCovAudit("scim.user.write", "x", at, `{"slot":"next"}`)
+	for _, c := range []struct {
+		name string
+		rows []types.AuditEvent // newest first
+		want string
+	}{
+		{"the next-slot row written last", []types.AuditEvent{next, primary}, "next"},
+		{"the primary-slot row written last", []types.AuditEvent{primary, next}, "primary"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := scimCovPagedEnv(t, newSCIMCovStore(), c.rows)
+			if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != c.want {
+				t.Errorf("status = %d, last_token_slot %q, want %q", w.Code, body.LastTokenSlot, c.want)
+			}
+		})
+	}
+}
+
 func TestSCIMCovStatusAuditReadFailures(t *testing.T) {
 	for _, c := range []struct{ name, action string }{
 		{"the slot read", ""},
