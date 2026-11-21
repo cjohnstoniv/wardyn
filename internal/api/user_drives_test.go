@@ -119,8 +119,9 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 		s.grantsAppear = nil
 	}
 	if refuseIfAllocated {
+		// As the store's statement counts them: a portal's allocation only when the write moves the backend.
 		for _, g := range s.grants {
-			if g.DriveID == d.ID {
+			if g.DriveID == d.ID && (g.SubjectType != types.DriveSubjectPortal || s.drives[d.ID].Backend != d.Backend) {
 				return types.UserDrive{}, store.ErrDriveAllocated
 			}
 		}
@@ -175,13 +176,16 @@ func (s *driveCRUDStore) ListUserDrives(context.Context) ([]types.UserDriveListI
 	}
 	var out []types.UserDriveListItem
 	for _, d := range s.drives {
-		n := 0
+		n, portals := 0, 0
 		for _, g := range s.grants {
 			if g.DriveID == d.ID {
 				n++
+				if g.SubjectType == types.DriveSubjectPortal {
+					portals++
+				}
 			}
 		}
-		out = append(out, types.UserDriveListItem{UserDrive: d, GrantCount: n})
+		out = append(out, types.UserDriveListItem{UserDrive: d, GrantCount: n, PortalGrantCount: portals})
 	}
 	return out, nil
 }

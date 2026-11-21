@@ -7,7 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -192,5 +196,93 @@ func TestPortalDriveAllocation_UnmarkTeamRefusedWhileHeld(t *testing.T) {
 		`{"name":"Team Data","backend":"docker_volume","team":false}`, map[string]string{"id": d.ID.String()})
 	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveRehomeInvalid {
 		t.Errorf("unmark refused = %d %s, want 409 %s", w.Code, w.Body, reasonUserDriveRehomeInvalid)
+	}
+}
+
+// rehomeFixture is the portal admin fixture holding portals portal allocations and people group allocations of its
+// team drive, with a PUT caller that answers the drive's own body with a new name and home template.
+func rehomeFixture(t *testing.T, portals, people int) (*portalGrantStore, *recRecorder, types.UserDrive, func(name, query string) *httptest.ResponseRecorder) {
+	t.Helper()
+	srv, st, d := portalAdminFixture(t)
+	// A static claim, which accepts both the hash and the sub home template, on a deployment that dispatches to Kubernetes.
+	d.Backend = types.DriveBackendK8sPVCStatic
+	st.drives[d.ID] = d
+	srv.cfg.RunnerTarget = d.Backend.RunnerTarget()
+	rec := &recRecorder{}
+	srv.cfg.Audit = rec
+	for range portals {
+		g := types.UserDriveGrant{ID: uuid.New(), SubjectType: types.DriveSubjectPortal, Subject: uuid.NewString(), DriveID: d.ID, Enabled: true}
+		st.grants[g.ID] = g
+	}
+	for i := range people {
+		g := types.UserDriveGrant{ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: fmt.Sprintf("grp-%d", i), DriveID: d.ID, Enabled: true}
+		st.grants[g.ID] = g
+	}
+	return st, rec, d, func(name, query string) *httptest.ResponseRecorder {
+		return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String()+query,
+			`{"name":"`+name+`","backend":"k8s_pvc_static","team":true,"home_template":"sub"}`, map[string]string{"id": d.ID.String()})
+	}
+}
+
+// A drive held by portals alone is edited without a re-home confirmation: its folders are named by the portal and
+// drive ids, so a rename and a home template change move none of them, and the audit row claims no move.
+func TestPortalDriveRehome_PortalOnlyEditIsAcknowledged(t *testing.T) {
+	st, rec, d, put := rehomeFixture(t, 2, 0)
+	w := put("Team Data Renamed", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("a rename and template change of a portal-only drive = %d %s, want 200 with no confirmation", w.Code, w.Body)
+	}
+	if got := st.drives[d.ID]; got.Name != "Team Data Renamed" || got.HomeTemplate != types.HomeTemplateSub {
+		t.Errorf("stored drive = %+v, want the edit written", got)
+	}
+	data := driveAuditData(t, rec, "drive.write")
+	if data["rehomed"] != false || data["rehomed_subjects"] != nil || data["rehomed_fields"] != nil {
+		t.Errorf("drive.write = %v, want rehomed false with no subjects or fields", data)
+	}
+}
+
+// With people and portals on one drive, only the people's allocations are re-homed: the refusal and the confirmed
+// audit row count them and name the fields, never the portals.
+func TestPortalDriveRehome_MixedGrantsCountOnlyWhatMoves(t *testing.T) {
+	st, rec, d, put := rehomeFixture(t, 2, 1)
+	w := put("Team Data Renamed", "")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveRehomeInvalid ||
+		!strings.Contains(w.Body.String(), "allocated to 1 subject and this change re-homes it") {
+		t.Fatalf("mixed edit = %d %s, want 409 naming 1 subject", w.Code, w.Body)
+	}
+	if st.drives[d.ID].Name != d.Name {
+		t.Errorf("the refused edit wrote %q", st.drives[d.ID].Name)
+	}
+	if w = put("Team Data Renamed", "?confirm=rehome"); w.Code != http.StatusOK {
+		t.Fatalf("confirmed mixed edit = %d %s, want 200", w.Code, w.Body)
+	}
+	data := driveAuditData(t, rec, "drive.write")
+	if data["rehomed"] != true || data["rehomed_subjects"] != float64(1) {
+		t.Errorf("drive.write = %v, want rehomed true for 1 subject", data)
+	}
+}
+
+// What moves, by allocation kind: a person or group's folder is named by all five identity fields, a portal's by the
+// backend alone, so a backend change moves every allocation and the rest move the people only.
+func TestPortalDriveRehome_AllocationsThatMove(t *testing.T) {
+	name, backend := `name "a" → "b"`, `backend "docker_volume" → "k8s_pvc_static"`
+	for _, c := range []struct {
+		label          string
+		people, portal int
+		changes        []string
+		wantMoved      int
+		wantChanges    []string
+	}{
+		{"portals only, a rename", 0, 2, []string{name}, 0, nil},
+		{"portals only, a backend change", 0, 2, []string{name, backend}, 2, []string{backend}},
+		{"people and portals, a rename", 1, 2, []string{name}, 1, []string{name}},
+		{"people and portals, a backend change", 1, 2, []string{name, backend}, 3, []string{name, backend}},
+		{"people only, a rename", 2, 0, []string{name}, 2, []string{name}},
+	} {
+		item := types.UserDriveListItem{GrantCount: c.people + c.portal, PortalGrantCount: c.portal}
+		moved, changes := driveRehomedAllocations(item, c.changes)
+		if moved != c.wantMoved || !reflect.DeepEqual(changes, c.wantChanges) {
+			t.Errorf("%s: moved %d %v, want %d %v", c.label, moved, changes, c.wantMoved, c.wantChanges)
+		}
 	}
 }

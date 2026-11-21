@@ -256,6 +256,49 @@ func TestPG_PortalDriveAllocation_StaleEditCannotUnmarkTeam(t *testing.T) {
 	}
 }
 
+// The re-home precondition counts a portal's allocation only when the write moves the drive's backend: a portal's
+// folder is named by the portal and drive ids, so a rename or a template change under refuseIfAllocated lands beside it,
+// while any person's or group's allocation, or a backend move, refuses as before. ListUserDrives says how many of a
+// drive's allocations are portals'.
+func TestPG_PortalDriveAllocation_RehomePreconditionCountsOnlyWhatMoves(t *testing.T) {
+	st, _ := isolatedStore(t)
+	ctx := context.Background()
+	portal := newIssuerPortal(t, st, "").Delegate
+	team := seedTeamDrive(t, st, "rehome-"+uuid.NewString()[:8])
+	addUserDriveGrant(t, st, portalGrant(portal, team))
+
+	renamed := team
+	renamed.Name = "renamed-" + uuid.NewString()[:8]
+	if got, err := st.UpsertUserDrive(ctx, renamed, true); err != nil || got.Name != renamed.Name {
+		t.Fatalf("rename of a portal-only drive under the precondition = %+v, %v; want it written", got, err)
+	}
+	moved := renamed
+	moved.Backend = types.DriveBackendK8sPVCStatic
+	if _, err := st.UpsertUserDrive(ctx, moved, true); !errors.Is(err, store.ErrDriveAllocated) {
+		t.Errorf("a backend move under the precondition: err = %v, want ErrDriveAllocated", err)
+	}
+	if got, err := st.GetUserDrive(ctx, team.ID); err != nil || got.Backend != types.DriveBackendDockerVolume {
+		t.Errorf("drive after the refused move = %+v, %v; want docker_volume", got, err)
+	}
+
+	addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: "platform",
+		DriveID: team.ID, Enabled: true, CreatedBy: "admin@example.com"})
+	again := renamed
+	again.Name = "again-" + uuid.NewString()[:8]
+	if _, err := st.UpsertUserDrive(ctx, again, true); !errors.Is(err, store.ErrDriveAllocated) {
+		t.Errorf("a rename once a group holds the drive: err = %v, want ErrDriveAllocated", err)
+	}
+	items, err := st.ListUserDrives(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.ID == team.ID && (it.GrantCount != 2 || it.PortalGrantCount != 1) {
+			t.Errorf("list item = %d allocations, %d portals; want 2 and 1", it.GrantCount, it.PortalGrantCount)
+		}
+	}
+}
+
 // A portal allocation is added, never replaced: the replace and tier-write doors refuse it.
 func TestPG_PortalDriveAllocation_AdditiveOnly(t *testing.T) {
 	st, _ := isolatedStore(t)
