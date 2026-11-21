@@ -521,3 +521,66 @@ func TestPG_PeopleDirectory_LoginGroups(t *testing.T) {
 		t.Errorf("bare = %+v", g)
 	}
 }
+
+// A portal person's last sign-in is the latest successful use of any portal, not the workforce last_login_at
+// they never have: a person who minted shows that time, one who was introduced but never completed a grant
+// stays "never", and a workforce person is read as before. The console-session count is its own: using a portal
+// opens no console session.
+func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	now := time.Now().UTC()
+
+	_, _, firstUse := mintFor(t, st, p, "used")
+	_, _, latestUse := mintFor(t, st, p, "used")
+	if !latestUse.After(firstUse) {
+		t.Fatalf("second mint at %v is not after the first at %v", latestUse, firstUse)
+	}
+	issueFor(t, st, p, "introduced") // never completes a grant
+	workforceAt := now.Add(-3 * time.Minute)
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "wf", Issuer: "https://dex.example", Email: "wf@Corp.Example"}, workforceAt); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := listingByPrincipal(t, page.People, types.PortalPrincipal(p.Key, "used"))
+	if used.LastSignInAt == nil || !used.LastSignInAt.Equal(latestUse) {
+		t.Errorf("portal person who minted: last sign-in = %v, want the latest use %v", used.LastSignInAt, latestUse)
+	}
+	if used.ActiveSessions != 0 {
+		t.Errorf("portal person who minted: active sessions = %d, want 0 (a portal opens no console session)", used.ActiveSessions)
+	}
+	introduced := listingByPrincipal(t, page.People, types.PortalPrincipal(p.Key, "introduced"))
+	if introduced.LastSignInAt != nil || introduced.ActiveSessions != 0 {
+		t.Errorf("introduced portal person: last sign-in = %v, active sessions = %d, want nil and 0", introduced.LastSignInAt, introduced.ActiveSessions)
+	}
+	wf := listingByPrincipal(t, page.People, "wf")
+	if wf.LastSignInAt == nil || !wf.LastSignInAt.Equal(workforceAt) || wf.ActiveSessions != 1 {
+		t.Errorf("workforce person: last sign-in = %v, active sessions = %d, want %v and 1", wf.LastSignInAt, wf.ActiveSessions, workforceAt)
+	}
+
+	// A portal person who also signed in on the console: the later of the two shows, and the session count
+	// follows the console sign-in alone, a revoke after it ends the session whatever the portal use.
+	both := types.PortalPrincipal(p.Key, "used")
+	if err := markedExec(t, pool, `UPDATE principal_identities SET last_login_at = $2 WHERE principal = $1`, both, latestUse.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, $2)`, both, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	used = listingByPrincipal(t, page.People, both)
+	if used.LastSignInAt == nil || !used.LastSignInAt.Equal(latestUse) {
+		t.Errorf("console sign-in older than the portal use: last sign-in = %v, want %v", used.LastSignInAt, latestUse)
+	}
+	if used.ActiveSessions != 0 {
+		t.Errorf("revoked console session: active sessions = %d, want 0", used.ActiveSessions)
+	}
+}
