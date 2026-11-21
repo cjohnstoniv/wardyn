@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -87,7 +88,10 @@ func viaPortal(ctx context.Context, portal uuid.UUID) context.Context {
 // different one per portal and drive.
 func TestPortalTeamDrive_SecondPersonSameFolder(t *testing.T) {
 	f := newPortalDriveFixture(t)
-	f.st.rows[f.two] = []store.UserDriveWinner{f.allocated} // the same drive, allocated to the second portal too
+	// The same drive, allocated to the second portal too: its own allocation row, naming it and not the first portal.
+	second := f.allocated
+	second.Grant.ID, second.Grant.Subject = uuid.New(), f.two.String()
+	f.st.rows[f.two] = []store.UserDriveWinner{second}
 	reach := func(portal uuid.UUID, sub string) runDrive {
 		ctx := viaPortal(operatorCtx(sub, sub+"@corp.example", "user"), portal)
 		drives, ref := authorizeDrives(f.srv, ctx, drivesRequest(f.allocated.Drive.ID.String()))
@@ -105,6 +109,9 @@ func TestPortalTeamDrive_SecondPersonSameFolder(t *testing.T) {
 	}
 	if elsewhere.resolved.ObjectName == alice.resolved.ObjectName {
 		t.Errorf("two portals share the folder %q, want one folder each", alice.resolved.ObjectName)
+	}
+	if wantElsewhere := types.DrivePortalObjectName(f.allocated.Drive, types.DrivePortalHome(f.allocated.Drive, f.two)); elsewhere.resolved.ObjectName != wantElsewhere {
+		t.Errorf("the second portal's folder = %q, want %q", elsewhere.resolved.ObjectName, wantElsewhere)
 	}
 	wantHome := types.DrivePortalHome(f.allocated.Drive, f.one)
 	if alice.resolved.HomeName != wantHome || alice.resolved.ObjectName != types.DrivePortalObjectName(f.allocated.Drive, wantHome) {
@@ -130,12 +137,12 @@ func TestPortalTeamDrive_UnallocatedOrOtherPortalIs403(t *testing.T) {
 	var first string
 	for name, req := range ask {
 		drives, ref := authorizeDrives(f.srv, ctx, req)
-		if ref == nil || drives != nil || ref.status != http.StatusForbidden || ref.body.Reason != string(authz.ReasonDriveNotAllocatedToPortal) ||
-			ref.body.Error != portalDriveNotAllocatedMsg {
+		if ref == nil || drives != nil || ref.decision == nil || ref.decision.Status != http.StatusForbidden ||
+			ref.decision.Reason != authz.ReasonDriveNotAllocatedToPortal || ref.decision.Sentence != portalDriveNotAllocatedMsg {
 			t.Errorf("%s = %+v, %+v; want 403 %s %q", name, drives, ref, authz.ReasonDriveNotAllocatedToPortal, portalDriveNotAllocatedMsg)
 			continue
 		}
-		body, _ := json.Marshal(ref.body)
+		body, _ := json.Marshal(ref.decision)
 		if first == "" {
 			first = string(body)
 		} else if string(body) != first {
@@ -162,6 +169,48 @@ func TestPortalTeamDrive_ConsolePortalKeepsTheMemberPath(t *testing.T) {
 	drives, ref := authorizeDrives(f.srv, ctx, drivesRequest(f.groupOnly.Drive.ID.String()))
 	if ref != nil || len(drives) != 1 || drives[0].portal {
 		t.Errorf("console portal = %+v, %+v; want the member's group drive, not a portal drive", drives, ref)
+	}
+}
+
+// A person who reaches a drive through no portal, or through a console portal, is answered exactly as before the
+// portal rule: the same mounted drive for a group's allocation and the same 422 for an id that names nothing or
+// another portal's drive, compared with a server whose store has no portal reads at all.
+func TestPortalTeamDrive_GroupRequestAnsweredAsBefore(t *testing.T) {
+	f := newPortalDriveFixture(t)
+	plain, base := multiDriveServer(f.groupOnly)
+	base.site = teamDrivesSite(true)
+	answer := func(srv *Server, ctx context.Context, id string) string {
+		drives, ref := authorizeDrives(srv, ctx, drivesRequest(id))
+		out := map[string]any{"drives": []any{}}
+		for _, d := range drives {
+			out["drives"] = append(out["drives"].([]any), d.resolved)
+			if d.portal {
+				t.Errorf("a drive reached through no portal came back marked as a portal's: %+v", d.resolved)
+			}
+		}
+		if ref != nil {
+			out["status"], out["body"] = ref.status, ref.body
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for who, ctx := range map[string]context.Context{
+		"a member through no portal":        driveMemberCtx([]string{"eng"}, false),
+		"a member through a console portal": viaPortal(driveMemberCtx([]string{"eng"}, false), f.console),
+	} {
+		for what, id := range map[string]string{
+			"the group's drive":        f.groupOnly.Drive.ID.String(),
+			"an id that names nothing": uuid.NewString(),
+			"another portal's drive":   f.otherPortal.Drive.ID.String(),
+		} {
+			want, got := answer(plain, driveMemberCtx([]string{"eng"}, false), id), answer(f.srv, ctx, id)
+			if got != want {
+				t.Errorf("%s asking for %s: %s, want what a server with no portal rule answers: %s", who, what, got, want)
+			}
+		}
 	}
 }
 
@@ -316,5 +365,122 @@ func TestPortalTeamDrive_ReclaimRefused(t *testing.T) {
 	code, msg := f.srv.driveTeamReclaimRefusal(context.Background(), f.allocated.Drive)
 	if code != http.StatusUnprocessableEntity || msg != driveTeamReclaimMsg {
 		t.Errorf("reclaim of a portal's team drive = %d %q, want 422 %q", code, msg, driveTeamReclaimMsg)
+	}
+}
+
+// A profile with the user drive door shut refuses a portal's drives[] the same as anyone's: the door is judged
+// before the portal's allocations are read, so an allocation cannot open it. With the door open the same request
+// mounts the drive.
+func TestPortalTeamDrive_UnitDenyUserDriveRefuses_PG(t *testing.T) {
+	f := newPortalDriveFixture(t)
+	ctx := viaPortal(driveMemberCtx([]string{"eng"}, false), f.one)
+	req := drivesRequest(f.allocated.Drive.ID.String())
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+
+	drives, ref := f.srv.authorizeRequestDrives(r, req, deniedCeiling())
+	if ref == nil || drives != nil || ref.decision == nil || ref.decision.Status != http.StatusForbidden || ref.decision.Reason != authz.ReasonGovernanceUnit {
+		t.Fatalf("a shut door = %+v, %+v; want 403 %s", drives, ref, authz.ReasonGovernanceUnit)
+	}
+	if drives, ref := f.srv.authorizeRequestDrives(r, req, governanceCeiling{}); ref != nil || len(drives) != 1 || !drives[0].portal {
+		t.Errorf("the open door = %+v, %+v; want the portal's drive", drives, ref)
+	}
+}
+
+// The queued start's mode cap, value by value (input -> before -> after):
+//
+//	context          recorded mode  read_only asked  -> read_only mounted
+//	not a queued run  -             nil               nil (the fresh resolution decides)
+//	not a queued run  -             false             false
+//	queued            read-only     nil               true
+//	queued            read-only     false             true  (never widened)
+//	queued            read-only     true              true
+//	queued            writable      nil               nil   (the fresh resolution decides, and may narrow)
+//	queued            writable      false             false
+//	queued            writable      true              true
+//	queued            none          nil               true  (no record: read-only)
+func TestPortalTeamDrive_QueuedModeCapValues(t *testing.T) {
+	yes, no := true, false
+	const id = "d"
+	for _, c := range []struct {
+		name  string
+		ctx   context.Context
+		asked *bool
+		want  *bool
+	}{
+		{"not queued, nil", context.Background(), nil, nil},
+		{"not queued, false", context.Background(), &no, &no},
+		{"read-only, nil", withPortalDriveModes(context.Background(), map[string]bool{id: true}), nil, &yes},
+		{"read-only, false", withPortalDriveModes(context.Background(), map[string]bool{id: true}), &no, &yes},
+		{"read-only, true", withPortalDriveModes(context.Background(), map[string]bool{id: true}), &yes, &yes},
+		{"writable, nil", withPortalDriveModes(context.Background(), map[string]bool{id: false}), nil, nil},
+		{"writable, false", withPortalDriveModes(context.Background(), map[string]bool{id: false}), &no, &no},
+		{"writable, true", withPortalDriveModes(context.Background(), map[string]bool{id: false}), &yes, &yes},
+		{"no record, nil", withPortalDriveModes(context.Background(), nil), nil, &yes},
+		{"another drive recorded, nil", withPortalDriveModes(context.Background(), map[string]bool{"other": false}), nil, &yes},
+	} {
+		got := portalDriveModeCap(c.ctx, id, c.asked)
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Errorf("%s: cap = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Through the real authorization: a portal drive whose allocation is writable now mounts read-only when the queued
+// run was admitted read-only or with no record, mounts writable when admitted writable, and mounts read-only when the
+// allocation has become read-only whatever it was admitted with.
+func TestPortalTeamDrive_QueuedStartNeverWidensTheMode(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		nowWritable  bool
+		modes        map[string]bool // nil: not a queued start
+		queued       bool
+		wantReadOnly bool
+	}{
+		{"admitted read-only, now writable", true, map[string]bool{}, true, true},
+		{"admitted writable, still writable", true, map[string]bool{}, true, false},
+		{"admitted writable, now read-only", false, map[string]bool{}, true, true},
+		{"no record, now writable", true, nil, true, true},
+		{"an ordinary create, writable", true, nil, false, false},
+	} {
+		f := newPortalDriveFixture(t)
+		f.allocated.Grant.MembersCanWrite = c.nowWritable
+		f.st.rows[f.one] = []store.UserDriveWinner{f.allocated}
+		id := f.allocated.Drive.ID.String()
+		modes := c.modes
+		switch c.name {
+		case "admitted read-only, now writable":
+			modes = map[string]bool{id: true}
+		case "admitted writable, still writable", "admitted writable, now read-only":
+			modes = map[string]bool{id: false}
+		}
+		ctx := viaPortal(driveMemberCtx(nil, false), f.one)
+		if c.queued {
+			ctx = withPortalDriveModes(ctx, modes)
+		}
+		drives, ref := authorizeDrives(f.srv, ctx, drivesRequest(id))
+		if ref != nil || len(drives) != 1 {
+			t.Errorf("%s: drives %+v refusal %+v, want one drive", c.name, drives, ref)
+			continue
+		}
+		if got := drives[0].readOnly(); got != c.wantReadOnly {
+			t.Errorf("%s: read-only = %v, want %v", c.name, got, c.wantReadOnly)
+		}
+	}
+}
+
+// A queued run's stored launch records the mode of each portal drive and no other.
+func TestPortalTeamDrive_PortalDriveModesOfTheLaunch(t *testing.T) {
+	ro := false
+	drives := []runDrive{
+		{id: "a", portal: true, narrow: &ro, resolved: types.ResolvedDrive{Writable: true}},
+		{id: "b", portal: true, resolved: types.ResolvedDrive{Writable: false}},
+		{id: "c", resolved: types.ResolvedDrive{Writable: true}},
+	}
+	got := portalDriveModes(drives)
+	if len(got) != 2 || got["a"] != false || got["b"] != true {
+		t.Errorf("modes = %v, want a:writable b:read-only and nothing for the group drive", got)
+	}
+	if portalDriveModes(drives[2:]) != nil {
+		t.Error("a launch with no portal drive records modes")
 	}
 }
