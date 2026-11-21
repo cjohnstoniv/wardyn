@@ -55,6 +55,11 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonOrgRevoked, orgRevokedMsg)
 		return
 	}
+	// A person list that names a portal person it may not (a role it cannot hold, or an issuer no portal is
+	// registered for) is a refusal about the write, whichever store write or held change reached it.
+	if writePortalRulingError(w, err) {
+		return
+	}
 	// A write for a deactivated or stale-epoch owner (the owner guard) is a refusal about the
 	// caller, not a fault, and gives no sentence that tells a suspension apart from a cut session.
 	if errors.Is(err, store.ErrIdentityDeactivated) {
@@ -90,12 +95,6 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		// (#656 slice 3) — this resolver failure is exactly that cause,
 		// reached through the (bool, error) seam rather than authz.Deny.
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonUserTypeUnknown), userTypeUnknownMsg)
-		return
-	}
-	// An admin-written person list the store refused for a portal person (a role it cannot hold, or an issuer
-	// with no portal, as a retirement that committed after the handler's own check leaves it) is a ruling,
-	// 422 with its registered reason, whichever handler's write it was.
-	if writePortalRulingError(w, err) {
 		return
 	}
 	slog.ErrorContext(r.Context(), "api: "+msg,

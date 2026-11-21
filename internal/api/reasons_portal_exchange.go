@@ -14,6 +14,5 @@ const (
 	reasonPortalIssuerConflict        = "portal_issuer_conflict"         // the exchange: the portal's issuer is this process's own console issuer
 	reasonPortalAdmissionChanged      = "portal_admission_changed"       // the exchange: the portal's admission rule changed after the token was checked; retry
 	reasonActorTokenUnsupported       = "actor_token_unsupported"        // the exchange: an issuer portal takes no actor token
-	reasonPortalRegistrationInvalid   = "portal_registration_invalid"    // the exchange: the portal's own row cannot be verified against (no client id, or an access profile with no audience or scopes)
 	reasonPortalUnavailable           = "portal_unavailable"             // the exchange: the portal's stores, verifier or issuer set are not available on this server
 )

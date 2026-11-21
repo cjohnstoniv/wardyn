@@ -58,7 +58,8 @@ func (f *fakeDelegateStore) CreateDelegate(_ context.Context, d types.Delegate, 
 	if _, dup := f.byCred[h]; dup {
 		return types.Delegate{}, store.ErrConflict
 	}
-	d.CredentialSHA256, d.CreatedAt = h, time.Now().UTC()
+	// admission_rev's column default, which the database applies to every row, a console portal's too.
+	d.CredentialSHA256, d.CreatedAt, d.AdmissionRev = h, time.Now().UTC(), 1
 	f.delegates[d.ID], f.byCred[h] = d, d.ID
 	return d, nil
 }
