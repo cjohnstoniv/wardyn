@@ -85,8 +85,26 @@ func TestMixedVersion_ReleasedCLIGetSetKeepsServiceGrant(t *testing.T) {
 // startReleasedServer starts the released v0.10.1 wardynd at bin on this fixture's own database and its sealed
 // secret store's key, as the hosted job's old replica: the schema is ahead of it, so it runs with
 // WARDYN_ALLOW_UNKNOWN_MIGRATIONS. It returns the
-// server's base URL and admin token once /healthz answers, and stops the process at cleanup.
+// server's base URL and admin token once /healthz answers, and stops the process at cleanup. The released
+// binary takes only an address, so a port another process took between the pick and the bind makes it exit
+// at once; the ports are then picked again, up to three times.
 func (f *svcPG) startReleasedServer(t *testing.T, bin string) (string, string) {
+	t.Helper()
+	var logs string
+	for range 3 {
+		base, token, exitedLogs := f.launchReleasedServer(t, bin)
+		if exitedLogs == "" {
+			return base, token
+		}
+		logs = exitedLogs
+	}
+	t.Fatalf("the released wardynd exited before serving /healthz on three port picks:\n%s", logs)
+	return "", ""
+}
+
+// launchReleasedServer is one attempt of startReleasedServer: the server's base URL and admin token, or, when the
+// process exited before /healthz answered, its log in the third result.
+func (f *svcPG) launchReleasedServer(t *testing.T, bin string) (string, string, string) {
 	t.Helper()
 	if f.ageKey == "" {
 		t.Fatal("the released server needs the fixture's sealed secret store (newSvcPGSealed)")
@@ -130,12 +148,12 @@ func (f *svcPG) startReleasedServer(t *testing.T, bin string) (string, string) {
 		if resp, err := client.Get(base + "/healthz"); err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return base, token
+				return base, token, ""
 			}
 		}
 		select {
 		case <-exited:
-			t.Fatalf("the released wardynd exited before serving /healthz:\n%s", logs.String())
+			return "", "", "the process exited; its log:\n" + logs.String()
 		case <-deadline:
 			t.Fatalf("the released wardynd did not serve /healthz within 60s:\n%s", logs.String())
 		case <-tick.C:
