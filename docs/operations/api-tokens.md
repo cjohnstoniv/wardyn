@@ -538,16 +538,18 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 | `email_domains` | ID-token profile only: the token's `email_verified` must be true and its domain listed. |
 | `groups_claim`, `group` | The claim that lists groups (default `groups`) and the one group a person must be in. |
 | `portal_managed_admission` | Set when the portal alone chooses its people: no group, and then no signal of Wardyn's own says the portal chose wrongly. A registration sets a group, or this flag, never both. |
-| `required_claim` | One optional `{claim, value}` match: the token's top-level claim must be that string. The claim should be one the person cannot edit at the provider. |
+| `required_claim` | One optional `{claim, value}` match, checked in addition to the group (or the flag), never instead of it: the token's top-level claim must be that string. The claim should be one the person cannot edit at the provider. |
 | `user_type` | The user type every one of its people gets. It is never read from a claim, and their role is always `user`. |
 | `max_subject_token_age_seconds` | 300 to 600, default 300. The oldest a token's `iat` may be. |
-| `grant_ttl_seconds` | 300 up to the maximum age, default the maximum age. The longest a grant lives from its mint. |
-| `run_in_under` | Required: the one unit its runs live in. |
+| `grant_ttl_seconds` | 300 up to the maximum age, default the maximum age. The longest a grant lives from its mint. A grant also ends at the token's own signed end, so it can live much less: read `expires_in` in the answer, which can be as low as 5 seconds. |
+| `run_in_under` | Required: the unit its runs live in. The pin covers that unit and every unit under it, for launching runs and for managing the runs its people own, so pinning a parent lets the portal's people work in any child unit. |
 
 - A registration answers its refusals with 422 or 409 and a reason in [the SDK reference](../sdk.md). `GET /admin/delegates` shows `admission_rev` only for an issuer portal. A console portal's answer keeps its 0.10.0 shape.
-- When changes are held for a second person, a registration is a held change: the answer is 202, and the credential is in that answer only.
+- When changes are held for a second person, a registration by a signed-in person is a held change: the answer is 202, and the credential is in that answer only. The break-glass admin token is not held: its write applies at once, and each one writes a `governance.change.bypass` row.
 - A portal that sets no group and no required claim carries a note in the review diff and the audit row: the portal chooses who can use it, and anyone it selects who meets the token requirements can act as a user in the pinned unit.
-- The group claim of a token is read tolerantly: a value that is not a list of strings counts as no groups. An issuer portal keeps no groups or email for a person.
+- The group claim of a token is read tolerantly: a value that is not a list of strings counts as no groups.
+- An issuer portal keeps no groups for a person: their sign-in record is empty, so no group of theirs reaches any grant or restriction. The portal's own registered `group` still gates its exchange, from the token's claim.
+- The People list keeps one display value per person and nothing authorises by it: the token's `email` claim for an ID token (empty if absent), the token's `sub` (the login name) for an access token.
 
 **Who a person is.**
 
@@ -557,18 +559,28 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 - The person id is the token's `uid` for an access token and its `sub` for an ID token. It is 1 to 128 printable ASCII characters with no space.
 - Two portals on one issuer share its people. What separates them is the unit each is pinned to: every request is checked against the portal's pin, and a person's own run outside it answers 403 `portal_unit_scope`.
 - Changing the issuer string means new people. The internal address and the pin are not part of who a person is.
-- The People list shows each portal person's issuer and internal address.
+- `GET /api/v1/people` returns `issuer` and `internal_address` for each portal person. The console's People screen does not show them yet.
 - A person's first exchange through any portal writes one `person.create` row, which carries no email.
 
 **Exchange.** `POST /api/v1/token`, with the portal's id and `wdi_` credential as HTTP Basic, as above.
 
 - `subject_token_type` must be the profile's: `urn:ietf:params:oauth:token-type:access_token` for `okta_access_token`, `…:id_token` for `okta_id_token`. Another type is 400 `invalid_request`.
-- An `actor_token` is refused 400 `invalid_request`, and so is a delegated token as the subject.
-- A token the verifier refuses is 400 `invalid_grant`. A person the portal may not act for is 403 `access_denied`. An issuer outage, a changed admission rule or a failed read is 503 `temporarily_unavailable`.
-- A person whose identity was deactivated or purged is 400 `invalid_grant`, and nothing is minted.
-- An unknown or revoked portal credential, or a binding retired mid-exchange, is 401 `invalid_client`.
+- The client sees an OAuth code. The audit row's `reason` is finer, so read the two apart:
+
+| Case | Client gets | `delegation.exchange` `reason` |
+|---|---|---|
+| `actor_token` sent | 400 `invalid_request` | `actor_token_unsupported` |
+| A `wdg_` token as the subject | 400 `invalid_grant` | `subject_token_delegated` |
+| The verifier refuses the token | 400 `invalid_grant`, or 400 `invalid_request` for a wrong type, or 403 `access_denied` when the portal may not act for them | the verifier's reason; `cause` or the claim's name beside it |
+| Issuer or keys cannot be reached | 503 `temporarily_unavailable`, with `Retry-After` when the wait is above zero | `portal_issuer_unavailable`, with `cause` |
+| The admission rule changed mid-exchange | 503 `temporarily_unavailable` | `portal_admission_changed` |
+| Identity deactivated or purged, or the session revoked | 400 `invalid_grant`, nothing minted | `identity_deactivated`, `session_revoked` |
+| A read failed | 503 `temporarily_unavailable` | `failure` row: the reply's code, `cause` names the step |
+| A write failed | 500 `server_error` | `failure` row: the reply's code, `cause` names the step |
+
+- A wrong, revoked or missing portal credential, or a binding retired mid-exchange, is 401 `invalid_client` and writes `auth.fail`, not a `delegation.exchange` row. A malformed form (`grant_type`, `subject_token`, a type or the actor fields) is refused 400 before the exchange and writes no row.
 - The answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":N,…}`. The token has no refresh, and `expires_in` is the grant's remaining life, never below 5.
-- Every refusal and every success writes a `delegation.exchange` row with the verifier's reason. Its fields are in [the audit reference](../AUDIT-ACTIONS.md).
+- Every decision past client authentication writes a `delegation.exchange` row. A success row carries `grant`, `expires_at`, `user_type` and `role`; every row names the issuer, `k`, the profile, the two freshness settings and the admission rule by names only. Its fields are in [the audit reference](../AUDIT-ACTIONS.md).
 
 **What the verifier checks**, in this order for a token that passed the signature and `iss` check:
 
@@ -590,14 +602,14 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 
 - Wardyn fetches discovery and keys itself, directly: proxy environment variables never pick the destination. It refuses redirects and caps each answer at 1 MiB.
 - It resolves the host and dials the address it checked. Loopback, link-local, metadata and other reserved addresses are refused for every host.
-- A host listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` may resolve into RFC 1918, unique-local or CGNAT space only, and is reached over TLS with the system roots plus `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE`. Nothing skips verification.
-- Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable` with the cause `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
-- A token whose key is not known triggers at most one key fetch per 30 seconds. Inside that interval the answer is 503 `keys_cooldown`.
-- An outage answer carries `Retry-After`: the rest of the 30-second interval. It is 0 when a key fetch broke a rule, such as `address_refused`.
+- Any host may resolve to a public address. A host listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` is also allowed to resolve into RFC 1918, unique-local or CGNAT space, and no other private space. Only a listed host is verified against the system roots plus `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE`; a public answer for it is allowed too. Nothing skips verification.
+- Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable`; the audit reason is `portal_issuer_unavailable` and its `cause` is `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
+- A token whose key is not known triggers at most one key fetch per 30 seconds. Inside that interval the answer is 503 `temporarily_unavailable`, cause `keys_cooldown`.
+- An outage answer carries `Retry-After`, the rest of the 30-second interval. When a key fetch broke a rule, such as `address_refused`, the wait is zero and the header is left out.
 - Wardyn learns of an outage only at its own fetches.
 - Keys loaded by any fetch, one an unknown key triggers included, reopen an issuer whose discovery is healthy. A failing or refused discovery keeps it closed.
 - A key fetch that breaks a rule drops the keys, their address and the discovery record. Only a newer verified discovery supersedes that, never a key fetch alone.
-- A valid token whose keys reload after an address change gets 503 `keys_cooldown`, not `invalid_grant`. A key a successful fetch removed is still refused.
+- A valid token whose keys reload after an address change gets 503 `temporarily_unavailable` (cause `keys_cooldown`), not `invalid_grant`. A key a successful fetch removed is still refused.
 - Each discovery and key request has its own 10-second bound, and a caller that leaves does not mark the issuer down.
 - A refresh failure counts on `wardyn_portal_issuer_refresh_failures_total{issuer_key,portal,source,cause}`.
 
@@ -608,10 +620,10 @@ Issuer portals are off in a new deployment. `POST /api/v1/admin/portal-issuers/a
 1. Stop every wardynd older than 0.10.2 that uses this database. An older server does not know the new tables, so it must not run beside one that does.
 2. Wait for the server you call to have sampled the database's other sessions for two minutes. Until then the call answers 409 `portal_issuers_sample_warming` with a `Retry-After`.
 3. Call it with `{"old_servers_stopped": true}`. Without that statement it answers 422 `portal_issuers_statement_required`.
-4. If a session in the sample does not carry a 0.10.2 label, the call answers 409 `portal_issuers_old_server_suspected` and lists them as `label@address`. Stop them, or check each one and call again with `"confirm_listed_sessions": true`.
-5. A call after the switch is on answers 200 with `already_activated`.
+4. If a session in the sample does not carry a label of 0.10.2 or later, the call answers 409 `portal_issuers_old_server_suspected` with `sessions`, a list of `{"label", "client_addr"}`. Stop them, or check each one and call again with `"confirm_listed_sessions": true`. The override audit row names them as `label@address`.
+5. The answer is 200 with `activated` and `overridden_sessions`. A call after the switch is on answers 200 with `already_activated`.
 
-- A 0.10.2 server labels each of its database sessions `application_name`: `wardynd/<version>/<replica>` for the server and `wardynd-<tool>/<version>` for a subcommand. A label of any other shape, an older version, or none is a suspect.
+- A 0.10.2 server labels each of its database sessions `application_name`: `wardynd/<version>/<replica>` for the server and `wardynd-<tool>/<version>` for a subcommand. A label of any other shape, a version before 0.10.2, or none is a suspect; a later version, or a prerelease of 0.10.2, is not.
 - The sample reads the database's own session list every 10 seconds, so it sees only sessions that exist when it looks, and a label is only what the client chose. It is a veto of the statement, never proof that old servers are stopped.
 - The call writes `portal_issuers.activate`, and `portal_issuers.activate_override` when sessions were confirmed past. After the switch each server checks hourly and writes `portal_issuers.old_client_seen` once per label and address per UTC day.
 - A server that cannot read the session sample answers as still warming, never as clean.
@@ -621,10 +633,10 @@ Issuer portals are off in a new deployment. `POST /api/v1/admin/portal-issuers/a
 - `DELETE /api/v1/admin/portal-issuers/{k}` retires an issuer binding that never admitted anyone. A binding that a portal, a person, a grant or a stored rule still names answers 409 `portal_issuer_in_use`.
 - `PUT /api/v1/admin/delegates/{id}/admission` changes a portal's group, `portal_managed_admission` or required claim. The body names the rule you read as `expected`. A stale one answers 409 `delegate_admission_stale`.
 - A change in the admission rule counts into `admission_rev`. An exchange that began under the old rule answers 503 `portal_admission_changed`, and the portal retries under the new one.
-- Both are admin only and, with a second human required, are held changes that apply when approved.
+- Both are admin only. With a second human required, a signed-in person's request is a held change that applies when approved. The break-glass admin token applies it directly and writes a `governance.change.bypass` row.
 
 #### The console issuer
 
-- A server with console sign-in configured records its console issuer at boot. Every console issuer a deployment has served stays recorded, so it can never become a portal's issuer on that deployment.
+- A server with console sign-in configured records its console issuer at boot. Each console issuer a 0.10.2 server boots with stays recorded, so it can never become a portal's issuer on that deployment. The record starts empty at the upgrade: an issuer the console used only before it, or on a server that never booted 0.10.2, is not in it. Do not register a portal on an issuer the console has ever signed in against.
 - Boot refuses to start when the console issuer equals a portal binding's issuer. The message names the portal registrations on that binding, by id and name with revoked ones marked, up to five and then `and N more`. When none names it, it says so.
 - On a split-role install the app role needs `SELECT, INSERT` on `console_issuers` before that boot step can run: see [the migration list](../OPERATIONS.md#splitting-the-migrator-and-app-roles-wardyn_pg_migrate_dsn).

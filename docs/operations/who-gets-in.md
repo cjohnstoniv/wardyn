@@ -15,7 +15,8 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
 - A cookie signed before this existed (pre-0.5) decodes as no session, forcing a re-login that derives one fresh.
 - **People of an issuer portal** never sign in to the console: their principal starts `delegate:person:`, which every human door refuses. They get in only through their portal's token exchange ([issuer portals](api-tokens.md#portals-with-their-own-identity-issuer)).
   - They are always role `user`, with the portal's `user_type`, and a delegated token acts at user reach.
-  - Their record holds no groups and no email, so a group never admits them.
+  - Their sign-in record holds no groups, so no group of theirs reaches a grant or restriction. The portal's own registered group still gates its token exchange, from the token's claim.
+  - The People list keeps a display value only, never used to authorise: the `email` claim of an ID token, the `sub` of an access token.
   - An admin names one by principal in a unit membership, capability grant, restriction member, drive allocation or runner-pool use policy. The principal's issuer must have a binding, or the write is refused.
   - A unit's admins, template group admins, role mappings, a remote runner's people and a service identity's sponsor refuse a portal person: they never hold an admin, sponsor, approver or console role.
 
