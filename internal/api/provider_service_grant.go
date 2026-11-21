@@ -355,12 +355,18 @@ func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider,
 		// changed row is drift; a failed read serves nothing from the cache.
 		liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, serviceGrantSecretName(p.UID))
 		liveDigest, found, derr := s.liveServiceGrantDigest(ctx, p.UID)
+		_, retiring, gerr := s.serviceGrantGate(ctx, p.UID)
 		switch {
-		case derr != nil:
+		case derr != nil || gerr != nil:
 			// An unreadable configuration is not a withdrawal: retryable, and nothing from the cache is served.
 			return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 		case !found || liveDigest != digest:
 			return serviceGrantMinted{}, errServiceGrantDrift
+		case retiring:
+			// A replacement committed with its predecessor's claim while this attempt ran: whatever the
+			// provider said, nothing from the old generation is served and the refusal is definitive.
+			s.dropServiceGrantCache(p.UID)
+			e = svcFail(svcReasonSecretGone, true)
 		case rerr != nil:
 			return serviceGrantMinted{}, e
 		case liveOK && liveRev == "":
