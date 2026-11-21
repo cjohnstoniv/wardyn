@@ -74,7 +74,7 @@ func issuerEventsEvents() map[string]func(*issuerEventsEnv, *testing.T) {
 			e.exec(t, "suspend", `UPDATE principal_identities SET deactivated_at = now() WHERE principal = $1`, e.principal)
 		},
 		"person purged": func(e *issuerEventsEnv, t *testing.T) {
-			e.exec(t, "tombstone", `UPDATE principal_identities SET purged_at = now() WHERE principal = $1`, e.principal)
+			tombstonePerson(t, e.st, e.principal)
 		},
 		"unit moves out of the pin": func(e *issuerEventsEnv, t *testing.T) {
 			team := e.team

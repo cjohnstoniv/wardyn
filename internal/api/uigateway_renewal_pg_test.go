@@ -109,8 +109,31 @@ func (rig *issuerPGRig) suspend(t *testing.T) {
 // tombstone marks the person purged and leaves the grant live and the rest of the purge undone.
 func (rig *issuerPGRig) tombstone(t *testing.T) {
 	t.Helper()
-	if _, err := rig.env.st.Pool.Exec(context.Background(), `UPDATE principal_identities SET purged_at = now() WHERE principal = $1`, rig.principal); err != nil {
-		t.Fatalf("tombstone: %v", err)
+	tombstonePerson(t, rig.env.st, rig.principal)
+	if _, err := rig.env.st.GetPortalGrantByID(context.Background(), rig.grant.ID, time.Now()); err != nil {
+		t.Fatalf("the grant did not stay live across the tombstone: %v", err)
+	}
+}
+
+// tombstonePerson writes principal's tombstone as the portal lifecycle does (MarkPortalIdentityPurged): under
+// the lifecycle marker the identity trigger requires, display email blanked, in one transaction. It leaves the
+// person's grants and the purge's later steps alone, and the database guard as it is.
+func tombstonePerson(t *testing.T, st store.PG, principal string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := st.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('wardyn.portal_lifecycle', 'v1', true)`); err != nil {
+		t.Fatalf("mark the lifecycle: %v", err)
+	}
+	if tag, err := tx.Exec(ctx, `UPDATE principal_identities SET purged_at = clock_timestamp(), display_email = '' WHERE principal = $1`, principal); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("tombstone: %v (%d rows)", err, tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the tombstone: %v", err)
 	}
 }
 
