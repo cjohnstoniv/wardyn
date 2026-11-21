@@ -6,9 +6,11 @@ package oidc
 import (
 	"context"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,15 +84,19 @@ func portalBoxFrom(ctx context.Context) *portalBox {
 // portalKeyFetch is one shared fetch of the key document. Every request that needs keys while it runs waits for
 // it, and a caller that leaves stops waiting only for itself: the fetch has its own bounded context.
 type portalKeyFetch struct {
-	done chan struct{}
-	err  error
+	done   chan struct{}
+	err    error
+	urlGen uint64 // the keys address generation the fetch started under
+	url    string
+	stale  bool // the address changed while it ran: its answer was discarded
 }
 
 // portalKeySet is Wardyn's own key set for one verifier. It fetches only on an unknown kid it has not seen
 // removed, at most once per cooldown however many requests ask, and a successful fetch replaces the set.
 type portalKeySet struct {
-	clock func() time.Time
-	fetch func(ctx context.Context) ([]jose.JSONWebKey, error)
+	clock   func() time.Time
+	timeout time.Duration // the bound of one key fetch
+	fetch   func(ctx context.Context, keysURL string) ([]jose.JSONWebKey, error)
 	// onFail is told of every failed fetch, with where it came from ("scheduled" or "unknown_kid").
 	onFail func(source string, err error)
 	// afterSelect is a test hook, called once a key is selected and before the signature is checked.
@@ -106,15 +112,17 @@ type portalKeySet struct {
 	lastErr   error
 	failed    bool // the last fetch failed; until one succeeds nothing verifies
 	inflight  *portalKeyFetch
+	url       string // the keys address the set belongs to
+	urlGen    uint64 // bumped whenever the address changes or is dropped
 }
 
-func newPortalKeySet(clock func() time.Time, fetch func(context.Context) ([]jose.JSONWebKey, error)) *portalKeySet {
-	return &portalKeySet{clock: clock, fetch: fetch}
+func newPortalKeySet(clock func() time.Time, timeout time.Duration, fetch func(context.Context, string) ([]jose.JSONWebKey, error)) *portalKeySet {
+	return &portalKeySet{clock: clock, timeout: timeout, fetch: fetch}
 }
 
 // startLocked begins the one fetch, with mu held and no fetch in flight. The cooldown runs from this moment.
 func (ks *portalKeySet) startLocked(source string) *portalKeyFetch {
-	f := &portalKeyFetch{done: make(chan struct{})}
+	f := &portalKeyFetch{done: make(chan struct{}), urlGen: ks.urlGen, url: ks.url}
 	ks.inflight = f
 	ks.attemptAt = ks.clock()
 	go ks.run(f, source)
@@ -122,10 +130,18 @@ func (ks *portalKeySet) startLocked(source string) *portalKeyFetch {
 }
 
 func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
-	ctx, cancel := context.WithTimeout(context.Background(), portalFetchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ks.timeout)
 	defer cancel()
-	keys, err := ks.fetch(ctx)
+	keys, err := ks.fetch(ctx, f.url)
 	ks.mu.Lock()
+	if f.urlGen != ks.urlGen {
+		// The keys address changed while this ran: whatever came back belongs to the old address. It neither
+		// populates the keys, nor moves okAt, nor changes health.
+		f.stale = true
+		ks.mu.Unlock()
+		close(f.done)
+		return
+	}
 	ks.seq++
 	if err != nil {
 		ks.lastErr, ks.failed = err, true
@@ -143,7 +159,9 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 		ks.keys, ks.removed, ks.okAt, ks.lastErr, ks.failed = next, removed, ks.clock(), nil, false
 		ks.gen++
 	}
-	ks.inflight = nil
+	if ks.inflight == f {
+		ks.inflight = nil
+	}
 	ks.mu.Unlock()
 	f.err = err
 	if err != nil && ks.onFail != nil {
@@ -152,28 +170,76 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 	close(f.done)
 }
 
-// refresh fetches now, joining a fetch already in flight, and waits for it. The caller decides whether the
-// cooldown allows it.
-func (ks *portalKeySet) refresh(ctx context.Context, source string) error {
+// portalEnsure is what ensure did.
+type portalEnsure int
+
+const (
+	portalEnsureFetched portalEnsure = iota
+	portalEnsureCurrent              // the keys are younger than the budget and good: nothing was fetched
+	portalEnsureCooling              // the budget does not allow a fetch yet and there are no good keys
+)
+
+// ensure fetches the keys unless the one-fetch-per-30-s budget forbids it, joining a fetch already in flight. The
+// budget decision and the reservation of the fetch are made under one lock.
+func (ks *portalKeySet) ensure(ctx context.Context, source string) (portalEnsure, time.Duration, error) {
 	ks.mu.Lock()
 	f := ks.inflight
 	if f == nil {
+		now := ks.clock()
+		if !ks.attemptAt.IsZero() && ks.attemptAt.Add(portalKeyCooldown).After(now) {
+			wait := ks.attemptAt.Add(portalKeyCooldown).Sub(now)
+			good := !ks.failed && !ks.okAt.IsZero()
+			ks.mu.Unlock()
+			if good {
+				return portalEnsureCurrent, 0, nil
+			}
+			return portalEnsureCooling, wait, nil
+		}
 		f = ks.startLocked(source)
 	}
 	ks.mu.Unlock()
 	select {
 	case <-f.done:
-		return f.err
+		if f.stale {
+			return portalEnsureCooling, ks.cooldownLeft(), nil
+		}
+		return portalEnsureFetched, 0, f.err
 	case <-ctx.Done():
-		return ctx.Err()
+		return portalEnsureFetched, 0, ctx.Err()
 	}
+}
+
+// cooldownLeft is the rest of the key budget, never negative.
+func (ks *portalKeySet) cooldownLeft() time.Duration {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return max(ks.attemptAt.Add(portalKeyCooldown).Sub(ks.clock()), 0)
+}
+
+// setURL points the set at a keys address. A changed address drops the keys and abandons any fetch in flight for
+// the old one; only keys fetched for the current address are ever kept.
+func (ks *portalKeySet) setURL(u string) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if ks.url == u {
+		return
+	}
+	ks.url = u
+	ks.dropLocked()
 }
 
 // drop forgets every key: the verifier it served is gone, or its keys address changed.
 func (ks *portalKeySet) drop() {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
+	ks.url = ""
+	ks.dropLocked()
+}
+
+func (ks *portalKeySet) dropLocked() {
 	ks.keys, ks.removed, ks.okAt, ks.failed, ks.lastErr = nil, nil, time.Time{}, false, nil
+	ks.inflight = nil
+	ks.urlGen++
 	ks.gen++
 }
 
@@ -260,7 +326,7 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 			// A fetch finished that this request waited for or took part in: its answer is this request's answer.
 			ks.mu.Unlock()
 			if lastErr != nil {
-				return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseKeysUnreachable}}
+				return portalKeyLookup{fault: &portalKeyFault{cause: portalKeysFaultCause(lastErr)}}
 			}
 			return portalKeyLookup{}
 		case !attemptAt.IsZero() && attemptAt.Add(portalKeyCooldown).After(ks.clock()):
@@ -275,14 +341,50 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string, fresh portalFres
 	case <-ctx.Done():
 		return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseCanceled}}
 	}
+	if f.stale {
+		return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseKeysCooldown, retryAfter: ks.cooldownLeft()}}
+	}
 	if f.err != nil {
-		return portalKeyLookup{fault: &portalKeyFault{cause: portalCauseKeysUnreachable}}
+		return portalKeyLookup{fault: &portalKeyFault{cause: portalKeysFaultCause(f.err)}}
 	}
 	ks.mu.RLock()
 	k, ok = ks.keys[kid]
 	gen = ks.gen
 	ks.mu.RUnlock()
 	return portalKeyLookup{key: k, gen: gen, found: ok}
+}
+
+// portalKeysFaultCause is the 503 cause of a failed key fetch: an outage is keys_unreachable, and a fetch that
+// broke a rule (a refused address, say) keeps its own cause, as the scheduled refresh reports it.
+func portalKeysFaultCause(err error) string {
+	if c := portalFetchCause(err); c != portalCauseUnreachable {
+		return c
+	}
+	return portalCauseKeysUnreachable
+}
+
+// portalProtectedTyp reads the typ member of a compact token's protected header as written: go-jose drops a
+// null member, so presence and shape come from the raw header.
+func portalProtectedTyp(raw string) (portalHeaderTyp, bool) {
+	seg, _, ok := strings.Cut(raw, ".")
+	if !ok {
+		return portalHeaderTyp{}, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(seg)
+	if err != nil {
+		return portalHeaderTyp{}, false
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(b, &members) != nil {
+		return portalHeaderTyp{}, false
+	}
+	m, present := members["typ"]
+	if !present {
+		return portalHeaderTyp{}, true
+	}
+	var s string
+	isStr := json.Unmarshal(m, &s) == nil && len(m) > 0 && m[0] == '"'
+	return portalHeaderTyp{present: true, isString: isStr, value: s}, true
 }
 
 // VerifySignature implements the go-oidc key set interface for RS256 tokens.
@@ -309,9 +411,11 @@ func (ks *portalKeySet) VerifySignature(ctx context.Context, raw string) ([]byte
 		return nil, errPortalBadToken
 	}
 	box.payload, box.kid, box.key, box.gen = payload, hdr.KeyID, got.key, got.gen
-	typ, present := hdr.ExtraHeaders[jose.HeaderType]
-	str, isStr := typ.(string)
-	box.typ = portalHeaderTyp{present: present, isString: isStr, value: str}
+	typ, ok := portalProtectedTyp(raw)
+	if !ok {
+		return nil, errPortalBadToken
+	}
+	box.typ = typ
 	return payload, nil
 }
 

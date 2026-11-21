@@ -402,6 +402,26 @@ func TestPortalProfile_IDTokenTypHeaderPresence(t *testing.T) {
 			}
 		})
 	}
+	// A JSON null typ is present, and not the string JWT: go-jose drops it from the parsed header, so the raw
+	// protected header is what is read.
+	for name, hdr := range map[string]string{
+		"null":       `{"alg":"RS256","kid":"k1","typ":null}`,
+		"null first": `{"typ":null,"alg":"RS256","kid":"k1"}`,
+		"object":     `{"alg":"RS256","kid":"k1","typ":{}}`,
+		"array":      `{"alg":"RS256","kid":"k1","typ":["JWT"]}`,
+	} {
+		t.Run("raw "+name, func(t *testing.T) {
+			if _, r := h.verifyReg(reg, h.mintHeader(0, h.idClaims(), hdr)); r.Reason != SubjectTokenNotIDToken {
+				t.Fatalf("header %s: %+v, want a refusal as not an ID token", hdr, r)
+			}
+		})
+	}
+	if _, r := h.verifyReg(reg, h.mintHeader(0, h.idClaims(), `{"alg":"RS256","kid":"k1","typ":"JWT"}`)); !r.OK() {
+		t.Fatalf("a raw typ JWT was refused: %+v", r)
+	}
+	if _, r := h.verifyReg(reg, h.mintHeader(0, h.idClaims(), `{"alg":"RS256","kid":"k1"}`)); !r.OK() {
+		t.Fatalf("a raw absent typ was refused: %+v", r)
+	}
 	if _, r := h.verifyReg(reg, h.token(h.idClaims())); !r.OK() {
 		t.Fatalf("an absent typ was refused: %+v", r)
 	}
@@ -411,6 +431,7 @@ func TestPortalProfile_IDTokenTypHeaderPresence(t *testing.T) {
 	// The access-token profile never reads the header.
 	h.mustAdmit(h.mint("k1", 0, h.accessClaims(), map[jose.HeaderKey]any{jose.HeaderType: true}))
 	h.mustAdmit(h.mint("k1", 0, h.accessClaims(), map[jose.HeaderKey]any{jose.HeaderType: "at+jwt"}))
+	h.mustAdmit(h.mintHeader(0, h.accessClaims(), `{"alg":"RS256","kid":"k1","typ":null}`))
 }
 
 func TestPortalAdmission_IDTokenEmailDomain(t *testing.T) {
@@ -468,4 +489,38 @@ func TestPortalAdmission_IDTokenEmailDomain(t *testing.T) {
 	if !r.OK() || subj.Email != "" || subj.EmailVerified {
 		t.Fatalf("access-token subject = %+v, %+v: the email field must not be read", subj, r)
 	}
+}
+
+func TestPortalProfile_InvalidRegistrationRefused(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	tok := h.token(h.accessClaims())
+	for name, mod := range map[string]func(r *PortalRegistration){
+		"no client id":         func(r *PortalRegistration) { r.ClientID = "" },
+		"no issuer":            func(r *PortalRegistration) { r.Issuer = "" },
+		"access, no audience":  func(r *PortalRegistration) { r.Audience = "" },
+		"access, no scopes":    func(r *PortalRegistration) { r.RequiredScopes = nil },
+		"access, empty scopes": func(r *PortalRegistration) { r.RequiredScopes = []string{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			reg := h.reg
+			mod(&reg)
+			_, r := h.verifyReg(reg, tok)
+			if r.Reason != PortalRegistrationInvalid || r.Class != PortalRefusedRequest {
+				t.Fatalf("refusal = %+v, want %s as a request refusal", r, PortalRegistrationInvalid)
+			}
+		})
+	}
+	if disc, keys := h.idp.hits(); disc != 0 || keys != 0 {
+		t.Fatalf("an invalid registration reached the network: (%d, %d)", disc, keys)
+	}
+	// An ID-token registration needs a client id only: no audience and no scopes.
+	id := h.idRegistration()
+	if _, r := h.verifyReg(id, h.token(h.idClaims())); !r.OK() {
+		t.Fatalf("a valid ID-token registration was refused: %+v", r)
+	}
+	id.ClientID = ""
+	if _, r := h.verifyReg(id, h.token(h.idClaims())); r.Reason != PortalRegistrationInvalid {
+		t.Fatalf("an ID-token registration with no client id: %+v", r)
+	}
+	h.mustAdmit(tok)
 }

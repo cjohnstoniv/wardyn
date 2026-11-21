@@ -296,13 +296,48 @@ func TestPortalFetch_RebindingDialsCheckedAddress(t *testing.T) {
 	})
 	// The first resolution is public: that exact address is dialled, never a second resolution of the name.
 	// The second resolution is loopback: it is refused and never dialled.
-	h.wantUnavailable(h.token(h.accessClaims()), portalCauseKeysUnreachable)
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
 	want := []string{"8.8.8.8:" + h.idp.port()}
 	if !slices.Equal(h.dials, want) {
 		t.Fatalf("dials = %v, want %v", h.dials, want)
 	}
 	if h.lookups != 2 {
 		t.Fatalf("%d resolutions, want one per connection", h.lookups)
+	}
+	// A refused keys address drops the verifier: nothing is admitted until a refresh passes, and the next one
+	// starts from discovery.
+	disc, _ := h.idp.hits()
+	h.setLookup(func(string) []net.IP { return []net.IP{portalPublicIP} })
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	h.mustAdmit(h.token(h.accessClaims()))
+	if d, _ := h.idp.hits(); d != disc+1 {
+		t.Fatalf("%d discovery fetches after the drop, want %d", d, disc+1)
+	}
+}
+
+func TestPortalFetch_UnknownKidKeysAddressRefusedDropsVerifier(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	h.idp.set(func(f *fakeIdP) {
+		f.override = func(w http.ResponseWriter, r *http.Request) bool {
+			w.Header().Set("Connection", "close") // every request resolves and dials again
+			return false
+		}
+	})
+	h.mustAdmit(h.token(h.accessClaims()))
+	h.idp.publish(t, "k2", 1)
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} })
+	// The unknown kid triggers a key fetch whose address resolves to loopback.
+	h.wantUnavailable(h.kidToken("k2", 1), portalCauseAddressRefused)
+	// The verifier is closed under that cause, for a known key too, and it is not an outage.
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+	disc, _ := h.idp.hits()
+	h.setLookup(func(string) []net.IP { return []net.IP{portalPublicIP} })
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	h.mustAdmit(h.kidToken("k2", 1))
+	if d, _ := h.idp.hits(); d != disc+1 {
+		t.Fatalf("%d discovery fetches after the drop, want %d", d, disc+1)
 	}
 }
 
@@ -569,6 +604,34 @@ func TestPortalDiscovery_RequiresExactMembers(t *testing.T) {
 			if _, keys := h.idp.hits(); keys != 0 {
 				t.Fatal("keys were fetched from a document that failed the exact-member rule")
 			}
+		})
+	}
+}
+
+func TestPortalFetch_ListedHostAllowsOnlyLiftableSpace(t *testing.T) {
+	refused := []string{
+		"240.0.0.1",                            // class E
+		"2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo
+		"fec0::1",                              // site-local
+		"192.0.2.1",                            // test-net
+		"100.100.100.200",                      // a metadata address inside CGNAT
+		"127.0.0.1", "169.254.169.254", "::1", "fe80::1",
+	}
+	for _, ip := range refused {
+		t.Run("refused "+ip, func(t *testing.T) {
+			h := internalHarness(t, "/oauth2/a", "/oauth2/a")
+			h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP(ip)} })
+			h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+			if h.dialCount() != 0 {
+				t.Fatalf("%s was dialled", ip)
+			}
+		})
+	}
+	for _, ip := range []string{"10.1.2.3", "172.16.0.5", "192.168.1.1", "100.64.0.1", "fd00::1234"} {
+		t.Run("allowed "+ip, func(t *testing.T) {
+			h := internalHarness(t, "/oauth2/a", "/oauth2/a")
+			h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP(ip)} })
+			h.mustAdmit(h.token(h.accessClaims()))
 		})
 	}
 }

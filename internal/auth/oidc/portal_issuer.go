@@ -117,6 +117,7 @@ type PortalIssuersOptions struct {
 
 	clock            func() time.Time
 	handshakeTimeout time.Duration
+	fetchTimeout     time.Duration
 	roots            *x509.CertPool
 	lookup           func(ctx context.Context, host string) ([]net.IP, error)
 	dial             func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -150,7 +151,7 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial}
+	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial}
 	for _, h := range opts.InternalHosts {
 		if a := portalListedAuthority(h); a != "" {
 			pn.internalHosts[a] = true
@@ -213,6 +214,10 @@ func (p *PortalIssuers) VerifyDetail(ctx context.Context, reg PortalRegistration
 	want := portalProfileType(reg.TokenProfile)
 	if want == "" {
 		return PortalSubject{}, PortalRefusal{Reason: PortalProfileUnknown, Class: PortalRefusedRequest}
+	}
+	if reg.Issuer == "" || reg.ClientID == "" ||
+		(reg.TokenProfile == PortalProfileAccessToken && (reg.Audience == "" || len(reg.RequiredScopes) == 0)) {
+		return PortalSubject{}, PortalRefusal{Reason: PortalRegistrationInvalid, Class: PortalRefusedRequest}
 	}
 	if declaredType != want {
 		return PortalSubject{}, PortalRefusal{Reason: SubjectTokenTypeMismatch, Class: PortalRefusedRequest}
@@ -351,11 +356,11 @@ func (p *PortalIssuers) verifierFor(reg PortalRegistration) (*portalVerifier, er
 // portalVerifier is the discovery and key state of one (issuer, internal address) pair.
 type portalVerifier struct {
 	issuer, internal string
+	timeout          time.Duration // the bound of one discovery request
 	clock            func() time.Time
 	client           *http.Client
 	ks               *portalKeySet
 	idv              *gooidc.IDTokenVerifier
-	keysURL          atomic.Pointer[string]
 	lastUsed         atomic.Int64
 
 	onFail func(PortalRefreshFailure)
@@ -379,15 +384,20 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 	if err != nil {
 		return nil, err
 	}
-	v := &portalVerifier{issuer: issuer, internal: internal, clock: clock, client: newPortalClient(pn, allowed, private), onFail: onFail}
-	v.ks = newPortalKeySet(clock, func(ctx context.Context) ([]jose.JSONWebKey, error) {
-		u := v.keysURL.Load()
-		if u == nil {
+	v := &portalVerifier{issuer: issuer, internal: internal, timeout: pn.timeout(), clock: clock, client: newPortalClient(pn, allowed, private), onFail: onFail}
+	v.ks = newPortalKeySet(clock, pn.timeout(), func(ctx context.Context, keysURL string) ([]jose.JSONWebKey, error) {
+		if keysURL == "" {
 			return nil, &portalFetchError{cause: portalCauseUnreachable, detail: "no keys address"}
 		}
-		return portalFetchKeys(ctx, v.client, *u)
+		return portalFetchKeys(ctx, v.client, keysURL)
 	})
-	v.ks.onFail = func(source string, err error) { v.reportFailure(source, portalFetchCause(err)) }
+	v.ks.onFail = func(source string, err error) {
+		cause := portalFetchCause(err)
+		v.reportFailure(source, cause)
+		if cause != portalCauseUnreachable {
+			v.dropForCause(cause) // a document or address that breaks a rule is never kept as the last good one
+		}
+	}
 	v.idv = gooidc.NewVerifier(issuer, v.ks, &gooidc.Config{SkipClientIDCheck: true, SupportedSigningAlgs: []string{string(jose.RS256)}})
 	return v, nil
 }
@@ -439,7 +449,7 @@ func (v *portalVerifier) prepare(ctx context.Context) (string, time.Duration) {
 		call = &portalRefreshCall{done: make(chan struct{})}
 		v.inflight, v.attemptAt = call, now
 		v.attemptNano.Store(now.UnixNano())
-		go v.runRefresh(context.Background(), call, now)
+		go v.runRefresh(call, now)
 	}
 	v.mu.Unlock()
 	select {
@@ -453,10 +463,8 @@ func (v *portalVerifier) prepare(ctx context.Context) (string, time.Duration) {
 	return call.cause, call.retry
 }
 
-func (v *portalVerifier) runRefresh(parent context.Context, call *portalRefreshCall, now time.Time) {
-	ctx, cancel := context.WithTimeout(parent, portalFetchTimeout)
-	defer cancel()
-	call.cause, call.retry, call.keysSeq = v.refresh(ctx, now)
+func (v *portalVerifier) runRefresh(call *portalRefreshCall, now time.Time) {
+	call.cause, call.retry, call.keysSeq = v.refresh(now)
 	v.mu.Lock()
 	v.inflight = nil
 	v.mu.Unlock()
@@ -475,8 +483,14 @@ func (v *portalVerifier) reportFailure(source, cause string) {
 // the last good result but leaves the verifier closed until a fetch succeeds. Keys are re-read only when the key
 // budget allows: if the keys address changed and the budget does not allow, the old keys are dropped and the
 // verifier stays closed until the new ones are loaded.
-func (v *portalVerifier) refresh(ctx context.Context, now time.Time) (string, time.Duration, uint64) {
+//
+// Each actual request has its own bound (discovery here, the key fetch in the key set), so two requests that each
+// finish in time never fail together. Nothing in a refresh waits on a caller's context: a caller that leaves
+// answers only itself, and the refresh publishes one health outcome when it ends.
+func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), v.timeout)
 	disc, err := portalDiscover(ctx, v.client, v.issuer, v.internal)
+	cancel()
 	if err != nil {
 		cause := portalFetchCause(err)
 		v.reportFailure("scheduled", cause)
@@ -492,35 +506,43 @@ func (v *portalVerifier) refresh(ctx context.Context, now time.Time) (string, ti
 		}
 		v.disc, v.discFailed, v.standing = nil, false, cause
 		v.mu.Unlock()
-		v.keysURL.Store(nil)
 		v.ks.drop()
 		v.setDown(cause)
 		return cause, 0, 0
 	}
 	v.mu.Lock()
-	urlChanged := v.disc != nil && v.disc.fetchURL != disc.fetchURL
 	v.disc, v.discOKAt, v.discFailed, v.standing = &disc, now, false, ""
 	v.mu.Unlock()
-	v.keysURL.Store(&disc.fetchURL)
-	if urlChanged {
-		v.ks.drop()
-	}
-	okAt, attempt, failed := v.ks.state()
-	cooling := now.Before(attempt.Add(portalKeyCooldown))
+	// A changed keys address drops the keys and every fetch still in flight for the old one.
+	v.ks.setURL(disc.fetchURL)
+	out, wait, err := v.ks.ensure(context.Background(), "scheduled") // the fetch itself is bounded by the key set
 	switch {
-	case !failed && !okAt.IsZero() && cooling:
+	case out == portalEnsureCurrent:
 		v.down.Store(nil) // the keys are younger than the budget: nothing to fetch
 		return "", 0, 0
-	case cooling:
+	case out == portalEnsureCooling:
 		v.setDown(portalCauseKeysCooldown)
-		return portalCauseKeysCooldown, attempt.Add(portalKeyCooldown).Sub(now), 0
-	}
-	if err := v.ks.refresh(ctx, "scheduled"); err != nil {
+		return portalCauseKeysCooldown, wait, 0
+	case err != nil:
+		if cause := portalFetchCause(err); cause != portalCauseUnreachable {
+			v.dropForCause(cause)
+			return cause, 0, 0
+		}
 		v.setDown(portalCauseIssuerDown)
 		return portalCauseKeysUnreachable, 0, 0
 	}
 	v.down.Store(nil)
 	return "", 0, v.ks.seqNow()
+}
+
+// dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
+// verifier under the cause until a refresh passes.
+func (v *portalVerifier) dropForCause(cause string) {
+	v.mu.Lock()
+	v.disc, v.discFailed, v.standing = nil, false, cause
+	v.mu.Unlock()
+	v.ks.drop()
+	v.setDown(cause)
 }
 
 func (v *portalVerifier) setDown(cause string) { v.down.Store(&cause) }

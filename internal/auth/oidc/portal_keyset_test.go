@@ -4,10 +4,14 @@
 package oidc
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
 )
 
 // warmPortal admits one token so discovery and the first key fetch have happened, and returns the fetch counts.
@@ -366,4 +370,241 @@ func TestPortalKeySet_KeyRemovedDuringExchangeRefuses(t *testing.T) {
 	if !r.OK() {
 		t.Fatalf("a refresh that kept the key refused the held exchange: %+v", r)
 	}
+}
+
+// gatedKeys is a key fetch the test steps by hand: every fetch announces its address and waits for the test to
+// hand it an answer, so the order in which fetches finish is the test's, never the scheduler's.
+type gatedKeys struct {
+	t       *testing.T
+	started chan string
+	mu      sync.Mutex
+	gates   map[string]chan gatedAnswer
+}
+
+type gatedAnswer struct {
+	kid string
+	err error
+}
+
+func newGatedKeys(t *testing.T) *gatedKeys {
+	return &gatedKeys{t: t, started: make(chan string, 8), gates: map[string]chan gatedAnswer{}}
+}
+
+func (g *gatedKeys) gate(url string) chan gatedAnswer {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.gates[url] == nil {
+		g.gates[url] = make(chan gatedAnswer, 1)
+	}
+	return g.gates[url]
+}
+
+func (g *gatedKeys) fetch(ctx context.Context, url string) ([]jose.JSONWebKey, error) {
+	g.started <- url
+	select {
+	case a := <-g.gate(url):
+		if a.err != nil {
+			return nil, a.err
+		}
+		return []jose.JSONWebKey{{Key: &portalTestKeys(g.t)[0].PublicKey, KeyID: a.kid, Algorithm: "RS256", Use: "sig"}}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (g *gatedKeys) waitStarted(want string) {
+	g.t.Helper()
+	select {
+	case got := <-g.started:
+		if got != want {
+			g.t.Fatalf("a fetch started for %q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		g.t.Fatalf("no fetch started for %q", want)
+	}
+}
+
+func (ks *portalKeySet) kids() (kids []string, okAt time.Time, seq uint64, failed bool) {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	for k := range ks.keys {
+		kids = append(kids, k)
+	}
+	return kids, ks.okAt, ks.seq, ks.failed
+}
+
+type ensureResult struct {
+	out portalEnsure
+	err error
+}
+
+type ensureCall chan ensureResult
+
+func startEnsure(ks *portalKeySet) ensureCall {
+	c := make(ensureCall, 1)
+	go func() {
+		out, _, err := ks.ensure(context.Background(), "scheduled")
+		c <- ensureResult{out, err}
+	}()
+	return c
+}
+
+func (c ensureCall) wait(t *testing.T) ensureResult {
+	t.Helper()
+	select {
+	case r := <-c:
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("ensure did not return")
+		return ensureResult{}
+	}
+}
+
+func TestPortalKeySet_StaleURLFetchCannotRepopulate(t *testing.T) {
+	const urlA, urlB = "https://idp.test/a/keys", "https://idp.test/b/keys"
+	newSet := func(t *testing.T) (*portalKeySet, *gatedKeys, *portalClock, *[]string) {
+		portalTestKeys(t)
+		g := newGatedKeys(t)
+		clk := newPortalClock()
+		ks := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
+		var failed []string
+		var fm sync.Mutex
+		ks.onFail = func(source string, err error) { fm.Lock(); failed = append(failed, source); fm.Unlock() }
+		return ks, g, clk, &failed
+	}
+	t.Run("the old fetch finishes after the address changed", func(t *testing.T) {
+		ks, g, clk, _ := newSet(t)
+		ks.setURL(urlA)
+		old := startEnsure(ks)
+		g.waitStarted(urlA)
+		ks.setURL(urlB) // the old fetch is abandoned
+		g.gate(urlA) <- gatedAnswer{kid: "old"}
+		if r := old.wait(t); r.out == portalEnsureFetched {
+			t.Fatalf("the abandoned fetch reported a completed fetch: %+v", r)
+		}
+		if kids, okAt, seq, _ := ks.kids(); len(kids) != 0 || !okAt.IsZero() || seq != 0 {
+			t.Fatalf("the old address's answer populated the set: kids %v okAt %v seq %d", kids, okAt, seq)
+		}
+		if got := ks.lookup(context.Background(), "old", portalFresh{}); got.found {
+			t.Fatal("a key from the old address was found")
+		}
+		clk.Advance(portalKeyCooldown + time.Second)
+		cur := startEnsure(ks)
+		g.waitStarted(urlB)
+		g.gate(urlB) <- gatedAnswer{kid: "new"}
+		if r := cur.wait(t); r.out != portalEnsureFetched || r.err != nil {
+			t.Fatalf("the current address's fetch: %+v", r)
+		}
+		if kids, _, _, _ := ks.kids(); len(kids) != 1 || kids[0] != "new" {
+			t.Fatalf("kids = %v, want only the current address's key", kids)
+		}
+	})
+	t.Run("the new fetch finishes first, then the old one", func(t *testing.T) {
+		ks, g, clk, _ := newSet(t)
+		ks.setURL(urlA)
+		old := startEnsure(ks)
+		g.waitStarted(urlA)
+		ks.setURL(urlB)
+		clk.Advance(portalKeyCooldown + time.Second)
+		cur := startEnsure(ks)
+		g.waitStarted(urlB)
+		g.gate(urlB) <- gatedAnswer{kid: "new"}
+		if r := cur.wait(t); r.out != portalEnsureFetched || r.err != nil {
+			t.Fatalf("the current address's fetch: %+v", r)
+		}
+		_, okAt, seq, _ := ks.kids()
+		ks.mu.RLock()
+		gen := ks.gen
+		ks.mu.RUnlock()
+		g.gate(urlA) <- gatedAnswer{kid: "old"}
+		old.wait(t)
+		kids, okAt2, seq2, failed := ks.kids()
+		ks.mu.RLock()
+		gen2 := ks.gen
+		ks.mu.RUnlock()
+		if len(kids) != 1 || kids[0] != "new" || !okAt2.Equal(okAt) || seq2 != seq || gen2 != gen || failed {
+			t.Fatalf("a late answer from the old address changed the set: kids %v okAt %v->%v seq %d->%d gen %d->%d failed %v",
+				kids, okAt, okAt2, seq, seq2, gen, gen2, failed)
+		}
+	})
+	t.Run("a late failure from the old address does not fail the new keys", func(t *testing.T) {
+		ks, g, clk, failures := newSet(t)
+		ks.setURL(urlA)
+		old := startEnsure(ks)
+		g.waitStarted(urlA)
+		ks.setURL(urlB)
+		clk.Advance(portalKeyCooldown + time.Second)
+		cur := startEnsure(ks)
+		g.waitStarted(urlB)
+		g.gate(urlB) <- gatedAnswer{kid: "new"}
+		cur.wait(t)
+		g.gate(urlA) <- gatedAnswer{err: errors.New("boom")}
+		old.wait(t)
+		if _, _, _, failed := ks.kids(); failed {
+			t.Fatal("a stale failure marked the current keys failed")
+		}
+		if len(*failures) != 0 {
+			t.Fatalf("a stale failure was reported: %v", *failures)
+		}
+	})
+}
+
+func TestPortalKeySet_ScheduledAndUnknownKidShareOneBudget(t *testing.T) {
+	portalTestKeys(t)
+	setup := func() (*portalKeySet, *gatedKeys, *portalClock) {
+		g := newGatedKeys(t)
+		clk := newPortalClock()
+		ks := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
+		ks.setURL("https://idp.test/keys")
+		return ks, g, clk
+	}
+	const keysURL = "https://idp.test/keys"
+	t.Run("an unknown-kid fetch that finishes first is not followed by a scheduled one", func(t *testing.T) {
+		ks, g, _ := setup()
+		got := make(chan portalKeyLookup, 1)
+		go func() { got <- ks.lookup(context.Background(), "k9", portalFresh{}) }()
+		g.waitStarted(keysURL)
+		g.gate(keysURL) <- gatedAnswer{kid: "k1"}
+		<-got
+		out, _, err := ks.ensure(context.Background(), "scheduled")
+		if out != portalEnsureCurrent || err != nil {
+			t.Fatalf("a scheduled fetch followed within the budget: %v %v", out, err)
+		}
+		select {
+		case u := <-g.started:
+			t.Fatalf("a second fetch started for %q", u)
+		default:
+		}
+	})
+	t.Run("a scheduled fetch in flight is joined by an unknown kid", func(t *testing.T) {
+		ks, g, _ := setup()
+		sched := startEnsure(ks)
+		g.waitStarted(keysURL)
+		got := make(chan portalKeyLookup, 1)
+		go func() { got <- ks.lookup(context.Background(), "k1", portalFresh{}) }()
+		// The lookup must be waiting on the fetch in flight, not starting its own.
+		time.Sleep(50 * time.Millisecond)
+		select {
+		case u := <-g.started:
+			t.Fatalf("a second fetch started for %q", u)
+		default:
+		}
+		g.gate(keysURL) <- gatedAnswer{kid: "k1"}
+		sched.wait(t)
+		if r := <-got; !r.found {
+			t.Fatalf("the joined lookup did not find the key: %+v", r)
+		}
+	})
+	t.Run("a scheduled fetch inside the budget after an unknown-kid failure is cooling", func(t *testing.T) {
+		ks, g, _ := setup()
+		got := make(chan portalKeyLookup, 1)
+		go func() { got <- ks.lookup(context.Background(), "k9", portalFresh{}) }()
+		g.waitStarted(keysURL)
+		g.gate(keysURL) <- gatedAnswer{err: errors.New("boom")}
+		<-got
+		out, wait, _ := ks.ensure(context.Background(), "scheduled")
+		if out != portalEnsureCooling || wait <= 0 {
+			t.Fatalf("ensure = %v wait %v, want cooling inside the budget", out, wait)
+		}
+	})
 }

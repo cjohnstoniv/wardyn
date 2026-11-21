@@ -36,6 +36,7 @@ const (
 	PortalOutsideScope           = "outside_scope"
 	PortalIssuerUnavailable      = "portal_issuer_unavailable"
 	PortalProfileUnknown         = "portal_profile_unknown"
+	PortalRegistrationInvalid    = "portal_registration_invalid"
 )
 
 const (

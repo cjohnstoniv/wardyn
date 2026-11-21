@@ -163,3 +163,62 @@ func TestPortalVerifier_RefreshFailureHook(t *testing.T) {
 		t.Fatalf("log lines %q do not name the issuer and cause, or carry a token", logs.String())
 	}
 }
+
+func TestPortalRefresh_EachRequestHasItsOwnBound(t *testing.T) {
+	// Discovery and the key fetch each finish inside the 1 s bound but together run longer than it. The refresh
+	// succeeds, the verifier is healthy, and the next exchange for a known key is admitted without a fetch.
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) { o.fetchTimeout = time.Second })
+	h.idp.set(func(f *fakeIdP) {
+		f.keyDelay = 600 * time.Millisecond
+		f.override = func(w http.ResponseWriter, r *http.Request) bool {
+			if strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
+				time.Sleep(600 * time.Millisecond)
+			}
+			return false
+		}
+	})
+	start := time.Now()
+	h.mustAdmit(h.token(h.accessClaims()))
+	if took := time.Since(start); took < 1100*time.Millisecond {
+		t.Fatalf("the refresh took %v: the test no longer runs longer than one bound", took)
+	}
+	disc, keys := h.idp.hits()
+	h.mustAdmit(h.token(h.accessClaims()))
+	if d, k := h.idp.hits(); d != disc || k != keys {
+		t.Fatalf("a healthy verifier fetched again: (%d, %d) -> (%d, %d)", disc, keys, d, k)
+	}
+}
+
+func TestPortalRefresh_CallerThatLeavesDoesNotCloseTheIssuer(t *testing.T) {
+	var failures []PortalRefreshFailure
+	var fm sync.Mutex
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {
+		o.fetchTimeout = 2 * time.Second
+		o.OnRefreshFailure = func(f PortalRefreshFailure) { fm.Lock(); failures = append(failures, f); fm.Unlock() }
+	})
+	h.idp.set(func(f *fakeIdP) { f.keyDelay = 500 * time.Millisecond })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, r := h.pi.VerifyDetail(ctx, h.reg, h.token(h.accessClaims()), PortalTokenTypeAccess)
+	if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseCanceled {
+		t.Fatalf("the caller that left got %+v", r)
+	}
+	// The key fetch that caller was waiting for still succeeds, and the issuer is healthy afterwards.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, r = h.verify(h.token(h.accessClaims()))
+		if r.OK() || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !r.OK() {
+		t.Fatalf("the issuer stayed closed after a caller left: %+v", r)
+	}
+	h.mustAdmit(h.token(h.accessClaims()))
+	fm.Lock()
+	defer fm.Unlock()
+	if len(failures) != 0 {
+		t.Fatalf("a caller that left was recorded as an issuer failure: %v", failures)
+	}
+}

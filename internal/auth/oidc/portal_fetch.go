@@ -95,7 +95,7 @@ func portalListedAuthority(entry string) string {
 // portalAddressRefused reports whether a resolved address may never be dialled for a portal fetch.
 // Loopback, link-local and metadata, unspecified, multicast and NAT64-embedded addresses are refused for every
 // host, as are the ::/96 and 6to4 forms that embed an IPv4. Private and reserved space is refused too, except
-// for a host the operator listed as an internal issuer host.
+// the liftable part of it for a host the operator listed as an internal issuer host.
 func portalAddressRefused(ip net.IP, internalHost bool) bool {
 	if ip == nil || ipguard.GatewayIPRefused(ip) {
 		return true
@@ -106,21 +106,32 @@ func portalAddressRefused(ip net.IP, internalHost bool) bool {
 			return true
 		}
 	}
-	if internalHost {
-		return false
+	// Private and reserved space is refused. A listed internal host may sit only in the space an operator may lift
+	// (ipguard.InLiftable: RFC 1918, unique-local and CGNAT, never the metadata endpoints), not in Teredo,
+	// site-local, test-net or class E space.
+	if private, _ := ipguard.PrivateReserved(ip); private {
+		return !(internalHost && ipguard.InLiftable(ip))
 	}
-	private, _ := ipguard.PrivateReserved(ip)
-	return private
+	return false
 }
 
 // portalNet carries the pieces a fetch layer needs from its operator and, in tests, its seams.
 type portalNet struct {
 	handshakeTimeout time.Duration   // bounds resolution, connect and TLS handshake together; 0 means 10 s
+	fetchTimeout     time.Duration   // bounds each actual request (discovery and keys separately); 0 means 10 s
 	internalHosts    map[string]bool // listed internal authorities
 	internalCA       *x509.CertPool  // system roots plus the operator's bundle, for listed hosts only
 	roots            *x509.CertPool  // system roots; nil means the platform's
 	lookup           func(ctx context.Context, host string) ([]net.IP, error)
 	dial             func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// timeout is the bound of one actual request.
+func (pn *portalNet) timeout() time.Duration {
+	if pn.fetchTimeout > 0 {
+		return pn.fetchTimeout
+	}
+	return portalFetchTimeout
 }
 
 // portalTransport is the single transport of one verifier.
@@ -138,15 +149,15 @@ func newPortalClient(pn *portalNet, allowed map[string]bool, private bool) *http
 	pt.base = &http.Transport{
 		Proxy:                  nil, // proxy environment variables never pick the destination
 		DialTLSContext:         pt.dialTLS,
-		TLSHandshakeTimeout:    portalFetchTimeout,
-		ResponseHeaderTimeout:  portalFetchTimeout,
+		TLSHandshakeTimeout:    pn.timeout(),
+		ResponseHeaderTimeout:  pn.timeout(),
 		MaxResponseHeaderBytes: 64 << 10,
 		IdleConnTimeout:        30 * time.Second,
 		MaxIdleConnsPerHost:    1,
 	}
 	return &http.Client{
 		Transport: pt,
-		Timeout:   portalFetchTimeout,
+		Timeout:   pn.timeout(),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return &portalFetchError{cause: portalCauseAddressRefused, detail: "redirect refused"}
 		},

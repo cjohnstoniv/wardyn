@@ -5,13 +5,16 @@ package oidc
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -352,6 +355,20 @@ func (h *portalHarness) mintRaw(kid string, idx int, payload []byte, hdr map[jos
 		h.t.Fatal(err)
 	}
 	return s
+}
+
+// mintHeader signs claims under a protected header written out by the test, so a member go-jose would drop (a
+// JSON null) is on the wire as the test wrote it.
+func (h *portalHarness) mintHeader(idx int, claims map[string]any, headerJSON string) string {
+	h.t.Helper()
+	payload, _ := json.Marshal(claims)
+	signed := base64.RawURLEncoding.EncodeToString([]byte(headerJSON)) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	sum := sha256.Sum256([]byte(signed))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, portalTestKeys(h.t)[idx], crypto.SHA256, sum[:])
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return signed + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
 func (h *portalHarness) token(claims map[string]any) string { return h.mint("k1", 0, claims, nil) }
