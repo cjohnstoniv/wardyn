@@ -166,8 +166,18 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	if sess.Via != nil {
 		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
 	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
+	// An issuer portal's request starts its first write into the sandbox, and anything its dial starts there,
+	// before checkStart plus uiDispatchFresh (uigateway_dispatch.go).
+	if issuerPortalPerson(sess.Via, sess.Principal) {
+		ctx = s.withUIDispatchBy(ctx, checkStart.Add(uiDispatchFresh))
+	}
+	// The same human is presence for the pause, and thaws a paused run: for an issuer portal's request, only
+	// before its dispatch time.
+	if !uiDispatchPast(ctx) {
+		pctx, pcancel := uiBoundedCtx(ctx)
+		_ = s.markPresent(pctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
+		pcancel()
+	}
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.serveUIRelay(w, r.WithContext(ctx))
 }
