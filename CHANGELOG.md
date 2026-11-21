@@ -76,7 +76,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A newly created container or pod sandbox maps a custom DNS host name in `WARDYN_SANDBOX_PROXY_URL` to its run's proxy. Before, that name could fail to resolve. An IP address is left as it is, and existing sandboxes keep their host mappings.
 - `wardyn sync` asked for another pass after Ctrl-C now stops, where an empty folder used to report a finished pass.
 - New Run's add-token dialog asks again before replacing a secret when the save would land in a different namespace (your own or the shared one) than the one you confirmed.
-- For certificate checks, `wardyn doctor` tells the organisation's host apart from an HTTPS proxy and points the trust fix at the host whose handshake failed. When both are IP addresses, it cannot tell them apart.
+- When the organisation and its HTTPS proxy use distinct DNS names, `wardyn doctor` identifies which one presented an untrusted certificate and gives trust guidance for that host.
 - New Kubernetes warm-pool placeholders exit and restart if `sleep` fails, where they used to spin and count as Ready. Existing placeholders keep their old command until they are replaced.
 
 ### Corrections to the 0.10.0 notes
