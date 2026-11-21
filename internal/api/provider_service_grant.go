@@ -451,7 +451,7 @@ func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool, f ser
 
 // serviceGrantMint is one token request: the record's read, the request, and the checks of its answer, then
 // the publish. It holds no database lock and runs under the single-flight on (uid, digest, revision).
-func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt, gen uint64) (serviceGrantMinted, error) {
+func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt, cacheGen uint64) (serviceGrantMinted, error) {
 	g := p.OIDC.ServiceGrant
 	name := serviceGrantSecretName(p.UID)
 	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantTokenBound)
@@ -493,13 +493,13 @@ func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, di
 	// the request's window is still checked, never discarded for the time the request used.
 	pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantPublishBound)
 	defer pcancel()
-	return s.publishServiceGrantToken(pctx, p, digest, rev, revOK, trigger, sent, attempt, gen, tok)
+	return s.publishServiceGrantToken(pctx, p, digest, rev, revOK, trigger, sent, attempt, cacheGen, tok)
 }
 
 // publishServiceGrantToken re-reads the revision and the live digest before the token is cached or returned.
 // A token the provider issued but that is not published is audited as superseded and stays masked.
 func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool,
-	trigger string, sent time.Time, attempt, gen uint64, tok serviceGrantMinted,
+	trigger string, sent time.Time, attempt, cacheGen uint64, tok serviceGrantMinted,
 ) (serviceGrantMinted, error) {
 	name := serviceGrantSecretName(p.UID)
 	liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, name)
@@ -531,7 +531,7 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 	// above is never overwritten. The one row for the request is written after it, labelled by the decision.
 	s.svcGrant.mu.Lock()
 	prev, held := s.svcGrant.cache[p.UID]
-	published := s.svcGrant.gen[p.UID] == gen && (!held || prev.attempt < attempt)
+	published := s.svcGrant.gen[p.UID] == cacheGen && (!held || prev.attempt < attempt)
 	if published {
 		if s.svcGrant.cache == nil {
 			s.svcGrant.cache = map[string]serviceGrantCached{}
