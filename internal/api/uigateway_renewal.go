@@ -211,6 +211,22 @@ func issuerAdmitCtx(ctx context.Context, sess uiSession) (context.Context, conte
 	return context.WithTimeout(ctx, issuerAdmitBound())
 }
 
+// issuerOpeningRun reads run id under ctx, an issuer portal's opening deadline: the run, or gone for a run that
+// does not exist (the caller answers it as its route answers a missing run), or, for a read that failed or ran
+// out, false with the retryable 503 written with msg.
+func (s *Server) issuerOpeningRun(ctx context.Context, w http.ResponseWriter, id uuid.UUID, msg string) (run types.AgentRun, gone, ok bool) {
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return types.AgentRun{}, true, false
+	case err != nil:
+		slog.ErrorContext(ctx, "wardynd: an issuer portal's run could not be read at its opening", "run_id", id, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, msg)
+		return types.AgentRun{}, false, false
+	}
+	return run, false, true
+}
+
 // issuerAdmitBound is the bound on an issuer portal's opening authorization reads, the watch's own.
 func issuerAdmitBound() time.Duration {
 	return time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))

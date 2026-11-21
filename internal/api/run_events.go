@@ -293,8 +293,8 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	// An issuer portal's stream is bounded from admission: its opening reads are bounded, and its first
 	// re-check is timed from here (runEventsIssuerCut).
 	admitted, admittedAt := time.Now(), s.cfg.Now().UTC()
-	ar, endOpening := s.runEventsOpening(r)
-	run, ok := s.getRunAuthorizedBy(w, ar, id, s.ownsRunOrSponsorOrAdmin)
+	ar, endOpening, issuer := s.runEventsOpening(r)
+	run, ok := s.runEventsOpeningRun(w, ar, id, issuer)
 	endOpening()
 	if !ok {
 		return
@@ -436,13 +436,30 @@ func (s *Server) delegationEndedSince(r *http.Request) bool {
 
 // runEventsOpening is r with its authorization reads bounded by supportWatchWait for an issuer portal's
 // stream, and r as it is for any other; the func ends the bound.
-func (s *Server) runEventsOpening(r *http.Request) (*http.Request, func()) {
+func (s *Server) runEventsOpening(r *http.Request) (*http.Request, func(), bool) {
 	via, delegated := audit.DelegationFrom(r.Context())
 	if _, principal := actorFromRequest(r); !delegated || !issuerPortalPerson(&via, principal) {
-		return r, func() {}
+		return r, func() {}, false
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
-	return r.WithContext(ctx), cancel
+	ctx, cancel := context.WithTimeout(r.Context(), issuerAdmitBound())
+	return r.WithContext(ctx), cancel, true
+}
+
+// runEventsOpeningRun is the read gate (getRunAuthorizedBy) of an event stream's opening. An issuer portal's
+// stream reads its run itself, under the opening's bound: a run that does not exist is the read gate's own 404,
+// and a read that fails or runs out the retryable 503, never a 500.
+func (s *Server) runEventsOpeningRun(w http.ResponseWriter, r *http.Request, id uuid.UUID, issuer bool) (types.AgentRun, bool) {
+	if !issuer {
+		return s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
+	}
+	run, gone, ok := s.issuerOpeningRun(r.Context(), w, id, runEventsUnverifiableMsg)
+	if gone {
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
+	}
+	if !ok || !s.authorizeLoadedRun(w, r, run, s.ownsRunOrSponsorOrAdmin) {
+		return types.AgentRun{}, false
+	}
+	return run, true
 }
 
 // runEventsIssuerCut is the guarded cut over an issuer portal's event stream, and ctx, w and a no-op stop for

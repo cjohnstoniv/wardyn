@@ -267,11 +267,15 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 	})
 }
 
-// flakyEventsStore is the env's Postgres store with two failures a test switches on: the person's identity that
-// cannot be read, and the run that is gone.
+// flakyEventsStore is the env's Postgres store with the failures a test switches on: the person's identity that
+// cannot be read, and the run that is gone, cannot be read, or whose read hangs until ctx ends.
 type flakyEventsStore struct {
 	store.PG
-	identityFails, runGone *atomic.Bool
+	identityFails, runGone, runFails, runStall *atomic.Bool
+}
+
+func newFlakyEventsStore(pg store.PG) flakyEventsStore {
+	return flakyEventsStore{PG: pg, identityFails: &atomic.Bool{}, runGone: &atomic.Bool{}, runFails: &atomic.Bool{}, runStall: &atomic.Bool{}}
 }
 
 func (f flakyEventsStore) IdentityBlocked(ctx context.Context, principal string, epoch int64) (bool, error) {
@@ -282,8 +286,14 @@ func (f flakyEventsStore) IdentityBlocked(ctx context.Context, principal string,
 }
 
 func (f flakyEventsStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
-	if f.runGone.Load() {
+	switch {
+	case f.runGone.Load():
 		return types.AgentRun{}, store.ErrNotFound
+	case f.runFails.Load():
+		return types.AgentRun{}, errors.New("run read failed")
+	case f.runStall.Load():
+		<-ctx.Done()
+		return types.AgentRun{}, ctx.Err()
 	}
 	return f.PG.GetRun(ctx, id)
 }
@@ -311,7 +321,7 @@ func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newIssuerEventsEnv(t)
-			f := flakyEventsStore{PG: e.st, identityFails: &atomic.Bool{}, runGone: &atomic.Bool{}}
+			f := newFlakyEventsStore(e.st)
 			e.h.srv.cfg.Store = f
 			e.h.srv.runEvents.emit(e.run.ID, client.RunEvent{Type: client.RunEventPulling, At: time.Now()}) // the backlog
 			e.h.srv.runEvents.onSetup = func() {
@@ -341,6 +351,42 @@ func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t
 			body, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != tc.want || strings.Contains(string(body), client.RunEventPulling) {
 				t.Fatalf("%s during setup: %d %q, want %d and no backlog", tc.name, resp.StatusCode, body, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunEventsIssuerPortal_FirstRunLookupAnswers_PG: the stream's first run read, at its opening, finds no run
+// (404, as a missing run is answered), cannot be read (503, retryable), or hangs (the same 503 within the opening
+// bound); none opens the stream.
+func TestRunEventsIssuerPortal_FirstRunLookupAnswers_PG(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		set    func(f flakyEventsStore)
+		want   int
+		reason string
+	}{
+		{"missing", func(f flakyEventsStore) { f.runGone.Store(true) }, http.StatusNotFound, reasonRunNotFound},
+		{"unreadable", func(f flakyEventsStore) { f.runFails.Store(true) }, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable},
+		{"stall", func(f flakyEventsStore) { f.runStall.Store(true) }, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newIssuerEventsEnv(t)
+			f := newFlakyEventsStore(e.st)
+			tc.set(f)
+			e.h.srv.cfg.Store = f
+			ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
+			t.Cleanup(ts.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			start := time.Now()
+			resp := openEventsAs(t, ctx, ts.URL, e.run.ID, e.raw)
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != tc.want || !strings.Contains(string(body), tc.reason) {
+				t.Fatalf("%s: %d %q, want %d %s", tc.name, resp.StatusCode, body, tc.want, tc.reason)
+			}
+			if d := time.Since(start); d > eventsBound+400*time.Millisecond {
+				t.Errorf("%s: answered %v after the open, want within the %v bound", tc.name, d, eventsBound)
 			}
 		})
 	}
