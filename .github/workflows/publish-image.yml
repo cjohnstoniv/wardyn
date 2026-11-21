@@ -237,31 +237,35 @@ jobs:
           got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI's version command failed in the image"; exit 1; }
           reports "wardyn in the image" "$cli"
           reports "the linux/amd64 host CLI in the image" "$got"
-          if [ -n "$REVISION" ]; then
-            # The files are copied out and read as data only, never executed here. The host CLIs are built
-            # with -trimpath, which leaves the linker flags out of the build info, so look for the stamped
-            # commit itself: nothing but the stamp puts those 40 characters in a binary.
-            cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
-            mkdir "$RUNNER_TEMP/host"
-            docker cp "$cid:/host/." "$RUNNER_TEMP/host"
-            docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+          # The files are copied out of the image of each Linux platform in the index and read as data only, never
+          # executed here: the other platform's binaries cannot run on this runner, and the unsigned image's
+          # bytes must not. A tag ref is checked for the files too, though it carries no commit to look for. The
+          # host CLIs are built with -trimpath, which leaves the linker flags out of the build info, so the stamp
+          # is the commit itself: nothing but the stamp puts those 40 characters in a binary.
+          for arch in amd64 arm64; do
+            cid="$(docker create --platform "linux/$arch" "$IMAGE_REF")"
+            mkdir -p "$RUNNER_TEMP/$arch/host"
+            docker cp "$cid:/host/." "$RUNNER_TEMP/$arch/host"
+            docker cp "$cid:/wardynd" "$RUNNER_TEMP/$arch/wardynd"
             docker rm "$cid" >/dev/null
             # Every file the image is built to carry is checked, so one that is missing fails here rather than
             # dropping out of a glob: the daemon, the generic host CLI that `make setup` falls back to, and one
             # host CLI for each of the four supported platforms (deploy/compose/Dockerfile.wardynd). A symbolic
             # link is not a copied-out file, so only regular files are read.
-            expected=("$RUNNER_TEMP/wardynd" "$RUNNER_TEMP/host/wardyn")
+            expected=("$RUNNER_TEMP/$arch/wardynd" "$RUNNER_TEMP/$arch/host/wardyn")
             for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-              expected+=("$RUNNER_TEMP/host/wardyn-$platform")
+              expected+=("$RUNNER_TEMP/$arch/host/wardyn-$platform")
             done
             for f in "${expected[@]}"; do
               if [ -L "$f" ] || [ ! -f "$f" ]; then
-                echo "::error::$(basename "$f") is missing from the image or is not a regular file"; exit 1
+                echo "::error::$(basename "$f") is missing from the linux/$arch image or is not a regular file"; exit 1
               fi
-              grep -aqF "$REVISION" "$f" \
-                || { echo "::error::$(basename "$f") was not stamped with revision ${REVISION}"; exit 1; }
+              if [ -n "$REVISION" ]; then
+                grep -aqF "$REVISION" "$f" \
+                  || { echo "::error::$(basename "$f") in the linux/$arch image was not stamped with revision ${REVISION}"; exit 1; }
+              fi
             done
-          fi
+          done
           echo "image reports: $got"
       # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>
       # carry a verifiable signature rather than being the one publishing lane

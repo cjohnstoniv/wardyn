@@ -212,20 +212,20 @@ publisher_host_exec_guard() {
 # exits 1; reads the workflow on stdin.
 PIN_BODY='docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
 --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version'
-PIN_DOCKER='cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
-docker cp "$cid:/host/." "$RUNNER_TEMP/host"
-docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+PIN_DOCKER='cid="$(docker create --platform "linux/$arch" "$IMAGE_REF")"
+docker cp "$cid:/host/." "$RUNNER_TEMP/$arch/host"
+docker cp "$cid:/wardynd" "$RUNNER_TEMP/$arch/wardynd"
 docker rm "$cid" >/dev/null
 docker buildx imagetools create --tag "$t" "$IMAGE_REF"
 now="$(docker buildx imagetools inspect "$t" --format '"'"'{{.Manifest.Digest}}'"'"')"'
-PIN_FILES='mkdir "$RUNNER_TEMP/host"
-expected=("$RUNNER_TEMP/wardynd" "$RUNNER_TEMP/host/wardyn")
-expected+=("$RUNNER_TEMP/host/wardyn-$platform")
+PIN_FILES='mkdir -p "$RUNNER_TEMP/$arch/host"
+expected=("$RUNNER_TEMP/$arch/wardynd" "$RUNNER_TEMP/$arch/host/wardyn")
+expected+=("$RUNNER_TEMP/$arch/host/wardyn-$platform")
 for f in "${expected[@]}"; do
 if [ -L "$f" ] || [ ! -f "$f" ]; then
-echo "::error::$(basename "$f") is missing from the image or is not a regular file"; exit 1
+echo "::error::$(basename "$f") is missing from the linux/$arch image or is not a regular file"; exit 1
 grep -aqF "$REVISION" "$f" \
-|| { echo "::error::$(basename "$f") was not stamped with revision ${REVISION}"; exit 1; }'
+|| { echo "::error::$(basename "$f") in the linux/$arch image was not stamped with revision ${REVISION}"; exit 1; }'
 publisher_pin_guard() {
   PIN_BODY="$PIN_BODY" PIN_DOCKER="$PIN_DOCKER" PIN_FILES="$PIN_FILES" awk '
     function trim(x) { sub(/^[[:space:]]+/, "", x); sub(/[[:space:]]+$/, "", x); return x }
@@ -327,14 +327,19 @@ case "$1" in
     case "$entry" in
       *"$STUB_FAIL"*) [ -z "$STUB_FAIL" ] || exit 3;;
     esac;;
-  create) echo cid;;
-  cp) case "$2" in
+  create) # the container id names the platform it was created for, so a copy knows which child image it reads
+    plat=""; prev=""
+    for a in "$@"; do [ "$prev" = "--platform" ] && plat="$a"; prev="$a"; done
+    echo "cid-${plat#linux/}";;
+  cp) arch="${2%%:*}"; arch="${arch#cid-}"
+      # STUB_OMIT and STUB_LINK are ARCH:FILE: the file is left out of, or made a link in, that platform'"'"'s image only.
+      case "$2" in
         */.) for f in wardyn wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64; do
-               [ "$f" = "$STUB_OMIT" ] || printf '%s' "$STUB_BYTES" > "$3/$f"
+               [ "$arch:$f" = "$STUB_OMIT" ] || printf '%s' "$STUB_BYTES" > "$3/$f"
              done
              # A name made a link to another file is present but not a copied-out regular file.
-             [ -z "$STUB_LINK" ] || { rm -f "$3/$STUB_LINK"; ln -s wardyn "$3/$STUB_LINK"; };;
-        *) printf '%s' "$STUB_BYTES" > "$3";;
+             [ "${STUB_LINK%%:*}" != "$arch" ] || { rm -f "$3/${STUB_LINK#*:}"; ln -s wardyn "$3/${STUB_LINK#*:}"; };;
+        *) [ "$arch:wardynd" = "$STUB_OMIT" ] || printf '%s' "$STUB_BYTES" > "$3";;
       esac;;
 esac
 STUB
@@ -355,10 +360,17 @@ runcheck 1 "$sha" main "0.10.1+222222222" "" "branch, another commit"
 runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, a copied-out binary without the commit" "no stamp in these bytes"
 # Every file the image is built to carry must be there, each a regular file: one missing from an otherwise valid
 # set, or a link in its place, fails even though every file that is there carries the commit.
-for omitted in wardyn wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64; do
-  STUB_OMIT="$omitted" runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, $omitted missing from the copied host files"
+# The two Linux children of the index are each read, so the same holds of the arm64 child, which nothing runs, and of a
+# tag ref, which has no commit to look for but is built to carry the same files.
+for arch in amd64 arm64; do
+  for omitted in wardynd wardyn wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64; do
+    STUB_OMIT="$arch:$omitted" runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, $omitted missing from the $arch image"
+    STUB_OMIT="$arch:$omitted" runcheck 1 "" v0.4.4 "0.4.4" "" "tag, $omitted missing from the $arch image"
+  done
+  STUB_LINK="$arch:wardyn-darwin-arm64" runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, a host CLI that is a link in the $arch image"
+  STUB_LINK="$arch:wardyn-darwin-arm64" runcheck 1 "" v0.4.4 "0.4.4" "" "tag, a host CLI that is a link in the $arch image"
 done
-STUB_LINK=wardyn-darwin-arm64 runcheck 1 "$sha" main "0.10.1+111111111" "" "branch, a host CLI that is a link"
+runcheck 0 "" v0.4.4 "0.4.4" "" "tag, binaries that carry no commit are not looked for one" "no stamp in these bytes"
 runcheck 0 "" v0.4.4 "0.4.4" "" "tag, the release version"
 runcheck 1 "" v0.4.4 "0.4.4" "/usr/local/bin/wardyn" "tag, the in-container CLI fails"
 runcheck 1 "" v0.4.4 "0.4.4" "/host/wardyn" "tag, the host CLI fails"
