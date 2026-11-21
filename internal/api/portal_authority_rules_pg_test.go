@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -167,36 +168,64 @@ func uiCallerBody(field, caller string) string {
 
 const unboundPerson = "delegate:person:aaaaaaaaaaaaaaaaaaaaaaaaaa:mfrggzdf"
 
-// A launch whose inline policy or overlay names a portal person of an issuer with no binding is refused at
-// create, and a queued run whose binding was retired while it waited is refused at its start.
+// A launch, a preset or a template naming a portal person of an issuer with no binding is refused at write (422
+// delegate_person_unknown_portal). A queued reference blocks the binding's retirement, so a waiting run cannot lose
+// its binding in production; the start's own refusal is proved on an explicitly historical fixture, a binding
+// removed under a waiting run by hand, and dispatches nothing.
 func TestPortalSubjectRuling_UICallerUnboundRefusedAtCreateAndQueuedStart_PG(t *testing.T) {
 	e := newQueueEnv(t)
+	ctx := context.Background()
 	pool := e.cappedPool("Busy", 1)
-	for _, field := range []string{"inline_policy", "policy_overlay"} {
-		out, w := e.launch(e.person, pool, uiCallerBody(field, unboundPerson))
-		_ = out
-		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonDelegatePersonUnknownPortal {
-			t.Errorf("%s naming an unbound portal person = %d %s, want 422 %s", field, w.Code, w.Body, reasonDelegatePersonUnknownPortal)
+	refused := func(what string, code int, reason string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != code || errorReason(w) != reason {
+			t.Errorf("%s naming an unbound portal person = %d %s, want %d %s", what, w.Code, w.Body, code, reason)
 		}
 	}
-	b, err := e.pg.BindPortalIssuerQ(context.Background(), e.pg.Pool, "https://idp-"+uuid.NewString()+".example.com", "https://internal-"+uuid.NewString()+".example.com", "uid", "test")
+	for _, field := range []string{"inline_policy", "policy_overlay"} {
+		_, w := e.launch(e.person, pool, uiCallerBody(field, unboundPerson))
+		refused("a launch's "+field, http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal, w)
+	}
+	apps := `{"ui_apps":[{"name":"web","port":3000,"inbound":true,"callers":["user:` + unboundPerson + `"]}]}`
+	refused("a launch preset", http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal,
+		e.admin(http.MethodPut, "/api/v1/presets/unbound-callers", `{"request":{"agent":"claude-code","inline_policy":`+apps+`}}`))
+	tmpl, _ := json.Marshal(map[string]any{"scope": "person", "name": "unbound-callers",
+		"document": json.RawMessage(templateDocBody(`{"inline_policy":` + apps + `}`))})
+	refused("a run template", http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal,
+		e.call(e.person, http.MethodPost, "/api/v1/templates", string(tmpl)))
+
+	b, err := e.pg.BindPortalIssuerQ(ctx, e.pg.Pool, "https://idp-"+uuid.NewString()+".example.com", "https://internal-"+uuid.NewString()+".example.com", "uid", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	occupant := e.occupy(pool)
 	waiting := e.queuedLaunch(e.person, pool, uiCallerBody("inline_policy", types.PortalPrincipal(b.IssuerKey, "alice")))
-	err = e.pg.WriteGovernance(context.Background(), func(q store.Querier) error {
-		if err := store.LockPortalIssuerRegistry(context.Background(), q); err != nil {
-			return err
-		}
-		return e.pg.RetirePortalIssuerQ(context.Background(), q, b.IssuerKey, nil)
-	})
-	if err != nil {
-		t.Fatalf("retire the binding while the run waits: %v", err)
+	retire := func() error {
+		return e.pg.WriteGovernance(ctx, func(q store.Querier) error {
+			if err := store.LockPortalIssuerRegistry(ctx, q); err != nil {
+				return err
+			}
+			return e.pg.RetirePortalIssuerQ(ctx, q, b.IssuerKey, nil)
+		})
 	}
+	if err := retire(); !errors.Is(err, store.ErrIssuerInUse) {
+		t.Fatalf("retire a binding a waiting run names = %v, want ErrIssuerInUse (the census reads run_queue.launch)", err)
+	}
+	// Historical fixture: the binding is gone under the waiting run, which production never allows.
+	e.exec(`DELETE FROM portal_issuers WHERE issuer_key = $1`, b.IssuerKey)
+	e.runner.mu.Lock()
+	dispatched := e.runner.createCalls
+	e.runner.mu.Unlock()
 	e.free(occupant)
-	if got := e.waitFailed(waiting.ID); got.State != types.RunFailed {
-		t.Errorf("a queued run whose binding was retired = %s, want FAILED", got.State)
+	got := e.waitFailed(waiting.ID)
+	if !strings.Contains(got.StatusDetail, reasonDelegatePersonUnknownPortal) {
+		t.Errorf("a queued run whose binding is gone = %s %q, want an end naming %s", got.State, got.StatusDetail, reasonDelegatePersonUnknownPortal)
+	}
+	e.runner.mu.Lock()
+	after := e.runner.createCalls
+	e.runner.mu.Unlock()
+	if after != dispatched {
+		t.Errorf("the refused start dispatched %d sandboxes, want none", after-dispatched)
 	}
 }
 
