@@ -352,7 +352,13 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 			}()
 		}
 		close(start)
-		wg.Wait()
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s: the two registrations did not finish within 30 s", name)
+		}
 		created, refused := 0, 0
 		for _, w := range out {
 			switch {
@@ -388,18 +394,22 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = gate.Rollback(ctx) }()
+		// Registered after the gate's pool, so it runs before that pool and the server's close: on every exit
+		// the gate is released, which lets both requests finish, and both are joined.
+		var workers sync.WaitGroup
+		t.Cleanup(func() { rollbackWithin(gate); joinWithin(t, &workers, name+": the two requests") })
 		if err := store.LockPortalIssuerRegistry(ctx, gate); err != nil {
 			t.Fatal(err)
 		}
 		gatePID := backendPID(t, gate)
 		approved, direct := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		run := func(f func()) { workers.Add(1); go func() { defer workers.Done(); f() }() }
 		start := []func(){
-			func() { go func() { approved <- e.decideHeld(t, change, "approve") }() },
+			func() { run(func() { approved <- e.decideHeld(t, change, "approve") }) },
 			func() {
-				go func() {
+				run(func() {
 					direct <- e.register(t, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
-				}()
+				})
 			},
 		}
 		if !approvalFirst {
