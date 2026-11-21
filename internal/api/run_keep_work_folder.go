@@ -347,7 +347,7 @@ func (s *Server) keptWorkFolderMount(ctx context.Context, run types.AgentRun) (t
 	if err == nil {
 		mount, err = memberDriveMount(d)
 	}
-	if err != nil || d.DeleteStartedAt != nil {
+	if err != nil || d.Deleting() {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(authz.ReasonDriveNotFound)})))
 		s.failAndRevoke(ctx, run.ID, run.State, driveNotFoundMsg(id.String()))

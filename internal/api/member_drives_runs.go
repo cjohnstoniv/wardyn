@@ -54,7 +54,7 @@ func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive
 	}
 	_, oneSnapshot := s.cfg.Store.(store.HeldMemberDriveStore)
 	for _, d := range drives {
-		if d.OwnerSubject != owner || d.DeleteStartedAt != nil {
+		if d.OwnerSubject != owner || d.Deleting() {
 			continue
 		}
 		held := heldIDs[d.ID]
@@ -162,7 +162,7 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 	for id, owner := range owners {
 		if ms != nil && owner == runOwner {
 			d, err := ms.GetMemberDriveOf(ctx, runOwner, id)
-			if err == nil && d.DeleteStartedAt == nil {
+			if err == nil && !d.Deleting() {
 				continue
 			}
 		}
