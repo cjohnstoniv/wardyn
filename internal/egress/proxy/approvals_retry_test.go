@@ -267,7 +267,8 @@ func entryOf(ap *approvalClient) hostApproval {
 // armed its budget did so under a.mu, and joined or started a check before releasing it.
 func registered(ap *approvalClient) {
 	ap.mu.Lock()
-	ap.mu.Unlock() //nolint:staticcheck // the empty critical section is the barrier
+	//lint:ignore SA2001 the empty critical section is the barrier
+	ap.mu.Unlock()
 }
 
 func awaitEntered(t *testing.T, cp *retryCP, n int) {
