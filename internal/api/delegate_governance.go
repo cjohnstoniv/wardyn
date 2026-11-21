@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -332,16 +333,21 @@ type portalActivation interface {
 // portalDeploymentRefusal is every check of an issuer portal that reads the deployment: the user type still
 // exists, issuer portals are switched on, console sign-in is configured and the issuer is not its issuer. A
 // non-nil error is a failed read, not a refusal.
-func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate) (*registrationRefusal, error) {
+//
+// readType is false inside a decision transaction, where lockPortalReferences reads the type on that
+// transaction and holds it; an unlocked read here would take a second pool connection and could go stale.
+func (s *Server) portalDeploymentRefusal(ctx context.Context, d types.Delegate, readType bool) (*registrationRefusal, error) {
 	if s.cfg.OIDC != nil && isOwnClientID(d.IdPClientID, s.cfg.OIDC.ClientID()) {
 		return unprocessable(reasonDelegateClientIDIsPortal, "idp_client_id", "idp_client_id: must be the portal's own client, not this deployment's"), nil
 	}
-	known, err := s.userTypeExists(ctx, d.UserType)
-	if err != nil {
-		return nil, err
-	}
-	if !known {
-		return unprocessable(reasonDelegateUserTypeInvalid, "user_type", "user_type: no such user type"), nil
+	if readType {
+		known, err := s.userTypeExists(ctx, d.UserType)
+		if err != nil {
+			return nil, err
+		}
+		if !known {
+			return unprocessable(reasonDelegateUserTypeInvalid, "user_type", "user_type: no such user type"), nil
+		}
 	}
 	act, ok := s.cfg.Store.(portalActivation)
 	if !ok {
@@ -394,6 +400,12 @@ func (s *Server) decidePortalRegistration(ctx context.Context, q store.Querier, 
 	if err := store.LockPortalIssuerRegistry(ctx, q); err != nil {
 		return types.Delegate{}, err
 	}
+	if ref, err := lockPortalReferences(ctx, q, d); err != nil || ref != nil {
+		if ref != nil {
+			err = ref
+		}
+		return types.Delegate{}, err
+	}
 	served, err := reg.ConsoleIssuersQ(ctx, q)
 	if err != nil {
 		return types.Delegate{}, err
@@ -414,6 +426,10 @@ func (s *Server) decidePortalRegistration(ctx context.Context, q store.Querier, 
 		hits, err := store.NamespaceCensusQ(ctx, q, key)
 		if err != nil {
 			return types.Delegate{}, err
+		}
+		// The configuration this process holds is a source the tables cannot show, read on every decision.
+		for src, n := range s.configuredNamespaceCensus(key) {
+			hits[src] += n
 		}
 		if len(hits) > 0 {
 			return types.Delegate{}, refuseRegistration(http.StatusConflict, reasonDelegateNamespaceInUse, "issuer",
@@ -436,6 +452,43 @@ func (s *Server) decidePortalRegistration(ctx context.Context, q store.Querier, 
 	}
 	d.IssuerKey = binding.IssuerKey
 	return reg.CreateDelegateQ(ctx, q, d, digest)
+}
+
+// lockPortalReferences reads the two rows a portal row names, on the decision's own transaction, and holds
+// them until it commits: the pin's unit (FOR KEY SHARE) and a custom user type (FOR SHARE). The delegate row
+// has no foreign key to either, so the lock is what makes a removal that commits first refuse the decision
+// and a removal that starts later wait for it, rather than an earlier read on another connection going stale.
+// The built-in type is not a row to hold. A missing row is a refusal, not a failed read.
+func lockPortalReferences(ctx context.Context, q store.Querier, d types.Delegate) (*registrationRefusal, error) {
+	held := func(sql string, arg any) (bool, error) {
+		var one int
+		switch err := q.QueryRow(ctx, sql, arg).Scan(&one); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		return true, nil
+	}
+	if d.RunInUnder != nil {
+		ok, err := held(`SELECT 1 FROM governance_units WHERE id = $1 FOR KEY SHARE`, *d.RunInUnder)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return unprocessable(reasonDelegateRunInUnderInvalid, "run_in_under", "%s", portalUnitInvalidMsg), nil
+		}
+	}
+	if d.UserType != types.UserTypeStandard {
+		ok, err := held(`SELECT 1 FROM user_types WHERE id = $1 FOR SHARE`, d.UserType)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return unprocessable(reasonDelegateUserTypeInvalid, "user_type", "user_type: no such user type"), nil
+		}
+	}
+	return nil, nil
 }
 
 // censusSources names the stored places a census found, with their counts and never a value, in a fixed order.
@@ -477,7 +530,7 @@ func (s *Server) registerIssuerDelegate(w http.ResponseWriter, r *http.Request, 
 	}
 	d.RunInUnder = pin
 	ctx := r.Context()
-	ref, err := s.portalDeploymentRefusal(ctx, d)
+	ref, err := s.portalDeploymentRefusal(ctx, d, true)
 	if err != nil {
 		writeServerError(w, r, "register issuer portal", err)
 		return
@@ -604,8 +657,9 @@ func (s *Server) holdDelegate(w http.ResponseWriter, r *http.Request, reg portal
 
 // applyDelegateChange applies a held registration inside the decision transaction, after the live approver
 // and distinct-human checks. Every fact that can change while it is held is read again: the row's own checks
-// (the host list included), the pin's unit, the user type, the activation, the console issuer, the binding
-// and the census. A failure refuses the decision 409 with that field's reason and inserts nothing.
+// (the host list included), the activation, the console issuer, the binding
+// and the census, and, on the decision's transaction with their rows held, the pin's unit and the user
+// type (lockPortalReferences). A failure refuses the decision 409 with that field's reason and inserts nothing.
 func applyDelegateChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	var held heldDelegate
@@ -619,14 +673,7 @@ func applyDelegateChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if d.RunInUnder == nil {
 		return govApplied{}, unprocessable(reasonDelegateIssuerPinRequired, "run_in_under", "run_in_under: required").decided()
 	}
-	units, err := s.unitOutlines(ctx)
-	if err != nil {
-		return govApplied{}, err
-	}
-	if !slices.ContainsFunc(units, func(u types.GovernanceUnit) bool { return u.ID == *d.RunInUnder }) {
-		return govApplied{}, unprocessable(reasonDelegateRunInUnderInvalid, "run_in_under", "%s", portalUnitInvalidMsg).decided()
-	}
-	ref, err := s.portalDeploymentRefusal(ctx, d)
+	ref, err := s.portalDeploymentRefusal(ctx, d, false)
 	if err != nil {
 		return govApplied{}, err
 	}
