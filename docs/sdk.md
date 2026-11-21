@@ -1453,8 +1453,10 @@ reasons:
 | `delegate_admission_stale` | `PUT /admin/delegates/{id}/admission` (409): the portal's admission rule is no longer the one the change expected. |
 | `delegate_person_not_allowed` / `delegate_person_unknown_portal` | An admin-written person list (422): it gives a portal person an admin, sponsor, approver or console role, or names a portal person whose issuer no portal is registered for. |
 
-The token exchange (`POST /api/v1/token`) for an issuer portal answers with an OAuth error. Its `delegation.exchange`
-audit row carries one of these reasons:
+A refused token exchange (`POST /api/v1/token`) for an issuer portal answers the client with an OAuth error, which is
+separate from the reason its `delegation.exchange` audit row records. A successful exchange records no denial reason.
+The issuer portal adds the refusal reasons below; the `delegation.exchange` row of [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)
+lists the complete set.
 
 | Reason | Meaning |
 |---|---|
