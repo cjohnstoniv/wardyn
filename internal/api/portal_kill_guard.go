@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,25 +63,32 @@ func killWasQueued(ctx context.Context) bool {
 	return ok && g.rcpt != nil && g.rcpt.queued
 }
 
-// killReceiptOf rewrites the run.kill event of a kill made under a claimed killGuard into the occurrence's one event
-// and marks ctx as a replay: a failed attempt's row has its own id (derived from the pinned one), so the retry that
-// succeeds adds its row, while a repeat of an attempt that was recorded adds none. Other kills are unchanged.
+// killReceiptOf makes the success run.kill event of an occurrence the one event every claim of it writes: the pinned
+// id and time are its dedup key, a replay adds no second row, and the real completion time is in the row's data
+// (completed_at), since the pinned time is the first claim's. A failed attempt's row is its own event, with a fresh id
+// and time and no replay: a retry that fails differently, and the success that follows, each leave their row. Other
+// kills are unchanged.
 func killReceiptOf(ctx context.Context, ev types.AuditEvent) (context.Context, types.AuditEvent) {
 	g, ok := killGuardOf(ctx)
-	if !ok || g.rcpt == nil || g.rcpt.id == uuid.Nil {
+	if !ok || g.rcpt == nil || g.rcpt.id == uuid.Nil || ev.Outcome != "success" {
 		return ctx, ev
 	}
-	ev.ID, ev.Time = g.rcpt.id, g.rcpt.at
-	if ev.Outcome != "success" {
-		ev.ID = uuid.NewSHA1(g.rcpt.id, []byte(ev.Outcome))
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil || data == nil {
+		data = map[string]any{}
 	}
+	data["completed_at"] = ev.Time.UTC().Format(time.RFC3339Nano)
+	if raw, err := json.Marshal(data); err == nil {
+		ev.Data = raw
+	}
+	ev.ID, ev.Time = g.rcpt.id, g.rcpt.at
 	return store.WithAuditReplay(ctx), ev
 }
 
 // claimGuardedKill is claimKill for a kill made under a killGuard. It is the same claim: a kill that is not the kept
 // machine's owner's marks it for delete in the claim itself, and the transition's side effects are the generic
 // ones (claimKillTransitionWith). A queued run leaves the queue in the claim's transaction too. A run that is
-// already KILLED is claimed for repair without being written again, and not while another claim of the occurrence is
+// already KILLED is claimed for repair (its state is not written again) and not while another claim of the occurrence is
 // live (store.ErrKillHeld).
 func (s *Server) claimGuardedKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, g killGuard) (bool, store.KeptMachineDeletion, error) {
 	kill := store.RunKill{RunID: run.ID, From: run.State, ReceiptID: uuid.New(), ReceiptAt: s.cfg.Now().UTC(), ClaimID: uuid.New()}
