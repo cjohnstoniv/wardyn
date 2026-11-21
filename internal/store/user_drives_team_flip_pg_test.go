@@ -95,40 +95,59 @@ func TestPG_DriveTeamFlip_OrderedAgainstAllocation(t *testing.T) {
 				}
 			})
 		}
-		t.Run(c.label+"/edit first", func(t *testing.T) {
-			d := seed(t)
-			tx, err := pool.Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback(ctx) //nolint:errcheck // already committed on the happy path
-			if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := tx.Exec(ctx, `UPDATE user_drives SET team = $2 WHERE id = $1`, d.ID, !c.startTeam); err != nil {
-				t.Fatal(err)
-			}
-			blocked, result := parked(func() error { _, err := st.AddUserDriveGrant(ctx, grant(d), true); return err })
-			if !blocked {
-				_ = tx.Commit(ctx)
-				t.Fatal("the allocation did not wait for the edit in flight")
-			}
-			waitForPortalLock(t, "the allocation waiting on the drive row", func() bool { return backendsWaiting(t, pool, false, "FROM user_drives") > 0 })
-			if err := tx.Commit(ctx); err != nil {
-				t.Fatal(err)
-			}
-			err = result()
-			rows := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, d.ID)
-			switch {
-			case c.editFirstRefused && (!errors.Is(err, store.ErrDriveGrantTeamRule) || rows != 0):
-				t.Errorf("the allocation behind a committed flip: err = %v, %d row(s); want ErrDriveGrantTeamRule and none", err, rows)
-			case !c.editFirstRefused && (err != nil || rows != 1):
-				t.Errorf("the allocation behind a committed flip: err = %v, %d row(s); want it stored on the new mode", err, rows)
-			}
-			if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Team == c.startTeam {
-				t.Errorf("drive = %+v, %v; want the flip kept", got, err)
-			}
-		})
+		// Every writer of an allocation takes the drive's lock and judges the allocation under it: the plain additive
+		// write, the replacing write, and the tier-judged write in both of its verbs (which reach the additive and the
+		// replacing bodies after their own read of the drive).
+		for _, w := range []struct {
+			name  string
+			write func(types.UserDriveGrant) error
+		}{
+			{"AddUserDriveGrant", func(g types.UserDriveGrant) error { _, err := st.AddUserDriveGrant(ctx, g, true); return err }},
+			{"ReplaceUserDriveGrant", func(g types.UserDriveGrant) error { _, _, err := st.ReplaceUserDriveGrant(ctx, g, true); return err }},
+			{"UpsertUserDriveGrantWithinTier additional", func(g types.UserDriveGrant) error {
+				_, _, err := st.UpsertUserDriveGrantWithinTier(ctx, g, true, true)
+				return err
+			}},
+			{"UpsertUserDriveGrantWithinTier replacing", func(g types.UserDriveGrant) error {
+				_, _, err := st.UpsertUserDriveGrantWithinTier(ctx, g, true, false)
+				return err
+			}},
+		} {
+			t.Run(c.label+"/edit first/"+w.name, func(t *testing.T) {
+				d := seed(t)
+				tx, err := pool.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(ctx) //nolint:errcheck // already committed on the happy path
+				if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tx.Exec(ctx, `UPDATE user_drives SET team = $2 WHERE id = $1`, d.ID, !c.startTeam); err != nil {
+					t.Fatal(err)
+				}
+				blocked, result := parked(func() error { return w.write(grant(d)) })
+				if !blocked {
+					_ = tx.Commit(ctx)
+					t.Fatal("the allocation did not wait for the edit in flight")
+				}
+				waitForPortalLock(t, "the allocation waiting on the drive row", func() bool { return backendsWaiting(t, pool, false, "FROM user_drives") > 0 })
+				if err := tx.Commit(ctx); err != nil {
+					t.Fatal(err)
+				}
+				err = result()
+				rows := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, d.ID)
+				switch {
+				case c.editFirstRefused && (!errors.Is(err, store.ErrDriveGrantTeamRule) || rows != 0):
+					t.Errorf("the allocation behind a committed flip: err = %v, %d row(s); want ErrDriveGrantTeamRule and none", err, rows)
+				case !c.editFirstRefused && (err != nil || rows != 1):
+					t.Errorf("the allocation behind a committed flip: err = %v, %d row(s); want it stored on the new mode", err, rows)
+				}
+				if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Team == c.startTeam {
+					t.Errorf("drive = %+v, %v; want the flip kept", got, err)
+				}
+			})
+		}
 	}
 }
 
