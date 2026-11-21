@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // internalHarness is a harness whose registration names an internal address on a listed host that resolves to
@@ -173,7 +174,7 @@ func TestPortalFetch_SplitHorizonMetadataOtherHostRefused(t *testing.T) {
 	h.wantUnavailable(h.token(h.accessClaims()), portalCauseKeysOffOrigin)
 	// A request to any host outside the allowed set never leaves: no lookup, no connection.
 	h = internalHarness(t, "/oauth2/a", "/oauth2/a")
-	client := newPortalClient(h.pi.net, map[string]bool{"idp.internal.test:" + h.idp.port(): true})
+	client := newPortalClient(h.pi.net, map[string]bool{"idp.internal.test:" + h.idp.port(): true}, false)
 	for _, target := range []string{
 		"https://example.com:" + h.idp.port() + "/keys",
 		"https://other.example.org:" + h.idp.port() + "/keys",
@@ -217,7 +218,7 @@ func TestPortalFetch_PortMismatchRefused(t *testing.T) {
 	h.idp.set(func(f *fakeIdP) { f.jwksURI = "https://example.com:1234/oauth2/a/keys" })
 	h.wantUnavailable(h.token(h.accessClaims()), portalCauseKeysOffOrigin)
 	// And at the transport: the same host on another port is not the allowed authority.
-	client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true})
+	client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true}, false)
 	var out map[string]any
 	err := portalGetJSON(context.Background(), client, "https://example.com:1234/oauth2/a/keys", &out)
 	if portalFetchCause(err) != portalCauseAddressRefused {
@@ -331,7 +332,7 @@ func TestPortalFetch_ProxyEnvironmentIgnored(t *testing.T) {
 	if hit.Load() != 0 {
 		t.Fatal("a request went to the proxy named by the environment")
 	}
-	client := newPortalClient(h.pi.net, map[string]bool{"example.com:1": true})
+	client := newPortalClient(h.pi.net, map[string]bool{"example.com:1": true}, false)
 	if client.Transport.(*portalTransport).base.Proxy != nil {
 		t.Fatal("the portal transport has a proxy function")
 	}
@@ -358,7 +359,7 @@ func TestPortalFetch_BodyCapAndNoBodyInErrors(t *testing.T) {
 			h.idp.set(func(f *fakeIdP) {
 				f.override = func(w http.ResponseWriter, r *http.Request) bool { c.handler(w); return true }
 			})
-			client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true})
+			client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true}, false)
 			var out struct{ Issuer string }
 			err := portalGetJSON(context.Background(), client, h.reg.Issuer+"/x", &out)
 			if err == nil || !strings.Contains(err.Error(), c.detail) || strings.Contains(err.Error(), secret) {
@@ -388,7 +389,7 @@ func TestPortalFetch_EmbeddedIPv4FormsRefused(t *testing.T) {
 		if listed {
 			host = "idp.internal.test"
 		}
-		client := newPortalClient(h.pi.net, map[string]bool{host + ":" + h.idp.port(): true})
+		client := newPortalClient(h.pi.net, map[string]bool{host + ":" + h.idp.port(): true}, listed)
 		for _, s := range refused {
 			if listed && s == "::ffff:10.0.0.1" {
 				continue // a listed internal host may sit on private space, mapped or not
@@ -406,7 +407,7 @@ func TestPortalFetch_EmbeddedIPv4FormsRefused(t *testing.T) {
 		t.Fatalf("%d connections for refused address forms: %v", h.dialCount(), h.dials)
 	}
 	// The control: a public IPv4-mapped address is dialled.
-	client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true})
+	client := newPortalClient(h.pi.net, map[string]bool{"example.com:" + h.idp.port(): true}, false)
 	h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP("::ffff:8.8.8.8")} })
 	var out map[string]any
 	_ = portalGetJSON(context.Background(), client, "https://example.com:"+h.idp.port()+"/x", &out)
@@ -431,12 +432,87 @@ func TestPortalFetch_InternalCAOnlyForListedHost(t *testing.T) {
 	pub.wantUnavailable(pub.token(pub.accessClaims()), portalCauseUnreachable)
 	unlisted := internalHarness(t, "/oauth2/a", "/oauth2/a", noPublicTrust, func(o *PortalIssuersOptions) { o.InternalHosts = nil })
 	unlisted.setLookup(func(string) []net.IP { return []net.IP{portalPublicIP} })
-	unlisted.wantUnavailable(unlisted.token(unlisted.accessClaims()), portalCauseUnreachable)
+	unlisted.wantUnavailable(unlisted.token(unlisted.accessClaims()), portalCauseAddressRefused)
 	// A bundle with no certificate is refused at construction.
 	if _, err := NewPortalIssuers(PortalIssuersOptions{Reserved: func(string) bool { return false }, InternalCAPEM: []byte("not pem")}); err == nil {
 		t.Fatal("a bundle holding no certificate was accepted")
 	}
 	if _, err := NewPortalIssuers(PortalIssuersOptions{}); err == nil {
 		t.Fatal("a verifier set with no reserved-name check was built")
+	}
+}
+
+func TestPortalFetch_PublicIssuerOnInternalListStillRefusesPrivate(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {})
+	h.rebuild(func(o *PortalIssuersOptions) { o.InternalHosts = []string{"example.com:" + h.idp.port()} })
+	h.setLookup(func(string) []net.IP { return []net.IP{net.ParseIP("10.0.0.5")} })
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+	if h.dialCount() != 0 {
+		t.Fatalf("a public issuer was dialled at private space because its host is on the internal list: %v", h.dials)
+	}
+	// The same host listed and chosen as the registration's internal address is the exception.
+	h.reg.InternalIssuer = h.reg.Issuer
+	h.mustAdmit(h.token(h.accessClaims()))
+	if h.dialCount() == 0 {
+		t.Fatal("the control did not dial")
+	}
+}
+
+func TestPortalFetch_UnlistedInternalAddressRefusedBeforeResolve(t *testing.T) {
+	for name, hosts := range map[string][]string{"empty list": nil, "another host": {"other.example.org:443"}, "another port": {"idp.internal.test:1"}} {
+		t.Run(name, func(t *testing.T) {
+			for _, ip := range []net.IP{net.ParseIP("10.1.2.3"), portalPublicIP} { // private, and one that resolves publicly
+				h := internalHarness(t, "/oauth2/a", "/oauth2/a", func(o *PortalIssuersOptions) { o.InternalHosts = hosts })
+				h.setLookup(func(string) []net.IP { return []net.IP{ip} })
+				h.wantUnavailable(h.token(h.accessClaims()), portalCauseAddressRefused)
+				if h.lookups != 0 || h.dialCount() != 0 {
+					t.Fatalf("%v: %d lookups, %d dials for an unlisted internal address", ip, h.lookups, h.dialCount())
+				}
+			}
+		})
+	}
+}
+
+func TestPortalFetch_StalledHandshakeClosesSocket(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {
+		o.handshakeTimeout = 300 * time.Millisecond
+		o.dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, ln.Addr().String())
+		}
+	})
+	// The caller gives up long before the handshake deadline; the socket must still be closed by Wardyn.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, r := h.pi.VerifyDetail(ctx, h.reg, h.token(h.accessClaims()), PortalTokenTypeAccess)
+	if r.Reason != PortalIssuerUnavailable {
+		t.Fatalf("refusal = %+v", r)
+	}
+	srv := <-accepted
+	defer srv.Close()
+	_ = srv.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 4096)
+	for {
+		if _, err := srv.Read(buf); err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				t.Fatal("the stalled connection was still open 3 s after the handshake deadline")
+			}
+			break // the client hello, then EOF or reset: the socket was closed
+		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the socket closed after %v, want about the 300 ms deadline", d)
 	}
 }

@@ -42,6 +42,9 @@ type portalBox struct {
 	fault   *portalKeyFault
 	payload []byte // set only after the signature verified
 	typ     string // the verified token's header typ
+	kid     string // the key the signature verified under, and where it came from
+	key     jose.JSONWebKey
+	gen     uint64
 }
 
 type portalBoxKey struct{}
@@ -64,6 +67,9 @@ type portalKeySet struct {
 	clock func() time.Time
 	fetch func(ctx context.Context) ([]jose.JSONWebKey, error)
 
+	// afterSelect is a test hook, called once a key is selected and before the signature is checked.
+	afterSelect func()
+
 	fetchMu sync.Mutex // one fetch at a time; a waiter takes the answer of the fetch it waited for
 
 	mu        sync.RWMutex
@@ -72,6 +78,7 @@ type portalKeySet struct {
 	okAt      time.Time       // set only by a successful fetch
 	attemptAt time.Time       // the last attempt, success or not: the cooldown runs from it
 	seq       uint64          // fetches completed
+	gen       uint64          // bumped each time the key map is replaced or dropped; the maps are never edited in place
 	lastErr   error
 	failed    bool // the last fetch failed; until one succeeds nothing verifies
 }
@@ -110,6 +117,7 @@ func (ks *portalKeySet) fetchLocked(ctx context.Context) error {
 		}
 	}
 	ks.keys, ks.removed, ks.okAt, ks.lastErr, ks.failed = next, removed, now, nil, false
+	ks.gen++
 	return nil
 }
 
@@ -118,6 +126,39 @@ func (ks *portalKeySet) drop() {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	ks.keys, ks.removed, ks.okAt, ks.failed, ks.lastErr = nil, nil, time.Time{}, false, nil
+	ks.gen++
+}
+
+// portalKeyCheck is the answer of recheck.
+type portalKeyCheck int
+
+const (
+	portalKeyStillGood portalKeyCheck = iota
+	portalKeyUnhealthy
+	portalKeyWithdrawn
+)
+
+// recheck is the success-point test of an exchange that selected key sel (kid) from generation gen: the key set
+// must not have failed since, and if the key map was replaced since, the same key must still be in it.
+func (ks *portalKeySet) recheck(kid string, sel jose.JSONWebKey, gen uint64) portalKeyCheck {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	if ks.failed {
+		return portalKeyUnhealthy
+	}
+	if ks.gen == gen {
+		return portalKeyStillGood
+	}
+	cur, ok := ks.keys[kid]
+	if !ok {
+		return portalKeyWithdrawn
+	}
+	a, aok := cur.Key.(*rsa.PublicKey)
+	b, bok := sel.Key.(*rsa.PublicKey)
+	if !aok || !bok || !a.Equal(b) {
+		return portalKeyWithdrawn
+	}
+	return portalKeyStillGood
 }
 
 func (ks *portalKeySet) state() (okAt, attemptAt time.Time, failed bool) {
@@ -129,6 +170,7 @@ func (ks *portalKeySet) state() (okAt, attemptAt time.Time, failed bool) {
 // portalKeyLookup says what a lookup found.
 type portalKeyLookup struct {
 	key   jose.JSONWebKey
+	gen   uint64 // the generation of the key map the key was taken from
 	found bool
 	fault *portalKeyFault
 }
@@ -137,12 +179,12 @@ type portalKeyLookup struct {
 // cooldown allows. A kid a successful fetch removed is refused at once, inside the cooldown too.
 func (ks *portalKeySet) lookup(ctx context.Context, kid string) portalKeyLookup {
 	ks.mu.RLock()
-	seq0 := ks.seq
+	seq0, gen := ks.seq, ks.gen
 	k, ok := ks.keys[kid]
 	gone := ks.removed[kid]
 	ks.mu.RUnlock()
 	if ok {
-		return portalKeyLookup{key: k, found: true}
+		return portalKeyLookup{key: k, gen: gen, found: true}
 	}
 	if gone || kid == "" {
 		return portalKeyLookup{}
@@ -152,10 +194,10 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string) portalKeyLookup 
 	ks.mu.RLock()
 	k, ok = ks.keys[kid]
 	gone = ks.removed[kid]
-	seq, lastErr, attemptAt := ks.seq, ks.lastErr, ks.attemptAt
+	seq, lastErr, attemptAt, gen := ks.seq, ks.lastErr, ks.attemptAt, ks.gen
 	ks.mu.RUnlock()
 	if ok {
-		return portalKeyLookup{key: k, found: true}
+		return portalKeyLookup{key: k, gen: gen, found: true}
 	}
 	if gone {
 		return portalKeyLookup{}
@@ -175,8 +217,9 @@ func (ks *portalKeySet) lookup(ctx context.Context, kid string) portalKeyLookup 
 	}
 	ks.mu.RLock()
 	k, ok = ks.keys[kid]
+	gen = ks.gen
 	ks.mu.RUnlock()
-	return portalKeyLookup{key: k, found: ok}
+	return portalKeyLookup{key: k, gen: gen, found: ok}
 }
 
 // VerifySignature implements the go-oidc key set interface for RS256 tokens.
@@ -195,11 +238,14 @@ func (ks *portalKeySet) VerifySignature(ctx context.Context, raw string) ([]byte
 	if !got.found {
 		return nil, errPortalBadToken
 	}
+	if ks.afterSelect != nil {
+		ks.afterSelect()
+	}
 	payload, err := jws.Verify(got.key.Key)
 	if err != nil {
 		return nil, errPortalBadToken
 	}
-	box.payload = payload
+	box.payload, box.kid, box.key, box.gen = payload, hdr.KeyID, got.key, got.gen
 	box.typ, _ = hdr.ExtraHeaders[jose.HeaderType].(string)
 	return payload, nil
 }

@@ -286,3 +286,84 @@ func TestPortalKeySet_RemovedVersusNeverSeenInCooldown(t *testing.T) {
 	h.wantRefusal(h.kidToken("k8", 1), SubjectTokenInvalid)
 	h.wantKeyHits(keys + 1)
 }
+
+// holdExchange starts an exchange for tok, holds it right after its key is selected, runs during, then lets it
+// finish and returns its refusal. It uses a hook and channels, never a sleep.
+func holdExchange(t *testing.T, h *portalHarness, tok string, during func()) PortalRefusal {
+	t.Helper()
+	v, err := h.pi.verifierFor(h.reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	v.ks.afterSelect = func() {
+		once.Do(func() {
+			close(selected)
+			<-resume
+		})
+	}
+	done := make(chan PortalRefusal, 1)
+	go func() {
+		_, r := h.verify(tok)
+		done <- r
+	}()
+	<-selected
+	during()
+	close(resume)
+	return <-done
+}
+
+func TestPortalKeySet_FailureDuringExchangeRefuses(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	warmPortal(h)
+	tok := h.token(h.accessClaims())
+	r := holdExchange(t, h, tok, func() {
+		// A refresh fails while the exchange holds its selected key: another request meets the failure.
+		h.clock.Advance(time.Hour)
+		h.idp.set(func(f *fakeIdP) { f.discStatus = 500 })
+		h.wantUnavailable(h.token(h.accessClaims()), portalCauseUnreachable)
+	})
+	if r.Reason != PortalIssuerUnavailable || r.Class != PortalRefusedUnavailable || r.Cause != portalCauseIssuerDown {
+		t.Fatalf("the exchange that held its key across a failed refresh got %+v, want a 503", r)
+	}
+	if r.RetryAfter <= 0 || r.RetryAfter > portalKeyCooldown {
+		t.Fatalf("Retry-After = %v, want the rest of the retry interval", r.RetryAfter)
+	}
+	// A key fetch that fails (an unknown kid) closes the verifier for a held exchange the same way.
+	h2 := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	warmPortal(h2)
+	r = holdExchange(t, h2, h2.token(h2.accessClaims()), func() {
+		h2.clock.Advance(portalKeyCooldown + time.Second)
+		h2.idp.set(func(f *fakeIdP) { f.keyStatus = 500 })
+		h2.wantUnavailable(h2.kidToken("k9", 1), portalCauseKeysUnreachable)
+	})
+	if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseIssuerDown {
+		t.Fatalf("after a failed key fetch the held exchange got %+v", r)
+	}
+}
+
+func TestPortalKeySet_KeyRemovedDuringExchangeRefuses(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	h.idp.publish(t, "k2", 1)
+	warmPortal(h)
+	r := holdExchange(t, h, h.kidToken("k2", 1), func() {
+		// A successful fetch withdraws the held exchange's kid.
+		h.idp.unpublish("k2")
+		h.clock.Advance(portalKeyCooldown + time.Second)
+		h.wantRefusal(h.kidToken("k9", 1), SubjectTokenInvalid)
+	})
+	if r.Reason != SubjectTokenInvalid || r.Class != PortalRefusedToken {
+		t.Fatalf("the exchange whose key was withdrawn got %+v, want a refusal as for a removed key", r)
+	}
+	// Control: a successful fetch that keeps the same key does not disturb a held exchange.
+	h2 := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	warmPortal(h2)
+	r = holdExchange(t, h2, h2.token(h2.accessClaims()), func() {
+		h2.clock.Advance(portalKeyCooldown + time.Second)
+		h2.wantRefusal(h2.kidToken("k9", 1), SubjectTokenInvalid) // a fetch that replaces the map, k1 kept
+	})
+	if !r.OK() {
+		t.Fatalf("a refresh that kept the key refused the held exchange: %+v", r)
+	}
+}

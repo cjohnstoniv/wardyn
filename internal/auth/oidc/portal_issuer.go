@@ -110,10 +110,11 @@ type PortalIssuersOptions struct {
 	// InternalCAPEM is an optional CA bundle trusted for the listed hosts only, on top of the system roots.
 	InternalCAPEM []byte
 
-	clock  func() time.Time
-	roots  *x509.CertPool
-	lookup func(ctx context.Context, host string) ([]net.IP, error)
-	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
+	clock            func() time.Time
+	handshakeTimeout time.Duration
+	roots            *x509.CertPool
+	lookup           func(ctx context.Context, host string) ([]net.IP, error)
+	dial             func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // PortalIssuers verifies subject tokens for issuer portals, one cached verifier per (issuer, internal address).
@@ -135,7 +136,7 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	pn := &portalNet{internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial}
+	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial}
 	for _, h := range opts.InternalHosts {
 		if a := portalListedAuthority(h); a != "" {
 			pn.internalHosts[a] = true
@@ -219,12 +220,22 @@ func (p *PortalIssuers) VerifyDetail(ctx context.Context, reg PortalRegistration
 	if err != nil {
 		return PortalSubject{}, verifyFailure(box, err)
 	}
+	// A refresh can have failed, or withdrawn the key this token was verified under, since the health check
+	// above: look again before anything is admitted.
+	if refusal := v.recheck(box); refusal.Reason != "" {
+		return PortalSubject{}, refusal
+	}
 	// go-oidc lets one non-identical spelling of an issuer through; Wardyn compares the bytes.
 	if tok.Issuer != reg.Issuer {
 		return PortalSubject{}, tokenRefusal(SubjectTokenInvalid)
 	}
 	var claims portalClaims
 	if tok.Claims(&claims) != nil || claims == nil {
+		return PortalSubject{}, tokenRefusal(SubjectTokenInvalid)
+	}
+	// The library fills Issuer by Go's struct decoding, which also matches a member spelled "ISS" or "Iss". The
+	// signed claim is the exact member "iss", read from the verified payload's own map.
+	if iss, ok := claims.str("iss"); !ok || iss != reg.Issuer {
 		return PortalSubject{}, tokenRefusal(SubjectTokenInvalid)
 	}
 	return p.checkVerified(reg, claims, box.typ)
@@ -339,14 +350,19 @@ type portalVerifier struct {
 	discFailed bool
 	attemptAt  time.Time
 	standing   string // the cause of a build that failed or of a document that was dropped
+
+	// down is the cause the verifier is closed under, nil while it is healthy. A refresh sets it on every
+	// outcome, so an exchange already in flight can read it without waiting for the refresh.
+	down        atomic.Pointer[string]
+	attemptNano atomic.Int64 // unix nanoseconds of the last refresh attempt, for Retry-After
 }
 
 func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *portalNet) (*portalVerifier, error) {
-	allowed, err := portalAllowedAuthorities(issuer, internal)
+	allowed, private, err := portalAllowedAuthorities(issuer, internal, pn)
 	if err != nil {
 		return nil, err
 	}
-	v := &portalVerifier{issuer: issuer, internal: internal, clock: clock, client: newPortalClient(pn, allowed)}
+	v := &portalVerifier{issuer: issuer, internal: internal, clock: clock, client: newPortalClient(pn, allowed, private)}
 	v.ks = newPortalKeySet(clock, func(ctx context.Context) ([]jose.JSONWebKey, error) {
 		u := v.keysURL.Load()
 		if u == nil {
@@ -390,6 +406,7 @@ func (v *portalVerifier) prepare(ctx context.Context) string {
 // the last good result but leaves the verifier closed until a fetch succeeds.
 func (v *portalVerifier) refresh(ctx context.Context, now time.Time) string {
 	v.attemptAt = now
+	v.attemptNano.Store(now.UnixNano())
 	disc, err := portalDiscover(ctx, v.client, v.issuer, v.internal)
 	if err != nil {
 		cause := portalFetchCause(err)
@@ -399,18 +416,51 @@ func (v *portalVerifier) refresh(ctx context.Context, now time.Time) string {
 			if v.disc == nil {
 				v.standing = cause
 			}
+			v.setDown(portalCauseIssuerDown)
 			return cause
 		}
 		v.disc, v.discFailed, v.standing = nil, false, cause
 		v.keysURL.Store(nil)
 		v.ks.drop()
+		v.setDown(cause)
 		return cause
 	}
 	v.disc, v.discOKAt, v.discFailed, v.standing = &disc, now, false, ""
 	v.keysURL.Store(&disc.fetchURL)
 	if err := v.ks.refresh(ctx); err != nil {
 		slog.Warn("portal issuer: key refresh failed", "issuer", v.issuer, "cause", portalFetchCause(err))
+		v.setDown(portalCauseIssuerDown)
 		return portalCauseKeysUnreachable
 	}
+	v.down.Store(nil)
 	return ""
+}
+
+func (v *portalVerifier) setDown(cause string) { v.down.Store(&cause) }
+
+// recheck is the success-point test: it reads the current health and key map again, without waiting for a
+// refresh, and refuses a token that was verified under a state that has since failed or lost the key. An
+// outage is the same 503 as a refused-at-the-door token, with the rest of the retry interval as Retry-After; a
+// key a successful refresh withdrew is refused as a removed key is, and nothing is fetched early.
+func (v *portalVerifier) recheck(box *portalBox) PortalRefusal {
+	cause := ""
+	if c := v.down.Load(); c != nil {
+		cause = *c
+	} else {
+		switch v.ks.recheck(box.kid, box.key, box.gen) {
+		case portalKeyUnhealthy:
+			cause = portalCauseIssuerDown
+		case portalKeyWithdrawn:
+			return tokenRefusal(SubjectTokenInvalid)
+		}
+	}
+	if cause == "" {
+		return PortalRefusal{}
+	}
+	last := time.Unix(0, v.attemptNano.Load())
+	if _, ksAttempt, _ := v.ks.state(); ksAttempt.After(last) {
+		last = ksAttempt
+	}
+	wait := max(last.Add(portalKeyCooldown).Sub(v.clock()), 0)
+	return PortalRefusal{Reason: PortalIssuerUnavailable, Cause: cause, Class: PortalRefusedUnavailable, RetryAfter: wait}
 }

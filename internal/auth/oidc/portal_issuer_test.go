@@ -6,6 +6,7 @@ package oidc
 import (
 	"crypto/sha256"
 	"encoding/base32"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -283,4 +284,27 @@ func TestPortalVerifier_RefreshToOffOriginDropsVerifier(t *testing.T) {
 	h.idp.set(func(f *fakeIdP) { f.jwksURI = h.reg.Issuer + "/keys" })
 	h.clock.Advance(portalKeyCooldown)
 	h.mustAdmit(tok())
+}
+
+func TestPortalVerifier_IssRequiresExactMember(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	now := h.clock.Now()
+	body := func(issMembers string) []byte {
+		return []byte(fmt.Sprintf(`{%s,"sub":"alice","uid":"00u1abcd","cid":"client-1","aud":"api://wardyn","scp":["wardyn.run"],"iat":%d,"exp":%d}`,
+			issMembers, now.Unix(), now.Add(10*time.Minute).Unix()))
+	}
+	iss := h.reg.Issuer
+	for name, members := range map[string]string{
+		"only ISS names the issuer":          fmt.Sprintf(`"ISS":%q`, iss),
+		"only Iss names the issuer":          fmt.Sprintf(`"Iss":%q`, iss),
+		"iss elsewhere, Iss here (Iss last)": fmt.Sprintf(`"iss":"https://other.example.org","Iss":%q`, iss),
+		"ISS here first, iss elsewhere":      fmt.Sprintf(`"ISS":%q,"iss":"https://other.example.org"`, iss),
+		"iss is not a string":                fmt.Sprintf(`"iss":[%q],"Iss":%q`, iss, iss),
+		"no issuer member at all":            `"x":1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h.wantRefusal(h.mintRaw("k1", 0, body(members), nil), SubjectTokenInvalid)
+		})
+	}
+	h.mustAdmit(h.mintRaw("k1", 0, body(fmt.Sprintf(`"iss":%q`, iss)), nil))
 }

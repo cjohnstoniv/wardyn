@@ -115,22 +115,26 @@ func portalAddressRefused(ip net.IP, internalHost bool) bool {
 
 // portalNet carries the pieces a fetch layer needs from its operator and, in tests, its seams.
 type portalNet struct {
-	internalHosts map[string]bool // listed internal authorities
-	internalCA    *x509.CertPool  // system roots plus the operator's bundle, for listed hosts only
-	roots         *x509.CertPool  // system roots; nil means the platform's
-	lookup        func(ctx context.Context, host string) ([]net.IP, error)
-	dial          func(ctx context.Context, network, addr string) (net.Conn, error)
+	handshakeTimeout time.Duration   // bounds resolution, connect and TLS handshake together; 0 means 10 s
+	internalHosts    map[string]bool // listed internal authorities
+	internalCA       *x509.CertPool  // system roots plus the operator's bundle, for listed hosts only
+	roots            *x509.CertPool  // system roots; nil means the platform's
+	lookup           func(ctx context.Context, host string) ([]net.IP, error)
+	dial             func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // portalTransport is the single transport of one verifier.
 type portalTransport struct {
 	allowed map[string]bool
+	// private says the allowed authority is this registration's own internal address, which the operator listed:
+	// the only case a private address may be dialled. A public issuer never has it, listed host or not.
+	private bool
 	net     *portalNet
 	base    *http.Transport
 }
 
-func newPortalClient(pn *portalNet, allowed map[string]bool) *http.Client {
-	pt := &portalTransport{allowed: allowed, net: pn}
+func newPortalClient(pn *portalNet, allowed map[string]bool, private bool) *http.Client {
+	pt := &portalTransport{allowed: allowed, private: private, net: pn}
 	pt.base = &http.Transport{
 		Proxy:                  nil, // proxy environment variables never pick the destination
 		DialTLSContext:         pt.dialTLS,
@@ -168,7 +172,15 @@ func (pt *portalTransport) dialTLS(ctx context.Context, network, addr string) (n
 	if !pt.allowed[authority] {
 		return nil, &portalFetchError{cause: portalCauseAddressRefused, detail: "destination not allowed"}
 	}
-	internal := pt.net.internalHosts[authority]
+	internal := pt.private
+	timeout := pt.net.handshakeTimeout
+	if timeout <= 0 {
+		timeout = portalFetchTimeout
+	}
+	// One deadline covers resolution, connect and handshake: net/http does not apply its own to a custom TLS dial
+	// and stops waiting for the dial when the request ends.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	ips, err := pt.net.resolve(ctx, host)
 	if err != nil || len(ips) == 0 {
 		return nil, &portalFetchError{cause: portalCauseUnreachable, detail: "name not resolved"}
@@ -190,11 +202,13 @@ func (pt *portalTransport) dialTLS(ctx context.Context, network, addr string) (n
 	if internal && pt.net.internalCA != nil {
 		roots = pt.net.internalCA
 	}
+	_ = raw.SetDeadline(time.Now().Add(timeout))
 	conn := tls.Client(raw, &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
 	if err := conn.HandshakeContext(ctx); err != nil {
 		_ = raw.Close()
 		return nil, &portalFetchError{cause: portalCauseUnreachable, detail: "tls handshake failed"}
 	}
+	_ = raw.SetDeadline(time.Time{})
 	return conn, nil
 }
 
@@ -299,15 +313,21 @@ func portalDiscover(ctx context.Context, client *http.Client, issuer, internalIs
 }
 
 // portalAllowedAuthorities is the set of destinations a verifier may reach: the issuer's authority, or with an
-// internal address, that authority only.
-func portalAllowedAuthorities(issuer, internalIssuer string) (map[string]bool, error) {
+// internal address, that authority only. The second result says private addresses may be dialled there, which
+// holds only for a registration that selected an internal address whose exact authority is on the operator's
+// list. An internal address that is not listed gets an empty set, so nothing is resolved or dialled for it.
+func portalAllowedAuthorities(issuer, internalIssuer string, pn *portalNet) (map[string]bool, bool, error) {
 	raw := issuer
 	if internalIssuer != "" {
 		raw = internalIssuer
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-		return nil, &portalFetchError{cause: portalCauseAddressRefused, detail: "not a https url"}
+		return nil, false, &portalFetchError{cause: portalCauseAddressRefused, detail: "not a https url"}
 	}
-	return map[string]bool{portalAuthority(u): true}, nil
+	authority := portalAuthority(u)
+	if internalIssuer != "" && !pn.internalHosts[authority] {
+		return map[string]bool{}, false, nil
+	}
+	return map[string]bool{authority: true}, internalIssuer != "", nil
 }

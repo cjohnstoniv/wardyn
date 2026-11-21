@@ -327,6 +327,13 @@ func (h *portalHarness) idRegistration() PortalRegistration {
 // mint signs claims with key index idx under kid, with the given extra header entries.
 func (h *portalHarness) mint(kid string, idx int, claims map[string]any, hdr map[jose.HeaderKey]any) string {
 	h.t.Helper()
+	payload, _ := json.Marshal(claims)
+	return h.mintRaw(kid, idx, payload, hdr)
+}
+
+// mintRaw signs a payload as given, so member order and spelling are the test's.
+func (h *portalHarness) mintRaw(kid string, idx int, payload []byte, hdr map[jose.HeaderKey]any) string {
+	h.t.Helper()
 	keys := portalTestKeys(h.t)
 	opts := &jose.SignerOptions{}
 	for k, v := range hdr {
@@ -336,7 +343,6 @@ func (h *portalHarness) mint(kid string, idx int, claims map[string]any, hdr map
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	payload, _ := json.Marshal(claims)
 	obj, err := signer.Sign(payload)
 	if err != nil {
 		h.t.Fatal(err)
