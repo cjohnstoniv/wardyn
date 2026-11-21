@@ -16,4 +16,3 @@ ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_claimed_at TIMESTAMPT
 -- kill's repair.
 ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_claim_id UUID;
 ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_from TEXT;
-
