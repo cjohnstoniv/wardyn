@@ -584,6 +584,26 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		}
 	}
 
+	// refusedRow checks a refused approval wrote one governance.change.approve failure row for the change, with the
+	// class "refused".
+	refusedRow := func(t *testing.T, h held) {
+		t.Helper()
+		var got []string
+		for _, ev := range e.rows("governance.change.approve") {
+			if ev.Target != h.change {
+				continue
+			}
+			var d struct {
+				Error string `json:"error"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			got = append(got, ev.Outcome+"/"+d.Error)
+		}
+		if len(got) != 1 || got[0] != "failure/refused" {
+			t.Errorf("approve rows for the refused approval = %v, want [failure/refused]", got)
+		}
+	}
+
 	t.Run("pending", func(t *testing.T) {
 		h := propose(t, map[string]any{"required_claim": map[string]string{"claim": "tenant", "value": "prod"}})
 		unusable(t, h, types.GovernanceChangePending)
@@ -658,6 +678,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateNamespaceInUse {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateNamespaceInUse)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("pin unit deleted", func(t *testing.T) {
@@ -672,6 +693,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateRunInUnderInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateRunInUnderInvalid)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("user type deleted", func(t *testing.T) {
@@ -686,6 +708,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateUserTypeInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateUserTypeInvalid)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("internal host delisted", func(t *testing.T) {
@@ -694,6 +717,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateInternalIssuerNotListed {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateInternalIssuerNotListed)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("approved by a distinct super admin", func(t *testing.T) {

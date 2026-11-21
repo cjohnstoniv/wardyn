@@ -82,11 +82,11 @@ func (e *registrationRefusal) write(w http.ResponseWriter) {
 }
 
 // decided is the refusal as a decision answers it: 409, since the request was valid when it was proposed and
-// the world has changed.
+// the world has changed. A refused approval records its failure row with the class "refused".
 func (e *registrationRefusal) decided() error {
 	c := *e
 	c.status = http.StatusConflict
-	return &govRefusal{why: c.reason, write: func(w http.ResponseWriter, _ *http.Request) { c.write(w) }}
+	return &govRefusal{why: c.reason, failure: "refused", write: func(w http.ResponseWriter, _ *http.Request) { c.write(w) }}
 }
 
 // registrationRefusalOf is the refusal err carries, if it carries one.
