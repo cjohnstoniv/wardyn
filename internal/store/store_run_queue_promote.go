@@ -824,27 +824,27 @@ func (s PG) ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, 
 }
 
 // cancelPoolQueue ends every run waiting for poolID as KILLED with the removal reason, deleting the
-// queue rows with them, inside the caller's transaction, and returns the run ids. The pool delete runs
-// it under the pool row's lock, so no enqueue can add a run behind it.
-func cancelPoolQueue(ctx context.Context, q Querier, poolID uuid.UUID, detail, hint string) ([]uuid.UUID, error) {
+// queue rows with them, inside the caller's transaction, and returns each run with the time it queued.
+// The pool delete runs it under the pool row's lock, so no enqueue can add a run behind it.
+func cancelPoolQueue(ctx context.Context, q Querier, poolID uuid.UUID, detail, hint string) ([]CancelledRun, error) {
 	rows, err := q.Query(ctx, `
 		WITH moved AS (
-			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
-			WHERE state=$5 AND id IN (SELECT run_id FROM run_queue WHERE pool_id=$1) RETURNING id),
+			UPDATE agent_runs a SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
+			FROM run_queue rq WHERE rq.pool_id=$1 AND a.id=rq.run_id AND a.state=$5 RETURNING a.id, rq.queued_at),
 		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id)
-		SELECT id FROM moved`,
+		SELECT id, queued_at FROM moved`,
 		poolID, string(types.RunKilled), detail, hint, string(types.RunQueued))
 	if err != nil {
 		return nil, fmt.Errorf("store: cancel pool queue: %w", err)
 	}
 	defer rows.Close()
-	var ids []uuid.UUID
+	var out []CancelledRun
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var c CancelledRun
+		if err := rows.Scan(&c.ID, &c.QueuedAt); err != nil {
 			return nil, fmt.Errorf("store: cancel pool queue: %w", err)
 		}
-		ids = append(ids, id)
+		out = append(out, c)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }

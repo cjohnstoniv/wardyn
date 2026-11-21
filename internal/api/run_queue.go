@@ -639,10 +639,12 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 }
 
 // auditPoolRemovalCancels records the runs a pool's removal ended while they waited, as the system.
-func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
-	for _, id := range ids {
+func (s *Server) auditPoolRemovalCancels(ctx context.Context, cancelled []store.CancelledRun) {
+	now := s.cfg.Now() // queued_at is a server's stamp, so a server's clock reads the wait, as killQueuedTail does
+	for _, c := range cancelled {
+		id := c.ID
 		s.metrics.runTerminal(types.RunKilled)
-		s.metrics.queueWait(queueOutcomeCancelled, 0)
+		s.metrics.queueWait(queueOutcomeCancelled, max(0, now.Sub(c.QueuedAt)))
 		s.runEvents.moved(id, types.RunQueued, types.RunKilled)
 		s.recordAudit(ctx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.kill", id.String(), "success",
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
