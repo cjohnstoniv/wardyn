@@ -81,6 +81,7 @@ export const SERVICE_PANEL = {
   DISAGREE_SANDBOX_FAILS: (port: number) => `The sandbox says the service is unhealthy, but port ${port} answers Wardyn's check. The lease is not renewed while the two disagree.`,
   LEASE_BOTH: (ends: string) => `Renewed while both checks say healthy or starting · ends ${ends} if renewal stops`,
   LEASE_NOT_NOW: (ends: string) => `Not renewed now · ends ${ends}`,
+  LEASE_NO_RENEWAL: (ends: string) => `Ends ${ends} · not renewed: no renewal length is set for this run`,
   FOOTNOTE_PROBE: "Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.",
 } as const;
 
@@ -122,6 +123,15 @@ export function shownProbeHealth(run: ServiceRunTimes & Pick<AgentRun, "service"
   if (!probeOn(run.service)) return undefined;
   const p = run.service_status?.probe;
   return p ? worseHealth(p.health, undefined) : missingHealth(run, now);
+}
+
+/**
+ * Whether the run captured a renewal length: Go's planServiceRenewal declines when both the longest end ahead and
+ * the default end its governance settings gave it are zero, whatever the health. A run response with no run_limits
+ * carries none.
+ */
+export function serviceRenewalLength(run: Pick<AgentRun, "run_limits">): boolean {
+  return !!(run.run_limits?.max_end_ahead_sec || run.run_limits?.default_end_sec);
 }
 
 /**

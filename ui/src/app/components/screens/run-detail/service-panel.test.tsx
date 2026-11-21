@@ -5,7 +5,7 @@
 
 // Mock r15 T1-c: every state the Service panel can show, in the mock's words.
 import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { RunDetail, RunService, RunServiceProbe, RunServiceStatus } from "../../../lib/types";
 import { SERVICE_PANEL as T } from "../../wardyn/copy/run-service";
 import { ServicePanel } from "./service-panel";
@@ -16,12 +16,14 @@ const NOW = Date.parse("2020-10-29T12:00:00Z");
 const ENDS = "2020-11-28T09:40:00Z";
 const CAP = new Date(Date.parse(ENDS) + 30 * 86_400_000).toISOString();
 const WITH_PATH: RunService = { restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } };
+// The run's captured governance limits: a week at most ahead, a day by default, so renewal has a length.
+const RENEWABLE = { max_end_ahead_sec: 7 * 86_400, default_end_sec: 86_400 };
 const status = (over: Partial<RunServiceStatus> & Pick<RunServiceStatus, "health">): RunServiceStatus => ({
   restarts: 0, observed_at: new Date(NOW - 40_000).toISOString(), ...over,
 });
 
 function show(service: RunService | undefined, service_status?: RunServiceStatus, over: Partial<RunDetail> = {}) {
-  const run = { id: "r1", state: "RUNNING", ends_at: ENDS, lifetime_cap_at: CAP, service, service_status, ...over } as RunDetail;
+  const run = { id: "r1", state: "RUNNING", ends_at: ENDS, lifetime_cap_at: CAP, run_limits: RENEWABLE, service, service_status, ...over } as RunDetail;
   return render(<ServicePanel run={run} now={NOW} />);
 }
 const row = (label: string) => (screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement);
@@ -52,6 +54,39 @@ describe("ServicePanel", () => {
     show(WITH_PATH, undefined, { created_at: new Date(NOW - 60_000).toISOString() });
     expect(row(T.HEALTH)).toHaveTextContent("Starting · waiting for the first check");
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  describe("a capped lease with no captured renewal length", () => {
+    // run_end_create_test.go: a one-day initial end under a thirty-day cap, both renewal limits zero.
+    const oneDay = new Date(NOW + 86_400_000).toISOString();
+    const noRenewal = { ends_at: oneDay, lifetime_cap_at: new Date(NOW + 30 * 86_400_000).toISOString(), run_limits: { max_end_ahead_sec: 0, default_end_sec: 0 } };
+    const PROBED_SVC: RunService = { restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" } };
+    const ends = keptUntilText(oneDay, NOW);
+
+    it("shows the end and promises no renewal for a healthy service", () => {
+      show(WITH_PATH, status({ health: "healthy" }), noRenewal);
+      expect(row(T.LEASE)).toHaveTextContent(T.LEASE_NO_RENEWAL(ends));
+      expect(row(T.LEASE)).not.toHaveTextContent(/Renewed/);
+    });
+
+    it("says the same with Wardyn's check on and both readings healthy", () => {
+      show(PROBED_SVC, status({ health: "healthy", probe: { health: "healthy", failures: 0, observed_at: new Date(NOW - 20_000).toISOString() } }), noRenewal);
+      expect(row(T.LEASE)).toHaveTextContent(T.LEASE_NO_RENEWAL(ends));
+      expect(row(T.LEASE)).not.toHaveTextContent(/Renewed/);
+    });
+
+    it("a run response with no run_limits at all is the same", () => {
+      show(WITH_PATH, status({ health: "healthy" }), { ...noRenewal, run_limits: undefined });
+      expect(row(T.LEASE)).toHaveTextContent(T.LEASE_NO_RENEWAL(ends));
+    });
+
+    it("a longest end ahead alone, or a default end alone, is a renewal length: the control keeps its promise", () => {
+      show(WITH_PATH, status({ health: "healthy" }), { ...noRenewal, run_limits: { max_end_ahead_sec: 7 * 86_400, default_end_sec: 0 } });
+      expect(row(T.LEASE)).toHaveTextContent(T.LEASE_RENEWED(ends));
+      cleanup();
+      show(WITH_PATH, status({ health: "healthy" }), { ...noRenewal, run_limits: { max_end_ahead_sec: 0, default_end_sec: 86_400 } });
+      expect(row(T.LEASE)).toHaveTextContent(T.LEASE_RENEWED(ends));
+    });
   });
 
   it("no read yet: Starting just inside ten minutes from admission, Health unknown just after, as renewal reads it", () => {
