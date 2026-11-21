@@ -1403,6 +1403,65 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). On `/runs/preflight` this 422 also carries `setup_items`: the checklist rows resolved before the refusal, model access aside. |
 | `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. The body may also carry `cause` (additive, optional): `token_expired`, `ended`, `consent_needed`, `blocked`, `permissions_missing` or `ado_pat_needs_console_app`; absent means not connected. |
 
+A model provider's service grant (the `/model-providers/{id}/service-grant` routes, the clean-up retry route and a
+run's model access through a grant) answers with its own reasons:
+
+| Reason | Meaning |
+|---|---|
+| `service_grants_not_activated` | A write that adds or changes a provider's `service_grant` (409): service grants are not switched on for this deployment yet. |
+| `service_grant_not_configured` | The service grant routes (409): the provider has no service grant. |
+| `service_grant_not_listed` | A run's model access through a service grant (403): the run's service identity is not one the grant lists. |
+| `service_grant_unavailable` | (503): the token request did not complete, or the grant's store could not be read. Retry. |
+| `service_grant_refused` | (424): the identity provider, or the stored record, refused the grant. An administrator must check it. |
+| `service_grant_failing` | A provider's setup status cause, not an error body: a live server's latest token request for this provider failed. |
+| `service_grant_destination_changed` | The service grant secret routes (409): the body's token URL, client id or gateway address is not the provider's. |
+| `service_grant_cleanup_pending` | (409): a removed grant's secret is still to be deleted under this provider. |
+| `service_grant_cleanup_not_found` | `POST /service-grant-cleanups/{uid}/retry` (404): no clean-up has that uid. |
+| `service_grant_secret_kept` | A removal or a clean-up retry: the secret's deletion did not finish. It stays listed and is retried. |
+| `service_grant_cleanup_revision_changed` | (409): the secret record was written outside Wardyn after the removal, so it needs reconciling. |
+| `service_grant_cleanup_unsupported` | (409): the secret store keeps no revision, so nothing is deleted. |
+| `service_grant_secret_changed` | (409): the secret record changed while its delete ran, so it is kept. |
+
+A portal with its own identity issuer is refused at registration (`POST /admin/delegates`), at activation and
+retirement (`/admin/portal-issuers`), and at an admission change (`PUT /admin/delegates/{id}/admission`) with these
+reasons:
+
+| Reason | Meaning |
+|---|---|
+| `portal_issuers_not_activated` | (409): issuer portals have not been switched on for this deployment. |
+| `portal_issuers_need_sso` | (409): issuer portals need console sign-in configured, since the console issuer is the one they must not equal. |
+| `portal_registration_invalid` | (422): a registration with no client id, or an access-token registration with no audience or scopes. The token exchange refuses a stored registration that fails the same check. |
+| `delegate_issuer_pin_required` | (422): an issuer portal names no unit to run in (`run_in_under`). |
+| `delegate_issuer_url_invalid` | (422): the issuer or internal address is not an `https` URL with a host and no user info, query or fragment. |
+| `delegate_internal_issuer_not_allowed` | (409): the internal address names a host the deployment does not list. |
+| `delegate_issuer_is_console` | (409): the issuer, after normalising, is one this deployment has served as its console issuer. |
+| `delegate_issuer_spelling_conflict` / `delegate_issuer_address_conflict` / `delegate_issuer_profile_conflict` | (409): another spelling of a bound issuer is already registered, the bound issuer fetches from another internal address, or the bound issuer names a person by another claim. |
+| `delegate_namespace_in_use` | (409): stored records already name people under this issuer's key. |
+| `delegate_token_profile_invalid` | (422): `token_profile` is not `okta_access_token` or `okta_id_token`. |
+| `delegate_access_fields_need_access_profile` / `delegate_email_domains_need_id_token` | (422): `audience` or `required_scopes` on an ID-token portal, or `email_domains` on an access-token portal. |
+| `delegate_email_domain_invalid` / `delegate_groups_claim_invalid` | (422): an email domain is empty, has an `@` or is not a host name, or `groups_claim` is not a claim name. |
+| `delegate_user_type_invalid` | (422): `user_type` is missing or names no user type. |
+| `delegate_max_age_invalid` / `delegate_grant_ttl_invalid` / `delegate_grant_ttl_above_max_age` | (422): `max_subject_token_age_seconds` is outside 300 to 600, or `grant_ttl_seconds` is below 300 or above the portal's maximum token age. |
+| `delegate_group_or_portal_managed` / `delegate_portal_managed_with_group` / `delegate_portal_managed_needs_issuer` | (422): an issuer portal with no group must set `portal_managed_admission`; that flag cannot go with a group, and a console-issuer portal cannot set it. |
+| `delegate_claim_incomplete` / `delegate_claim_reserved` / `delegate_claim_invalid` | (422): `required_claim` names only one of claim and value, names a claim that already has a meaning, or its name or value breaks its shape. |
+| `delegate_renewal_needs_issuer` / `delegate_issuer_field_needs_issuer` | (422): `ui_session_renewal`, or another field only an issuer portal has, on a console-issuer registration. |
+| `portal_issuers_statement_required` | `POST /admin/portal-issuers/activate` (422): the activation needs `old_servers_stopped: true`. |
+| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): another client of the database is not a 0.10.2 `wardynd`. The answer lists it. |
+| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database for two minutes yet. |
+| `portal_issuer_in_use` / `portal_issuer_not_found` | `DELETE /admin/portal-issuers/{k}` (409, 404): a portal, a person, a grant or a stored rule still names the binding, or no binding has that key. |
+| `delegate_admission_stale` | `PUT /admin/delegates/{id}/admission` (409): the portal's admission rule is no longer the one the change expected. |
+| `delegate_person_not_allowed` / `delegate_person_unknown_portal` | An admin-written person list (422): it gives a portal person an admin, sponsor, approver or console role, or names a portal person whose issuer no portal is registered for. |
+
+The token exchange (`POST /api/v1/token`) for an issuer portal answers with an OAuth error. Its `delegation.exchange`
+audit row carries one of these reasons:
+
+| Reason | Meaning |
+|---|---|
+| `portal_issuer_conflict` | (503): the portal's issuer is this server's own console issuer. |
+| `portal_admission_changed` | (503): the portal's admission rule changed after the token was checked. Retry. |
+| `actor_token_unsupported` | (400): an issuer portal takes no actor token. |
+| `portal_unavailable` | (503): the portal's stores, verifier or issuer set are not available on this server. |
+
 ## Pending approval (governance writes)
 
 A deployment can require a second approver for governance writes: a covered write is
