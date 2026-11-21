@@ -66,20 +66,22 @@ func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list people", err)
 		return
 	}
-	roleOf, err := s.personRoleResolver(r)
-	if err != nil {
-		writeServerError(w, r, "list people", err)
-		return
-	}
-	out := personDirectoryPage{People: make([]personDirectoryEntry, len(page.People))}
+	roleOf := s.lazyPersonRoleResolver(r)
+	out := types.PersonList{People: make([]types.PersonSummary, len(page.People))}
 	for i, p := range page.People {
-		out.People[i] = personDirectoryEntry{PersonSummary: types.PersonSummary{
+		role, err := personRole(p, roleOf)
+		if err != nil {
+			writeServerError(w, r, "list people", err)
+			return
+		}
+		out.People[i] = types.PersonSummary{
 			Principal: p.Principal, Email: p.Email, IssuerKind: personIssuerKind(p),
 			PreCreated: p.PreCreated, FirstSignedInAt: p.FirstSignInAt, LastSignedInAt: p.LastSignInAt,
-			DeactivatedAt: p.DeactivatedAt, Role: personRole(p, roleOf),
+			DeactivatedAt: p.DeactivatedAt, Role: role,
 			ActiveSessions: p.ActiveSessions, APITokens: p.APITokens, SSHKeys: p.SSHKeys,
 			Credentials: p.Credentials, ActiveRuns: p.ActiveRuns,
-		}, Issuer: p.PortalIssuer, InternalAddress: p.PortalInternalIssuer}
+			Issuer: p.PortalIssuer, InternalAddress: p.PortalInternalIssuer,
+		}
 	}
 	if page.Next != "" {
 		out.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(page.Next))
@@ -87,26 +89,12 @@ func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// personDirectoryEntry is one listed person. A portal person also carries the issuer its portal's identity
-// provider is and the internal address its binding fetches keys from ("" when the issuer's own address is
-// used); both are absent for everyone else.
-type personDirectoryEntry struct {
-	types.PersonSummary
-	Issuer          string `json:"issuer,omitempty"`
-	InternalAddress string `json:"internal_address,omitempty"`
-}
-
-// personDirectoryPage is one page of GET /people, types.PersonList with portal people's two address fields.
-type personDirectoryPage struct {
-	People     []personDirectoryEntry `json:"people"`
-	NextCursor string                 `json:"next_cursor,omitempty"`
-}
-
 // personRole is a person's role in the list. A portal person is always a user: no role mapping is read for
-// one, since none applies to a person the portal's own provider vouches for.
-func personRole(p store.PersonListing, roleOf func(store.PersonListing) string) string {
+// one, since none applies to a person the portal's own provider vouches for, and the mappings are not even
+// loaded for a page that holds only portal people.
+func personRole(p store.PersonListing, roleOf func(store.PersonListing) (string, error)) (string, error) {
 	if p.PortalIssuer != "" {
-		return oidc.RoleUser
+		return oidc.RoleUser, nil
 	}
 	return roleOf(p)
 }
@@ -122,6 +110,27 @@ func personIssuerKind(p store.PersonListing) string {
 		return issuerKindEntra
 	}
 	return issuerKindOIDC
+}
+
+// lazyPersonRoleResolver is personRoleResolver loaded on the first workforce row that needs a role, so a
+// failing mapping read never fails a page that has none. A failed load is kept and answered for every
+// later row.
+func (s *Server) lazyPersonRoleResolver(r *http.Request) func(store.PersonListing) (string, error) {
+	var (
+		loaded bool
+		fn     func(store.PersonListing) string
+		err    error
+	)
+	return func(p store.PersonListing) (string, error) {
+		if !loaded {
+			fn, err = s.personRoleResolver(r)
+			loaded = true
+		}
+		if err != nil {
+			return "", err
+		}
+		return fn(p), nil
+	}
 }
 
 // personRoleResolver reads the role mappings and user types once and returns the role each email
