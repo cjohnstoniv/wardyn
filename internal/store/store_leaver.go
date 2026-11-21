@@ -361,6 +361,45 @@ const RefusalAuditOwedMsg = "the refusal's audit row is not yet written"
 // newly bound principal, so the caller reads the row again and makes a new plan.
 var ErrIdentityRebound = errors.New("store: the identity was bound since the suspension was planned")
 
+// beginSuspend opens step 1's transaction, with the portal lifecycle marker set first for a portal person's
+// suspension.
+func (s PG) beginSuspend(ctx context.Context, p SuspendPlan) (pgx.Tx, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return nil, fmt.Errorf("store: suspend identity: %w", err)
+	}
+	if p.PortalLifecycle {
+		if err = markPortalLifecycle(ctx, tx); err != nil {
+			_ = tx.Rollback(ctx)
+			return nil, err
+		}
+	}
+	return tx, nil
+}
+
+// deactivateSuspended deactivates the identity rows of a suspension and, for a portal person's, deletes the
+// portal grants of the same principals in the same transaction.
+func deactivateSuspended(ctx context.Context, tx pgx.Tx, p SuspendPlan, principals []string, purgeAfter time.Duration) error {
+	if _, err := tx.Exec(ctx, `
+		WITH unrecorded AS (
+			UPDATE deprovision_jobs SET detail = detail - 'deactivated_at_us'
+			 WHERE kind = 'suspend' AND step = 'cutoff' AND target = '' AND identity_id IN (
+			       SELECT id FROM principal_identities WHERE (id = $1 OR principal = ANY($2::text[])) AND deactivated_at IS NULL))
+		UPDATE principal_identities
+		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
+		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))
+		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
+		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, purgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
+		return fmt.Errorf("store: deactivate identities: %w", err)
+	}
+	if p.PortalLifecycle {
+		if _, err := tx.Exec(ctx, `DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE principal = ANY($1::text[]) ORDER BY id FOR UPDATE)`, principals); err != nil {
+			return fmt.Errorf("store: delete portal grants: %w", err)
+		}
+	}
+	return nil
+}
+
 // SuspendIdentity is step 1 of a suspension, one transaction. It takes every row it will change
 // FOR UPDATE, in id order (so a sign-in holding one of them finishes first or is refused), writes
 // the session cutoff for every sub and email form, deactivates the identity rows and bumps their
@@ -369,16 +408,11 @@ var ErrIdentityRebound = errors.New("store: the identity was bound since the sus
 // suspension of an active identity first clears the ledger of any earlier one. Another row it deactivates
 // keeps its ledger, less that ledger's record of a deactivation.
 func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.beginSuspend(ctx, p)
 	if err != nil {
-		return SuspendResult{}, fmt.Errorf("store: suspend identity: %w", err)
+		return SuspendResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if p.PortalLifecycle {
-		if err = markPortalLifecycle(ctx, tx); err != nil {
-			return SuspendResult{}, err
-		}
-	}
 	principals := nonEmptyStrings(p.Principals)
 	purgeAfter := p.PurgeAfter
 	if p.Partial != "" {
@@ -425,22 +459,8 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	// row's is otherwise kept, so a tail bound to that earlier deactivation closes no step a pass bound to this one
 	// may have worked, also once the person is active again (FinishSuspensionJobAt). Recording this deactivation
 	// there instead would prove it that row's own suspension's (ownSuspension).
-	if _, err = tx.Exec(ctx, `
-		WITH unrecorded AS (
-			UPDATE deprovision_jobs SET detail = detail - 'deactivated_at_us'
-			 WHERE kind = 'suspend' AND step = 'cutoff' AND target = '' AND identity_id IN (
-			       SELECT id FROM principal_identities WHERE (id = $1 OR principal = ANY($2::text[])) AND deactivated_at IS NULL))
-		UPDATE principal_identities
-		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
-		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))
-		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
-		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, purgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
-		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
-	}
-	if p.PortalLifecycle {
-		if _, err = tx.Exec(ctx, `DELETE FROM portal_grants WHERE principal = ANY($1::text[])`, principals); err != nil {
-			return SuspendResult{}, fmt.Errorf("store: delete portal grants: %w", err)
-		}
+	if err = deactivateSuspended(ctx, tx, p, principals, purgeAfter); err != nil {
+		return SuspendResult{}, err
 	}
 	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
 	if _, err = tx.Exec(ctx, `UPDATE people SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()) WHERE principal = ANY($1::text[])`,

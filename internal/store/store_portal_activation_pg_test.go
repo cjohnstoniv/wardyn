@@ -110,6 +110,9 @@ func TestPortalIssuersActivate_MaskedClientCountsAsSuspect_PG(t *testing.T) {
 		if c.Label == store.PortalSessionUnknown {
 			t.Errorf("the owner reports a session as unknown: %+v", c)
 		}
+		if strings.Contains(c.ClientAddr, "/") {
+			t.Errorf("the owner reports address %q with a prefix length: %+v", c.ClientAddr, c)
+		}
 	}
 	if labels["wardynd/0.10.2/replica-new"] != 0 {
 		t.Errorf("a 0.10.2 writer is reported: %v", labels)
