@@ -74,6 +74,19 @@ func (f *fakeDelegateStore) GetDelegateByRaw(_ context.Context, raw string) (typ
 	return d, nil
 }
 
+// GetDelegateByID makes every store that embeds the fake a store.DelegateReader, as the Postgres store is: each
+// delegated run request reads its portal's row for the unit pin (portalPinOf), and a store that cannot read it
+// answers 503 portal_unit_unavailable. A revoked row is still read, as the Postgres read returns it.
+func (f *fakeDelegateStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.delegates[id]
+	if !ok {
+		return types.Delegate{}, store.ErrNotFound
+	}
+	return d, nil
+}
+
 func (f *fakeDelegateStore) ListDelegates(context.Context) ([]types.Delegate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
