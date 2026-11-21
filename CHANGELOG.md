@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A kept drive made for a run that leaves the queue without starting is now reclaimed even when the first attempt fails or the process stops right after the run ends. The run's exit records that the reclaim is owed (migration `0298`), and a sweep retries it every ten minutes against the same owner-starting and in-use checks. A drive another run holds, or that the owner's later runs could have attached, is left where it is.
+- A kept drive made for a run that leaves the queue without starting is now reclaimed even when the first attempt fails or the process stops right after the run ends. The run's exit records that the reclaim is owed (migration `0299`), and a sweep retries it every ten minutes against the same owner-starting and in-use checks. A drive another run holds, or that the owner's later runs could have attached, is left where it is.
 
 ## [0.10.1] — 2026-11-21
 
