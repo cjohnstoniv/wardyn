@@ -123,16 +123,13 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
 		return nil
 	}
-	if err := checkHistoryAllowed(ctx, root, branch, sy.Opts.OrgDeny); err != nil {
-		return err
-	}
 	tmp, err := os.CreateTemp(filepath.Dir(sy.StateFile), "laptop-*.bundle")
 	if err != nil {
 		return err
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
-	if _, err := laptopGit(ctx, root, "bundle", "create", "-q", tmp.Name(), "refs/heads/"+branch); err != nil {
+	if err := makeCheckedBundle(ctx, root, branch, head, tmp.Name(), sy.Opts.OrgDeny); err != nil {
 		return err
 	}
 	remote := syncGitBundlePath(runID, "laptop")
@@ -155,6 +152,29 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	return nil
 }
 
+// makeCheckedBundle writes branch's bundle to path and refuses it unless it carries exactly head and nothing
+// the organisation's patterns leave out. The branch name can move at any moment, so the bundle is made
+// first, its one advertised tip is read back from the file itself, and the history scanned is that
+// commit's: what is uploaded is the file, whose contents no later commit can change.
+func makeCheckedBundle(ctx context.Context, root, branch, head, path string, orgDeny []string) error {
+	ref := "refs/heads/" + branch
+	if _, err := laptopGit(ctx, root, "bundle", "create", "-q", path, ref); err != nil {
+		return err
+	}
+	heads, err := laptopGit(ctx, root, "bundle", "list-heads", path)
+	if err != nil {
+		return err
+	}
+	tip, name, _ := strings.Cut(heads, " ")
+	if name != ref || strings.ContainsAny(heads, "\n") || !syncGitSHA.MatchString(tip) {
+		return fmt.Errorf("--git did not send %s: the bundle does not advertise exactly %s (%s)", Shown(branch), ref, Shown(heads))
+	}
+	if tip != head {
+		return fmt.Errorf("--git did not send %s: it moved from %s to %s while the bundle was made; run the sync again", Shown(branch), head[:12], tip[:12])
+	}
+	return checkHistoryAllowed(ctx, root, branch, tip, orgDeny)
+}
+
 // HistoryDeniedError is --git refusing a branch whose history holds a path the
 // organisation's sync patterns leave out. A bundle carries every commit's files
 // whole, so the patterns cannot be applied to it.
@@ -166,27 +186,26 @@ func (e *HistoryDeniedError) Error() string {
 		Shown(e.Branch), Shown(e.Path), Shown(e.Pattern))
 }
 
-// checkHistoryAllowed refuses to bundle branch when any path in its history, in
+// checkHistoryAllowed refuses to send branch, at the commit tip, when any path in its history, in
 // any commit or in the tip's tree, is one the organisation's patterns deny,
 // tested as a pass tests it: each directory above the file, then the file.
-func checkHistoryAllowed(ctx context.Context, root, branch string, orgDeny []string) error {
+func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny []string) error {
 	if len(orgDeny) == 0 {
 		return nil
 	}
-	ref := "refs/heads/" + branch
 	// -m diffs a merge against each parent and --no-renames keeps a rename's old
 	// name, so a path a commit removed or moved is listed too.
-	changed, err := laptopGitRaw(ctx, root, "log", "-z", "--format=", "--name-only", "-m", "--no-renames", ref, "--")
+	changed, err := laptopGitRaw(ctx, root, "log", "-z", "--format=", "--name-only", "-m", "--no-renames", tip, "--")
 	if err != nil {
 		return err
 	}
-	tip, err := laptopGitRaw(ctx, root, "ls-tree", "-r", "-z", "--name-only", ref, "--")
+	tree, err := laptopGitRaw(ctx, root, "ls-tree", "-r", "-z", "--name-only", tip, "--")
 	if err != nil {
 		return err
 	}
 	ig := newSyncIgnore(orgDeny)
 	seen := map[string]bool{}
-	for _, name := range strings.Split(changed+"\x00"+tip, "\x00") {
+	for _, name := range strings.Split(changed+"\x00"+tree, "\x00") {
 		if name == "" || seen[name] {
 			continue
 		}

@@ -770,7 +770,7 @@ func snapshot(p string) string {
 func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) {
 	g := newGitRig(t)
 	ctx := t.Context()
-	if err := checkHistoryAllowed(ctx, g.lap, "feature/x", []string{"*.pem", "secrets/"}); err != nil {
+	if err := checkHistoryAllowed(ctx, g.lap, "feature/x", g.head, []string{"*.pem", "secrets/"}); err != nil {
 		t.Fatalf("a history with no matching path: %v; want it sent", err)
 	}
 	g.write(filepath.Join(g.lap, "secrets"), "notes.txt", "synthetic\n")
@@ -780,6 +780,7 @@ func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) 
 	g.run(g.lap, "mv", "old.pem", "kept.txt")
 	g.run(g.lap, "rm", "-q", "-r", "secrets")
 	g.run(g.lap, "commit", "-q", "-m", "remove and rename")
+	tip := g.run(g.lap, "rev-parse", "HEAD")
 	if st := g.run(g.lap, "ls-files"); st != "kept.txt\nmain.go" {
 		t.Fatalf("the tip holds %q; the matching paths must be only in earlier commits", st)
 	}
@@ -793,7 +794,7 @@ func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) 
 		{[]string{"kept.txt"}, "kept.txt", "kept.txt"},
 		{nil, "", ""},
 	} {
-		err := checkHistoryAllowed(ctx, g.lap, "feature/x", c.deny)
+		err := checkHistoryAllowed(ctx, g.lap, "feature/x", tip, c.deny)
 		var denied *HistoryDeniedError
 		switch {
 		case c.wantPath == "" && err != nil:
@@ -802,4 +803,69 @@ func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) 
 			t.Errorf("deny %q: got %v; want a refusal naming %s and %s", c.deny, err, c.wantPath, c.wantPat)
 		}
 	}
+}
+
+// moveBranchAround runs script (a commit that moves feature/x) when the git named by step runs, before (when
+// after is false) or after it: a stand-in for a commit landing while --git is working.
+func (g *gitRig) moveBranchAround(step string, after bool, script string) {
+	g.t.Helper()
+	hook := filepath.Join(g.t.TempDir(), "move.sh")
+	g.write(filepath.Dir(hook), "move.sh", script)
+	order := `sh "$MOVE_SH"; ` + shellQuote(g.git) + ` "$@"; rc=$?`
+	if after {
+		order = shellQuote(g.git) + ` "$@"; rc=$?; sh "$MOVE_SH"`
+	}
+	g.write(g.bin, "git", "#!/bin/sh\ncase \" $* \" in *\" "+step+" \"*) "+order+"; exit $rc;; esac\nexec "+shellQuote(g.git)+" \"$@\"\n")
+	if err := os.Chmod(filepath.Join(g.bin, "git"), 0o755); err != nil {
+		g.t.Fatal(err)
+	}
+	g.t.Setenv("MOVE_SH", hook)
+	g.t.Setenv("PATH", g.bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func (g *gitRig) commitFileScript(name string) string {
+	return "cd " + shellQuote(g.lap) + " && echo synthetic > " + name + " && " + shellQuote(g.git) + " add " + name + " && " + shellQuote(g.git) + " commit -q -m late\n"
+}
+
+// The commit --git sends is the one it checked. A commit landing on the branch after the head was read and
+// before the bundle was made is refused, and one landing after the bundle was made is not in the file, which
+// is checked at its own tip.
+func TestMakeCheckedBundle_SendsExactlyTheCommitItChecked(t *testing.T) {
+	deny := []string{"*.pem"}
+	listHeads := func(g *gitRig, bundle string) string { return g.run(g.lap, "bundle", "list-heads", bundle) }
+	t.Run("a commit lands before the bundle is made", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		g.moveBranchAround("bundle create", false, g.commitFileScript("late.pem"))
+		err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny)
+		if err == nil || !strings.Contains(err.Error(), "moved") {
+			t.Fatalf("got %v; want a refusal saying the branch moved", err)
+		}
+	})
+	t.Run("a commit lands after the bundle is made", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		g.moveBranchAround("bundle create", true, g.commitFileScript("late.pem"))
+		if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny); err != nil {
+			t.Fatalf("the bundle holds only the checked commit, yet: %v", err)
+		}
+		if got, want := listHeads(g, bundle), g.head+" refs/heads/feature/x"; got != want {
+			t.Fatalf("bundle heads = %q, want %q", got, want)
+		}
+		if now := g.run(g.lap, "rev-parse", "feature/x"); now == g.head {
+			t.Fatal("the branch did not move; the test proves nothing")
+		}
+	})
+	t.Run("a denied path in the checked commit's history", func(t *testing.T) {
+		g := newGitRig(t)
+		g.write(g.lap, "old.pem", "synthetic\n")
+		g.run(g.lap, "add", "old.pem")
+		g.run(g.lap, "commit", "-q", "-m", "pem")
+		head := g.run(g.lap, "rev-parse", "HEAD")
+		err := makeCheckedBundle(t.Context(), g.lap, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny)
+		var denied *HistoryDeniedError
+		if !errors.As(err, &denied) || denied.Path != "old.pem" {
+			t.Fatalf("got %v; want a refusal naming old.pem", err)
+		}
+	})
 }
