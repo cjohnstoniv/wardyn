@@ -5,10 +5,10 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // AuditEventKey names one audit event by its fixed event time and id.
@@ -29,24 +29,21 @@ func (s PG) AuditEventsStored(ctx context.Context, want []AuditEventKey) (map[Au
 	for i, k := range want {
 		ids[i], ats[i] = k.ID, k.At.UTC().Truncate(time.Microsecond)
 	}
-	rows, err := s.Pool.Query(ctx, `
+	held, err := collect(ctx, s.Pool, "list", "stored audit events", `
 		SELECT k.id, k.at FROM unnest($1::uuid[], $2::timestamptz[]) AS k(id, at)
-		 WHERE EXISTS (SELECT 1 FROM audit_events e WHERE e."time" = k.at AND e.id = k.id)`, ids, ats)
+		 WHERE EXISTS (SELECT 1 FROM audit_events e WHERE e."time" = k.at AND e.id = k.id)`, []any{ids, ats},
+		func(r pgx.Row) (AuditEventKey, error) {
+			var k AuditEventKey
+			err := r.Scan(&k.ID, &k.At)
+			k.At = k.At.UTC().Truncate(time.Microsecond)
+			return k, err
+		})
 	if err != nil {
-		return nil, fmt.Errorf("store: list stored audit events: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	out := make(map[AuditEventKey]bool, len(want))
-	for rows.Next() {
-		var k AuditEventKey
-		if err := rows.Scan(&k.ID, &k.At); err != nil {
-			return nil, fmt.Errorf("store: scan stored audit events: %w", err)
-		}
-		k.At = k.At.UTC().Truncate(time.Microsecond)
+	out := make(map[AuditEventKey]bool, len(held))
+	for _, k := range held {
 		out[k] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list stored audit events: %w", err)
 	}
 	return out, nil
 }
