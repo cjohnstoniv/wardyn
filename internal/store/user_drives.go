@@ -250,8 +250,10 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			// If only one guard applied, that's the answer regardless of the re-read (both fail
-			// closed to false on error — this only picks the message, never the write).
-			if refuseIfAllocated && !namespacePossible {
+			// closed to false on error — this only picks the message, never the write). Off a share the
+			// home-namespace guard is not in the statement, and the team-mode guard always is, so what
+			// refused it is an allocation whether or not the re-home flag was set.
+			if !namespacePossible {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			return types.UserDrive{}, ErrDriveHomeNamespaceConflict
