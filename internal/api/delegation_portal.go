@@ -48,6 +48,14 @@ type portalIntroductionFinder interface {
 	PendingPortalIntroductionFor(ctx context.Context, identity uuid.UUID) (store.PortalIntroduction, bool, error)
 }
 
+// auditPresence is the read of the shared audit table that settles an owed event: which (time, id) pairs the
+// table holds. store.PG has it; a store without it never settles an introduction, which stays owed.
+type auditPresence interface {
+	AuditEventsStored(ctx context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error)
+}
+
+var _ auditPresence = store.PG{}
+
 // portalIntroductionBatch bounds how many owed introduction events one exchange looks through for the
 // identity it just touched. The portal leaver sweep delivers the rest.
 const portalIntroductionBatch = 100
@@ -138,6 +146,17 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	unavailable := func(reason string, extra map[string]any) {
 		deny(http.StatusServiceUnavailable, "temporarily_unavailable", "", reason, extra)
 	}
+	// failed answers a failure of this server's own reads or writes after the portal authenticated. The reply
+	// is the one the step always gave; the row's reason is the reply's code and its cause names the step
+	// that failed, never the error.
+	failed := func(status int, code, desc, target, step string) {
+		data := map[string]any{"reason": code, "cause": step}
+		for k, v := range base {
+			data[k] = v
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange", target, "failure", mustJSON(data)))
+		writeOAuthError(w, status, code, desc)
+	}
 	pgs, okG := s.cfg.Store.(store.PortalGrantStore)
 	pis, okI := s.cfg.Store.(store.PortalIdentityStore)
 	if !okG || !okI || s.cfg.PortalIssuers == nil {
@@ -161,21 +180,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	}
 	subj, refusal := s.cfg.PortalIssuers.VerifyDetail(ctx, portalRegistration(d), subjectToken, r.PostForm.Get("subject_token_type"))
 	if !refusal.OK() {
-		status, code := portalRefusalStatus(refusal.Class)
-		extra := map[string]any{}
-		switch {
-		case refusal.Cause != "":
-			extra["cause"] = refusal.Cause
-		case refusal.Reason == oidc.SubjectTokenClaimMismatch && d.RequiredClaim != nil:
-			extra["claim"] = d.RequiredClaim.Claim
-		}
-		if refusal.Reason == oidc.PortalRegistrationInvalid {
-			slog.ErrorContext(ctx, "api: an issuer portal's own registration cannot be verified against", "portal", d.ID, "reason", reasonPortalRegistrationInvalid)
-		}
-		if refusal.RetryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
-		}
-		deny(status, code, "", refusal.Reason, extra)
+		denyPortalRefusal(ctx, w, d, refusal, deny)
 		return
 	}
 	// A person never takes the name of the local operator's seat, whatever shape the operator was given.
@@ -189,7 +194,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	if err != nil {
 		slog.ErrorContext(ctx, "api: revocation order lookup failed; portal exchange refused", "error", err)
 		s.metrics.authStoreErrorInc()
-		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed")
+		failed(http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed", subj.Principal, "revocation_order_lookup")
 		return
 	}
 	if s.cfg.SessionRevocations != nil {
@@ -197,7 +202,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		if err != nil {
 			slog.ErrorContext(ctx, "api: session-revocation lookup failed; portal exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
-			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed")
+			failed(http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed", subj.Principal, "session_revocation_lookup")
 			return
 		}
 		if revoked {
@@ -210,7 +215,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	if err != nil {
 		slog.ErrorContext(ctx, "api: user type lookup failed; portal exchange refused", "error", err)
 		s.metrics.authStoreErrorInc()
-		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "user type lookup failed")
+		failed(http.StatusServiceUnavailable, "temporarily_unavailable", "user type lookup failed", subj.Principal, "user_type_lookup")
 		return
 	}
 	if !exists {
@@ -224,7 +229,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		display = subj.Email
 	}
 	identity, _, err := pis.IssuePortalIdentity(ctx, subj.Principal, subj.K, display, d.Issuer, d.ID, d.AdmissionRev)
-	if s.portalWriteRefused(w, r, err, "issue portal identity", subj.Principal, deny) {
+	if s.portalWriteRefused(w, r, err, "issue portal identity", subj.Principal, deny, failed) {
 		return
 	}
 	s.deliverPortalIntroductions(ctx, pis, identity)
@@ -233,7 +238,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		if err := pw.PutPrincipalGroups(ctx, subj.Principal, d.ID.String(), "", nil, false, subj.IssuedAt); err != nil {
 			slog.ErrorContext(ctx, "api: record the portal exchange failed; portal exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
-			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")
+			failed(http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed", subj.Principal, "sign_in_record_write")
 			return
 		}
 	}
@@ -245,7 +250,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, oidc.SubjectTokenStale, nil)
 		return
 	}
-	if s.portalWriteRefused(w, r, err, "mint portal grant", subj.Principal, deny) {
+	if s.portalWriteRefused(w, r, err, "mint portal grant", subj.Principal, deny, failed) {
 		return
 	}
 	// After the commit, so two people's mints never wait on each other: the portal's last use, at most
@@ -273,6 +278,28 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	})
 }
 
+// denyPortalRefusal answers a subject token the portal's issuer refused: the refusal class's status and code,
+// the cause or the required claim's name, a Retry-After hint when the refusal gives one, and a log line when
+// the portal's own registration is what cannot be verified against.
+func denyPortalRefusal(ctx context.Context, w http.ResponseWriter, d types.Delegate, refusal oidc.PortalRefusal,
+	deny func(status int, code, target, reason string, extra map[string]any)) {
+	status, code := portalRefusalStatus(refusal.Class)
+	extra := map[string]any{}
+	switch {
+	case refusal.Cause != "":
+		extra["cause"] = refusal.Cause
+	case refusal.Reason == oidc.SubjectTokenClaimMismatch && d.RequiredClaim != nil:
+		extra["claim"] = d.RequiredClaim.Claim
+	}
+	if refusal.Reason == oidc.PortalRegistrationInvalid {
+		slog.ErrorContext(ctx, "api: an issuer portal's own registration cannot be verified against", "portal", d.ID, "reason", reasonPortalRegistrationInvalid)
+	}
+	if refusal.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
+	}
+	deny(status, code, "", refusal.Reason, extra)
+}
+
 // portalMaxAge is the portal's maximum subject-token age, 300 s when the row names none.
 func portalMaxAge(d types.Delegate) time.Duration {
 	if d.MaxSubjectTokenAgeSeconds <= 0 {
@@ -285,8 +312,9 @@ func portalMaxAge(d types.Delegate) time.Duration {
 // portal revoked or an issuer binding retired since the token was checked is the revoked portal's answer,
 // 401 invalid_client, and writes nothing; an admission rule changed since is 503 portal_admission_changed
 // and the portal retries under the new rule; a deactivated or purged person is refused as the console
-// refuses one. Anything else is a failed write: 500, nothing minted.
-func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err error, what, principal string, deny func(int, string, string, string, map[string]any)) bool {
+// refuses one. Anything else is a failed write: 500, nothing minted, and a failure row naming the step.
+func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err error, what, principal string,
+	deny func(int, string, string, string, map[string]any), failed func(int, string, string, string, string)) bool {
 	switch {
 	case err == nil:
 		return false
@@ -300,7 +328,7 @@ func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err 
 		deny(http.StatusBadRequest, "invalid_grant", principal, oidc.DenialIdentityDeactivated, nil)
 	default:
 		slog.ErrorContext(r.Context(), "api: portal exchange write failed", "step", what, "error", err)
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", what+" failed")
+		failed(http.StatusInternalServerError, "server_error", what+" failed", principal, strings.ReplaceAll(what, " ", "_"))
 	}
 	return true
 }
@@ -332,15 +360,32 @@ func (s *Server) deliverPortalIntroductions(ctx context.Context, ps store.Portal
 	}
 }
 
-// deliverPortalIntroduction appends one owed introduction as person.create and marks it delivered. The data
-// is read from the identity row alone, never recomputed, and carries no email in any form. A row that could
-// not be durably accepted is left owed for the next delivery.
+// deliverPortalIntroduction appends one owed introduction as person.create and marks it delivered once the
+// shared audit table holds it. The data is read from the identity row alone, never recomputed, and carries no
+// email in any form. A recorder's acceptance is not enough: an event that only reached this replica's local
+// spool is lost with the replica, so the mark waits until a read of the shared table finds the event's id with
+// its recorded time. Until then it stays owed, and every later delivery replays it; the replay is keyed by
+// that id and time, so the table keeps one row.
 func (s *Server) deliverPortalIntroduction(ctx context.Context, ps store.PortalIdentityStore, p store.PortalIntroduction) {
 	ev := s.auditEvent(nil, types.ActorSystem, delegateActor(p.PortalID), "person.create", p.Principal, "success", mustJSON(map[string]any{
 		"source": "portal", "portal": p.PortalID, "issuer": p.Issuer, "k": p.IssuerKey, "identity": p.IdentityID,
 	}))
 	ev.ID, ev.Time = p.EventID, p.EventAt
 	if !s.recordAuditDurably(store.WithAuditReplay(ctx), ev) {
+		return
+	}
+	ap, ok := ps.(auditPresence)
+	if !ok {
+		return
+	}
+	key := store.AuditEventKey{ID: p.EventID, At: p.EventAt.UTC().Truncate(time.Microsecond)}
+	stored, err := ap.AuditEventsStored(ctx, []store.AuditEventKey{key})
+	if err != nil {
+		slog.WarnContext(ctx, "api: read whether a portal introduction is stored failed; it stays owed", "error", err)
+		return
+	}
+	if !stored[key] {
+		slog.WarnContext(ctx, "api: a portal introduction is not in the shared audit table yet; it stays owed", "identity", p.IdentityID)
 		return
 	}
 	if _, err := ps.MarkPortalIntroductionAudited(ctx, p.IdentityID); err != nil {

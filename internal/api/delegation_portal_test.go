@@ -117,6 +117,10 @@ type portalStore struct {
 	stamped   int
 	swept     int
 	mintErr   error
+	// userTypeErr, groupsErr and issueErr fail the user type read, the sign-in record write and the identity write.
+	userTypeErr, groupsErr, issueErr error
+	// audit is the recorder whose rows stand for the shared audit table.
+	audit *recRecorder
 }
 
 var (
@@ -127,10 +131,38 @@ var (
 func (p *portalStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.userTypeErr != nil {
+		return types.UserType{}, p.userTypeErr
+	}
 	if p.userTypes[id] {
 		return types.UserType{ID: id, Name: id}, nil
 	}
 	return types.UserType{}, store.ErrNotFound
+}
+
+// AuditEventsStored answers from the recorder's rows, as the shared audit table, by normalised (time, id).
+func (p *portalStore) AuditEventsStored(_ context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error) {
+	norm := func(id uuid.UUID, at time.Time) store.AuditEventKey {
+		return store.AuditEventKey{ID: id, At: at.UTC().Truncate(time.Microsecond)}
+	}
+	asked := map[store.AuditEventKey]bool{}
+	for _, k := range want {
+		asked[norm(k.ID, k.At)] = true
+	}
+	out := map[store.AuditEventKey]bool{}
+	if p.audit == nil {
+		return out, nil
+	}
+	for _, ev := range p.audit.snapshot() {
+		if k := norm(ev.ID, ev.Time); asked[k] {
+			out[k] = true
+		}
+	}
+	return out, nil
+}
+
+func (p *portalStore) PutPrincipalGroups(context.Context, string, string, string, []string, bool, time.Time) error {
+	return p.groupsErr
 }
 
 func (p *portalStore) GetIssuerDelegateByRaw(_ context.Context, raw string) (types.Delegate, error) {
@@ -160,6 +192,9 @@ func (p *portalStore) lockPortal(id uuid.UUID, rev int64) (types.Delegate, error
 func (p *portalStore) IssuePortalIdentity(_ context.Context, principal, key, display, realIssuer string, portal uuid.UUID, rev int64) (uuid.UUID, bool, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.issueErr != nil {
+		return uuid.Nil, false, p.issueErr
+	}
 	if _, err := p.lockPortal(portal, rev); err != nil {
 		return uuid.Nil, false, err
 	}
@@ -349,6 +384,7 @@ func newExchHarness(t *testing.T, shape ...func(*Config)) *exchHarness {
 	}
 	srv, _, _, _ := newAuthzMatrixServer(t, append([]func(*Config){wire}, shape...)...)
 	h := &exchHarness{srv: srv, ps: ps, ver: ver, rec: srv.cfg.Audit.(*recRecorder)}
+	ps.audit = h.rec
 	h.ver.subj = h.subject(portalTestUID)
 	return h
 }

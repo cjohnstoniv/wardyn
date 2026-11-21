@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -361,6 +362,19 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	// Register and exchange as the app role.
 	const issuer = "https://idp.split.example/oauth2/default"
 	p, cred := registerIssuerPortal(t, app, bindIssuerAs(t, app, issuer), "split-portal")
+	// An ended grant the exchange's sweep must delete once its grant commits, as the app role.
+	ended := func() uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := mig.Exec(ctx, `
+			INSERT INTO portal_grants (id, delegate_id, token_sha256, principal, user_type, chain_id, subject_issued_at, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, 'standard', $1, now() - interval '2 hours', now() - interval '2 hours', now() - interval '1 hour')`,
+			id, p.ID, "ended-"+id.String(), oidc.PortalPrincipal(issuer, "ended")); err != nil {
+			t.Fatalf("seed an ended grant: %v", err)
+		}
+		return id
+	}
+	gone := ended()
 	h := newPortalAPI(t, store.NewPG(app), rec, app, "u1")
 	w := portalExchangeOn(h, p, cred)
 	if w.Code != http.StatusOK {
@@ -382,6 +396,24 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	if n := count(`SELECT count(*) FROM audit_events WHERE action = 'delegation.exchange' AND outcome = 'success' AND target = $1`, u1); n != 1 {
 		t.Fatalf("successful exchange rows = %d, want 1", n)
 	}
+	// The two writes after the grant's commit only log a failure, so the test reads what they wrote: the
+	// portal's last use (UPDATE on delegates) and the sweep of ended grants (UPDATE and DELETE on portal_grants).
+	if n := count(`SELECT count(*) FROM delegates WHERE id = $1 AND last_used_at IS NOT NULL`, p.ID); n != 1 {
+		t.Fatal("the exchange did not stamp the portal's last use as the app role")
+	}
+	if n := count(`SELECT count(*) FROM portal_grants WHERE id = $1`, gone); n != 0 {
+		t.Fatal("the exchange's sweep did not delete the ended grant as the app role")
+	}
+	// Without DELETE on portal_grants the exchange still answers, and the ended grant stays: the check above can fail.
+	as(`REVOKE DELETE ON portal_grants FROM ` + role)
+	kept := ended()
+	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(app), rec, app, "u3"), p, cred); w.Code != http.StatusOK {
+		t.Fatalf("exchange without DELETE on portal_grants = %d %s, want 200 with the sweep failing", w.Code, w.Body)
+	}
+	if n := count(`SELECT count(*) FROM portal_grants WHERE id = $1`, kept); n != 1 {
+		t.Fatalf("ended grant rows without DELETE = %d, want it left in place", n)
+	}
+	as(`GRANT DELETE ON portal_grants TO ` + role)
 	// The exchange's grant write needs INSERT on portal_grants, which only 0294's grant gives this role.
 	as(`REVOKE INSERT ON portal_grants FROM ` + role)
 	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(app), rec, app, "u2"), p, cred); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "mint portal grant failed") {
