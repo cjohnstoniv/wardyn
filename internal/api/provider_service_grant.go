@@ -43,6 +43,8 @@ const (
 	serviceGrantMinLifetime = 900
 	// serviceGrantPacing separates the attempts a resolve or a dispatch starts after a failure, per row and replica.
 	serviceGrantPacing = time.Minute
+	// serviceGrantPublishBound bounds the reads and audit row that publish a token, apart from the token request's own.
+	serviceGrantPublishBound = 5 * time.Second
 
 	serviceGrantActor = "wardyn/service-grant"
 
@@ -464,7 +466,11 @@ func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, di
 		s.auditServiceGrantMint(mctx, p, trigger, sent, nil, ferr, false)
 		return serviceGrantMinted{}, ferr
 	}
-	return s.publishServiceGrantToken(mctx, p, digest, rev, revOK, trigger, sent, attempt, tok)
+	// The publish reads get a bound of their own, on the same base as the request's: a token that arrives late in
+	// the request's window is still checked, never discarded for the time the request used.
+	pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantPublishBound)
+	defer pcancel()
+	return s.publishServiceGrantToken(pctx, p, digest, rev, revOK, trigger, sent, attempt, tok)
 }
 
 // publishServiceGrantToken re-reads the revision and the live digest before the token is cached or returned.
