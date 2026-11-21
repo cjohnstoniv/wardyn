@@ -32,6 +32,7 @@ type stallConn struct {
 	net.Conn
 	mu       sync.Mutex
 	stalled  bool
+	slow     time.Duration // while not stalled, each write first waits this long, honouring its deadline
 	deadline time.Time
 	changed  chan struct{} // closed and replaced on every change
 	closed   bool
@@ -48,6 +49,9 @@ func newStallConn(c net.Conn) *stallConn { return &stallConn{Conn: c, changed: m
 func (c *stallConn) bump() { close(c.changed); c.changed = make(chan struct{}) }
 
 func (c *stallConn) stall(on bool) { c.mu.Lock(); c.stalled = on; c.bump(); c.mu.Unlock() }
+
+// setSlow makes every later write take d, as a reader making slow progress does.
+func (c *stallConn) setSlow(d time.Duration) { c.mu.Lock(); c.slow = d; c.bump(); c.mu.Unlock() }
 
 func (c *stallConn) SetWriteDeadline(t time.Time) error {
 	c.mu.Lock()
@@ -83,6 +87,17 @@ func (c *stallConn) Write(p []byte) (int, error) {
 		if !c.deadline.IsZero() && !time.Now().Before(c.deadline) {
 			c.mu.Unlock()
 			return 0, errStallTimeout
+		}
+		if !c.stalled && c.slow > 0 {
+			slow, dl := c.slow, c.deadline
+			c.mu.Unlock()
+			wait := slow
+			if !dl.IsZero() && time.Until(dl) < wait {
+				time.Sleep(max(time.Until(dl), 0))
+				return 0, errStallTimeout
+			}
+			time.Sleep(wait)
+			c.mu.Lock()
 		}
 		if !c.stalled {
 			c.mu.Unlock()
@@ -819,6 +834,66 @@ func TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket(t *testing.T) {
 	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := io.Copy(io.Discard, raw); isTimeout(err) {
 		t.Error("the connection is still open")
+	}
+}
+
+// TestStreamCut_BatchDeadlineSharedAcrossWrites: a handler sets one deadline for a batch (as the run-events
+// loop does) and its writes and flush make slow progress. They share that one budget: the batch stops at its
+// deadline, not one per-write budget later per write.
+func TestStreamCut_BatchDeadlineSharedAcrossWrites(t *testing.T) {
+	conns := make(chan *stallConn, 4)
+	type result struct {
+		at     time.Time
+		writes int
+		err    error
+	}
+	done := make(chan result, 1)
+	const budget = 400 * time.Millisecond
+	srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
+		sc := <-conns
+		_, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
+		defer c.End()
+		if err := http.NewResponseController(cw).Flush(); err != nil {
+			done <- result{err: err}
+			return
+		}
+		sc.setSlow(150 * time.Millisecond)
+		if err := c.SetWriteDeadline(time.Now().Add(budget)); err != nil {
+			done <- result{err: err}
+			return
+		}
+		start, n := time.Now(), 0
+		chunk := []byte(strings.Repeat("x", 32<<10))
+		for ; n < 10; n++ {
+			if _, err := cw.Write(chunk); err != nil {
+				break
+			}
+		}
+		if n == 10 {
+			_ = http.NewResponseController(cw).Flush()
+		}
+		done <- result{at: start, writes: n}
+		_ = c.SetWriteDeadline(time.Time{})
+	})
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	go func() { _, _ = io.Copy(io.Discard, resp.Body) }()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if r.writes >= 10 {
+			t.Fatalf("ten writes of 150 ms each all went inside one %v batch deadline", budget)
+		}
+		if d := time.Since(r.at); d > budget+250*time.Millisecond {
+			t.Errorf("the batch stopped %v after its start, want by its %v deadline", d, budget)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the batch never stopped")
 	}
 }
 

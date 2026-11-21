@@ -71,6 +71,7 @@ type streamCut struct {
 	cut       bool // sticky
 	inflight  int  // wrapped operations running
 	deadline  time.Time
+	batch     time.Time // the handler's own deadline (SetWriteDeadline), zero for none; operations never outlast it
 	ending    bool
 	switched  bool // the server's Hijack returned without error; sticky
 	hijacking bool
@@ -279,8 +280,9 @@ func (c *streamCut) End() {
 
 // op runs f, one operation that can block on the client, under the per-operation rule: refused once the
 // stream is cut, ended or past its end; otherwise under a write deadline of min(now + streamOpWrite, end),
-// never later than the one an operation already in flight runs under; and the deadline is cleared after only
-// when no other operation runs and the stream was not cut meanwhile.
+// never later than the one an operation already in flight runs under nor the handler's own (SetWriteDeadline);
+// and once no other operation runs and the stream was not cut meanwhile, the deadline goes back to the
+// handler's own, or none.
 func (c *streamCut) op(f func() error) error {
 	if err := c.begin(); err != nil {
 		return err
@@ -303,6 +305,9 @@ func (c *streamCut) begin() error {
 	if c.inflight > 0 && c.deadline.Before(d) {
 		d = c.deadline
 	}
+	if !c.batch.IsZero() && c.batch.Before(d) {
+		d = c.batch
+	}
 	c.inflight++
 	c.deadline = d
 	c.setWriteDeadlineLocked(d)
@@ -314,8 +319,8 @@ func (c *streamCut) finish() {
 	defer c.mu.Unlock()
 	c.inflight--
 	if c.inflight == 0 && !c.cut {
-		c.deadline = time.Time{}
-		c.setWriteDeadlineLocked(time.Time{})
+		c.deadline = c.batch // the handler's own deadline stands until it clears it
+		c.setWriteDeadlineLocked(c.batch)
 	}
 }
 
@@ -332,7 +337,8 @@ func (c *streamCut) setWriteDeadlineLocked(t time.Time) {
 
 // SetWriteDeadline is a handler's own deadline (the run-events loop's per batch), never past the end: refused
 // once the stream is cut or ended, and a deadline set at or past the end is refused too, so no batch starts
-// after it. The zero time clears the deadline, as the controller's does.
+// after it. It stands until the handler clears it with the zero time: every operation meanwhile runs under it as
+// well as its own, so the writes and the flush of one batch share one budget.
 func (c *streamCut) SetWriteDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -346,6 +352,10 @@ func (c *streamCut) SetWriteDeadline(t time.Time) error {
 		if c.hardEnd.Before(t) {
 			t = c.hardEnd
 		}
+	}
+	c.batch = t
+	if c.inflight > 0 && !c.deadline.IsZero() && (t.IsZero() || c.deadline.Before(t)) {
+		return nil // an operation in flight keeps its earlier deadline; finish restores this one
 	}
 	c.deadline = t
 	return c.rc.SetWriteDeadline(t)
