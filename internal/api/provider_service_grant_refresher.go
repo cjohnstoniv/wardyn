@@ -91,22 +91,19 @@ func (s *Server) serviceGrantPass(ctx context.Context) {
 		return
 	}
 	// The mask reconciliation runs beside the attempts, never ahead of them: a name another request holds is
-	// left to the next pass.
+	// left to the next pass. The pass's reads take at most 5 s, each attempt at most 25 s, and the mask
+	// reconciliation beside them at most 25 s.
 	reconciled := make(chan struct{})
-	go func() { defer close(reconciled); s.reconcileServiceGrantMasks(ctx) }()
+	go func() {
+		defer close(reconciled)
+		mctx, mcancel := context.WithTimeout(ctx, serviceGrantAttemptBound)
+		defer mcancel()
+		s.reconcileServiceGrantMasks(mctx)
+	}()
 	defer func() { <-reconciled }()
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil || sc.ModelProviders == nil {
+	due, ok := s.serviceGrantDueRows(ctx)
+	if !ok {
 		return
-	}
-	if active, aerr := s.serviceGrantsActive(ctx); aerr != nil || !active {
-		return
-	}
-	var due []types.ModelProvider
-	for _, p := range sc.ModelProviders.Providers {
-		if p.OIDC != nil && p.OIDC.ServiceGrant != nil && !p.Disabled && s.serviceGrantDue(ctx, p) {
-			due = append(due, p)
-		}
 	}
 	sem := make(chan struct{}, serviceGrantPassWorkers)
 	var wg sync.WaitGroup
@@ -122,6 +119,27 @@ func (s *Server) serviceGrantPass(ctx context.Context) {
 		}(p)
 	}
 	wg.Wait()
+}
+
+// serviceGrantDueRows reads the configuration and picks the due rows under one 5 s bound; ok is false when the
+// configuration cannot be read, holds no rows, or the switch-on has not been made.
+func (s *Server) serviceGrantDueRows(ctx context.Context) ([]types.ModelProvider, bool) {
+	rctx, cancel := context.WithTimeout(ctx, serviceGrantStatusWriteBound)
+	defer cancel()
+	sc, err := s.cfg.Store.GetSiteConfig(rctx)
+	if err != nil || sc.ModelProviders == nil {
+		return nil, false
+	}
+	if active, aerr := s.serviceGrantsActive(rctx); aerr != nil || !active {
+		return nil, false
+	}
+	var due []types.ModelProvider
+	for _, p := range sc.ModelProviders.Providers {
+		if p.OIDC != nil && p.OIDC.ServiceGrant != nil && !p.Disabled && s.serviceGrantDue(rctx, p) {
+			due = append(due, p)
+		}
+	}
+	return due, true
 }
 
 func (s *Server) beginServiceGrantAttempt(uid string) bool {
