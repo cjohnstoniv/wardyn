@@ -92,8 +92,8 @@ type Options struct {
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
-// makes without a caller context.
-const callTimeout = 30 * time.Second
+// makes without a caller context. A variable only so a test can scale it.
+var callTimeout = 30 * time.Second
 
 // Substrate is one runner as a substrate.Substrate.
 type Substrate struct {

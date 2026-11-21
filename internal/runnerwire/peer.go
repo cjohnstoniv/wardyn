@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,8 +24,9 @@ const (
 	ackBytes = 64 << 10
 )
 
-// MaxStreams bounds the byte streams a connection holds open, parked ones
-// included: an OPEN past it is refused. A constant, not a knob.
+// MaxStreams bounds the byte streams a connection holds open, parked ones and
+// aborted ones whose RESET is still due included: an OPEN past it, ours or the
+// peer's, is refused. A constant, not a knob.
 const MaxStreams = 256
 
 // maxStreamReplies bounds the RESET and OPEN_OK answers to OPENs that wait
@@ -106,6 +108,10 @@ type Peer struct {
 	owed      int64
 	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
 	replyWake chan struct{}
+	// resetDue is the RESETs Stream.Abort left for the reply worker, oldest first, under mu. Each still
+	// counts against MaxStreams until it is written, the peer's RESET for its stream crosses it, or the
+	// link fails. Its zero value is ready, so NewPeer sets nothing for it.
+	resetDue []dueReset
 	// retire is the carried calls to drop at the first PONG (retireUnanswerable):
 	// Start sets it before the read loop starts, which alone uses it after.
 	retire []uint32
@@ -193,7 +199,7 @@ func (p *Peer) fail(err error) {
 	for _, c := range p.inCalls {
 		cancels = append(cancels, c)
 	}
-	p.streams, p.parked, p.byCall = map[uint32]*Stream{}, map[uint32]*Stream{}, map[uint32][]uint32{}
+	p.streams, p.parked, p.byCall, p.resetDue = map[uint32]*Stream{}, map[uint32]*Stream{}, map[uint32][]uint32{}, nil
 	p.mu.Unlock()
 	close(p.done)
 	p.connSend.Close()
@@ -217,6 +223,44 @@ func (p *Peer) send(ctx context.Context, f Frame) error {
 }
 
 func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
+	return p.sendFrameBy(ctx, f, time.Time{})
+}
+
+// sendFrameBy is sendFrame for a frame that must not be written at or after by; a zero by sets no
+// cutoff. The time is read once the writer is held and before the frame gets a sequence, so a frame
+// refused there gives back the replay room it reserved, is neither written nor buffered, and answers
+// errAdmitExpired.
+func (p *Peer) sendFrameBy(ctx context.Context, f Frame, by time.Time) (uint64, error) {
+	var admit func() error
+	if !by.IsZero() {
+		admit = func() error {
+			if !time.Now().Before(by) {
+				return errAdmitExpired
+			}
+			return nil
+		}
+	}
+	return p.sendChecked(ctx, f, admit)
+}
+
+// sendData writes one DATA frame of s. The stream's reset is read with the link's writer held, so a
+// frame checked after an abort is dropped and never written, and the RESET the reply worker writes
+// follows every DATA frame of the stream that went out. A dropped frame's connection credit is returned
+// at once: the peer never sees the frame, so it never gives that credit back.
+func (p *Peer) sendData(s *Stream, payload []byte) error {
+	_, err := p.sendChecked(p.ctx, Frame{Type: TypeData, Stream: s.id, Payload: payload}, func() error {
+		if err := s.Err(); err != nil {
+			p.connSend.Add(int64(len(payload)))
+			return err
+		}
+		return nil
+	})
+	return err
+}
+
+// sendChecked is sendFrame with admit, when set, run with the writer held and before any sequence is
+// assigned: an error from it writes nothing and is the answer.
+func (p *Peer) sendChecked(ctx context.Context, f Frame, admit func() error) (uint64, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(p.ctx, cancel)
 	defer func() { stop(); cancel() }()
@@ -232,6 +276,14 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 			p.replay.unreserve(len(f.Payload))
 		}
 		return 0, p.offline()
+	}
+	if admit != nil {
+		if err := admit(); err != nil {
+			if f.Type.Sequenced() {
+				p.replay.unreserve(len(f.Payload))
+			}
+			return 0, err
+		}
 	}
 	if f.Type.Sequenced() {
 		f = p.replay.Assign(f)
@@ -502,7 +554,12 @@ func (p *Peer) onReset(id, code uint32) {
 	}
 	delete(p.streams, id)
 	delete(p.parked, id)
+	// Both sides have now reset the stream: a RESET of ours still due is never written.
+	p.dropDueLocked(id)
 	p.mu.Unlock()
+	if h := resetUnlocked.Load(); h != nil {
+		(*h)(id)
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -520,7 +577,8 @@ func (p *Peer) wakeReplies() {
 
 // One worker answers OPENs (queued, bounded), PINGs and dropped credit (each
 // coalesced: the latest PING, the sum of credit), so a peer that sends faster
-// than this side can write cannot create a goroutine per frame.
+// than this side can write cannot create a goroutine per frame. It also writes
+// the RESETs Stream.Abort leaves due.
 func (p *Peer) sendReplies() {
 	for {
 		select {
@@ -543,8 +601,96 @@ func (p *Peer) sendReplies() {
 		if owed > 0 && p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(min(owed, math.MaxUint32)))}) != nil {
 			return
 		}
+		if !p.sendDueResets() {
+			return
+		}
 	}
 }
+
+// dueReset is one RESET Stream.Abort left for the reply worker.
+type dueReset struct{ id, code uint32 }
+
+// errNotDue: a due RESET was retired while the reply worker waited for the writer.
+var errNotDue = errors.New("runnerwire: the RESET is no longer due")
+
+// Test seams, nil outside tests: dueSelected runs in the reply worker after it picks a due RESET and
+// before it takes the writer; resetUnlocked runs in onReset between its unlock and the stream's abort.
+var dueSelected, resetUnlocked atomic.Pointer[func(id uint32)]
+
+// resetLater moves s from the stream table into resetDue, with code, and wakes the reply worker. It adds
+// an entry only when it removes s in the same hold: a stream onReset or fail already took out has been
+// reset by the peer or the link, and gets no RESET. So the count never grows.
+func (p *Peer) resetLater(s *Stream, code uint32) {
+	p.mu.Lock()
+	moved := true
+	switch {
+	case p.streams[s.id] == s:
+		delete(p.streams, s.id)
+	case p.parked[s.id] == s:
+		delete(p.parked, s.id)
+	default:
+		moved = false
+	}
+	if moved {
+		p.resetDue = append(p.resetDue, dueReset{id: s.id, code: code})
+	}
+	p.mu.Unlock()
+	if moved {
+		p.wakeReplies()
+	}
+}
+
+// dropDueLocked takes id's RESET off resetDue, if it is there.
+func (p *Peer) dropDueLocked(id uint32) {
+	if i := p.dueIndexLocked(id); i >= 0 {
+		p.resetDue = slices.Delete(p.resetDue, i, i+1)
+	}
+}
+
+func (p *Peer) dueIndexLocked(id uint32) int {
+	return slices.IndexFunc(p.resetDue, func(d dueReset) bool { return d.id == id })
+}
+
+// sendDueResets writes every due RESET, oldest first, choosing the next under mu after each: wakes
+// coalesce, so writing one per wake would strand the rest. An entry stays due, and counted, while the
+// worker waits for the writer; with the writer held it is checked again, since a crossing RESET from the
+// peer or a link failure may have retired it, and a retired one is not written. It reports false once
+// the link is down.
+func (p *Peer) sendDueResets() bool {
+	for {
+		p.mu.Lock()
+		if len(p.resetDue) == 0 {
+			p.mu.Unlock()
+			return true
+		}
+		d := p.resetDue[0]
+		p.mu.Unlock()
+		if h := dueSelected.Load(); h != nil {
+			(*h)(d.id)
+		}
+		_, err := p.sendChecked(p.ctx, Frame{Type: TypeReset, Stream: d.id, Payload: EncodeReset(d.code)}, func() error {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.dueIndexLocked(d.id) < 0 {
+				return errNotDue
+			}
+			return nil
+		})
+		if errors.Is(err, errNotDue) {
+			continue
+		}
+		if err != nil {
+			return false
+		}
+		p.mu.Lock()
+		p.dropDueLocked(d.id)
+		p.mu.Unlock()
+	}
+}
+
+// heldLocked is what counts against MaxStreams: the live and parked streams, and the aborted ones whose
+// RESET is still due.
+func (p *Peer) heldLocked() int { return len(p.streams) + len(p.parked) + len(p.resetDue) }
 
 // grant returns consumed bytes to the sender's stream window.
 func (p *Peer) grant(s *Stream, n int64) {
@@ -606,6 +752,12 @@ func (p *Peer) Open(ctx context.Context, o Open) (*Stream, error) {
 		p.mu.Unlock()
 		return nil, p.offline()
 	}
+	if p.heldLocked() >= MaxStreams {
+		p.mu.Unlock()
+		// No OPEN is sent. This is the answer a full peer's RESET gives the opener, so a caller's
+		// capacity retry covers both.
+		return nil, &ResetError{Code: ResetCapacity}
+	}
 	id := p.ids.Next()
 	s := p.newStream(id, o.Kind)
 	p.streams[id] = s
@@ -661,7 +813,7 @@ func (p *Peer) onOpen(f Frame) error {
 		p.mu.Unlock()
 		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
 	}
-	if len(p.streams)+len(p.parked) >= MaxStreams {
+	if p.heldLocked() >= MaxStreams {
 		p.mu.Unlock()
 		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)})
 	}
