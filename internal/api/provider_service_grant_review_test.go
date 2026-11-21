@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,8 +68,11 @@ func (f *svcFix) cached() bool {
 
 // The owner is removed while a renewal fails transiently. The failed renewal still repeats the
 // owner check, so the answer is the 403 that makes the proxy drop its last good header, not a 503 it rides out.
+// Plant: put the last good token into the failed renewal's mint row; the sweep runs after that row and its sink
+// copy have settled, so it finds the token.
 func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	f := newSvcFixWithSecret(t)
+	ids := f.captureRowIDs()
 	plan, _, _, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
@@ -91,6 +95,13 @@ func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	if code != http.StatusForbidden || body["reason"] != reasonServiceGrantNotListed {
 		t.Fatalf("resolve = %d %v, want 403 %s", code, body, reasonServiceGrantNotListed)
 	}
+	got := ids()
+	if len(got) == 0 {
+		t.Fatal("no mint row id was captured")
+	}
+	failing := got[len(got)-1] // the failed renewal's row settles after the answer: the sweep covers it and its copy
+	f.awaitRows(t, failing)
+	f.awaitSink(t, failing)
 	if strings.Contains(f.auditAll(), svcToken(1)) {
 		t.Error("the last good token reached the audit")
 	}
@@ -724,6 +735,207 @@ func TestServiceGrant_RecordGoneAtReadStaysFinalOverInconclusiveRereads(t *testi
 			}
 			if f.cached() {
 				t.Fatal("the cached token survived the record's absence")
+			}
+		})
+	}
+}
+
+// A token that answers late in the token request's window is still published: the publication runs under the
+// attempt's context, never the time the try left over. The bounds are shortened to real milliseconds, since a
+// context's deadline runs on the real clock: the provider answers 300 ms into a 400 ms try, and the publication's
+// revision read then takes 200 ms, ending after the try's deadline and inside the attempt's 1200 ms. The controls
+// run the same publication under a child of the request's context and under an expired one, and both must fail; a
+// read that outlasts the attempt is cut at its deadline.
+// Plant: run the publication under the try's context; its revision read then ends at the 400 ms try and the late
+// token is not published.
+func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
+	const answerAt, readTakes = 300 * time.Millisecond, 200 * time.Millisecond
+	// The attempt keeps attempt >= token + tail, so the try is the 400 ms token bound and the publication runs
+	// under the attempt's context, which ends at 1200 ms.
+	shorten := func(t *testing.T) {
+		attempt, tokenBound, tail, publishBound := serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound
+		serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound = 1200*time.Millisecond, 400*time.Millisecond, 700*time.Millisecond, 300*time.Millisecond
+		t.Cleanup(func() {
+			serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound = attempt, tokenBound, tail, publishBound
+		})
+	}
+	lateFix := func(t *testing.T, read time.Duration) *svcFix {
+		f := newSvcFixWithSecret(t)
+		f.idp.mu.Lock()
+		f.idp.respond = func(n int, r svcReq) svcAnswer {
+			if time.Until(r.Deadline) < answerAt {
+				return svcAnswer{Err: errors.New("the request has no time left to answer late in")}
+			}
+			time.Sleep(answerAt) // the provider's own latency, inside the request's 400 ms
+			f.sec.mu.Lock()
+			f.sec.revDelay = read // the next bounded read is the publish's: the attempt's earlier reads are done
+			f.sec.mu.Unlock()
+			return svcOK(n, 3600)
+		}
+		f.idp.mu.Unlock()
+		return f
+	}
+	// publishUnder runs the publish step alone under ctx, as the mint would after a late answer.
+	publishUnder := func(t *testing.T, f *svcFix, ctx context.Context) error {
+		p := f.provider()
+		f.sec.mu.Lock()
+		rev := f.sec.revOf(serviceGrantSecretName(p.UID))
+		f.sec.revDelay = readTakes // no token request here: the publish's read takes its time directly
+		f.sec.mu.Unlock()
+		tok := serviceGrantMinted{token: svcToken(9), expiresAt: f.clock.Now().Add(time.Hour)}
+		_, err := f.srv.publishServiceGrantToken(ctx, p, serviceGrantDigest(p), rev, true, serviceGrantTriggerRefresh,
+			f.clock.Now(), f.srv.nextServiceGrantGen(), f.srv.serviceGrantCacheGen(p.UID), tok, func() {})
+		return err
+	}
+
+	t.Run("published under its own bound", func(t *testing.T) {
+		shorten(t)
+		f := lateFix(t, readTakes)
+		started := time.Now()
+		tok, err := f.token(serviceGrantTriggerRefresh)
+		if err != nil || tok.token != svcToken(1) || !f.cached() {
+			t.Fatalf("late answer = %q, %v, cached %v; want the token published", tok.token, err, f.cached())
+		}
+		if took := time.Since(started); took < answerAt+readTakes || took >= serviceGrantAttemptBound {
+			t.Fatalf("the mint took %v, want the late answer and the full read (at least %v) inside both bounds", took, answerAt+readTakes)
+		}
+	})
+	t.Run("control: a child of the request's context fails", func(t *testing.T) {
+		shorten(t)
+		f := lateFix(t, readTakes)
+		req, cancel := context.WithTimeout(context.Background(), serviceGrantTokenBound)
+		defer cancel()
+		time.Sleep(answerAt) // the request's time used by the late answer
+		pctx, pcancel := context.WithTimeout(req, serviceGrantPublishBound)
+		defer pcancel()
+		if err := publishUnder(t, f, pctx); err == nil || f.cached() {
+			t.Fatalf("publish under the request's context = %v, cached %v; want it cut at the request's deadline", err, f.cached())
+		}
+	})
+	t.Run("control: an expired context fails", func(t *testing.T) {
+		shorten(t)
+		f := lateFix(t, readTakes)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		if err := publishUnder(t, f, ctx); err == nil || f.cached() {
+			t.Fatalf("publish under an expired context = %v, cached %v; want it refused", err, f.cached())
+		}
+	})
+	t.Run("a publication read past the attempt's deadline is cut there", func(t *testing.T) {
+		shorten(t)
+		f := lateFix(t, 10*time.Second)
+		started := time.Now()
+		_, err := f.token(serviceGrantTriggerRefresh)
+		took := time.Since(started)
+		var se *serviceGrantError
+		if !errors.As(err, &se) || se.reason != svcReasonUnavailable || se.definitive || f.cached() {
+			t.Fatalf("a publish read past its bound = %v (%+v), cached %v; want the transient unavailable, nothing cached", err, se, f.cached())
+		}
+		if took < serviceGrantAttemptBound-50*time.Millisecond || took >= serviceGrantAttemptBound+time.Second {
+			t.Fatalf("the mint took %v, want it to end at the attempt's bound (about %v)", took, serviceGrantAttemptBound)
+		}
+	})
+}
+
+// A rotation that completes after an attempt's last revision read never lets that attempt publish: the attempt is
+// held after the read inside its publish, the rotation is written through the route, and the attempt then resumes.
+// With a newer-revision attempt published in between, and with none, the old token is never cached or returned, the
+// old attempt writes one superseded row and no success row, and its caller gets the new revision's token.
+// Plant: drop the eviction case from serviceGrantSupersededBy; the cache generation is the double's only signal
+// here, so the old token publishes.
+func TestServiceGrant_RotationAfterLastRevisionReadNeverPublishesOldToken(t *testing.T) {
+	for _, newerFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("newer attempt publishes first=%v", newerFirst), func(t *testing.T) {
+			f := newSvcFixWithSecret(t)
+			ids := f.captureRowIDs() // the old attempt's publication fixes the first id
+			var oldSent, held atomic.Bool
+			paused, resume := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(resume) }) }
+			t.Cleanup(release)
+			f.idp.mu.Lock()
+			f.idp.respond = func(n int, _ svcReq) svcAnswer {
+				if n == 1 {
+					oldSent.Store(true)
+				}
+				return svcOK(n, 3600)
+			}
+			f.idp.mu.Unlock()
+			f.sec.mu.Lock()
+			f.sec.afterRev = func() { // the old attempt's publish read, the first revision read after its request
+				if oldSent.Load() && held.CompareAndSwap(false, true) {
+					close(paused)
+					select {
+					case <-resume:
+					case <-time.After(10 * time.Second):
+					}
+				}
+			}
+			f.sec.mu.Unlock()
+			type result struct {
+				tok serviceGrantMinted
+				err error
+			}
+			old := make(chan result, 1)
+			go func() {
+				tok, err := f.token(serviceGrantTriggerRefresh)
+				old <- result{tok, err}
+			}()
+			svcAwait(t, paused, "the old attempt to pass its last revision read")
+			if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code != http.StatusNoContent {
+				t.Fatalf("rotation: %d %s", w.Code, w.Body.String())
+			}
+			if newerFirst {
+				if tok, err := f.token(serviceGrantTriggerRefresh); err != nil || tok.token != svcToken(2) {
+					t.Fatalf("the newer attempt = %q, %v; want the second token", tok.token, err)
+				}
+			}
+			release()
+			var r result
+			select {
+			case r = <-old:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the old attempt never returned")
+			}
+			if r.tok.token == svcToken(1) {
+				t.Fatal("the old attempt returned its token after the rotation")
+			}
+			var se *serviceGrantError
+			if r.err != nil && (!errors.As(r.err, &se) || se.reason != svcReasonUnavailable || se.definitive) {
+				t.Fatalf("the old attempt's caller got %v, want the new revision's token or the transient error", r.err)
+			}
+			if r.err == nil && r.tok.token != svcToken(2) {
+				t.Fatalf("the old attempt's caller got %q, want the new revision's token", r.tok.token)
+			}
+			f.srv.svcGrant.mu.Lock()
+			c, ok := f.srv.svcGrant.cache[f.uid]
+			f.srv.svcGrant.mu.Unlock()
+			if !ok || c.token != svcToken(2) {
+				t.Fatalf("the cache holds %q (present %v), want the second token", c.token, ok)
+			}
+			var superseded, success int
+			for _, ev := range f.mintRows() {
+				var d map[string]any
+				_ = json.Unmarshal(ev.Data, &d)
+				switch {
+				case d["superseded"] == true:
+					superseded++
+				case ev.Outcome == "success":
+					success++
+				}
+			}
+			if f.idp.count() != 2 || superseded != 1 || success != 1 {
+				t.Fatalf("%d token requests, %d superseded and %d success rows; want 2, 1 (the old) and 1 (the new)",
+					f.idp.count(), superseded, success)
+			}
+			oldID := ids()[0]
+			rows := f.st.rowsOf(oldID)
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"superseded_by":"eviction"`) {
+				t.Fatalf("the old attempt's rows = %v, want one superseded by the eviction", rows)
+			}
+			f.sinkSettled(t)
+			if n := f.sink.copiesOf(oldID); n != 1 {
+				t.Fatalf("the sink holds %d copies of the old attempt's row, want 1", n)
 			}
 		})
 	}

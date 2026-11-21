@@ -25,9 +25,11 @@ import (
 
 // The injector reads the real clock and the server reads cfg.Now, so the test moves the server's clock instead of
 // waiting: a resolve answered with the server six minutes behind is a resolve made six minutes ago, and moving the
-// server 51 minutes past the first mint is the moment the proxy asks again near the token's end. The injector
-// rides its installed header while the lease allows and its retry pacing holds it (proxy.injector.resolveCtx),
-// then asks; the server must answer that ask with a new token, never the one inside its last ten minutes.
+// server 51 minutes past the first mint is the moment the proxy asks again near the token's end. The injector's
+// boot resolve installs a lease already inside its five-minute margin, so the first forward resolves again and
+// gets the server's cached token; that answer arms the injector's retry pacing (proxy.injector.resolveCtx), which
+// holds the header until the pacing runs out and the injector asks; the server must answer that ask with a new
+// token, never the one inside its last ten minutes.
 func TestServiceGrant_ProxyRenewsAcrossExpiry_PG(t *testing.T) {
 	f := newSvcLaunchPG(t)
 	var skew atomic.Int64
@@ -70,6 +72,9 @@ func TestServiceGrant_ProxyRenewsAcrossExpiry_PG(t *testing.T) {
 		defer cancel()
 		_ = eng.Close(ctx)
 	})
+	if n := resolves.Load(); n != 1 {
+		t.Fatalf("resolves after the injector was built = %d, want its one boot resolve", n)
+	}
 	// send is one sandbox request through the injector; it answers the header the upstream received.
 	send := func(what string) string {
 		t.Helper()
@@ -89,8 +94,9 @@ func TestServiceGrant_ProxyRenewsAcrossExpiry_PG(t *testing.T) {
 	if got := send("the first request"); got != first {
 		t.Fatalf("the first request forwarded %q, want the dispatched token", got)
 	}
-	if n := resolves.Load(); n != 1 {
-		t.Fatalf("resolves after the first request = %d, want 1", n)
+	if n := resolves.Load(); n != 2 || f.idp.count() != 1 {
+		t.Fatalf("after the first request: %d resolves and %d token requests, want 2 (the lease was inside the margin) and 1",
+			n, f.idp.count())
 	}
 
 	// 51 minutes after the first mint: nine minutes are left on the first token, so the server must renew it.
@@ -108,8 +114,8 @@ func TestServiceGrant_ProxyRenewsAcrossExpiry_PG(t *testing.T) {
 		time.Sleep(time.Second) // real time for the injector's retry pacing to run out; the loop is bounded above
 	}
 	renewal := resolves.Load()
-	if got := forwarded[len(forwarded)-1]; got != second || renewal != 2 || f.idp.count() != 2 {
-		t.Fatalf("the renewal forwarded %q after %d resolves and %d token requests, want the second token, 2 and 2",
+	if got := forwarded[len(forwarded)-1]; got != second || renewal != 3 || f.idp.count() != 2 {
+		t.Fatalf("the renewal forwarded %q after %d resolves and %d token requests, want the second token, 3 and 2",
 			got, renewal, f.idp.count())
 	}
 	if got := send("the request after the renewal"); got != second || resolves.Load() != renewal {

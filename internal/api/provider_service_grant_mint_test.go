@@ -69,11 +69,14 @@ func TestServiceGrant_FormCarriesScopeAndAudience(t *testing.T) {
 	}
 }
 
+// Plant: copy the provider's id_token into the success row's data; the sweep runs after the row's sink copy
+// arrives, so it finds the value.
 func TestServiceGrant_NoOpenIDAndIDTokenIgnored(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.idp.respond = func(n int, _ svcReq) svcAnswer {
 		return svcAnswer{Status: 200, Body: `{"access_token":"` + svcToken(n) + `","expires_in":3600,"id_token":"idtoken-never-verified-or-kept-0001","refresh_token":"refresh-never-kept-0000000001"}`}
 	}
+	ids := f.captureRowIDs()
 	f.mustToken(serviceGrantTriggerRefresh)
 	req := f.idp.requests()[0]
 	if strings.Contains(req.Form.Get("scope"), "openid") || req.Form.Has("nonce") {
@@ -85,6 +88,7 @@ func TestServiceGrant_NoOpenIDAndIDTokenIgnored(t *testing.T) {
 	if cached.token != svcToken(1) {
 		t.Fatalf("cached token = %q, want the access token", cached.token)
 	}
+	f.awaitSink(t, ids()...) // the sweep covers the success's sink copy
 	all := f.auditAll() + f.logs.String()
 	for _, v := range []string{"idtoken-never-verified-or-kept-0001", "refresh-never-kept-0000000001"} {
 		if strings.Contains(all, v) {
@@ -322,6 +326,7 @@ func TestServiceGrant_FailureVisibleBeforeTokenExpires(t *testing.T) {
 	if f.idp.count() != 2 {
 		t.Fatalf("requests = %d, want the pass to try a new token", f.idp.count())
 	}
+	f.srv.serviceGrantHeartbeat(context.Background()) // the heartbeat is its own loop: this replica is live now
 	rows, _ := f.st.ServiceGrantStatuses(context.Background(), []string{f.uid})
 	if st := serviceGrantStatusOf(f.provider(), rows); st.State != serviceGrantStateFailed || st.Replicas[0].Reason != "invalid_client" {
 		t.Fatalf("status = %+v, want failing while the old token still has life", st)
@@ -367,15 +372,20 @@ func TestServiceGrant_ConcurrentResolvesMintOnce(t *testing.T) {
 	}
 }
 
+// Plant: put the error_description into the failure row's data; the sweep runs after that row and its sink copy
+// have settled, so it finds the text.
 func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.idp.respond = func(int, svcReq) svcAnswer {
 		return svcAnswer{Status: 400, Body: `{"error":"invalid_client","error_description":"bad secret ` + svcClientSecret + `"}`}
 	}
+	ids := f.captureRowIDs()
 	_, err := f.token(serviceGrantTriggerRefresh)
 	if err == nil || strings.Contains(err.Error(), svcClientSecret) {
 		t.Fatalf("error = %v", err)
 	}
+	f.awaitRows(t, ids()...) // the failure row settles after the answer: the sweep covers it and its copy
+	f.awaitSink(t, ids()...)
 	row, _ := f.st.statusOf(f.uid, f.srv.svcGrant.replica())
 	haystack := f.logs.String() + f.auditAll() + err.Error() + row.Reason + row.OAuthError
 	if strings.Contains(haystack, svcClientSecret) || strings.Contains(haystack, "bad secret") {
@@ -383,6 +393,7 @@ func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	}
 }
 
+// Plant: leave egress out of the failure row's data; that row, read by its id once settled, then fails its check.
 func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	var mu sync.Mutex
@@ -398,6 +409,7 @@ func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	t.Cleanup(proxy.Close)
 	pu, _ := url.Parse(proxy.URL)
 	f.srv.cfg.ServiceGrantTransport = &http.Transport{Proxy: http.ProxyURL(pu)}
+	ids := f.captureRowIDs()
 	if _, err := f.token(serviceGrantTriggerRefresh); err == nil {
 		t.Fatal("the proxy refused the tunnel and the mint succeeded")
 	}
@@ -406,7 +418,11 @@ func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	if len(connects) != 1 || connects[0] != "idp.example.test:443" {
 		t.Fatalf("proxy saw CONNECT %v, want one for the token host", connects)
 	}
-	rows := f.mintRows()
+	if len(ids()) != 1 {
+		t.Fatalf("row ids = %v, want the one request's", ids())
+	}
+	f.awaitRows(t, ids()[0]) // the failure row settles after the answer
+	rows := f.st.rowsOf(ids()[0])
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"egress":"proxy"`) {
 		t.Fatalf("audit rows = %v, want one naming egress proxy", rows)
 	}

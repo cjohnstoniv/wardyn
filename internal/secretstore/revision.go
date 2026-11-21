@@ -29,6 +29,21 @@ type Revisioned interface {
 	Revision(ctx context.Context, name string) (string, error)
 }
 
+// RevisionRow is a Revisioned store whose revision of a name is the value_rev of this view's row in the secrets
+// table of the database it shares with internal/store, so a transaction there can share-lock the row.
+type RevisionRow interface {
+	RevisionRowOwner() (owner string, ok bool)
+}
+
+// RevisionRowOf is st's RevisionRow owner, or ok=false for a store whose revision is no such row.
+func RevisionRowOf(st Store) (string, bool) {
+	r, can := st.(RevisionRow)
+	if !can {
+		return "", false
+	}
+	return r.RevisionRowOwner()
+}
+
 type ifRevisionKey struct{}
 
 // WithIfRevision returns a context under which a Put or Delete acts only while
