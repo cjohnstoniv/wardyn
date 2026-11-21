@@ -224,6 +224,9 @@ func startRead[T, U any](s *Server, h startHold, read func(context.Context) (T, 
 	return read(ctx)
 }
 
+// startAfterFunc arms a start's budget timer (startAdmitted): time.AfterFunc, which a test replaces to hold it.
+var startAfterFunc = time.AfterFunc
+
 // startAdmitted runs start, one command start under h, and lets the fence go beside the started command, never
 // while it runs. start runs on a context of ctx's that is cut at budget, which also lets the fence go, or when h's
 // lock is lost. A value start returns after either, or once a check on the lock's own connection
@@ -237,7 +240,7 @@ func startAdmitted[T any](s *Server, ctx context.Context, h startHold, budget ti
 		return zero, errStartLockLost
 	}
 	sctx, cut := context.WithCancelCause(ctx)
-	slow := time.AfterFunc(budget, func() { cut(errStartTooSlow); h.release() })
+	slow := startAfterFunc(budget, func() { cut(errStartTooSlow); h.release() })
 	unwatch := context.AfterFunc(h.ctx, func() {
 		if errors.Is(context.Cause(h.ctx), db.ErrLockLost) {
 			cut(errStartLockLost)
