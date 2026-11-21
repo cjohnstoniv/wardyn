@@ -13,6 +13,11 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
 - Authorization is a real three-role model: every OIDC session carries an **admin**, **`security_admin`** or **user** role (0.9 removed `member`), derived once at login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session cookie.
 - A sign-in whose subject starts with `service:` (and one that starts `local:`, `device:`, `delegate:` or `subject:`, or equals `admin-token`, `erased` or the local operator's name) is refused: those names are reserved. A `service:<name>` principal is a service identity and authenticates only by its own tokens, never by signing in (`isReservedPrincipal`, [`internal/api/reserved_principal.go`](../../internal/api/reserved_principal.go)).
 - A cookie signed before this existed (pre-0.5) decodes as no session, forcing a re-login that derives one fresh.
+- **People of an issuer portal** never sign in to the console: their principal starts `delegate:person:`, which every human door refuses. They get in only through their portal's token exchange ([issuer portals](api-tokens.md#portals-with-their-own-identity-issuer)).
+  - They are always role `user`, with the portal's `user_type`, and a delegated token acts at user reach.
+  - Their record holds no groups and no email, so a group never admits them.
+  - An admin names one by principal in a unit membership, capability grant, restriction member, drive allocation or runner-pool use policy. The principal's issuer must have a binding, or the write is refused.
+  - A unit's admins, template group admins, role mappings, a remote runner's people and a service identity's sponsor refuse a portal person: they never hold an admin, sponsor, approver or console role.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|

@@ -35,7 +35,7 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 ## Take a set
 
 1. Stop the writer, then take the dump or snapshot as [Back them up](../OPERATIONS.md#back-them-up) says.
-2. Copy the spool, its sidecars, any `fs` recordings and the drive objects into a new, empty directory in the layout above. Quiesce each `mac_disk` drive's writers first, then copy its image sparse (`cp -c`, or `rsync --sparse`).
+2. Copy the spool, its sidecars, any `fs` recordings and the drive objects into a new, empty directory in the layout above. Quiesce each `mac_disk` drive's writers first, then copy its image sparse: `cp -c` on the same APFS volume, otherwise `rsync --sparse`.
 3. Write the manifest with the writer still stopped. The verb refuses while any other client is connected.
 
    ```sh

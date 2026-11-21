@@ -15,20 +15,54 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
+- A portal can sign its people in against its own identity provider: register it with an `issuer` (and an `internal_issuer` when Wardyn must reach the provider at another address). Wardyn verifies the provider's tokens itself and admits a person by the portal's group, one claim it names, or `portal_managed_admission`. It mints a grant of 5 to 10 minutes that acts as a `user` in the unit the portal is pinned to. These people are never console sign-ins. Issuer portals stay off until an admin calls `POST /admin/portal-issuers/activate`, once, after every older wardynd is stopped ([issuer portals](docs/operations/api-tokens.md#portals-with-their-own-identity-issuer)). Retiring an unused issuer binding is `DELETE /admin/portal-issuers/{k}`, and changing an issuer portal's admission rule is `PUT /admin/delegates/{id}/admission`.
+- Migration `0294_portal_issuer` adds columns to `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that refuses a portal person's deactivation deadline, reactivation or purge written by anything but the portal's own store writes. It refuses to run, naming the count, while a `delegates` row with no issuer has an empty `scope_group`.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `console_issuers`, and
   `SELECT, INSERT, UPDATE, DELETE` on `portal_issuers`, `portal_grants` and `portal_person_portals`, to every role that was granted `UPDATE` on
   `delegates`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not
   pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as
-  the migration has run. WORDING PENDING
-<!-- WORDING PENDING: the service grant lines below are the minimum the migration guards need; the release notes' wording replaces them. -->
-- A `custom_endpoint` provider's `oidc` block can carry a `service_grant`, a client-credentials grant that lists the service identities allowed to use it. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
+  the migration has run. Until then a server with console sign-in configured does not start.
+- A `custom_endpoint` model provider's `oidc` block can carry a `service_grant`: a client-credentials grant that lists the service identities allowed to use it. An admin writes its client secret with `PUT /model-providers/{id}/service-grant/secret` and removes the grant with `DELETE /model-providers/{id}/service-grant`; a removed grant's secret is deleted by a background clean-up, which `POST /service-grant-cleanups/{uid}/retry` retries. A write that adds a grant answers 409 `service_grants_not_activated` until the same switch-on as issuer portals. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
   `provider_service_grant_status` to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If
   the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
   grant's token request outcome is recorded.
-- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) lists exact host names whose service grant token request always goes through the daemon proxy, even when `WARDYN_DAEMON_NO_PROXY` covers them. For now it changes only that token request; every other call wardynd makes is routed as before. WORDING PENDING
+- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) lists exact host names whose service grant token request always goes through the daemon proxy, even when `WARDYN_DAEMON_NO_PROXY` covers them. Boot refuses an IP address, a numeric name, `localhost`, a host wardynd always reaches directly, a bad entry, or a list with no usable proxy, in every mode that installs the daemon transport. For now it changes only that token request; every other call wardynd makes is routed as before.
+- `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` lists the hosts an issuer portal's `internal_issuer` may name, and `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` adds a CA bundle for those hosts only. A failed refresh of an issuer's discovery or keys counts on `wardyn_portal_issuer_refresh_failures_total`.
+- The audit log has rows for these: `portal_issuers.activate`, `portal_issuers.activate_override`, `portal_issuers.old_client_seen`, `portal_issuer.retire`, `delegate.admission.change`, and `model_provider.service_grant.mint`, `.secret_write` and `.secret_delete`. A portal person's first exchange writes one `person.create` row, which carries no email.
+- `GET /runs?service=1` returns only the runs started with Keep it running, and the Runs page's Services segment uses it, so the segment no longer depends on which page of runs was loaded.
+
+### Changed
+
+- The server and its subcommands name their database sessions in `application_name`: `wardynd/<version>/<replica>` for the server and `wardynd-<tool>/<version>` for a subcommand. The issuer portal switch-on reads these labels to tell a 0.10.2 server from an older one.
+- A person-erasure `credentials` count, `delegated_deleted`, now includes issuer-portal grants, and the erasure deletes the record of which portals a portal person used.
+- A run's policy view marks an allow entry that Wardyn opens only some destinations of as Partly inspected, and the answer's `host_marks.partial` lists those entries. A Tunnel only entry says Wardyn leaves the TLS connection intact, though a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.
+- The Mac recovery steps copy a `mac_disk` image with `cp -c` on the same APFS volume, and with `rsync --sparse` otherwise.
+
+### Fixed
+
+- `wardyn run output` on a terminal now shows the DEL character as `\x7f`, as the help text promised.
+- `wardynd -recovery-rehearse` now reports a key fingerprint failure first when the platform key file differs from the one recorded in the set's manifest, or is unset. Manifests from older versions skip that comparison.
+- `make agent-image-claude-code-multiarch` refuses `AWS_CLI_INSTALL=staged`, since one staged zip is one architecture. Build each architecture separately, or leave it unset.
+- Images published per commit report `<version>+<commit>` in `wardyn --version` and in `/healthz`. Release images and tagged builds still report the bare version.
+- On an Intel Mac, the runner package no longer sets up the virtual machine ledger, which needs Apple silicon, so the install no longer fails there. On Apple silicon a failure there still fails the install.
+- The release build's check that every macOS binary loads on macOS 26 now also refuses a minimum of 26.0.1 or any other 26.0 patch.
+- `wardyn-runnerd doctor` now fails a start the runner refused before any stage, and keeps that failure until the runner next connects, instead of reporting it as stopped.
+- The Runs page's Services segment is read by the server, so it no longer shows an empty or partial list when the loaded page of runs holds few service runs. A segment that cannot show them all says so and offers to look further back.
+- The approval notification card says "No deliveries marked failed in the past hour" when none failed.
+- The boundary review shows a change's Data out value and lock, and says "No existing policies would change" when none would.
+- A service with no health reading for 10 minutes reads Health unknown.
+- The audit retention status stops showing a decrease as pending once its date has passed.
+- A notification that names a person is dismissed on sign-out, and a late one from a request started before it is not shown.
+- A run past its lifetime cap whose files are kept no longer offers Extend and revive: the banner shows the retention date and says the run cannot be revived, and a request to move its end is refused 409 `run_end_wait_max_lifetime`, naming that date.
+- An archived approval that was cancelled because its run was lost now says so, instead of a fixed sentence.
+- A run's header shows its end time from `ended_at`, so a late teardown no longer moves it.
+
+### Before you upgrade
+
+- A `delegates` row with no issuer and an empty `scope_group` stops migration `0294`. Set a group on each, or revoke the portal and delete the row.
+- Issuer portals and model-provider service grants are off until an admin switches them on. Stop every wardynd older than 0.10.2 first: an older server does not know the new tables.
 
 ## [0.10.1] — 2026-11-21
 

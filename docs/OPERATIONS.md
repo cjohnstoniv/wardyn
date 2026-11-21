@@ -527,7 +527,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
 
-**Disk drives on Macs.** A `mac_disk` drive's image sits on one Mac runner, outside every volume above. The inventory lists it as `mac_disk_images`, naming the Mac and the image. Quiesce its writers and copy it sparse (`cp -c`, or `rsync --sparse`) ([steps](operations/recovery-rehearsal.md#take-a-set)). A rehearsal keeps the image under the scratch set and never touches the Mac. Restore it only in a real recovery, on the Mac `home_runner_id` names with its writers quiesced, never over a working image.
+**Disk drives on Macs.** A `mac_disk` drive's image sits on one Mac runner, outside every volume above. The inventory lists it as `mac_disk_images`, naming the Mac and the image. Quiesce its writers and copy it sparse: `cp -c` on the same APFS volume, otherwise `rsync --sparse` ([steps](operations/recovery-rehearsal.md#take-a-set)). A rehearsal keeps the image under the scratch set and never touches the Mac. Restore it only in a real recovery, on the Mac `home_runner_id` names with its writers quiesced, never over a working image.
 
 **Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
 
@@ -1218,6 +1218,7 @@ takes effect when, from its own clock:
   - The pending value and its date are stored, so a restart never moves the date, and setting the same value at
     every boot for 29 days leaves it where it was.
   - Restating the current value withdraws a pending decrease.
+  - `GET /audit/retention` shows a decrease as pending only until its date. After that the new window is the effective one, though the sweeper may not yet have rewritten the stored row.
 - the boot that records a change writes an `audit.retention.set` audit row.
 
 Set the same value on every replica. `GET /audit/retention` (`wardyn audit retention`) shows the effective and the
@@ -1406,7 +1407,8 @@ erases one person's retained records by explicit scope, in one audited act
     `secret_owner_generations` below would. Its `erased_at` tells the run token sweep which refused token records
     an erase kept.
   - `secret_owner_generations` keeps the subject id (below).
-- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted` (delegated tokens and
+  issuer-portal grants together; the record of which portals a portal person used goes with them, uncounted), and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
   erasure again once they expire to delete them. `run_create_keys_deleted` counts their `POST /runs` idempotency keys.
 
@@ -1959,7 +1961,7 @@ Moved to [api-tokens.md](operations/api-tokens.md#tokens-for-a-person-who-never-
 
 ### Delegated run management (portals)
 
-Moved to [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals).
+Moved to [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals). Portals with their own identity issuer, and the one-time step that switches them on, are in the same page ([issuer portals](operations/api-tokens.md#portals-with-their-own-identity-issuer)).
 
 ### Three roles, and who sets the walls
 
@@ -4167,6 +4169,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0291` (`0291_runner_event_refusal_windows`) creates `runner_event_refusal_windows`: each runner's current window of `runner.event.refuse` rows (its start, the rows it wrote and the refusals it suppressed), so the bound holds across replicas and restarts. The next window overwrites the row; a row goes with its runner. The migration grants `SELECT, INSERT, UPDATE` on it to every role granted `UPDATE` on `runner_spool_cursors`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no refusal is recorded, and a runner resends each event the organisation refuses.
 - `0292` (`0292_agent_runs_data_out`) adds the nullable `agent_runs.data_out` (`0001`'s table): the run's `data_out` rule, written at dispatch and kept when audit retention removes the run's policy records. Existing runs are filled from the policy records retention has kept, except a run at policy generation 2 or later whose current generation's record is missing: it is left NULL and its rule reads as unreadable. Any other run with none left is set to `blocked` if it predates the newest record retention removed, plus a day, and is not queued, pending or starting with no sandbox. No grant changes.
 - `0293` (`0293_run_support_grants`) creates `run_support_grants`: each request by a super admin to help inside another person's running run, with the owner's answer, the doors and minutes the owner allowed, and when and why the grant ended. It adds `support_grant` and `support_expires` to `attach_tickets` (`0026`'s table) and `support` to `run_attach_leases` (`0129`'s), and runs `CREATE OR REPLACE FUNCTION run_support_grants_end_with_run()` for a trigger on `agent_runs` (`0001`'s table) that ends a run's open grant in the statement that stops the run or marks it lost. The function runs as the migrator, so a run write never fails for want of this table's grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on the table to every role granted `DELETE` on `run_attach_leases`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no support request or answer is recorded, and approving and denying approval holds works as before. The run watcher's sweep (which needs `SELECT` and `UPDATE`), its list of live grants and the check of whether a person was a run's helper skip a role without `SELECT` on the table, and erasing a person's run tasks skips the grant blank for a role without `INSERT`, which can have written no row; a role with `INSERT` but not `UPDATE` fails that erasure.
+- `0294` (`0294_portal_issuer`) adds the issuer-portal columns to `delegates` (`0094`'s table; `issuer` is empty on every existing row, which is a console portal as before) and the portal person's columns to `principal_identities` (`0113`'s table). It creates `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and `CREATE FUNCTION principal_identities_portal_lifecycle()` for a trigger on `principal_identities` that refuses a portal person's deactivation deadline, reactivation or purge written by anything but the portal's own store writes, whatever binary sends the SQL. It refuses to run, naming the count, while a `delegates` row with no issuer has an empty `scope_group`: set a group on each, or revoke the portal and delete the row, then upgrade. The migration grants `SELECT, INSERT` on `console_issuers`, and `SELECT, INSERT, UPDATE, DELETE` on the other three, to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then a server with console sign-in configured does not start, because at boot it reads `portal_issuers` and records its console issuer in `console_issuers`.
+- `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4588,6 +4592,8 @@ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set ima
   - The chart's startup
     probe window is derived from `WARDYN_MIGRATE_TIMEOUT` (above): if your table is larger than the figures cover,
     raise the timeout rather than letting the probe kill a migration that is making progress.
+
+- **Switching on 0.10.2's issuer portals and service grants.** Both stay off until an admin calls `POST /api/v1/admin/portal-issuers/activate`, once, after every older wardynd is stopped. The steps and what the call checks are under [issuer portals](operations/api-tokens.md#switch-issuer-portals-on). Until then a write that adds a service grant to a model provider answers 409 `service_grants_not_activated`.
 
 ### Backup: what `pg_dump` carries here, and what it does not
 
