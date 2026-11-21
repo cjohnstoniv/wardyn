@@ -165,6 +165,56 @@ func TestPortalSuspend_KillClaimBelongsToItsAcquisition_PG(t *testing.T) {
 	}
 }
 
+// A worker that claimed a kill and died leaves its claim id on the row. While the lease runs, a claim-less write (a
+// failure before any claim, the finish of a step that owes no kill) is refused; once it has run out such a write owns
+// the row, so the spared finish closes it on the next pass instead of being refused on every one, and it closes with no
+// receipt pinned, since no kill is counted for it.
+func TestPortalSuspend_ClaimLessWriteOwnsARowWhoseLeaseRanOut_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, _ := l.signIn(t, "u1")
+	run := l.seedRun(t, principal, types.RunRunning)
+	c := killRowOf(t, l, principal, run)
+	got, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run, From: types.RunRunning, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+	if err != nil || !got.Applied {
+		t.Fatalf("the dead worker's claim = %+v, %v", got, err)
+	}
+	row := func() string {
+		var out string
+		if err := l.pool.QueryRow(ctx, `SELECT state || '|' || attempts || '|' || last_error || '|' || (audit_event_id IS NOT NULL)::text FROM deprovision_jobs WHERE id = $1`, c.key.ID).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	// Inside the lease the claim holds: neither a claim-less failure nor a claim-less finish takes the row.
+	before := row()
+	if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, c.key, errors.New("before any claim")); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less failure inside the lease = %v, want ErrKillHeld", err)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, c.key, nil, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less finish inside the lease = %v, want ErrKillHeld", err)
+	}
+	if after := row(); after != before {
+		t.Fatalf("a refused write changed the row: %q -> %q", before, after)
+	}
+	// The worker is dead: its lease has run out.
+	if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET kill_claimed_at = now() - interval '10 minutes' WHERE id = $1`, c.key.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, c.key, errors.New("before any claim")); err != nil {
+		t.Errorf("a claim-less failure after the lease = %v, want it recorded", err)
+	}
+	if got := row(); got != "pending|1|before any claim|true" {
+		t.Errorf("row after the claim-less failure = %q, want pending, one attempt, the error, the pinned receipt kept", got)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, c.key, map[string]int{"runs_killed": 0}, c.bound); err != nil {
+		t.Errorf("the spared finish after the lease = %v, want nil", err)
+	}
+	if got := row(); got != "done|2||false" {
+		t.Errorf("row after the spared finish = %q, want done, two attempts, no error and no receipt pinned", got)
+	}
+}
+
 // enqueueWithDrive enqueues a run for principal as the enqueue path does: its run row, its queue row and the member
 // drive it keeps its work folder in, in one transaction.
 func enqueueWithDrive(t *testing.T, l *portalLife, principal string) (types.AgentRun, types.UserDrive) {
