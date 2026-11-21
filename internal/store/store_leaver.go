@@ -596,6 +596,13 @@ func (s PG) FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind
 // audit table: the step stays pending, and any replica's retry writes the same event.
 var ErrReceiptNotStored = errors.New("store: the step's pinned audit event is not in the shared audit table")
 
+// takeoverSQL is true of a row whose kill claim has run out its lease, for a caller that names no claim of its own: a
+// worker that failed before it acquired one, or the pass that closes a step owing no kill (a run made after a
+// reactivation). The worker that held the claim is gone or too slow to matter; a claim-less write may not be refused
+// forever by its id, and a finish that takes the row over drops the receipt the dead claim pinned, since a step
+// closed with no kill counted has none to store.
+var takeoverSQL = fmt.Sprintf(`($7::uuid IS NULL AND kill_claim_id IS NOT NULL AND kill_claimed_at <= now() - make_interval(secs => %d))`, int(KillClaimLease.Seconds()))
+
 // finishJob is the done write of a step. Named by row id, it needs the pinned event stored (matched by id and time)
 // and clears the pinned payload; with at, it also needs the suspension to be the identity's current one. strict says
 // whether no row is ErrSuperseded.
@@ -612,12 +619,14 @@ func (s PG) finishJob(ctx context.Context, identityID uuid.UUID, kind string, k 
 	}
 	var found, done, lost int
 	err := s.Pool.QueryRow(ctx, `
-		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored,
-		                  kill_claim_id IS NOT DISTINCT FROM $7::uuid AS owned
+		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR `+takeoverSQL+` OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored,
+		                  (kill_claim_id IS NOT DISTINCT FROM $7::uuid OR `+takeoverSQL+`) AS owned, `+takeoverSQL+` AS taken
 		             FROM deprovision_jobs
 		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`+current+` FOR UPDATE),
 		     u AS (UPDATE deprovision_jobs d SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5,
-		                  audit_event_payload = CASE WHEN $6::uuid IS NULL THEN d.audit_event_payload END, updated_at = now()
+		                  audit_event_payload = CASE WHEN $6::uuid IS NULL THEN d.audit_event_payload END,
+		                  audit_event_id = CASE WHEN j.taken THEN NULL ELSE d.audit_event_id END,
+		                  audit_event_at = CASE WHEN j.taken THEN NULL ELSE d.audit_event_at END, updated_at = now()
 		            FROM j WHERE d.id = j.id AND j.stored AND j.owned RETURNING 1)
 		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u), (SELECT count(*) FROM j WHERE NOT owned)`, args...).Scan(&found, &done, &lost)
 	if err != nil {
@@ -645,7 +654,7 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 	var found, marked int
 	var pending bool
 	err := s.Pool.QueryRow(ctx, `
-		WITH j AS (SELECT id, state = 'pending' AS pending, kill_claim_id IS NOT DISTINCT FROM $7::uuid AS owned FROM deprovision_jobs
+		WITH j AS (SELECT id, state = 'pending' AS pending, (kill_claim_id IS NOT DISTINCT FROM $7::uuid OR `+takeoverSQL+`) AS owned FROM deprovision_jobs
 		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6) FOR UPDATE),
 		     u AS (UPDATE deprovision_jobs d SET attempts = attempts + 1, last_error = $5, updated_at = now()
 		            FROM j WHERE d.id = j.id AND ($6::uuid IS NULL OR (j.pending AND j.owned)) RETURNING 1)

@@ -310,8 +310,10 @@ func (s PG) ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k J
 // PinnedEvent is the audit event a portal step writes, as its ledger row holds it: the id and time the first
 // attempt fixed and the payload it fixed with them.
 //
-// Done is set when the row had already been finished: its event is the one written, nothing was pinned or
-// stored, and its payload is gone.
+// Done is set when the row had already been finished: nothing was pinned or stored, ID and At are the event it was
+// finished with (zero when a legacy finish pinned none), and Payload is whatever the row still holds, which is
+// nothing after a finish named by its row id and the old payload after an unnamed one. A caller that sees Done
+// reads no payload.
 type PinnedEvent struct {
 	ID      uuid.UUID
 	At      time.Time
