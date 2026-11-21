@@ -683,8 +683,8 @@ func backendsWaiting(t *testing.T, pool *pgxpool.Pool, advisory bool, sql string
 	return n
 }
 
-// waitFor polls cond for at most 10 seconds.
-func waitFor(t *testing.T, what string, cond func() bool) {
+// waitForPortalLock polls cond for at most 10 seconds.
+func waitForPortalLock(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
@@ -783,13 +783,13 @@ func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 				release()
 				t.Fatal("the insert did not stop at the pause")
 			}
-			waitFor(t, "the insert to wait on the advisory lock", func() bool { return backendsWaiting(t, pool, true, "agent_runs") > 0 })
+			waitForPortalLock(t, "the insert to wait on the advisory lock", func() bool { return backendsWaiting(t, pool, true, "agent_runs") > 0 })
 			revokeBlocked, revokeResult := parked(func() error { _, _, err := st.RevokeDelegate(ctx, portal.ID, time.Now().UTC(), false); return err })
 			if !revokeBlocked {
 				release()
 				t.Fatal("the revoke did not wait for the insert in flight")
 			}
-			waitFor(t, "the revoke to wait on the portal's row", func() bool { return backendsWaiting(t, pool, false, "delegates") > 0 })
+			waitForPortalLock(t, "the revoke to wait on the portal's row", func() bool { return backendsWaiting(t, pool, false, "delegates") > 0 })
 			if n := portalRuns(t, portal); n != 0 {
 				t.Errorf("%d portal run row(s) visible before the insert committed, want none", n)
 			}
