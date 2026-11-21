@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,14 +80,43 @@ func (e *regPG) sidePool(t *testing.T) *pgxpool.Pool {
 	return p
 }
 
+// observeTimeout bounds every read of the observer and of a held transaction's own process id, the query
+// itself as well as the polling around it.
+const observeTimeout = 15 * time.Second
+
 // backendPID is the server process id of tx's connection.
 func backendPID(t *testing.T, tx pgx.Tx) int32 {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), observeTimeout)
+	defer cancel()
 	var pid int32
-	if err := tx.QueryRow(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
 		t.Fatal(err)
 	}
 	return pid
+}
+
+// observe polls the observer with read until it reports done, under one deadline that also bounds each query:
+// a query that hangs ends with the deadline instead of holding the test.
+func observe(t *testing.T, what string, read func(ctx context.Context) (done bool, err error)) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), observeTimeout)
+	defer cancel()
+	for {
+		done, err := read(ctx)
+		switch {
+		case err == nil && done:
+			return
+		case ctx.Err() != nil:
+			t.Fatalf("%s: not observed within %s", what, observeTimeout)
+		case err != nil:
+			t.Fatalf("%s: %v", what, err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 // waitBlockedBy waits until the database reports a backend waiting on holder's locks, other than skip, and
@@ -93,25 +124,30 @@ func backendPID(t *testing.T, tx pgx.Tx) int32 {
 // from elapsed time.
 func waitBlockedBy(t *testing.T, observer *pgxpool.Pool, holder int32, skip ...int32) int32 {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		var pid int32
-		err := observer.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity
+	var pid int32
+	observe(t, fmt.Sprintf("a backend waiting on process %d", holder), func(ctx context.Context) (bool, error) {
+		err := observer.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
 			WHERE $1::int = ANY(pg_blocking_pids(pid)) AND NOT (pid = ANY($2::int[])) ORDER BY pid LIMIT 1`, holder, append([]int32{0}, skip...)).Scan(&pid)
-		switch {
-		case err == nil:
-			return pid
-		case !errors.Is(err, pgx.ErrNoRows):
-			t.Fatal(err)
-		case time.Now().After(deadline):
-			t.Fatalf("no backend waited on process %d", holder)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return err == nil, err
+	})
+	return pid
 }
 
-// receiveWithin receives from ch, failing the test if nothing arrives in 30 s, so a request that never returns ends the
-// test instead of hanging it.
+// waitWaitsOn waits until the database reports that waiter is blocked by holder.
+func waitWaitsOn(t *testing.T, observer *pgxpool.Pool, waiter, holder int32) {
+	t.Helper()
+	observe(t, fmt.Sprintf("process %d waiting on process %d", waiter, holder), func(ctx context.Context) (bool, error) {
+		var on bool
+		err := observer.QueryRow(ctx, `SELECT $2::int = ANY(pg_blocking_pids($1::int))`, waiter, holder).Scan(&on)
+		return on, err
+	})
+}
+
+// receiveWithin receives from ch, failing the test if nothing arrives in 30 s, so a request that never returns
+// ends the test instead of hanging it.
 func receiveWithin[T any](t *testing.T, ch <-chan T, what string) T {
 	t.Helper()
 	select {
@@ -124,23 +160,88 @@ func receiveWithin[T any](t *testing.T, ch <-chan T, what string) T {
 	}
 }
 
-// waitWaitsOn waits until the database reports that waiter is blocked by holder.
-func waitWaitsOn(t *testing.T, observer *pgxpool.Pool, waiter, holder int32) {
+// joinWithin waits for workers for at most 30 s, and reports any still running. It is called only after their
+// contexts are cancelled and the test's own locks released, so a worker blocked on the database has had its
+// wait cancelled; one still running past the bound is reported, and its pool's Close then waits for it.
+func joinWithin(t *testing.T, workers *sync.WaitGroup, what string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		var on bool
-		if err := observer.QueryRow(context.Background(), `SELECT $2::int = ANY(pg_blocking_pids($1::int))`, waiter, holder).Scan(&on); err != nil {
-			t.Fatal(err)
-		}
-		if on {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("process %d never waited on process %d", waiter, holder)
-		}
-		time.Sleep(20 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Errorf("%s still running 30 s after they were cancelled", what)
 	}
+}
+
+// requestWorkers runs a test's concurrent HTTP requests and fixture work on worker goroutines that share one
+// cancellable context: every request carries it, so cancelling it cancels each database wait a handler is in.
+// Workers never touch the test's t. The handler and its panic check are built on the test goroutine, so the
+// check's cleanup is registered before the teardown's and runs after the join.
+type requestWorkers struct {
+	h      http.Handler
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// newRequestWorkers is called after the test has opened the pools it holds transactions on. teardown, which
+// the caller registers right after, then runs before those pools close and before the panic check.
+func newRequestWorkers(t *testing.T, srv *Server) *requestWorkers {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	return &requestWorkers{h: panicFails(t, srv.Handler()), ctx: ctx, cancel: cancel}
+}
+
+// teardown registers, for every exit of the test, in this order: cancel every worker, run release (the locks
+// the test itself holds), then join the workers.
+func (rw *requestWorkers) teardown(t *testing.T, release ...func()) {
+	t.Helper()
+	t.Cleanup(func() {
+		rw.cancel()
+		for _, f := range release {
+			f()
+		}
+		joinWithin(t, &rw.wg, "the test's workers")
+	})
+}
+
+// run starts f on a worker with the shared context.
+func (rw *requestWorkers) run(f func(ctx context.Context)) {
+	rw.wg.Add(1)
+	go func() { defer rw.wg.Done(); f(rw.ctx) }()
+}
+
+// do serves one request on a worker, carrying the shared context, and delivers the answer on the channel.
+func (rw *requestWorkers) do(method, path string, cookie *http.Cookie, body string) <-chan *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(rw.ctx)
+	if cookie != nil {
+		r.AddCookie(cookie)
+	}
+	out := make(chan *httptest.ResponseRecorder, 1)
+	rw.run(func(context.Context) {
+		w := httptest.NewRecorder()
+		rw.h.ServeHTTP(w, r)
+		out <- w
+	})
+	return out
+}
+
+// approveOn is decideHeld's approval as a worker's request.
+func (e *regPG) approveOn(rw *requestWorkers, change string) <-chan *httptest.ResponseRecorder {
+	return rw.do(http.MethodPost, "/api/v1/governance/changes/"+change+"/approve", e.admin2, `{"reason":"no"}`)
+}
+
+// registerOn is register as a worker's request.
+func (e *regPG) registerOn(rw *requestWorkers, mut map[string]any) <-chan *httptest.ResponseRecorder {
+	return rw.do(http.MethodPost, "/api/v1/admin/delegates", e.admin, e.body(mut))
+}
+
+// rollbackWithin rolls tx back under its own bound; on a transaction already ended it does nothing.
+func rollbackWithin(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), observeTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
 }
 
 // credentialUnknown checks that a held or refused registration's credential resolves to no portal: the lookup
@@ -274,11 +375,6 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 		}
 		return change, issuer
 	}
-	approve := func(change string) <-chan *httptest.ResponseRecorder {
-		got := make(chan *httptest.ResponseRecorder, 1)
-		go func() { got <- e.decideHeld(t, change, "approve") }()
-		return got
-	}
 	removals := map[string]struct {
 		reason string
 		remove func(ctx context.Context, q store.Querier, unit uuid.UUID, ut string) error
@@ -300,11 +396,14 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = tx.Rollback(ctx) }()
+			// On every exit: cancel the approval, release the removal's transaction, join, all before the
+			// pool closes.
+			rw := newRequestWorkers(t, e.h.srv)
+			rw.teardown(t, func() { rollbackWithin(tx) })
 			if err := rm.remove(ctx, tx, unit, ut); err != nil {
 				t.Fatal(err)
 			}
-			got := approve(change)
+			got := e.approveOn(rw, change)
 			waitBlockedBy(t, observer, backendPID(t, tx)) // the decision waits on the uncommitted removal's row lock
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
@@ -329,27 +428,49 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = park.Rollback(ctx) }()
+			removePool := e.sidePool(t)
+			// The removal's worker owns its transaction from begin to commit or rollback. On every exit the
+			// approval and the removal are cancelled, the decision is unparked and both are joined, all
+			// before either pool closes.
+			rw := newRequestWorkers(t, e.h.srv)
+			rw.teardown(t, func() { rollbackWithin(park) })
 			if _, err := e.st.BindPortalIssuerQ(ctx, park, issuer, "", portalPersonIDClaim(oidc.PortalProfileAccessToken), "test"); err != nil {
 				t.Fatal(err)
 			}
-			got := approve(change)
+			got := e.approveOn(rw, change)
 			decider := waitBlockedBy(t, observer, backendPID(t, park))
-			rtx, err := e.sidePool(t).Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
+			type started struct {
+				pid int32
+				err error
 			}
-			defer func() { _ = rtx.Rollback(ctx) }()
-			removed := make(chan error, 1)
-			remover := backendPID(t, rtx)
-			go func() {
-				err := rm.remove(ctx, rtx, unit, ut)
+			began, removed := make(chan started, 1), make(chan error, 1)
+			rw.run(func(workerCtx context.Context) {
+				rtx, err := removePool.Begin(workerCtx)
+				if err != nil {
+					began <- started{err: err}
+					return
+				}
+				var pid int32
+				if err := rtx.QueryRow(workerCtx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+					rollbackWithin(rtx)
+					began <- started{err: err}
+					return
+				}
+				began <- started{pid: pid}
+				err = rm.remove(workerCtx, rtx, unit, ut)
 				if err == nil {
-					err = rtx.Commit(ctx)
+					err = rtx.Commit(workerCtx)
+				}
+				if err != nil {
+					rollbackWithin(rtx)
 				}
 				removed <- err
-			}()
-			waitWaitsOn(t, observer, remover, decider) // the removal waits on the decision's row lock
+			})
+			st := receiveWithin(t, began, "the removal's begin")
+			if st.err != nil {
+				t.Fatal(st.err)
+			}
+			waitWaitsOn(t, observer, st.pid, decider) // the removal waits on the decision's row lock
 			if err := park.Rollback(ctx); err != nil {
 				t.Fatal(err)
 			}

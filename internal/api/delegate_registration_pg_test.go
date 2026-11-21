@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -340,19 +339,12 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 	t.Setenv(envPortalInternalIssuerHosts, "a.internal.example.com,b.internal.example.com")
 	race := func(name string, one, two map[string]any, loser string) {
 		t.Helper()
-		var wg sync.WaitGroup
-		out := make([]*httptest.ResponseRecorder, 2)
-		start := make(chan struct{})
-		for i, mut := range []map[string]any{one, two} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				out[i] = e.register(t, mut)
-			}()
-		}
-		close(start)
-		wg.Wait()
+		// Both requests carry one cancellable context; on any exit they are cancelled and joined before the
+		// server's pool closes.
+		rw := newRequestWorkers(t, e.h.srv)
+		rw.teardown(t)
+		first, second := e.registerOn(rw, one), e.registerOn(rw, two)
+		out := []*httptest.ResponseRecorder{receiveWithin(t, first, name+": the first registration"), receiveWithin(t, second, name+": the second registration")}
 		created, refused := 0, 0
 		for _, w := range out {
 			switch {
@@ -388,18 +380,19 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = gate.Rollback(ctx) }()
+		// On every exit: cancel both requests, release the gate, join, before the gate's pool and the server's
+		// close.
+		rw := newRequestWorkers(t, e.h.srv)
+		rw.teardown(t, func() { rollbackWithin(gate) })
 		if err := store.LockPortalIssuerRegistry(ctx, gate); err != nil {
 			t.Fatal(err)
 		}
 		gatePID := backendPID(t, gate)
-		approved, direct := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		var approved, direct <-chan *httptest.ResponseRecorder
 		start := []func(){
-			func() { go func() { approved <- e.decideHeld(t, change, "approve") }() },
+			func() { approved = e.approveOn(rw, change) },
 			func() {
-				go func() {
-					direct <- e.register(t, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
-				}()
+				direct = e.registerOn(rw, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
 			},
 		}
 		if !approvalFirst {
@@ -534,6 +527,39 @@ func TestPeopleList_PortalPersonShowsIssuerAndUser_PG(t *testing.T) {
 	}
 }
 
+// TestPortalRegistration_DigestNeverInDiffOrReads: a held registration's 202 and the approver's reads of the
+// change (one change, the change list) never carry the credential or its digest, yet still show the claim.
+func TestPortalRegistration_DigestNeverInDiffOrReads(t *testing.T) {
+	e := newRegPG(t)
+	t.Setenv(envGovernanceSecondHuman, "true")
+	change, cred, proposed := e.proposeHeld(t, map[string]any{
+		"issuer":         "https://digest-reads.example.com",
+		"required_claim": map[string]string{"claim": "tenant", "value": "prod"},
+	})
+	if change == "" || !strings.HasPrefix(cred, store.PortalCredentialPrefix) {
+		t.Fatalf("propose = %d %s, want 202 with the credential once", proposed.Code, proposed.Body.String())
+	}
+	digest := hashPortalCredential(cred)
+	if strings.Contains(proposed.Body.String(), digest) {
+		t.Errorf("the 202 carries the credential's digest: %s", proposed.Body.String())
+	}
+	// The approver's reads: the change with its diff, and the list that names it.
+	for _, path := range []string{"/api/v1/governance/changes/" + change, "/api/v1/governance/changes"} {
+		w := doSSO(t, e.h.srv, http.MethodGet, path, e.admin2, "")
+		body := w.Body.String()
+		if w.Code != http.StatusOK || !strings.Contains(body, change) {
+			t.Fatalf("GET %s = %d %s, want 200 naming the change", path, w.Code, body)
+		}
+		if strings.Contains(body, cred) || strings.Contains(body, digest) {
+			t.Errorf("GET %s carries the credential or its digest: %s", path, body)
+		}
+		// The diff still shows the claim name and value the approver approves.
+		if !strings.Contains(body, "tenant") || !strings.Contains(body, "prod") {
+			t.Errorf("GET %s does not show the required claim: %s", path, body)
+		}
+	}
+}
+
 // A held registration never makes its credential usable before a distinct super admin approves, whichever way
 // the decision goes. Each failed decision leaves the change in its expected state, no portal row and no
 // binding; the credential lookup answers not found (not a storage failure) and the exchange answers 401.
@@ -589,13 +615,29 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		}
 	}
 
-	t.Run("pending", func(t *testing.T) {
-		h := propose(t, nil)
-		unusable(t, h, types.GovernanceChangePending)
-		body := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/governance/changes/"+h.change, e.admin2, "").Body.String()
-		if strings.Contains(body, h.cred) || strings.Contains(body, hashPortalCredential(h.cred)) {
-			t.Errorf("the change read carries the credential or its digest: %s", body)
+	// refusedRow checks a refused approval wrote one governance.change.approve failure row for the change, with the
+	// class "refused".
+	refusedRow := func(t *testing.T, h held) {
+		t.Helper()
+		var got []string
+		for _, ev := range e.rows("governance.change.approve") {
+			if ev.Target != h.change {
+				continue
+			}
+			var d struct {
+				Error string `json:"error"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			got = append(got, ev.Outcome+"/"+d.Error)
 		}
+		if len(got) != 1 || got[0] != "failure/refused" {
+			t.Errorf("approve rows for the refused approval = %v, want [failure/refused]", got)
+		}
+	}
+
+	t.Run("pending", func(t *testing.T) {
+		h := propose(t, map[string]any{"required_claim": map[string]string{"claim": "tenant", "value": "prod"}})
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("self-approval", func(t *testing.T) {
 		h := propose(t, nil)
@@ -648,6 +690,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateNamespaceInUse {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateNamespaceInUse)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("pin unit deleted", func(t *testing.T) {
@@ -662,6 +705,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateRunInUnderInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateRunInUnderInvalid)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("user type deleted", func(t *testing.T) {
@@ -676,6 +720,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateUserTypeInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateUserTypeInvalid)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("internal host delisted", func(t *testing.T) {
@@ -684,6 +729,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateInternalIssuerNotListed {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateInternalIssuerNotListed)
 		}
+		refusedRow(t, h)
 		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("approved by a distinct super admin", func(t *testing.T) {

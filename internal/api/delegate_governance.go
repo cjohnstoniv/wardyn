@@ -82,11 +82,11 @@ func (e *registrationRefusal) write(w http.ResponseWriter) {
 }
 
 // decided is the refusal as a decision answers it: 409, since the request was valid when it was proposed and
-// the world has changed.
+// the world has changed. A refused approval records its failure row with the class "refused".
 func (e *registrationRefusal) decided() error {
 	c := *e
 	c.status = http.StatusConflict
-	return &govRefusal{why: c.reason, write: func(w http.ResponseWriter, _ *http.Request) { c.write(w) }}
+	return &govRefusal{why: c.reason, failure: "refused", write: func(w http.ResponseWriter, _ *http.Request) { c.write(w) }}
 }
 
 // registrationRefusalOf is the refusal err carries, if it carries one.
@@ -170,6 +170,19 @@ func unprocessable(reason, field, format string, args ...any) *registrationRefus
 // deployment's host list, in the order a caller can fix them. A held registration's approval runs it again.
 // It does not read the pin or the user type, which need the store.
 func validatePortalRow(d types.Delegate) *registrationRefusal {
+	for _, check := range []func(types.Delegate) *registrationRefusal{
+		portalProfileRefusal, portalListsRefusal, portalAdmissionRefusal, portalGrantRefusal, portalAddressRefusal,
+	} {
+		if ref := check(d); ref != nil {
+			return ref
+		}
+	}
+	return nil
+}
+
+// portalProfileRefusal checks the fields the token profile decides: the client id, the profile itself, and
+// the audience and scopes an access-token profile needs and an ID-token profile refuses.
+func portalProfileRefusal(d types.Delegate) *registrationRefusal {
 	access := d.TokenProfile == oidc.PortalProfileAccessToken
 	// The verifier refuses a registration it cannot verify against, on every exchange. The same predicate
 	// refuses it here: no client id, no issuer, or an access-token profile with no audience or no scopes.
@@ -198,6 +211,12 @@ func validatePortalRow(d types.Delegate) *registrationRefusal {
 	if access && (len(d.Audience) > portalTextMaxLen || !controlCharFree(d.Audience)) {
 		return unprocessable(reasonPortalRegistrationInvalid, "audience", "audience: at most 200 bytes, no control characters")
 	}
+	return nil
+}
+
+// portalListsRefusal checks the required scopes and the email domains, entry by entry, then the groups claim's
+// name.
+func portalListsRefusal(d types.Delegate) *registrationRefusal {
 	if len(d.RequiredScopes) > portalScopesMax {
 		return unprocessable(reasonPortalRegistrationInvalid, "required_scopes", "required_scopes: at most %d", portalScopesMax)
 	}
@@ -217,9 +236,12 @@ func validatePortalRow(d types.Delegate) *registrationRefusal {
 	if d.GroupsClaim != "" && !portalClaimNameRE.MatchString(d.GroupsClaim) {
 		return unprocessable(reasonDelegateGroupsClaimInvalid, "groups_claim", "groups_claim: 1-64 characters of letters, digits and _ . : -")
 	}
-	if ref := portalAdmissionRefusal(d); ref != nil {
-		return ref
-	}
+	return nil
+}
+
+// portalGrantRefusal checks what a grant is made from and given: the subject token's maximum age, the grant's
+// lifetime against it, and the user type it acts as.
+func portalGrantRefusal(d types.Delegate) *registrationRefusal {
 	if d.MaxSubjectTokenAgeSeconds < portalMaxAgeMin || d.MaxSubjectTokenAgeSeconds > portalMaxAgeMax {
 		return unprocessable(reasonDelegateMaxAgeInvalid, "max_subject_token_age_seconds",
 			"max_subject_token_age_seconds: %d to %d", portalMaxAgeMin, portalMaxAgeMax)
@@ -234,6 +256,12 @@ func validatePortalRow(d types.Delegate) *registrationRefusal {
 	if d.UserType == "" {
 		return unprocessable(reasonDelegateUserTypeInvalid, "user_type", "user_type: required")
 	}
+	return nil
+}
+
+// portalAddressRefusal checks the issuer's shape and, when one is set, the internal address's shape and that
+// its host is on the deployment's list.
+func portalAddressRefusal(d types.Delegate) *registrationRefusal {
 	if _, ok := portalURLShape(d.Issuer); !ok {
 		return unprocessable(reasonDelegateIssuerURLInvalid, "issuer", "issuer: an https URL with a host, and no userinfo, query or fragment")
 	}

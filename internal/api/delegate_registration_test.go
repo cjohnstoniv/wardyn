@@ -406,29 +406,18 @@ func TestPortalRegistration_NoOutboundCallBeforeExchange(t *testing.T) {
 	}
 }
 
-func TestPortalRegistration_DigestNeverInDiffOrReads(t *testing.T) {
+func TestPortalRegistration_DigestNeverInAdminList(t *testing.T) {
 	e := newRegEnv(t)
 	d := e.wantCreated(t, "registration", regBody(map[string]any{"required_claim": map[string]string{"claim": "tenant", "value": "prod"}}))
 	digest := e.st.created[0].CredentialSHA256
 	if digest == "" || digest != hashPortalCredential(d.Credential) {
 		t.Fatalf("digest %q is not the SHA-256 of the returned credential", digest)
 	}
-	// What a reader of the held change is served: the rendered diff, the change row, and the portal list.
-	held := e.st.created[0]
-	held.Credential = ""
-	after := delegateDiffViewOf(held)
-	change := types.GovernanceChange{TargetKind: govKindDelegate, Op: "create", TargetKey: held.ID.String(),
-		Payload: mustJSON(heldDelegate{Delegate: held, Digest: digest}),
-		Diff:    renderGovernanceDiff(nil, after, changedPaths(nil, after), nil)}
-	served, _ := json.Marshal(change)
+	// The held change's reads are checked through the real diff and read paths in
+	// TestPortalRegistration_HeldDecisions_PG.
 	list := do(t, e.srv, http.MethodGet, "/api/v1/admin/delegates", adminToken, "")
-	for name, body := range map[string]string{"change": string(served), "diff": string(change.Diff), "list": list.Body.String()} {
-		if strings.Contains(body, digest) || strings.Contains(body, d.Credential) || strings.Contains(body, "credential") {
-			t.Errorf("%s carries the credential or its digest: %s", name, body)
-		}
-	}
-	if !strings.Contains(string(change.Diff), "tenant") || !strings.Contains(string(change.Diff), "prod") {
-		t.Errorf("the diff must show the claim name and value the approver approves: %s", change.Diff)
+	if body := list.Body.String(); strings.Contains(body, digest) || strings.Contains(body, d.Credential) || strings.Contains(body, "credential") {
+		t.Errorf("the portal list carries the credential or its digest: %s", body)
 	}
 }
 

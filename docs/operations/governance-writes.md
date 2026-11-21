@@ -250,7 +250,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 - That row's actor is the approver and it carries `change_id` and `proposed_by`: two named humans for one change.
 - Also look for:
   - `governance.change.bypass`: the admin token wrote or approved. Alert on it.
-  - `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`, `not_pending` or `error`).
+  - `governance.change.approve` with outcome `failure`: not applied (`error` is `stale`, `not_pending`, `refused` (unit removed) or `error`).
   - `authz.denied` with reason `second_human_required` or `admin_surface` and target `governance.change`: a self-approval, or a security admin at a role-mapping change.
   - A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come through the API. See the threat model's "database is not four-eyed" residual.
 
