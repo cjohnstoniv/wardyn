@@ -303,8 +303,8 @@ END $$`,
 
 // TestSplitRole_AppRolePortalExchangeRevokeRetire_PG: migrations run as the migrator; the application role
 // holds the runbook's baseline and the new migrations' own grants, nothing more. It boots, registers a portal,
-// exchanges, revokes the portal, retires an unused binding and records the console issuer, with no permission
-// error. Taking back one grant a write needs makes that write fail.
+// exchanges, revokes the portal, retires an unused binding, records the console issuer and writes and updates a
+// service grant status, with no permission error. Taking back one grant a write needs makes that write fail.
 func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	dsn, admin := portalPGSchema(t, "split")
 	ctx := context.Background()
@@ -438,5 +438,28 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 
 	if err := recordConsoleIssuer(ctx, app, "https://login.split.example/", "split-1"); err != nil {
 		t.Fatalf("record the console issuer as the app role: %v", err)
+	}
+
+	// Record a service grant's token request outcome, then a later one, as the app role: 0295's grant covers
+	// the insert and the update, and the later failure keeps the last success and its expiry.
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	until := at.Add(time.Hour)
+	row := store.ServiceGrantStatusRow{ProviderUID: "split-provider", ReplicaID: "split-1", ReplicaHost: "split-host",
+		GrantDigest: "d1", ClientID: "c1", Outcome: "ok", AttemptedAt: at, LastOKAt: &at, ValidUntil: &until}
+	if err := st.UpsertServiceGrantStatus(ctx, row); err != nil {
+		t.Fatalf("write a service grant status as the app role: %v", err)
+	}
+	later := at.Add(time.Minute)
+	row.Outcome, row.Reason, row.AttemptedAt, row.LastOKAt, row.ValidUntil = "failed", "service_grant_refused", later, nil, nil
+	if err := st.UpsertServiceGrantStatus(ctx, row); err != nil {
+		t.Fatalf("update the service grant status as the app role: %v", err)
+	}
+	got, err := st.ServiceGrantStatuses(ctx, []string{"split-provider"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("read the service grant status as the app role: %d rows, %v; want 1", len(got), err)
+	}
+	if g := got[0]; g.Outcome != "failed" || g.Reason != "service_grant_refused" || !g.AttemptedAt.Equal(later) ||
+		g.LastOKAt == nil || !g.LastOKAt.Equal(at) || g.ValidUntil == nil || !g.ValidUntil.Equal(until) {
+		t.Fatalf("stored service grant status %+v, want the later failure with the earlier success and expiry kept", g)
 	}
 }
