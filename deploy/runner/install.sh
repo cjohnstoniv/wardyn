@@ -72,13 +72,23 @@ uninstall() {
       data_dir="$HOME/Library/Application Support/wardyn"
       identity_dir="$data_dir/runner"
       # A service that is already gone is success; one that cannot be confirmed stopped leaves every file in place.
-      if ! launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; then
-        if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
-          die "launchctl bootout $LABEL failed and the agent is still loaded, so it may still be running. Nothing was removed. Check: launchctl print gui/$(id -u)/$LABEL"
-        fi
-        launchctl print "gui/$(id -u)" >/dev/null 2>&1 \
-          || die "cannot reach this login's launchd domain (gui/$(id -u)), so the agent may still be running. Nothing was removed. Run this from the Mac's own login session, then run --uninstall again."
-      fi
+      domain="gui/$(id -u)"
+      launchctl print "$domain" >/dev/null 2>&1 \
+        || die "cannot reach this login's launchd domain ($domain), so the agent may still be running. Nothing was removed. Run this from the Mac's own login session, then run --uninstall again."
+      launchctl bootout "$domain/$LABEL" >/dev/null 2>&1 || true
+      # bootout returns before launchd has finished unloading the job. Wait, bounded (about 10 seconds; the tick count
+      # is WARDYN_UNINSTALL_UNLOAD_TICKS, for tests), until launchd answers 113, its answer for a label it does not
+      # know. Any other failure of the lookup is not evidence that the job is gone.
+      ticks="${WARDYN_UNINSTALL_UNLOAD_TICKS:-50}"
+      while :; do
+        rc=0
+        launchctl print "$domain/$LABEL" >/dev/null 2>&1 || rc=$?
+        [ "$rc" = 113 ] && break
+        [ "$rc" = 0 ] || die "launchctl could not say whether $LABEL is still loaded (print exited $rc), so it may still be running. Nothing was removed. Check: launchctl print $domain/$LABEL"
+        ticks=$((ticks - 1))
+        [ "$ticks" -gt 0 ] || die "$LABEL is still loaded after launchctl bootout, so it may still be running. Nothing was removed. Check: launchctl print $domain/$LABEL"
+        sleep 0.2
+      done
       rm -f "$HOME/Library/LaunchAgents/$LABEL.plist" "$data_dir/runnerd.json"
       ;;
     *) die "unsupported OS: $(uname -s)" ;;

@@ -161,8 +161,14 @@ done
 
 # The manager answers but the stop fails: same refusal, files kept.
 stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=loaded\nActiveState=active\n" ;; *) exit 1 ;; esac'
+SF="$WORK/home-stopfail"
+mkdir -p "$SF/.config/systemd/user" "$SF/.config/wardyn" "$SF/.local/share/wardyn/bin"
+: >"$SF/.config/systemd/user/wardyn-runnerd.service"; : >"$SF/.config/wardyn/runnerd.json"; : >"$SF/.local/share/wardyn/bin/wardyn-runnerd"
 run_install stopfail --uninstall
-[ "$RC" -ne 0 ] && [ -e "$U/.config/wardyn/runnerd.json" ] || fail "uninstall removed files after a failed stop (rc=$RC): $OUT"
+[ "$RC" -ne 0 ] && grep -q 'disable --now' <<<"$OUT" || fail "uninstall after a failed stop did not fail with a diagnostic (rc=$RC): $OUT"
+for kept in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.json .local/share/wardyn/bin/wardyn-runnerd; do
+  [ -e "$SF/$kept" ] || fail "uninstall removed $kept after a failed stop"
+done
 
 # Already uninstalled (the manager knows no such unit, nothing is active): idempotent success, and no stop is attempted.
 stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=not-found\nActiveState=inactive\n" ;; daemon-reload) ;; *) exit 1 ;; esac'
@@ -177,19 +183,54 @@ mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 : >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/runnerd.json"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
 : >"$M/Library/Application Support/wardyn/bin/wardyn"; : >"$M/Library/Application Support/wardyn/cli.json"
 : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous"
+# launchd answers 113 for a label it does not know; the default stub answers 0 to everything, which is a job that never unloads.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; case "$1 $2" in "print gui/"*"/com.wardyn.runnerd") exit 113 ;; *) exit 0 ;; esac'
 run_install mac --uninstall
 [ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] && [ ! -e "$M/Library/Application Support/wardyn/runnerd.json" ] || fail "macOS uninstall left the agent, binary, rollback copy or runnerd.json (rc=$RC): $OUT"
 [ -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall removed the person's wardyn CLI or cli.json"
 
-# macOS: a bootout that fails with the login's launchd domain unreachable keeps every file; with the domain reachable and the agent unknown, the service is already gone and uninstall succeeds.
+# macOS: nothing is removed unless launchd says the job is gone. Each case seeds its own home and checks it.
+mac_home() {
+  local h="$WORK/home-$1"
+  mkdir -p "$h/Library/LaunchAgents" "$h/Library/Application Support/wardyn/bin"
+  : >"$h/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$h/Library/Application Support/wardyn/bin/wardyn-runnerd"
+}
+mac_kept() { [ -e "$WORK/home-$1/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ -e "$WORK/home-$1/Library/Application Support/wardyn/bin/wardyn-runnerd" ]; }
+
+# The login's launchd domain is unreachable.
 stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; exit 1'
-N="$WORK/home-macno"
-mkdir -p "$N/Library/LaunchAgents" "$N/Library/Application Support/wardyn/bin"
-: >"$N/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$N/Library/Application Support/wardyn/bin/wardyn-runnerd"
+mac_home macno
 run_install macno --uninstall
-[ "$RC" -ne 0 ] && grep -q 'cannot reach this login' <<<"$OUT" && [ -e "$N/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ -e "$N/Library/Application Support/wardyn/bin/wardyn-runnerd" ] || fail "macOS uninstall with no reachable launchd did not fail and keep the files (rc=$RC): $OUT"
-stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; case "$1 $2" in "print gui/"*"/com.wardyn.runnerd") exit 113 ;; "print gui/"*) exit 0 ;; *) exit 3 ;; esac'
+[ "$RC" -ne 0 ] && grep -q 'cannot reach this login' <<<"$OUT" && mac_kept macno || fail "macOS uninstall with no reachable launchd did not fail and keep the files (rc=$RC): $OUT"
+
+# The domain answers but the lookup of the job fails with something other than 113: not evidence of absence.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; case "$1 $2" in "print gui/"*"/com.wardyn.runnerd") exit 5 ;; *) exit 0 ;; esac'
+mac_home macindet
+run_install macindet --uninstall
+[ "$RC" -ne 0 ] && grep -q 'could not say whether' <<<"$OUT" && mac_kept macindet || fail "macOS uninstall with an indeterminate job lookup did not fail and keep the files (rc=$RC): $OUT"
+
+# bootout succeeds but the job is still unloading for a few polls, then goes: uninstall waits and succeeds.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"
+case "$1 $2" in
+  "print gui/"*"/com.wardyn.runnerd")
+    n=$(cat "$STUB_LOG.n" 2>/dev/null || echo 0); echo $((n + 1)) >"$STUB_LOG.n"
+    [ "$n" -ge 2 ] && exit 113 || exit 0 ;;
+  *) exit 0 ;;
+esac'
+mac_home macunload
+run_install macunload --uninstall
+[ "$RC" -eq 0 ] && ! mac_kept macunload && [ "$(grep -c 'launchctl print gui/.*/com.wardyn.runnerd' "$WORK/home-macunload/stub.log")" -ge 3 ] || fail "macOS uninstall did not wait for a job that was still unloading (rc=$RC): $OUT"
+
+# The job never finishes unloading: the wait is bounded, and every file stays.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; exit 0'
+mac_home macstuck
+WARDYN_UNINSTALL_UNLOAD_TICKS=3 run_install macstuck --uninstall
+[ "$RC" -ne 0 ] && grep -q 'still loaded' <<<"$OUT" && mac_kept macstuck || fail "macOS uninstall of a job that stays loaded did not fail and keep the files (rc=$RC): $OUT"
+
+# The job is already gone (113): idempotent success.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; case "$1 $2" in "print gui/"*"/com.wardyn.runnerd") exit 113 ;; *) exit 0 ;; esac'
+mac_home macgone
 run_install macgone --uninstall
-[ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "macOS uninstall of an absent agent was not a success (rc=$RC): $OUT"
+[ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" && ! mac_kept macgone || fail "macOS uninstall of an absent agent was not a success (rc=$RC): $OUT"
 
 echo "test-runner-units: PASS"
