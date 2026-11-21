@@ -3,7 +3,7 @@
 
 package main
 
-// Hosted-only (WARDYN_TEST_PG): the console-issuer record at boot (D18) and the split-role boot of the issuer
+// Hosted-only (WARDYN_TEST_PG): the console-issuer record at boot and the split-role boot of the issuer
 // portal writers. Each test migrates a schema of its own and drops it afterwards.
 
 import (
