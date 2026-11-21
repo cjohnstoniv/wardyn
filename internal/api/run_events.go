@@ -15,7 +15,9 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -70,6 +72,8 @@ type runEventHub struct {
 	// runEventsWrite for one server, so a test need not wait real seconds; zero
 	// means the constant.
 	beat, hold, write time.Duration
+	// onBatch, when set, runs at the top of each batch of an issuer portal's stream, after its wake: tests only.
+	onBatch func(*streamCut)
 	// streams counts each principal's open streams (maxRunEventStreams).
 	streams map[runEventStreamer]int
 	// publish, when set, sends the events this replica itself emits to the others
@@ -303,8 +307,14 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	openedAt := s.cfg.Now().UTC()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
+	ctx, w, cut, stop := s.runEventsIssuerCut(r, w, id, principal, openedAt)
+	defer stop()
 	rc := http.NewResponseController(w)
-	daemon := r.Context()
+	deadline := rc.SetWriteDeadline
+	if cut != nil {
+		deadline = cut.SetWriteDeadline // refused once the stream is cut or ended: the batch stops
+	}
+	daemon := ctx
 	if s.cfg.BaseCtx != nil {
 		daemon = s.cfg.BaseCtx
 	}
@@ -316,10 +326,15 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	s.runEvents.settle(id, run.State)
 	for {
 		evs, wake, ended := s.runEvents.since(id, after)
+		if cut != nil && s.runEvents.onBatch != nil {
+			s.runEvents.onBatch(cut)
+		}
 		// The server sets no write deadline (boot_serve.go), so each batch sets
 		// its own (runEventsWrite) and clears it before the wait: an HTTP/2
 		// deadline resets the stream even while nothing is being written.
-		_ = rc.SetWriteDeadline(time.Now().Add(cmp.Or(s.runEvents.write, runEventsWrite)))
+		if err := deadline(time.Now().Add(cmp.Or(s.runEvents.write, runEventsWrite))); err != nil && cut != nil {
+			return
+		}
 		for _, ev := range evs {
 			data, _ := json.Marshal(ev)
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data); err != nil {
@@ -330,11 +345,17 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 		if err := rc.Flush(); err != nil || ended {
 			return
 		}
-		_ = rc.SetWriteDeadline(time.Time{})
+		if err := deadline(time.Time{}); err != nil && cut != nil {
+			return
+		}
 		select {
 		case <-wake:
 		case <-beat.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r) {
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			// An issuer portal's stream is checked beside it, by its cut's watch (runEventsIssuerCut).
+			if cut == nil && (s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r)) {
 				return
 			}
 			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
@@ -342,7 +363,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-hold.C:
 			return
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-daemon.Done():
 			return
@@ -400,4 +421,58 @@ func (s *Server) delegationEndedSince(r *http.Request) bool {
 	}
 	_, err := ds.GetDelegatedTokenByRaw(r.Context(), tok, s.cfg.Now().UTC())
 	return err != nil
+}
+
+// runEventsIssuerCut is the guarded cut over an issuer portal's event stream, and ctx, w and a no-op stop for
+// any other request. The stream ends at its grant's end, and its authority runs beside it, every beat from
+// openedAt, each lookup bounded by supportWatchWait: the grant (its portal's revoke included), the person's
+// session cutoff, the person's identity and the portal's pin on the current tree. A check that fails cuts the
+// stream, a blocked write included, so it ends within one beat and the bound of the event (20 s).
+func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runID uuid.UUID, principal string, openedAt time.Time) (context.Context, http.ResponseWriter, *streamCut, func()) {
+	via, delegated := audit.DelegationFrom(r.Context())
+	if !delegated || !issuerPortalPerson(&via, principal) {
+		return r.Context(), w, nil, func() {}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	end, v := s.delegationLive(ctx, via)
+	hardEnd := time.Now()
+	if v == verdictOK {
+		hardEnd = time.Now().Add(end.Sub(s.cfg.Now()))
+	}
+	cut := newStreamCut(w, hardEnd, cancel) // a grant no longer live: the stream ends before its first write
+	every := cmp.Or(s.runEvents.beat, runEventsBeat)
+	bound := time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
+	opened := time.Now()
+	cut.watch(ctx, opened.Add(every), every, bound, func(lctx context.Context) error {
+		return s.runEventsIssuerHolds(lctx, principal, via, runID, openedAt)
+	})
+	return ctx, cut.Writer(w), cut, func() {
+		defer cancel()
+		cut.End()
+	}
+}
+
+// errRunEventsAuthorityEnded is an issuer portal's event stream whose re-check refused.
+var errRunEventsAuthorityEnded = errors.New("api: this event stream is no longer authorized")
+
+// runEventsIssuerHolds is one tick of an issuer portal's event stream: the person's session cutoff as the
+// keepalive reads it, the grant in portal_grants, and the person's identity and the portal's pin over the run
+// read fresh. Anything but a live answer ends the stream; the reconnect re-authenticates.
+func (s *Server) runEventsIssuerHolds(ctx context.Context, principal string, via types.DelegationVia, runID uuid.UUID, openedAt time.Time) error {
+	if s.cfg.SessionRevocations != nil {
+		if revoked, err := s.admittedRevoked(ctx, principal, openedAt); err != nil || revoked {
+			return errRunEventsAuthorityEnded
+		}
+	}
+	if _, v := s.delegationLive(ctx, via); v != verdictOK {
+		return errRunEventsAuthorityEnded
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if s.issuerPortalPersonHolds(ctx, principal, via, run) != nil {
+		return errRunEventsAuthorityEnded
+	}
+	return nil
 }
