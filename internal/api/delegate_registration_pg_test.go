@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -340,25 +339,12 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 	t.Setenv(envPortalInternalIssuerHosts, "a.internal.example.com,b.internal.example.com")
 	race := func(name string, one, two map[string]any, loser string) {
 		t.Helper()
-		var wg sync.WaitGroup
-		out := make([]*httptest.ResponseRecorder, 2)
-		start := make(chan struct{})
-		for i, mut := range []map[string]any{one, two} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				out[i] = e.register(t, mut)
-			}()
-		}
-		close(start)
-		done := make(chan struct{})
-		go func() { wg.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(30 * time.Second):
-			t.Fatalf("%s: the two registrations did not finish within 30 s", name)
-		}
+		// Both requests carry one cancellable context; on any exit they are cancelled and joined before the
+		// server's pool closes.
+		rw := newRequestWorkers(t, e.h.srv)
+		rw.teardown(t)
+		first, second := e.registerOn(rw, one), e.registerOn(rw, two)
+		out := []*httptest.ResponseRecorder{receiveWithin(t, first, name+": the first registration"), receiveWithin(t, second, name+": the second registration")}
 		created, refused := 0, 0
 		for _, w := range out {
 			switch {
@@ -394,22 +380,19 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Registered after the gate's pool, so it runs before that pool and the server's close: on every exit
-		// the gate is released, which lets both requests finish, and both are joined.
-		var workers sync.WaitGroup
-		t.Cleanup(func() { rollbackWithin(gate); joinWithin(t, &workers, name+": the two requests") })
+		// On every exit: cancel both requests, release the gate, join, before the gate's pool and the server's
+		// close.
+		rw := newRequestWorkers(t, e.h.srv)
+		rw.teardown(t, func() { rollbackWithin(gate) })
 		if err := store.LockPortalIssuerRegistry(ctx, gate); err != nil {
 			t.Fatal(err)
 		}
 		gatePID := backendPID(t, gate)
-		approved, direct := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
-		run := func(f func()) { workers.Add(1); go func() { defer workers.Done(); f() }() }
+		var approved, direct <-chan *httptest.ResponseRecorder
 		start := []func(){
-			func() { run(func() { approved <- e.decideHeld(t, change, "approve") }) },
+			func() { approved = e.approveOn(rw, change) },
 			func() {
-				run(func() {
-					direct <- e.register(t, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
-				})
+				direct = e.registerOn(rw, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
 			},
 		}
 		if !approvalFirst {
