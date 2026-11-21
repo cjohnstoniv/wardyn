@@ -326,6 +326,7 @@ func TestServiceGrant_FailureVisibleBeforeTokenExpires(t *testing.T) {
 	if f.idp.count() != 2 {
 		t.Fatalf("requests = %d, want the pass to try a new token", f.idp.count())
 	}
+	f.srv.serviceGrantHeartbeat(context.Background()) // the heartbeat is its own loop: this replica is live now
 	rows, _ := f.st.ServiceGrantStatuses(context.Background(), []string{f.uid})
 	if st := serviceGrantStatusOf(f.provider(), rows); st.State != serviceGrantStateFailed || st.Replicas[0].Reason != "invalid_client" {
 		t.Fatalf("status = %+v, want failing while the old token still has life", st)

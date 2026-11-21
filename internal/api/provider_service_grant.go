@@ -94,8 +94,6 @@ var serviceGrantOAuthErrors = []string{"invalid_request", "invalid_client", "inv
 var (
 	// errServiceGrantDrift: the row's grant changed from the one the caller's run was authorised under.
 	errServiceGrantDrift = errors.New("the provider's service grant changed")
-	// errServiceGrantNotListed: the service identity is not one the grant lists.
-	errServiceGrantNotListed = errors.New("the service identity is not listed on the provider's service grant")
 	// errServiceGrantRevisionMoved: only the secret's revision moved while a mint ran; the caller mints once more.
 	errServiceGrantRevisionMoved = errors.New("the service grant's secret changed during a token request")
 )

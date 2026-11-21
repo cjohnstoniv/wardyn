@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -613,8 +615,15 @@ func TestPutProviderCredential_ServiceOnServiceGrantRow409(t *testing.T) {
 		ClientID: svcClientID, ServiceIdentities: []string{svcOwner}}
 	site := credentialSite(row)
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
-	svc := ssoSession(t, svcOwner, "svc@corp.example", oidc.RoleUser)
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+row.ID+"/credential", svc, `{"value":"a-pasted-token-0123456789"}`)
+	// A service identity reaches the door by its own token, never a session cookie (the cookie lane refuses a
+	// service principal), so the request carries the context the token lane builds.
+	router := chi.NewRouter()
+	srv.mountModelProviderCredentialRoutes(router)
+	ctx := withServiceIdentity(withHumanIdentity(context.Background(), svcOwner, "", oidc.RoleUser, types.UserTypeStandard, []string{}, false), "ci-bot", "sponsor@corp.example")
+	r := httptest.NewRequest(http.MethodPut, "/model-providers/"+row.ID+"/credential", strings.NewReader(`{"value":"a-pasted-token-0123456789"}`)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonModelProviderCredentialSignsIn) || !strings.Contains(w.Body.String(), mpcServiceGrant) {
 		t.Fatalf("PUT = %d %s, want 409 with the service grant sentence", w.Code, w.Body.String())
 	}
@@ -634,6 +643,8 @@ func TestSetupStatus_ServiceIdentityServiceGrantState(t *testing.T) {
 	}
 	f.idp.respond = func(int, svcReq) svcAnswer { return svcOAuthError(401, "invalid_client") }
 	f.token(serviceGrantTriggerRefresh) //nolint:errcheck // the failure is the point
+	// The heartbeat is its own loop: only a live replica's failure grades the row.
+	f.srv.serviceGrantHeartbeat(ctx)
 	if got := grade(); got.State != modelAccessNotConfigured || got.Cause != reasonServiceGrantFailing {
 		t.Fatalf("after a definitive failure: %+v, want not_configured %s", got, reasonServiceGrantFailing)
 	}

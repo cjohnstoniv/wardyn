@@ -285,10 +285,16 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	svc := ssoSession(t, svcOwner, "svc@corp.example", oidc.RoleUser)
 	p := f.row("corp-a")
 	body := putServiceGrantSecretRequest{Value: svcClientSecret, TokenURL: p.OIDC.ServiceGrant.TokenURL, ClientID: p.OIDC.ServiceGrant.ClientID, BaseURL: p.BaseURL}
-	for name, c := range map[string]*http.Cookie{"security admin": secAdmin, "service": svc, "person": f.person} {
+	// The cookie lane refuses a service principal before any route runs (401 reserved_principal); the others reach
+	// the route and are refused there.
+	callers := map[string]struct {
+		c    *http.Cookie
+		want int
+	}{"security admin": {secAdmin, http.StatusForbidden}, "service": {svc, http.StatusUnauthorized}, "person": {f.person, http.StatusForbidden}}
+	for name, k := range callers {
 		for _, m := range []string{http.MethodPut, http.MethodDelete} {
-			if w := f.do(m, f.secretPath("corp-a"), c, body); w.Code != http.StatusForbidden {
-				t.Errorf("%s %s the secret route = %d, want 403", name, m, w.Code)
+			if w := f.do(m, f.secretPath("corp-a"), k.c, body); w.Code != k.want {
+				t.Errorf("%s %s the secret route = %d, want %d", name, m, w.Code, k.want)
 			}
 		}
 	}

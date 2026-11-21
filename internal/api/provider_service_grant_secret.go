@@ -15,7 +15,6 @@ import (
 	"sort"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // serviceGrantMaskGeneration is the masking registry's generation snapshot, taken before a credential is read.
@@ -205,16 +204,4 @@ func (s *Server) reconcileServiceGrantMask(ctx context.Context, name string) {
 		s.evictServiceGrantSecretMask(name)
 		s.dropServiceGrantCache(uid)
 	}
-}
-
-// serviceGrantRowFor returns the provider holding a service grant under uid.
-func serviceGrantRowFor(block *types.ModelProviders, uid string) (types.ModelProvider, bool) {
-	if block != nil {
-		for _, p := range block.Providers {
-			if p.UID == uid && p.OIDC != nil && p.OIDC.ServiceGrant != nil {
-				return p, true
-			}
-		}
-	}
-	return types.ModelProvider{}, false
 }

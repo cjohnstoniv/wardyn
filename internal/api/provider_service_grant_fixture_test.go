@@ -161,7 +161,8 @@ func (i *svcIdP) requests() []svcReq {
 func (i *svcIdP) count() int { return len(i.requests()) }
 
 // svcSecrets is an operator-namespace secret store that keeps a revision per name, can fail or hold each
-// operation, and records what it was asked. For("") is the store itself; another owner gets an empty view.
+// operation, and records what it was asked. For("") is the store itself; another owner gets a view of its own,
+// empty at first and kept, so a person's sign-in stored through it is there on the next read.
 type svcSecrets struct {
 	mu     sync.Mutex
 	m      map[string][]byte
@@ -181,8 +182,9 @@ type svcSecrets struct {
 	// revDelay makes the next Revision call under a context with a deadline take this long, or end at the deadline.
 	revDelay time.Duration
 	// hold runs before each operation, outside the store's lock; it may block.
-	hold  func(op, name string)
-	calls []string
+	hold   func(op, name string)
+	calls  []string
+	owners map[string]*svcSecrets // For(owner)'s views
 }
 
 func newSvcSecrets() *svcSecrets { return &svcSecrets{m: map[string][]byte{}, rev: map[string]int{}} }
@@ -328,7 +330,17 @@ func (s *svcSecrets) For(owner string) secretstore.Store {
 	if owner == "" {
 		return s
 	}
-	return newSvcSecrets()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owners == nil {
+		s.owners = map[string]*svcSecrets{}
+	}
+	v, ok := s.owners[owner]
+	if !ok {
+		v = newSvcSecrets()
+		s.owners[owner] = v
+	}
+	return v
 }
 
 // set writes a value as a direct writer would (another process, the external store), bumping its revision and
@@ -771,15 +783,14 @@ func (s *svcStore) statusOf(uid, replica string) (store.ServiceGrantStatusRow, b
 // svcFix is one wired server: the run fixture's custom endpoint row carries a service grant listing svcOwner.
 type svcFix struct {
 	*oidcRunFixture
-	t       *testing.T
-	st      *svcStore
-	sec     *svcSecrets
-	idp     *svcIdP
-	clock   *svcClock
-	uid     string
-	mux     http.Handler
-	records int
-	sink    *svcSink
+	t     *testing.T
+	st    *svcStore
+	sec   *svcSecrets
+	idp   *svcIdP
+	clock *svcClock
+	uid   string
+	mux   http.Handler
+	sink  *svcSink
 	// prepares counts the mint-row preparations.
 	prepares atomic.Int64
 	// stop cancels the server's BaseCtx.
@@ -829,8 +840,6 @@ func (f *svcFix) setRow(edit func(*types.ModelProvider)) {
 }
 
 func (f *svcFix) provider() types.ModelProvider { return f.liveRow(f.t) }
-
-func (f *svcFix) grant() *types.ProviderServiceGrant { return f.provider().OIDC.ServiceGrant }
 
 func (f *svcFix) secretName() string { return serviceGrantSecretName(f.uid) }
 
