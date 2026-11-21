@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
   grant's token request outcome is recorded.
+- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) lists exact host names whose service grant token request always goes through the daemon proxy, even when `WARDYN_DAEMON_NO_PROXY` covers them. For now it changes only that token request; every other call wardynd makes is routed as before. WORDING PENDING
 
 ## [0.10.1] — 2026-11-21
 
