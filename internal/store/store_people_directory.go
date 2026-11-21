@@ -58,6 +58,11 @@ type PersonListing struct {
 	FirstSignInAt *time.Time
 	LastSignInAt  *time.Time
 	DeactivatedAt *time.Time
+	// PortalIssuer is the issuer a portal person signed in through, and PortalInternalIssuer the address its
+	// binding fetches keys from; both are empty for every other person. A portal person's Email is the
+	// display email the portal's token carried, since that person keeps no email_lower.
+	PortalIssuer         string
+	PortalInternalIssuer string
 	// ActiveSessions is 0 or 1, see PeopleDirectoryActiveSessionWindow.
 	ActiveSessions int
 	APITokens      int
@@ -87,7 +92,9 @@ const peopleDirectoryRows = `
 WITH ident AS (
     SELECT principal,
            bool_or(object_id <> '') AS entra,
-           (array_agg(email_lower ORDER BY last_login_at DESC NULLS LAST, id) FILTER (WHERE email_lower <> ''))[1] AS email,
+           (array_agg(COALESCE(NULLIF(email_lower, ''), display_email) ORDER BY last_login_at DESC NULLS LAST, id)
+               FILTER (WHERE email_lower <> '' OR display_email <> ''))[1] AS email,
+           (array_agg(introduced_issuer ORDER BY id) FILTER (WHERE starts_with(issuer, 'delegate:person:')))[1] AS portal_issuer,
            min(created_at) AS first_seen,
            max(last_login_at) AS last_login_at,
            CASE WHEN bool_and(deactivated_at IS NOT NULL) THEN max(deactivated_at) END AS deactivated_at
@@ -101,13 +108,16 @@ WITH ident AS (
            p.principal IS NOT NULL AS pre_created,
            COALESCE(p.first_signed_in_at, i.first_seen) AS first_sign_in_at,
            i.last_login_at AS last_sign_in_at,
-           COALESCE(i.deactivated_at, p.deactivated_at) AS deactivated_at
+           COALESCE(i.deactivated_at, p.deactivated_at) AS deactivated_at,
+           COALESCE(i.portal_issuer, '') AS portal_issuer
       FROM ident i
       FULL JOIN people p ON p.principal = i.principal
 )
 SELECT dir.principal, dir.email, dir.entra, dir.pre_created, dir.first_sign_in_at, dir.last_sign_in_at, dir.deactivated_at,
-       COALESCE(g.groups, '[]'::jsonb), COALESCE(g.truncated, false), g.principal IS NOT NULL
+       COALESCE(g.groups, '[]'::jsonb), COALESCE(g.truncated, false), g.principal IS NOT NULL,
+       dir.portal_issuer, COALESCE(pi.internal_issuer_norm, '')
   FROM dir
+  LEFT JOIN portal_issuers pi ON dir.portal_issuer <> '' AND pi.issuer = dir.portal_issuer
   LEFT JOIN key_domain_login_groups g ON g.principal = dir.principal
  WHERE NOT starts_with(lower(dir.principal), 'service:')
    AND ($1 = '' OR starts_with(dir.principal, $1) OR starts_with(lower(dir.email), lower($1)))
@@ -148,7 +158,7 @@ func (s PG) ListPeopleDirectory(ctx context.Context, f PeopleDirectoryFilter) (P
 		var p PersonListing
 		var groups []byte
 		if err := r.Scan(&p.Principal, &p.Email, &p.Entra, &p.PreCreated, &p.FirstSignInAt, &p.LastSignInAt, &p.DeactivatedAt,
-			&groups, &p.GroupsTruncated, &p.GroupsVerified); err != nil {
+			&groups, &p.GroupsTruncated, &p.GroupsVerified, &p.PortalIssuer, &p.PortalInternalIssuer); err != nil {
 			return p, err
 		}
 		if err := json.Unmarshal(groups, &p.Groups); err != nil {
