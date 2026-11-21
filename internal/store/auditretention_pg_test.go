@@ -481,6 +481,10 @@ func TestPG_RetentionPolicyCooldown(t *testing.T) {
 	if w := scalar[int](t, c.pool, `SELECT audit_retention_window()`); w != 90 {
 		t.Errorf("window after the date = %d, want 90", w)
 	}
+	// The status says the same without a set-policy call: 90 effective, nothing pending, though the stored pair remains.
+	if st, err = pg.AuditRetentionStatus(ctx); err != nil || st.Policy.EffectiveDays != 90 || st.Policy.PendingDays != nil || st.Policy.PendingEffectiveAt != nil {
+		t.Fatalf("status after the date = %+v, err %v, want 90 effective and no pending pair", st.Policy, err)
+	}
 	ch, err = pg.SetAuditRetentionPolicy(ctx, 90)
 	if err != nil || ch.Outcome != "applied" || ch.EffectiveDays != 90 || ch.PendingDays != nil {
 		t.Fatalf("the boot after the date = %+v, err %v, want applied", ch, err)
