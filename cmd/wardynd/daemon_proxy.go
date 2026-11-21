@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -71,6 +72,16 @@ const (
 	daemonProxyAlwaysEnvProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but HTTPS_PROXY (or " +
 		"https_proxy) is not a usable proxy address; without one those hosts would be reached directly. Fix it, or set " +
 		"WARDYN_DAEMON_PROXY_URL"
+	// daemonProxyAlwaysDirectHostRefusal is the BOOT REFUSAL when WARDYN_DAEMON_PROXY_ALWAYS is set
+	// and a host wardynd always reaches directly cannot be compared with the list's names (it does
+	// not convert to its IDNA-ASCII form). Never the host's text.
+	daemonProxyAlwaysDirectHostRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but one of the hosts wardynd " +
+		"always reaches directly (the Kubernetes API, the AWS SSO override or the internal issuer) is not a valid host name, " +
+		"so the list cannot be checked against it; fix that setting or unset the list"
+	// daemonProxyAlwaysPortRefusal is the BOOT REFUSAL when the daemon proxy the list uses names a
+	// port outside 1 to 65535: every listed host would fail at dial. Never the proxy's text.
+	daemonProxyAlwaysPortRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but the daemon proxy's port " +
+		"is not a number from 1 to 65535; fix it or unset the list"
 	// daemonProxyAlwaysEntryRefusal is the BOOT REFUSAL for one unusable entry. %d is its
 	// 1-based position and %s says why. Never the entry's text: a pasted proxy URL carries a
 	// credential, and the refusal is written to the daemon log.
@@ -337,30 +348,54 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 	if raw == nil {
 		return nil, nil
 	}
+	out := map[string]struct{}{}
+	var entries []string
+	for _, entry := range strings.Split(*raw, ",") {
+		entries = append(entries, strings.TrimSpace(entry))
+	}
+	listed := false
+	for _, e := range entries {
+		listed = listed || e != ""
+	}
+	if !listed {
+		return out, nil
+	}
+	// The hosts wardynd always reaches directly are compared with an entry, and with the
+	// request's host, in one form: IDNA-ASCII, lower-case, no trailing dot, no port. One that
+	// does not convert cannot be checked, so boot is refused rather than leaving it unprotected.
 	skip := map[string]struct{}{}
 	for _, h := range direct {
-		skip[normalizeProxyHost(h)] = struct{}{}
+		if strings.TrimSpace(h) == "" {
+			continue
+		}
+		if hostPart, _, err := net.SplitHostPort(h); err == nil {
+			h = hostPart
+		}
+		c, err := asciiProxyHost(h)
+		if err != nil {
+			return nil, errors.New(daemonProxyAlwaysDirectHostRefusal)
+		}
+		skip[c] = struct{}{}
 	}
-	out := map[string]struct{}{}
-	for i, entry := range strings.Split(*raw, ",") {
-		entry = strings.TrimSpace(entry)
+	for i, entry := range entries {
 		if entry == "" {
 			continue
 		}
 		host := normalizeProxyHost(entry)
 		why := ""
+		canon, cerr := asciiProxyHost(entry)
+		_, protected := skip[canon]
 		switch {
 		case net.ParseIP(strings.Trim(host, "[]")) != nil:
 			why = "an IP address"
 		case host == "localhost":
 			why = "localhost"
+		case cerr == nil && protected:
+			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
 		case !isFullHostName(host):
 			why = "not an exact host name (no port, path, suffix, wildcard or other text)"
 		case numericHostName(host):
 			why = "a numeric name (an address spelled as a name), not a host name"
-		}
-		if _, ok := skip[host]; ok && why == "" {
-			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
 		}
 		if why != "" {
 			return nil, fmt.Errorf(daemonProxyAlwaysEntryRefusal, i+1, why)
@@ -382,7 +417,7 @@ func parseEnvironmentProxy(raw string) (*url.URL, bool) {
 			u, err = u2, nil
 		}
 	}
-	if err != nil || u.Hostname() == "" {
+	if err != nil || u.Hostname() == "" || !proxyPortUsable(u) {
 		return nil, false
 	}
 	switch u.Scheme {
@@ -390,6 +425,17 @@ func parseEnvironmentProxy(raw string) (*url.URL, bool) {
 		return u, true
 	}
 	return nil, false
+}
+
+// proxyPortUsable reports whether u's explicit port, if it has one, is a number from 1 to 65535.
+// url.Parse accepts any digits, so 0 and 70000 would boot and fail at every dial.
+func proxyPortUsable(u *url.URL) bool {
+	port := u.Port()
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // isFullHostName reports whether host (already lower-cased, one trailing dot removed) is a
@@ -429,11 +475,12 @@ func numericHostName(host string) bool {
 	return true
 }
 
-// requestProxyHost is the host a request is dialled at, in the form the list is keyed by:
-// net/http converts a non-ASCII host to its IDNA-ASCII form before it dials, so the lookup does
-// too (a fullwidth letter, an ideographic dot or a U-label spells the same host). A host that
-// does not convert is an error, never a request sent direct.
-func requestProxyHost(host string) (string, error) {
+// asciiProxyHost is the one form a host is compared in, for the list, the hosts wardynd always
+// reaches directly and a request's host alike: net/http converts a non-ASCII host to its
+// IDNA-ASCII form before it dials, so the comparison does too (a fullwidth letter, an ideographic
+// dot or a U-label spells the same host), then lower-cases it and drops a trailing dot. A host
+// that does not convert is an error: a request is never sent direct over it and boot is refused.
+func asciiProxyHost(host string) (string, error) {
 	for i := 0; i < len(host); i++ {
 		if host[i] >= 0x80 {
 			ascii, err := idna.Lookup.ToASCII(host)
@@ -482,6 +529,9 @@ func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[
 	// usable proxy or boot is refused: httpproxy's own function drops a value it
 	// cannot parse and then answers "direct".
 	proxy := daemonProxy
+	if proxy != nil && !proxyPortUsable(proxy) {
+		return nil, errors.New(daemonProxyAlwaysPortRefusal)
+	}
 	if proxy == nil {
 		env := httpproxy.FromEnvironment().HTTPSProxy
 		if env == "" {
@@ -495,7 +545,7 @@ func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[
 	rest := tr.Proxy
 	clone := tr.Clone()
 	clone.Proxy = func(req *http.Request) (*url.URL, error) {
-		host, err := requestProxyHost(req.URL.Hostname())
+		host, err := asciiProxyHost(req.URL.Hostname())
 		if err != nil {
 			return nil, err
 		}

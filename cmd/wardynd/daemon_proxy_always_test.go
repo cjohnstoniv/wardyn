@@ -355,3 +355,96 @@ func TestDaemonProxyAlways_RefusesNonHostnameEntry(t *testing.T) {
 		t.Errorf("valid names: %v, %v; want a grant transport", grant, err)
 	}
 }
+
+// A host wardynd always reaches directly and a list entry are compared in one form (IDNA-ASCII,
+// lower-case, no trailing dot), the form the grant request is looked up in. So a protected host
+// written in Unicode protects its ASCII spelling, and the reverse, and one that cannot be
+// converted refuses boot instead of leaving the list unchecked.
+func TestDaemonProxyAlways_ProtectedHostsCompareAfterIDNA(t *testing.T) {
+	const proxy = "http://proxy.corp.example:3128"
+	cases := []struct {
+		name, issuer, kube, list, want string
+	}{
+		{"unicode issuer, punycode entry", "https://idp.bücher.example", "", "ok.example,idp.xn--bcher-kva.example", "entry 2 "},
+		{"unicode issuer, upper-case dotted entry", "https://idp.bücher.example", "", "IDP.xn--bcher-kva.example.", "entry 1 "},
+		{"punycode issuer, unicode entry", "https://idp.xn--bcher-kva.example", "", "ok.example,idp.bücher.example", "entry 2 "},
+		{"punycode issuer, fullwidth entry", "https://idp.xn--bcher-kva.example", "", "ｉdp.xn--bcher-kva.example", "entry 1 "},
+		{"punycode issuer, ideographic dot entry", "https://idp.xn--bcher-kva.example", "", "idp。xn--bcher-kva.example", "entry 1 "},
+		{"unicode cluster host, punycode entry", "", "k8s.bücher.example", "k8s.xn--bcher-kva.example", "entry 1 "},
+		{"issuer with a port, ascii entry", "https://idp.corp.example:8443", "", "idp.corp.example", "entry 1 "},
+	}
+	for _, c := range cases {
+		clearProxyEnv(t)
+		t.Setenv("KUBERNETES_SERVICE_HOST", c.kube)
+		f := alwaysFlags(proxy, "", c.list)
+		*f.oidcInternalIss = c.issuer
+		_, err := bootDaemonProxy(freshTransport(), f)
+		if err == nil {
+			t.Errorf("%s: boot succeeded, want a refusal", c.name)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, c.want) || !strings.Contains(msg, "always reaches directly") {
+			t.Errorf("%s: refusal %q must name %q and the always-direct reason", c.name, msg, c.want)
+		}
+	}
+	// A Unicode protected host does not touch an unrelated entry.
+	clearProxyEnv(t)
+	f := alwaysFlags(proxy, "", "login.corp.example")
+	*f.oidcInternalIss = "https://idp.bücher.example"
+	if grant, err := bootDaemonProxy(freshTransport(), f); err != nil || grant == nil {
+		t.Errorf("unrelated entry: %v, %v; want a grant transport", grant, err)
+	}
+	// A protected host that does not convert refuses boot when a list is set, and only then.
+	f = alwaysFlags(proxy, "", "login.corp.example")
+	*f.oidcInternalIss = "https://a b.example"
+	_, err := bootDaemonProxy(freshTransport(), f)
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_DAEMON_PROXY_ALWAYS") || strings.Contains(err.Error(), "b.example") {
+		t.Errorf("unconvertible protected host with a list: %v; want a refusal that names the variable and not the host", err)
+	}
+	f = alwaysFlags(proxy, "", "")
+	*f.oidcInternalIss = "https://a b.example"
+	if _, err := bootDaemonProxy(freshTransport(), f); err != nil {
+		t.Errorf("unconvertible protected host without a list refused boot: %v", err)
+	}
+}
+
+// A proxy port outside 1 to 65535 parses, then fails every listed grant at dial, so boot refuses it
+// for the daemon proxy and for HTTPS_PROXY alike, without echoing the value.
+func TestDaemonProxyAlways_RefusesUnusableProxyPort(t *testing.T) {
+	for _, port := range []string{"0", "65536", "70000", "99999999999999999999", "abc"} {
+		for _, kind := range []string{"daemon", "environment"} {
+			clearProxyEnv(t)
+			proxy := ""
+			if kind == "daemon" {
+				proxy = "http://proxy.corp.example:" + port
+			} else {
+				t.Setenv("HTTPS_PROXY", "proxy.corp.example:"+port)
+			}
+			grant, err := bootDaemonProxy(freshTransport(), alwaysFlags(proxy, "", "login.corp.example"))
+			if err == nil {
+				t.Errorf("%s proxy port %s: boot succeeded with %v, want a refusal", kind, port, grant)
+				continue
+			}
+			if strings.Contains(err.Error(), port) {
+				t.Errorf("%s proxy port %s: refusal %q echoes the port", kind, port, err)
+			}
+		}
+	}
+	for _, port := range []string{"1", "65535"} {
+		clearProxyEnv(t)
+		if grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:"+port, "", "login.corp.example")); err != nil || grant == nil {
+			t.Errorf("daemon proxy port %s: %v, %v; want a grant transport", port, grant, err)
+		}
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "http://proxy.corp.example:"+port)
+		if grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example")); err != nil || grant == nil {
+			t.Errorf("environment proxy port %s: %v, %v; want a grant transport", port, grant, err)
+		}
+	}
+	// With no list the proxy's port is not this variable's business.
+	clearProxyEnv(t)
+	if _, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:70000", "", "")); err != nil {
+		t.Errorf("no list, port 70000: %v; the list's check must not apply", err)
+	}
+}
