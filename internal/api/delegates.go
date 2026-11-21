@@ -58,6 +58,25 @@ type registerDelegateRequest struct {
 	// RunInUnder pins the portal to a governance unit, by id or exact name (run_portal_unit.go). Empty
 	// is unpinned. It is set here only: changing it means registering a new portal.
 	RunInUnder string `json:"run_in_under"`
+
+	// The fields below belong to a portal with its own issuer (delegate_governance.go). On a registration
+	// with no issuer, naming any of them is refused rather than ignored.
+	Issuer         string `json:"issuer"`
+	InternalIssuer string `json:"internal_issuer"`
+	// TokenProfile is okta_access_token or okta_id_token; Audience and RequiredScopes belong to the first.
+	TokenProfile   string   `json:"token_profile"`
+	GroupsClaim    string   `json:"groups_claim"`
+	EmailDomains   []string `json:"email_domains"`
+	UserType       string   `json:"user_type"`
+	Audience       string   `json:"audience"`
+	RequiredScopes []string `json:"required_scopes"`
+	// MaxSubjectTokenAgeSeconds (300-600, default 300) and GrantTTLSeconds (300 up to the first, default
+	// the first) are pointers so that a stated 0 is refused and only an absent field takes the default.
+	MaxSubjectTokenAgeSeconds *int                       `json:"max_subject_token_age_seconds"`
+	GrantTTLSeconds           *int                       `json:"grant_ttl_seconds"`
+	UISessionRenewal          bool                       `json:"ui_session_renewal"`
+	PortalManagedAdmission    bool                       `json:"portal_managed_admission"`
+	RequiredClaim             *types.PortalRequiredClaim `json:"required_claim"`
 }
 
 // handleRegisterDelegate is POST /api/v1/admin/delegates: register one portal
@@ -80,6 +99,14 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateNameInvalid, "name: required, at most 200 bytes, no control characters")
+		return
+	}
+	if req.Issuer != "" {
+		s.registerIssuerDelegate(w, r, req, name)
+		return
+	}
+	if ref := consolePathRefusal(req); ref != nil {
+		ref.write(w)
 		return
 	}
 	clientID := strings.TrimSpace(req.IdPClientID)
