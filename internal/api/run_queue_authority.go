@@ -282,10 +282,23 @@ func narrowRole(launched, derived string) string {
 const (
 	queueEndUserTypeUnknown   = "user_type_unknown"
 	queueEndPortalUnitScope   = "portal_unit_scope"
+	queueEndPortalRunScope    = "portal_run_scope"
 	queueUserTypeUnknownHint  = "The user type this portal gives its people no longer exists, so this run was not started."
 	queuePortalUnitScopeHint  = "This run's unit is no longer under the portal's unit, so it was not started."
 	queuePortalPrincipalError = "Queue portal start: the principal is not one of the portal's people"
 )
+
+// queuePortalRunScope ends a run that mounted a portal's drive unless it starts through the portal that created it: the
+// row's creator (immutable) must be the portal the stored authority names, or the replay would resolve one portal's
+// drive and attribute it to the other. It runs for every queued start, ahead of queueCurrentRole, because the fold reads
+// the authority's delegate whether or not the authority marks itself a portal launch (portalIssuerLaunch), so a row whose
+// marks and delegate disagree is judged by the delegate too. A run with no portal drive is not touched.
+func queuePortalRunScope(run types.AgentRun, a queueAuthority) *queueEnd {
+	if run.PortalDrives && (run.CreatedVia == nil || a.Delegate == nil || *run.CreatedVia != *a.Delegate) {
+		return &queueEnd{token: queueEndPortalRunScope, hint: portalRunScopeMsg}
+	}
+	return nil
+}
 
 // queuePortalIssuerRole is queueCurrentRole for an issuer-portal person's launch (the stored authority marks
 // it). The role stays user and is never derived. No role mapping or user-type-from-mapping is read: the user

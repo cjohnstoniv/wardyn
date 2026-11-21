@@ -29,6 +29,8 @@ import (
 // is not delegated, comes through a console portal or a portal with no pin.
 type portalPin struct {
 	applies bool
+	// portal is the issuer portal's own id, set whenever applies is.
+	portal  uuid.UUID
 	unit    uuid.UUID
 	name    string
 	present bool
@@ -57,14 +59,14 @@ func (s *Server) portalPinOf(ctx context.Context) (portalPin, *runRefusal) {
 	}
 	if d.RunInUnder == nil {
 		// An issuer portal is registered with a pin or not at all: a row without one reaches nothing.
-		return portalPin{applies: true}, nil
+		return portalPin{applies: true, portal: d.ID}, nil
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "portal pin: read the units", slog.Any("err", err))
 		return portalPin{}, unavailable
 	}
-	p := portalPin{applies: true, unit: *d.RunInUnder, name: d.RunInUnder.String(), byID: unitsByID(units)}
+	p := portalPin{applies: true, portal: d.ID, unit: *d.RunInUnder, name: d.RunInUnder.String(), byID: unitsByID(units)}
 	if u, found := p.byID[p.unit]; found {
 		p.present, p.name = true, u.Name
 	}
@@ -104,7 +106,7 @@ func (p portalPin) scope() *store.RunUnitScope {
 			}
 		}
 	}
-	return &store.RunUnitScope{IDs: ids}
+	return &store.RunUnitScope{IDs: ids, Portal: p.portal}
 }
 
 // refusal is the 403 for a run outside the pin: the create refusal's reason and sentence.
@@ -115,17 +117,23 @@ func (p portalPin) refusal() *runRefusal {
 	return runError(http.StatusForbidden, reasonPortalUnitScope, fmt.Sprintf(portalUnitScopeMsg, p.name))
 }
 
-// portalRunInPin is nil when run is reachable through the issuer portal ctx's request came through: the
+// portalRunReachable is nil when run is reachable through the issuer portal ctx's request came through: the
 // request is not delegated, the portal is a console portal or has no pin, or the run's unit is under the
-// pin. It is called only after the owner predicate has passed, so a missing run and another person's run
-// keep today's byte-identical 404 and only a person's own run outside the pin answers 403.
-func (s *Server) portalRunInPin(ctx context.Context, run types.AgentRun) *runRefusal {
+// pin. A run that mounted a portal's drive (portal_drives) is also reachable only through the portal that
+// created it, so another portal on the same issuer, which serves the same person, cannot reach it: 403
+// portal_run_scope, whether or not the allocation or the creating portal still stands. It is called only after
+// the owner predicate has passed, so a missing run and another person's run keep today's byte-identical 404 and
+// only a person's own run outside the pin or the portal answers 403.
+func (s *Server) portalRunReachable(ctx context.Context, run types.AgentRun) *runRefusal {
 	p, refusal := s.portalPinOf(ctx)
 	if refusal != nil {
 		return refusal
 	}
-	if p.holds(run.UnitID) {
-		return nil
+	if !p.holds(run.UnitID) {
+		return p.refusal()
 	}
-	return p.refusal()
+	if p.applies && run.PortalDrives && (run.CreatedVia == nil || *run.CreatedVia != p.portal) {
+		return runError(http.StatusForbidden, reasonPortalRunScope, portalRunScopeMsg)
+	}
+	return nil
 }
