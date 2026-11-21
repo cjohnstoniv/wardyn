@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 // The proxied portal fetch: the discovery and key fetches of an issuer host the operator listed on the daemon
@@ -137,6 +139,32 @@ type portalProxyTransport struct {
 	base      *http.Transport
 
 	tlsDoneHook func() // test seam: runs before a TLSHandshakeDone is recorded
+}
+
+// portalProxyCanonical is the route with the proxy's host in the form net/http dials: a non-ASCII name
+// becomes its IDNA-ASCII form, the conversion the always list compares hosts in, so the dial guard and the
+// proxy certificate's name check the host that is dialled. An IP literal, the port and the credentials are
+// kept, and a name that does not convert stays as given, which is also the name net/http dials.
+func portalProxyCanonical(pp *PortalProxy) *PortalProxy {
+	if pp == nil || pp.URL == nil {
+		return pp
+	}
+	host := pp.URL.Hostname()
+	if !strings.ContainsFunc(host, func(r rune) bool { return r >= 0x80 }) {
+		return pp
+	}
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil {
+		return pp
+	}
+	u := *pp.URL
+	u.Host = ascii
+	if port := pp.URL.Port(); port != "" {
+		u.Host = net.JoinHostPort(ascii, port)
+	}
+	c := *pp
+	c.URL = &u
+	return &c
 }
 
 // portalProxyAddr is the proxy's host and port, the scheme's default port when it names none.

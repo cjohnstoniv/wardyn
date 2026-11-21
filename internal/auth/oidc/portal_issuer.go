@@ -163,7 +163,7 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial, proxy: opts.Proxy}
+	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial, proxy: portalProxyCanonical(opts.Proxy)}
 	for _, h := range opts.InternalHosts {
 		if a := portalListedAuthority(h); a != "" {
 			pn.internalHosts[a] = true

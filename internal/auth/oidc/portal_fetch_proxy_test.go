@@ -201,7 +201,7 @@ func newFakeProxy(t *testing.T, kind string) *fakeProxy {
 	fp := &fakeProxy{t: t, kind: kind}
 	if kind == "https" {
 		fp.ca = newTestCA(t, "proxy CA")
-		c := fp.ca.leaf(t, nil, []net.IP{net.ParseIP("127.0.0.1")})
+		c := fp.ca.leaf(t, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
 		fp.cert = &c
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1589,6 +1589,72 @@ func TestPortalProxyFetch_FailureLogNamesRouteNeverProxy(t *testing.T) {
 	if !strings.Contains(logs.String(), `route=direct detail="status 5xx"`) {
 		t.Fatalf("log %q lacks the direct route", logs.String())
 	}
+}
+
+// An internationalised spelling of the proxy's name is dialled, and its certificate checked, in its IDNA-ASCII
+// form, as the ASCII spelling is; the dial guard still refuses every address but the proxy's own.
+func TestPortalProxyFetch_InternationalProxyHostReachesProxy(t *testing.T) {
+	spellings := map[string]string{"ascii": "localhost", "unicode": "\uff4c\uff4f\uff43\uff41\uff4c\uff48\uff4f\uff53\uff54"}
+	for _, kind := range []string{"http", "https", "socks5"} {
+		for name, host := range spellings {
+			t.Run(kind+"/"+name, func(t *testing.T) {
+				fp := newFakeProxy(t, kind)
+				port := fp.url().Port()
+				h := proxyHarness(t, fp, func(o *PortalIssuersOptions) {
+					u := *o.Proxy.URL
+					u.Host = net.JoinHostPort(host, port)
+					o.Proxy.URL = &u
+				})
+				h.mustAdmit(h.token(h.accessClaims()))
+				if fp.connCount() == 0 || h.dialCount() != 0 {
+					t.Fatalf("proxy saw %d connections and the direct seam %d dials, want some and 0", fp.connCount(), h.dialCount())
+				}
+			})
+		}
+	}
+	t.Run("guard", func(t *testing.T) {
+		fp := newFakeProxy(t, "https")
+		port := fp.url().Port()
+		reserved := func(string) bool { return false }
+		pp := &PortalProxy{URL: &url.URL{Scheme: "https", Host: net.JoinHostPort(spellings["unicode"], port), User: url.UserPassword("u", "p")},
+			Listed: proxyTestListed, ProxyRoots: fp.roots(), IssuerRoots: x509.NewCertPool()}
+		p, err := NewPortalIssuers(PortalIssuersOptions{Reserved: reserved, Proxy: pp})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.net.proxy.URL; got.Host != "localhost:"+port || got.User.String() != "u:p" || got.Scheme != "https" {
+			t.Fatalf("canonical proxy URL %s, want https://u:p@localhost:%s", got.Redacted(), port)
+		}
+		if pp.URL.Hostname() != spellings["unicode"] {
+			t.Fatalf("the caller's route was changed: %s", pp.URL.Hostname())
+		}
+		for _, lit := range []string{"127.0.0.1:3128", "[::1]:3128", "proxy.corp.example"} {
+			in := &PortalProxy{URL: &url.URL{Scheme: "http", Host: lit}}
+			if out := portalProxyCanonical(in); out != in {
+				t.Fatalf("%s: rewritten to %s, want it kept", lit, out.URL.Host)
+			}
+		}
+		tr := newPortalProxyClient(p.net, map[string]bool{"login.corp.example": true}, "login.corp.example").Transport.(*portalProxyTransport)
+		attempt := func() context.Context {
+			return context.WithValue(context.Background(), portalProxyAttemptKey{}, &portalProxyAttempt{deadline: time.Now().Add(5 * time.Second)})
+		}
+		for _, addr := range []string{"127.0.0.1:" + port, "localhost:1", "evil.example:" + port, net.JoinHostPort(spellings["unicode"], port)} {
+			conn, err := tr.dialProxyTLS(attempt(), "tcp", addr)
+			if conn != nil {
+				_ = conn.Close()
+			}
+			wantFetchDetail(t, err, portalCauseAddressRefused, portalDetailNotTheProxy)
+		}
+		before := fp.connCount()
+		conn, err := tr.dialProxyTLS(attempt(), "tcp", "localhost:"+port)
+		if err != nil {
+			t.Fatalf("dial of the proxy's own name: %v", err)
+		}
+		_ = conn.Close()
+		if fp.connCount() != before+1 {
+			t.Fatalf("proxy saw %d new connections, want 1", fp.connCount()-before)
+		}
+	})
 }
 
 func TestPortalIssuers_ProxyOptionValidated(t *testing.T) {
