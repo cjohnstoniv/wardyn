@@ -32,8 +32,9 @@ const (
 type scimStatus struct {
 	// Configured is whether wardynd mounts the SCIM routes. When false every other field is empty.
 	Configured bool `json:"configured"`
-	// LastTokenSlot is the bearer slot of the newest SCIM write ("primary" or "next"), or "" before
-	// the first one.
+	// LastTokenSlot is the bearer slot of the newest SCIM user write or group member removal that names one
+	// ("primary" or "next"), or "" before the first one. It is the latest update only: another provisioning job
+	// may use the other slot.
 	LastTokenSlot string `json:"last_token_slot"`
 	// PurgeAfterSeconds is WARDYN_SCIM_PURGE_AFTER; zero means only a DELETE purges.
 	PurgeAfterSeconds int64 `json:"purge_after_seconds"`
@@ -169,14 +170,18 @@ func (s *Server) scimAuditRows(ctx context.Context, f store.AuditFilter) ([]type
 	return pager.QueryAuditEventsFilteredPage(ctx, nil, f, store.Page{Limit: scimStatusAuditScan})
 }
 
-// scimLastTokenSlot is the bearer slot of the newest scim.user.* row that names one; the sweeper's own
-// rows name no bearer.
+// scimLastTokenSlot is the bearer slot of the newest audit row that names one: a scim.user.* row or a group
+// member removal, both of which record the slot of the request that caused them. The sweeper's own rows name
+// no bearer.
 func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
-	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.user."})
+	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim."})
 	if err != nil {
 		return "", err
 	}
 	for _, ev := range rows { // newest first
+		if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
+			continue
+		}
 		var d struct {
 			Slot string `json:"slot"`
 		}

@@ -199,13 +199,44 @@ func TestSCIMCovStatusLastTokenSlotIsTheNewestWriteThatNamesOne(t *testing.T) {
 		t.Fatalf("status = %d %s, want last_token_slot next", w.Code, w.Body.String())
 	}
 	first := paged.filters[0]
-	if first.ActionPrefix != "scim.user." || first.Actor != scimActor || first.ActorType != types.ActorSystem || first.Origin != store.AuditOriginOrganisation {
-		t.Errorf("slot filter = %+v, want the SCIM caller's own organisation rows of scim.user.*", first)
+	if first.ActionPrefix != "scim." || first.Actor != scimActor || first.ActorType != types.ActorSystem || first.Origin != store.AuditOriginOrganisation {
+		t.Errorf("slot filter = %+v, want the SCIM caller's own organisation rows of scim.*", first)
 	}
 
 	paged.audit = rows[:2]
 	if _, body := e.status(); body.LastTokenSlot != "" {
 		t.Errorf("last_token_slot = %q, want empty when no row names a bearer", body.LastTokenSlot)
+	}
+}
+
+// A group member removal records the bearer slot as a user write does, so the newest of the two decides, in
+// either order and for either slot; a removal row that names no slot, or another scim.* row, decides nothing.
+func TestSCIMCovStatusLastTokenSlotCountsGroupRemovalsToo(t *testing.T) {
+	t0 := scimCovNow
+	user := func(ago time.Duration, slot string) types.AuditEvent {
+		return scimCovAudit("scim.user.write", "x", t0.Add(-ago), `{"slot":"`+slot+`"}`)
+	}
+	group := func(ago time.Duration, slot string) types.AuditEvent {
+		return scimCovAudit("scim.group.member_remove", "x", t0.Add(-ago), `{"slot":"`+slot+`","group":"g"}`)
+	}
+	for _, c := range []struct {
+		name string
+		rows []types.AuditEvent // newest first
+		want string
+	}{
+		{"a group removal on primary after a user write on next", []types.AuditEvent{group(time.Minute, "primary"), user(2*time.Minute, "next")}, "primary"},
+		{"a user write on next after a group removal on primary", []types.AuditEvent{user(time.Minute, "next"), group(2*time.Minute, "primary")}, "next"},
+		{"a group removal on next after a user write on primary", []types.AuditEvent{group(time.Minute, "next"), user(2*time.Minute, "primary")}, "next"},
+		{"a user write on primary after a group removal on next", []types.AuditEvent{user(time.Minute, "primary"), group(2*time.Minute, "next")}, "primary"},
+		{"a group removal naming no slot, then a user write", []types.AuditEvent{scimCovAudit("scim.group.member_remove", "x", t0, `{"group":"g"}`), user(time.Minute, "next")}, "next"},
+		{"another scim row, then a group removal", []types.AuditEvent{scimCovAudit("scim.group.purge", "x", t0, `{"slot":"next"}`), group(time.Minute, "primary")}, "primary"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := scimCovPagedEnv(t, newSCIMCovStore(), c.rows)
+			if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != c.want {
+				t.Errorf("status = %d, last_token_slot %q, want %q", w.Code, body.LastTokenSlot, c.want)
+			}
+		})
 	}
 }
 
