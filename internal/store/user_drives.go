@@ -419,7 +419,20 @@ func replaceUserDriveGrantOn(ctx context.Context, tx pgx.Tx, g types.UserDriveGr
 // again updates that row and returns its id; another drive is another row. The guards and error
 // mapping are UpsertUserDriveGrant's.
 func (s PG) AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
-	return upsertUserDriveGrant(ctx, s.Pool, g, homeOverrideStated, false)
+	// A transaction, so the ruling's read of the issuer binding is held to the insert's commit.
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.UserDriveGrant{}, fmt.Errorf("store: begin user drive grant add: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	out, err := upsertUserDriveGrant(ctx, tx, g, homeOverrideStated, false)
+	if err != nil {
+		return types.UserDriveGrant{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.UserDriveGrant{}, fmt.Errorf("store: commit user drive grant add: %w", err)
+	}
+	return out, nil
 }
 
 // ErrUserDriveGrantChanged is UpsertUserDriveGrantWithinTier's answer when an allocation for the
@@ -514,6 +527,11 @@ type rowQuerier interface {
 // refuses to update a row (ErrUserDriveGrantChanged): the caller judged the write against there
 // being none.
 func upsertUserDriveGrant(ctx context.Context, q rowQuerier, g types.UserDriveGrant, homeOverrideStated, mustBeNew bool) (types.UserDriveGrant, error) {
+	if g.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "user_drive_grants.subject", g.Subject); err != nil {
+			return types.UserDriveGrant{}, err
+		}
+	}
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}

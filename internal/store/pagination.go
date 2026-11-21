@@ -93,7 +93,7 @@ var _ Pager = PG{}
 // unlike Pager, an absent implementation must fail closed (500), not fall
 // back to the unscoped list — an unscoped list IS the vulnerability here.
 type RunsByCreatorPager interface {
-	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error)
+	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page, scope *RunUnitScope) ([]types.AgentRun, error)
 }
 
 var _ RunsByCreatorPager = PG{}
@@ -246,14 +246,20 @@ func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string)
 	return collect(ctx, s.Pool, "list", "active runs at workspace path", q, []any{workspacePath, states}, scanRun)
 }
 
-// ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order.
+// ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order. A non-nil scope also keeps
+// only the runs in that unit set, in the query itself so a page is never short and a cursor never skips.
 // ponytail: no dedicated (created_by, created_at) index yet — agent_runs is
 // small enough per-operator that the existing created_at index plus a
 // filter scan is fine; add one if a member's run list ever gets slow.
-func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
+func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page, scope *RunUnitScope) ([]types.AgentRun, error) {
+	args := []any{createdBy}
+	where := `created_by = $1`
+	if scope != nil {
+		where += ` AND ` + scope.sql(&args)
+	}
 	q, args := p.appendTo(`
 		SELECT `+runCols+`
-		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
+		FROM agent_runs WHERE `+where+` ORDER BY created_at DESC`, args)
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
 
