@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -279,6 +280,7 @@ func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny [
 	if err != nil {
 		return err
 	}
+	sweepStaleScans(filepath.Dir(abs))
 	dir, err := os.MkdirTemp(filepath.Dir(abs), "wardyn-bundle-scan-")
 	if err != nil {
 		return err
@@ -286,13 +288,14 @@ func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny [
 	defer os.RemoveAll(dir)
 	env := cleanGitEnv(dir)
 	repo := filepath.Join(dir, "scan.git")
-	// The scanner holds the bundle's own hash: a SHA-1 repository cannot import a SHA-256 bundle. SHA-1, the
-	// default, takes no flag, so an older git that lacks the option still works.
-	init := []string{"init", "--bare", "-q", repo}
+	// The scanner holds the bundle's own hash: a SHA-1 repository cannot import a SHA-256 bundle. SHA-1 takes
+	// no flag, so an older git that lacks the option still works; the variable names SHA-1 for a git whose
+	// default is another hash, and an older git ignores it.
+	init, initEnv := []string{"init", "--bare", "-q", repo}, append(env[:len(env):len(env)], "GIT_DEFAULT_HASH=sha1")
 	if len(tip) == 64 {
-		init = append(init, "--object-format=sha256")
+		init, initEnv = append(init, "--object-format=sha256"), env
 	}
-	if _, err := gitIn(ctx, dir, env, init...); err != nil {
+	if _, err := gitIn(ctx, dir, initEnv, init...); err != nil {
 		if len(tip) == 64 {
 			return fmt.Errorf("--git did not send %s: its history uses SHA-256 object names and this git cannot make a repository to check them in: %w", Shown(branch), err)
 		}
@@ -303,6 +306,20 @@ func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny [
 		return fmt.Errorf("--git did not send %s: its bundle could not be read back to check its history: %w", Shown(branch), err)
 	}
 	return checkHistoryAllowed(ctx, repo, branch, tip, orgDeny)
+}
+
+// staleScanAge is how old a scan repository must be before the next scan removes it as left by a send that was
+// killed. A scan in progress is far younger.
+const staleScanAge = time.Hour
+
+// sweepStaleScans removes the scan repositories a killed send left in dir, which only a clean exit removes.
+func sweepStaleScans(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "wardyn-bundle-scan-*"))
+	for _, p := range old {
+		if fi, err := os.Lstat(p); err == nil && fi.IsDir() && time.Since(fi.ModTime()) > staleScanAge {
+			os.RemoveAll(p)
+		}
+	}
 }
 
 // branchMovedError is a branch that moved between the head SendGit read and the bundle's tip.
