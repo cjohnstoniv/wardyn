@@ -41,8 +41,9 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 
 - The key is scoped to **your own principal** — there is no admin view of another human's keys, and `DELETE` on a key you don't own 404s exactly like a nonexistent one (no existence leak).
 - The fingerprint returned (and shown in the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public by design** — it identifies the server/key, it authenticates no one, so showing it is not a disclosure.
-- Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message. The quota is checked first: a caller already holding 20 keys gets the `422` quota refusal for any add, a duplicate included:
+- Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message:
   - it does not confirm the key exists under a DIFFERENT account, only that this exact `POST` didn't take.
+- The quota is checked before the duplicate check: a caller already holding 20 keys gets the `422` quota refusal for any otherwise valid add, a duplicate included.
 
 ### Reclaiming a squatted fingerprint
 
