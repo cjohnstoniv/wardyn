@@ -532,10 +532,15 @@ func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
 	p := newIssuerPortal(t, st, "")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
+	// One person uses two portals of the same issuer: the first portal at t1, the second at t2, the first again
+	// at t3. The directory shows t3, the latest across both portals, not the second portal's row, which was
+	// written last but used earlier.
+	second := newIssuerPortalOn(t, st, p)
 	_, _, firstUse := mintFor(t, st, p, "used")
+	_, _, secondUse := mintFor(t, st, second, "used")
 	_, _, latestUse := mintFor(t, st, p, "used")
-	if !latestUse.After(firstUse) {
-		t.Fatalf("second mint at %v is not after the first at %v", latestUse, firstUse)
+	if !secondUse.After(firstUse) || !latestUse.After(secondUse) {
+		t.Fatalf("uses at %v, %v, %v are not in order", firstUse, secondUse, latestUse)
 	}
 	issueFor(t, st, p, "introduced") // never completes a grant
 	workforceAt := now.Add(-3 * time.Minute)
@@ -582,5 +587,32 @@ func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
 	}
 	if used.ActiveSessions != 0 {
 		t.Errorf("revoked console session: active sessions = %d, want 0", used.ActiveSessions)
+	}
+
+	// A console sign-in later than the latest portal use shows as the last sign-in, and the session count
+	// follows it: a revoke between the portal use and the console sign-in leaves that session live.
+	later := types.PortalPrincipal(p.Key, "consolelater")
+	issueFor(t, st, p, "consolelater")
+	useAt, consoleAt := now.Add(-3*time.Hour), now.Add(-10*time.Minute)
+	if _, err := pool.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id, first_used_at, last_used_at)
+		SELECT id, $2, $3, $3 FROM principal_identities WHERE principal = $1`, later, p.Delegate.ID, useAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := markedExec(t, pool, `UPDATE principal_identities SET last_login_at = $2 WHERE principal = $1`, later, consoleAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, $2)`, later, now.Add(-90*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := listingByPrincipal(t, page.People, later)
+	if cl.LastSignInAt == nil || !cl.LastSignInAt.Equal(consoleAt) {
+		t.Errorf("console sign-in later than the portal use: last sign-in = %v, want the console time %v", cl.LastSignInAt, consoleAt)
+	}
+	if cl.ActiveSessions != 1 {
+		t.Errorf("console sign-in after the revoke: active sessions = %d, want 1 (the count follows the console time, not the use at %v)", cl.ActiveSessions, useAt)
 	}
 }
