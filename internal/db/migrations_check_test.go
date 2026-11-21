@@ -542,9 +542,15 @@ func closedEnumChecks() []closedEnumCheck {
 		// above carry, reused rather than re-enumerated — one Go definition for
 		// "who is this row written against". Pinned here so a fourth subject
 		// type cannot land on two tables' CHECKs and not the third's.
+		//
+		// THIS ONE TABLE DIFFERS: it also accepts types.DriveSubjectPortal (0296),
+		// which names an issuer portal and is a drive allocation's subject only.
+		// capability_grants and governance_assignments never learn it, so they stay
+		// on the four capability subject types.
 		{"user_drive_grants", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
+			string(types.DriveSubjectPortal),
 		)},
 		// Why the org stopped waiting for a runner's resident erase. The Go set
 		// is store.ResidentAbandon*, which this package cannot import (store

@@ -309,6 +309,9 @@ type AgentRun struct {
 	// CreatedViaActor is the agent that portal named when it launched the run (the subject and issuer of the
 	// identity provider token the portal held for it); nil when it named none. It is recorded, never authorised.
 	CreatedViaActor *DelegationActor `json:"created_via_actor,omitempty"`
+	// PortalDrives marks a run that mounted a drive allocated to the portal in CreatedVia. Set at create, never
+	// changed, and not part of the wire: a run that carries it is reachable only through that portal.
+	PortalDrives bool `json:"-"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
 	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
 	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
