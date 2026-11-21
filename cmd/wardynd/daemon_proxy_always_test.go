@@ -265,16 +265,27 @@ func TestDaemonProxyAlways_ListedHostNeverDirect(t *testing.T) {
 		for k, v := range c.env {
 			t.Setenv(k, v)
 		}
-		grant, err := bootDaemonProxy(&http.Transport{Proxy: c.shared}, alwaysFlags(c.proxy, c.noProxy, "login.corp.example,Idp.Corp.Example."))
+		grant, err := bootDaemonProxy(&http.Transport{Proxy: c.shared}, alwaysFlags(c.proxy, c.noProxy, "login.corp.example,Idp.Corp.Example.,xn--bcher-kva.corp.example"))
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		for _, target := range []string{"https://login.corp.example/t", "https://login.corp.example:8443/t", "https://LOGIN.corp.example./t", "http://idp.corp.example/t"} {
+		for _, target := range []string{"https://login.corp.example/t", "https://login.corp.example:8443/t", "https://LOGIN.corp.example./t", "http://idp.corp.example/t",
+			// net/http dials the IDNA-ASCII form, so these spellings are the listed hosts too.
+			"https://\uff4cogin.corp.example/token", "https://login\u3002corp.example/token", "https://b\u00fccher.corp.example/token"} {
 			if got := proxyFor(t, grant, target); got == "" {
 				t.Errorf("%s: a listed host, %s, goes direct", name, target)
 			}
 		}
+	}
+	// A host that cannot be converted is an error, never a direct request.
+	clearProxyEnv(t)
+	grant, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", "login.corp.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, err := grant.(*http.Transport).Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "a\u2028b.example"}}); err == nil {
+		t.Errorf("a host that does not convert to ASCII got proxy %v and no error", u)
 	}
 	// And the configuration that would send it direct does not boot.
 	clearProxyEnv(t)
@@ -326,6 +337,7 @@ func TestDaemonProxyAlways_RefusesNonHostnameEntry(t *testing.T) {
 	for _, entry := range []string{
 		"login.corp.example?MARKER-q1", "login.corp.example#MARKER-f1", "login corp.example", "login..corp.example",
 		"-bad.example", "bad-.example", long, strings.Repeat("a.", 130) + "example", "log\u00efn.example", "under_score.example", ".",
+		"127.1", "2130706433", "0x7f.0.0.1",
 	} {
 		_, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", "ok.example,"+entry))
 		if err == nil {

@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"golang.org/x/net/http/httpproxy"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -74,7 +75,7 @@ const (
 	// 1-based position and %s says why. Never the entry's text: a pasted proxy URL carries a
 	// credential, and the refusal is written to the daemon log.
 	daemonProxyAlwaysEntryRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS entry %d is %s — " +
-		"the list takes exact host names that wardynd reaches directly today, nothing else"
+		"the list takes exact host names that WARDYN_DAEMON_NO_PROXY or NO_PROXY bypasses"
 )
 
 // installDaemonProxy sets tr.Proxy from WARDYN_DAEMON_PROXY_URL, scoped to the
@@ -355,6 +356,8 @@ func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, 
 			why = "localhost"
 		case !isFullHostName(host):
 			why = "not an exact host name (no port, path, suffix, wildcard or other text)"
+		case numericHostName(host):
+			why = "a numeric name (an address spelled as a name), not a host name"
 		}
 		if _, ok := skip[host]; ok && why == "" {
 			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
@@ -411,6 +414,39 @@ func isFullHostName(host string) bool {
 	return true
 }
 
+// numericHostName reports whether host (already a valid DNS name) is one a resolver reads as
+// an address: its last label is all digits (127.1, 2130706433) or starts with 0x (0x7f.0.0.1).
+func numericHostName(host string) bool {
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	if strings.HasPrefix(last, "0x") {
+		return true
+	}
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// requestProxyHost is the host a request is dialled at, in the form the list is keyed by:
+// net/http converts a non-ASCII host to its IDNA-ASCII form before it dials, so the lookup does
+// too (a fullwidth letter, an ideographic dot or a U-label spells the same host). A host that
+// does not convert is an error, never a request sent direct.
+func requestProxyHost(host string) (string, error) {
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			ascii, err := idna.Lookup.ToASCII(host)
+			if err != nil {
+				return "", fmt.Errorf("service grant token host is not a valid internationalised host name: %w", err)
+			}
+			host = ascii
+			break
+		}
+	}
+	return normalizeProxyHost(host), nil
+}
+
 // normalizeProxyHost lower-cases a host and drops one trailing dot, the form a
 // request URL's host is compared in.
 func normalizeProxyHost(h string) string {
@@ -459,7 +495,11 @@ func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[
 	rest := tr.Proxy
 	clone := tr.Clone()
 	clone.Proxy = func(req *http.Request) (*url.URL, error) {
-		if _, ok := always[normalizeProxyHost(req.URL.Hostname())]; ok {
+		host, err := requestProxyHost(req.URL.Hostname())
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := always[host]; ok {
 			return proxy, nil
 		}
 		if rest == nil {
