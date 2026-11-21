@@ -235,6 +235,9 @@ func (p *PortalIssuers) VerifyDetail(ctx context.Context, reg PortalRegistration
 	if cause, retry := v.prepare(ctx); cause != "" {
 		return PortalSubject{}, PortalRefusal{Reason: PortalIssuerUnavailable, Cause: cause, Class: PortalRefusedUnavailable, RetryAfter: retry}
 	}
+	if v.afterPrepare != nil {
+		v.afterPrepare()
+	}
 	tok, err := v.idv.Verify(ctx, raw)
 	if err != nil {
 		return PortalSubject{}, verifyFailure(box, err)
@@ -363,6 +366,11 @@ type portalVerifier struct {
 	idv              *gooidc.IDTokenVerifier
 	lastUsed         atomic.Int64
 
+	// Test hooks: afterPrepare runs once an exchange is through prepare; beforeDrop runs once a key fetch that
+	// broke a rule has been reported and before its drop is decided.
+	afterPrepare func()
+	beforeDrop   func()
+
 	onFail func(PortalRefreshFailure)
 
 	mu         sync.Mutex // guards the fields below; never held across a fetch
@@ -391,13 +399,17 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 		}
 		return portalFetchKeys(ctx, v.client, keysURL)
 	})
-	v.ks.onFail = func(source string, err error) {
+	v.ks.onFail = func(source string, err error, at portalKeyAt) {
 		cause := portalFetchCause(err)
 		v.reportFailure(source, cause)
 		if cause != portalCauseUnreachable {
-			v.dropForCause(cause) // a document or address that breaks a rule is never kept as the last good one
+			if v.beforeDrop != nil {
+				v.beforeDrop()
+			}
+			v.dropForCause(cause, at) // a document or address that breaks a rule is never kept as the last good one
 		}
 	}
+	v.ks.onOK = func() { v.settle("") } // keys loaded by either path reopen a verifier whose discovery is healthy
 	v.idv = gooidc.NewVerifier(issuer, v.ks, &gooidc.Config{SkipClientIDCheck: true, SupportedSigningAlgs: []string{string(jose.RS256)}})
 	return v, nil
 }
@@ -500,48 +512,68 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 			if v.disc == nil {
 				v.standing = cause
 			}
-			v.mu.Unlock()
 			v.setDown(portalCauseIssuerDown)
+			v.mu.Unlock()
 			return cause, 0, 0
 		}
 		v.disc, v.discFailed, v.standing = nil, false, cause
-		v.mu.Unlock()
 		v.ks.drop()
 		v.setDown(cause)
+		v.mu.Unlock()
 		return cause, 0, 0
 	}
+	// The document and its keys address are published together. A changed keys address drops the keys and every
+	// fetch still in flight for the old one.
 	v.mu.Lock()
 	v.disc, v.discOKAt, v.discFailed, v.standing = &disc, now, false, ""
-	v.mu.Unlock()
-	// A changed keys address drops the keys and every fetch still in flight for the old one.
 	v.ks.setURL(disc.fetchURL)
+	v.mu.Unlock()
 	out, wait, err := v.ks.ensure(context.Background(), "scheduled") // the fetch itself is bounded by the key set
 	switch {
 	case out == portalEnsureCurrent:
-		v.down.Store(nil) // the keys are younger than the budget: nothing to fetch
+		v.settle("") // the keys are younger than the budget: nothing to fetch
 		return "", 0, 0
 	case out == portalEnsureCooling:
-		v.setDown(portalCauseKeysCooldown)
+		v.settle(portalCauseKeysCooldown)
 		return portalCauseKeysCooldown, wait, 0
 	case err != nil:
 		if cause := portalFetchCause(err); cause != portalCauseUnreachable {
-			v.dropForCause(cause)
-			return cause, 0, 0
+			return cause, 0, 0 // the key set's failure callback has already dropped the verifier under it
 		}
-		v.setDown(portalCauseIssuerDown)
+		v.settle(portalCauseIssuerDown)
 		return portalCauseKeysUnreachable, 0, 0
 	}
-	v.down.Store(nil)
+	v.settle("")
 	return "", 0, v.ks.seqNow()
 }
 
-// dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
-// verifier under the cause until a refresh passes.
-func (v *portalVerifier) dropForCause(cause string) {
+// settle publishes the verifier's health once the keys have moved: open when discovery is healthy and the current
+// address's keys are loaded and good, whichever fetch loaded them; otherwise closed under cause, or left as it is
+// when cause is "". Discovery and the key set are read under one lock, so a key success and a refresh outcome
+// never publish out of order, and a discovery that failed or was refused is never reopened by a key success.
+func (v *portalVerifier) settle(cause string) {
 	v.mu.Lock()
+	defer v.mu.Unlock()
+	okAt, _, failed := v.ks.state()
+	if v.disc != nil && !v.discFailed && v.standing == "" && !okAt.IsZero() && !failed {
+		v.down.Store(nil)
+		return
+	}
+	if cause != "" {
+		v.setDown(cause)
+	}
+}
+
+// dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
+// verifier under the cause until a refresh passes, but only while the key set is still in the state the failure
+// was recorded at: a failure never drops a discovery or keys published after it.
+func (v *portalVerifier) dropForCause(cause string, at portalKeyAt) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.ks.dropAt(at) {
+		return
+	}
 	v.disc, v.discFailed, v.standing = nil, false, cause
-	v.mu.Unlock()
-	v.ks.drop()
 	v.setDown(cause)
 }
 
