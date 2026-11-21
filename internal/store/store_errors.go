@@ -44,6 +44,27 @@ var ErrDriveSlugConflict = fmt.Errorf(
 var ErrDriveAllocated = fmt.Errorf(
 	"%w: this user drive gained an allocation while the write was being prepared", ErrConflict)
 
+// The refusals of a portal's team-drive allocation, and of a drive edit that would break one. Each is a plain
+// error and not a conflict: the API answers each with its own reason. Nothing was written.
+var (
+	// ErrDrivePortalNotLive: the portal is unknown or revoked.
+	ErrDrivePortalNotLive = errors.New("store: the portal is unknown or revoked")
+	// ErrDrivePortalNotIssuer: the portal has no issuer of its own (a console portal).
+	ErrDrivePortalNotIssuer = errors.New("store: the portal is not an issuer portal")
+	// ErrDrivePortalNotTeam: the drive is not a team drive.
+	ErrDrivePortalNotTeam = errors.New("store: a portal allocation is for a team drive only")
+	// ErrDrivePortalBackend: the drive is not on docker_volume or k8s_pvc_static, or an edit would move it off
+	// them while a portal holds it.
+	ErrDrivePortalBackend = errors.New("store: a portal's folder needs a drive on docker_volume or k8s_pvc_static")
+	// ErrDrivePortalSecondPlace: the drive has a second place, or an edit would add one while a portal holds it.
+	ErrDrivePortalSecondPlace = errors.New("store: a portal's folder needs a drive with no second place")
+	// ErrDrivePortalAdditiveOnly: a replacing write, or a tier-judged one, named a portal.
+	ErrDrivePortalAdditiveOnly = errors.New("store: a portal holds one allocation per drive and is allocated beside its others")
+	// ErrPortalRevoked: a run that mounts a portal's drive was refused because the portal was revoked before
+	// the row was written.
+	ErrPortalRevoked = errors.New("store: the portal was revoked")
+)
+
 // ErrWorkspaceStale is returned by UpdateWorkspace when the row changed after
 // the caller read it (every writer stamps updated_at), so replaying the
 // caller's snapshot would revert a concurrent claim, record result or build.

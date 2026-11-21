@@ -151,7 +151,9 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 	if d.ID == uuid.Nil {
 		d.ID = uuid.New()
 	}
-	if !refuseIfAllocated {
+	// An edit that adds a second place or moves the backend off the two a portal's folder can be on takes the
+	// drive's lock whatever the re-home guard answered, so it can be refused for a portal allocation (below).
+	if !refuseIfAllocated && !driveEditNeedsPortalCheck(d) {
 		return s.upsertUserDriveOn(ctx, s.Pool, d, false)
 	}
 	// NOT EXISTS alone isn't the guard — the lock is. It sees only the
@@ -171,7 +173,10 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
 		return types.UserDrive{}, fmt.Errorf("store: lock user drive: %w", err)
 	}
-	out, err := s.upsertUserDriveOn(ctx, tx, d, true)
+	if err := refuseEditOfPortalDrive(ctx, tx, d); err != nil {
+		return types.UserDrive{}, err
+	}
+	out, err := s.upsertUserDriveOn(ctx, tx, d, refuseIfAllocated)
 	if err != nil {
 		return types.UserDrive{}, err
 	}
@@ -332,6 +337,9 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 // ReplaceUserDriveGrant is UpsertUserDriveGrant that also returns the drives the subject lost:
 // the drive ids of the rows it removed and of the kept row's drive before the repoint.
 func (s PG) ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	if g.SubjectType == types.DriveSubjectPortal {
+		return types.UserDriveGrant{}, nil, ErrDrivePortalAdditiveOnly
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin drive grant write: %w", err)
@@ -425,6 +433,11 @@ func (s PG) AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeO
 		return types.UserDriveGrant{}, fmt.Errorf("store: begin user drive grant add: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	if g.SubjectType == types.DriveSubjectPortal {
+		if err := lockPortalAllocation(ctx, tx, g); err != nil {
+			return types.UserDriveGrant{}, err
+		}
+	}
 	out, err := upsertUserDriveGrant(ctx, tx, g, homeOverrideStated, false)
 	if err != nil {
 		return types.UserDriveGrant{}, err
@@ -465,6 +478,9 @@ var _ UserDriveGrantTierWriter = PG{}
 // (ErrUserDriveGrantChanged otherwise). The removed drives are ReplaceUserDriveGrant's. READ
 // COMMITTED is pinned for UpsertUserDrive's reason. ErrNotFound for an unknown drive.
 func (s PG) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	if g.SubjectType == types.DriveSubjectPortal {
+		return types.UserDriveGrant{}, nil, ErrDrivePortalAdditiveOnly
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin user drive grant write: %w", err)
