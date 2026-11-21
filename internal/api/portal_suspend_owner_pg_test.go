@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -409,31 +410,54 @@ func TestPG_PortalSuspendConcurrentReplacementWaitsForTheQueueDeparture(t *testi
 	if _, err := hold.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, run.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Each party runs on a pool of its own that names its connections, and the observer is a third pool, so no wait is
+	// recognised by the text of a statement (the queued claim's begins WITH, another primitive's may not) and the
+	// held transaction's pool is never asked for a second connection.
+	claimer, claimerName := l.namedPool(t, "claimant")
+	replacer, replacerName := l.namedPool(t, "replacement")
+	watch, _ := l.namedPool(t, "observer")
 	claimDone := make(chan error, 1)
 	go func() {
-		_, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+		_, err := store.NewPG(claimer).ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
 		claimDone <- err
 	}()
-	// The held transaction is on l.pool; the claim's wait is observed from a pool of its own, on the one connection the
-	// claim's UPDATE waits on, which is blocked by the connection holding the run's row.
-	watch, err := pgxpool.NewWithConfig(ctx, l.pool.Config())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer watch.Close()
+	// The claimant is waiting on the run's row: its connection is blocked by the holder's backend.
 	pollTrue(t, "the claim to wait on the run's row", func() bool {
 		var n int
-		if err := watch.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
-			AND state = 'active' AND $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'UPDATE agent_runs%'`, holderPID).Scan(&n); err != nil {
+		if err := watch.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock' AND $2 = ANY(pg_blocking_pids(pid))`,
+			claimerName, holderPID).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n > 0
 	})
+	// While it waits it holds the suspension's ledger row: a lock request on that row that does not wait is refused.
+	probe, err := watch.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = probe.Exec(ctx, `SELECT 1 FROM deprovision_jobs WHERE id = $1 FOR UPDATE NOWAIT`, c.key.ID)
+	_ = probe.Rollback(ctx)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("the stalled claim's ledger row is lockable by another transaction (%v), want it held", err)
+	}
 	replaced := make(chan error, 1)
 	go func() {
-		_, _, _, err := l.h.srv.portalSuspendStepOne(withActor(ctx, second.actorType, second.actor), l.st, c.id, second, 0, nil)
+		_, _, _, err := l.h.srv.portalSuspendStepOne(withActor(ctx, second.actorType, second.actor), store.NewPG(replacer), c.id, second, 0, nil)
 		replaced <- err
 	}()
+	// The replacement's connection waits on the claimant's, which waits on the holder's: it queues behind the claim.
+	pollTrue(t, "the replacement to wait on the stalled claim", func() bool {
+		var n int
+		if err := watch.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity r JOIN pg_stat_activity c ON c.pid = ANY(pg_blocking_pids(r.pid))
+			WHERE r.datname = current_database() AND r.application_name = $1 AND r.wait_event_type = 'Lock'
+			  AND c.application_name = $2 AND $3 = ANY(pg_blocking_pids(c.pid))`,
+			replacerName, claimerName, holderPID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	})
 	select {
 	case err := <-replaced:
 		t.Fatalf("the replacement suspension went ahead of the stalled claim (%v)", err)
@@ -449,6 +473,24 @@ func TestPG_PortalSuspendConcurrentReplacementWaitsForTheQueueDeparture(t *testi
 	if got := l.runState(t, run.ID); got != types.RunKilled || l.count(t, `SELECT count(*) FROM run_queue WHERE run_id = $1`, run.ID) != 0 {
 		t.Errorf("run = %s with %d queue rows, want KILLED with none", got, l.count(t, `SELECT count(*) FROM run_queue WHERE run_id = $1`, run.ID))
 	}
+}
+
+// namedPool opens a pool of its own onto the test database whose connections carry a unique application name, and
+// returns it with that name. It is closed with the test.
+func (l *portalLife) namedPool(t *testing.T, role string) (*pgxpool.Pool, string) {
+	t.Helper()
+	name := role + "-" + uuid.NewString()[:8]
+	cfg := l.pool.Config()
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = name
+	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	return p, name
 }
 
 // pollTrue polls cond for up to ten seconds.
