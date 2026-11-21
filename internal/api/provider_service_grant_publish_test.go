@@ -1339,6 +1339,8 @@ func TestServiceGrant_BlockedSinkNeverHoldsTheAttempt(t *testing.T) {
 		t.Fatalf("queue = %+v, want one copy taken, two queued and two dropped", q)
 	}
 	release()
+	// The three copies arrive first, which empties the two-slot queue, so the drain marker that follows is not dropped.
+	f.awaitSink(t, ids()[0], ids()[1], ids()[2])
 	f.sinkSettled(t)
 	got := f.sink.mintCopies()
 	all := ids()
@@ -2266,5 +2268,60 @@ func TestServiceGrant_SinkChecksWaitForHeldCopies(t *testing.T) {
 	}
 	if n := f.sink.copiesOf(row); n != 1 {
 		t.Fatalf("the sink holds %d copies of the row, want 1", n)
+	}
+}
+
+// A refresher pass returns only after its worker has freed the row's slot. The worker is held in the grant document
+// read at the start of its attempt; the test then takes the runtime mutex and lets the read fail, so the attempt
+// returns at once, touching nothing under the mutex, and the worker's cleanup waits on it. While the mutex is held
+// the pass must not return. The mask reconciliation beside the pass has no names to retire here, so it needs the
+// mutex once, at its start.
+// Plant: defer `<-sem; wg.Done(); s.endServiceGrantAttempt(p.UID)` in the worker, so Done comes before the slot is
+// freed; the pass then returns while the mutex is held. The plant passes only if the reconciliation has not yet taken
+// the mutex when the test does.
+func TestServiceGrant_PassReturnsOnlyAfterItsWorkerFreesTheSlot(t *testing.T) {
+	f := newSvcFixWithSecret(t)
+	// Cache the switch-on, so the pass's own due-rows read never reaches the held document read.
+	if active, err := f.srv.serviceGrantsActive(context.Background()); err != nil || !active {
+		t.Fatalf("grants active = %v, %v; want true", active, err)
+	}
+	atRead, releaseRead := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	f.st.gmu.Lock()
+	f.st.docErr = func() error {
+		if !held.CompareAndSwap(false, true) {
+			return nil
+		}
+		close(atRead)
+		<-releaseRead
+		return errSvcDown
+	}
+	f.st.gmu.Unlock()
+	passed := make(chan struct{})
+	go func() {
+		defer close(passed)
+		f.srv.serviceGrantPass(context.Background())
+	}()
+	select {
+	case <-atRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the worker never reached the grant document read")
+	}
+	f.srv.svcGrant.mu.Lock()
+	close(releaseRead)
+	select {
+	case <-passed:
+		f.srv.svcGrant.mu.Unlock()
+		t.Fatal("the pass returned while its worker could not yet free the row's slot")
+	case <-time.After(300 * time.Millisecond):
+	}
+	f.srv.svcGrant.mu.Unlock()
+	select {
+	case <-passed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass did not return once the mutex was free")
+	}
+	if f.pubRunning(f.uid) {
+		t.Fatal("the refresher slot is still held after the pass returned")
 	}
 }

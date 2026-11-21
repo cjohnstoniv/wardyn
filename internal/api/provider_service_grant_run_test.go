@@ -411,6 +411,8 @@ func TestServiceGrant_UnmaskableTokenNotHandedOut(t *testing.T) {
 	}
 }
 
+// Plant: put the token into the success row's data; the audit sweep runs after the row's sink copy arrives, so it
+// finds it.
 func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	ids := f.captureRowIDs()

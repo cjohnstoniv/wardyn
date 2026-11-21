@@ -69,6 +69,8 @@ func TestServiceGrant_FormCarriesScopeAndAudience(t *testing.T) {
 	}
 }
 
+// Plant: copy the provider's id_token into the success row's data; the sweep runs after the row's sink copy
+// arrives, so it finds the value.
 func TestServiceGrant_NoOpenIDAndIDTokenIgnored(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.idp.respond = func(n int, _ svcReq) svcAnswer {
@@ -369,6 +371,8 @@ func TestServiceGrant_ConcurrentResolvesMintOnce(t *testing.T) {
 	}
 }
 
+// Plant: put the error_description into the failure row's data; the sweep runs after that row and its sink copy
+// have settled, so it finds the text.
 func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.idp.respond = func(int, svcReq) svcAnswer {
@@ -388,6 +392,7 @@ func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	}
 }
 
+// Plant: leave egress out of the failure row's data; that row, read by its id once settled, then fails its check.
 func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	var mu sync.Mutex

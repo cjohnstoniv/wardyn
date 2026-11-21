@@ -15,6 +15,7 @@ func (r *rowStore) RevisionRowOwner() (string, bool) { return r.owner, true }
 
 // A store whose revision is a secrets row names its owner, directly and through the audit wrapper; a store
 // without one, wrapped or not, answers ok=false.
+// Plant: drop the audit wrapper's RevisionRowOwner forwarder; the audited row store then answers "", false.
 func TestRevisionRowOf(t *testing.T) {
 	cases := []struct {
 		name      string

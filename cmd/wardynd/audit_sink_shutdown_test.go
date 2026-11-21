@@ -280,6 +280,8 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 
 // The serve-error exit stops the service grant sink queue before the fanout closes: the deferred stop has already
 // run when serveAndShutdown returns, so a second stop finds the queue stopped.
+// Plant: drop the deferred StopServiceGrantSIEM in serveAndShutdown; the queue is then still running and the test's
+// own stop returns true.
 func TestServeAndShutdownStopsTheServiceGrantSinkQueueOnAServeError(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -668,7 +668,7 @@ func (s *Server) serviceGrantMint(ctx, tctx context.Context, p types.ModelProvid
 			handed = true // after the call: a panic before the settle exists leaves the release to the deferred call
 		} else {
 			slog.Error("wardynd: AUDIT WRITE FAILED: a service grant mint row could not be prepared",
-				slog.String("event_id", id.String()), slog.Any("err", err))
+				slog.String("provider_uid", p.UID), slog.String("event_id", id.String()), slog.Any("err", err))
 		}
 		return serviceGrantMinted{}, ferr
 	}
@@ -749,7 +749,7 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 	}
 	if err != nil {
 		slog.Error("wardynd: AUDIT WRITE FAILED: mint row could not be prepared; the token is not published",
-			slog.String("event_id", id.String()), slog.Any("err", err))
+			slog.String("provider_uid", p.UID), slog.String("event_id", id.String()), slog.Any("err", err))
 		release()
 		return serviceGrantMinted{}, &serviceGrantError{reason: svcReasonUnavailable, sent: true, egress: tok.egress}
 	}

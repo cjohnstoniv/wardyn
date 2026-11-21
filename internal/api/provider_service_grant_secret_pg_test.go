@@ -173,6 +173,8 @@ func TestServiceGrant_SecretDeletedStopsServing_PG(t *testing.T) {
 	}
 }
 
+// Plant: drop the revision case from serviceGrantSupersededBy; the held mint then publishes token 1 and the
+// caller's check fails.
 func TestServiceGrant_RotateWhileMintPending_PG(t *testing.T) {
 	f := newSvcPG(t, true)
 	f.seedOne()
@@ -398,6 +400,8 @@ func TestServiceGrant_FailedRotationKeepsGrantMinting_PG(t *testing.T) {
 	}
 }
 
+// Plant: leave previous_valid_until out of a failure row's data; that row, read by its id once settled, then fails
+// its check.
 func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	clock := &svcClock{t: time.Now().UTC()}
 	f := newSvcPGClocked(t, true, clock)

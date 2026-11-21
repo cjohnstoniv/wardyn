@@ -68,6 +68,8 @@ func (f *svcFix) cached() bool {
 
 // The owner is removed while a renewal fails transiently. The failed renewal still repeats the
 // owner check, so the answer is the 403 that makes the proxy drop its last good header, not a 503 it rides out.
+// Plant: put the last good token into the failed renewal's mint row; the sweep runs after that row and its sink
+// copy have settled, so it finds the token.
 func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	ids := f.captureRowIDs()
@@ -744,6 +746,8 @@ func TestServiceGrant_RecordGoneAtReadStaysFinalOverInconclusiveRereads(t *testi
 // revision read then takes 200 ms, ending after the try's deadline and inside the attempt's 1200 ms. The controls
 // run the same publication under a child of the request's context and under an expired one, and both must fail; a
 // read that outlasts the attempt is cut at its deadline.
+// Plant: run the publication under the try's context; its revision read then ends at the 400 ms try and the late
+// token is not published.
 func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 	const answerAt, readTakes = 300 * time.Millisecond, 200 * time.Millisecond
 	// The attempt keeps attempt >= token + tail, so the try is the 400 ms token bound and the publication runs
@@ -837,6 +841,8 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 // held after the read inside its publish, the rotation is written through the route, and the attempt then resumes.
 // With a newer-revision attempt published in between, and with none, the old token is never cached or returned, the
 // old attempt writes one superseded row and no success row, and its caller gets the new revision's token.
+// Plant: drop the eviction case from serviceGrantSupersededBy; the cache generation is the double's only signal
+// here, so the old token publishes.
 func TestServiceGrant_RotationAfterLastRevisionReadNeverPublishesOldToken(t *testing.T) {
 	for _, newerFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("newer attempt publishes first=%v", newerFirst), func(t *testing.T) {
