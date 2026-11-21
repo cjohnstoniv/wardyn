@@ -149,6 +149,8 @@ type svcSecrets struct {
 	putPartial bool
 	// revDeadlines are the context deadlines Revision was called with, in order (zero when none).
 	revDeadlines []time.Time
+	// revDelay makes the next Revision call under a context with a deadline take this long, or end at the deadline.
+	revDelay time.Duration
 	// hold runs before each operation, outside the store's lock; it may block.
 	hold  func(op, name string)
 	calls []string
@@ -229,9 +231,22 @@ func (s *svcSecrets) revOf(name string) string {
 // Revision implements secretstore.Revisioned.
 func (s *svcSecrets) Revision(ctx context.Context, name string) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	dl, _ := ctx.Deadline()
+	dl, bounded := ctx.Deadline()
 	s.revDeadlines = append(s.revDeadlines, dl)
+	delay := s.revDelay
+	if bounded {
+		s.revDelay = 0 // one read only: the publish's, not the failure's re-reads after it
+	}
+	s.mu.Unlock()
+	if delay > 0 && bounded {
+		select { // a store read that takes delay and honours its context's deadline, as a database read does
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.noRev {
 		return "", secretstore.ErrNoRevision
 	}
