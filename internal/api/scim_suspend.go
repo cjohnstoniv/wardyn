@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -99,19 +100,45 @@ func (o leaverOrigin) portalLedger(ctx context.Context, st any, id uuid.UUID) (s
 	return led, b.at, true
 }
 
-// pinStepEvent fixes the id and time of the audit row a portal step writes on the step's ledger row, the first
-// writer's winning, and marks ctx as a replay, so a second writer of the same step adds no row. key names the row
-// the caller read (key.ID): a row a later suspension replaced is store.ErrSuperseded, and nothing is pinned or
-// written. Other origins are untouched.
+// pinnedPayload is the part of a portal step's audit event that is fixed with its id and time: who wrote it and
+// what it says.
+type pinnedPayload struct {
+	ActorType types.ActorType `json:"actor_type"`
+	Actor     string          `json:"actor"`
+	Data      json.RawMessage `json:"data"`
+}
+
+// pinStepEvent fixes the audit event a portal step writes on the step's ledger row, the first attempt's winning
+// whole: its id, time, actor and data. ev is rewritten to what the row holds, and ctx is marked as a replay, so a
+// second writer of the same step, on any replica, writes the same event and adds no row. key names the row the
+// caller read and must carry its id; in a bound suspension tail the pin also requires, in the same statement,
+// that the row belongs to the suspension the tail is bound to. A row a later suspension replaced is
+// store.ErrSuperseded, and nothing is pinned or written. Other origins are untouched.
 func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
 	if !o.portal {
 		return ctx, nil
 	}
-	evID, at, err := st.PinDeprovisionEvent(ctx, id, kind, key, uuid.New(), now)
+	pinner, ok := st.(store.PortalEventPinner)
+	if !ok {
+		return ctx, errors.New("the store cannot pin a portal step's audit event")
+	}
+	payload, err := json.Marshal(pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
 	if err != nil {
 		return ctx, err
 	}
-	ev.ID, ev.Time = evID, at
+	var bound *time.Time
+	if b, in := suspensionBound(ctx); in && kind == store.JobKindSuspend && b.id == id {
+		bound = &b.at
+	}
+	held, err := pinner.PinPortalEvent(ctx, id, kind, key, uuid.New(), now, payload, bound)
+	if err != nil {
+		return ctx, err
+	}
+	var p pinnedPayload
+	if err := json.Unmarshal(held.Payload, &p); err != nil {
+		return ctx, fmt.Errorf("read a pinned audit event: %w", err)
+	}
+	ev.ID, ev.Time, ev.ActorType, ev.Actor, ev.Data = held.ID, held.At, p.ActorType, p.Actor, p.Data
 	return store.WithAuditReplay(ctx), nil
 }
 
@@ -778,14 +805,18 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
 			continue
 		}
+		tctx := ctx
 		if led, at, guarded := o.portalLedger(ctx, st, id); guarded {
 			// Before any runner I/O: the row is still the one this pass read, pending, under the current suspension.
 			if err := led.ClaimSuspensionJobAt(ctx, id, key, at); err != nil {
 				errs = append(errs, err)
 				continue
 			}
+			// And the run's KILLED transition, with a kept machine's delete intent, is made in a transaction that
+			// locks that row again (claimKill), so a replacement cannot land between this check and the transition.
+			tctx = withKillGuard(ctx, killGuard{led: led, id: id, key: key, at: at})
 		}
-		if err := s.teardownRun(ctx, o, st, runID); err != nil {
+		if err := s.teardownRun(tctx, o, st, runID); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
@@ -887,11 +918,18 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 	}
 	var errs []error
 	for _, row := range rows {
-		if j, ok := jobByKey(jobs, row.step, ""); ok && j.Done {
+		j, found := jobByKey(jobs, row.step, "")
+		if found && j.Done {
 			continue
 		}
 		key := store.JobKey{Step: row.step}
-		if j, ok := jobByKey(jobs, row.step, ""); ok && o.portal {
+		if o.portal {
+			if !found {
+				// A portal suspension's steps are all on its ledger from step one: no row is a ledger a later
+				// suspension replaced or one that was never this suspension's.
+				errs = append(errs, store.ErrSuperseded)
+				continue
+			}
 			key.ID = j.ID
 		}
 		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
@@ -900,7 +938,7 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 			errs = append(errs, err)
 			continue
 		}
-		if err := s.recordAuditStrict(rctx, ev); err != nil {
+		if err := s.recordAuditStepEvent(rctx, o, ev); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
@@ -920,4 +958,27 @@ func (s *Server) recordAuditStrict(ctx context.Context, ev types.AuditEvent) err
 		return err
 	}
 	return nil
+}
+
+// errAuditHeldBySpool is a portal step's audit row that only this replica's local spool holds: not in the shared
+// table yet, so the step does not settle on it.
+var errAuditHeldBySpool = errors.New("the audit row is held by this replica's spool and is not in the shared audit table yet")
+
+// recordAuditStepEvent writes a step's audit row. A portal step settles in the shared ledger only once the row is
+// in the shared audit table: a row the audit spool took is not enough, since the spool is one replica's, and losing
+// it would leave a done step with no stored receipt for any other replica to write. The step stays pending, and its
+// retry replays the same pinned event, which adds no row once the table has it. Other origins keep
+// recordAuditStrict.
+func (s *Server) recordAuditStepEvent(ctx context.Context, o leaverOrigin, ev types.AuditEvent) error {
+	if !o.portal {
+		return s.recordAuditStrict(ctx, ev)
+	}
+	if s.cfg.Audit == nil {
+		return nil
+	}
+	err := s.cfg.Audit.Record(ctx, ev)
+	if errors.Is(err, audit.ErrSpooled) {
+		return errAuditHeldBySpool
+	}
+	return err
 }

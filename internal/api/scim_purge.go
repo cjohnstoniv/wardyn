@@ -557,7 +557,10 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 		return err
 	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
-	if found && o.portal {
+	if o.portal {
+		if !found {
+			return store.ErrSuperseded
+		}
 		key.ID = j.ID
 	}
 	data := map[string]any{
@@ -585,7 +588,7 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 	if err != nil {
 		return err
 	}
-	if err := s.recordAuditStrict(rctx, ev); err != nil {
+	if err := s.recordAuditStepEvent(rctx, o, ev); err != nil {
 		return errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, err))
 	}
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)

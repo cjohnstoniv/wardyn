@@ -388,6 +388,9 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 // no write but the claim. The owner's own kill and every system kill mark nothing: the machine is kept
 // as a hard stop. The zero deletion means no intent.
 func (s *Server) claimKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, store.KeptMachineDeletion, error) {
+	if g, ok := killGuardOf(ctx); ok {
+		return s.claimGuardedKill(ctx, run, killerType, killer, g)
+	}
 	ks, ok := s.cfg.Store.(store.KeptMachineStore)
 	nonOwner := killerType == serviceActorType || killerType == types.ActorHuman && killer != run.CreatedBy
 	if !ok || !nonOwner || run.State.IsTerminal() || run.State == types.RunQueued {
