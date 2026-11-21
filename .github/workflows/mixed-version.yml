@@ -8,6 +8,13 @@ name: Mixed version (0.10.1 replica beside this tree)
 #      rolling sample has seen the old one, and nothing is switched on;
 #   2. the same call with confirm_listed_sessions succeeds, and its audit row names the old replica's own session;
 #      and the veto stays refused for the unconfirmed call until then.
+# Then, on issuer-portal state seeded into the shared database (.github/mixed-version/portal-artifacts.sh):
+#   3. the old server's own entry points refuse every issuer-portal artifact, beside a legacy portal it still
+#      serves, and its revoke of an issuer portal ends that portal's grant on the new server;
+#   4. with the new replica scaled to zero, the old worker ends a queued issuer-portal run before binding any
+#      authority, with the start-failed hint, and dispatches nothing;
+#   5. the service-grant tests that need the released v0.10.1 wardynd and CLI run against them
+#      (.github/mixed-version/released-service-grant-tests.sh).
 # It is not a supported runtime, it only shows the fence. Dispatch it, or call it from the train.
 
 on:
@@ -29,7 +36,7 @@ permissions:
 jobs:
   mixed-version:
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       NS: wardyn-mixed
       OLD_IMAGE: ghcr.io/cjohnstoniv/wardynd
@@ -174,6 +181,21 @@ jobs:
           # A second call finds it already on.
           code=$(call '{"old_servers_stopped":true}')
           [ "$code" = 200 ] && jq -e '.already_activated == true' /tmp/out.json >/dev/null || { echo "::error::a repeat activation answered $code $(cat /tmp/out.json)"; exit 1; }
+      - name: Seed issuer-portal artifacts into the shared database
+        run: bash .github/mixed-version/portal-artifacts.sh seed
+      - name: The old server refuses every issuer-portal artifact, and still serves a legacy portal
+        run: bash .github/mixed-version/portal-artifacts.sh old-refusals
+      - name: The old server's revoke of an issuer portal ends its grant on the new server
+        run: bash .github/mixed-version/portal-artifacts.sh old-revoke
+      # Last of the cluster checks: it scales the new replica to zero, so only the old worker can take the row.
+      - name: The old worker ends a queued issuer-portal run and never starts it
+        run: bash .github/mixed-version/portal-artifacts.sh old-worker
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: The service-grant tests against the released v0.10.1 wardynd and CLI
+        run: bash .github/mixed-version/released-service-grant-tests.sh
       - name: Logs on failure
         if: failure()
         run: |
