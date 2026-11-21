@@ -175,6 +175,21 @@ stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "Lo
 run_install gone --uninstall
 [ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "uninstall of an absent service was not a success (rc=$RC): $OUT"
 ! grep -q 'disable' "$WORK/home-gone/stub.log" || fail "uninstall tried to stop a service the manager does not know: $(cat "$WORK/home-gone/stub.log")"
+
+# The unit file is gone but the process is alive (not-found, still active): that is not an absent service, so the stop is
+# tried, and when it fails nothing is removed.
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=not-found\nActiveState=active\n" ;; *) exit 1 ;; esac'
+AL="$WORK/home-alive"
+mkdir -p "$AL/.config/wardyn" "$AL/.local/share/wardyn/bin"
+: >"$AL/.config/wardyn/runnerd.json"; : >"$AL/.local/share/wardyn/bin/wardyn-runnerd"
+run_install alive --uninstall
+[ "$RC" -ne 0 ] && grep -q 'disable --now' "$AL/stub.log" && [ -e "$AL/.config/wardyn/runnerd.json" ] && [ -e "$AL/.local/share/wardyn/bin/wardyn-runnerd" ] || fail "uninstall removed files under a service whose unit file is gone but whose process is still active (rc=$RC): $OUT"
+
+# A first uninstall that left the unit failed (its stop ended non-zero) leaves nothing running: the second run is a success and no stop is tried.
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=not-found\nActiveState=failed\n" ;; daemon-reload) ;; *) exit 1 ;; esac'
+run_install failedunit --uninstall
+[ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "a second uninstall of a unit left failed was not a success (rc=$RC): $OUT"
+! grep -q 'disable' "$WORK/home-failedunit/stub.log" || fail "uninstall tried to stop a failed unit that has no process"
 stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"'
 
 stub uname 'echo Darwin'

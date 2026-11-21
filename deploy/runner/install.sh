@@ -60,7 +60,7 @@ uninstall() {
       # A service that is already gone is success; one that cannot be confirmed stopped leaves every file in place.
       state="$(systemctl --user show -p LoadState -p ActiveState "$UNIT" 2>/dev/null)" \
         || die "cannot reach the systemd user manager from this shell, so the service may still be running. Nothing was removed. Run this from a login session of the person who owns the runner, or stop it yourself (systemctl --user disable --now $UNIT), then run --uninstall again."
-      if ! { grep -qx 'LoadState=not-found' <<<"$state" && grep -qx 'ActiveState=inactive' <<<"$state"; }; then
+      if ! { grep -qx 'LoadState=not-found' <<<"$state" && grep -qxE 'ActiveState=(inactive|failed)' <<<"$state"; }; then
         systemctl --user disable --now "$UNIT" 2>/dev/null \
           || die "systemctl --user disable --now $UNIT failed, so the service may still be running. Nothing was removed. Check: systemctl --user status $UNIT"
       fi
