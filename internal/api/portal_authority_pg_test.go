@@ -353,10 +353,16 @@ func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	if e.runState(run) != types.RunKilled {
 		t.Fatalf("control: the run is %s", e.runState(run))
 	}
-	var cuts int
-	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM oidc_session_revocations WHERE sub = ANY($1)`, []string{sub, email}).Scan(&cuts); err != nil || cuts == 0 {
-		t.Fatalf("control: session cuts written = %d, %v", cuts, err)
+	// The forms the suspension cuts: the bound principal, the email, and the directory's tenant/object form. Each
+	// carries exactly one cutoff, and the receipt counts all of them.
+	forms := []string{sub, email, entraPrincipalPrefix + e.tenant + ":" + oid}
+	for _, form := range forms {
+		var n int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM oidc_session_revocations WHERE sub = $1`, form).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("control: session cutoffs for %q = %d, %v; want 1", form, n, err)
+		}
 	}
+	cuts := len(forms)
 	roles := map[string]string{userID: "person", run.String(): "run", ws.ID.String(): "workspace"}
 	var got []string
 	for _, ev := range e.b.h.audit.snapshot() {

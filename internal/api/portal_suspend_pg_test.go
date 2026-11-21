@@ -85,8 +85,8 @@ func (h *auditHook) Record(ctx context.Context, ev types.AuditEvent) error {
 	return h.inner.Record(ctx, ev)
 }
 
-// waitFor answers true when ch yields or is closed within d.
-func waitFor(ch <-chan struct{}, d time.Duration) bool {
+// yieldsWithin answers true when ch yields or is closed within d.
+func yieldsWithin(ch <-chan struct{}, d time.Duration) bool {
 	select {
 	case <-ch:
 		return true
@@ -114,12 +114,12 @@ func TestPortalSuspend_BetweenIdentityAndGrantCommits_PG(t *testing.T) {
 		}
 		once.Do(func() {
 			close(held)
-			waitFor(release, 30*time.Second)
+			yieldsWithin(release, 30*time.Second)
 		})
 	}}
 	exchanged := make(chan *httptest.ResponseRecorder, 1)
 	go func() { exchanged <- l.exchange(t, l.d.ID, l.cred, "subject-token") }()
-	if !waitFor(held, 10*time.Second) {
+	if !yieldsWithin(held, 10*time.Second) {
 		t.Fatal("the exchange never reached its introduction row")
 	}
 	// The identity has committed and the grant has not: the control for the order.

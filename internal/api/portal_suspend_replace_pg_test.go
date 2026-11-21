@@ -40,9 +40,9 @@ type pinHook struct {
 	before func()
 }
 
-func (h *pinHook) PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k store.JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error) {
+func (h *pinHook) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k store.JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (store.PinnedEvent, error) {
 	h.once.Do(h.before)
-	return h.PG.PinDeprovisionEvent(ctx, identityID, kind, k, id, at)
+	return h.PG.PinPortalEvent(ctx, identity, kind, k, id, at, payload, bound)
 }
 
 // A tail that counted a run's kill done in the first suspension's ledger, and saw the run live again, does not
