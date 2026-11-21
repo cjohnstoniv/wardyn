@@ -74,7 +74,7 @@ func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runn
 		slog.Warn("wardynd: docker substrate: refusing to reclaim a volume that is not this drive's object",
 			slog.String("volume", name), slog.String("drive", drive.DriveName),
 			slog.String("drive_id", drive.DriveID.String()), slog.String("reason", adoptErr.Error()))
-		return "", fmt.Errorf("docker: drive: refusing to reclaim volume %q: %w", name, runner.ErrDriveNotReclaimable)
+		return "", runner.Untouched(fmt.Errorf("docker: drive: refusing to reclaim volume %q: %w", name, runner.ErrDriveNotReclaimable))
 	}
 	// RESIDUAL, stated not hidden: unlike Kubernetes claim delete (UID + resourceVersion
 	// preconditions), Docker's DELETE /volumes/{name} takes no precondition — a volume

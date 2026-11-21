@@ -134,6 +134,8 @@ func (s *Server) handleDeleteMemberDriveAdmin(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "delete refused: "+res.driverErr.Error())
 	case res.reason == reasonMemberDriveInUse:
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "delete refused: a run of the drive's owner is starting")
+	case res.reason == reasonMemberDriveBusy:
+		writeErrorReason(w, http.StatusConflict, reasonMemberDriveBusy, memberDriveBusyMsg())
 	case res.reason == reasonMemberDriveDeleteUnavailable:
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable, memberDriveDeleteUnavailableMsg())
 	case res.reason != "" && res.reason != reasonMemberDriveRecordOnly && res.reason != reasonMemberDriveDeleteDeferred:

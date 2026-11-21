@@ -447,6 +447,8 @@ func (s *Server) handleDeleteMyDrive(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInRunOnMacMsg(d.Name, mac))
 	case res.reason == reasonMemberDriveInUse:
 		writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInUseMsg())
+	case res.reason == reasonMemberDriveBusy:
+		writeErrorReason(w, http.StatusConflict, reasonMemberDriveBusy, memberDriveBusyMsg())
 	case res.reason == reasonMemberDriveDeleteUnavailable:
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable, memberDriveDeleteUnavailableMsg())
 	default:
@@ -466,6 +468,10 @@ const (
 type memberDriveDeletion struct {
 	object, outcome, reason string
 	driverErr, err          error
+	// issued is the count the issue statement returned (migration 0299): 0 when no physical call was made under
+	// the claim. untouched is the substrate's definitive refusal, made before it changed anything.
+	issued    int
+	untouched bool
 }
 
 // deleteMemberDrive destroys a tombstoned member drive's substrate object and
@@ -487,11 +493,16 @@ func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDr
 	return true, nil
 }
 
+// The claim d carries (started, d.DeleteIssues) is settled by exactly one of: the row's removal (deleted, already
+// absent, record-only), the claim's clearing (a refusal before any call, or a definitive refusal after it that
+// touched nothing), the claim left for the Mac's sweep, or nothing, which leaves the drive deleting: a call was
+// made and its outcome is not known. The one physical call is made only after IssueMemberDriveDelete committed
+// for this exact pair, so a retry, a duplicate or a claim taken over never makes a second call.
 func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
-	// Past the tombstone the delete finishes even if the caller goes away, so
-	// the row is always removed or restored and the attempt audited.
+	// Past the claim the delete finishes even if the caller goes away, so
+	// the row is always removed or settled and the attempt audited.
 	// The substrate work after it (the lifecycle check and the reclaim) is
-	// bounded by driveReclaimTimeout; running out aborts and keeps the drive.
+	// bounded by driveReclaimTimeout; running out leaves the drive held.
 	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, driveReclaimTimeout)
 	defer cancel()
@@ -502,14 +513,15 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	case err != nil:
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
 	case d.Backend == types.DriveBackendMacDisk:
-		res.outcome, res.reason, res.driverErr = s.reclaimMacDisk(sctx, ms, d, mount)
+		res = s.reclaimMacDisk(sctx, ms, d, started, mount)
+		res.object = mount.ObjectName
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
-		// Past the tombstone, a run of the owner's still STARTING may have re-read this drive before it
+		// Past the claim, a run of the owner's still STARTING may have re-read this drive before it
 		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
 		// as in use until that run leaves STARTING, and until a create whose run was ended on another
-		// replica stops holding its lease. A run that re-reads later meets the tombstone.
+		// replica stops holding its lease. A run that re-reads later meets the claim.
 		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject, watcherLeaseStaleAfter)
 		if serr != nil {
 			slog.WarnContext(ctx, "api: member drive delete could not read the owner's starting runs",
@@ -521,35 +533,83 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 			res.outcome, res.reason = driveReclaimOutcomeRefused, reasonMemberDriveInUse
 			break
 		}
+		issued, refusal, issuedOK := s.issueMemberDriveDelete(sctx, ms, d, started)
+		if !issuedOK {
+			refusal.object = mount.ObjectName
+			res = refusal
+			break
+		}
+		res.issued = issued
 		outcome, rerr := rc.ReclaimDrive(sctx, mount)
 		switch {
 		case rerr == nil:
 			res.outcome = string(outcome)
-		case errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveNotReclaimable):
+		case errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveNotReclaimable) || errors.Is(rerr, runner.ErrDriveUntouched):
 			res.outcome, res.reason, res.driverErr = driveReclaimOutcomeRefused, reasonMemberDriveInUse, rerr
+			res.untouched = errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveUntouched)
 		default:
 			slog.WarnContext(ctx, "api: member drive delete failed on the substrate",
 				slog.String("drive_id", d.ID.String()), slog.String("error", rerr.Error()))
 			res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
 		}
 	}
-	switch {
-	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
-		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started, d.DeleteIssues); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
-			res.err = ferr
-		}
-	case res.reason == reasonMemberDriveDeleteDeferred, by == memberDriveByMacReconnect && res.reason == reasonMemberDriveInUse:
-		// The tombstone stays: the drive reads as deleting, no run attaches it, and the Mac's reconnect
-		// finishes the delete (finishMacDiskDeletes). A disk its Mac's run still has, met by that
-		// sweep, waits for the next one: the owner already asked for the delete.
-	default:
-		if aerr := ms.ClearMemberDriveClaim(ctx, d.ID, started, d.DeleteIssues); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
-			slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
-				slog.String("drive_id", d.ID.String()), slog.String("error", aerr.Error()))
-		}
-	}
+	s.settleMemberDriveDelete(ctx, ms, d, started, by, &res)
 	s.auditMemberDriveDelete(ctx, d, res, by)
 	return res
+}
+
+// settleMemberDriveDelete applies what deleteMemberDrive found to the claim (started, d.DeleteIssues).
+func (s *Server) settleMemberDriveDelete(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string, res *memberDriveDeletion) {
+	claimN := d.DeleteIssues
+	sweep := by == memberDriveByMacReconnect
+	var err error
+	switch {
+	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
+		n := claimN // a record-only delete issued nothing
+		if res.issued != 0 {
+			n = res.issued
+		}
+		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started, n); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
+			res.err = ferr
+		}
+		return
+	case res.reason == reasonMemberDriveBusy, res.reason == reasonMemberDriveDeleteDeferred:
+		// The claim was consumed or taken over (nothing to settle), or it stays for the Mac's sweep: the
+		// drive reads as deleting, no run attaches it, and the Mac's reconnect finishes the delete.
+		return
+	case res.issued == 0:
+		// Nothing was issued. The sweep keeps the mark for every such failure: the owner already asked for
+		// the delete, and the next sweep meets it again.
+		if !sweep {
+			err = ms.ClearMemberDriveClaim(ctx, d.ID, started, claimN)
+		}
+	case res.untouched:
+		// Refused after the issue, before anything changed. Only a claim over an even count clears; the
+		// sweep keeps the mark and its next pass issues again.
+		if !sweep && claimN%2 == 0 {
+			err = ms.ClearMemberDriveIssued(ctx, d.ID, started, claimN, res.issued)
+		}
+	}
+	// Anything else made a call whose outcome is not known: the drive stays deleting.
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.ErrorContext(ctx, "api: clear a member drive's delete claim",
+			slog.String("drive_id", d.ID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// issueMemberDriveDelete makes the claim's one physical call outstanding. When it cannot, the deletion to answer
+// with: the claim was consumed or taken over (busy, no call), or the write itself failed (failed, nothing
+// issued as far as is known).
+func (s *Server) issueMemberDriveDelete(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time) (int, memberDriveDeletion, bool) {
+	n, err := ms.IssueMemberDriveDelete(ctx, d.ID, started, d.DeleteIssues)
+	switch {
+	case err == nil:
+		return n, memberDriveDeletion{}, true
+	case errors.Is(err, store.ErrNotFound):
+		return 0, memberDriveDeletion{outcome: driveReclaimOutcomeRefused, reason: reasonMemberDriveBusy}, false
+	}
+	slog.WarnContext(ctx, "api: record a member drive delete's issue", slog.String("drive_id", d.ID.String()), slog.String("error", err.Error()))
+	return 0, memberDriveDeletion{outcome: driveReclaimOutcomeFailed, reason: reasonMemberDriveDeleteFailed}, false
 }
 
 // Outcomes of a disk drive's delete that are not its Mac's (drive.member.delete's outcome).
@@ -560,35 +620,40 @@ const (
 
 // reclaimMacDisk is deleteMemberDrive's substrate step for a disk drive: the Mac
 // it is kept on deletes its image (reclaim_drive). A Mac no longer registered
-// keeps the image and the row goes (MAC-D12); an offline one keeps the tombstone
-// for its reconnect (MAC-D10); one whose run has the disk refuses (MAC-D11). A run
-// of the owner's still starting may attach the disk, so it refuses too.
-func (s *Server) reclaimMacDisk(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, mount types.DriveMount) (string, string, error) {
+// keeps the image and the row goes (MAC-D12), with no call and so no issue; an offline one, or one this replica
+// does not hold, keeps the claim for its reconnect (MAC-D10); one whose run has the disk refuses (MAC-D11). A run
+// of the owner's still starting may attach the disk, so it refuses too. The issue is made just before the
+// call. The Mac answers a refusal typed only as in use, which is definitive.
+func (s *Server) reclaimMacDisk(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, mount types.DriveMount) memberDriveDeletion {
 	rn, _, err := s.macDiskHome(ctx, d)
 	switch {
 	case errors.Is(err, store.ErrNotFound) || err == nil && rn.RevokedAt != nil:
-		return driveReclaimOutcomeRecordOnly, reasonMemberDriveRecordOnly, nil
+		return memberDriveDeletion{outcome: driveReclaimOutcomeRecordOnly, reason: reasonMemberDriveRecordOnly}
 	case err != nil:
-		return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+		return memberDriveDeletion{outcome: driveReclaimOutcomeFailed, reason: reasonMemberDriveDeleteFailed}
 	case !s.macDiskHeldHere(rn.ID):
-		return driveReclaimOutcomeDeferred, reasonMemberDriveDeleteDeferred, nil
+		return memberDriveDeletion{outcome: driveReclaimOutcomeDeferred, reason: reasonMemberDriveDeleteDeferred}
 	}
 	if starting, serr := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject, watcherLeaseStaleAfter); serr != nil || starting {
 		if serr != nil {
-			return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+			return memberDriveDeletion{outcome: driveReclaimOutcomeFailed, reason: reasonMemberDriveDeleteFailed}
 		}
-		return driveReclaimOutcomeRefused, reasonMemberDriveInUse, nil
+		return memberDriveDeletion{outcome: driveReclaimOutcomeRefused, reason: reasonMemberDriveInUse}
+	}
+	issued, refusal, ok := s.issueMemberDriveDelete(ctx, ms, d, started)
+	if !ok {
+		return refusal
 	}
 	outcome, rerr := s.runnerEndpoint(rn.ID).sub.ReclaimMacDisk(ctx, mount)
 	switch {
 	case rerr == nil:
-		return string(outcome), "", nil
+		return memberDriveDeletion{outcome: string(outcome), issued: issued}
 	case errors.Is(rerr, runner.ErrDriveInUse):
-		return driveReclaimOutcomeRefused, reasonMemberDriveInUse, rerr
+		return memberDriveDeletion{outcome: driveReclaimOutcomeRefused, reason: reasonMemberDriveInUse, driverErr: rerr, issued: issued, untouched: true}
 	}
 	slog.WarnContext(ctx, "api: a disk drive's delete failed on its Mac",
 		slog.String("drive_id", d.ID.String()), slog.String("runner_id", rn.ID.String()), slog.String("error", rerr.Error()))
-	return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+	return memberDriveDeletion{outcome: driveReclaimOutcomeFailed, reason: reasonMemberDriveDeleteFailed, issued: issued}
 }
 
 // macDiskHeldHere reports whether this replica holds runnerID's session, online
@@ -630,7 +695,7 @@ func (s *Server) finishMacDiskDeletes(ctx context.Context) error {
 		if !gone && (herr != nil || !s.macDiskHeldHere(rn.ID)) {
 			continue
 		}
-		d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, w.ID)
+		d, started, err := ms.BeginMemberDriveTakeover(ctx, w.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrMemberDriveBusy):
 			continue
