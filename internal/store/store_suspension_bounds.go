@@ -50,8 +50,10 @@ type PortalSuspensionLedger interface {
 	// receipt id and time, so every claim of one occurrence writes the same run.kill event.
 	ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time, kill RunKill) (KillClaim, error)
 	// ReleaseSuspensionKillAt ends the claim a failed teardown leaves on the row, so its retry need not wait out
-	// the claim's lease. A row that is gone or replaced is left alone.
-	ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey) error
+	// the claim's lease, only when the row's claim is the one named (KillClaim.ClaimID): a worker that never
+	// acquired a claim, or whose claim another worker took over after its lease, releases nothing. A row that is
+	// gone or replaced is left alone.
+	ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, claim uuid.UUID) error
 }
 
 // KillClaimLease is how long a claim of a suspension's kill row holds off another claim of the same occurrence: the
@@ -64,16 +66,22 @@ var ErrKillHeld = errors.New("store: another worker holds this suspension's kill
 
 // KillClaim is what ClaimSuspensionKillAt returns: whether the claim is the caller's, a kept machine's delete intent
 // it made, and the id and time of the one run.kill event the occurrence writes.
+//
+// ClaimID names this acquisition (RunKill.ClaimID): release and finish apply only while it is the row's claim.
+// From is the state the run was killed from, the original claim's on a repair: a run that left the queue is
+// repaired as one that left the queue (its receipt says so and its unstarted drive is dropped).
 type KillClaim struct {
 	Applied   bool
 	Intent    KeptMachineDeletion
 	ReceiptID uuid.UUID
 	ReceiptAt time.Time
+	ClaimID   uuid.UUID
+	From      types.RunState
 }
 
 // RunKill is the transition ClaimSuspensionKillAt makes: run RunID from state From to KILLED. With MarkKept the run's
 // kept machine is marked for delete by By, as killed by Killer, unless Exempt owns it (KillRunMarkingKeptMachine).
-// ReceiptID and ReceiptAt are the event the claim pins when the row has none.
+// ReceiptID and ReceiptAt are the event the claim pins when the row has none; ClaimID names the acquisition.
 type RunKill struct {
 	RunID              uuid.UUID
 	From               types.RunState
@@ -81,6 +89,7 @@ type RunKill struct {
 	By, Killer, Exempt string
 	ReceiptID          uuid.UUID
 	ReceiptAt          time.Time
+	ClaimID            uuid.UUID
 }
 
 // suspensionCurrentSQL is the test FinishSuspensionJobAt applies, with the identity as $1 and the bound as the
@@ -185,7 +194,7 @@ func (s PG) EnsureSuspensionJobsAt(ctx context.Context, identity uuid.UUID, keys
 // ReopenSuspensionJobAt — see PortalSuspensionLedger.
 func (s PG) ReopenSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, kill_claim_id = NULL, kill_from = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4)
 		   AND `+suspensionCurrentSQL("$5"), identity, k.Step, k.Target, k.occurrence(), at)
 	if err != nil {
@@ -220,13 +229,12 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 	var out KillClaim
 	err := s.inTx(ctx, func(q Querier) error {
 		var held bool
-		var rid *uuid.UUID
-		var rat *time.Time
+		var was *string
 		err := q.QueryRow(ctx, `
-			SELECT kill_claimed_at IS NOT NULL AND kill_claimed_at > now() - make_interval(secs => $6), audit_event_id, audit_event_at
+			SELECT kill_claimed_at IS NOT NULL AND kill_claimed_at > now() - make_interval(secs => $6), kill_from
 			  FROM deprovision_jobs
 			 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4) AND state = 'pending'
-			   AND `+suspensionCurrentSQL("$5")+` FOR UPDATE`, identity, k.Step, k.Target, k.occurrence(), at, KillClaimLease.Seconds()).Scan(&held, &rid, &rat)
+			   AND `+suspensionCurrentSQL("$5")+` FOR UPDATE`, identity, k.Step, k.Target, k.occurrence(), at, KillClaimLease.Seconds()).Scan(&held, &was)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrSuperseded
 		}
@@ -236,9 +244,13 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 		if kill.From == types.RunKilled && held {
 			return ErrKillHeld
 		}
+		out.From = kill.From
 		switch {
 		case kill.From == types.RunKilled:
 			out.Applied = true // a repair: the run is already the occurrence's, and is not written again
+			if was != nil {
+				out.From = types.RunState(*was) // killed from the state the first claim killed it from
+			}
 		case kill.From == types.RunQueued:
 			err = q.QueryRow(ctx, `
 				WITH moved AS (UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = COALESCE(ended_at, now()) WHERE id = $2 AND state = $3 RETURNING id),
@@ -259,9 +271,12 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 			return nil
 		}
 		err = q.QueryRow(ctx, `
-			UPDATE deprovision_jobs SET kill_claimed_at = now(), audit_event_id = COALESCE(audit_event_id, $3), audit_event_at = COALESCE(audit_event_at, $4)
+			UPDATE deprovision_jobs SET kill_claimed_at = now(), kill_claim_id = $7, kill_from = COALESCE(kill_from, $8),
+			       audit_event_id = COALESCE(audit_event_id, $3), audit_event_at = COALESCE(audit_event_at, $4)
 			 WHERE identity_id = $1 AND kind = 'suspend' AND step = $5 AND target = $6 AND ($2::uuid IS NULL OR id = $2)
-			RETURNING audit_event_id, audit_event_at`, identity, k.occurrence(), kill.ReceiptID, kill.ReceiptAt, k.Step, k.Target).Scan(&out.ReceiptID, &out.ReceiptAt)
+			RETURNING audit_event_id, audit_event_at`, identity, k.occurrence(), kill.ReceiptID, kill.ReceiptAt, k.Step, k.Target,
+			kill.ClaimID, string(kill.From)).Scan(&out.ReceiptID, &out.ReceiptAt)
+		out.ClaimID = kill.ClaimID
 		if err != nil {
 			return fmt.Errorf("store: pin a kill's receipt: %w", err)
 		}
@@ -274,11 +289,15 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 }
 
 // ReleaseSuspensionKillAt — see PortalSuspensionLedger.
-func (s PG) ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey) error {
+func (s PG) ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, claim uuid.UUID) error {
+	if claim == uuid.Nil {
+		return nil
+	}
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET kill_claimed_at = NULL
-		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4) AND state = 'pending'`,
-		identity, k.Step, k.Target, k.occurrence()); err != nil {
+		UPDATE deprovision_jobs SET kill_claimed_at = NULL, kill_claim_id = NULL
+		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4) AND state = 'pending'
+		   AND kill_claim_id = $5`,
+		identity, k.Step, k.Target, k.occurrence(), claim); err != nil {
 		return fmt.Errorf("store: release a suspension kill claim: %w", err)
 	}
 	return nil
@@ -286,10 +305,14 @@ func (s PG) ReleaseSuspensionKillAt(ctx context.Context, identity uuid.UUID, k J
 
 // PinnedEvent is the audit event a portal step writes, as its ledger row holds it: the id and time the first
 // attempt fixed and the payload it fixed with them.
+//
+// Done is set when the row had already been finished: its event is the one written, nothing was pinned or
+// stored, and its payload is gone.
 type PinnedEvent struct {
 	ID      uuid.UUID
 	At      time.Time
 	Payload []byte
+	Done    bool
 }
 
 // PortalEventPinner pins a portal step's audit event on its ledger row.
@@ -301,19 +324,24 @@ type PortalEventPinner interface {
 	PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (PinnedEvent, error)
 }
 
-// PinPortalEvent — see PortalEventPinner.
+// PinPortalEvent — see PortalEventPinner. Only a pending row is written: a step another worker finished meanwhile
+// answers what it holds with Done set, so a late retry neither pins again nor restores a payload the finish cleared.
 func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (PinnedEvent, error) {
 	if k.ID == uuid.Nil {
 		return PinnedEvent{}, ErrSuperseded
 	}
 	var out PinnedEvent
 	err := s.Pool.QueryRow(ctx, `
-		UPDATE deprovision_jobs SET audit_event_id = COALESCE(audit_event_id, $5), audit_event_at = COALESCE(audit_event_at, $6),
-		       audit_event_payload = COALESCE(audit_event_payload, $7::jsonb)
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND id = $8
-		   AND ($9::timestamptz IS NULL OR `+suspensionCurrentSQL("$9")+`)
-		RETURNING audit_event_id, audit_event_at, audit_event_payload`,
-		identity, kind, k.Step, k.Target, id, at, payload, k.ID, bound).Scan(&out.ID, &out.At, &out.Payload)
+		WITH cur AS (SELECT id, state, audit_event_id, audit_event_at, audit_event_payload FROM deprovision_jobs
+		              WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND id = $8
+		                AND ($9::timestamptz IS NULL OR `+suspensionCurrentSQL("$9")+`) FOR UPDATE),
+		     upd AS (UPDATE deprovision_jobs d SET audit_event_id = COALESCE(d.audit_event_id, $5), audit_event_at = COALESCE(d.audit_event_at, $6),
+		                    audit_event_payload = COALESCE(d.audit_event_payload, $7::jsonb)
+		              FROM cur WHERE d.id = cur.id AND cur.state = 'pending'
+		          RETURNING d.audit_event_id, d.audit_event_at, d.audit_event_payload)
+		SELECT COALESCE(upd.audit_event_id, cur.audit_event_id), COALESCE(upd.audit_event_at, cur.audit_event_at), COALESCE(upd.audit_event_payload, cur.audit_event_payload), cur.state = 'done'
+		  FROM cur LEFT JOIN upd ON true`,
+		identity, kind, k.Step, k.Target, id, at, payload, k.ID, bound).Scan(&out.ID, &out.At, &out.Payload, &out.Done)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PinnedEvent{}, ErrSuperseded
 	}

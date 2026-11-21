@@ -124,9 +124,21 @@ type DeprovisionJob struct {
 // JobKey names a ledger row within one identity and kind. ID, when set, is the row's own id
 // (DeprovisionJob.ID): a finish or a failure then applies to that occurrence only, and one whose row a newer
 // occurrence replaced is ErrSuperseded.
+//
+// Claim, when set, is the ownership handle a kill claim returned (KillClaim.ClaimID): a finish then applies only
+// while that claim is still the row's, so a worker whose lease ended and was taken over cannot finish the
+// successor's row.
 type JobKey struct {
 	Step, Target string
 	ID           uuid.UUID
+	Claim        uuid.UUID
+}
+
+func (k JobKey) claim() *uuid.UUID {
+	if k.Claim == uuid.Nil {
+		return nil
+	}
+	return &k.Claim
 }
 
 // occurrence is k.ID as a statement argument: nil, which matches any row, when k names no occurrence.
@@ -592,27 +604,30 @@ func (s PG) finishJob(ctx context.Context, identityID uuid.UUID, kind string, k 
 		detail = map[string]int{}
 	}
 	raw, _ := json.Marshal(detail)
-	args := []any{identityID, kind, k.Step, k.Target, raw, k.occurrence()}
+	args := []any{identityID, kind, k.Step, k.Target, raw, k.occurrence(), k.claim()}
 	current := ""
 	if at != nil {
-		current = " AND " + suspensionCurrentSQL("$7")
+		current = " AND " + suspensionCurrentSQL("$8")
 		args = append(args, *at)
 	}
-	var found, done int
+	var found, done, lost int
 	err := s.Pool.QueryRow(ctx, `
-		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored
+		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored,
+		                  ($7::uuid IS NULL OR kill_claim_id IS NULL OR kill_claim_id = $7) AS owned
 		             FROM deprovision_jobs
 		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`+current+` FOR UPDATE),
 		     u AS (UPDATE deprovision_jobs d SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5,
 		                  audit_event_payload = CASE WHEN $6::uuid IS NULL THEN d.audit_event_payload END, updated_at = now()
-		            FROM j WHERE d.id = j.id AND j.stored RETURNING 1)
-		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u)`, args...).Scan(&found, &done)
+		            FROM j WHERE d.id = j.id AND j.stored AND j.owned RETURNING 1)
+		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u), (SELECT count(*) FROM j WHERE NOT owned)`, args...).Scan(&found, &done, &lost)
 	if err != nil {
 		return fmt.Errorf("store: finish deprovision job: %w", err)
 	}
 	switch {
 	case found == 0 && strict:
 		return ErrSuperseded
+	case lost > 0:
+		return ErrKillHeld
 	case found > 0 && done == 0:
 		return ErrReceiptNotStored
 	}
@@ -642,7 +657,7 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 // found live once more.
 func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, kill_claim_id = NULL, kill_from = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target); err != nil {
 		return fmt.Errorf("store: reopen deprovision job: %w", err)
 	}

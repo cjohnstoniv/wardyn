@@ -11,3 +11,8 @@
 -- the same occurrence waits out the claim's lease instead of tearing the run down again.
 ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS audit_event_payload JSONB;
 ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_claimed_at TIMESTAMPTZ;
+-- deprovision_jobs.kill_claim_id and kill_from: the acquisition that holds the kill claim, so only its holder releases
+-- or finishes the row, and the state the run was killed from, so a repair of a run that left the queue is a queued
+-- kill's repair.
+ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_claim_id UUID;
+ALTER TABLE deprovision_jobs ADD COLUMN IF NOT EXISTS kill_from TEXT;
