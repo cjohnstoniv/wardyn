@@ -61,7 +61,11 @@ func scanPortalGrant(row pgx.Row) (types.PortalGrant, error) {
 // ErrAdmissionChanged), both held to commit so a retirement, a revoke or an admission change waits for the
 // mint and the next one finds it done; then the per-(portal, person) advisory lock; then one read of the
 // database clock, which decides everything after it. The grant ends at min(signedEnd, dbnow + grantTTL), and a
-// mint with less than five seconds of life left is ErrSubjectTokenStale, nothing written. The grant joins
+// mint with less than five seconds of life left is ErrSubjectTokenStale, nothing written. Lock order: the
+// binding, the portal's row, the per-(portal, person) advisory lock, then the person's identity row FOR SHARE
+// (ErrPortalPersonPurged when the person is purged, nothing written). The purge and the credential erase hold
+// only identity rows, taken FOR UPDATE, so neither can wait on a lock a mint holds and a mint waits for them
+// at its last lock: no cycle. The grant joins
 // the chain of the person's latest-expiring grant through this portal that is live at dbnow, or starts one.
 //
 // Nothing in the transaction writes delegates: two people's mints through one portal both hold its row
@@ -80,6 +84,20 @@ func (s PG) MintPortalGrant(ctx context.Context, g types.PortalGrant, raw string
 		}
 		if _, err = q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text || $2, 0))`, g.DelegateID, g.Principal); err != nil {
 			return fmt.Errorf("store: lock portal grant mints: %w", err)
+		}
+		// The person's identity row FOR SHARE, held to commit: a permanent purge or a credential erase of this
+		// person takes it FOR UPDATE, so it either finished before this read, and the mint is refused, or waits
+		// for this commit and then deletes the grant and the history written here. A person with no identity
+		// row records no history below.
+		var purged bool
+		err = q.QueryRow(ctx, `SELECT purged_at IS NOT NULL FROM principal_identities WHERE issuer = $1 AND principal = $2 FOR SHARE`,
+			types.PortalPersonPrefix+key, g.Principal).Scan(&purged)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("store: lock portal identity: %w", err)
+		case purged:
+			return ErrPortalPersonPurged
 		}
 		if err = q.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbnow); err != nil {
 			return fmt.Errorf("store: read database clock: %w", err)

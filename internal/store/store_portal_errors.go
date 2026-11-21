@@ -27,6 +27,11 @@ var ErrSubjectTokenStale = errors.New("store: the subject token is too old for a
 // longer there (retired, or revoked after the exchange verified its token).
 var ErrPortalGone = errors.New("store: the portal or its issuer binding is gone")
 
+// ErrPortalPersonPurged is an exchange write refused because the person was permanently purged after the
+// exchange validated them: a purged identity is a tombstone, and a grant or history row minted for it would
+// restore what the purge removed. Nothing is written.
+var ErrPortalPersonPurged = errors.New("store: the portal person was purged")
+
 // ErrAdmissionChanged is an exchange write refused because the portal's admission revision moved after the
 // exchange verified its token; the portal retries under the new rule.
 var ErrAdmissionChanged = errors.New("store: the portal's admission rule changed")
