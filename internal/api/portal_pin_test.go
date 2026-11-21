@@ -153,3 +153,40 @@ func TestPortalPin_CreateOutsidePinRefused(t *testing.T) {
 		t.Fatalf("launch under the pin = %+v, want none", r)
 	}
 }
+
+// The ceiling a launch already resolved is the pin unit, and the pin unit is then deleted: an issuer portal's
+// launch is refused (the equality onPath answers at once is not presence), a console portal keeps its contract,
+// and an issuer row with no pin reaches nothing.
+func TestPortalUnit_DeletedPinWithResolvedCeilingRefused(t *testing.T) {
+	f := newPinFixture(t)
+	ctx := audit.WithDelegation(context.Background(), f.via)
+	resolved := governanceCeiling{Unit: &ResolvedUnit{ID: f.pin.ID, Name: f.pin.Name}}
+	if r := f.srv.portalUnitRefusal(ctx, resolved, false); r != nil {
+		t.Fatalf("the pin unit while it exists = %+v, want none", r)
+	}
+	f.ps.units = []types.GovernanceUnit{{ID: store.DefaultUnitID, Name: "Default"}, f.outside}
+	if r := f.srv.portalUnitRefusal(ctx, resolved, false); r == nil || r.status != http.StatusForbidden || r.body.Reason != "portal_unit_scope" {
+		t.Fatalf("the pin unit after the delete = %+v, want 403 portal_unit_scope", r)
+	}
+	// A console portal on the same pin keeps today's answer.
+	f.ps.pmu.Lock()
+	d := f.ps.portals[f.via.Delegate]
+	d.Issuer, d.IssuerKey = "", ""
+	f.ps.portals[f.via.Delegate] = d
+	f.ps.pmu.Unlock()
+	if r := f.srv.portalUnitRefusal(ctx, resolved, false); r != nil {
+		t.Errorf("a console portal with the resolved unit = %+v, want its contract kept (none)", r)
+	}
+	// An issuer portal row with no pin fails closed, in the launch and in the pin of every other door.
+	f.ps.pmu.Lock()
+	d.Issuer, d.IssuerKey, d.RunInUnder = portalTestIssuer, oidc.PortalIssuerKey(portalTestIssuer), nil
+	f.ps.portals[f.via.Delegate] = d
+	f.ps.pmu.Unlock()
+	if r := f.srv.portalUnitRefusal(ctx, governanceCeiling{}, false); r == nil || r.status != http.StatusForbidden {
+		t.Errorf("an issuer portal with no pin, launching = %+v, want 403", r)
+	}
+	pin, refusal := f.srv.portalPinOf(ctx)
+	if refusal != nil || !pin.applies || pin.holds(nil) || len(pin.scope().IDs) != 0 {
+		t.Errorf("an issuer portal with no pin = %+v (%v), want a pin that applies and holds nothing", pin, refusal)
+	}
+}

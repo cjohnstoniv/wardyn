@@ -52,8 +52,12 @@ func (s *Server) portalPinOf(ctx context.Context) (portalPin, *runRefusal) {
 		slog.ErrorContext(ctx, "portal pin: read the portal", slog.String("delegate", via.Delegate.String()), slog.Any("err", err))
 		return portalPin{}, unavailable
 	}
-	if d.Issuer == "" || d.RunInUnder == nil {
+	if d.Issuer == "" {
 		return portalPin{}, nil
+	}
+	if d.RunInUnder == nil {
+		// An issuer portal is registered with a pin or not at all: a row without one reaches nothing.
+		return portalPin{applies: true, name: portalNoPinName}, nil
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {

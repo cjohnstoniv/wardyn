@@ -25,6 +25,7 @@ import (
 
 const (
 	portalUnitScopeMsg       = "This portal starts runs only in %s and the units below it. Choose a context there."
+	portalNoPinName          = "its pin (this portal has none set)"
 	portalUnitUnavailableMsg = "This portal's unit could not be checked right now. Try again shortly."
 	portalUnitInvalidMsg     = "The run_in_under field must name an existing governance unit, by id or exact name."
 )
@@ -52,8 +53,13 @@ func (s *Server) portalUnitRefusal(ctx context.Context, ceiling governanceCeilin
 		slog.ErrorContext(ctx, "portal unit: read the portal", slog.String("delegate", via.Delegate.String()), slog.Any("err", err))
 		return runError(http.StatusServiceUnavailable, reasonPortalUnitUnavailable, portalUnitUnavailableMsg)
 	}
+	issuer := d.Issuer != ""
 	if d.RunInUnder == nil {
-		return nil
+		if !issuer {
+			return nil
+		}
+		// An issuer portal is registered with a pin or not at all; a row without one fails closed.
+		return runError(http.StatusForbidden, reasonPortalUnitScope, fmt.Sprintf(portalUnitScopeMsg, portalNoPinName))
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {
@@ -65,7 +71,12 @@ func (s *Server) portalUnitRefusal(ctx context.Context, ceiling governanceCeilin
 	if ceiling.Unit != nil {
 		picked = ceiling.Unit.ID
 	}
-	if onPath(byID, picked, *d.RunInUnder) {
+	_, pinFound := byID[*d.RunInUnder]
+	_, pickedFound := byID[picked]
+	// onPath answers true at once for an id equal to its ancestor, so an issuer portal also needs both units to
+	// exist in the tree read: a ceiling resolved before the pin unit was deleted must not pass. A console
+	// portal keeps its contract (the unit it resolved stands).
+	if onPath(byID, picked, *d.RunInUnder) && (!issuer || (pinFound && pickedFound)) {
 		return nil
 	}
 	name := d.RunInUnder.String()
