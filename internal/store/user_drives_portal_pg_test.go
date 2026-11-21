@@ -256,38 +256,57 @@ func TestPG_PortalDriveAllocation_StaleEditCannotUnmarkTeam(t *testing.T) {
 	}
 }
 
-// The re-home precondition counts a portal's allocation only when the write moves the drive's backend: a portal's
-// folder is named by the portal and drive ids, so a rename or a template change under refuseIfAllocated lands beside it,
-// while any person's or group's allocation, or a backend move, refuses as before. ListUserDrives says how many of a
-// drive's allocations are portals'.
+// The re-home precondition counts an allocation only when the write moves its object, under the drive's row lock: a
+// portal's folder is named by the portal and drive ids, so only a backend move reaches it; a group's team folder by the
+// drive id, so a template change never does and a rename only under the slug scheme; any other allocation by all of
+// the identity fields. ListUserDrives says how many of a drive's allocations are portals'.
 func TestPG_PortalDriveAllocation_RehomePreconditionCountsOnlyWhatMoves(t *testing.T) {
-	st, _ := isolatedStore(t)
+	st, pool := isolatedStore(t)
 	ctx := context.Background()
 	portal := newIssuerPortal(t, st, "").Delegate
 	team := seedTeamDrive(t, st, "rehome-"+uuid.NewString()[:8])
 	addUserDriveGrant(t, st, portalGrant(portal, team))
+	allowed := func(label string, d types.UserDrive) types.UserDrive {
+		t.Helper()
+		got, err := st.UpsertUserDrive(ctx, d, true)
+		if err != nil {
+			t.Fatalf("%s under the precondition: %v, want it written", label, err)
+		}
+		return got
+	}
+	refused := func(label string, d types.UserDrive) {
+		t.Helper()
+		if _, err := st.UpsertUserDrive(ctx, d, true); !errors.Is(err, store.ErrDriveAllocated) {
+			t.Errorf("%s under the precondition: err = %v, want ErrDriveAllocated", label, err)
+		}
+	}
 
-	renamed := team
-	renamed.Name = "renamed-" + uuid.NewString()[:8]
-	if got, err := st.UpsertUserDrive(ctx, renamed, true); err != nil || got.Name != renamed.Name {
-		t.Fatalf("rename of a portal-only drive under the precondition = %+v, %v; want it written", got, err)
-	}
-	moved := renamed
+	team.Name = "renamed-" + uuid.NewString()[:8]
+	team = allowed("a rename of a portal-only drive", team)
+	team.HomeTemplate = types.HomeTemplateSub
+	team = allowed("a template change of a portal-only drive", team)
+	moved := team
 	moved.Backend = types.DriveBackendK8sPVCStatic
-	if _, err := st.UpsertUserDrive(ctx, moved, true); !errors.Is(err, store.ErrDriveAllocated) {
-		t.Errorf("a backend move under the precondition: err = %v, want ErrDriveAllocated", err)
-	}
+	refused("a backend move of a portal-only drive", moved)
 	if got, err := st.GetUserDrive(ctx, team.ID); err != nil || got.Backend != types.DriveBackendDockerVolume {
 		t.Errorf("drive after the refused move = %+v, %v; want docker_volume", got, err)
 	}
 
 	addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: "platform",
 		DriveID: team.ID, Enabled: true, CreatedBy: "admin@example.com"})
-	again := renamed
-	again.Name = "again-" + uuid.NewString()[:8]
-	if _, err := st.UpsertUserDrive(ctx, again, true); !errors.Is(err, store.ErrDriveAllocated) {
-		t.Errorf("a rename once a group holds the drive: err = %v, want ErrDriveAllocated", err)
+	team.HomeTemplate = types.HomeTemplateHash
+	team = allowed("a template change once a group holds the ID-named team drive", team)
+	team.Name = "again-" + uuid.NewString()[:8]
+	team = allowed("a rename once a group holds the ID-named team drive", team)
+	moved = team
+	moved.Backend = types.DriveBackendK8sPVCStatic
+	refused("a backend move once a group holds the drive", moved)
+	if _, err := pool.Exec(ctx, `UPDATE user_drives SET object_scheme = 'slug', name_slug = $2 WHERE id = $1`, team.ID, types.DriveSlug(team.Name)); err != nil {
+		t.Fatal(err)
 	}
+	team.Name = "slugged-" + uuid.NewString()[:8]
+	refused("a rename of a slug-named team drive a group holds", team)
+
 	items, err := st.ListUserDrives(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -297,6 +316,14 @@ func TestPG_PortalDriveAllocation_RehomePreconditionCountsOnlyWhatMoves(t *testi
 			t.Errorf("list item = %d allocations, %d portals; want 2 and 1", it.GrantCount, it.PortalGrantCount)
 		}
 	}
+
+	own := seedUserDrive(t, st, "own-"+uuid.NewString()[:8])
+	addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: "sub-alice",
+		DriveID: own.ID, Enabled: true, CreatedBy: "admin@example.com"})
+	own.HomeTemplate = types.HomeTemplateSub
+	refused("a template change of an ordinary drive a person holds", own)
+	own.HomeTemplate, own.Writable = types.HomeTemplateHash, !own.Writable
+	allowed("an edit of an ordinary drive that names no storage", own)
 }
 
 // A portal allocation is added, never replaced: the replace and tier-write doors refuse it.
@@ -402,7 +429,7 @@ func TestPortalDriveAllocation_RacesDriveEdit_PG_Orders(t *testing.T) {
 			VALUES ($1, 'portal', $2, $3, true, 'x')`, uuid.New(), portal.ID.String(), team.ID); err != nil {
 			t.Fatal(err)
 		}
-		blocked, done := parked(func() error { _, err := st.UpsertUserDrive(ctx, edit, false); return err })
+		blocked, result := parked(func() error { _, err := st.UpsertUserDrive(ctx, edit, false); return err })
 		if !blocked {
 			_ = tx.Commit(ctx)
 			t.Fatal("the edit did not wait for the allocation in flight")
@@ -410,7 +437,7 @@ func TestPortalDriveAllocation_RacesDriveEdit_PG_Orders(t *testing.T) {
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := <-done; !errors.Is(err, store.ErrDrivePortalSecondPlace) {
+		if err := result(); !errors.Is(err, store.ErrDrivePortalSecondPlace) {
 			t.Errorf("the edit behind a committed allocation: err = %v, want ErrDrivePortalSecondPlace", err)
 		}
 		if got, err := st.GetUserDrive(ctx, team.ID); err != nil || got.AltBackend != "" {
@@ -430,7 +457,7 @@ func TestPortalDriveAllocation_RacesDriveEdit_PG_Orders(t *testing.T) {
 			team.ID, string(edit.AltBackend), edit.AltHostRoot, edit.AltRunnerID); err != nil {
 			t.Fatal(err)
 		}
-		blocked, done := parked(func() error { _, err := st.AddUserDriveGrant(ctx, portalGrant(portal, team), true); return err })
+		blocked, result := parked(func() error { _, err := st.AddUserDriveGrant(ctx, portalGrant(portal, team), true); return err })
 		if !blocked {
 			_ = tx.Commit(ctx)
 			t.Fatal("the allocation did not wait for the edit in flight")
@@ -438,7 +465,7 @@ func TestPortalDriveAllocation_RacesDriveEdit_PG_Orders(t *testing.T) {
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := <-done; !errors.Is(err, store.ErrDrivePortalSecondPlace) {
+		if err := result(); !errors.Is(err, store.ErrDrivePortalSecondPlace) {
 			t.Errorf("the allocation behind a committed edit: err = %v, want ErrDrivePortalSecondPlace", err)
 		}
 		if n := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, team.ID); n != 0 {
@@ -612,24 +639,98 @@ func holdPortalRow(t *testing.T, pool *pgxpool.Pool, portal uuid.UUID, revoke bo
 	}
 }
 
-// parked reports whether f is still blocked after a pause, and the channel its result arrives on.
-func parked(f func() error) (blocked bool, done <-chan error) {
+// parked runs f on its own goroutine and reports whether it is still blocked after a pause. result returns f's answer
+// exactly once whichever way it finished: an answer that arrived inside the pause is kept, and a call still blocked is
+// waited for at most 30 seconds.
+func parked(f func() error) (blocked bool, result func() error) {
 	ch := make(chan error, 1)
 	go func() { ch <- f() }()
 	select {
-	case <-ch:
-		return false, ch
+	case err := <-ch:
+		return false, func() error { return err }
 	case <-time.After(400 * time.Millisecond):
-		return true, ch
+		return true, func() error {
+			select {
+			case err := <-ch:
+				return err
+			case <-time.After(30 * time.Second):
+				return errors.New("the parked call did not finish within 30 seconds of its release")
+			}
+		}
 	}
 }
 
-// The two commit orders of a portal run's insert against the portal's revoke, on every create path. A revoke
-// that is in flight holds the insert behind it, and the insert is then refused with ErrPortalRevoked and leaves no
-// row; an insert in flight holds the revoke behind it, so the run exists before the revoke commits.
+// onAnotherGoroutine runs f where the caller's held connection is not: the pool guard fails a goroutine that asks for a
+// second connection while it holds one, and the tests below hold a transaction on the test's own goroutine.
+func onAnotherGoroutine(f func()) {
+	done := make(chan struct{})
+	go func() { defer close(done); f() }()
+	<-done
+}
+
+// backendsWaiting counts the database's backends that are waiting on a lock, read on another goroutine. advisory selects
+// the waiters on an advisory lock (the paused insert) or on a row (the revoke); sql is a fragment of the statement.
+func backendsWaiting(t *testing.T, pool *pgxpool.Pool, advisory bool, sql string) int {
+	t.Helper()
+	var n int
+	onAnotherGoroutine(func() {
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND (wait_event = 'advisory') = $1 AND query ILIKE $2`,
+			advisory, "%"+sql+"%").Scan(&n); err != nil {
+			t.Errorf("read pg_stat_activity: %v", err)
+		}
+	})
+	return n
+}
+
+// waitFor polls cond for at most 10 seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// holdPause is an open transaction holding the advisory lock the pause trigger below waits on, released by the commit.
+func holdPause(t *testing.T, pool *pgxpool.Pool) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7770042)`); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	return func() {
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The two commit orders of a portal run's insert against the portal's revoke, on every create path, each with a real
+// insert. A revoke in flight holds the insert behind it, and the insert is then refused with ErrPortalRevoked and leaves
+// no portal run. A real insert is stopped after it has taken its lock on the portal's row (a trigger that waits on an
+// advisory lock the test holds), a revoke is started and seen waiting on a lock, and when the insert is let go it commits
+// first: the run exists and the revoke follows it. An ordinary run, in a case of its own with its own pool and cap, is
+// created while a revoke is in flight.
 func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
+	for _, ddl := range []string{
+		`CREATE FUNCTION zz_pause_portal_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(7770042); RETURN NEW; END $$`,
+		`CREATE TRIGGER zz_pause_portal_insert BEFORE INSERT ON agent_runs FOR EACH ROW WHEN (NEW.portal_drives) EXECUTE FUNCTION zz_pause_portal_insert()`,
+	} {
+		if _, err := pool.Exec(ctx, ddl); err != nil {
+			t.Fatalf("install the insert pause: %v", err)
+		}
+	}
 	creators := func(portal types.Delegate, qpool types.RunnerPool, portalDrives bool) map[string]func() (types.AgentRun, error) {
 		mk := func() types.AgentRun {
 			r := newRun(types.RunRunning)
@@ -647,47 +748,80 @@ func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 			},
 		}
 	}
-	qpool := cappedPool(t, st, 1000)
+	portalRuns := func(t *testing.T, portal types.Delegate) int {
+		t.Helper()
+		var n int
+		onAnotherGoroutine(func() {
+			n = rowCount(t, pool, `SELECT count(*) FROM agent_runs WHERE created_via = $1 AND portal_drives`, portal.ID)
+		})
+		return n
+	}
 	for _, path := range []string{"CreateRun", "CreateRunUnderCap", "CreateQueuedRun"} {
 		t.Run(path+" behind a revoke in flight", func(t *testing.T) {
 			portal := newIssuerPortal(t, st, "").Delegate
+			create := creators(portal, cappedPool(t, st, 1000), true)[path]
 			release := holdPortalRow(t, pool, portal.ID, true)
-			blocked, done := parked(func() error { _, err := creators(portal, qpool, true)[path](); return err })
+			blocked, result := parked(func() error { _, err := create(); return err })
 			if !blocked {
 				release()
 				t.Fatal("the insert did not wait for the revoke in flight")
 			}
-			// An ordinary run of the same person is not behind the fence: it is created while the revoke is still open.
-			if ordinaryBlocked, ordinaryDone := parked(func() error { _, err := creators(portal, qpool, false)[path](); return err }); ordinaryBlocked {
-				release()
-				t.Fatal("an ordinary run waited for the portal's revoke")
-			} else if err := <-ordinaryDone; err != nil {
-				release()
-				t.Fatalf("an ordinary run during the revoke: %v", err)
-			}
 			release()
-			if err := <-done; !errors.Is(err, store.ErrPortalRevoked) {
+			if err := result(); !errors.Is(err, store.ErrPortalRevoked) {
 				t.Errorf("insert after the revoke committed: err = %v, want ErrPortalRevoked", err)
 			}
-			if n := rowCount(t, pool, `SELECT count(*) FROM agent_runs WHERE created_via = $1`, portal.ID); n != 0 {
-				t.Errorf("%d run row(s) for a refused insert, want none", n)
+			if n := portalRuns(t, portal); n != 0 {
+				t.Errorf("%d portal run row(s) for a refused insert, want none", n)
 			}
 		})
 		t.Run(path+" ahead of a revoke", func(t *testing.T) {
 			portal := newIssuerPortal(t, st, "").Delegate
-			release := holdPortalRow(t, pool, portal.ID, false) // the insert's own hold on the portal row
-			blocked, done := parked(func() error { _, _, err := st.RevokeDelegate(ctx, portal.ID, time.Now().UTC(), false); return err })
-			if !blocked {
+			create := creators(portal, cappedPool(t, st, 1000), true)[path]
+			release := holdPause(t, pool)
+			insertBlocked, insertResult := parked(func() error { _, err := create(); return err })
+			if !insertBlocked {
+				release()
+				t.Fatal("the insert did not stop at the pause")
+			}
+			waitFor(t, "the insert to wait on the advisory lock", func() bool { return backendsWaiting(t, pool, true, "agent_runs") > 0 })
+			revokeBlocked, revokeResult := parked(func() error { _, _, err := st.RevokeDelegate(ctx, portal.ID, time.Now().UTC(), false); return err })
+			if !revokeBlocked {
 				release()
 				t.Fatal("the revoke did not wait for the insert in flight")
 			}
-			release()
-			if err := <-done; err != nil {
-				t.Errorf("revoke after the insert committed: %v", err)
+			waitFor(t, "the revoke to wait on the portal's row", func() bool { return backendsWaiting(t, pool, false, "delegates") > 0 })
+			if n := portalRuns(t, portal); n != 0 {
+				t.Errorf("%d portal run row(s) visible before the insert committed, want none", n)
 			}
-			if _, err := creators(portal, qpool, true)[path](); !errors.Is(err, store.ErrPortalRevoked) {
+			release()
+			if err := insertResult(); err != nil {
+				t.Errorf("the insert that took its lock before the revoke: %v, want it created", err)
+			}
+			if err := revokeResult(); err != nil {
+				t.Errorf("the revoke behind the insert: %v", err)
+			}
+			if n := portalRuns(t, portal); n != 1 {
+				t.Errorf("%d portal run row(s) after both finished, want the one the insert committed", n)
+			}
+			if _, err := create(); !errors.Is(err, store.ErrPortalRevoked) {
 				t.Errorf("a later insert: err = %v, want ErrPortalRevoked", err)
 			}
+		})
+		t.Run(path+" ordinary run during a revoke in flight", func(t *testing.T) {
+			portal := newIssuerPortal(t, st, "").Delegate
+			create := creators(portal, cappedPool(t, st, 1000), false)[path]
+			release := holdPortalRow(t, pool, portal.ID, true)
+			blocked, result := parked(func() error { _, err := create(); return err })
+			if blocked {
+				release()
+				_ = result()
+				t.Fatal("an ordinary run waited for the portal's revoke")
+			}
+			if err := result(); err != nil {
+				release()
+				t.Fatalf("an ordinary run during the revoke: %v", err)
+			}
+			release()
 		})
 	}
 }
