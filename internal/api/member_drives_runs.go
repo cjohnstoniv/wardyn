@@ -61,7 +61,7 @@ func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive
 		if !oneSnapshot {
 			held = d.KeptFromRun != nil && !s.keptRunEnded(ctx, *d.KeptFromRun)
 		}
-		r := reachableDrive{owned: true, held: held, winner: store.UserDriveWinner{Drive: d, Grant: types.UserDriveGrant{
+		r := reachableDrive{owned: true, held: held, legacyHeld: d.LegacyUnsettled, winner: store.UserDriveWinner{Drive: d, Grant: types.UserDriveGrant{
 			SubjectType: types.CapabilitySubjectUser, Subject: owner, DriveID: d.ID, Enabled: true,
 		}}}
 		r.resolved, r.err = newResolvedDrive(&r.winner.Drive, &r.winner.Grant, types.CapabilitySubjectUser, []string{owner}, ceiling)
@@ -162,8 +162,16 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 	for id, owner := range owners {
 		if ms != nil && owner == runOwner {
 			d, err := ms.GetMemberDriveOf(ctx, runOwner, id)
-			if err == nil && !d.Deleting() {
+			if err == nil && !d.Deleting() && !d.LegacyUnsettled {
 				continue
+			}
+			if err == nil && d.LegacyUnsettled && !d.Deleting() {
+				// A run created before the upgrade: the drive is listed but not settled, so it is refused at the
+				// re-read in the words the create gives, and is not delayed.
+				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+					run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(authz.ReasonDriveNotFound)})))
+				s.failAndRevoke(ctx, run.ID, types.RunStarting, legacyDriveHeldMsg(d))
+				return false
 			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
