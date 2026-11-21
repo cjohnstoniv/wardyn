@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -207,11 +208,26 @@ func ensureLocalSSHKey(path string) (pub ssh.PublicKey, generated bool, err erro
 		if serr != nil {
 			return nil, false, fmt.Errorf("ssh-key: %s: %w", path, serr)
 		}
-		// The .pub sibling is part of the documented contract; restore it when a
-		// key was copied here without one.
-		if _, perr := os.Stat(path + ".pub"); errors.Is(perr, os.ErrNotExist) {
+		// The .pub sibling is part of the documented contract: restore it when a
+		// key was copied here without one, and refuse one that is another key's
+		// (a replaced private key beside its old .pub), which a person or script
+		// reading the .pub would take for the registered key.
+		raw, perr := os.ReadFile(path + ".pub")
+		switch {
+		case errors.Is(perr, os.ErrNotExist):
 			if werr := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(signer.PublicKey()), 0o644); werr != nil {
 				return nil, false, fmt.Errorf("ssh-key: write %s.pub: %w", path, werr)
+			}
+		case perr != nil:
+			return nil, false, fmt.Errorf("ssh-key: read %s.pub: %w", path, perr)
+		default:
+			companion, _, _, _, aerr := ssh.ParseAuthorizedKey(raw)
+			if aerr != nil {
+				return nil, false, fmt.Errorf("ssh-key: %s.pub is not a readable public key (%v) — move it aside and it is rewritten from %s", path, aerr, path)
+			}
+			if !bytes.Equal(companion.Marshal(), signer.PublicKey().Marshal()) {
+				return nil, false, fmt.Errorf("ssh-key: %s.pub is %s, not the public key of %s (%s) — move one aside: nothing was registered or changed",
+					path, ssh.FingerprintSHA256(companion), path, ssh.FingerprintSHA256(signer.PublicKey()))
 			}
 		}
 		return signer.PublicKey(), false, nil
