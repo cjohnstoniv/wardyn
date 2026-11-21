@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -238,21 +239,32 @@ func (s *Server) issuerOpeningRun(ctx context.Context, w http.ResponseWriter, id
 }
 
 // issuerOpeningIn reports whether ctx carries an issuer portal ticket still in its opening (ticketActor.admitBy).
-// A read that fails or runs out there answers refuseIssuerOpeningUnread's retryable 503, never a 500.
+// A read that fails or runs out there answers refuseIssuerOpeningUnread's retryable 503, never a 500. A shared
+// door, which cannot tell a terminal from a browser entry, says issuerOpeningUnverifiableMsg.
 func issuerOpeningIn(ctx context.Context) bool {
 	ta, ok := ticketActorFromContext(ctx)
 	return ok && !ta.admitBy.IsZero()
 }
 
 // refuseIssuerOpeningUnread answers an issuer portal's opening read that failed or ran out: the retryable 503.
-func refuseIssuerOpeningUnread(ctx context.Context, w http.ResponseWriter, what string, err error) {
+func refuseIssuerOpeningUnread(ctx context.Context, w http.ResponseWriter, what, msg string, err error) {
 	slog.ErrorContext(ctx, "wardynd: an issuer portal's opening read failed", "read", what, "err", err)
-	writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+	writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, msg)
 }
+
+// The 503 bodies of an issuer portal's opening reads where the route has no message of its own.
+const (
+	issuerOpeningUnverifiableMsg = "Could not verify this session; try again"
+	attachUnverifiableMsg        = "Could not verify this terminal session; try again"
+)
+
+// issuerAdmitWaitNS replaces issuerAdmitBound's watch bound when set: tests only, so a test can keep a short
+// watch bound and still give its opening reads room.
+var issuerAdmitWaitNS atomic.Int64
 
 // issuerAdmitBound is the bound on an issuer portal's opening authorization reads, the watch's own.
 func issuerAdmitBound() time.Duration {
-	return time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
+	return time.Duration(cmp.Or(issuerAdmitWaitNS.Load(), supportWatchWaitNS.Load(), int64(supportWatchWait)))
 }
 
 // uiStreamEnd is an issuer-portal stream's known end on the wall clock: the earliest of sess's signed

@@ -143,7 +143,7 @@ func TestUIDesktopIssuerPortal_SlowClosedSetLookupDoesNotDelayRecheck_PG(t *test
 // long as the store takes.
 func TestUIDesktopIssuerPortal_AdmissionClosedReadHeldPastBound_PG(t *testing.T) {
 	rig, srv := desktopPGRig(t)
-	const bound = 200 * time.Millisecond
+	const bound = time.Second // the Postgres reads before the held one fit inside it under -race
 	setSupportWatch(t, time.Hour, bound)
 	slow := &atomic.Bool{}
 	slow.Store(true)
@@ -208,7 +208,7 @@ func (s heldDesktopReadStore) OpenTakeovers(context.Context, uuid.UUID) ([]uuid.
 // sign-in watch's run read hangs. Each is answered with its own 503 within the session's opening bound, never
 // held for as long as the store takes.
 func TestUIDesktopIssuerPortal_OpeningRulesAndSignInReadsHeld_PG(t *testing.T) {
-	const bound = 200 * time.Millisecond
+	const bound = time.Second // the Postgres reads before the held one fit inside it under -race
 	for _, tc := range []struct {
 		name, reason string
 		policy       bool

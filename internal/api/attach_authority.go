@@ -274,16 +274,13 @@ func (s *Server) attachIssuerCut(r *http.Request, w http.ResponseWriter, runID u
 	}
 	check := s.attachAuthority(r, runID)
 	ctx, cancel := context.WithCancel(r.Context())
-	hardEnd := time.Now() // a grant no longer live: the socket ends before it opens
-	// The opening read runs under the ticket's opening deadline (ticketActor.admitCtx), bounded as every
-	// re-check is.
-	actx, acancel := ta.admitCtx(ctx)
-	lctx, lcancel := context.WithTimeout(actx, s.attachAuthorityLookupBound())
-	if end, v := s.delegationLive(lctx, *ta.via); v == verdictOK {
-		hardEnd = time.Now().Add(end.Sub(s.cfg.Now()))
+	// The socket ends at the grant end redemption read under the opening deadline (ticketActor.grantExpires),
+	// not read again here: a setup that spent that deadline (the thaw's wait for the run's lock) never reads a
+	// live grant as ended. A revoke since redemption is the watch's, timed from checkStart.
+	hardEnd := time.Now() // no grant end: the socket ends before it opens
+	if !ta.grantExpires.IsZero() {
+		hardEnd = time.Now().Add(ta.grantExpires.Sub(s.cfg.Now()))
 	}
-	lcancel()
-	acancel()
 	cut := newStreamCut(w, hardEnd, cancel)
 	start := ta.checkStart
 	if start.IsZero() {

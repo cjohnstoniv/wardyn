@@ -62,7 +62,7 @@ func (s *Server) refuseRunUnitError(w http.ResponseWriter, r *http.Request, targ
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, target, u.Error()).OnRun(run.ID))
 	}
 	if issuerOpeningIn(r.Context()) {
-		refuseIssuerOpeningUnread(r.Context(), w, op, err)
+		refuseIssuerOpeningUnread(r.Context(), w, op, issuerOpeningUnverifiableMsg, err)
 		return true
 	}
 	writeServerError(w, r, op, err)

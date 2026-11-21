@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -609,19 +610,24 @@ func TestUIIssuerPortal_EntryRunReadAnswers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newIssuerUIRig(t, closingBackend("app"))
 			tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+			var hit bool
 			rig.is.mu.Lock()
 			rig.is.runReads = 0 // count from the enter on
 			rig.is.runHook = func(ctx context.Context, n int) error {
 				if n < 2 {
 					return nil
 				}
+				hit = true // read after the enter has returned
 				return tc.hook(ctx)
 			}
 			rig.is.mu.Unlock()
 			start := time.Now()
-			rec := rig.enterWith(tok)
+			rec := rig.enterWithin(tok, 5*time.Second)
 			if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.reason) {
 				t.Fatalf("%s: %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.code, tc.reason)
+			}
+			if !hit {
+				t.Fatalf("%s: the entry's run read was never asked: the answer came from redemption", tc.name)
 			}
 			if d := time.Since(start); d > bound+400*time.Millisecond {
 				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, d, bound)
@@ -674,7 +680,7 @@ func TestUIIssuerPortal_EntryPolicyReadAnswers(t *testing.T) {
 			}
 			rig.is.mu.Unlock()
 			start := time.Now()
-			rec := rig.enterWith(tok)
+			rec := rig.enterWithin(tok, 5*time.Second)
 			took := time.Since(start)
 			rig.is.mu.Lock()
 			policyReads := rig.is.policyReads
@@ -689,5 +695,86 @@ func TestUIIssuerPortal_EntryPolicyReadAnswers(t *testing.T) {
 				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, took, bound)
 			}
 		})
+	}
+}
+
+// setIssuerAdmit sets the issuer opening reads' bound (issuerAdmitBound) apart from the watch's, for the test.
+func setIssuerAdmit(t *testing.T, d time.Duration) {
+	t.Helper()
+	issuerAdmitWaitNS.Store(int64(d))
+	t.Cleanup(func() { issuerAdmitWaitNS.Store(0) })
+}
+
+// enterWithin is enterWith on a request whose context ends after d, so an entry held past its bound fails the
+// test there, never at the package timeout.
+func (rig *issuerUIRig) enterWithin(tok string, d time.Duration) *httptest.ResponseRecorder {
+	rig.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	q := url.Values{"run": {rig.run.ID.String()}, "app": {"code"}, "ticket": {tok}}
+	req := rig.bound(httptest.NewRequestWithContext(ctx, http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
+	rec := httptest.NewRecorder()
+	rig.gateway.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestUIRenewal_ChainReadHeldAtRedemptionAnswers503: a renewing portal's chain read, the last of redemption's,
+// hangs. The entry answers the retryable 503 within the opening bound, never a session that quietly does not
+// renew.
+func TestUIRenewal_ChainReadHeldAtRedemptionAnswers503(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerUIRig(t, closingBackend("app"))
+	rig.is.renewal = true
+	tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	rig.is.hold(hang)
+	start := time.Now()
+	rec := rig.enterWithin(tok, 5*time.Second)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), uiDeniedReasonRevocationUnavailable) {
+		t.Fatalf("a held chain read at redemption: %d %s, want 503 %s", rec.Code, rec.Body.String(), uiDeniedReasonRevocationUnavailable)
+	}
+	if len(setUICookies(rec)) != 0 {
+		t.Fatal("a held chain read at redemption set a session cookie")
+	}
+	if d := time.Since(start); d > bound+400*time.Millisecond {
+		t.Errorf("answered %v after the enter, want within the %v bound", d, bound)
+	}
+}
+
+// TestUIIssuerPortal_OpeningReadsShareOneBound: redemption's identity read takes most of the opening bound and
+// the entry's run read then hangs. The entry answers within one bound of its start, not one bound per read.
+func TestUIIssuerPortal_OpeningReadsShareOneBound(t *testing.T) {
+	const bound, first = 500 * time.Millisecond, 400 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerUIRig(t, closingBackend("app"))
+	tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+	slow := make(chan struct{})
+	var hit bool
+	rig.is.mu.Lock()
+	rig.is.hangIdentity = slow
+	rig.is.runReads = 0
+	rig.is.runHook = func(ctx context.Context, n int) error {
+		if n < 2 {
+			return nil
+		}
+		hit = true // read after the enter has returned
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	rig.is.mu.Unlock()
+	time.AfterFunc(first, func() { close(slow) })
+	start := time.Now()
+	rec := rig.enterWithin(tok, 5*time.Second)
+	took := time.Since(start)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), uiDeniedReasonRevocationUnavailable) {
+		t.Fatalf("%d %s, want 503 %s", rec.Code, rec.Body.String(), uiDeniedReasonRevocationUnavailable)
+	}
+	if !hit {
+		t.Fatal("the entry's run read was never asked: the slow identity read ran out the bound alone")
+	}
+	if took < first || took > bound+200*time.Millisecond {
+		t.Fatalf("answered %v after the enter, want after the %v identity read and within the one %v bound", took, first, bound)
 	}
 }

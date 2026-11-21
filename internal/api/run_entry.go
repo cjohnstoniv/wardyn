@@ -193,6 +193,11 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 	ta.grantExpires = expires
 	if v == verdictOK {
 		ta.renewChain = s.uiRenewalChain(ctx, ta)
+		// A chain read the opening deadline ran out on is an outage, never a session that quietly stops renewing.
+		if ta.renewChain == uuid.Nil && !ta.admitBy.IsZero() && ctx.Err() != nil {
+			slog.WarnContext(ctx, "wardynd: an issuer portal ticket's renewal chain could not be read in its bound", "run_id", runID, "err", ctx.Err())
+			v = verdictRevocationUnavailable
+		}
 	}
 	return ta, v, nil
 }
