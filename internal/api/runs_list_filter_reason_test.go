@@ -30,11 +30,15 @@ func TestListRunsFiltered_Reasons(t *testing.T) {
 		{"invalid include_killed", "include_killed=nonsense", http.StatusBadRequest, reasonInvalidIncludeKilledParam},
 		{"invalid sponsored", "sponsored=nonsense", http.StatusBadRequest, reasonInvalidSponsoredParam},
 		{"invalid no_end", "no_end=nonsense", http.StatusBadRequest, reasonInvalidNoEndParam},
+		{"invalid service", "service=nonsense", http.StatusBadRequest, reasonInvalidServiceParam},
 		{"q too long", "q=" + strings.Repeat("q", maxRunsListQueryLen+1), http.StatusBadRequest, reasonRunsSearchQueryTooLong},
 		// A validly-shaped filter still 500s on this harness's nil store, which
 		// cannot implement RunsFilteredPager — the SAME reason GET /approvals'
 		// sibling capability check answers (#656: one reason per shape, shared
 		// across resources).
+		// A valid service value gets past parsing and reaches the same store capability check.
+		{"service=1 parses", "service=1", http.StatusInternalServerError, reasonListingUnscopedBackend},
+		{"service=0 parses", "service=0", http.StatusInternalServerError, reasonListingUnscopedBackend},
 		{"valid filter, unscoped backend", "view=user", http.StatusInternalServerError, reasonListingUnscopedBackend},
 	}
 	for _, tc := range cases {

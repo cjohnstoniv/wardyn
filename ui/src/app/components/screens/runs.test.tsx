@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 
@@ -397,25 +397,105 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       expect(screen.queryByText("No runs match these filters")).not.toBeInTheDocument();
     });
 
-    it("Services on a cut-short first page does not say none yet, and reads the older service on request", async () => {
+    describe("Services segment is read server-side", () => {
       const tasks = Array.from({ length: 1000 }, (_, i) => run({ id: `t${i}`, task: `Task ${i}`, shape: "agent_task" }));
-      const service = run({ id: "old-svc", task: "Old service", shape: "application", agent: "", service: { restart: "on_failure" } });
-      listRunsFilteredMock.mockImplementation((f: { offset?: number }) =>
-        Promise.resolve(
-          f.offset
-            ? { runs: [service], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
-            : { runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 },
-        ),
-      );
-      renderScreen();
-      await screen.findByText("Task 0");
-      fireEvent.click(screen.getByRole("button", { name: "Services 0" }));
-      await screen.findByText("None in the newest 1000 runs");
-      expect(screen.queryByText(/No services yet/)).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: "Look further back" }));
-      await screen.findByText("Old service");
-      expect(listRunsFilteredMock).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1000 }));
-      expect(screen.queryByText("None in the newest 1000 runs")).toBeNull();
+      const oldService = run({ id: "old-svc", task: "Old service", shape: "application", agent: "", service: { restart: "on_failure" } });
+      // The server keeps only service runs when asked, before it pages: 1000 newer tasks never crowd the service out.
+      const serverSide = (hidden = { hiddenOlder: 0, hiddenKilled: 0 }) =>
+        listRunsFilteredMock.mockImplementation((f: { service?: boolean }) =>
+          Promise.resolve(
+            f.service
+              ? { runs: [oldService], truncated: false, ...hidden }
+              : { runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 },
+          ),
+        );
+
+      it("asks for service runs only, so one old service behind 1000 tasks is listed", async () => {
+        serverSide();
+        renderScreen(undefined, "/runs?segment=services");
+        await screen.findByText("Old service");
+        expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true }));
+        expect(screen.queryByText(/No services yet/)).toBeNull();
+        expect(screen.getByRole("button", { name: "Services 1" })).toBeTruthy();
+      });
+
+      it("finds the old service under a workspace filter", async () => {
+        serverSide();
+        renderScreen(undefined, "/runs?segment=services&workspace=acme%2Fwidgets");
+        await screen.findByText("Old service");
+        expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, workspace: "acme/widgets" }));
+        expect(screen.queryByText("No runs match these filters")).toBeNull();
+      });
+
+      it("finds the old service when older runs are hidden", async () => {
+        serverSide({ hiddenOlder: 7, hiddenKilled: 2 });
+        renderScreen(undefined, "/runs?segment=services");
+        await screen.findByText("Old service");
+        expect(screen.queryByText("No runs match these filters")).toBeNull();
+      });
+
+      it.each([
+        ["status", "status=failed"],
+        ["search", "q=old"],
+        ["owner scope", "owner=me"],
+      ])("finds the old service under a %s filter", async (_n, qs) => {
+        serverSide({ hiddenOlder: 3, hiddenKilled: 0 });
+        renderScreen(undefined, `/runs?segment=services&${qs}`);
+        await screen.findByText("Old service");
+        expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true }));
+        expect(screen.queryByText("No runs match these filters")).toBeNull();
+      });
+
+      it("the plain page's counts read at least N on a cut-short page, and Services is exact once picked", async () => {
+        serverSide();
+        renderScreen();
+        await screen.findByText("Task 0");
+        expect(screen.getByRole("button", { name: "Services 0+" })).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Services 0+" }));
+        await screen.findByText("Old service");
+        expect(screen.getByRole("button", { name: "Services 1" })).toBeTruthy();
+      });
+
+      it("another segment cut short under a filter or hidden runs still says none so far", async () => {
+        listRunsFilteredMock.mockResolvedValue({ runs: tasks, truncated: true, hiddenOlder: 4, hiddenKilled: 0 });
+        renderScreen(undefined, "/runs?segment=environments&status=failed");
+        await screen.findByText("None in the newest 1000 runs");
+        expect(screen.queryByText("No runs match these filters")).toBeNull();
+      });
+
+      it("does not send the service filter on any other segment", async () => {
+        serverSide();
+        renderScreen();
+        await screen.findByText("Task 0");
+        for (const call of listRunsFilteredMock.mock.calls) expect(call[0].service).toBeUndefined();
+      });
+
+      it("a poll replaces the page: no stale tail is kept", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          const newer = run({ id: "new-svc", task: "Newer service", shape: "application", agent: "", service: { restart: "on_failure" } });
+          listRunsFilteredMock
+            .mockResolvedValueOnce({ runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 })
+            .mockResolvedValueOnce({ runs: [oldService], truncated: false, hiddenOlder: 0, hiddenKilled: 0 })
+            .mockResolvedValue({ runs: [newer], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+          renderScreen(undefined, "/runs?segment=services");
+          await screen.findByText("Old service");
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(3500);
+          });
+          await screen.findByText("Newer service");
+          expect(screen.queryByText("Old service")).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("another segment cut short by a full first page says none so far, not none yet", async () => {
+        listRunsFilteredMock.mockResolvedValue({ runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 });
+        renderScreen(undefined, "/runs?segment=environments");
+        await screen.findByText("None in the newest 1000 runs");
+        expect(screen.queryByText(/No environments yet/)).toBeNull();
+      });
     });
 
     it("a segment with no run under another active filter reads as no match, not as no services", async () => {

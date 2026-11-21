@@ -214,6 +214,8 @@ export interface RunsListFilter {
   // "exclude" turns off only the addition of the runs of service identities the caller sponsors to their own
   // list (#2513); omitted keeps them.
   sponsored?: "exclude";
+  // Only service runs, applied by the server before it pages.
+  service?: boolean;
   workspace?: string;
   q?: string;
   limit?: number;
@@ -237,6 +239,7 @@ async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFiltere
   if (filter.endedWithin) q.set("ended_within", filter.endedWithin);
   if (filter.includeKilled) q.set("include_killed", "1");
   if (filter.sponsored) q.set("sponsored", filter.sponsored);
+  if (filter.service) q.set("service", "1");
   if (filter.workspace) q.set("workspace", filter.workspace);
   if (filter.q) q.set("q", filter.q);
   q.set("limit", String(filter.limit ?? LIST_LIMIT));
