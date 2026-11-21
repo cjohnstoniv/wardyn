@@ -573,21 +573,48 @@ func (s PG) ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind 
 		})
 }
 
-// FinishDeprovisionJob marks a step done, storing the counts it produced.
+// FinishDeprovisionJob marks a step done, storing the counts it produced. A step with the named row id (a portal
+// step) is done only once the audit event its row pinned is in the shared audit table, in the same statement, which
+// also drops the pinned payload; a row a later occurrence replaced is ErrSuperseded.
 func (s PG) FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int) error {
+	return s.finishJob(ctx, identityID, kind, k, detail, nil, k.ID != uuid.Nil)
+}
+
+// ErrReceiptNotStored is a portal step's finish refused because the audit event its row pinned is not in the shared
+// audit table: the step stays pending, and any replica's retry writes the same event.
+var ErrReceiptNotStored = errors.New("store: the step's pinned audit event is not in the shared audit table")
+
+// finishJob is the done write of a step. Named by row id, it needs the pinned event stored (matched by id and time)
+// and clears the pinned payload; with at, it also needs the suspension to be the identity's current one. strict says
+// whether no row is ErrSuperseded.
+func (s PG) finishJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int, at *time.Time, strict bool) error {
 	if detail == nil {
 		detail = map[string]int{}
 	}
 	raw, _ := json.Marshal(detail)
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
-		identityID, kind, k.Step, k.Target, raw, k.occurrence())
+	args := []any{identityID, kind, k.Step, k.Target, raw, k.occurrence()}
+	current := ""
+	if at != nil {
+		current = " AND " + suspensionCurrentSQL("$7")
+		args = append(args, *at)
+	}
+	var found, done int
+	err := s.Pool.QueryRow(ctx, `
+		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored
+		             FROM deprovision_jobs
+		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`+current+` FOR UPDATE),
+		     u AS (UPDATE deprovision_jobs d SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5,
+		                  audit_event_payload = CASE WHEN $6::uuid IS NULL THEN d.audit_event_payload END, updated_at = now()
+		            FROM j WHERE d.id = j.id AND j.stored RETURNING 1)
+		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u)`, args...).Scan(&found, &done)
 	if err != nil {
 		return fmt.Errorf("store: finish deprovision job: %w", err)
 	}
-	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+	switch {
+	case found == 0 && strict:
 		return ErrSuperseded
+	case found > 0 && done == 0:
+		return ErrReceiptNotStored
 	}
 	return nil
 }
@@ -615,7 +642,7 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 // found live once more.
 func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target); err != nil {
 		return fmt.Errorf("store: reopen deprovision job: %w", err)
 	}
