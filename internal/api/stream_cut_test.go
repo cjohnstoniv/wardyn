@@ -930,3 +930,274 @@ func TestStreamCut_CloseRawConnUnwrapsWrappers(t *testing.T) {
 		t.Error("the transport under a TLS connection was not closed")
 	}
 }
+
+// recWriter is a server writer that records the controller's calls: each write deadline, the flushes and writes
+// that reach it, and, on Hijack, the deadline in force for the server's flush.
+type recWriter struct {
+	header http.Header
+	conn   net.Conn
+
+	mu        sync.Mutex
+	deadline  time.Time
+	atHijack  time.Time
+	flushes   int
+	writes    int
+	hijacked  bool
+	deadlines int
+}
+
+func newRecWriter(conn net.Conn) *recWriter { return &recWriter{header: http.Header{}, conn: conn} }
+
+func (w *recWriter) Header() http.Header { return w.header }
+func (w *recWriter) WriteHeader(int)     {}
+func (w *recWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.writes++
+	w.mu.Unlock()
+	return len(p), nil
+}
+
+func (w *recWriter) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	w.deadline = t
+	w.deadlines++
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *recWriter) FlushError() error {
+	w.mu.Lock()
+	w.flushes++
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *recWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	w.mu.Lock()
+	w.atHijack, w.hijacked = w.deadline, true
+	w.mu.Unlock()
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func (w *recWriter) state() (deadline, atHijack time.Time, flushes, writes int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.deadline, w.atHijack, w.flushes, w.writes
+}
+
+// TestStreamCut_HijackFlushUnderDeadlineAndFlushRefusedAfter: the server's flush of the buffered header runs under
+// the per-operation deadline, and once the stream has switched a Flush is refused without reaching the server.
+func TestStreamCut_HijackFlushUnderDeadlineAndFlushRefusedAfter(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	rw := newRecWriter(a)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newStreamCut(rw, time.Now().Add(time.Hour), cancel)
+	cw := c.Writer(rw)
+	start := time.Now()
+	if _, _, err := cw.(http.Hijacker).Hijack(); err != nil {
+		t.Fatalf("hijack: %v", err)
+	}
+	_, at, _, _ := rw.state()
+	if at.IsZero() || at.After(start.Add(streamOpWrite+time.Second)) {
+		t.Errorf("the server's hijack flush ran under deadline %v, want one within %v", at, streamOpWrite)
+	}
+	if err := cw.(interface{ FlushError() error }).FlushError(); !errors.Is(err, errStreamCut) {
+		t.Errorf("a flush after the switch: %v, want refused", err)
+	}
+	if _, _, flushes, _ := rw.state(); flushes != 0 {
+		t.Errorf("a flush after the switch reached the server's writer %d times", flushes)
+	}
+}
+
+// TestStreamCut_RefusedOnceCutOrPastEnd: once cut, the handler's own deadline is refused and the past deadline
+// stands; past the end, a write is refused before it reaches the server.
+func TestStreamCut_RefusedOnceCutOrPastEnd(t *testing.T) {
+	rw := newRecWriter(nil)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newStreamCut(rw, time.Now().Add(time.Hour), cancel)
+	c.Cut()
+	if err := c.SetWriteDeadline(time.Now().Add(time.Minute)); !errors.Is(err, errStreamCut) {
+		t.Errorf("a handler deadline after the cut: %v, want refused", err)
+	}
+	if d, _, _, _ := rw.state(); !d.Equal(streamPast) {
+		t.Errorf("the write deadline after the cut is %v, want the past one", d)
+	}
+
+	rw2 := newRecWriter(nil)
+	c2 := newStreamCut(rw2, time.Now().Add(-time.Millisecond), cancel)
+	if _, err := c2.Writer(rw2).Write([]byte("x")); !errors.Is(err, errStreamCut) {
+		t.Errorf("a write past the end: %v, want refused", err)
+	}
+	if _, _, _, writes := rw2.state(); writes != 0 {
+		t.Errorf("a write past the end reached the server's writer %d times", writes)
+	}
+}
+
+// TestStreamCut_LookupDeadlineClampedToEnd: a lookup's context never outlasts the stream's end, whatever its bound.
+func TestStreamCut_LookupDeadlineClampedToEnd(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	end := time.Now().Add(150 * time.Millisecond)
+	c := newStreamCut(newRecWriter(nil), end, cancel)
+	var dl time.Time
+	c.lookup(context.Background(), time.Hour, func(ctx context.Context) error { dl, _ = ctx.Deadline(); return nil })
+	if dl.IsZero() || dl.After(end) {
+		t.Errorf("the lookup ran under deadline %v, past the end %v", dl, end)
+	}
+}
+
+// TestStreamCut_EndTimerCutsWithNoCheckDue: with no check due before it, the end alone cuts the stream and ends
+// its context.
+func TestStreamCut_EndTimerCutsWithNoCheckDue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	end := time.Now().Add(100 * time.Millisecond)
+	c := newStreamCut(newRecWriter(nil), end, cancel)
+	c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stream outlived its end by 2 s with no check due")
+	}
+	if !c.isCut() {
+		t.Error("the stream's context ended but it was not cut")
+	}
+	cutWithin(t, "the end timer", time.Now(), end, 300*time.Millisecond)
+	func() {
+		defer func() { _ = recover() }() // a cut unswitched stream aborts its handler
+		c.End()
+	}()
+}
+
+// deadlineFirstConn records whether a past deadline was set on it before it was closed.
+type deadlineFirstConn struct {
+	net.Conn
+	mu        sync.Mutex
+	past      bool
+	pastFirst bool
+}
+
+func (d *deadlineFirstConn) SetDeadline(t time.Time) error {
+	d.mu.Lock()
+	d.past = d.past || !t.After(time.Now())
+	d.mu.Unlock()
+	return d.Conn.SetDeadline(t)
+}
+
+func (d *deadlineFirstConn) Close() error {
+	d.mu.Lock()
+	d.pastFirst = d.past
+	d.mu.Unlock()
+	return d.Conn.Close()
+}
+
+// TestStreamCut_SwitchedCutStopsBothDirectionsBeforeClose: a cut gives a switched connection a past deadline in
+// both directions before it closes the transport, so a read or write in progress returns at the cut.
+func TestStreamCut_SwitchedCutStopsBothDirectionsBeforeClose(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	conn := &deadlineFirstConn{Conn: a}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	switchedCut(conn, time.Now().Add(time.Hour), cancel).Cut()
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if !conn.pastFirst {
+		t.Error("the switched connection was closed with no past deadline set first")
+	}
+}
+
+// tlsNetConn is a wrapper of the server's hijacked TLS connection that gives it up, as the desktop's frame-checked
+// reader does.
+type tlsNetConn struct{ net.Conn }
+
+func (c tlsNetConn) NetConn() net.Conn { return c.Conn }
+
+// wrapHijack hands the cut the server's connection inside tlsNetConn.
+type wrapHijack struct{ http.ResponseWriter }
+
+func (v *wrapHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	return tlsNetConn{conn}, brw, nil
+}
+
+// countConn counts the bytes read through it.
+type countConn struct {
+	net.Conn
+	n atomic.Int64
+}
+
+func (c *countConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+// TestStreamCut_IdleTLSCutSendsNothing: a cut of an idle switched TLS stream, the server's own connection and the
+// same connection inside a wrapper, closes the socket under TLS: not one byte (no close_notify) reaches the client
+// after the cut began.
+func TestStreamCut_IdleTLSCutSendsNothing(t *testing.T) {
+	for _, wrap := range []bool{false, true} {
+		t.Run(map[bool]string{false: "server's conn", true: "wrapped conn"}[wrap], func(t *testing.T) {
+			cutNow, cutDone := make(chan struct{}), make(chan struct{})
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var base http.ResponseWriter = w
+				if wrap {
+					base = &wrapHijack{w}
+				}
+				_, cancel := context.WithCancel(r.Context())
+				defer cancel()
+				c := newStreamCut(base, time.Now().Add(time.Hour), cancel)
+				cw := c.Writer(base)
+				cw.WriteHeader(http.StatusSwitchingProtocols)
+				if _, _, err := cw.(http.Hijacker).Hijack(); err != nil {
+					t.Errorf("hijack: %v", err)
+					close(cutDone)
+					return
+				}
+				<-cutNow
+				c.Cut()
+				close(cutDone)
+				c.End()
+			}))
+			srv.StartTLS()
+			defer srv.Close()
+			raw, err := net.Dial("tcp", srv.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cc := &countConn{Conn: raw}
+			conn := tls.Client(cc, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}}) // #nosec G402 -- the test server's own certificate
+			defer conn.Close()
+			if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			br := bufio.NewReader(conn)
+			for {
+				line, err := br.ReadString('\n')
+				if err != nil {
+					t.Fatalf("reading the 101: %v", err)
+				}
+				if line == "\r\n" {
+					break
+				}
+			}
+			time.Sleep(300 * time.Millisecond) // session tickets and anything else sent after the handshake
+			mark := cc.n.Load()
+			close(cutNow)
+			<-cutDone
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, _ = io.Copy(io.Discard, br)
+			if n := cc.n.Load() - mark; n != 0 {
+				t.Errorf("%d bytes reached the client after the cut began", n)
+			}
+		})
+	}
+}

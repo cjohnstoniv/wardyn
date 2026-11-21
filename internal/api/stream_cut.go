@@ -66,18 +66,17 @@ type streamCut struct {
 	cancel  context.CancelFunc       // the stream's context
 	hardEnd time.Time                // the stream's known end, wall clock, fixed at admission
 
-	mu        sync.Mutex
-	live      bool // the handler has not started returning
-	cut       bool // sticky
-	inflight  int  // wrapped operations running
-	deadline  time.Time
-	batch     time.Time // the handler's own deadline (SetWriteDeadline), zero for none; operations never outlast it
-	ending    bool
-	switched  bool // the server's Hijack returned without error; sticky
-	hijacking bool
-	watching  bool
-	conn      net.Conn // the switched connection, once registered
-	closers   []func()
+	mu       sync.Mutex
+	live     bool // the handler has not started returning
+	cut      bool // sticky
+	inflight int  // wrapped operations running
+	deadline time.Time
+	batch    time.Time // the handler's own deadline (SetWriteDeadline), zero for none; operations never outlast it
+	ending   bool
+	switched bool // the server's Hijack returned without error; sticky
+	watching bool
+	conn     net.Conn // the switched connection, once registered
+	closers  []func()
 
 	done   chan struct{} // closed by End: the watch starts no new lookup
 	exited chan struct{} // closed when the watch returns
@@ -419,12 +418,8 @@ func (w *cutWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if err := c.begin(); err != nil {
 		return nil, nil, err
 	}
-	c.mu.Lock()
-	c.hijacking = true
-	c.mu.Unlock()
 	conn, brw, err := c.rc.Hijack()
 	c.mu.Lock()
-	c.hijacking = false
 	c.inflight--
 	if err != nil {
 		if c.inflight == 0 && !c.cut {
