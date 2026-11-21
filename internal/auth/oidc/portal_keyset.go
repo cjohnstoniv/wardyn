@@ -91,8 +91,8 @@ type portalKeyFetch struct {
 	stale  bool // the address changed while it ran: its answer was discarded
 }
 
-// portalKeyAt names a state of the key set: the keys address generation and the key map generation.
-type portalKeyAt struct{ urlGen, gen uint64 }
+// portalKeyAt names the recovery generation a failure was recorded at.
+type portalKeyAt struct{ epoch uint64 }
 
 // portalKeySet is Wardyn's own key set for one verifier. It fetches only on an unknown kid it has not seen
 // removed, at most once per cooldown however many requests ask, and a successful fetch replaces the set.
@@ -120,6 +120,9 @@ type portalKeySet struct {
 	inflight  *portalKeyFetch
 	url       string // the keys address the set belongs to
 	urlGen    uint64 // bumped whenever the address changes or is dropped
+	// epoch is the recovery generation: bumped by every discovery publish (setURL, even of the same address), every
+	// fetch reservation, every key replacement and every drop. A failure's drop stands only at its own epoch.
+	epoch uint64
 }
 
 func newPortalKeySet(clock func() time.Time, timeout time.Duration, fetch func(context.Context, string) ([]jose.JSONWebKey, error)) *portalKeySet {
@@ -131,6 +134,7 @@ func (ks *portalKeySet) startLocked(source string) *portalKeyFetch {
 	f := &portalKeyFetch{done: make(chan struct{}), urlGen: ks.urlGen, url: ks.url}
 	ks.inflight = f
 	ks.attemptAt = ks.clock()
+	ks.epoch++
 	go ks.run(f, source)
 	return f
 }
@@ -152,7 +156,7 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 	var at portalKeyAt
 	if err != nil {
 		ks.lastErr, ks.failed = err, true
-		at = portalKeyAt{urlGen: ks.urlGen, gen: ks.gen}
+		at = portalKeyAt{epoch: ks.epoch}
 	} else {
 		next := make(map[string]jose.JSONWebKey, len(keys))
 		for _, k := range keys {
@@ -166,6 +170,7 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 		}
 		ks.keys, ks.removed, ks.okAt, ks.lastErr, ks.failed = next, removed, ks.clock(), nil, false
 		ks.gen++
+		ks.epoch++
 	}
 	if ks.inflight == f {
 		ks.inflight = nil
@@ -227,11 +232,13 @@ func (ks *portalKeySet) cooldownLeft() time.Duration {
 	return max(ks.attemptAt.Add(portalKeyCooldown).Sub(ks.clock()), 0)
 }
 
-// setURL points the set at a keys address. A changed address drops the keys and abandons any fetch in flight for
-// the old one; only keys fetched for the current address are ever kept.
+// setURL points the set at a keys address, once per discovery published. A changed address drops the keys and
+// abandons any fetch in flight for the old one; only keys fetched for the current address are ever kept. The same
+// address keeps its keys and its fetch in flight, but still supersedes any earlier failure's drop.
 func (ks *portalKeySet) setURL(u string) {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
+	ks.epoch++
 	if ks.url == u {
 		return
 	}
@@ -247,13 +254,13 @@ func (ks *portalKeySet) drop() {
 	ks.dropLocked()
 }
 
-// dropAt is drop for a failure recorded at at: it forgets the keys only if neither the keys address nor the key
-// map has changed since, so an old failure never drops a newer address or newer keys. The check and the drop are
-// one critical section. It reports whether it dropped.
+// dropAt is drop for a failure recorded at at: it forgets the keys only if nothing has advanced the recovery
+// generation since, so an old failure never drops a newer discovery, a newer fetch in flight or newer keys. The
+// check and the drop are one critical section. It reports whether it dropped.
 func (ks *portalKeySet) dropAt(at portalKeyAt) bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	if ks.urlGen != at.urlGen || ks.gen != at.gen {
+	if ks.epoch != at.epoch {
 		return false
 	}
 	ks.url = ""
@@ -266,6 +273,7 @@ func (ks *portalKeySet) dropLocked() {
 	ks.inflight = nil
 	ks.urlGen++
 	ks.gen++
+	ks.epoch++
 }
 
 // portalKeyCheck is the answer of recheck.

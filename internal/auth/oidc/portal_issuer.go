@@ -367,9 +367,11 @@ type portalVerifier struct {
 	lastUsed         atomic.Int64
 
 	// Test hooks: afterPrepare runs once an exchange is through prepare; beforeDrop runs once a key fetch that
-	// broke a rule has been reported and before its drop is decided.
+	// broke a rule has been reported and before its drop is decided; afterPublish runs once a refresh has published
+	// discovery and before it reserves the key fetch.
 	afterPrepare func()
 	beforeDrop   func()
+	afterPublish func()
 
 	onFail func(PortalRefreshFailure)
 
@@ -528,6 +530,9 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 	v.disc, v.discOKAt, v.discFailed, v.standing = &disc, now, false, ""
 	v.ks.setURL(disc.fetchURL)
 	v.mu.Unlock()
+	if v.afterPublish != nil {
+		v.afterPublish()
+	}
 	out, wait, err := v.ks.ensure(context.Background(), "scheduled") // the fetch itself is bounded by the key set
 	switch {
 	case out == portalEnsureCurrent:
@@ -566,7 +571,7 @@ func (v *portalVerifier) settle(cause string) {
 
 // dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
 // verifier under the cause until a refresh passes, but only while the key set is still in the state the failure
-// was recorded at: a failure never drops a discovery or keys published after it.
+// was recorded at: a failure never drops a discovery, a key fetch or keys that came after it.
 func (v *portalVerifier) dropForCause(cause string, at portalKeyAt) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
