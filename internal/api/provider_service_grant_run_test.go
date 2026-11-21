@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -146,7 +147,11 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 			events = append(events, event{at, false})
 		}
 	}
-	sort.SliceStable(events, func(i, j int) bool { return events[i].at < events[j].at })
+	// The stuck pass starts just before the resolve of the same moment, so the workers are held when it asks.
+	sort.SliceStable(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		return a.at < b.at || (slow && a.at == b.at && !a.resolve && b.resolve)
+	})
 	var installed string // the header the proxy holds
 	var lease time.Time
 	resolves, handed := 0, map[string]bool{}
@@ -212,6 +217,18 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	}
 	if len(handed) != 2 {
 		t.Fatalf("tokens handed to the proxy = %d, want the first and its replacement", len(handed))
+	}
+	if slow {
+		// Dispatch's request, the eight held workers' slow rows, then the 50-minute resolve's renewal; the
+		// other eight slow rows wait for the release at clean-up.
+		var order []string
+		for _, r := range f.idp.requests() {
+			order = append(order, map[bool]string{true: "slow", false: "healthy"}[strings.Contains(r.URL, "hang-")])
+		}
+		want := append(append([]string{"healthy"}, slices.Repeat([]string{"slow"}, serviceGrantPassWorkers)...), "healthy")
+		if !slices.Equal(order, want) {
+			t.Fatalf("token request order = %v, want %v", order, want)
+		}
 	}
 	healthy := f.svcHealthyRequests()
 	var rows int
