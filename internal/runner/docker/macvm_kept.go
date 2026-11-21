@@ -550,6 +550,10 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 // say it has expired: it was used or stopped after the organisation last heard.
 var errKeptNotExpired = errors.New("docker: the kept machine's record has not expired")
 
+// errKeptRecordMissing is an expiry-driven delete of a folder whose record is gone while the folder is not: the
+// state a failed tools update can leave, which is the sweep's to recover, never a deadline's to remove.
+var errKeptRecordMissing = errors.New("docker: the kept machine folder has no record")
+
 // removeKeptIfExpired is removeKept for a delete the organisation started because the machine expired: under
 // the machine's lock it reads the record's own deadline and removes the folder only if that has passed with
 // no session holding the machine. The organisation's view of the deadline may be older than a stop the Mac
@@ -564,7 +568,17 @@ func (c *MacVMConfig) removeKeptIfExpired(dir string, id uuid.UUID) (bool, error
 	rec, err := macvm.ReadKept(dir, id.String())
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return removeKeptHeld(dir) // the sweep removed it first: false, and the lock file the wait made goes
+		// A missing record is not a missing folder: a failed tools update leaves a folder with no record beside
+		// the person's old disk moved aside, which nothing here may remove.
+		if _, serr := os.Lstat(dir); errors.Is(serr, fs.ErrNotExist) {
+			if rerr := os.Remove(dir + ".lock"); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				return false, rerr
+			}
+			return false, nil // the sweep removed it first; only the lock file the wait made goes
+		} else if serr != nil {
+			return false, serr
+		}
+		return false, errKeptRecordMissing
 	case err != nil:
 		return false, err
 	case c.keptHeldBy(rec) != "" || !keptExpired(rec, c.keptClock()):
@@ -585,7 +599,12 @@ func (d *Driver) DeleteExpiredKeptMachine(_ context.Context, id uuid.UUID, by st
 	dir := c.keptDir(id)
 	_, err := macvm.ReadKept(dir, id.String())
 	switch {
-	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, macvm.ErrKeptIDMismatch):
+	case errors.Is(err, fs.ErrNotExist):
+		if _, serr := os.Lstat(dir); serr == nil {
+			return "", runnerwire.Refuse("docker: kept machine %s has a folder but no record on this Mac, which an expiry does not remove", id) // nothing was removed
+		}
+		return runnerwire.KeptMachineAlreadyAbsent, nil
+	case errors.Is(err, macvm.ErrKeptIDMismatch):
 		return runnerwire.KeptMachineAlreadyAbsent, nil
 	case err != nil:
 		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
@@ -594,6 +613,8 @@ func (d *Driver) DeleteExpiredKeptMachine(_ context.Context, id uuid.UUID, by st
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
 		return "", runnerwire.Refuse("docker: kept machine %s is running on this Mac", id) // nothing was removed
+	case errors.Is(err, errKeptRecordMissing):
+		return "", runnerwire.Refuse("docker: kept machine %s has a folder but no record on this Mac, which an expiry does not remove", id) // nothing was removed
 	case errors.Is(err, errKeptNotExpired):
 		return "", runnerwire.Refuse("docker: kept machine %s has not expired on this Mac: its record holds a later deadline", id) // nothing was removed
 	case err != nil:

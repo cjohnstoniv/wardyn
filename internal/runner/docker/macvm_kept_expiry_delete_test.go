@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,5 +82,30 @@ func TestKeptMachineExpiryDeleteRechecksTheLocalDeadline(t *testing.T) {
 	}
 	if _, err := os.Lstat(vanished + ".lock"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a lock file outlived the expiry delete of a vanished folder: %v", err)
+	}
+	// A failed tools update leaves the folder with no record beside the person's old disk moved aside. An expiry
+	// delete never removes it, whether it finds the record missing at its first look or only under the lock.
+	stuck := uuid.New()
+	stuckDir := c.keptDir(stuck)
+	oldGen := stuckDir + ".update.old-" + uuid.NewString()
+	for _, d := range []string{stuckDir, oldGen, stuckDir + ".update"} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := filepath.Join(oldGen, "disk.img")
+	if err := os.WriteFile(data, []byte("the person's disk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := r.d.DeleteExpiredKeptMachine(ctx, stuck, runnerwire.KeptMachineByExpiry); err == nil || !refused(err) || out != "" {
+		t.Fatalf("an expiry delete of a folder with no record: %q, %v; want a refused reply", out, err)
+	}
+	if gone, err := c.removeKeptIfExpired(stuckDir, stuck); gone || !errors.Is(err, errKeptRecordMissing) {
+		t.Fatalf("under the lock, a folder with no record: %v, %v; want refused and not removed", gone, err)
+	}
+	for _, p := range []string{stuckDir, stuckDir + ".update", data} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Fatalf("an expiry delete of a recoverable folder removed %s: %v", p, err)
+		}
 	}
 }

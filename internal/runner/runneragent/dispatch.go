@@ -227,7 +227,9 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 		return nil, runnerwire.Refuse("this runner keeps no machines")
 	}
 	del := km.DeleteKeptMachine
-	if a.Op == runnerwire.KeptMachineOpDeleteExpired {
+	// An expiry delete from a control plane of the earlier release is op delete with by expiry: it is the same
+	// request as delete_expired, and runs only the conditional delete.
+	if a.Op == runnerwire.KeptMachineOpDeleteExpired || a.By == runnerwire.KeptMachineByExpiry {
 		ex, ok := d.cfg.Substrate.(KeptMachineExpiredDeleter)
 		if !ok {
 			return nil, runnerwire.Refuse("this runner cannot delete only an expired machine")

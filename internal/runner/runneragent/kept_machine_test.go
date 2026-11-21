@@ -149,3 +149,40 @@ func TestKeptMachineDeleteExpiredReachesOnlyTheConditionalDelete(t *testing.T) {
 		t.Fatalf("a substrate with no conditional delete: %v; want a refusal", err)
 	}
 }
+
+// An expiry delete from a control plane of the earlier release is op delete with by expiry. It reaches only the
+// conditional delete, and is refused by a substrate that has none; a person's or an operator's delete with any
+// other by reaches the plain one. Both wire formats of the expiry delete are covered.
+func TestKeptMachineLegacyExpiryDeleteIsConditional(t *testing.T) {
+	base := &keptFake{Fake: runnertest.NewFake(), outcome: runnerwire.KeptMachineDeleted}
+	sub := &expiringKeptFake{keptFake: base}
+	call, done := keptDispatcher(t, sub)
+	defer done()
+	id := uuid.New()
+	for name, args := range map[string]runnerwire.KeptMachineArgs{
+		"the earlier release (op delete, by expiry)": {Op: runnerwire.KeptMachineOpDelete, ID: id.String(), By: runnerwire.KeptMachineByExpiry},
+		"this release (op delete_expired)":           {Op: runnerwire.KeptMachineOpDeleteExpired, ID: id.String(), By: runnerwire.KeptMachineByExpiry},
+	} {
+		if _, err := call(args); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if len(sub.expired) != 2 || len(base.asked) != 0 {
+		t.Fatalf("conditional calls %d, plain calls %d; want 2 and 0", len(sub.expired), len(base.asked))
+	}
+	for _, by := range []string{"owner", "admin", ""} {
+		if _, err := call(runnerwire.KeptMachineArgs{Op: runnerwire.KeptMachineOpDelete, ID: id.String(), By: by}); err != nil {
+			t.Fatalf("delete by %q: %v", by, err)
+		}
+	}
+	if len(base.asked) != 3 || len(sub.expired) != 2 {
+		t.Fatalf("plain calls %d, conditional %d; want 3 and 2", len(base.asked), len(sub.expired))
+	}
+	plain, done2 := keptDispatcher(t, &keptFake{Fake: runnertest.NewFake(), outcome: runnerwire.KeptMachineDeleted})
+	defer done2()
+	_, err := plain(runnerwire.KeptMachineArgs{Op: runnerwire.KeptMachineOpDelete, ID: id.String(), By: runnerwire.KeptMachineByExpiry})
+	var we *runnerwire.Error
+	if !errors.As(err, &we) || we.Code != runnerwire.CodeRefused {
+		t.Fatalf("a legacy expiry delete on a substrate with no conditional delete: %v; want a refusal", err)
+	}
+}
