@@ -764,6 +764,11 @@ type PersonSummary struct {
 	SSHKeys         int        `json:"ssh_keys"`
 	Credentials     int        `json:"credentials"`
 	ActiveRuns      int        `json:"active_runs"`
+	// Issuer and InternalAddress are set for a portal person only: the issuer the person's portal
+	// registered, and the internal address its binding fetches keys from ("" when the issuer's own
+	// address is used).
+	Issuer          string `json:"issuer,omitempty"`
+	InternalAddress string `json:"internal_address,omitempty"`
 }
 
 // PersonList is one page of GET /people. NextCursor is empty on the last page.
