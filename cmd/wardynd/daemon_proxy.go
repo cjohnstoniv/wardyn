@@ -77,7 +77,7 @@ const (
 	// and a host wardynd always reaches directly cannot be compared with the list's names (it does
 	// not convert to its IDNA-ASCII form). Never the host's text.
 	daemonProxyAlwaysDirectHostRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but one of the hosts wardynd " +
-		"always reaches directly (the Kubernetes API, the AWS SSO override or the internal issuer) is not a valid host name, " +
+		"always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a portal internal issuer host) is not a valid host name, " +
 		"so the list cannot be checked against it; fix that setting or unset the list"
 	// daemonProxyAlwaysPortRefusal is the BOOT REFUSAL when the daemon proxy the list uses names a
 	// port outside 1 to 65535: every listed host would fail at dial. Never the proxy's text.
