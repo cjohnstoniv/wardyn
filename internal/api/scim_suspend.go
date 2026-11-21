@@ -46,6 +46,11 @@ const (
 // suspension work of it is run or resumed here.
 var errNotSCIMOwned = errors.New("the identity belongs to another identity provider issuer or tenant than this SCIM endpoint serves")
 
+// errNoSCIMConfig is the answer of every suspension and purge step when SCIM is not configured: with no
+// configured issuer there is no identity provider whose users these steps may act on, so they own nothing,
+// write nothing and fail.
+var errNoSCIMConfig = errors.New("SCIM is not configured, so no identity is this endpoint's to suspend or purge")
+
 // errDeprovisionIncomplete is a suspension that has not finished: the identity is deactivated and
 // every pending step is on the ledger, but the caller must retry.
 var errDeprovisionIncomplete = errors.New("deprovisioning is incomplete; retry the request")
@@ -324,6 +329,19 @@ func jobByKey(jobs []store.DeprovisionJob, step, target string) (store.Deprovisi
 	return jobs[i], true
 }
 
+// scimAuthority is nil when this endpoint serves identity ident (scimOwns), errNotSCIMOwned when it belongs
+// to another issuer or tenant, and errNoSCIMConfig, never a panic or a silent pass, when SCIM is not
+// configured: with no configuration the sweeper and the suspension and purge steps own nothing.
+func (s *Server) scimAuthority(ident store.PrincipalIdentity) error {
+	if s.cfg.SCIM == nil {
+		return errNoSCIMConfig
+	}
+	if !s.scimOwns(ident) {
+		return errNotSCIMOwned
+	}
+	return nil
+}
+
 // warnNotSCIMOwned logs that the sweeper left identity id alone: it belongs to another issuer or tenant than
 // this endpoint serves, so any work of it still pending is left in place, never resumed or destroyed here.
 func (s *Server) warnNotSCIMOwned(ctx context.Context, id uuid.UUID) {
@@ -479,8 +497,8 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID,
 	if err != nil {
 		return ident, leaverForms{}, nil, err
 	}
-	if !s.scimOwns(ident) {
-		return ident, leaverForms{}, nil, errNotSCIMOwned
+	if err := s.scimAuthority(ident); err != nil {
+		return ident, leaverForms{}, nil, err
 	}
 	if resumeOf != nil && (ident.DeactivatedAt == nil || !ident.DeactivatedAt.Equal(*resumeOf)) {
 		return ident, leaverForms{}, nil, store.ErrSuperseded

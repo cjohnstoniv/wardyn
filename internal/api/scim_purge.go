@@ -85,6 +85,9 @@ func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 // touching anything when it is not. Without it (DELETE) the purge is unconditional and repeatable: a
 // retry finishes the steps that are still pending and writes nothing new once they are all done.
 func (s *Server) purgeIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string, requireDue bool) (bool, error) {
+	if s.cfg.SCIM == nil {
+		return false, errNoSCIMConfig
+	}
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	marked, err := st.MarkIdentityPurged(ctx, id, requireDue, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant)
 	if err != nil {
@@ -106,9 +109,12 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	}
 	// Nothing of a foreign identity is purged: the suspension above already left it alone (suspendStepOne),
 	// and no step below runs for it.
-	if !s.scimOwns(ident) {
-		s.warnNotSCIMOwned(ctx, id)
-		return nil
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, id)
+			return nil
+		}
+		return err
 	}
 	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
 	if err != nil {
@@ -598,9 +604,12 @@ func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.Pe
 	if err != nil {
 		return err
 	}
-	if !s.scimOwns(ident) {
-		s.warnNotSCIMOwned(ctx, o.IdentityID)
-		return nil
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, o.IdentityID)
+			return nil
+		}
+		return err
 	}
 	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
 	if err != nil {
