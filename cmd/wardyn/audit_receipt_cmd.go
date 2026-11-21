@@ -265,14 +265,12 @@ func auditVerifyCmd() *cobra.Command {
 			rep := auditreceipt.VerifyBundle(b, keys)
 			var writeErr error
 			if asJSON {
-				if err := emitJSON(cmd.OutOrStdout(), rep); err != nil {
-					return err
-				}
+				writeErr = emitJSON(cmd.OutOrStdout(), rep)
 			} else {
 				writeErr = printVerifyReport(cmd.OutOrStdout(), rep)
 			}
 			// A verdict keeps its own code whether or not the report reached its destination; the write failure
-			// is added to its message. A verified or incomplete-free report that was not written is not a success.
+			// is added to its message. A verified report that was not written is not a success.
 			var verdict *exitError
 			switch {
 			case !rep.OK():
