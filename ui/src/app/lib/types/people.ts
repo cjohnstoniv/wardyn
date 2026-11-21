@@ -18,6 +18,10 @@ export interface PersonSummary {
   ssh_keys: number;
   credentials: number;
   active_runs: number;
+  // A portal person only: the issuer their portal registered, and the internal address its binding
+  // fetches keys from (absent when the issuer's own address is used).
+  issuer?: string;
+  internal_address?: string;
 }
 
 export interface PersonList {

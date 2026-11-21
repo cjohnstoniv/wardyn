@@ -175,6 +175,8 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>{P.COL_PERSON}</TableHead>
+                <TableHead>{P.COL_ISSUER}</TableHead>
+                <TableHead>{P.COL_INTERNAL}</TableHead>
                 <TableHead>{P.COL_ROLE}</TableHead>
                 <TableHead>{P.COL_LAST}</TableHead>
                 <TableHead>{P.COL_STATE}</TableHead>
@@ -190,6 +192,16 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                       <button type="button" className="max-w-[16rem] truncate text-left hover:underline" title={p.email || p.principal} onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
                         {p.email || p.principal}
                       </button>
+                    </TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-xs" title={p.issuer || undefined}>
+                      {p.issuer || <span className="font-sans text-sm text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-xs" title={p.internal_address || undefined}>
+                      {p.internal_address || (
+                        <span className="font-sans text-sm text-muted-foreground">
+                          —{p.issuer ? ` ${P.INTERNAL_FROM_ISSUER}` : ""}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>{p.role ? roleLabel(p.role) : "—"}</TableCell>
                     <TableCell className="text-muted-foreground" title={p.last_signed_in_at ? absoluteTime(p.last_signed_in_at) : undefined}>
