@@ -174,6 +174,13 @@ jobs:
           n=$(kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
             "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$old_ip' AND datname = current_database()")
           [ "$n" -ge 1 ] || { echo "::error::the old replica ($old_ip) has no session on the database"; exit 1; }
+          # And the new replica holds at least one session labelled as a current wardynd (cmd/wardynd/db_label.go:
+          # wardynd/<version>/<replica>, a 0.10.2 build or a 0.10.2 prerelease), so the veto's lack of the new
+          # replica's address below is read off a correctly identified new server, not off a missing one.
+          current_label='^wardynd/0[.]10[.]2(-[0-9A-Za-z.-]+)?/[A-Za-z0-9][A-Za-z0-9._-]*$'
+          n=$(kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
+            "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$new_ip' AND datname = current_database() AND application_name ~ '$current_label'")
+          [ "$n" -ge 1 ] || { echo "::error::the new replica ($new_ip) has no session labelled wardynd/0.10.2/<replica> on the database"; exit 1; }
           echo "OLD_IP=$old_ip" >> "$GITHUB_ENV"
           echo "NEW_IP=$new_ip" >> "$GITHUB_ENV"
       - name: The activation is vetoed beside the old replica, then runs with the audited override
