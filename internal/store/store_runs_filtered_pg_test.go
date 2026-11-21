@@ -294,8 +294,48 @@ func TestPG_ListRunsFiltered_ServiceOnlyBeforePaging(t *testing.T) {
 	if len(got) != 1 || got[0].ID != svc.ID {
 		t.Fatalf("ServiceOnly page 1 = %d rows, want exactly the old service", len(got))
 	}
-	if _, _, err := pg.CountHiddenRuns(ctx, f); err != nil {
+}
+
+// TestPG_CountHiddenRuns_ServiceOnly pins that the hidden counts follow the same service filter as the list:
+// ordinary rows hidden by the window or the killed default are not counted when only services are asked for.
+func TestPG_CountHiddenRuns_ServiceOnly(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "hidden-service-" + uuid.NewString()
+	ended := func(state types.RunState, ago time.Duration, service bool) {
+		r := newFilterRun(owner, state)
+		if service {
+			r.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
+		}
+		r = persistRun(t, ctx, pool, r)
+		stampEnded(t, ctx, pool, r.ID, state, timePtr(time.Now().UTC().Add(-ago)), nil, "")
+	}
+	const day = 24 * time.Hour
+	// Outside the 7-day window: two ordinary, one service.
+	ended(types.RunCompleted, 30*day, false)
+	ended(types.RunCompleted, 30*day, false)
+	ended(types.RunCompleted, 30*day, true)
+	// Inside the window but a KILLED run older than a day: two ordinary, one service.
+	ended(types.RunKilled, 3*day, false)
+	ended(types.RunKilled, 3*day, false)
+	ended(types.RunKilled, 3*day, true)
+
+	f := store.RunFilter{Owner: owner, EndedWithin: 7 * day}
+	older, killed, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("CountHiddenRuns: %v", err)
+	}
+	if older != 3 || killed != 3 {
+		t.Fatalf("all runs: hidden older/killed = %d/%d, want 3/3", older, killed)
+	}
+	f.ServiceOnly = true
+	older, killed, err = pg.CountHiddenRuns(ctx, f)
+	if err != nil {
 		t.Fatalf("CountHiddenRuns ServiceOnly: %v", err)
+	}
+	if older != 1 || killed != 1 {
+		t.Fatalf("service only: hidden older/killed = %d/%d, want 1/1", older, killed)
 	}
 }
 

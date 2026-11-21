@@ -319,16 +319,20 @@ export function RunLifetimeBanner({
       // time — the grace is counted from lost_at, not from a later PATCH).
       // Offering Extend here would be a button that does nothing; End run is
       // the only real action left.
+      // Past its maximum lifetime the run only waits out its files: a revival is refused, so none is offered.
+      const pastCap = !!run.lifetime_cap_at && Date.parse(run.lifetime_cap_at) <= Date.now();
+      const keptBody = run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE;
+      const pastCapBody = run.kept_until ? RL.endedPastCapBody(keptUntilText(run.kept_until)) : RL.ENDED_PAST_CAP_BODY_NO_DATE;
       return (
         <Banner
           data-testid="run-lifetime-ended"
           tone="plain"
           title={RL.ENDED_TITLE}
-          body={run.interactive ? (run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
+          body={run.interactive ? (pastCap ? pastCapBody : keptBody) : RL.ENDED_BODY_TASK}
         >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">
-              {run.interactive && (
+              {run.interactive && !pastCap && (
                 <Button size="sm" onClick={() => void extendAndRevive()} disabled={busy}>
                   {RL.ENDED_EXTEND_AND_REVIVE}
                 </Button>

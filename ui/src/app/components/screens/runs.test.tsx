@@ -382,6 +382,8 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       await screen.findByText("Fix flaky auth tests");
       fireEvent.click(screen.getByRole("button", { name: "Services 0" }));
       await screen.findByText("No services yet. Start one with Keep it running on an Automation / script run.");
+      // An older daemon ignores the service filter and returns every shape: the chip counts the rows the list shows.
+      expect(screen.getByRole("button", { name: "Services 0" })).toBeTruthy();
     });
 
     it.each([
@@ -419,12 +421,14 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         expect(screen.getByRole("button", { name: "Services 1" })).toBeTruthy();
       });
 
-      it("finds the old service under a workspace filter", async () => {
-        serverSide();
+      it("finds the old service under a workspace filter, and the header keeps the plain page's total", async () => {
+        serverSide({ hiddenOlder: 3, hiddenKilled: 2 });
         renderScreen(undefined, "/runs?segment=services&workspace=acme%2Fwidgets");
         await screen.findByText("Old service");
         expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, workspace: "acme/widgets" }));
         expect(screen.queryByText("No runs match these filters")).toBeNull();
+        // 1000 plain rows, cut short, no plain hidden runs: the service page's hidden counts and flag are not mixed in
+        expect(screen.getByText("Your runs · 1000+")).toBeInTheDocument();
       });
 
       it("finds the old service when older runs are hidden", async () => {
@@ -432,18 +436,70 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         renderScreen(undefined, "/runs?segment=services");
         await screen.findByText("Old service");
         expect(screen.queryByText("No runs match these filters")).toBeNull();
+        // The hidden counts under the rows are the service page's (the plain page here hides nothing).
+        expect(screen.getByText(/7 older runs and 2 killed runs are hidden\./)).toBeInTheDocument();
       });
 
-      it.each([
-        ["status", "status=failed"],
-        ["search", "q=old"],
-        ["owner scope", "owner=me"],
-      ])("finds the old service under a %s filter", async (_n, qs) => {
-        serverSide({ hiddenOlder: 3, hiddenKilled: 0 });
-        renderScreen(undefined, `/runs?segment=services&${qs}`);
-        await screen.findByText("Old service");
-        expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true }));
-        expect(screen.queryByText("No runs match these filters")).toBeNull();
+      describe("under a status, search or owner filter", () => {
+        // The server applies each filter it is sent: this mock does the same, so a filter the console drops shows.
+        const pool = [
+          run({ id: "s-run", task: "Old service", state: "RUNNING", created_by: "me", repo: "acme/widgets", shape: "application", agent: "", service: { restart: "on_failure" } }),
+          run({ id: "s-fail", task: "Other failing", state: "FAILED", created_by: "alice", repo: "acme/widgets", shape: "application", agent: "", service: { restart: "on_failure" } }),
+        ];
+        const filtered = () =>
+          listRunsFilteredMock.mockImplementation((f: { service?: boolean; status?: string; q?: string; owner?: string }) => {
+            if (!f.service) return Promise.resolve({ runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 });
+            const rows = pool.filter(
+              (r) =>
+                (!f.status || (f.status === "failed" ? r.state === "FAILED" : r.state === "RUNNING")) &&
+                (!f.q || r.task.toLowerCase().includes(f.q.toLowerCase())) &&
+                (!f.owner || r.created_by === "me"),
+            );
+            return Promise.resolve({ runs: rows, truncated: false, hiddenOlder: 3, hiddenKilled: 0 });
+          });
+
+        it("status: sends status=failed with the service request and lists only the failed service", async () => {
+          filtered();
+          renderScreen(undefined, "/runs?segment=services&status=failed");
+          await screen.findByText("Other failing");
+          expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, status: "failed" }));
+          expect(screen.queryByText("Old service")).toBeNull();
+        });
+
+        it("search: sends q with the service request and lists only the match", async () => {
+          filtered();
+          renderScreen(undefined, "/runs?segment=services&q=old");
+          await screen.findByText("Old service");
+          expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, q: "old" }));
+          expect(screen.queryByText("Other failing")).toBeNull();
+        });
+
+        it("owner: the Admin view's Mine sends owner=me with the service request and lists only one's own", async () => {
+          filtered();
+          renderScreen(undefined, "/admin/runs?segment=services&owner=me");
+          await screen.findByText("Old service");
+          expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, owner: "me", view: "admin" }));
+          expect(screen.queryByText("Other failing")).toBeNull();
+        });
+      });
+
+      it("the Workspace control lists the service page's workspaces, and picking one asks for it", async () => {
+        const inB = run({ id: "svc-b", task: "Service in B", shape: "application", agent: "", repo: "acme/b", service: { restart: "on_failure" } });
+        listRunsFilteredMock.mockImplementation((f: { service?: boolean; workspace?: string }) =>
+          Promise.resolve(
+            f.service
+              ? { runs: !f.workspace || f.workspace === "acme/b" ? [inB] : [], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
+              : { runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 },
+          ),
+        );
+        renderScreen(undefined, "/runs?segment=services");
+        await screen.findByText("Service in B");
+        fireEvent.click(within(await screen.findByRole("search")).getByRole("combobox", { name: "Workspace" }));
+        fireEvent.click(await screen.findByRole("option", { name: "acme/b" }));
+        await waitFor(() =>
+          expect(listRunsFilteredMock).toHaveBeenLastCalledWith(expect.objectContaining({ service: true, workspace: "acme/b" })),
+        );
+        await screen.findByText("Service in B");
       });
 
       it("the plain page's counts read at least N on a cut-short page, and Services is exact once picked", async () => {

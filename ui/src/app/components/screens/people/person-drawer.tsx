@@ -10,7 +10,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, RotateCw } from "lucide-react";
-import { toast } from "sonner";
+import { accountToast, signInGeneration } from "../../../lib/account-toasts";
 import { people as peopleApi } from "../../../lib/api/people";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
@@ -116,13 +116,14 @@ export function PersonDrawer({
 
   const run = async (action: Action) => {
     setBusy(true);
+    const startedUnder = signInGeneration();
     try {
       const result = await message[action].run();
-      toast.success(message[action].done(result));
+      accountToast("success", message[action].done(result), startedUnder);
       setConfirm(null);
       onChanged();
     } catch (e) {
-      toast.error(getErrorMessage(e));
+      accountToast("error", getErrorMessage(e), startedUnder);
     } finally {
       setBusy(false);
     }

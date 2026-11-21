@@ -140,12 +140,12 @@ describe("ImpactSection", () => {
       />,
     );
     const tree = screen.getByTestId("change-impact-tree");
-    expect(within(tree).getByText(CHANGE_REVIEW.PEOPLE).previousSibling).toHaveTextContent("5");
+    expect(within(tree).getByText(CHANGE_REVIEW.ASSIGNMENTS).previousSibling).toHaveTextContent("5");
     expect(within(tree).getByText(CHANGE_REVIEW.UNITS).previousSibling).toHaveTextContent("2");
     expect(within(tree).getByText(CHANGE_REVIEW.LIVE_RUNS_WALLS).previousSibling).toHaveTextContent("7");
     expect(tree).toHaveTextContent(CHANGE_REVIEW.NOT_IN_REPORT);
     const people = screen.getByTestId("change-impact-people");
-    expect(within(people).getByText("person3@example.com")).toBeInTheDocument();
+    expect(within(people).getByText("Person · person3@example.com")).toBeInTheDocument();
     expect(within(people).queryByText("person4@example.com")).toBeNull();
     expect(within(people).getAllByText(/Allowed hosts: a → a, b/)).toHaveLength(3);
     expect(within(people).getByText(CHANGE_REVIEW.MORE(2))).toBeInTheDocument();
@@ -153,6 +153,17 @@ describe("ImpactSection", () => {
     expect(within(runs).getByText("Nightly build")).toBeInTheDocument();
     expect(within(runs).getByText("22222222")).toBeInTheDocument();
     expect(within(runs).getByText(CHANGE_REVIEW.MORE(5))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["a person", { subject_type: "user" as const, subject: "ana@example.com" }, "Person · ana@example.com"],
+    ["a group", { subject_type: "group" as const, subject: "platform" }, "Group · platform"],
+    ["everyone", { subject_type: "all" as const, subject: "" }, CHANGE_REVIEW.SUBJECT_EVERYONE],
+  ])("names who an affected assignment covers: %s", (_name, subject, shown) => {
+    render(<ImpactSection change={change()} impact={impact({ people: [{ ...person(1), ...subject }] })} />);
+    const people = screen.getByTestId("change-impact-people");
+    expect(within(people).getByText(shown)).toBeInTheDocument();
+    expect(screen.getByTestId("change-impact-tree")).toHaveTextContent("Assignments affected");
   });
 
   it("shows the boundary report's counts and rows", () => {
@@ -224,7 +235,7 @@ describe("ImpactSection", () => {
       />,
     );
     const tree = screen.getByTestId("change-impact-tree");
-    expect(within(tree).getByText(CHANGE_REVIEW.PEOPLE).previousSibling).toHaveTextContent("2");
+    expect(within(tree).getByText(CHANGE_REVIEW.ASSIGNMENTS).previousSibling).toHaveTextContent("2");
     expect(within(tree).getByText(CHANGE_REVIEW.LIVE_RUNS_WALLS).previousSibling).toHaveTextContent("4");
     expect(screen.queryByText(CHANGE_REVIEW.IMPACT_NOT_COMPUTED)).toBeNull();
   });
