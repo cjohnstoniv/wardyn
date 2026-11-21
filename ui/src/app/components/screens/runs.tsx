@@ -232,7 +232,8 @@ export function RunsScreen() {
   // R17-N3: the segment narrows the fetched rows here; its counts follow the other filters.
   const counts = React.useMemo(() => {
     const c = segmentCounts(runsList);
-    return serviceRuns ? { ...c, services: serviceRuns.length } : c;
+    // The same rows the list shows: an older daemon ignores the service filter and returns every shape.
+    return serviceRuns ? { ...c, services: filterBySegment(serviceRuns, "services").length } : c;
   }, [runsList, serviceRuns]);
   // A count is exact only when the page it came from was whole: the plain page for the shapes, the service-only
   // page for Services while that segment is picked.

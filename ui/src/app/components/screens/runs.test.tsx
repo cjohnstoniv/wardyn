@@ -382,6 +382,8 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       await screen.findByText("Fix flaky auth tests");
       fireEvent.click(screen.getByRole("button", { name: "Services 0" }));
       await screen.findByText("No services yet. Start one with Keep it running on an Automation / script run.");
+      // An older daemon ignores the service filter and returns every shape: the chip counts the rows the list shows.
+      expect(screen.getByRole("button", { name: "Services 0" })).toBeTruthy();
     });
 
     it.each([
