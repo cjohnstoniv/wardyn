@@ -428,6 +428,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
+
+	// The service grant's secret and removal routes, and the clean-up retry: operatorOnly beside the provider
+	// routes (provider_service_grant_routes.go).
+	"PUT /api/v1/model-providers/{id}/service-grant/secret":    {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant/secret": {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant":        {class: classAdmin},
+	"POST /api/v1/service-grant-cleanups/{uid}/retry":          {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
 	// Getting Started -> People editor over the store half of
 	// internal/auth/oidc's RoleMappingSource. SUPER-only, including BOTH reads,
