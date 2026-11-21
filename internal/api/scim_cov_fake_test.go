@@ -857,6 +857,9 @@ func (s *scimCovStore) AddScimGroupMembers(_ context.Context, id uuid.UUID, iden
 	if err := s.enter("AddScimGroupMembers"); err != nil {
 		return err
 	}
+	if _, ok := s.groups[id]; !ok {
+		return store.ErrNotFound
+	}
 	for _, m := range identities {
 		if _, known := s.idents[m]; known && !slices.Contains(s.members[id], m) {
 			s.members[id] = append(s.members[id], m)
@@ -871,6 +874,12 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 	if err := s.enter("StartGroupRemoval"); err != nil {
 		return err
 	}
+	s.startGroupRemoval(groupID, identityID)
+	return nil
+}
+
+// startGroupRemoval is StartGroupRemoval's work, under s.mu.
+func (s *scimCovStore) startGroupRemoval(groupID, identityID uuid.UUID) {
 	target := groupID.String()
 	wasMember := slices.Contains(s.members[groupID], identityID)
 	s.members[groupID] = slices.DeleteFunc(s.members[groupID], func(m uuid.UUID) bool { return m == identityID })
@@ -889,7 +898,6 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 			s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: identityID, Kind: store.JobKindGroupRemove, Step: step, Target: target})
 		}
 	}
-	return nil
 }
 
 func (s *scimCovStore) ResumeGroupRemoval(_ context.Context, groupID, identityID uuid.UUID) (bool, error) {
@@ -921,7 +929,7 @@ func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UU
 	return out, nil
 }
 
-func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
+func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("DeleteScimGroup"); err != nil {
@@ -929,6 +937,13 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	}
 	if _, ok := s.groups[id]; !ok {
 		return store.ErrNotFound
+	}
+	// Every member of the issuer and tenant still recorded leaves with a removal owed, as the store's delete
+	// opens it.
+	for _, m := range slices.Clone(s.members[id]) {
+		if i, known := s.idents[m]; known && i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant) {
+			s.startGroupRemoval(id, m)
+		}
 	}
 	delete(s.groups, id)
 	delete(s.members, id)

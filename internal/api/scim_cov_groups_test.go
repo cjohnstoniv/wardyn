@@ -463,6 +463,61 @@ func TestSCIMCovDeleteGroupRemovesEveryoneThenTheGroup(t *testing.T) {
 	}
 }
 
+// lateJoinStore adds late to the group right after the first listing of who to remove: an add that commits
+// between a DELETE's listing and its delete.
+type lateJoinStore struct {
+	*scimCovStore
+	late uuid.UUID
+}
+
+func (s *lateJoinStore) GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
+	ids, err := s.scimCovStore.GroupRemovalIdentities(ctx, groupID)
+	if late := s.late; err == nil && late != uuid.Nil {
+		s.late = uuid.Nil
+		err = s.AddScimGroupMembers(ctx, groupID, []uuid.UUID{late}, scimCovNow)
+	}
+	return ids, err
+}
+
+// A member added after the DELETE listed who to remove leaves the group with the delete, and the 204 waits
+// for their removal.
+func TestSCIMCovDeleteGroupRemovesAMemberAddedAfterTheListing(t *testing.T) {
+	st := newSCIMCovStore()
+	m1, late := scimCovPerson(st, "sub-1"), scimCovPerson(st, "sub-2")
+	g := st.addGroup(scimCovGroupExternal, "Engineering", m1.ID)
+	e := newSCIMCovEnv(t, &lateJoinStore{scimCovStore: st, late: late.ID})
+
+	if w := e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	targets := map[string]bool{}
+	for _, ev := range e.auditRows("scim.group.member_remove") {
+		targets[ev.Target] = true
+	}
+	if len(targets) != 2 || !targets[m1.ID.String()] || !targets[late.ID.String()] {
+		t.Errorf("removal rows for %v, want the listed member and the one added after the listing", targets)
+	}
+	for _, j := range st.jobs {
+		if j.IdentityID == late.ID && !j.Done {
+			t.Errorf("the late member's %s step is still pending", j.Step)
+		}
+	}
+}
+
+// An add that finds the group deleted since the request read it is refused with 404.
+func TestSCIMCovPatchAddToAGroupDeletedMeanwhile(t *testing.T) {
+	st := newSCIMCovStore()
+	m := scimCovPerson(st, "sub-1")
+	g := st.addGroup(scimCovGroupExternal, "Engineering")
+	st.failNext("AddScimGroupMembers", store.ErrNotFound, 1)
+	e := newSCIMCovEnv(t, st)
+	w := e.scim(http.MethodPatch, "/scim/v2/Groups/"+g.ID.String(), scimCovPatch(scimCovGroupAdd(m.ID.String())))
+	scimCovWantError(t, w, http.StatusNotFound, "")
+	if len(st.groupMembers(g.ID)) != 0 {
+		t.Errorf("members %v, want nobody added", st.groupMembers(g.ID))
+	}
+}
+
 func TestSCIMCovDeleteGroupFailures(t *testing.T) {
 	t.Run("an unknown group", func(t *testing.T) {
 		e := newSCIMCovEnv(t, newSCIMCovStore())
@@ -531,7 +586,7 @@ func TestSCIMCovGroupSnapshotMatch(t *testing.T) {
 			t.Errorf("%s: match = %t, want %t", c.name, got, c.want)
 		}
 	}
-	if err := (&Server{}).removeGroupMembers(context.Background(), nil, store.ScimGroup{}, nil, "x"); err != nil {
+	if err := (&Server{}).removeGroupMembers(context.Background(), nil, store.ScimGroup{}, nil, "x", false); err != nil {
 		t.Errorf("removing no one = %v, want nil", err)
 	}
 }
