@@ -177,6 +177,16 @@ func (s PG) UpdateRemoteRunner(ctx context.Context, id string, revision int64, n
 // target lock): pools off clears the list, listed stores subjects. A non-nil revision must be the
 // runner's (ErrRunnerPoolStale). ErrNotFound: no such runner.
 func SetRemoteRunnerPeopleQ(ctx context.Context, q Querier, id string, revision *int64, pools types.RemoteRunnerPeoplePools, subjects []types.RunnerPoolSubject, by string) (types.RemoteRunner, error) {
+	if pools == types.PeoplePoolsListed {
+		for _, sub := range subjects {
+			if sub.SubjectType != types.CapabilitySubjectUser {
+				continue
+			}
+			if err := ruleDelegatePersonSubject(ctx, q, "remote_runners.people_subjects", sub.Subject); err != nil {
+				return types.RemoteRunner{}, err
+			}
+		}
+	}
 	cur, err := GetRemoteRunnerQ(ctx, q, id, true)
 	if err != nil {
 		return cur, err

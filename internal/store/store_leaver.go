@@ -85,6 +85,12 @@ type SuspendPlan struct {
 	// row had then. Step 1 runs only while the row still has it; a row reactivated since (none) or suspended
 	// again (another) is ErrSuperseded, so an old resume never deactivates a reactivated person again.
 	ResumeOf *time.Time
+	// PortalLifecycle marks the suspension as a portal person's: the transaction first sets the portal
+	// lifecycle marker that the principal_identities trigger requires for a purge deadline, and the same
+	// transaction deletes the portal grants of every principal it deactivates, so a lookup of one of their
+	// grants misses on every path. Without it a suspension that schedules a purge for a portal person is
+	// refused by that trigger.
+	PortalLifecycle bool
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -155,8 +161,8 @@ type LeaverStore interface {
 	PendingRefusalAudits(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (UserSubjectRowsDeleted, error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)
-	ListDeactivatedIdentities(ctx context.Context, limit int) ([]PrincipalIdentity, error)
-	ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
+	ListDeactivatedIdentities(ctx context.Context, issuer, tenant string, limit int) ([]PrincipalIdentity, error)
+	ListDeprovisionFailures(ctx context.Context, issuer, tenant string, limit int) ([]DeprovisionFailure, error)
 }
 
 var _ LeaverStore = PG{}
@@ -368,6 +374,11 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: suspend identity: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if p.PortalLifecycle {
+		if err = markPortalLifecycle(ctx, tx); err != nil {
+			return SuspendResult{}, err
+		}
+	}
 	principals := nonEmptyStrings(p.Principals)
 	purgeAfter := p.PurgeAfter
 	if p.Partial != "" {
@@ -425,6 +436,11 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
 		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, purgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
+	}
+	if p.PortalLifecycle {
+		if _, err = tx.Exec(ctx, `DELETE FROM portal_grants WHERE principal = ANY($1::text[])`, principals); err != nil {
+			return SuspendResult{}, fmt.Errorf("store: delete portal grants: %w", err)
+		}
 	}
 	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
 	if _, err = tx.Exec(ctx, `UPDATE people SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()) WHERE principal = ANY($1::text[])`,

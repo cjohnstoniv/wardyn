@@ -141,6 +141,9 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 // CreateServiceIdentityQ is CreateServiceIdentity's statements on tx (a pgx.Tx), which a held governance
 // change applies inside the decision transaction.
 func CreateServiceIdentityQ(ctx context.Context, tx Querier, si types.ServiceIdentity) (types.ServiceIdentity, error) {
+	if err := ruleDelegatePersonSubject(ctx, tx, "service_identities.sponsor", si.Sponsor); err != nil {
+		return types.ServiceIdentity{}, err
+	}
 	principal := si.Principal()
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('service_identities:' || $1, 0))`, si.Name); err != nil {
 		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
@@ -251,6 +254,11 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 // UpdateServiceIdentityQ is UpdateServiceIdentity's statements on tx (a pgx.Tx), which a held governance
 // change applies inside the decision transaction.
 func UpdateServiceIdentityQ(ctx context.Context, tx Querier, name string, ch ServiceIdentityChange) (ServiceIdentityChanged, error) {
+	if ch.Sponsor != nil {
+		if err := ruleDelegatePersonSubject(ctx, tx, "service_identities.sponsor", *ch.Sponsor); err != nil {
+			return ServiceIdentityChanged{}, err
+		}
+	}
 	before, err := lockServiceIdentity(ctx, tx, name)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
