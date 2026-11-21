@@ -18,7 +18,7 @@ import (
 func TestEndWaitRunRefusal_KeptPastTheCapNamesTheRetentionDeadline(t *testing.T) {
 	grace := 7 * 24 * time.Hour
 	s := &Server{cfg: Config{EndedRunGrace: grace}}
-	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	capAt := now.Add(-time.Hour)
 	lostAt := now.Add(-3 * time.Hour)
 	kept := types.AgentRun{State: types.RunRunning, LifetimeCapAt: &capAt, LostReason: types.LostEnded, LostAt: &lostAt}
