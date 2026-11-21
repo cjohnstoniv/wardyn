@@ -59,7 +59,7 @@ type PortalActivationStore interface {
 	PortalIssuersActivated(ctx context.Context) (bool, error)
 	ActivatePortalIssuersAs(ctx context.Context, a PortalActivation) (activated bool, err error)
 	PendingPortalActivation(ctx context.Context) (PortalActivation, bool, error)
-	AuditEventsStored(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]time.Time, error)
+	AuditEventsStored(ctx context.Context, want []AuditEventKey) (map[AuditEventKey]bool, error)
 	SettlePortalActivation(ctx context.Context) (bool, error)
 	UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error)
 }

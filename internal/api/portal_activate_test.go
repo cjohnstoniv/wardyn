@@ -54,12 +54,12 @@ func (s *activationStore) PendingPortalActivation(context.Context) (store.Portal
 	}
 	return *s.rec, true, nil
 }
-func (s *activationStore) AuditEventsStored(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]time.Time, error) {
-	out := map[uuid.UUID]time.Time{}
+func (s *activationStore) AuditEventsStored(_ context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error) {
+	out := map[store.AuditEventKey]bool{}
 	if s.stored != nil {
-		for _, id := range ids {
-			if at, ok := s.stored(id); ok {
-				out[id] = at
+		for _, k := range want {
+			if at, ok := s.stored(k.ID); ok && at.Equal(k.At) {
+				out[store.AuditEventKey{ID: k.ID, At: k.At.UTC().Truncate(time.Microsecond)}] = true
 			}
 		}
 	}
