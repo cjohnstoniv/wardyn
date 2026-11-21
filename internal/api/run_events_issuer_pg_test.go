@@ -9,16 +9,20 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -260,22 +264,55 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 	})
 }
 
-// TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG: the run's unit moves out of the pin
-// while the stream's setup is delayed past a beat, after its authorization read; the stream is refused before
-// its backlog goes. Control: the same delay with no move serves the backlog.
+// flakyEventsStore is the env's Postgres store with two failures a test switches on: the person's identity that
+// cannot be read, and the run that is gone.
+type flakyEventsStore struct {
+	store.PG
+	identityFails, runGone *atomic.Bool
+}
+
+func (f flakyEventsStore) IdentityBlocked(ctx context.Context, principal string, epoch int64) (bool, error) {
+	if f.identityFails.Load() {
+		return false, errors.New("identity read failed")
+	}
+	return f.PG.IdentityBlocked(ctx, principal, epoch)
+}
+
+func (f flakyEventsStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if f.runGone.Load() {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	return f.PG.GetRun(ctx, id)
+}
+
+// TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG: while the stream's setup is delayed
+// past a beat, after its authorization read, the run's unit moves out of the pin (403), the person's identity
+// cannot be read (503, retryable), or the run goes (404, as the read gate answers a missing run); none releases
+// the backlog. Control: the same delay with nothing changed serves the backlog.
 func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t *testing.T) {
-	for _, move := range []bool{true, false} {
-		t.Run(map[bool]string{true: "unit moves out", false: "control"}[move], func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		during func(e *issuerEventsEnv, f flakyEventsStore, t *testing.T)
+		want   int
+	}{
+		{"unit moves out", func(e *issuerEventsEnv, _ flakyEventsStore, t *testing.T) {
+			team := e.team
+			team.ParentID = &e.other.ID
+			if _, err := e.st.UpsertGovernanceUnit(context.Background(), team); err != nil {
+				t.Errorf("move the run's unit: %v", err)
+			}
+		}, http.StatusForbidden},
+		{"identity unreadable", func(_ *issuerEventsEnv, f flakyEventsStore, _ *testing.T) { f.identityFails.Store(true) }, http.StatusServiceUnavailable},
+		{"run gone", func(_ *issuerEventsEnv, f flakyEventsStore, _ *testing.T) { f.runGone.Store(true) }, http.StatusNotFound},
+		{"control", func(*issuerEventsEnv, flakyEventsStore, *testing.T) {}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newIssuerEventsEnv(t)
+			f := flakyEventsStore{PG: e.st, identityFails: &atomic.Bool{}, runGone: &atomic.Bool{}}
+			e.h.srv.cfg.Store = f
 			e.h.srv.runEvents.emit(e.run.ID, client.RunEvent{Type: client.RunEventPulling, At: time.Now()}) // the backlog
 			e.h.srv.runEvents.onSetup = func() {
-				if move {
-					team := e.team
-					team.ParentID = &e.other.ID
-					if _, err := e.st.UpsertGovernanceUnit(context.Background(), team); err != nil {
-						t.Errorf("move the run's unit: %v", err)
-					}
-				}
+				tc.during(e, f, t)
 				time.Sleep(2 * eventsBeat)
 			}
 			ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
@@ -283,7 +320,7 @@ func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			resp := openEventsAs(t, ctx, ts.URL, e.run.ID, e.raw)
-			if !move {
+			if tc.want == http.StatusOK {
 				if resp.StatusCode != http.StatusOK {
 					t.Fatalf("control: %d", resp.StatusCode)
 				}
@@ -299,8 +336,8 @@ func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t
 				}
 			}
 			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != http.StatusForbidden || strings.Contains(string(body), client.RunEventPulling) {
-				t.Fatalf("a stream whose run left the pin during its setup: %d %q, want 403 and no backlog", resp.StatusCode, body)
+			if resp.StatusCode != tc.want || strings.Contains(string(body), client.RunEventPulling) {
+				t.Fatalf("%s during setup: %d %q, want %d and no backlog", tc.name, resp.StatusCode, body, tc.want)
 			}
 		})
 	}

@@ -386,6 +386,11 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 	if notFoundIf(w, err, "run", reasonRunNotFound) {
 		return types.AgentRun{}, false
 	}
+	// Only a bounded opening read runs out (an issuer portal's event stream, runEventsOpening): retryable.
+	if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, runEventsUnverifiableMsg)
+		return types.AgentRun{}, false
+	}
 	if err != nil {
 		writeServerError(w, r, "get run", err)
 		return types.AgentRun{}, false

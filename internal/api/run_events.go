@@ -474,6 +474,8 @@ func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runI
 	}
 	lcancel()
 	switch {
+	case errors.Is(err, errRunEventsRunGone): // the run went during setup: the read gate's own 404
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusNotFound, reason: reasonRunNotFound, msg: "run not found"}
 	case v.unavailable() || (err != nil && !errors.Is(err, errRunEventsAuthorityEnded)):
 		return r.Context(), w, nil, none, &uiDialError{status: http.StatusServiceUnavailable, reason: uiDeniedReasonRevocationUnavailable, msg: runEventsUnverifiableMsg}
 	case v != verdictOK || err != nil:
@@ -494,26 +496,44 @@ const (
 	runEventsUnverifiableMsg       = "Could not verify this event stream; try again"
 )
 
-// errRunEventsAuthorityEnded is an issuer portal's event stream whose re-check refused.
-var errRunEventsAuthorityEnded = errors.New("api: this event stream is no longer authorized")
+// The answers of an issuer portal's event-stream check that are not a pass: its authority refused, a lookup
+// that could not answer, and the run no longer there. An open stream ends on any of them; an opening answers
+// 403, 503 and 404 for them.
+var (
+	errRunEventsAuthorityEnded = errors.New("api: this event stream is no longer authorized")
+	errRunEventsUnverifiable   = errors.New("api: this event stream's authority could not be read")
+	errRunEventsRunGone        = errors.New("api: this event stream's run no longer exists")
+)
 
 // runEventsIssuerHolds is one tick of an issuer portal's event stream: the person's session cutoff as the
 // keepalive reads it, the grant in portal_grants, and the person's identity and the portal's pin over the run
 // read fresh. Anything but a live answer ends the stream; the reconnect re-authenticates.
 func (s *Server) runEventsIssuerHolds(ctx context.Context, principal string, via types.DelegationVia, runID uuid.UUID, openedAt time.Time) error {
 	if s.cfg.SessionRevocations != nil {
-		if revoked, err := s.admittedRevoked(ctx, principal, openedAt); err != nil || revoked {
+		revoked, err := s.admittedRevoked(ctx, principal, openedAt)
+		if err != nil {
+			return errRunEventsUnverifiable
+		}
+		if revoked {
 			return errRunEventsAuthorityEnded
 		}
 	}
-	if _, v := s.delegationLive(ctx, via); v != verdictOK {
+	if _, v := s.delegationLive(ctx, via); v.unavailable() {
+		return errRunEventsUnverifiable
+	} else if v != verdictOK {
 		return errRunEventsAuthorityEnded
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil {
-		return err
+	if errors.Is(err, store.ErrNotFound) {
+		return errRunEventsRunGone
 	}
-	if s.issuerPortalPersonHolds(ctx, principal, via, run) != nil {
+	if err != nil {
+		return errRunEventsUnverifiable
+	}
+	if de := s.issuerPortalPersonHolds(ctx, principal, via, run); de != nil {
+		if de.status == http.StatusServiceUnavailable {
+			return errRunEventsUnverifiable
+		}
 		return errRunEventsAuthorityEnded
 	}
 	return nil
