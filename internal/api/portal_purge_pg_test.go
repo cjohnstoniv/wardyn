@@ -168,8 +168,20 @@ func TestPortalPurge_ReactivatedAfterSelectionNotPurged_PG(t *testing.T) {
 	}
 }
 
-// An explicit purge that finds the person reactivated since the admin read them is refused 409, and nothing is
-// written; a person who is not suspended is refused the same way.
+// reactivateBeforeMark is the store whose purge mark finds the person reactivated since the admin route read
+// them: the reactivation commits after the route's read and before the locked mark.
+type reactivateBeforeMark struct {
+	store.PG
+	reactivate func()
+}
+
+func (w reactivateBeforeMark) MarkPortalIdentityPurged(ctx context.Context, id uuid.UUID, mode store.PortalPurgeMode) (bool, error) {
+	w.reactivate()
+	return w.PG.MarkPortalIdentityPurged(ctx, id, mode)
+}
+
+// An explicit purge that finds the person reactivated since the admin read them is refused 409, nothing is
+// written, and the request row says denied: no success row is left for a purge that did not happen.
 func TestPortalPurgeRoute_RefusedAfterConcurrentReactivate_PG(t *testing.T) {
 	l := newPortalLife(t)
 	ctx := context.Background()
@@ -178,15 +190,40 @@ func TestPortalPurgeRoute_RefusedAfterConcurrentReactivate_PG(t *testing.T) {
 		t.Fatalf("suspend = %d", w.Code)
 	}
 	id := l.ident(t, principal).ID
-	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
-		t.Fatalf("reactivate = %d", w.Code)
+	purgeRows := func() (denied, success int) {
+		for _, ev := range l.rows("person.purge") {
+			switch ev.Outcome {
+			case "denied":
+				if lifeData(ev)["reason"] != "person_not_suspended" {
+					t.Errorf("person.purge denial reason = %v, want person_not_suspended", lifeData(ev)["reason"])
+				}
+				denied++
+			case "success":
+				success++
+			}
+		}
+		return denied, success
 	}
-	// The handler's own read said "suspended"; the reactivation committed after it.
-	if _, err := l.h.srv.purgePortalIdentity(ctx, l.st, id, store.PortalPurgeExplicit, portalOrigin(types.ActorHuman, "root")); !errors.Is(err, store.ErrPersonNotSuspended) {
-		t.Errorf("explicit purge of a reactivated person = %v, want ErrPersonNotSuspended", err)
+	if d, s := purgeRows(); d != 0 || s != 0 {
+		t.Fatalf("control: person.purge rows before the request = %d denied, %d success", d, s)
 	}
+	// The route's own read says suspended; the reactivation commits between that read and the locked mark.
+	orig := l.h.srv.cfg.Store
+	l.h.srv.cfg.Store = reactivateBeforeMark{PG: l.st, reactivate: func() {
+		if ok, err := l.st.ReactivatePortalIdentity(ctx, id); err != nil || !ok {
+			t.Errorf("reactivate between the read and the mark = %v, %v", ok, err)
+		}
+	}}
 	if w := l.post(t, l.admin, principal, "purge", ""); w.Code != http.StatusConflict || errorReason(w) != "person_not_suspended" {
 		t.Errorf("purge route = %d %s, want 409 person_not_suspended", w.Code, w.Body.String())
+	}
+	if d, s := purgeRows(); d != 1 || s != 0 {
+		t.Errorf("person.purge rows after the refused purge = %d denied, %d success; want 1 denied, 0 success", d, s)
+	}
+	l.h.srv.cfg.Store = orig
+	// The same refusal at the helper the sweep and the route share.
+	if _, err := l.h.srv.purgePortalIdentity(ctx, l.st, id, store.PortalPurgeExplicit, portalOrigin(types.ActorHuman, "root")); !errors.Is(err, store.ErrPersonNotSuspended) {
+		t.Errorf("explicit purge of a reactivated person = %v, want ErrPersonNotSuspended", err)
 	}
 	if ident := l.ident(t, principal); ident.PurgedAt != nil || ident.DeactivatedAt != nil {
 		t.Errorf("identity = purged %v, deactivated %v; want active", ident.PurgedAt, ident.DeactivatedAt)
