@@ -123,8 +123,10 @@ func TestPortalRegistration_NamespaceInUseRefused_PG(t *testing.T) {
 }
 
 // Each independent historical source the store census reports refuses a registration on its own, and a
-// key whose only history is an ended run's policy rows registers. The records are written the way the census
-// reads them: a unit, a running run's owner, a running run's resolved policy and its policy generation.
+// key whose only history is an ended run's policy rows registers. The records are written by the store's own
+// writers where it has them, the way the census reads them: a unit's creator, a running run's owner, a running
+// run's resolved policy and its policy generation, a launch preset, a unit ceiling, a composed unit's overlay,
+// a run template and a queued launch.
 func TestPortalRegistration_NamespaceCensusRefusesEachSource_PG(t *testing.T) {
 	e := newRegPG(t)
 	ctx := context.Background()
@@ -146,30 +148,109 @@ func TestPortalRegistration_NamespaceCensusRefusesEachSource_PG(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// whileBound writes a stored document naming principal while issuer's key is bound, as every ruled writer
+	// needs, then drops the binding, so the key is new again to the registration.
+	whileBound := func(issuer string, write func(principal string) error) {
+		key := types.PortalIssuerKey(issuer)
+		if _, err := e.st.BindPortalIssuerQ(ctx, e.pool, issuer, "", "uid", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := write(types.PortalPrincipal(key, "p")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.pool.Exec(ctx, `DELETE FROM portal_issuers WHERE issuer_key = $1`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uiApps := func(p string) []types.UIApp {
+		return []types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{"user:" + p}}}
+	}
+	uiAppsDoc := func(p string) string {
+		return `{"ui_apps":[{"name":"app","port":8080,"inbound":true,"callers":["user:` + p + `"]}]}`
+	}
+	writeUnit := func(u types.GovernanceUnit) error {
+		tx, err := e.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		u.Name, u.CreatedBy = "unit-"+uuid.NewString(), "admin@example.com"
+		if _, err := store.WriteGovernanceUnitQ(ctx, tx, uuid.New(), func([]types.GovernanceUnit, []types.GovernanceMembership) (types.GovernanceUnit, error) {
+			return u, nil
+		}); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	parent := store.DefaultUnitID
 	sources := []struct {
 		name, column string
-		seed         func(principal string)
+		seed         func(issuer string)
 	}{
-		{"a unit's creator", "governance_units.created_by", func(p string) {
+		{"a unit's creator", "governance_units.created_by", func(issuer string) {
+			p := types.PortalPrincipal(types.PortalIssuerKey(issuer), "p")
 			if _, err := e.pool.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}',$3)`, uuid.New(), "u-"+uuid.NewString(), p); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"a run's owner", "agent_runs.created_by", func(p string) { newRun(p, types.RunRunning) }},
-		{"a running run's resolved policy", "audit_events.data", func(p string) {
-			policyRow(newRun("sub-owner", types.RunRunning), "run.policy.resolve", p)
+		{"a run's owner", "agent_runs.created_by", func(issuer string) {
+			newRun(types.PortalPrincipal(types.PortalIssuerKey(issuer), "p"), types.RunRunning)
 		}},
-		{"a running run's policy generation", "audit_events.data", func(p string) {
-			policyRow(newRun("sub-owner", types.RunRunning), "run.policy.generation", p)
+		{"a running run's resolved policy", "audit_events.data", func(issuer string) {
+			policyRow(newRun("sub-owner", types.RunRunning), "run.policy.resolve", types.PortalPrincipal(types.PortalIssuerKey(issuer), "p"))
+		}},
+		{"a running run's policy generation", "audit_events.data", func(issuer string) {
+			policyRow(newRun("sub-owner", types.RunRunning), "run.policy.generation", types.PortalPrincipal(types.PortalIssuerKey(issuer), "p"))
+		}},
+		{"a launch preset", "launch_presets.request", func(issuer string) {
+			whileBound(issuer, func(p string) error {
+				_, _, err := e.st.PutLaunchPreset(ctx, types.LaunchPreset{Name: "preset-" + uuid.NewString(), UserTypes: []string{},
+					Request: json.RawMessage(`{"task":"x","inline_policy":` + uiAppsDoc(p) + `}`), CreatedBy: "admin@example.com"})
+				return err
+			})
+		}},
+		{"a unit ceiling", "governance_units.ceiling", func(issuer string) {
+			whileBound(issuer, func(p string) error {
+				return writeUnit(types.GovernanceUnit{Ceiling: types.RunPolicySpec{UIApps: uiApps(p)}})
+			})
+		}},
+		{"a composed unit's overlay", "governance_units.overlay", func(issuer string) {
+			whileBound(issuer, func(p string) error {
+				apps := uiApps(p)
+				return writeUnit(types.GovernanceUnit{ParentID: &parent, Overlay: &types.CeilingOverlay{UIApps: &apps}})
+			})
+		}},
+		{"a run template", "run_template_revisions.document", func(issuer string) {
+			whileBound(issuer, func(p string) error {
+				_, err := e.st.CreateTemplate(ctx, types.RunTemplate{ID: uuid.New(), Owner: types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"},
+					Kind: types.TemplateKindTemplate, Name: "t-" + uuid.NewString(), CreatedBy: "alice",
+					Document: json.RawMessage(`{"kind":"template","intent":{"inline_policy":` + uiAppsDoc(p) + `}}`)}, nil)
+				return err
+			})
+		}},
+		{"a queued launch", "run_queue.launch", func(issuer string) {
+			pool := uuid.New()
+			if _, err := e.pool.Exec(ctx, `INSERT INTO runner_pools (id, name, scope, owner) VALUES ($1, $2, 'user', 'sub-census')`, pool, "pool-"+uuid.NewString()); err != nil {
+				t.Fatal(err)
+			}
+			run := newRun("sub-owner", types.RunQueued)
+			doc := `{"task":"x","inline_policy":` + uiAppsDoc(types.PortalPrincipal(types.PortalIssuerKey(issuer), "p")) + `}`
+			if _, err := e.pool.Exec(ctx, `INSERT INTO run_queue (run_id, pool_id, owner, deadline_at, launch) VALUES ($1, $2, 'sub-owner', now() + interval '1 hour', $3::jsonb)`,
+				run, pool, doc); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	}
 	for i, src := range sources {
 		t.Run(src.name, func(t *testing.T) {
 			issuer := "https://source-" + strings.Repeat("x", i+1) + ".example.com"
-			src.seed(types.PortalPrincipal(types.PortalIssuerKey(issuer), "p"))
+			src.seed(issuer)
 			w := e.refused(t, src.name, map[string]any{"issuer": issuer}, http.StatusConflict, reasonDelegateNamespaceInUse)
 			if !strings.Contains(w.Body.String(), src.column+" (1)") {
 				t.Errorf("the refusal does not name %s once: %s", src.column, w.Body.String())
+			}
+			if e.portals(t, issuer) != 0 {
+				t.Errorf("a refused registration stored a portal")
 			}
 			// Another issuer is not touched by it.
 			e.registered(t, map[string]any{"issuer": "https://untouched-" + strings.Repeat("y", i+1) + ".example.com"})
@@ -252,7 +333,8 @@ func TestPortalRegistration_SecondPortalAndRotationAfterRealUse_PG(t *testing.T)
 }
 
 // Two registrations that conflict, started together, are serialised by the registry lock: exactly one wins
-// and the other gets its 409.
+// and the other gets its 409. That holds for two direct registrations and for a held approval against a direct
+// registration, whichever reaches the lock first.
 func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 	e := newRegPG(t)
 	t.Setenv(envPortalInternalIssuerHosts, "a.internal.example.com,b.internal.example.com")
@@ -289,6 +371,77 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 	race("two addresses", map[string]any{"issuer": "https://race-a.example.com", "internal_issuer": "https://a.internal.example.com"},
 		map[string]any{"issuer": "https://race-a.example.com", "internal_issuer": "https://b.internal.example.com"}, reasonDelegateIssuerAddressConflict)
 	race("two spellings", map[string]any{"issuer": "https://race-b.example.com/x"}, map[string]any{"issuer": "https://race-b.example.com/x/"}, reasonDelegateIssuerSpellingConflict)
+
+	// A held approval against a conflicting direct registration of the same issuer at another internal address,
+	// in both orders. A transaction of the test holds the registry lock until both requests are queued behind
+	// it, as the database reports, so the one queued first takes the lock first.
+	side := e.sidePool(t)
+	ctx := context.Background()
+	heldRace := func(name, issuer string, approvalFirst bool) {
+		t.Setenv(envGovernanceSecondHuman, "true")
+		change, _, w := e.proposeHeld(t, map[string]any{"issuer": issuer, "internal_issuer": "https://a.internal.example.com"})
+		if change == "" {
+			t.Fatalf("%s: proposal = %d %s, want 202", name, w.Code, w.Body.String())
+		}
+		t.Setenv(envGovernanceSecondHuman, "") // the direct registration is not held
+		gate, err := side.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = gate.Rollback(ctx) }()
+		if err := store.LockPortalIssuerRegistry(ctx, gate); err != nil {
+			t.Fatal(err)
+		}
+		gatePID := backendPID(t, gate)
+		approved, direct := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		start := []func(){
+			func() { go func() { approved <- e.decideHeld(t, change, "approve") }() },
+			func() {
+				go func() {
+					direct <- e.register(t, map[string]any{"issuer": issuer, "internal_issuer": "https://b.internal.example.com"})
+				}()
+			},
+		}
+		if !approvalFirst {
+			start[0], start[1] = start[1], start[0]
+		}
+		start[0]()
+		first := waitBlockedBy(t, side, gatePID)
+		start[1]()
+		waitBlockedBy(t, side, gatePID, first)
+		if err := gate.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		wa, wd := <-approved, <-direct
+		winner, loser, wantNorm := wa, wd, "https://a.internal.example.com"
+		if !approvalFirst {
+			winner, loser, wantNorm = wd, wa, "https://b.internal.example.com"
+		}
+		if winner.Code != http.StatusOK && winner.Code != http.StatusCreated {
+			t.Errorf("%s: first in = %d %s, want success", name, winner.Code, winner.Body.String())
+		}
+		if loser.Code != http.StatusConflict || reasonOf(t, loser) != reasonDelegateIssuerAddressConflict {
+			t.Errorf("%s: second in = %d %s, want 409 %s", name, loser.Code, loser.Body.String(), reasonDelegateIssuerAddressConflict)
+		}
+		var bindings int
+		var norm string
+		if err := e.pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(internal_issuer_norm), '') FROM portal_issuers WHERE issuer_key = $1`,
+			types.PortalIssuerKey(issuer)).Scan(&bindings, &norm); err != nil {
+			t.Fatal(err)
+		}
+		if bindings != 1 || norm != types.NormIssuerURL(wantNorm) || e.portals(t, issuer) != 1 {
+			t.Errorf("%s: %d binding(s) at %q and %d portal(s), want one of each at the first one's address", name, bindings, norm, e.portals(t, issuer))
+		}
+		wantState := types.GovernanceChangeApplied
+		if !approvalFirst {
+			wantState = types.GovernanceChangePending
+		}
+		if s := e.changeState(t, change); s != wantState {
+			t.Errorf("%s: change state = %s, want %s", name, s, wantState)
+		}
+	}
+	heldRace("approval first", "https://race-c.example.com", true)
+	heldRace("direct first", "https://race-d.example.com", false)
 }
 
 // An issuer this deployment once served as its console issuer is refused, in any spelling equal under norm,
@@ -382,161 +535,167 @@ func TestPeopleList_PortalPersonShowsIssuerAndUser_PG(t *testing.T) {
 }
 
 // A held registration never makes its credential usable before a distinct super admin approves, whichever way
-// the decision goes. Each case leaves no portal row, so the credential resolves to nothing.
+// the decision goes. Each failed decision leaves the change in its expected state, no portal row and no
+// binding; the credential lookup answers not found (not a storage failure) and the exchange answers 401.
 func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 	e := newRegPG(t)
 	ctx := context.Background()
 	t.Setenv(envGovernanceSecondHuman, "true")
 	t.Setenv(envPortalInternalIssuerHosts, "idp.internal.example.com")
+	type held struct {
+		change, cred, issuer string
+		id                   uuid.UUID
+	}
 	n := 0
-	propose := func(t *testing.T, mut map[string]any) (change, cred string) {
+	propose := func(t *testing.T, mut map[string]any) held {
 		t.Helper()
 		n++
 		m := map[string]any{"issuer": "https://held-" + strings.Repeat("h", n) + ".example.com"}
 		for k, v := range mut {
 			m[k] = v
 		}
-		w := e.register(t, m)
-		if w.Code != http.StatusAccepted {
-			t.Fatalf("propose = %d %s, want 202", w.Code, w.Body.String())
+		change, cred, w := e.proposeHeld(t, m)
+		if change == "" || !strings.HasPrefix(cred, store.PortalCredentialPrefix) {
+			t.Fatalf("propose = %d %s, want 202 with the credential once", w.Code, w.Body.String())
 		}
-		var got struct {
-			Pending struct {
-				ID uuid.UUID `json:"id"`
-			} `json:"pending_change"`
-			Credential string `json:"credential"`
+		var key string
+		if err := e.pool.QueryRow(ctx, `SELECT target_key FROM governance_changes WHERE id = $1`, change).Scan(&key); err != nil {
+			t.Fatal(err)
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Credential == "" || !strings.HasPrefix(got.Credential, store.PortalCredentialPrefix) {
-			t.Fatalf("202 body %s (err %v): want the credential once", w.Body.String(), err)
-		}
-		return got.Pending.ID.String(), got.Credential
+		return held{change: change, cred: cred, issuer: m["issuer"].(string), id: uuid.MustParse(key)}
 	}
 	decide := func(who *http.Cookie, change, verb string) *httptest.ResponseRecorder {
 		return doSSO(t, e.h.srv, http.MethodPost, "/api/v1/governance/changes/"+change+"/"+verb, who, `{"reason":"no"}`)
 	}
-	unusable := func(t *testing.T, cred string) {
+	// unusable checks every durable trace of a registration that did not apply, and the state its change is in.
+	unusable := func(t *testing.T, h held, state string) {
 		t.Helper()
-		if _, err := e.st.GetIssuerDelegateByRaw(ctx, cred); err == nil {
-			t.Error("the credential of a held or refused registration resolves to a portal")
+		if s := e.changeState(t, h.change); s != state {
+			t.Errorf("change state = %s, want %s", s, state)
 		}
-	}
-	state := func(t *testing.T, change string) string {
-		t.Helper()
-		var s string
-		if err := e.pool.QueryRow(ctx, `SELECT state FROM governance_changes WHERE id = $1`, change).Scan(&s); err != nil {
+		var rows, bindings int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM delegates WHERE id = $1 OR issuer = $2`, h.id, h.issuer).Scan(&rows); err != nil {
 			t.Fatal(err)
 		}
-		return s
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM portal_issuers WHERE issuer_key = $1`, types.PortalIssuerKey(h.issuer)).Scan(&bindings); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 0 || bindings != 0 {
+			t.Errorf("a registration that did not apply left %d portal row(s) and %d binding(s)", rows, bindings)
+		}
+		e.credentialUnknown(t, h.cred)
+		if w := e.exchange(t, h.id, h.cred, "x"); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "invalid_client") {
+			t.Errorf("exchange with the credential = %d %s, want 401 invalid_client", w.Code, w.Body.String())
+		}
 	}
 
 	t.Run("pending", func(t *testing.T) {
-		change, cred := propose(t, nil)
-		unusable(t, cred)
-		body := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/governance/changes/"+change, e.admin2, "").Body.String()
-		if strings.Contains(body, cred) || strings.Contains(body, hashPortalCredential(cred)) {
+		h := propose(t, nil)
+		unusable(t, h, types.GovernanceChangePending)
+		body := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/governance/changes/"+h.change, e.admin2, "").Body.String()
+		if strings.Contains(body, h.cred) || strings.Contains(body, hashPortalCredential(h.cred)) {
 			t.Errorf("the change read carries the credential or its digest: %s", body)
 		}
 	})
 	t.Run("self-approval", func(t *testing.T) {
-		change, cred := propose(t, nil)
-		if w := decide(e.admin, change, "approve"); w.Code == http.StatusOK {
+		h := propose(t, nil)
+		if w := decide(e.admin, h.change, "approve"); w.Code == http.StatusOK {
 			t.Errorf("the proposer approved their own registration: %s", w.Body.String())
 		}
-		unusable(t, cred)
-		if s := state(t, change); s != "pending" {
-			t.Errorf("state = %s, want pending", s)
-		}
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("withdraw", func(t *testing.T) {
-		change, cred := propose(t, nil)
-		if w := decide(e.admin, change, "reject"); w.Code != http.StatusOK {
+		h := propose(t, nil)
+		if w := decide(e.admin, h.change, "reject"); w.Code != http.StatusOK {
 			t.Fatalf("withdraw = %d %s", w.Code, w.Body.String())
 		}
-		if w := decide(e.admin2, change, "approve"); w.Code == http.StatusOK {
+		if w := decide(e.admin2, h.change, "approve"); w.Code == http.StatusOK {
 			t.Error("a withdrawn registration was approved")
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangeRejected) // a withdrawal is the proposer's own reject
 	})
 	t.Run("rejection", func(t *testing.T) {
-		change, cred := propose(t, nil)
-		if w := decide(e.admin2, change, "reject"); w.Code != http.StatusOK {
+		h := propose(t, nil)
+		if w := decide(e.admin2, h.change, "reject"); w.Code != http.StatusOK {
 			t.Fatalf("reject = %d %s", w.Code, w.Body.String())
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangeRejected)
 	})
 	t.Run("forced commit failure", func(t *testing.T) {
-		change, cred := propose(t, nil)
+		h := propose(t, nil)
+		// A deferred constraint trigger fails at COMMIT, after the decision has written the binding, the portal
+		// row and the change's new state: the commit itself fails and every one of those writes is undone.
 		for _, stmt := range []string{
 			`CREATE OR REPLACE FUNCTION regtest_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced'; END $$`,
-			`CREATE TRIGGER regtest_fail BEFORE INSERT ON delegates FOR EACH ROW EXECUTE FUNCTION regtest_fail()`,
+			`CREATE CONSTRAINT TRIGGER regtest_fail AFTER INSERT ON delegates DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION regtest_fail()`,
 		} {
 			if _, err := e.pool.Exec(ctx, stmt); err != nil {
 				t.Fatal(err)
 			}
 		}
-		w := decide(e.admin2, change, "approve")
-		_, _ = e.pool.Exec(ctx, `DROP TRIGGER regtest_fail ON delegates`)
+		w := decide(e.admin2, h.change, "approve")
+		if _, err := e.pool.Exec(ctx, `DROP TRIGGER regtest_fail ON delegates`); err != nil {
+			t.Fatal(err)
+		}
 		if w.Code != http.StatusInternalServerError {
-			t.Errorf("approve with a failing insert = %d %s, want 500", w.Code, w.Body.String())
+			t.Errorf("approve with a failing commit = %d %s, want 500", w.Code, w.Body.String())
 		}
-		unusable(t, cred)
-		if s := state(t, change); s != "pending" {
-			t.Errorf("state = %s, want pending", s)
-		}
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("census dirty at approval", func(t *testing.T) {
-		const issuer = "https://held-dirty.example.com"
-		change, cred := propose(t, map[string]any{"issuer": issuer})
-		e.orphan(t, issuer)
-		if w := decide(e.admin2, change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateNamespaceInUse {
+		h := propose(t, map[string]any{"issuer": "https://held-dirty.example.com"})
+		e.orphan(t, h.issuer)
+		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateNamespaceInUse {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateNamespaceInUse)
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("pin unit deleted", func(t *testing.T) {
 		unit := uuid.New()
 		if _, err := e.pool.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, unit, "held-pin-"+unit.String()); err != nil {
 			t.Fatal(err)
 		}
-		change, cred := propose(t, map[string]any{"run_in_under": unit.String()})
+		h := propose(t, map[string]any{"run_in_under": unit.String()})
 		if _, err := e.pool.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, unit); err != nil {
 			t.Fatal(err)
 		}
-		if w := decide(e.admin2, change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateRunInUnderInvalid {
+		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateRunInUnderInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateRunInUnderInvalid)
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("user type deleted", func(t *testing.T) {
 		ut := "held-ut-" + strings.ToLower(uuid.NewString()[:8])
 		if _, err := e.st.CreateUserType(ctx, types.UserType{ID: ut, Name: ut}); err != nil {
 			t.Fatal(err)
 		}
-		change, cred := propose(t, map[string]any{"user_type": ut})
+		h := propose(t, map[string]any{"user_type": ut})
 		if err := e.st.DeleteUserType(ctx, ut); err != nil {
 			t.Fatal(err)
 		}
-		if w := decide(e.admin2, change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateUserTypeInvalid {
+		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateUserTypeInvalid {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateUserTypeInvalid)
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("internal host delisted", func(t *testing.T) {
-		change, cred := propose(t, map[string]any{"internal_issuer": "https://idp.internal.example.com"})
+		h := propose(t, map[string]any{"internal_issuer": "https://idp.internal.example.com"})
 		t.Setenv(envPortalInternalIssuerHosts, "")
-		if w := decide(e.admin2, change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateInternalIssuerNotListed {
+		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusConflict || reasonOf(t, w) != reasonDelegateInternalIssuerNotListed {
 			t.Errorf("approve = %d %s, want 409 %s", w.Code, w.Body.String(), reasonDelegateInternalIssuerNotListed)
 		}
-		unusable(t, cred)
+		unusable(t, h, types.GovernanceChangePending)
 	})
 	t.Run("approved by a distinct super admin", func(t *testing.T) {
-		change, cred := propose(t, nil)
-		unusable(t, cred)
-		if w := decide(e.admin2, change, "approve"); w.Code != http.StatusOK {
+		h := propose(t, nil)
+		if w := decide(e.admin2, h.change, "approve"); w.Code != http.StatusOK {
 			t.Fatalf("approve = %d %s", w.Code, w.Body.String())
 		}
-		d, err := e.st.GetIssuerDelegateByRaw(ctx, cred)
-		if err != nil || d.Issuer == "" || d.IssuerKey != types.PortalIssuerKey(d.Issuer) {
+		if s := e.changeState(t, h.change); s != types.GovernanceChangeApplied {
+			t.Errorf("state = %s, want %s", s, types.GovernanceChangeApplied)
+		}
+		d, err := e.st.GetIssuerDelegateByRaw(ctx, h.cred)
+		if err != nil || d.ID != h.id || d.IssuerKey != types.PortalIssuerKey(h.issuer) {
 			t.Fatalf("the approved portal = %+v, %v", d, err)
 		}
 		if got := e.h.auditOutcomes("delegate.create"); len(got) == 0 {

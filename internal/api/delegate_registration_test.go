@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -47,6 +48,7 @@ func (q regCensusQuerier) Query(context.Context, string, ...any) (pgx.Rows, erro
 
 type regRow struct {
 	n   int
+	on  bool
 	err error
 }
 
@@ -57,6 +59,8 @@ func (r regRow) Scan(dest ...any) error {
 	switch d := dest[0].(type) {
 	case *int:
 		*d = r.n
+	case *bool:
+		*d = r.on
 	}
 	return nil
 }
@@ -64,6 +68,9 @@ func (r regRow) Scan(dest ...any) error {
 func (q regCensusQuerier) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	q.f.mu.Lock()
 	defer q.f.mu.Unlock()
+	if strings.Contains(sql, "FROM site_config") && args[0] == store.PortalIssuersActivatedKey {
+		return regRow{on: q.f.txActivated}
+	}
 	if strings.Contains(sql, "FROM portal_issuers WHERE issuer_key") {
 		for issuer := range q.f.bound {
 			if types.PortalIssuerKey(issuer) == args[0] {
@@ -104,17 +111,19 @@ type regStore struct {
 	store.Store
 	*fakeDelegateStore
 	mu        sync.Mutex
-	activated bool
-	units     []types.GovernanceUnit
-	census    map[string]int                // "table.column" -> count, for a key no binding holds
-	bound     map[string]types.PortalIssuer // by exact issuer
-	console   []types.ConsoleIssuer
-	created   []types.Delegate
+	activated bool // the activation as a read through the pool sees it
+	// txActivated is the activation as a read on the decision's transaction sees it.
+	txActivated bool
+	units       []types.GovernanceUnit
+	census      map[string]int                // "table.column" -> count, for a key no binding holds
+	bound       map[string]types.PortalIssuer // by exact issuer
+	console     []types.ConsoleIssuer
+	created     []types.Delegate
 }
 
 func newRegStore() *regStore {
 	return &regStore{
-		fakeDelegateStore: newFakeDelegateStore(), activated: true,
+		fakeDelegateStore: newFakeDelegateStore(), activated: true, txActivated: true,
 		units:  []types.GovernanceUnit{{ID: uuid.New(), Name: "platform"}},
 		census: map[string]int{}, bound: map[string]types.PortalIssuer{},
 	}
@@ -196,7 +205,7 @@ func (f *regStore) BindPortalIssuerQ(_ context.Context, _ store.Querier, issuer,
 func (f *regStore) CreateDelegateQ(_ context.Context, _ store.Querier, d types.Delegate, digest string) (types.Delegate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	d.CredentialSHA256 = digest
+	d.CredentialSHA256, d.AdmissionRev = digest, 1 // the column default
 	f.created = append(f.created, d)
 	f.fakeDelegateStore.mu.Lock()
 	f.fakeDelegateStore.delegates[d.ID] = d
@@ -342,21 +351,58 @@ func TestPortalRegistration_InternalIssuerHostNotListedRefused(t *testing.T) {
 	e.wantCreated(t, "listed ipv6", regBody(map[string]any{"issuer": "https://idp3.example.com", "internal_issuer": "https://[fd00::1]"}))
 }
 
-func TestPortalRegistration_NoOutboundCallBeforeExchange(t *testing.T) {
+// discoveryEndpoint is a TLS listener that stands where a registered portal's discovery document would be
+// fetched from, and counts every connection made to it, by any client. Registering it as an issuer or an
+// internal address puts the count at the discovery boundary itself, whichever transport a fetch would use.
+type discoveryEndpoint struct {
+	url, authority string
+	conns          atomic.Int32
+}
+
+func newDiscoveryEndpoint(t *testing.T) *discoveryEndpoint {
+	t.Helper()
+	ep := &discoveryEndpoint{}
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			ep.conns.Add(1)
+		}
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	ep.authority = srv.Listener.Addr().String()
+	ep.url = "https://" + ep.authority + "/oauth2/default"
+	return ep
+}
+
+// countDefaultTransport counts every request through http.DefaultTransport until the test ends, passing each
+// on unchanged.
+func countDefaultTransport(t *testing.T) *atomic.Int32 {
+	t.Helper()
 	var calls atomic.Int32
 	prev := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		return nil, errors.New("outbound call: " + r.URL.String())
+		return prev.RoundTrip(r)
 	})
 	t.Cleanup(func() { http.DefaultTransport = prev })
+	return &calls
+}
+
+// A registration, and a refused one, make no outbound call: none through the default transport and no
+// connection to the issuer or the internal address it names.
+func TestPortalRegistration_NoOutboundCallBeforeExchange(t *testing.T) {
 	e := newRegEnv(t)
-	calls.Store(0) // the console fixture's own discovery is not a registration's
-	t.Setenv(envPortalInternalIssuerHosts, "idp.internal.example.com")
-	e.wantCreated(t, "registration", regBody(map[string]any{"internal_issuer": "https://idp.internal.example.com/oauth2/default"}))
-	e.wantRefusal(t, "refused registration", regBody(map[string]any{"issuer": "https://x.example.com", "audience": nil}), 422, reasonPortalRegistrationInvalid)
+	calls := countDefaultTransport(t) // after the console fixture's own discovery, which is not a registration's
+	issuer, internal := newDiscoveryEndpoint(t), newDiscoveryEndpoint(t)
+	t.Setenv(envPortalInternalIssuerHosts, internal.authority)
+	e.wantCreated(t, "registration", regBody(map[string]any{"issuer": issuer.url, "internal_issuer": internal.url}))
+	e.wantRefusal(t, "refused registration", regBody(map[string]any{"issuer": issuer.url, "audience": nil}), 422, reasonPortalRegistrationInvalid)
 	if n := calls.Load(); n != 0 {
-		t.Errorf("registration made %d outbound call(s) through the default transport, want 0", n)
+		t.Errorf("registration made %d call(s) through the default transport, want 0", n)
+	}
+	if n := issuer.conns.Load() + internal.conns.Load(); n != 0 {
+		t.Errorf("registration connected %d time(s) to the issuer or its internal address, want 0", n)
 	}
 }
 
@@ -416,6 +462,14 @@ func TestPortalRegistration_LegacyPathUnchanged(t *testing.T) {
 	}
 	if len(e.st.created) != 0 || len(e.st.bound) != 0 {
 		t.Error("a console portal went through the issuer registry")
+	}
+	// The store gives the row an admission revision, as the column default does; the list still serves the
+	// console portal without one.
+	if stored := e.st.delegates[d.ID]; stored.AdmissionRev == 0 {
+		t.Fatal("the fake did not apply the admission_rev default")
+	}
+	if list := do(t, e.srv, http.MethodGet, "/api/v1/admin/delegates", adminToken, ""); list.Code != http.StatusOK || strings.Contains(list.Body.String(), "admission_rev") {
+		t.Errorf("legacy list = %d %s, want 200 with no admission_rev", list.Code, list.Body.String())
 	}
 	// An unknown field is still a 400, and an issuer-only field on this path is refused, never ignored.
 	if w := e.register(t, `{"name":"p","idp_client_id":"c","group":"g","surprise":1}`); w.Code != http.StatusBadRequest {
@@ -652,4 +706,42 @@ func TestPortalRegistration_ConfiguredNamespaceReferenceRefused(t *testing.T) {
 	// The key is bound now: its own people may be named anywhere, and a second portal registers.
 	e.srv.cfg.DefaultPolicy.UIApps = []types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{"user:" + person}}}
 	e.wantCreated(t, "second portal on a bound issuer", regBody(map[string]any{"name": "second"}))
+}
+
+// The decision reads the activation on its own transaction, never through the pool: the decision already holds
+// a connection, so a second one per concurrent decision could exhaust the pool. The fake answers the two reads
+// differently, so only a read on the transaction gives the expected outcome. Outside a decision the pool is read.
+func TestPortalRegistration_DecisionReadsActivationOnItsTransaction(t *testing.T) {
+	e := newRegEnv(t)
+	q := regCensusQuerier{e.st}
+	pin := e.st.units[0].ID
+	d := types.Delegate{ID: uuid.New(), Name: "p", IdPClientID: "0oa1", Issuer: "https://tx-read.example.com", TokenProfile: oidc.PortalProfileAccessToken,
+		Audience: "api://wardyn", RequiredScopes: []string{"wardyn.run"}, PortalManagedAdmission: true, UserType: types.UserTypeStandard,
+		RunInUnder: &pin, MaxSubjectTokenAgeSeconds: portalMaxAgeMin, GrantTTLSeconds: portalGrantTTLMin, RegisteredBy: "root"}
+	decide := func() error {
+		ch := types.GovernanceChange{TargetKind: govKindDelegate, Op: "create", TargetKey: d.ID.String(),
+			Payload: mustJSON(heldDelegate{Delegate: d, Digest: hashPortalCredential("wdi_x")})}
+		_, err := applyDelegateChange(e.srv, httptest.NewRequest(http.MethodPost, "/api/v1/governance/changes/x/approve", nil), q, ch)
+		return err
+	}
+	notActivated := func(err error) bool {
+		var gr *govRefusal
+		return errors.As(err, &gr) && gr.why == reasonPortalIssuersNotActivated
+	}
+
+	e.st.activated, e.st.txActivated = true, false
+	if err := decide(); !notActivated(err) {
+		t.Errorf("decision with the transaction reading no activation = %v, want the not-activated refusal", err)
+	}
+	e.st.activated, e.st.txActivated = false, true
+	if err := decide(); err != nil {
+		t.Errorf("decision with the transaction reading the activation = %v, want applied", err)
+	}
+	if len(e.st.created) != 1 {
+		t.Errorf("created %d portals, want 1", len(e.st.created))
+	}
+	// Outside a decision the pool is the only connection in use, and it is the one read.
+	if ref, err := e.srv.portalDeploymentRefusal(context.Background(), d, nil); err != nil || ref == nil || ref.reason != reasonPortalIssuersNotActivated {
+		t.Errorf("refusal outside a decision = %+v, %v, want %s from the pool read", ref, err, reasonPortalIssuersNotActivated)
+	}
 }
