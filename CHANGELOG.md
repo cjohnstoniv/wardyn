@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers` and `portal_grants`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `console_issuers`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `portal_issuers` and `portal_grants`, to every role that was granted `UPDATE` on
+  `delegates`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not
+  pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as
+  the migration has run. WORDING PENDING
+
 ## [0.10.1] — 2026-11-21
 
 ### Added

@@ -61,12 +61,30 @@ var retiredMigrations = map[string]string{
 // (TryAdvisoryLockDedicated); the default stays 10.
 const DefaultPoolMaxConns = 10
 
+// ConnectOption adjusts the pool configuration Connect builds from the DSN.
+type ConnectOption func(*pgxpool.Config)
+
+// WithApplicationName makes every connection of the pool report label as its application_name,
+// whatever the DSN says: it is applied after the DSN is parsed. The live bus copies the pool's
+// configuration, so its connection carries the label too.
+func WithApplicationName(label string) ConnectOption {
+	return func(cfg *pgxpool.Config) {
+		if cfg.ConnConfig.RuntimeParams == nil {
+			cfg.ConnConfig.RuntimeParams = map[string]string{}
+		}
+		cfg.ConnConfig.RuntimeParams["application_name"] = label
+	}
+}
+
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
 // Returns the pool; caller owns Close().
-func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+func Connect(ctx context.Context, dsn string, opts ...ConnectOption) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
+	}
+	for _, opt := range opts {
+		opt(cfg)
 	}
 	if !dsnSetsPoolMaxConns(dsn) {
 		cfg.MaxConns = max(cfg.MaxConns, DefaultPoolMaxConns)
