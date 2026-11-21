@@ -735,6 +735,15 @@ var auditActionGrammarAllow = map[string]bool{
 	// POST /people/{principal}/erasure row) before the lane that first emits it
 	// met this grammar. It ends in a noun, like authz.denied ends in a past tense.
 	"person.erasure": true,
+	// The issuer portal switch's two companion rows (0.10.2): "activate_override" is the override that rides with
+	// portal_issuers.activate, and "old_client_seen" is a status, the older database client an alarm found, not an act
+	// to ask for. Neither joins the shared verb list, which would let any action end in a past tense.
+	"portal_issuers.activate_override": true,
+	"portal_issuers.old_client_seen":   true,
+	// The model provider service grant's secret rows (0.10.2): the suffix is the secret and the act on it, one compound
+	// each, so it is an exception here and not a verb every action may end in.
+	"model_provider.service_grant.secret_write":  true,
+	"model_provider.service_grant.secret_delete": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.
