@@ -91,17 +91,41 @@ func (s PG) DeleteErasedRefusedRunPATs(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// DeleteDelegatedTokensOf deletes every delegated token minted for one of principals, live or
-// expired. It returns the rows it deleted.
+// DeleteDelegatedTokensOf deletes every delegated token and every issuer-portal grant minted for one of
+// principals, live or expired, and the record of which portals a portal person used, in one transaction. It
+// returns the delegated tokens and the portal grants it deleted, added together: a grant is the same kind of
+// bearer record for a portal that issues its own people.
 func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (int64, error) {
 	if len(principals) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM delegated_tokens WHERE principal = ANY($1)`, principals)
+	var deleted int64
+	err := s.inTx(ctx, func(q Querier) error {
+		// A portal person's identity rows FOR UPDATE first, in id order, so a mint that writes a grant and its
+		// history (it holds the row FOR SHARE) either commits before this and is deleted whole, or waits for
+		// this commit and writes both after it. The erase takes no other lock a mint holds.
+		if _, err := q.Exec(ctx, `SELECT id FROM principal_identities WHERE principal = ANY($1) AND starts_with(issuer, $2)
+			ORDER BY id FOR UPDATE`, principals, types.PortalPersonPrefix); err != nil {
+			return err
+		}
+		for _, stmt := range []string{
+			`DELETE FROM delegated_tokens WHERE principal = ANY($1)`,
+			`DELETE FROM portal_grants WHERE principal = ANY($1)`,
+		} {
+			tag, err := q.Exec(ctx, stmt, principals)
+			if err != nil {
+				return err
+			}
+			deleted += tag.RowsAffected()
+		}
+		_, err := q.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id IN
+			(SELECT id FROM principal_identities WHERE principal = ANY($1))`, principals)
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete delegated tokens: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return deleted, nil
 }
 
 // DeleteRunCreateKeysOf deletes every POST /runs Idempotency-Key of one of principals, direct or through

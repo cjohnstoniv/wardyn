@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,20 +49,47 @@ type DelegateReader interface {
 
 var _ DelegateReader = PG{}
 
-const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at, run_in_under`
+const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at, run_in_under,
+	issuer, internal_issuer, issuer_key, token_profile, groups_claim, email_domains, user_type, ui_session_renewal, audience, required_scopes,
+	max_subject_token_age_seconds, grant_ttl_seconds, required_claim, portal_managed_admission, admission_rev`
 
 func scanDelegate(row pgx.Row) (types.Delegate, error) { return scanDelegateWith(row) }
 
 // scanDelegateWith scans delegateCols, then any columns a query selects after them into extra.
 func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 	var d types.Delegate
+	var audience *string
+	var maxAge, grantTTL *int
+	var requiredClaim []byte
 	err := row.Scan(append([]any{&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
-		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt, &d.RunInUnder}, extra...)...)
+		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt, &d.RunInUnder,
+		&d.Issuer, &d.InternalIssuer, &d.IssuerKey, &d.TokenProfile, &d.GroupsClaim, &d.EmailDomains, &d.UserType,
+		&d.UISessionRenewal, &audience, &d.RequiredScopes, &maxAge, &grantTTL, &requiredClaim,
+		&d.PortalManagedAdmission, &d.AdmissionRev}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Delegate{}, ErrNotFound
 	}
 	if err != nil {
 		return types.Delegate{}, fmt.Errorf("store: scan delegate: %w", err)
+	}
+	if audience != nil {
+		d.Audience = *audience
+	}
+	if maxAge != nil {
+		d.MaxSubjectTokenAgeSeconds = *maxAge
+	}
+	if grantTTL != nil {
+		d.GrantTTLSeconds = *grantTTL
+	}
+	if len(d.EmailDomains) == 0 {
+		d.EmailDomains = nil
+	}
+	if requiredClaim != nil {
+		var rc types.PortalRequiredClaim
+		if err := json.Unmarshal(requiredClaim, &rc); err != nil {
+			return types.Delegate{}, fmt.Errorf("store: scan delegate required claim: %w", err)
+		}
+		d.RequiredClaim = &rc
 	}
 	return d, nil
 }
@@ -70,11 +98,36 @@ func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 // its hash is stored. Returns ErrConflict on a credential_sha256 collision
 // (a reused credential in a 256-bit space).
 func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error) {
-	const q = `
-		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by, run_in_under)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	return s.CreateDelegateQ(ctx, s.Pool, d, hashToken(raw))
+}
+
+// CreateDelegateQ registers one portal on q with the SHA-256 digest of its credential, which the caller
+// hashed (the plaintext never reaches the store here). It is the write a held registration applies inside
+// the decision transaction, so a rolled-back decision leaves no portal. Returns ErrConflict on a digest
+// collision. Every issuer-portal field is written as given; a console portal's are all zero, and the row
+// stores them as the defaults, NULL for the optional ones.
+func (s PG) CreateDelegateQ(ctx context.Context, q Querier, d types.Delegate, digest string) (types.Delegate, error) {
+	var requiredClaim any
+	if d.RequiredClaim != nil {
+		b, err := json.Marshal(d.RequiredClaim)
+		if err != nil {
+			return types.Delegate{}, fmt.Errorf("store: encode required claim: %w", err)
+		}
+		requiredClaim = string(b)
+	}
+	emailDomains := d.EmailDomains
+	if emailDomains == nil {
+		emailDomains = []string{}
+	}
+	const stmt = `
+		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by, run_in_under,
+			issuer, internal_issuer, issuer_key, token_profile, groups_claim, email_domains, user_type, ui_session_renewal,
+			audience, required_scopes, max_subject_token_age_seconds, grant_ttl_seconds, required_claim, portal_managed_admission)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULLIF($16,''),$17,NULLIF($18,0),NULLIF($19,0),$20::jsonb,$21)
 		RETURNING ` + delegateCols
-	out, err := scanDelegate(s.Pool.QueryRow(ctx, q, d.ID, d.Name, d.IdPClientID, d.Group, hashToken(raw), d.RegisteredBy, d.RunInUnder))
+	out, err := scanDelegate(q.QueryRow(ctx, stmt, d.ID, d.Name, d.IdPClientID, d.Group, digest, d.RegisteredBy, d.RunInUnder,
+		d.Issuer, d.InternalIssuer, d.IssuerKey, d.TokenProfile, d.GroupsClaim, emailDomains, d.UserType, d.UISessionRenewal,
+		d.Audience, d.RequiredScopes, d.MaxSubjectTokenAgeSeconds, d.GrantTTLSeconds, requiredClaim, d.PortalManagedAdmission))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Delegate{}, ErrConflict
@@ -82,10 +135,60 @@ func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (t
 	return out, err
 }
 
-// GetDelegateByRaw resolves the LIVE portal a credential stands for.
+// GetDelegateByRaw resolves the LIVE console portal a credential stands for. A row with an issuer is never
+// found here: its credential has its own prefix and its own lookup (GetIssuerDelegateByRaw).
 func (s PG) GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error) {
-	const q = `SELECT ` + delegateCols + ` FROM delegates WHERE credential_sha256 = $1 AND revoked_at IS NULL`
+	const q = `SELECT ` + delegateCols + ` FROM delegates WHERE credential_sha256 = $1 AND issuer = '' AND revoked_at IS NULL`
 	return scanDelegate(s.Pool.QueryRow(ctx, q, hashToken(raw)))
+}
+
+// GetIssuerDelegateByRaw resolves the LIVE issuer portal a wdi_ credential stands for: only a row with an
+// issuer, and only for a secret that carries the wdi_ prefix. A console portal's credential never resolves
+// here, so each prefix is bound to its kind in both directions.
+func (s PG) GetIssuerDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error) {
+	if !strings.HasPrefix(raw, PortalCredentialPrefix) {
+		return types.Delegate{}, ErrNotFound
+	}
+	const q = `SELECT ` + delegateCols + ` FROM delegates WHERE credential_sha256 = $1 AND issuer <> '' AND revoked_at IS NULL`
+	return scanDelegate(s.Pool.QueryRow(ctx, q, hashToken(raw)))
+}
+
+// PortalCredentialPrefix starts the credential of an issuer portal.
+const PortalCredentialPrefix = "wdi_"
+
+// UpdateDelegateAdmissionQ replaces an issuer portal's admission rule with next when its current one is
+// expected, and increments admission_rev. Zero rows (another change landed first, the row is not an
+// issuer portal, or it is unknown) is ErrStaleCompare, so two edits cannot cross. The write updates the
+// portal's delegates row, which the exchange's identity and grant writes hold FOR SHARE, so it waits for
+// an exchange in flight and the next exchange meets the new revision.
+func (s PG) UpdateDelegateAdmissionQ(ctx context.Context, q Querier, id uuid.UUID, expected, next types.PortalAdmission) error {
+	claim := func(c *types.PortalRequiredClaim) (any, error) {
+		if c == nil {
+			return nil, nil
+		}
+		b, err := json.Marshal(c)
+		return string(b), err
+	}
+	was, err := claim(expected.RequiredClaim)
+	if err != nil {
+		return fmt.Errorf("store: encode required claim: %w", err)
+	}
+	now, err := claim(next.RequiredClaim)
+	if err != nil {
+		return fmt.Errorf("store: encode required claim: %w", err)
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE delegates SET scope_group = $2, portal_managed_admission = $3, required_claim = $4::jsonb, admission_rev = admission_rev + 1
+		 WHERE id = $1 AND issuer <> ''
+		   AND scope_group = $5 AND portal_managed_admission = $6 AND required_claim IS NOT DISTINCT FROM $7::jsonb`,
+		id, next.Group, next.PortalManaged, now, expected.Group, expected.PortalManaged, was)
+	if err != nil {
+		return fmt.Errorf("store: update portal admission: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrStaleCompare
+	}
+	return nil
 }
 
 // GetDelegateByID returns the portal with id, revoked or not (ErrNotFound only for an id that was
@@ -187,12 +290,14 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 
 // GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must
 // be unexpired at now AND its portal still registered — the join is what
-// makes revoking a portal kill all its tokens on their next request.
+// makes revoking a portal kill all its tokens on their next request. The
+// portal must be a console portal: a delegated_tokens row never rides an
+// issuer portal's row.
 func (s PG) GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error) {
 	const q = `
 		SELECT ` + delegatedTokenCols + `
 		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
-		WHERE t.token_sha256 = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
+		WHERE t.token_sha256 = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL AND d.issuer = ''`
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, hashToken(raw), now))
 }
 
@@ -204,6 +309,6 @@ func (s PG) GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Ti
 	const q = `
 		SELECT ` + delegatedTokenCols + `
 		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
-		WHERE t.id = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
+		WHERE t.id = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL AND d.issuer = ''`
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, id, now))
 }

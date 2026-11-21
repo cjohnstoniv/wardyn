@@ -578,7 +578,15 @@ func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolic
 		INSERT INTO run_policies (id, name, created_at, updated_at, spec)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, created_at, updated_at, spec`
-	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	var out types.RunPolicy
+	err = s.inTx(ctx, func(tx Querier) error {
+		if err := ruleUIAppCallersQ(ctx, tx, specJSON); err != nil {
+			return err
+		}
+		var serr error
+		out, serr = scanPolicy(tx.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+		return serr
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
