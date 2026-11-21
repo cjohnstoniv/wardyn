@@ -302,6 +302,23 @@ func TestPortalIntroduction_StopAfterAppendReplaysSameIDToEverySink_PG(t *testin
 	if !st.stopped.Load() || owed() != 1 {
 		t.Fatalf("after the stop: mark attempted %v, owed %d; want the introduction appended and still owed", st.stopped.Load(), owed())
 	}
+	// The event's id and time are the identity row's, fixed when it was inserted: exactly one audit row has
+	// that pair before the replay, and the same one after it.
+	var eventID uuid.UUID
+	var eventAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT introduction_event_id, introduction_event_at FROM principal_identities WHERE principal = $1`, principal).Scan(&eventID, &eventAt); err != nil {
+		t.Fatalf("read the identity's introduction event: %v", err)
+	}
+	withTuple := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE id = $1 AND time = $2 AND action = 'person.create'`, eventID, eventAt).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := withTuple(); n != 1 {
+		t.Fatalf("audit rows with the identity's introduction id and time before the replay = %d, want 1", n)
+	}
 	if w := portalExchangeOn(h, later, credLater); w.Code != http.StatusOK {
 		t.Fatalf("later exchange = %d %s", w.Code, w.Body)
 	}
@@ -322,6 +339,9 @@ func TestPortalIntroduction_StopAfterAppendReplaysSameIDToEverySink_PG(t *testin
 	}
 	if n != 1 || actor != "delegate:"+first.ID.String() || !strings.Contains(data, issuer) || !strings.Contains(data, b.IssuerKey) {
 		t.Fatalf("person.create rows = %d, actor %q, data %s; want one, under the introducing portal and the real issuer", n, actor, data)
+	}
+	if n := withTuple(); n != 1 || rowID != eventID || !rowAt.Equal(eventAt) {
+		t.Fatalf("after the replay: %d rows with the identity's pair, row %s %v; want the same single row %s %v", n, rowID, rowAt, eventID, eventAt)
 	}
 	if err := closeFan(); err != nil {
 		t.Fatal(err)
