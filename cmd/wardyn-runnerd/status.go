@@ -83,6 +83,13 @@ type statusWriter struct {
 func newStatusWriter(stateDir string) *statusWriter {
 	w := &statusWriter{path: statusPath(stateDir), now: time.Now}
 	w.cur = runnerStatus{PID: os.Getpid()}
+	// A refusal the last start recorded outlives this new process until a connect: this start has not
+	// proved the configuration works, and it may stop before it connects. A file with no flag (written
+	// before it existed) is not carried: its errors may be history.
+	if prev, err := loadStatus(w.path); err == nil && prev.StartRefused {
+		w.cur.LastError, w.cur.LastErrorAt, w.cur.StartRefused = prev.LastError, prev.LastErrorAt, true
+		w.refused = &runnerStatus{LastError: prev.LastError, LastErrorAt: prev.LastErrorAt, StartRefused: true}
+	}
 	w.set("starting")
 	return w
 }

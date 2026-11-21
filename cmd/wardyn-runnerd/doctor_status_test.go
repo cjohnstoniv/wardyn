@@ -260,12 +260,54 @@ func TestStatusStageStartRefusedWithoutAStageFailsUntilAStartSucceeds(t *testing
 		t.Errorf("a clean stop after an old error failed: %q", s.Detail)
 	}
 
-	// A start that connects clears it, and the stop after it stays clean.
+	// A retry in progress has not connected: its starting file still fails, and a retry interrupted before
+	// it connects stops with the refusal intact. Each is checked before any connect.
 	refuse()
 	w := newStatusWriter(state)
+	if st, _ := loadStatus(statusPath(state)); st.State != "starting" || !st.StartRefused || !strings.Contains(st.LastError, "local attach") {
+		t.Fatalf("a new writer's file = %+v, want starting with the refusal carried", st)
+	}
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "starting") {
+		t.Errorf("a retry that has not connected: status = %s %q, want FAIL", s.Status, s.Detail)
+	}
+	w.stopped()
+	if st, _ := loadStatus(statusPath(state)); st.State != "stopped" || !st.StartRefused {
+		t.Fatalf("a retry interrupted before it connected recorded %+v, want a stop that keeps the refusal", st)
+	}
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status != doctor.StatusFail {
+		t.Errorf("a retry interrupted before it connected: status = %s %q, want FAIL", s.Status, s.Detail)
+	}
+
+	// A newer refusal at a stage replaces it.
+	l := newOfflineLog(state, nil)
+	w = newStatusWriter(state)
+	l.reportTo(w)
+	l.startFailed(atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	w.stopped()
+	if st, _ := loadStatus(statusPath(state)); st.StartRefused || st.Stage != types.RunnerStageEngine || strings.Contains(st.LastError, "local attach") {
+		t.Errorf("a staged refusal after the unstaged one: %+v, want only the stage's", st)
+	}
+	_ = os.Remove(filepath.Join(state, startupFailureFile))
+
+	// A start that connects clears it, and the stop after it stays clean.
+	refuse()
+	w = newStatusWriter(state)
 	w.linkChanged(true, "")
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a connected start still fails: %q", s.Detail)
+	}
 	w.stopped()
 	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
 		t.Errorf("a refusal outlived a successful start: %q", s.Detail)
+	}
+	if st, _ := loadStatus(statusPath(state)); st.StartRefused {
+		t.Errorf("start_refused stayed after a connect: %+v", st)
+	}
+
+	// A file from before the flag existed is ambiguous history: a new writer does not carry it.
+	r.writeStatus(t, "", runnerStatus{State: "stopped", Since: statusAt, LastError: "link down", LastErrorAt: &statusAt})
+	newStatusWriter(state).stopped()
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("an unflagged file became a failure: %q", s.Detail)
 	}
 }
