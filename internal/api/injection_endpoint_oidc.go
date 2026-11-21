@@ -86,6 +86,7 @@ func providerKeyGrantScope(run types.AgentRun, lane providerKeyLane) map[string]
 	}
 	if lane.provider.OIDC != nil {
 		snap.AddressDigest = providerAddressDigest(lane.provider)
+		snap.ServiceGrantDigest = serviceGrantSnapshotDigest(lane.provider, lane.owner)
 		scope["require_tls"] = true
 	}
 	scope["snapshot"] = snap
@@ -217,6 +218,9 @@ func (s *Server) resolveEndpointOIDCInjection(w http.ResponseWriter, r *http.Req
 	}
 	if !hostEqual(minted.Injection.Host, lane.host) {
 		return fail(http.StatusForbidden, reasonHostNotEndpoint, endpointOIDCResolveHostPin, map[string]any{"host": minted.Injection.Host})
+	}
+	if rec.ServiceGrantDigest != "" {
+		return s.resolveServiceGrantInjection(w, r, claims, minted, grantID, rec, p, *run, lane, fail)
 	}
 	access, err := s.RedeemEndpointOIDCAccess(ctx, rec.OwnerSubject, p)
 	if err != nil {

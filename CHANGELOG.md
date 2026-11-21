@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+<!-- WORDING PENDING: the service grant lines below are the minimum the migration guards need; the release notes' wording replaces them. -->
+- A `custom_endpoint` provider's `oidc` block can carry a `service_grant`, a client-credentials grant that lists the service identities allowed to use it. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `provider_service_grant_status` to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If
+  the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
+  grant's token request outcome is recorded.
+
 ## [0.10.1] — 2026-11-21
 
 ### Added

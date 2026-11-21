@@ -907,6 +907,11 @@ func GetSiteConfigQ(ctx context.Context, q Querier) (types.SiteConfig, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: unmarshal site config: %w", err)
 	}
+	grants, err := storedServiceGrants(raw)
+	if err != nil {
+		return types.SiteConfig{}, err
+	}
+	attachServiceGrants(&cfg, grants)
 	return cfg, nil
 }
 
@@ -920,25 +925,8 @@ func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.Site
 }
 
 // PutSiteConfigQ is PutSiteConfig on q. A held governance change applies
-// through it inside the decision transaction.
+// through it inside the decision transaction. Each provider row's service grant is lifted out into its own
+// stored key and attached again on every read (store_service_grant.go).
 func PutSiteConfigQ(ctx context.Context, q Querier, cfg types.SiteConfig) (types.SiteConfig, error) {
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: marshal site config: %w", err)
-	}
-	const stmt = `
-		INSERT INTO site_config (singleton, config, updated_at)
-		VALUES (true, $1, now())
-		ON CONFLICT (singleton) DO UPDATE
-			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
-		RETURNING config`
-	var out []byte
-	if err := q.QueryRow(ctx, stmt, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
-	}
-	var saved types.SiteConfig
-	if err := json.Unmarshal(out, &saved); err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: unmarshal saved site config: %w", err)
-	}
-	return saved, nil
+	return PutSiteConfigGrantsQ(ctx, q, cfg, ServiceGrantChange{})
 }

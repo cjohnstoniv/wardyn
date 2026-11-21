@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
+	"net/http"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -187,17 +188,15 @@ type Config struct {
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
 	DefaultPolicy types.RunPolicySpec
-	// TrustedCAPEM is WARDYN_TRUSTED_CA_FILE's content (cmd/wardynd's
-	// loadTrustedCA), read once at boot: a PEM bundle of additional roots a
-	// corporate TLS-inspecting middlebox signs with. "" (the default) means the
-	// knob is unset. Forwarded verbatim to two other trust boundaries dispatch
-	// composes per run — the proxy sidecar (runner.ProxyConfig.TrustedCAPEM,
-	// which rides WARDYN_PROXY_CONFIG_JSON) and the sandbox's own CA trust
-	// (runner.InstallSandboxTrustedCA, appended to WARDYN_MITM_CA_PEM) — wardynd's OWN
-	// outbound TLS trusts it separately, via installTrustedCA mutating
-	// http.DefaultTransport at boot. Control-plane-authored only: never a
-	// SiteConfig field, never agent-reachable.
+	// TrustedCAPEM is WARDYN_TRUSTED_CA_FILE's content (cmd/wardynd's loadTrustedCA), read once at boot: a PEM
+	// bundle of additional roots a corporate TLS-inspecting middlebox signs with. "" (the default) means the knob is
+	// unset. Forwarded verbatim to two other trust boundaries dispatch composes per run: the proxy sidecar
+	// (runner.ProxyConfig.TrustedCAPEM, which rides WARDYN_PROXY_CONFIG_JSON) and the sandbox's own CA trust
+	// (runner.InstallSandboxTrustedCA, appended to WARDYN_MITM_CA_PEM). wardynd's OWN outbound TLS trusts it
+	// separately, via installTrustedCA mutating http.DefaultTransport at boot. Control-plane-authored only, never agent-reachable.
 	TrustedCAPEM string
+	// ServiceGrantTransport carries a provider service grant's token request only; nil is the daemon transport.
+	ServiceGrantTransport http.RoundTripper
 	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off, the default), "dry_run" or "on"
 	// (80/443 plus host:port entries); off leaves a bare allowlist host open on every port. Desktop VM runs always have it on.
 	EgressPortRule     string
@@ -772,6 +771,7 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
+	svcGrant        serviceGrantRuntime
 	runnerStreams   runnerStreamState
 	gatewayIdentity gatewayIdentityState
 	cfg             Config

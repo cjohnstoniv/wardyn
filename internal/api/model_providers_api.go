@@ -35,6 +35,7 @@ const (
 func (s *Server) mountModelProviderRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Get("/model-providers", s.handleGetModelProviders)
 	operatorOnly.Put("/model-providers", s.handlePutModelProviders)
+	s.mountServiceGrantRoutes(operatorOnly) // provider_service_grant_routes.go
 	s.mountModelProviderCredentialRoutes(r)
 	s.mountProviderSignInRoutes(r)
 }
@@ -75,9 +76,14 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "count connected people", err)
 		return
 	}
+	grants, cleanups, err := s.serviceGrantReadFields(r.Context(), sc.ModelProviders)
+	if err != nil {
+		writeServerError(w, r, "read service grants", err)
+		return
+	}
 	w.Header().Set("ETag", computeETag(block))
 	writeJSON(w, http.StatusOK, types.ModelProvidersRead{
-		ModelProviders: block, ConnectedPeople: connected,
+		ModelProviders: block, ConnectedPeople: connected, ServiceGrants: grants, ServiceGrantCleanups: cleanups,
 		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
 		GatewayIdentityIssuer: s.gatewayIdentityIssuer(), GatewayJWKSPath: s.cfg.BasePath + gatewayJWKSRoute,
 		GatewayIdentityBedrockSSO: s.gatewayBedrockSSOAvailable(),
@@ -144,6 +150,10 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)
+	plan, ok := s.planServiceGrantDoor(w, r, existing.ModelProviders, block, true)
+	if !ok {
+		return
+	}
 	invalidated, err := s.purgeProviderCredentials(ctx, existing.ModelProviders, block)
 	if err != nil {
 		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
@@ -153,15 +163,16 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	candidate.ModelProviders = block
 	candidate.EffectiveScmHosts = nil
 	candidate.WithheldScmHosts = nil
-	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
-	if err != nil {
-		writeServerError(w, r, "put site config", err)
+	saved, err := s.putSiteConfigGrants(ctx, candidate, plan.change)
+	if writeSiteConfigSaveError(w, r, err) {
 		return
 	}
+	warnings, cleanup := s.finishServiceGrantWrite(ctx, plan, warnings)
 	s.endUnanswerableSignIns(ctx, existing.ModelProviders, saved.ModelProviders)
 	savedBlock := storedModelProviders(saved)
 	datum := modelProviderAuditData(storedModelProviders(existing), savedBlock)
 	datum["per_user_credentials_invalidated"] = invalidated
+	auditServiceGrantCleanup(datum, cleanup)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"model_provider.write", "model_providers", "success", mustJSON(datum)))
 	w.Header().Set("ETag", computeETag(savedBlock))
@@ -203,7 +214,7 @@ func stillDefaultRefusal(roster *types.AgentProviders, block *types.ModelProvide
 // more people than the providers page is.
 func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	ids, kinds, pairs, disabled, pins, changed := []string{}, []string{}, []string{}, []string{}, []string{}, []string{}
-	rekinded, identity, unbound := []string{}, []string{}, []string{}
+	rekinded, identity, unbound, grants := []string{}, []string{}, []string{}, []string{}
 	prior, priorByID := map[string]types.ModelProvider{}, map[string]types.ModelProvider{}
 	for _, p := range before.Providers {
 		prior[p.UID], priorByID[p.ID] = p, p
@@ -231,11 +242,14 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 		if p.OIDC.Unbound() { // named on every write that carries it, so setting it is on the record
 			unbound = append(unbound, p.ID)
 		}
+		if p.OIDC != nil && p.OIDC.ServiceGrant != nil { // the providers that carry a service grant
+			grants = append(grants, p.ID)
+		}
 		if old, ok := priorByID[p.ID]; ok && old.Kind != p.Kind {
 			rekinded = append(rekinded, p.ID)
 		}
 	}
-	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity, unbound} {
+	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity, unbound, grants} {
 		slices.Sort(l)
 	}
 	data := map[string]any{
@@ -250,6 +264,9 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	}
 	if len(unbound) > 0 { // absent unless a row signs people in without tying it to their console sign-in
 		data["oidc_unbound"] = unbound
+	}
+	if len(grants) > 0 { // absent unless a provider carries a service grant
+		data["service_grant"] = grants
 	}
 	return data
 }
