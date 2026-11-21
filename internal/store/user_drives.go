@@ -53,6 +53,24 @@ const driveHomeNamespaceClashPred = `EXISTS (
 // write (upsertUserDriveOn).
 var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$2", "$3")
 
+// driveMovesAnAllocationPred is true when an allocation of the drive has its storage object moved by a write of this
+// row: the arguments are the placeholders (or literals) of the drive id, the written backend, host root, home template
+// and name slug. It is the store's under-lock form of the re-home guard's rule (driveRehomedAllocations in the api): a
+// portal's folder is named by the portal and drive ids, so only the backend moves it; a group's on a team drive is the
+// team folder, named by the drive id, so the template never reaches it, the host root only on a host path and the name
+// only under the slug scheme; any other allocation is named by all of them.
+const driveMovesAnAllocationPred = `EXISTS (
+			SELECT 1 FROM user_drive_grants g JOIN user_drives p ON p.id = g.drive_id
+			WHERE g.drive_id = %[1]s::uuid AND CASE
+				WHEN g.subject_type = '` + string(types.DriveSubjectPortal) + `' THEN p.backend IS DISTINCT FROM %[2]s::text
+				WHEN p.team THEN p.backend IS DISTINCT FROM %[2]s::text
+					OR (%[2]s::text = '` + shareBackend + `' AND p.host_root IS DISTINCT FROM %[3]s::text)
+					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text)
+				ELSE p.backend IS DISTINCT FROM %[2]s::text OR p.host_root IS DISTINCT FROM %[3]s::text
+					OR p.home_template IS DISTINCT FROM %[4]s::text
+					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text)
+			END)`
+
 // userDriveUpsertSQL: WHERE carries two guards — the re-home precondition
 // ($12, asserted under UpsertUserDrive's row lock) and the home-namespace rule
 // above. An empty result means a guard refused, not that the row is missing.
@@ -66,11 +84,7 @@ var userDriveUpsertSQL = `
 			alt_backend, alt_host_root, alt_runner_id)
 		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean,
 			NULLIF($14::text, ''),NULLIF($15::text, ''),$16::uuid
-		WHERE (NOT $12::boolean OR NOT EXISTS (
-			SELECT 1 FROM user_drive_grants g WHERE g.drive_id = $1::uuid
-			  AND (g.subject_type <> '` + string(types.DriveSubjectPortal) + `'
-			       OR $3::text IS DISTINCT FROM (SELECT p.backend FROM user_drives p WHERE p.id = $1::uuid))
-		))
+		WHERE (NOT $12::boolean OR NOT ` + fmt.Sprintf(driveMovesAnAllocationPred, "$1", "$3", "$4", "$6", "$11") + `)
 		  AND ($3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT ` +
 	fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$4", "$6") + `)
 		ON CONFLICT (id) DO UPDATE
@@ -231,15 +245,13 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 	return out, nil
 }
 
-// driveHasGrants reports whether an allocation that refuseIfAllocated counts points at this drive: any allocation to a
-// person or group, and one to a portal only when the write moves the drive's backend (a portal's folder is named by
-// the portal and drive ids alone). A failed read answers false so the caller falls back to the other 409's message,
+// driveHasGrants reports whether the write moves an allocation of the drive (driveMovesAnAllocationPred), which is the
+// answer refuseIfAllocated refused on. A failed read answers false so the caller falls back to the other 409's message,
 // never the write.
 func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, d types.UserDrive) bool {
 	var exists bool
-	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_drive_grants g WHERE g.drive_id = $1
-		AND (g.subject_type <> '`+string(types.DriveSubjectPortal)+`'
-		     OR $2::text IS DISTINCT FROM (SELECT p.backend FROM user_drives p WHERE p.id = $1)))`, d.ID, string(d.Backend)).Scan(&exists); err != nil {
+	if err := q.QueryRow(ctx, `SELECT `+fmt.Sprintf(driveMovesAnAllocationPred, "$1", "$2", "$3", "$4", "$5"),
+		d.ID, string(d.Backend), d.HostRoot, string(d.HomeTemplate), types.DriveSlug(d.Name)).Scan(&exists); err != nil {
 		return false
 	}
 	return exists

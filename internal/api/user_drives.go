@@ -664,7 +664,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	// and the drive ids alone, so of the five fields only a backend change (a Docker volume becoming a claim) moves
 	// it; every other allocation is named by all five. An edit that moves none is acknowledged without a claim of a
 	// move, still guarded against a person's allocation arriving before the write lands.
-	moved, changes := driveRehomedAllocations(*before, changes)
+	moved, changes := driveRehomedAllocations(*before, d, changes)
 	if moved == 0 {
 		return 0, "", "", driveRehome{}, true
 	}
@@ -695,28 +695,40 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		pluralDriveSubjects(moved), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
 }
 
-// driveRehomedAllocations is how many of the drive's allocations an edit with these identity changes moves, and the
-// changes that move them. Allocations to a person or group are named by all five fields, so they move on any change; a
-// portal's is named by the portal and drive ids only, so it moves only when the backend does.
-func driveRehomedAllocations(before types.UserDriveListItem, changes []string) (int, []string) {
-	people := before.GrantCount - before.PortalGrantCount
-	moved := 0
-	if people > 0 {
-		moved += people
-	}
-	var backend []string
-	for _, c := range changes {
-		if strings.HasPrefix(c, "backend ") {
-			backend = []string{c}
+// driveRehomedAllocations is how many of the drive's allocations an edit moves, and the identity changes that move
+// them, by what each kind of allocation's storage object is named from. A person's or group's on an ordinary drive is
+// named by all five fields. A group's on a team drive is the team folder, named by the drive's id: the home template
+// never reaches it, the host root only on a host path, and the name only where the drive's object scheme puts it in the
+// object name. A portal's is named by the portal and drive ids alone, so only a backend change (a Docker volume
+// becoming a claim) moves it. The store asserts the same rule under its row lock (userDriveMovesAnAllocationSQL).
+func driveRehomedAllocations(before types.UserDriveListItem, after types.UserDrive, changes []string) (int, []string) {
+	members := before.GrantCount - before.PortalGrantCount
+	backendMoved := before.Backend != after.Backend
+	relevant := func(change string) bool { return true }
+	if before.Team {
+		relevant = func(change string) bool {
+			return !strings.HasPrefix(change, "home_template ") && (!strings.HasPrefix(change, "host_root ") || after.Backend == types.DriveBackendHostPath)
 		}
 	}
-	if before.PortalGrantCount > 0 && len(backend) > 0 {
+	var fields []string
+	for _, c := range changes {
+		if (members > 0 && relevant(c)) || (before.PortalGrantCount > 0 && backendMoved && strings.HasPrefix(c, "backend ")) {
+			fields = append(fields, c)
+		}
+	}
+	moved := 0
+	if members > 0 {
+		for _, c := range fields {
+			if relevant(c) {
+				moved += members
+				break
+			}
+		}
+	}
+	if before.PortalGrantCount > 0 && backendMoved {
 		moved += before.PortalGrantCount
 	}
-	if people <= 0 {
-		return moved, backend
-	}
-	return moved, changes
+	return moved, fields
 }
 
 // driveRehome is what the re-home guard decided, carried to the audit row: a
