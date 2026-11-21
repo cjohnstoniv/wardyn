@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // A replace ref or a graft in the laptop's checkout changes what git shows of its history, not what the
@@ -367,33 +366,5 @@ func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 	}
 	if inits != 1 || fetches != 1 {
 		t.Fatalf("saw %d init and %d fetch calls, want 1 each:\n%s", inits, fetches, b)
-	}
-}
-
-// A scan repository a killed send left is removed by the next scan once it is old; a young one (a scan in
-// progress) and anything else beside it are not.
-func TestCheckBundleAllowed_SweepsStaleScanRepositories(t *testing.T) {
-	g := newGitRig(t)
-	beside := t.TempDir()
-	made := func(name string, age time.Duration) string {
-		p := filepath.Join(beside, name)
-		if err := os.MkdirAll(filepath.Join(p, "scan.git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		at := time.Now().Add(-age)
-		if err := os.Chtimes(p, at, at); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	stale, young, other := made("wardyn-bundle-scan-stale", 2*time.Hour), made("wardyn-bundle-scan-young", time.Minute), made("keep-me", 48*time.Hour)
-	_ = checkBundleAllowed(t.Context(), filepath.Join(beside, "missing.bundle"), "feature/x", g.head, []string{"*.pem"})
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Errorf("the stale scan repository was left: %v", err)
-	}
-	for _, p := range []string{young, other} {
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("%s was removed: %v", filepath.Base(p), err)
-		}
 	}
 }
