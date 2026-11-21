@@ -581,7 +581,8 @@ func (s *scimCovStore) FinishDeprovisionJob(_ context.Context, id uuid.UUID, kin
 	if err := s.enter("FinishDeprovisionJob", kind); err != nil {
 		return err
 	}
-	if j := s.findJob(id, kind, k); j != nil {
+	// Like the database: a row already finished is not written again.
+	if j := s.findJob(id, kind, k); j != nil && !j.Done {
 		if detail == nil {
 			detail = map[string]int{}
 		}
