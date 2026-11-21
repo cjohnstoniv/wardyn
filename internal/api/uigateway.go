@@ -324,10 +324,12 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), and one
-	// that fails or runs out is the retryable 503, never the wrong-owner answer.
+	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), every
+	// gate's through r, and one that fails or runs out is the retryable 503, never the wrong-owner answer or a
+	// 500. Any other ticket's actx is r's own context.
 	actx, acancel := ta.admitCtx(r.Context())
 	defer acancel()
+	r = r.WithContext(actx)
 	run, err := s.cfg.Store.GetRun(actx, runID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) && !ta.admitBy.IsZero() {
 		slog.ErrorContext(r.Context(), "wardynd: an issuer portal's entry could not read its run", "run_id", runID, "err", err)
@@ -388,6 +390,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 
 	apps, err := s.effectiveUIApps(r.Context(), runID)
+	if err != nil && !ta.admitBy.IsZero() {
+		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", err)
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
@@ -395,6 +401,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := uiDeclaredApp(apps, app)
+	if !found && !ta.admitBy.IsZero() && actx.Err() != nil { // the sign-in display's holder read ran out
+		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", actx.Err())
+		return
+	}
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))

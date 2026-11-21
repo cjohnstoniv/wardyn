@@ -227,6 +227,19 @@ func (s *Server) issuerOpeningRun(ctx context.Context, w http.ResponseWriter, id
 	return run, false, true
 }
 
+// issuerOpeningIn reports whether ctx carries an issuer portal ticket still in its opening (ticketActor.admitBy).
+// A read that fails or runs out there answers refuseIssuerOpeningUnread's retryable 503, never a 500.
+func issuerOpeningIn(ctx context.Context) bool {
+	ta, ok := ticketActorFromContext(ctx)
+	return ok && !ta.admitBy.IsZero()
+}
+
+// refuseIssuerOpeningUnread answers an issuer portal's opening read that failed or ran out: the retryable 503.
+func refuseIssuerOpeningUnread(ctx context.Context, w http.ResponseWriter, what string, err error) {
+	slog.ErrorContext(ctx, "wardynd: an issuer portal's opening read failed", "read", what, "err", err)
+	writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+}
+
 // issuerAdmitBound is the bound on an issuer portal's opening authorization reads, the watch's own.
 func issuerAdmitBound() time.Duration {
 	return time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))

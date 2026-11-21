@@ -290,8 +290,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
-	// paused container (run_pause.go).
-	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock included, runs
+	// under the opening deadline; one that fails or runs out is the retryable 503.
+	if err := s.thawForExec(actx, run, principalType, principal, "presence"); err != nil {
+		if !admit.admitBy.IsZero() {
+			refuseIssuerOpeningUnread(actx, w, "thaw", err)
+			return
+		}
 		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
 		return
 	}

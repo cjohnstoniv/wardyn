@@ -39,6 +39,8 @@ type issuerUIStore struct {
 	hangIdentity   chan struct{}                          // while set, an identity read waits for it to close
 	runHook        func(ctx context.Context, n int) error // when set, answers the n-th run read (1 is the first): an error, or nil to read
 	runReads       int
+	policyHook     func(ctx context.Context, n int) error // when set, answers the n-th audit (policy) read after the entry's run read
+	policyReads    int
 	afterChainRead func()                    // runs once, after the next chain read answers
 	stallTouch     func(ctx context.Context) // replaces the idle clock's write when set
 }
@@ -128,6 +130,26 @@ func (s *issuerUIStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRu
 		}
 	}
 	return s.uiMemStore.GetRun(ctx, id)
+}
+
+// QueryAuditEvents is the run's policy rows. Reads from the entry's own run read on (the second run read; the
+// first is redemption's) are counted and answered through policyHook when it is set.
+func (s *issuerUIStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	hook := s.policyHook
+	if hook != nil && s.runReads >= 2 {
+		s.policyReads++
+	} else {
+		hook = nil
+	}
+	n := s.policyReads
+	s.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, n); err != nil {
+			return nil, err
+		}
+	}
+	return s.uiMemStore.QueryAuditEvents(ctx, runID, limit)
 }
 
 func (s *issuerUIStore) IdentityBlocked(ctx context.Context, principal string, _ int64) (bool, error) {
@@ -603,6 +625,68 @@ func TestUIIssuerPortal_EntryRunReadAnswers(t *testing.T) {
 			}
 			if d := time.Since(start); d > bound+400*time.Millisecond {
 				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, d, bound)
+			}
+		})
+	}
+}
+
+// dataOutKeptUIStore keeps the run's data_out rule on its row (store.RunDataOuts), so the app door reads the
+// rule from the run and the first policy read after the entry's run read is the declared-apps lookup's.
+type dataOutKeptUIStore struct{ *issuerUIStore }
+
+func (dataOutKeptUIStore) RaiseRunDataOut(context.Context, uuid.UUID, types.TransferRule) error {
+	return nil
+}
+
+// TestUIIssuerPortal_EntryPolicyReadAnswers: the entry's run read succeeds, then a policy read stalls or fails:
+// the app door's data_out rule (its own 503) or the declared-apps lookup (the retryable 503, never a 500). Each
+// answers within the opening bound.
+func TestUIIssuerPortal_EntryPolicyReadAnswers(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	stall := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	for _, tc := range []struct {
+		name   string
+		kept   bool // the rule is on the run's row
+		hook   func(ctx context.Context) error
+		reason string
+	}{
+		{"data-out rule stalls", false, stall, reasonDataOutUnreadable},
+		{"declared apps stall", true, stall, uiDeniedReasonRevocationUnavailable},
+		{"declared apps fail", true, func(context.Context) error { return errors.New("store down") }, uiDeniedReasonRevocationUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newIssuerUIRig(t, closingBackend("app"))
+			if tc.kept {
+				allowed := types.TransferAllowed
+				rig.run.DataOut = &allowed
+				rig.store.putRun(rig.run)
+				rig.srv.cfg.Store = dataOutKeptUIStore{rig.is}
+			}
+			tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+			rig.is.mu.Lock()
+			rig.is.runReads, rig.is.policyReads = 0, 0 // count from the enter on
+			rig.is.policyHook = func(ctx context.Context, n int) error {
+				if n > 1 {
+					return nil
+				}
+				return tc.hook(ctx)
+			}
+			rig.is.mu.Unlock()
+			start := time.Now()
+			rec := rig.enterWith(tok)
+			took := time.Since(start)
+			rig.is.mu.Lock()
+			policyReads := rig.is.policyReads
+			rig.is.mu.Unlock()
+			if policyReads == 0 {
+				t.Fatalf("%s: no policy read after the entry's run read: %d %s", tc.name, rec.Code, rec.Body.String())
+			}
+			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), tc.reason) {
+				t.Fatalf("%s: %d %s, want 503 %s", tc.name, rec.Code, rec.Body.String(), tc.reason)
+			}
+			if took > bound+400*time.Millisecond {
+				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, took, bound)
 			}
 		})
 	}

@@ -61,6 +61,10 @@ func (s *Server) refuseRunUnitError(w http.ResponseWriter, r *http.Request, targ
 	if u, ok := isOverlayUnsatisfiable(err); ok {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, target, u.Error()).OnRun(run.ID))
 	}
+	if issuerOpeningIn(r.Context()) {
+		refuseIssuerOpeningUnread(r.Context(), w, op, err)
+		return true
+	}
 	writeServerError(w, r, op, err)
 	return true
 }

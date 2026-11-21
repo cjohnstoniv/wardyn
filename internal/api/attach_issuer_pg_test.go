@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -299,5 +300,42 @@ func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
 				t.Errorf("%s: answered %v after the dial, want within the %v bound", tc.name, d, bound)
 			}
 		})
+	}
+}
+
+// TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG: another operation holds the run's lock, so the terminal's
+// thaw waits for it. The wait runs under the opening deadline and answers the retryable 503 within the bound,
+// not when the lock frees.
+func TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerAttachRig(t)
+	_, unlock, err := rig.srv.lockRunOp(context.Background(), rig.run.ID)
+	if err != nil {
+		t.Fatalf("hold the run's lock: %v", err)
+	}
+	defer unlock()
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
+		rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
+	if err != nil {
+		t.Fatalf("mint a ticket: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tok, nil)
+	took := time.Since(start)
+	if err == nil {
+		_ = c.CloseNow()
+		t.Fatal("the terminal opened while the run's lock was held")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a held run lock: %v %v, want the retryable 503", resp, err)
+	}
+	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), uiDeniedReasonRevocationUnavailable) {
+		t.Fatalf("a held run lock answered %s, want %s", body, uiDeniedReasonRevocationUnavailable)
+	}
+	if took > bound+400*time.Millisecond {
+		t.Fatalf("the open waited %v on the run's lock, want within %v", took, bound+400*time.Millisecond)
 	}
 }
