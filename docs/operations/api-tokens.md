@@ -559,7 +559,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 - The person id is the token's `uid` for an access token and its `sub` for an ID token. It is 1 to 128 printable ASCII characters with no space.
 - Two portals on one issuer share its people. What separates them is the unit each is pinned to: every request is checked against the portal's pin, and a person's own run outside it answers 403 `portal_unit_scope`.
 - Changing the issuer string means new people. The internal address and the pin are not part of who a person is.
-- `GET /api/v1/people` returns `issuer` and `internal_address` for each portal person. The console's People screen does not show them yet.
+- `GET /api/v1/people` returns `issuer` for each portal person, and `internal_address` when the registration has an `internal_issuer` (it is left out when empty, so treat it as optional). The console's People screen does not show them yet.
 - A person's first exchange through any portal writes one `person.create` row, which carries no email.
 
 **Exchange.** `POST /api/v1/token`, with the portal's id and `wdi_` credential as HTTP Basic, as above.
@@ -576,7 +576,8 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 | The admission rule changed mid-exchange | 503 `temporarily_unavailable` | `portal_admission_changed` |
 | Identity deactivated or purged, or the session revoked | 400 `invalid_grant`, nothing minted | `identity_deactivated`, `session_revoked` |
 | A read failed | 503 `temporarily_unavailable` | `failure` row: the reply's code, `cause` names the step |
-| A write failed | 500 `server_error` | `failure` row: the reply's code, `cause` names the step |
+| The sign-in record write failed | 503 `temporarily_unavailable` | `failure` row: `cause` is `sign_in_record_write` |
+| The identity or grant write failed unexpectedly | 500 `server_error` | `failure` row: `cause` is `issue_portal_identity` or `mint_portal_grant` |
 
 - A wrong, revoked or missing portal credential, or a binding retired mid-exchange, is 401 `invalid_client` and writes `auth.fail`, not a `delegation.exchange` row. A malformed form (`grant_type`, `subject_token`, a type or the actor fields) is refused 400 before the exchange and writes no row.
 - The answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":N,…}`. The token has no refresh, and `expires_in` is the grant's remaining life, never below 5.
@@ -602,7 +603,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 
 - Wardyn fetches discovery and keys itself, directly: proxy environment variables never pick the destination. It refuses redirects and caps each answer at 1 MiB.
 - It resolves the host and dials the address it checked. Loopback, link-local, metadata and other reserved addresses are refused for every host.
-- Any host may resolve to a public address. A host listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` is also allowed to resolve into RFC 1918, unique-local or CGNAT space, and no other private space. Only a listed host is verified against the system roots plus `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE`; a public answer for it is allowed too. Nothing skips verification.
+- Any host may resolve to a public address. The extra private ranges (RFC 1918, unique-local and CGNAT, no other private space) and the extra CA from `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` apply only to the host and port a registration selects with `internal_issuer` that is also listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS`. Listing a public issuer's host alone grants neither. An `internal_issuer` that is not listed is refused with `address_refused`, and nothing is resolved. Nothing skips verification.
 - Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable`; the audit reason is `portal_issuer_unavailable` and its `cause` is `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
 - A token whose key is not known triggers at most one key fetch per 30 seconds. Inside that interval the answer is 503 `temporarily_unavailable`, cause `keys_cooldown`.
 - An outage answer carries `Retry-After`, the rest of the 30-second interval. When a key fetch broke a rule, such as `address_refused`, the wait is zero and the header is left out.
@@ -632,7 +633,7 @@ Issuer portals are off in a new deployment. `POST /api/v1/admin/portal-issuers/a
 
 - `DELETE /api/v1/admin/portal-issuers/{k}` retires an issuer binding that never admitted anyone. A binding that a portal, a person, a grant or a stored rule still names answers 409 `portal_issuer_in_use`.
 - `PUT /api/v1/admin/delegates/{id}/admission` changes a portal's group, `portal_managed_admission` or required claim. The body names the rule you read as `expected`. A stale one answers 409 `delegate_admission_stale`.
-- A change in the admission rule counts into `admission_rev`. An exchange that began under the old rule answers 503 `portal_admission_changed`, and the portal retries under the new one.
+- A change in the admission rule counts into `admission_rev`. An exchange that began under the old rule answers 503 `temporarily_unavailable`, with `portal_admission_changed` as its audit reason, and the portal retries under the new one.
 - Both are admin only. With a second human required, a signed-in person's request is a held change that applies when approved. The break-glass admin token applies it directly and writes a `governance.change.bypass` row.
 
 #### The console issuer
