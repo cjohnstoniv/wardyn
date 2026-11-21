@@ -501,3 +501,35 @@ func TestPortalTeamDrive_PortalDriveModesOfTheLaunch(t *testing.T) {
 		t.Error("a launch with no portal drive records modes")
 	}
 }
+
+// A queued run that mounted a portal's drive ends portal_run_scope unless the stored authority names the portal that
+// created it, whatever marks the authority carries. A run with no portal drive is never judged by it.
+func TestQueuePortalRunScope_JudgedWhateverTheAuthorityMarks(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	marked := func(p uuid.UUID) queueAuthority {
+		return queueAuthority{Delegate: &p, Grant: &queueGrant{Portal: true}}
+	}
+	unmarked := func(p uuid.UUID) queueAuthority { return queueAuthority{Delegate: &p} }
+	for _, c := range []struct {
+		label     string
+		portal    bool
+		createdBy *uuid.UUID
+		auth      queueAuthority
+		ends      bool
+	}{
+		{"portal drives, created by A, authority names A (marked)", true, &a, marked(a), false},
+		{"portal drives, created by A, authority names B (marked)", true, &a, marked(b), true},
+		{"portal drives, created by A, authority names B without a portal mark", true, &a, unmarked(b), true},
+		{"portal drives, created by A, authority names A without a portal mark", true, &a, unmarked(a), false},
+		{"portal drives, created by A, authority without a portal", true, &a, queueAuthority{}, true},
+		{"portal drives, no creator", true, nil, marked(a), true},
+		{"no portal drives, created by A, authority names B", false, &a, marked(b), false},
+		{"no portal drives, authority without a portal", false, nil, queueAuthority{}, false},
+	} {
+		run := types.AgentRun{PortalDrives: c.portal, CreatedVia: c.createdBy}
+		end := queuePortalRunScope(run, c.auth)
+		if (end != nil) != c.ends || (end != nil && end.token != queueEndPortalRunScope) {
+			t.Errorf("%s: end = %+v, want ends %v with %q", c.label, end, c.ends, queueEndPortalRunScope)
+		}
+	}
+}

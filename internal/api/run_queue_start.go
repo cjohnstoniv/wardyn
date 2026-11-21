@@ -211,6 +211,9 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end := s.queueOwnerStanding(st); end != nil {
 		return end
 	}
+	if end := queuePortalRunScope(st.run, st.auth); end != nil {
+		return end
+	}
 	if end := s.queueCurrentRole(st); end != nil {
 		return end
 	}

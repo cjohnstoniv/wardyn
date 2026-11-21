@@ -288,6 +288,18 @@ const (
 	queuePortalPrincipalError = "Queue portal start: the principal is not one of the portal's people"
 )
 
+// queuePortalRunScope ends a run that mounted a portal's drive unless it starts through the portal that created it: the
+// row's creator (immutable) must be the portal the stored authority names, or the replay would resolve one portal's
+// drive and attribute it to the other. It runs for every queued start, ahead of queueCurrentRole, because the fold reads
+// the authority's delegate whether or not the authority marks itself a portal launch (portalIssuerLaunch), so a row whose
+// marks and delegate disagree is judged by the delegate too. A run with no portal drive is not touched.
+func queuePortalRunScope(run types.AgentRun, a queueAuthority) *queueEnd {
+	if run.PortalDrives && (run.CreatedVia == nil || a.Delegate == nil || *run.CreatedVia != *a.Delegate) {
+		return &queueEnd{token: queueEndPortalRunScope, hint: portalRunScopeMsg}
+	}
+	return nil
+}
+
 // queuePortalIssuerRole is queueCurrentRole for an issuer-portal person's launch (the stored authority marks
 // it). The role stays user and is never derived. No role mapping or user-type-from-mapping is read: the user
 // type is the live portal row's, and must still exist. The portal row must be live (queueOwnerStanding), the
@@ -313,11 +325,6 @@ func (s *Server) queuePortalIssuerRole(st *queuedStart) *queueEnd {
 	if d.Issuer == "" || d.IssuerKey == "" || !strings.HasPrefix(a.Sub, types.PortalPersonPrefix+d.IssuerKey+":") {
 		slog.ErrorContext(st.base, queuePortalPrincipalError, slog.String("run_id", st.run.ID.String()), slog.String("delegate", d.ID.String()))
 		return failed
-	}
-	// A run that mounted a portal's drive belongs to the portal that created it: its row's creator (immutable) must be
-	// the portal the stored authority names, or the replay would resolve one portal's drive and attribute it to the other.
-	if st.run.PortalDrives && (st.run.CreatedVia == nil || *st.run.CreatedVia != via.Delegate) {
-		return &queueEnd{token: queueEndPortalRunScope, hint: portalRunScopeMsg}
 	}
 	userTypes, err := s.cfg.Store.ListUserTypes(st.ctx)
 	if err != nil {
