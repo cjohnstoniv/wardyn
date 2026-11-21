@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -323,24 +324,47 @@ func (s *Server) deliverPortalActivation(ctx context.Context, ps store.PortalAct
 	if !m.mayRetry(now) {
 		return
 	}
-	landedActivate, landedOverride, err := ps.PortalActivationLanded(ctx)
-	if err != nil {
-		slog.WarnContext(ctx, "portal activation: read the audit table", slog.Any("err", err))
+	want := []store.AuditEventKey{{ID: rec.ActivateEventID, At: rec.EventAt}}
+	if len(rec.Sessions) > 0 {
+		want = append(want, store.AuditEventKey{ID: rec.OverrideEventID, At: rec.EventAt})
+	}
+	// An event counts as in the audit table only with the id and the event time the record fixed.
+	stored := func() (map[uuid.UUID]bool, bool) {
+		held, err := ps.AuditEventsStored(ctx, want)
+		if err != nil {
+			slog.WarnContext(ctx, "portal activation: read the audit table", slog.Any("err", err))
+			return nil, false
+		}
+		in := map[uuid.UUID]bool{}
+		for _, k := range want {
+			if held[store.AuditEventKey{ID: k.ID, At: k.At.UTC().Truncate(time.Microsecond)}] {
+				in[k.ID] = true
+			}
+		}
+		return in, true
+	}
+	in, ok := stored()
+	if !ok {
 		return
 	}
 	ctx = store.WithAuditReplay(ctx)
 	actorType := types.ActorType(rec.ActorType)
-	if !landedActivate {
+	if !in[rec.ActivateEventID] {
 		activate := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate", "portal_issuers", "success",
 			mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(rec.Sessions)}))
 		activate.ID, activate.Time = rec.ActivateEventID, rec.EventAt
 		s.recordAuditDurably(ctx, activate)
 	}
-	if len(rec.Sessions) > 0 && !landedOverride {
+	if len(rec.Sessions) > 0 && !in[rec.OverrideEventID] {
 		override := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate_override", "portal_issuers", "success",
 			mustJSON(map[string]any{"sessions": rec.Sessions}))
 		override.ID, override.Time = rec.OverrideEventID, rec.EventAt
 		s.recordAuditDurably(ctx, override)
+	}
+	if in, ok = stored(); !ok || len(in) != len(want) {
+		slog.WarnContext(ctx, "portal activation: the audit rows are not in the shared audit table yet, they stay owed")
+		m.retryAfter(now.Add(portalActivationRetryEvery))
+		return
 	}
 	settled, err := ps.SettlePortalActivation(ctx)
 	if err != nil {
@@ -349,7 +373,7 @@ func (s *Server) deliverPortalActivation(ctx context.Context, ps store.PortalAct
 		return
 	}
 	if !settled {
-		slog.WarnContext(ctx, "portal activation: the audit rows are not in the shared audit table yet, they stay owed")
+		slog.WarnContext(ctx, "portal activation: the record was not settled, it stays owed")
 		m.retryAfter(now.Add(portalActivationRetryEvery))
 		return
 	}

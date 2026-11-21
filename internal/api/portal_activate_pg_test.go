@@ -46,7 +46,7 @@ func newActivateEnv(t *testing.T) *activateEnv {
 	}
 	raw.Close()
 	h := newHarness(t)
-	e := &activateEnv{t: t, pool: pool, st: store.NewPG(pool), audit: h.audit, now: time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)}
+	e := &activateEnv{t: t, pool: pool, st: store.NewPG(pool), audit: h.audit, now: time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)}
 	e.srv = New(baseTestConfig(h, e.st))
 	e.srv.cfg.Now = func() time.Time { return e.now }
 	return e
@@ -332,7 +332,7 @@ func TestPortalIssuers_OldClientAlarmDedupedPerDay_PG(t *testing.T) {
 	if n := e.rows("portal_issuers.old_client_seen"); n != 1 {
 		t.Fatalf("rows after three samples in a day = %d, want 1", n)
 	}
-	e.now = time.Date(2026, 12, 2, 0, 5, 0, 0, time.UTC)
+	e.now = e.now.Truncate(24 * time.Hour).Add(24*time.Hour + 5*time.Minute)
 	e.sample()
 	if n := e.rows("portal_issuers.old_client_seen"); n != 2 {
 		t.Fatalf("rows after the next UTC day = %d, want 2", n)
