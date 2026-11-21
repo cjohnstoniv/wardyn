@@ -54,7 +54,7 @@ type ScimGroupStore interface {
 	StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) error
 	ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error)
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
-	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
+	DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant string) error
 	PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
 	GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
 }
@@ -138,15 +138,28 @@ func (s PG) ScimGroupMembers(ctx context.Context, id uuid.UUID) ([]uuid.UUID, er
 }
 
 // AddScimGroupMembers records each identity as a member, leaving one already recorded as it is and
-// skipping an id that names no identity row.
+// skipping an id that names no identity row. A group that is gone is ErrNotFound. The group row is held
+// FOR KEY SHARE first, the lock DeleteScimGroup's FOR UPDATE waits on: an add that a deletion finds in
+// flight commits before the deletion reads the members, and an add that starts while a deletion holds the
+// row waits for it and then finds no group.
 func (s PG) AddScimGroupMembers(ctx context.Context, id uuid.UUID, identities []uuid.UUID, now time.Time) error {
-	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO scim_group_members (group_id, identity_id, added_at)
-		SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
-		ON CONFLICT DO NOTHING`, id, identities, now); err != nil {
-		return fmt.Errorf("store: add scim group members: %w", err)
-	}
-	return nil
+	return s.inTx(ctx, func(q Querier) error {
+		var one int
+		err := q.QueryRow(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR KEY SHARE`, id).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: lock scim group for an add: %w", err)
+		}
+		if _, err := q.Exec(ctx, `
+			INSERT INTO scim_group_members (group_id, identity_id, added_at)
+			SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
+			ON CONFLICT DO NOTHING`, id, identities, now); err != nil {
+			return fmt.Errorf("store: add scim group members: %w", err)
+		}
+		return nil
+	})
 }
 
 // StartGroupRemoval opens the ledger of one person leaving one group, in one transaction with the
@@ -161,6 +174,17 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 		return fmt.Errorf("store: start group removal: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = startGroupRemoval(ctx, tx, groupID, identityID); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit group removal: %w", err)
+	}
+	return nil
+}
+
+// startGroupRemoval is StartGroupRemoval's work on tx, which the caller commits.
+func startGroupRemoval(ctx context.Context, tx Querier, groupID, identityID uuid.UUID) error {
 	target := groupID.String()
 	tag, err := tx.Exec(ctx, `DELETE FROM scim_group_members WHERE group_id = $1 AND identity_id = $2`, groupID, identityID)
 	if err != nil {
@@ -201,9 +225,6 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 				return fmt.Errorf("store: open group removal ledger: %w", err)
 			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("store: commit group removal: %w", err)
 	}
 	return nil
 }
@@ -292,14 +313,41 @@ func (s PG) GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionF
 	})
 }
 
-// DeleteScimGroup removes the group row and, by cascade, its members. Its ledger rows stay.
-func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("store: delete scim group: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+// DeleteScimGroup removes the group row, or answers ErrNotFound. The row is locked FOR UPDATE first, so a
+// member add in flight (AddScimGroupMembers) commits before the members are read and a later one finds no
+// group. Every member still recorded who is a person of the given issuer (and tenant, as PendingGroupRemovals
+// reads it) then leaves the group in the same transaction, with the ledger StartGroupRemoval opens, so the
+// cascade drops no such membership without its removal owed. Another issuer's member is dropped by the
+// cascade, as its own endpoint never removes it. The ledger rows stay, pending until GroupRemovalIdentities'
+// caller or the sweeper finishes them.
+func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant string) error {
+	return s.inTx(ctx, func(q Querier) error {
+		var one int
+		err := q.QueryRow(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR UPDATE`, id).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: lock scim group for its delete: %w", err)
+		}
+		members, err := collect(ctx, q, "list", "scim group members to remove", `
+			SELECT m.identity_id FROM scim_group_members m JOIN principal_identities pi ON pi.id = m.identity_id
+			 WHERE m.group_id = $1 AND pi.issuer = $2 AND ($3::text = '' OR pi.tenant_id = '' OR pi.tenant_id = $3::text)
+			 ORDER BY 1`, []any{id, issuer, tenant}, func(r pgx.Row) (uuid.UUID, error) {
+			var v uuid.UUID
+			return v, r.Scan(&v)
+		})
+		if err != nil {
+			return err
+		}
+		for _, m := range members {
+			if err := startGroupRemoval(ctx, q, id, m); err != nil {
+				return err
+			}
+		}
+		if _, err := q.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, id); err != nil {
+			return fmt.Errorf("store: delete scim group: %w", err)
+		}
+		return nil
+	})
 }
