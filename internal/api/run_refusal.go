@@ -73,7 +73,7 @@ func (f *runRefusal) write(s *Server, w http.ResponseWriter, r *http.Request) bo
 	if f.drive != nil {
 		f.drive.write(s, w)
 	} else if f.err != nil && issuerOpeningIn(r.Context()) {
-		refuseIssuerOpeningUnread(r.Context(), w, f.operation, f.err)
+		refuseIssuerOpeningUnread(r.Context(), w, f.operation, issuerOpeningUnverifiableMsg, f.err)
 	} else if f.err != nil {
 		writeServerError(w, r, f.operation, f.err)
 	} else if f.decision != nil && f.status == 0 {

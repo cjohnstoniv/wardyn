@@ -228,7 +228,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	}
 	off, err := s.macOSDesktopSignInsOffRead(r.Context(), run)
 	if err != nil && !ta.admitBy.IsZero() {
-		refuseIssuerOpeningUnread(r.Context(), w, "site config", err)
+		refuseIssuerOpeningUnread(r.Context(), w, "site config", uiSessionUnverifiableMsg, err)
 		return
 	}
 	if off {

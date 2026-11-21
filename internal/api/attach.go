@@ -230,7 +230,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ar := r.WithContext(actx)
 	var run types.AgentRun
 	if !admit.admitBy.IsZero() {
-		got, gone, ok := s.issuerOpeningRun(actx, w, id, uiSessionUnverifiableMsg)
+		got, gone, ok := s.issuerOpeningRun(actx, w, id, attachUnverifiableMsg)
 		if gone {
 			writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
 		}
@@ -294,7 +294,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// under the opening deadline; one that fails or runs out is the retryable 503.
 	if err := s.thawForExec(actx, run, principalType, principal, "presence"); err != nil {
 		if !admit.admitBy.IsZero() {
-			refuseIssuerOpeningUnread(actx, w, "thaw", err)
+			refuseIssuerOpeningUnread(actx, w, "thaw", attachUnverifiableMsg, err)
 			return
 		}
 		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")

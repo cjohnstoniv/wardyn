@@ -391,7 +391,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil && !ta.admitBy.IsZero() {
-		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", err)
+		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)
 		return
 	}
 	if err != nil {
@@ -402,7 +402,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := uiDeclaredApp(apps, app)
 	if !found && !ta.admitBy.IsZero() && actx.Err() != nil { // the sign-in display's holder read ran out
-		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", actx.Err())
+		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", uiSessionUnverifiableMsg, actx.Err())
 		return
 	}
 	if !found {
