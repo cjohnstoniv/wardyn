@@ -48,14 +48,17 @@ END
 $mig$;
 
 -- Each constraint is dropped before it is added, so the migration can run again over a catalogue that has it.
+-- A missing maximum age means its default (300) and a missing grant lifetime means the maximum age, so each
+-- bound is checked on the effective value: a NULL bound would make the comparison unknown, which a CHECK passes.
 ALTER TABLE delegates
     DROP CONSTRAINT IF EXISTS delegates_max_subject_token_age,
     ADD CONSTRAINT delegates_max_subject_token_age CHECK (
-        issuer = '' OR max_subject_token_age_seconds BETWEEN 300 AND 600);
+        issuer = '' OR COALESCE(max_subject_token_age_seconds, 300) BETWEEN 300 AND 600);
 ALTER TABLE delegates
     DROP CONSTRAINT IF EXISTS delegates_grant_ttl,
     ADD CONSTRAINT delegates_grant_ttl CHECK (
-        issuer = '' OR grant_ttl_seconds BETWEEN 300 AND max_subject_token_age_seconds);
+        issuer = '' OR COALESCE(grant_ttl_seconds, COALESCE(max_subject_token_age_seconds, 300))
+                       BETWEEN 300 AND COALESCE(max_subject_token_age_seconds, 300));
 ALTER TABLE delegates
     DROP CONSTRAINT IF EXISTS delegates_required_claim_shape,
     ADD CONSTRAINT delegates_required_claim_shape CHECK (
@@ -103,6 +106,17 @@ CREATE TABLE IF NOT EXISTS portal_grants (
 
 CREATE INDEX IF NOT EXISTS portal_grants_chain ON portal_grants (delegate_id, principal, chain_id, expires_at);
 CREATE INDEX IF NOT EXISTS portal_grants_expires_at ON portal_grants (expires_at);
+
+-- Which portals a person has used: one row per (person, portal), written when a grant is minted for them. It
+-- is the person's portal history, kept apart from the grants (which expire and are cleared on suspension).
+-- A purge or an erasure of the person deletes their rows; an expiry sweep and a suspension do not.
+CREATE TABLE IF NOT EXISTS portal_person_portals (
+    identity_id   UUID        NOT NULL REFERENCES principal_identities (id) ON DELETE CASCADE,
+    delegate_id   UUID        NOT NULL REFERENCES delegates (id),
+    first_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (identity_id, delegate_id)
+);
 
 ALTER TABLE principal_identities
     ADD COLUMN IF NOT EXISTS display_email            TEXT        NOT NULL DEFAULT '',
@@ -183,7 +197,7 @@ CREATE TRIGGER principal_identities_portal_lifecycle
 -- The app role is granted the new tables here, found from the catalog and never by name: every role but the
 -- owner that holds UPDATE on delegates, which the portal's revoke and admission writes use. The exchange's
 -- FOR KEY SHARE on a binding and the retirement's FOR UPDATE need UPDATE on portal_issuers, and the retirement
--- deletes the row; the grants sweep deletes portal_grants; console_issuers is only read and added to.
+-- deletes the row; the grants sweep deletes portal_grants; a purge or an erasure deletes portal_person_portals rows; console_issuers is only read and added to.
 DO $mig$
 DECLARE
     r record;
@@ -199,6 +213,7 @@ BEGIN
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON portal_issuers TO %I', r.rolname);
         EXECUTE format('GRANT SELECT, INSERT ON console_issuers TO %I', r.rolname);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON portal_grants TO %I', r.rolname);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON portal_person_portals TO %I', r.rolname);
     END LOOP;
 END
 $mig$;

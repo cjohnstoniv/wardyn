@@ -839,3 +839,10 @@ func applyMigration(ctx context.Context, db migrationExecutor, filename, sql str
 	}
 	return nil
 }
+
+// OtherClientSQL is the pg_stat_activity condition that selects client sessions, masked ones included. A
+// role without pg_read_all_stats sees another role's session with backend_type NULL (measured on Postgres
+// 17) but still its usename, and the server's own workers (autovacuum, replication) have none, so
+// "backend_type NULL with a usename" is a masked client. The migrate-only quiet check and the portal issuer
+// activation's session sample share this one condition.
+const OtherClientSQL = `(backend_type = 'client backend' OR (backend_type IS NULL AND usename IS NOT NULL))`
