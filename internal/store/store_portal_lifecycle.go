@@ -61,7 +61,7 @@ func markPortalLifecycle(ctx context.Context, q Querier) error {
 // transaction that holds the row FOR UPDATE. It reports whether this call marked it.
 //
 // The conditions are decided under the lock. Nothing is written, and false is returned, for a row that is
-// not a portal person's, one already purged (a retry of an unfinished purge), and, in PortalPurgeScheduled
+// not a portal person's (its issuer is not a bound portal issuer's, or its principal is not that issuer's), one already purged (a retry of an unfinished purge), and, in PortalPurgeScheduled
 // mode, one that is not due under its own suspension: a person reactivated after the sweep selected them, or
 // suspended again with a later deadline. In PortalPurgeExplicit mode a row that is not deactivated is
 // ErrPersonNotSuspended, so a reactivation that committed first wins. An unknown id is ErrNotFound.
@@ -79,7 +79,10 @@ func (s PG) MarkPortalIdentityPurged(ctx context.Context, id uuid.UUID, mode Por
 	}
 	var owned, purged, deactivated, due bool
 	err = tx.QueryRow(ctx, `
-		SELECT starts_with(i.issuer, $2), i.purged_at IS NOT NULL, i.deactivated_at IS NOT NULL,
+		SELECT starts_with(i.issuer, $2)
+		       AND i.principal IS NOT NULL AND starts_with(i.principal, i.issuer || ':')
+		       AND EXISTS (SELECT 1 FROM portal_issuers b WHERE b.issuer_key = substr(i.issuer, length($2) + 1)),
+		       i.purged_at IS NOT NULL, i.deactivated_at IS NOT NULL,
 		       i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now() AND `+ownSuspension+`
 		  FROM principal_identities i WHERE i.id = $1 FOR UPDATE`, id, types.PortalPersonPrefix).Scan(&owned, &purged, &deactivated, &due)
 	if errors.Is(err, pgx.ErrNoRows) {

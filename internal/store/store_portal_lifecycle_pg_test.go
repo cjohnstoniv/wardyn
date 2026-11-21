@@ -233,3 +233,42 @@ func TestPortalPurge_ExplicitRefusedAfterConcurrentReactivate_PG(t *testing.T) {
 		t.Fatalf("a refused purge left %d jobs", n)
 	}
 }
+
+// A row that carries the portal issuer prefix but is not a bound portal's person is never marked: the locked mark
+// requires the bound issuer and a principal of that issuer before any write, in both modes. The row and the
+// ledger are left as they were.
+func TestPortalPurge_MarkRefusedForMalformedRows_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	unboundKey := "dddddddddddddddddddddddddd"
+	for name, row := range map[string]struct{ issuer, principal string }{
+		"an issuer no binding names":         {"delegate:person:" + unboundKey, "delegate:person:" + unboundKey + ":" + uuid.NewString()},
+		"a principal of another issuer":      {"delegate:person:" + p.Key, "delegate:person:" + unboundKey + ":" + uuid.NewString()},
+		"a principal that is not a portal's": {"delegate:person:" + p.Key, "workforce-" + uuid.NewString()},
+	} {
+		for _, mode := range []store.PortalPurgeMode{store.PortalPurgeScheduled, store.PortalPurgeExplicit} {
+			var id uuid.UUID
+			if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer) VALUES ($1, $2) RETURNING id`, row.principal, row.issuer).Scan(&id); err != nil {
+				t.Fatalf("%s: insert: %v", name, err)
+			}
+			if _, err := pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() - interval '1 hour' WHERE id = $1`, id); err != nil {
+				t.Fatalf("%s: deactivate: %v", name, err)
+			}
+			if marked, err := st.MarkPortalIdentityPurged(ctx, id, mode); marked || err != nil {
+				t.Errorf("%s, mode %v: mark = %v, %v; want false, nil", name, mode, marked, err)
+			}
+			if n := rowCount(t, pool, `SELECT count(*) FROM principal_identities WHERE id = $1 AND purged_at IS NULL AND deactivated_at IS NOT NULL`, id); n != 1 {
+				t.Errorf("%s, mode %v: the row was written", name, mode)
+			}
+			if n := rowCount(t, pool, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1`, id); n != 0 {
+				t.Errorf("%s, mode %v: %d ledger rows after a refused mark", name, mode, n)
+			}
+		}
+	}
+	// The control: a bound portal's own person is marked.
+	id := deactivatedPerson(t, st, p, "carol")
+	if marked, err := st.MarkPortalIdentityPurged(ctx, id, store.PortalPurgeExplicit); err != nil || !marked {
+		t.Fatalf("control: a bound portal person's mark = %v, %v; want true", marked, err)
+	}
+}
