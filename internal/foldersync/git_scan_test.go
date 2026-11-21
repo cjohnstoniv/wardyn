@@ -292,3 +292,79 @@ func TestCheckBundleAllowed_IgnoresTheLaptopsEnvironment(t *testing.T) {
 		t.Fatalf("got %v; want a refusal naming old.pem", err)
 	}
 }
+
+// gitProbe puts a git first on PATH that records each call's HOME, GIT_DEFAULT_HASH and arguments to the
+// returned log, fails a bare init carrying --object-format=sha256 as a git older than 2.28 does, and passes
+// everything else to the real git.
+func gitProbe(t *testing.T) (log string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "calls.log")
+	script := "#!/bin/sh\n" +
+		"printf '%s|%s|%s\\n' \"$HOME\" \"$GIT_DEFAULT_HASH\" \"$*\" >> '" + log + "'\n" +
+		"case \" $* \" in *' --object-format=sha256 '*) echo 'error: unknown option `object-format=sha256' >&2; exit 129;; esac\n" +
+		"exec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+// A git that cannot make a SHA-256 repository gives the clear refusal, and the bundle is not read.
+func TestCheckBundleAllowed_RefusesWhenGitCannotMakeASHA256Scanner(t *testing.T) {
+	log := gitProbe(t)
+	err := checkBundleAllowed(t.Context(), filepath.Join(t.TempDir(), "missing.bundle"), "feature/x", strings.Repeat("a", 64), []string{"*.pem"})
+	if err == nil || !strings.Contains(err.Error(), "SHA-256 object names") || !strings.Contains(err.Error(), "cannot make a repository to check them in") {
+		t.Fatalf("got %v; want the SHA-256 refusal", err)
+	}
+	b, _ := os.ReadFile(log)
+	if strings.Contains(string(b), "fetch") {
+		t.Fatalf("the bundle was read after the init failed:\n%s", b)
+	}
+}
+
+// The scan's init names SHA-1 for a 40-hex tip, its fetch carries the maintenance and gc switches, and both run
+// with HOME in the scan's own directory, not the laptop's.
+func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
+	g := newGitRig(t)
+	log := gitProbe(t)
+	bundle := filepath.Join(t.TempDir(), "b.bundle")
+	g.run(g.lap, "bundle", "create", "-q", bundle, "refs/heads/feature/x")
+	if err := checkBundleAllowed(t.Context(), bundle, "feature/x", g.head, []string{"*.pem"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	var inits, fetches int
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		f := strings.SplitN(line, "|", 3)
+		if len(f) != 3 {
+			continue
+		}
+		switch {
+		case strings.Contains(f[2], " init "):
+			inits++
+			if f[1] != "sha1" {
+				t.Errorf("init ran with GIT_DEFAULT_HASH=%q, want sha1: %s", f[1], line)
+			}
+		case strings.Contains(f[2], " fetch "):
+			fetches++
+			for _, want := range []string{"-c maintenance.auto=false", "-c gc.auto=0"} {
+				if !strings.Contains(f[2], want) {
+					t.Errorf("fetch lacks %q: %s", want, line)
+				}
+			}
+		default:
+			continue
+		}
+		if !strings.Contains(f[0], "wardyn-bundle-scan-") {
+			t.Errorf("HOME is %q, want the scan's own directory: %s", f[0], line)
+		}
+	}
+	if inits != 1 || fetches != 1 {
+		t.Fatalf("saw %d init and %d fetch calls, want 1 each:\n%s", inits, fetches, b)
+	}
+}
