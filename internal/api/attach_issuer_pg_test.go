@@ -372,7 +372,8 @@ func TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG(t *testing.T) {
 	}
 }
 
-// runOpLockSeen is a Locker that reports each wait begun on one key, before it waits.
+// runOpLockSeen is a Locker that reports each call to Lock on one key, before it delegates. The signal marks the
+// call, not a proven block; the test that uses it holds the lock from before the dial and checks the dial is pending.
 type runOpLockSeen struct {
 	db.Locker
 	key     db.LockKey
