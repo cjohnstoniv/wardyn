@@ -390,6 +390,8 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 		superseded()
 		return serviceGrantMinted{}, errServiceGrantRevisionMoved
 	}
+	// One success row per request sent, written before the token is published to any waiter.
+	s.auditServiceGrantMint(ctx, p, trigger, sent, &tok, nil, false)
 	s.svcGrant.mu.Lock()
 	if s.svcGrant.cache == nil {
 		s.svcGrant.cache = map[string]serviceGrantCached{}

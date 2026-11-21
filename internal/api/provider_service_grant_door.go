@@ -55,7 +55,7 @@ const (
 // planServiceGrantDoor is planServiceGrantWrite for a door: it answers a refusal or a failure itself, and ok=false
 // means the answer is written.
 func (s *Server) planServiceGrantDoor(w http.ResponseWriter, r *http.Request, existing, block *types.ModelProviders, wholeBlock bool) (serviceGrantPlan, bool) {
-	plan, refusal, err := s.planServiceGrantWrite(r.Context(), existing, block, wholeBlock, "")
+	plan, refusal, err := s.planServiceGrantWrite(r.Context(), existing, block, wholeBlock, "", "")
 	if refusal.write(w) {
 		return plan, false
 	}
@@ -71,14 +71,14 @@ func (s *Server) planServiceGrantDoor(w http.ResponseWriter, r *http.Request, ex
 // none, refuses a grant on a uid that still has a clean-up claim, and works out which grants the write drops and
 // the claim each leaves. wholeBlock is false when the door does not write model_providers at all, which changes
 // nothing. It reads the secret store's revision of every record that is to go, so a failed read fails the write.
-func (s *Server) planServiceGrantWrite(ctx context.Context, existing, block *types.ModelProviders, wholeBlock bool, why string) (serviceGrantPlan, *serviceGrantRefusal, error) {
+func (s *Server) planServiceGrantWrite(ctx context.Context, existing, block *types.ModelProviders, wholeBlock bool, why, removed string) (serviceGrantPlan, *serviceGrantRefusal, error) {
 	var plan serviceGrantPlan
 	gs, ok := s.serviceGrantStore()
 	if !ok || !wholeBlock {
 		return plan, nil, nil
 	}
 	if block != nil {
-		if refusal := carryServiceGrants(existing, block); refusal != nil {
+		if refusal := carryServiceGrants(existing, block, removed); refusal != nil {
 			return plan, refusal, nil
 		}
 	}
@@ -101,9 +101,10 @@ func (s *Server) planServiceGrantWrite(ctx context.Context, existing, block *typ
 }
 
 // carryServiceGrants keeps a stored grant on every row of block that keeps its uid and its oidc block and
-// carries no service_grant object, whether the member was absent or null. The carried grant is validated with
+// carries no service_grant object, whether the member was absent or null. The row whose uid is removed is the
+// one an explicit removal names: its grant is not carried, so it is dropped and claimed. The carried grant is validated with
 // the row as written.
-func carryServiceGrants(existing, block *types.ModelProviders) *serviceGrantRefusal {
+func carryServiceGrants(existing, block *types.ModelProviders, removed string) *serviceGrantRefusal {
 	if existing == nil {
 		return nil
 	}
@@ -116,7 +117,7 @@ func carryServiceGrants(existing, block *types.ModelProviders) *serviceGrantRefu
 	for i := range block.Providers {
 		p := &block.Providers[i]
 		g, ok := held[p.UID]
-		if !ok || p.OIDC == nil || p.OIDC.ServiceGrant != nil || p.UID == "" {
+		if !ok || p.OIDC == nil || p.OIDC.ServiceGrant != nil || p.UID == "" || p.UID == removed {
 			continue
 		}
 		o := *p.OIDC

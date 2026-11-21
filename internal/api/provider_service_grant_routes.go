@@ -154,7 +154,8 @@ func (s *Server) handleDeleteServiceGrant(w http.ResponseWriter, r *http.Request
 	defer unlock()
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	if _, _, ok := s.serviceGrantRouteRow(w, r, id); !ok {
+	target, _, ok := s.serviceGrantRouteRow(w, r, id)
+	if !ok {
 		return
 	}
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
@@ -163,7 +164,7 @@ func (s *Server) handleDeleteServiceGrant(w http.ResponseWriter, r *http.Request
 		return
 	}
 	block := withoutServiceGrant(existing.ModelProviders, id)
-	plan, refusal, err := s.planServiceGrantWrite(ctx, existing.ModelProviders, block, true, cleanupReasonGrantRemoved)
+	plan, refusal, err := s.planServiceGrantWrite(ctx, existing.ModelProviders, block, true, cleanupReasonGrantRemoved, target.UID)
 	if refusal.write(w) {
 		return
 	}
