@@ -241,8 +241,11 @@ func (s PG) BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (type
 // out of every run's reach (memberReachableDrives, memberDrivesStillThere). Nothing is compared by time. The
 // cleanup finishes the delete, or clears the tombstone when it keeps the drive, which is when the drive is
 // first offered.
+//
+// The claim is taken only where no delete was ever issued for the drive (delete_issues even): a drive with a
+// physical delete outstanding is the one claim left to settle it, never one a run's exit may overwrite.
 const keptDriveHoldSQL = `UPDATE user_drives SET delete_started_at = now()
-	WHERE owner_subject <> '' AND delete_started_at IS NULL AND kept_from_run IN (SELECT id FROM moved)`
+	WHERE owner_subject <> '' AND delete_started_at IS NULL AND delete_issues % 2 = 0 AND kept_from_run IN (SELECT id FROM moved)`
 
 func (s PG) beginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error) {
 	d, err := scanDriveRow(s.Pool.QueryRow(ctx, beginMemberDriveDeleteSQL, id, owner))
@@ -265,22 +268,72 @@ func (s PG) beginMemberDriveDelete(ctx context.Context, owner string, id uuid.UU
 	return types.UserDrive{}, time.Time{}, ErrNotFound
 }
 
-// AbortMemberDriveDelete clears the tombstone started set, and only that one.
-// ErrNotFound when it is gone (finished, or taken over).
-func (s PG) AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
-	return memberDriveTombstoneExec(ctx, s, "abort",
-		`UPDATE user_drives SET delete_started_at = NULL WHERE id = $1 AND delete_started_at = $2`, id, started)
+// beginMemberDriveTakeoverSQL is the sweep's own claim: it takes only a mark already older than a minute, so a row
+// its list saw marked and an owner has since cleared (S NULL) is never claimed, which the admin statement above would
+// do. Like every claim it keeps delete_issues.
+const beginMemberDriveTakeoverSQL = `UPDATE user_drives SET delete_started_at = now()
+	WHERE id = $1 AND owner_subject <> '' AND delete_started_at IS NOT NULL
+	  AND delete_started_at < now() - interval '` + memberDriveTakeover + `'
+	RETURNING ` + driveRowCols
+
+// BeginMemberDriveTakeover is the Mac sweep's claim of drive id: ErrNotFound when the row is gone, unmarked, or its
+// mark is younger than a minute.
+func (s PG) BeginMemberDriveTakeover(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error) {
+	d, err := scanDriveRow(s.Pool.QueryRow(ctx, beginMemberDriveTakeoverSQL, id))
+	if err != nil {
+		return types.UserDrive{}, time.Time{}, err
+	}
+	return d, *d.DeleteStartedAt, nil
 }
 
-// FinishMemberDriveDelete removes the row while it still carries the tombstone
-// started set. ErrNotFound when it does not.
-func (s PG) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+// IssueMemberDriveDelete records, before the physical call, that one is about to be made under the claim
+// (started, n): the count becomes odd, and the new value is returned. The claim is consumed by the first issue, so a
+// second presentation of the same pair (a retry, a duplicate, a claim a takeover has since replaced) finds the count
+// moved and gets ErrNotFound, and no call is made. A claim over an odd count (an earlier call outstanding) lands on
+// the next odd count.
+func (s PG) IssueMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) (int, error) {
+	var issued int
+	err := s.Pool.QueryRow(ctx, `UPDATE user_drives SET delete_issues = delete_issues + 1 + (delete_issues % 2)
+		WHERE id = $1 AND delete_started_at = $2 AND delete_issues = $3 RETURNING delete_issues`, id, started, n).Scan(&issued)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("store: issue member drive delete: %w", err)
+	}
+	return issued, nil
+}
+
+// ClearMemberDriveClaim gives up the claim (started, n) before anything was issued: the drive is admissible again.
+// Only a claim over an even count that nothing has touched since is cleared; the count moves by two, so the next
+// claim's pair differs from this one without a comparison of times. ErrNotFound when the pair no longer matches.
+func (s PG) ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
+	return memberDriveTombstoneExec(ctx, s, "clear",
+		`UPDATE user_drives SET delete_started_at = NULL, delete_issues = delete_issues + 2
+		 WHERE id = $1 AND delete_started_at = $2 AND delete_issues = $3 AND delete_issues % 2 = 0`, id, started, n)
+}
+
+// ClearMemberDriveIssued gives up a claim whose issue (the count issued) the substrate answered with a refusal that
+// touched nothing. It clears only when the claim was over an even count and the issue was its own (claimN + 1 =
+// issued): then the count becomes even again, larger than any value an earlier holder saw, so no late clear matches.
+// A claim over an odd count never clears. ErrNotFound when the pair no longer matches.
+func (s PG) ClearMemberDriveIssued(ctx context.Context, id uuid.UUID, started time.Time, claimN, issued int) error {
+	return memberDriveTombstoneExec(ctx, s, "clear",
+		`UPDATE user_drives SET delete_started_at = NULL, delete_issues = delete_issues + 1
+		 WHERE id = $1 AND delete_started_at = $2 AND delete_issues = $3 AND $4::int % 2 = 0 AND $3::int = $4::int + 1`,
+		id, started, issued, claimN)
+}
+
+// FinishMemberDriveDelete removes the row while it still carries the claim (started, n): n is the count the claim
+// returned when nothing was issued (a record-only delete), else the count the issue returned.
+// ErrNotFound when it does not.
+func (s PG) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	return memberDriveTombstoneExec(ctx, s, "finish",
-		`DELETE FROM user_drives WHERE id = $1 AND delete_started_at = $2`, id, started)
+		`DELETE FROM user_drives WHERE id = $1 AND delete_started_at = $2 AND delete_issues = $3`, id, started, n)
 }
 
-func memberDriveTombstoneExec(ctx context.Context, s PG, verb, q string, id uuid.UUID, started time.Time) error {
-	tag, err := s.Pool.Exec(ctx, q, id, started)
+func memberDriveTombstoneExec(ctx context.Context, s PG, verb, q string, args ...any) error {
+	tag, err := s.Pool.Exec(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("store: %s member drive delete: %w", verb, err)
 	}

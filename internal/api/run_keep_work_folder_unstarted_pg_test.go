@@ -390,7 +390,7 @@ func TestPG_KeptDriveOwnersFailedDeleteIsNotTakenOverByTheDelayedCleanup(t *test
 		t.Fatalf("tombstone after the exit = %v (%v), want the owner's %v untouched", tombstone, err, started)
 	}
 	// The owner's delete fails on the substrate and clears its own tombstone.
-	if err := e.pg.AbortMemberDriveDelete(ctx, keptWorkFolderDriveID(run.ID), started); err != nil {
+	if err := e.pg.ClearMemberDriveClaim(ctx, keptWorkFolderDriveID(run.ID), started, 0); err != nil {
 		t.Fatal(err)
 	}
 	w := e.askForKeptDrive(pool, run)

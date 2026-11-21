@@ -535,7 +535,7 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	}
 	switch {
 	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
-		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
+		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started, d.DeleteIssues); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
 			res.err = ferr
 		}
 	case res.reason == reasonMemberDriveDeleteDeferred, by == memberDriveByMacReconnect && res.reason == reasonMemberDriveInUse:
@@ -543,7 +543,7 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 		// finishes the delete (finishMacDiskDeletes). A disk its Mac's run still has, met by that
 		// sweep, waits for the next one: the owner already asked for the delete.
 	default:
-		if aerr := ms.AbortMemberDriveDelete(ctx, d.ID, started); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
+		if aerr := ms.ClearMemberDriveClaim(ctx, d.ID, started, d.DeleteIssues); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
 				slog.String("drive_id", d.ID.String()), slog.String("error", aerr.Error()))
 		}

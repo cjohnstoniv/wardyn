@@ -508,10 +508,18 @@ type MemberDriveStore interface {
 	// MemberDriveOwnerStarting reports whether owner has a run in STARTING, or one with no sandbox
 	// recorded whose dispatcher's watcher lease is younger than leaseFresh.
 	MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error)
-	// AbortMemberDriveDelete clears only the tombstone started names.
-	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
-	// FinishMemberDriveDelete removes the row only while it carries started.
-	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// BeginMemberDriveTakeover is the Mac sweep's own claim: only a mark older than a minute, never an unmarked row.
+	BeginMemberDriveTakeover(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// IssueMemberDriveDelete makes the claim (started, n) outstanding before the physical call and returns the
+	// count it is now under; ErrNotFound when the pair no longer matches, and then no call is made.
+	IssueMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) (int, error)
+	// ClearMemberDriveClaim gives up a claim nothing was issued under.
+	ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error
+	// ClearMemberDriveIssued gives up a claim after a refusal that touched nothing, only when the claim was over
+	// an even count and issued is its own issue.
+	ClearMemberDriveIssued(ctx context.Context, id uuid.UUID, started time.Time, claimN, issued int) error
+	// FinishMemberDriveDelete removes the row only while it carries the claim (started, n).
+	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error
 	// ListMemberDrives returns one page of every person's drives and the total.
 	ListMemberDrives(ctx context.Context, p Page) ([]types.UserDrive, int, error)
 }

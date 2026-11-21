@@ -361,18 +361,18 @@ func (r *cancellingReclaim) ReclaimDrive(context.Context, types.DriveMount) (run
 // a database call would.
 type ctxMemberDriveStore struct{ *memberDriveStore }
 
-func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started, n)
 }
 
-func (s ctxMemberDriveStore) AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.AbortMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.ClearMemberDriveClaim(ctx, id, started, n)
 }
 
 // TestMemberDriveDeleteOutlivesTheRequest: a delete whose caller goes away
