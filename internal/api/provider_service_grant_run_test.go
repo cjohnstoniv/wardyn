@@ -9,7 +9,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,55 +77,147 @@ func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMintDirect(t *testing.T) {
 	}
 }
 
-// phases is the proxy's resolves, in minutes from the first mint, across one token's life.
+// The proxy's resolves and the refresher's passes across one token's life, run in phases: the sandbox's first
+// request at 0, 2.5 and 4.9 minutes after the first mint, crossed with the refresher's passes at 0, 30 and 59
+// seconds into each minute, and once with 16 slow rows queued ahead of the healthy one in the refresher. The
+// proxy side follows the injector's own rule (internal/egress/proxy/inject.go:269-273): a sandbox request reuses
+// the installed header until five minutes before the lease, then resolves again.
 func TestServiceGrant_RunSpansTokenExpiry(t *testing.T) {
+	for _, first := range []time.Duration{0, 150 * time.Second, 294 * time.Second} {
+		for _, pass := range []time.Duration{0, 30 * time.Second, 59 * time.Second} {
+			t.Run(fmt.Sprintf("resolve+%v/refresh+%v", first, pass), func(t *testing.T) { svcSpanExpiry(t, first, pass, false) })
+		}
+	}
+	t.Run("sixteen slow rows queued ahead", func(t *testing.T) { svcSpanExpiry(t, 0, 0, true) })
+}
+
+func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	f := newSvcFixWithSecret(t)
+	uid := f.uid
 	issued := map[string]time.Time{}
 	var mu sync.Mutex
-	f.idp.respond = func(n int, _ svcReq) svcAnswer {
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	f.idp.mu.Lock()
+	f.idp.respond = func(n int, r svcReq) svcAnswer {
+		if strings.Contains(r.URL, "hang-") {
+			return svcAnswer{Status: 200, Block: release}
+		}
 		mu.Lock()
 		issued[svcToken(n)] = f.clock.Now()
 		mu.Unlock()
-		return svcAnswer{}
+		return svcOK(n, 3600)
+	}
+	f.idp.mu.Unlock()
+	if slow {
+		for i := range 16 {
+			f.addRow(fmt.Sprintf("slow-%02d", i), fmt.Sprintf("https://hang-%02d.example.test/token", i))
+		}
+		f.site.mu.Lock() // the healthy row last, so every slow row is queued ahead of it
+		rows := f.site.sc.ModelProviders.Providers
+		f.site.sc.ModelProviders = &types.ModelProviders{Providers: append(append([]types.ModelProvider(nil), rows[1:]...), rows[0])}
+		f.site.mu.Unlock()
 	}
 	plan, _, _, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
 	}
 	start := f.clock.Now()
-	seen := map[string]bool{}
-	for _, min := range []float64{0, 2.5, 4.9, 30, 45, 49, 50.1, 55, 59} {
-		target := start.Add(time.Duration(min * float64(time.Minute)))
-		if d := target.Sub(f.clock.Now()); d > 0 {
+	passDone := make(chan struct{})
+	stuck := false
+	type event struct {
+		at      time.Duration
+		resolve bool
+	}
+	var events []event
+	for at := first; at <= 65*time.Minute; at += 30 * time.Second {
+		events = append(events, event{at, true})
+	}
+	if slow {
+		events = append(events, event{50 * time.Minute, false}) // the healthy row is due: it queues behind sixteen
+	} else {
+		for at := passAt; at <= 65*time.Minute; at += time.Minute {
+			events = append(events, event{at, false})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].at < events[j].at })
+	var installed string // the header the proxy holds
+	var lease time.Time
+	resolves, handed := 0, map[string]bool{}
+	for _, ev := range events {
+		if d := start.Add(ev.at).Sub(f.clock.Now()); d > 0 {
 			f.clock.Advance(d)
 		}
-		code, body := f.svcResolve(plan)
-		if code != http.StatusOK {
-			t.Fatalf("resolve at minute %.1f: %d %v", min, code, body)
+		now := f.clock.Now()
+		switch {
+		case !ev.resolve && slow && !stuck:
+			// One pass that cannot finish: eight workers hang on slow rows and the healthy row waits behind them.
+			stuck = true
+			go func() { defer close(passDone); f.srv.serviceGrantPass(context.Background()) }()
+			t.Cleanup(func() {
+				once.Do(func() { close(release) })
+				if !svcWaited(passDone) {
+					t.Error("the stuck pass did not end after its providers were released")
+				}
+			})
+			continue
+		case !ev.resolve:
+			f.srv.serviceGrantPass(context.Background())
+			continue
 		}
-		tok := resolvedToken(t, body)
-		seen[tok] = true
+		if installed == "" || !now.Before(lease.Add(-5*time.Minute)) {
+			code, body := f.svcResolve(plan)
+			if code != http.StatusOK {
+				t.Fatalf("resolve at %v: %d %v", ev.at, code, body)
+			}
+			resolves++
+			tok := resolvedToken(t, body)
+			mu.Lock()
+			left := issued[tok].Add(time.Hour).Sub(now)
+			mu.Unlock()
+			if left <= 10*time.Minute {
+				t.Fatalf("resolve at %v handed out a token with %v left, want more than 10 minutes", ev.at, left)
+			}
+			ms, _ := body["expires_at"].(float64)
+			value, _ := body["value"].(string)
+			installed, lease, handed[tok] = value, time.UnixMilli(int64(ms)), true
+		}
 		mu.Lock()
-		left := issued[tok].Add(time.Hour).Sub(f.clock.Now())
+		var live string
+		for tok, at := range issued {
+			if installed == "Bearer "+tok && now.Before(at.Add(time.Hour)) {
+				live = tok
+			}
+		}
 		mu.Unlock()
-		if left <= 10*time.Minute {
-			t.Fatalf("minute %.1f: handed out a token with %v left, want more than 10 minutes", min, left)
+		if live == "" {
+			t.Fatalf("at %v the proxy holds %q, which is no live token", ev.at, installed)
+		}
+		if ev.at > 55*time.Minute && live == svcToken(1) {
+			t.Fatalf("at %v the proxy still holds the first token, past its renewal", ev.at)
 		}
 	}
-	if len(seen) != 2 {
-		t.Fatalf("distinct tokens = %d, want the first and its replacement", len(seen))
+	if len(handed) != 2 {
+		t.Fatalf("tokens handed to the proxy = %d, want the first and its replacement", len(handed))
 	}
-	if rows := f.mintRows(); len(rows) != f.idp.count() {
-		t.Fatalf("mint rows = %d for %d requests sent", len(rows), f.idp.count())
+	var healthy int
+	for _, r := range f.idp.requests() {
+		if strings.Contains(r.URL, "//idp.example.test") {
+			healthy++
+		}
 	}
-	// The refresher's passes at 0, 30 and 59 seconds into a minute change nothing but the one renewal.
-	before := f.idp.count()
-	for _, sec := range []time.Duration{0, 30 * time.Second, 29 * time.Second} {
-		f.clock.Advance(sec)
-		f.srv.serviceGrantPass(context.Background())
+	var rows int
+	for _, ev := range f.mintRows() {
+		if strings.Contains(string(ev.Data), `"provider_uid":"`+uid+`"`) {
+			rows++
+		}
 	}
-	if f.idp.count() != before {
-		t.Fatalf("the refresher minted %d more times inside a fresh token's life", f.idp.count()-before)
+	if healthy != 2 || rows != healthy {
+		t.Fatalf("token requests for the healthy row = %d with %d mint rows, want 2 and one row per request", healthy, rows)
+	}
+	if resolves < 2 {
+		t.Fatalf("the proxy resolved %d times, want at least the first and the renewal", resolves)
 	}
 }
 
