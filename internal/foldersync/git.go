@@ -65,6 +65,14 @@ func cleanGitEnv(home string) []string {
 	return env
 }
 
+// gitVerb is the git command in args, past any leading -c name=value pairs.
+func gitVerb(args []string) string {
+	for len(args) > 2 && args[0] == "-c" {
+		args = args[2:]
+	}
+	return args[0]
+}
+
 // gitIn runs git in dir with exactly env.
 func gitIn(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
@@ -72,7 +80,7 @@ func gitIn(ctx context.Context, dir string, env []string, args ...string) (strin
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, Shown(strings.TrimSpace(errb.String())))
+		return "", fmt.Errorf("git %s: %w: %s", gitVerb(args), err, Shown(strings.TrimSpace(errb.String())))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
@@ -120,9 +128,9 @@ func laptopGitNames(ctx context.Context, root string, env []string, stdin io.Rea
 	case verr != nil:
 		return verr
 	case serr != nil:
-		return fmt.Errorf("git %s: %w", args[0], serr)
+		return fmt.Errorf("git %s: %w", gitVerb(args), serr)
 	case werr != nil:
-		return fmt.Errorf("git %s: %w: %s", args[0], werr, Shown(strings.TrimSpace(errb.String())))
+		return fmt.Errorf("git %s: %w: %s", gitVerb(args), werr, Shown(strings.TrimSpace(errb.String())))
 	}
 	return nil
 }
@@ -264,24 +272,34 @@ func makeCheckedBundle(ctx context.Context, root, branch, head, path string, org
 
 // checkBundleAllowed reads the bundle at path, the file that is sent, in an empty repository of its own,
 // so nothing in the laptop's checkout (a replace ref, a graft, a config) changes what is inspected: the
-// scan sees the commits the bundle's pack carries. The repository is removed on every path.
+// scan sees the commits the bundle's pack carries. The repository is made beside the bundle (a send's state
+// directory, not a memory-backed temp one) and removed on every path.
 func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny []string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp("", "wardyn-bundle-scan-")
+	dir, err := os.MkdirTemp(filepath.Dir(abs), "wardyn-bundle-scan-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
 	env := cleanGitEnv(dir)
 	repo := filepath.Join(dir, "scan.git")
-	if _, err := gitIn(ctx, dir, env, "init", "--bare", "-q", repo); err != nil {
+	// The scanner holds the bundle's own hash: a SHA-1 repository cannot import a SHA-256 bundle. SHA-1, the
+	// default, takes no flag, so an older git that lacks the option still works.
+	init := []string{"init", "--bare", "-q", repo}
+	if len(tip) == 64 {
+		init = append(init, "--object-format=sha256")
+	}
+	if _, err := gitIn(ctx, dir, env, init...); err != nil {
+		if len(tip) == 64 {
+			return fmt.Errorf("--git did not send %s: its history uses SHA-256 object names and this git cannot make a repository to check them in: %w", Shown(branch), err)
+		}
 		return err
 	}
 	ref := "refs/heads/" + branch
-	if _, err := gitIn(ctx, repo, env, "-c", "core.hooksPath="+os.DevNull, "fetch", "-q", "--no-tags", abs, ref+":"+ref); err != nil {
+	if _, err := gitIn(ctx, repo, env, "-c", "core.hooksPath="+os.DevNull, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "-q", "--no-tags", abs, ref+":"+ref); err != nil {
 		return fmt.Errorf("--git did not send %s: its bundle could not be read back to check its history: %w", Shown(branch), err)
 	}
 	return checkHistoryAllowed(ctx, repo, branch, tip, orgDeny)
@@ -335,7 +353,7 @@ func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny 
 		}
 		return nil
 	}
-	env := cleanGitEnv(os.TempDir())
+	env := cleanGitEnv(root)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rev := exec.CommandContext(ctx, "git", "-C", root, "rev-list", tip, "--")

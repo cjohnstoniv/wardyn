@@ -73,9 +73,10 @@ func TestMakeCheckedBundle_ChecksTheBundleNotTheCheckoutsView(t *testing.T) {
 		if strings.Contains(listed(g), "old.pem") {
 			t.Skip("this git no longer honours a graft file")
 		}
-		// git cannot pack the history a graft cuts, so there is no bundle to send.
-		if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny); err == nil {
-			t.Fatal("a branch with a graft was sent")
+		// The pack lacks the commit the graft cuts away, so the bundle cannot be read back to be checked.
+		err := makeCheckedBundle(t.Context(), g.lap, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny)
+		if err == nil || !strings.Contains(err.Error(), "could not be read back") || !strings.Contains(err.Error(), "git fetch:") {
+			t.Fatalf("got %v; want a refusal saying the bundle could not be read back, by git fetch", err)
 		}
 	})
 	t.Run("no replace ref or graft is a plain refusal of the same history", func(t *testing.T) {
@@ -92,13 +93,12 @@ func TestMakeCheckedBundle_ChecksTheBundleNotTheCheckoutsView(t *testing.T) {
 // The repository the bundle is checked in is removed whether the check passes, refuses or fails.
 func TestMakeCheckedBundle_RemovesItsScanRepository(t *testing.T) {
 	g := newGitRig(t)
-	scratch := t.TempDir()
-	t.Setenv("TMPDIR", scratch)
+	beside := t.TempDir()
 	left := func() []string {
-		m, _ := filepath.Glob(filepath.Join(scratch, "wardyn-bundle-scan-*"))
+		m, _ := filepath.Glob(filepath.Join(beside, "wardyn-bundle-scan-*"))
 		return m
 	}
-	bundle := func() string { return filepath.Join(t.TempDir(), "b.bundle") }
+	bundle := func() string { return filepath.Join(beside, "b.bundle") }
 	if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle(), []string{"*.pem"}); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestMakeCheckedBundle_RemovesItsScanRepository(t *testing.T) {
 	if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.run(g.lap, "rev-parse", "HEAD"), bundle(), []string{"*.pem"}); err == nil {
 		t.Fatal("a denied history was sent")
 	}
-	if err := checkBundleAllowed(t.Context(), filepath.Join(t.TempDir(), "missing.bundle"), "feature/x", g.head, []string{"*.pem"}); err == nil {
+	if err := checkBundleAllowed(t.Context(), filepath.Join(beside, "missing.bundle"), "feature/x", g.head, []string{"*.pem"}); err == nil {
 		t.Fatal("a missing bundle was checked")
 	}
 	if m := left(); len(m) != 0 {
@@ -215,4 +215,80 @@ func TestBundleCurrentBranch_RetriesOnceWhenTheBranchMoves(t *testing.T) {
 			t.Fatal("a bundle was made for a commit already sent")
 		}
 	})
+}
+
+// A SHA-256 repository's bundle is checked in a SHA-256 scanner, allowed or denied; a git without SHA-256
+// skips the test.
+func TestMakeCheckedBundle_ChecksASHA256Bundle(t *testing.T) {
+	g := newGitRig(t)
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q", "-b", "feature/x", "--object-format=sha256").CombinedOutput(); err != nil {
+		t.Skipf("this git has no SHA-256 repositories: %s", out)
+	}
+	g.write(dir, "main.go", "package main\n")
+	g.run(dir, "add", "main.go")
+	g.run(dir, "commit", "-q", "-m", "root")
+	head := g.run(dir, "rev-parse", "HEAD")
+	if len(head) != 64 {
+		t.Fatalf("head %q is not a SHA-256 id; the test proves nothing", head)
+	}
+	deny := []string{"*.pem"}
+	if err := makeCheckedBundle(t.Context(), dir, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny); err != nil {
+		t.Fatalf("an allowed SHA-256 history was refused: %v", err)
+	}
+	g.write(dir, "old.pem", "synthetic\n")
+	g.run(dir, "add", "old.pem")
+	g.run(dir, "commit", "-q", "-m", "pem")
+	head = g.run(dir, "rev-parse", "HEAD")
+	err := makeCheckedBundle(t.Context(), dir, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny)
+	var denied *HistoryDeniedError
+	if !errors.As(err, &denied) || denied.Path != "old.pem" {
+		t.Fatalf("got %v; want a refusal naming old.pem", err)
+	}
+}
+
+// A commit the history walk cannot read is an error, not a clean history: rev-list prints the commits it
+// reached before it failed, and diff-tree reads those without complaint.
+func TestCheckHistoryAllowed_RefusesAHistoryItCannotWalk(t *testing.T) {
+	g := newGitRig(t)
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "pem")
+	adds := g.run(g.lap, "rev-parse", "HEAD")
+	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
+		g.write(g.lap, name, "synthetic\n")
+		g.run(g.lap, "add", name)
+		g.run(g.lap, "commit", "-q", "-m", name)
+	}
+	tip := g.run(g.lap, "rev-parse", "HEAD")
+	if err := os.Remove(filepath.Join(g.lap, ".git", "objects", adds[:2], adds[2:])); err != nil {
+		t.Fatalf("the commit is not a loose object: %v", err)
+	}
+	err := checkHistoryAllowed(t.Context(), g.lap, "feature/x", tip, []string{"old.pem"})
+	var denied *HistoryDeniedError
+	if err == nil || errors.As(err, &denied) || !strings.Contains(err.Error(), "rev-list") {
+		t.Fatalf("got %v; want a rev-list error", err)
+	}
+}
+
+// The scan reads nothing the laptop's environment names: a graft file set in the process hides a commit
+// from a git that inherits it, not from the scan of the bundle.
+func TestCheckBundleAllowed_IgnoresTheLaptopsEnvironment(t *testing.T) {
+	g := newGitRig(t)
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "pem")
+	g.run(g.lap, "rm", "-q", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "gone")
+	tip, base := g.run(g.lap, "rev-parse", "HEAD"), g.run(g.lap, "rev-parse", "HEAD~2")
+	bundle := filepath.Join(t.TempDir(), "b.bundle")
+	g.run(g.lap, "bundle", "create", "-q", bundle, "refs/heads/feature/x")
+	grafts := filepath.Join(t.TempDir(), "grafts")
+	g.write(filepath.Dir(grafts), "grafts", tip+" "+base+"\n")
+	t.Setenv("GIT_GRAFT_FILE", grafts)
+	err := checkBundleAllowed(t.Context(), bundle, "feature/x", tip, []string{"*.pem"})
+	var denied *HistoryDeniedError
+	if !errors.As(err, &denied) || denied.Path != "old.pem" {
+		t.Fatalf("got %v; want a refusal naming old.pem", err)
+	}
 }

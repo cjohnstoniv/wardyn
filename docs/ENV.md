@@ -1934,7 +1934,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_SYNC_DENY`
 
 - Gitignore-syntax patterns, e.g. `.env*,*.pem`, served as `sync.deny` on `GET /runs/{id}`. No ignore file can re-include one.
-- `wardyn sync --git` sends whole commits, so it reads the bundle it will send in a repository of its own. It checks every path any commit adds, even one later removed or renamed, and the tip's tree. A match refuses the send and names the path and pattern; the working-tree sync still runs.
+- `wardyn sync --git` sends whole commits. With these patterns set, it reads the bundle in a repository of its own. It checks every path any commit adds (even one later removed or renamed) and the tip's tree; with none set it skips this. A match refuses the send and names the path and pattern.
 - Boot refuses over 64 patterns, one over 256 bytes, or a control character. See [SSH.md](SSH.md#sync-a-directory-wardyn-sync).
 
 ### `WARDYN_LOCAL_FOLDER_SEED_WAIT`
