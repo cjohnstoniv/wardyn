@@ -36,10 +36,10 @@ type runnerStatus struct {
 	// when. Both are empty once connected, and after a clean shutdown unless a refusal at start set them.
 	Stage   string     `json:"stage,omitempty"`
 	StageAt *time.Time `json:"stage_at,omitempty"`
-	// StartRefused is set when the last start was refused with no stage to name (a bad flag), so a clean
-	// stop after a refusal reads differently from one after an old connection error. It is cleared once a
-	// connection is made, or a refusal at a stage replaces it.
-	StartRefused bool `json:"start_refused,omitempty"`
+	// StartRefusal is the latest start refused with no stage to name (a bad flag), kept apart from LastError
+	// so a connection failure after it, a clean stop, a hard kill and the next start all leave it on disk.
+	// It is cleared only when a connection is made or a newer refusal at a stage replaces it.
+	StartRefusal *startRefusal `json:"start_refusal,omitempty"`
 	// Relay is types.RelayReachable or types.RelayUnreachable; empty when no relay is probed.
 	Relay     string    `json:"relay,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -50,6 +50,12 @@ type runnerStatus struct {
 	// NextRetryAt is when the runner next tries to pull its proxy image while it waits for one; empty
 	// otherwise. State stays "starting" meanwhile.
 	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
+}
+
+// startRefusal is a refusal of serve's start that no doctor stage names, and when it happened.
+type startRefusal struct {
+	Error string    `json:"error"`
+	At    time.Time `json:"at"`
 }
 
 // statusPath is statusFile in stateDir.
@@ -84,11 +90,12 @@ func newStatusWriter(stateDir string) *statusWriter {
 	w := &statusWriter{path: statusPath(stateDir), now: time.Now}
 	w.cur = runnerStatus{PID: os.Getpid()}
 	// A refusal the last start recorded outlives this new process until a connect: this start has not
-	// proved the configuration works, and it may stop before it connects. A file with no flag (written
-	// before it existed) is not carried: its errors may be history.
-	if prev, err := loadStatus(w.path); err == nil && prev.StartRefused {
-		w.cur.LastError, w.cur.LastErrorAt, w.cur.StartRefused = prev.LastError, prev.LastErrorAt, true
-		w.refused = &runnerStatus{LastError: prev.LastError, LastErrorAt: prev.LastErrorAt, StartRefused: true}
+	// proved the configuration works, and it may stop before it connects. A file with no refusal (written
+	// before it existed) carries nothing: its errors may be history.
+	if prev, err := loadStatus(w.path); err == nil && prev.StartRefusal != nil {
+		at := prev.StartRefusal.At
+		w.cur.LastError, w.cur.LastErrorAt, w.cur.StartRefusal = prev.StartRefusal.Error, &at, prev.StartRefusal
+		w.refused = &runnerStatus{LastError: prev.StartRefusal.Error, LastErrorAt: &at}
 	}
 	w.set("starting")
 	return w
@@ -124,7 +131,7 @@ func (w *statusWriter) linkChanged(up bool, reason string) {
 		w.cur.LastError, w.cur.LastErrorAt = cleanStatusError(reason), &at
 	}
 	if up {
-		w.cur.Stage, w.cur.StageAt, w.cur.StartRefused, w.refused = "", nil, false, nil
+		w.cur.Stage, w.cur.StageAt, w.cur.StartRefusal, w.refused = "", nil, nil, nil
 		w.set("connected")
 	} else {
 		w.set("offline")
@@ -142,12 +149,21 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 	defer w.mu.Unlock()
 	at = at.UTC()
 	w.cur.LastError, w.cur.LastErrorAt = reason, &at
-	w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = stage, &at, false
+	w.cur.Stage, w.cur.StageAt = stage, &at
 	if refusal {
+		w.cur.StartRefusal = nil // a newer refusal at a stage replaces one with none; a failed connect does not
 		w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at, Stage: stage, StageAt: &at}
 	}
 	w.cur.UpdatedAt = w.now()
 	w.write()
+}
+
+// refusalAfter reports whether the writer holds a start refusal with no stage that is newer than at: a
+// pending summary of an older refusal at a stage must not be replayed over it.
+func (w *statusWriter) refusalAfter(at time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cur.StartRefusal != nil && w.cur.StartRefusal.At.After(at)
 }
 
 // startError records a start that failed with no stage (a bad flag): the error is the last one, and is kept
@@ -160,8 +176,9 @@ func (w *statusWriter) startError(reason string, at time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	at = at.UTC()
-	w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = reason, &at, "", nil, true
-	w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at, StartRefused: true}
+	w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = reason, &at, "", nil
+	w.cur.StartRefusal = &startRefusal{Error: reason, At: at}
+	w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at}
 	w.cur.UpdatedAt = w.now()
 	w.write()
 }
@@ -211,9 +228,9 @@ func (w *statusWriter) retryAt(next *time.Time) {
 func (w *statusWriter) stopped() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.cur.Stage, w.cur.StageAt, w.cur.NextRetryAt, w.cur.StartRefused = "", nil, nil, false
+	w.cur.Stage, w.cur.StageAt, w.cur.NextRetryAt = "", nil, nil
 	if r := w.refused; r != nil {
-		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = r.LastError, r.LastErrorAt, r.Stage, r.StageAt, r.StartRefused
+		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = r.LastError, r.LastErrorAt, r.Stage, r.StageAt
 	}
 	w.set("stopped")
 }

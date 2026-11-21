@@ -376,8 +376,12 @@ func statusStage(path string) doctor.Stage {
 	since := st.Since.UTC().Format(time.RFC3339)
 	// A start the runner refused with no stage to name (a bad flag, an invalid local-attach value) is a
 	// failure that stays until a start succeeds: this runner has not connected on its latest configuration.
-	if st.StartRefused && st.State != "connected" {
-		return doctor.FailStage("status", fmt.Sprintf("%s since %s (start refused)%s", st.State, since, last), "",
+	if r := st.StartRefusal; r != nil && st.State != "connected" {
+		detail := fmt.Sprintf("%s since %s (start refused at %s: %s)", st.State, since, r.At.UTC().Format(time.RFC3339), r.Error)
+		if st.LastError != "" && st.LastError != r.Error && st.LastErrorAt != nil {
+			detail += fmt.Sprintf("; last connection error at %s: %s", st.LastErrorAt.UTC().Format(time.RFC3339), st.LastError)
+		}
+		return doctor.FailStage("status", detail, "",
 			"fix the setting the error names and start the runner again; this stays failed until a start succeeds")
 	}
 	// A failure is a runner that is not connected and either stopped at a stage or is offline. An error left
