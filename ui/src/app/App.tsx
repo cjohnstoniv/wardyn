@@ -9,6 +9,7 @@ import { NotFoundPage } from "./components/wardyn/not-found-page";
 import { RouteFallback } from "./components/wardyn/route-fallback";
 import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
+import { clearAccountToasts } from "./lib/account-toasts";
 import { Toaster } from "./components/ui/sonner";
 import { SHELL } from "./components/wardyn/copy";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
@@ -834,6 +835,8 @@ export default function App() {
                 // The signed-out hold stays up through the logout (which alone
                 // passes it, core.ts WfetchInit.endsSession) and drops with
                 // resetReauth below, once the logout has settled.
+                // A notification that names a person must not outlive this sign-in on the gate that follows.
+                clearAccountToasts();
                 signingOutRef.current = true;
                 signedOutHereRef.current = true;
                 setSignedOutHold(true);
