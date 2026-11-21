@@ -148,18 +148,17 @@ type bootFlags struct {
 	// refuseWritableCA is WARDYN_TRUSTED_CA_REFUSE_WRITABLE: refuse boot, rather than warn,
 	// when that bundle is group- or world-writable (readTrustedCAFile).
 	refuseWritableCA *bool
-	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
-	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
-	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
-	// GitHub App minting, AWS SSO CreateToken renewal, Entra sync) — the
-	// supported replacement for setting HTTPS_PROXY on wardynd, which stays
-	// unsupported (Go's net/http would also re-point the Kubernetes client and
-	// every http.ProxyFromEnvironment reader process-wide). Same posture class
-	// as trustedCAFile above: control-plane-authored only, never a SiteConfig
-	// field. Empty daemonProxyURL = the shared http.DefaultTransport is left
-	// untouched, byte-identical to today.
-	daemonProxyURL *string
-	daemonNoProxy  *string
+	// daemonProxyURL / daemonNoProxy / daemonProxyAlways are WARDYN_DAEMON_PROXY_URL / _NO_PROXY /
+	// _ALWAYS (see daemon_proxy.go): a forward proxy for wardynd's OWN outbound HTTP calls (OIDC
+	// discovery/JWKS, audit webhooks, GitHub App minting, AWS SSO CreateToken renewal, Entra sync) —
+	// the supported replacement for setting HTTPS_PROXY on wardynd, which stays unsupported (Go's
+	// net/http would also re-point the Kubernetes client and every http.ProxyFromEnvironment reader
+	// process-wide); _ALWAYS names the hosts a service grant's token request sends through it even
+	// past the bypass list. Same posture class as trustedCAFile above: control-plane-authored only,
+	// never a SiteConfig field. Empty daemonProxyURL = the shared http.DefaultTransport is untouched.
+	daemonProxyURL    *string
+	daemonNoProxy     *string
+	daemonProxyAlways *string
 	// daemonProxySecretFile is WARDYN_DAEMON_PROXY_SECRET (see
 	// installDaemonProxySecret, daemon_proxy.go): a PATH to a file holding one
 	// proxy URL that MAY embed user:pass@ — the credentialed form
@@ -546,6 +545,7 @@ func parseBootFlags() *bootFlags {
 		refuseWritableCA:       flagBool("trusted-ca-refuse-writable", "WARDYN_TRUSTED_CA_REFUSE_WRITABLE", false, "refuse boot when the -trusted-ca-file bundle is group- or world-writable; off, boot logs a warning naming the file and mode (default false)"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
+		daemonProxyAlways:      flagEnv("daemon-proxy-always", "WARDYN_DAEMON_PROXY_ALWAYS", "", "comma-separated exact host names that a provider service grant's token request always sends through the daemon proxy (-daemon-proxy-url, -daemon-proxy-secret-file or HTTPS_PROXY), even when -daemon-no-proxy covers them; no suffix or wildcard, and no other call changes. Refused at boot for an IP address, localhost, a host wardynd always reaches directly, or when no daemon proxy is configured. Empty (default) lists none"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
 		cliArtifactBase:        flagEnv("cli-artifact-base", "WARDYN_CLI_ARTIFACT_BASE", "", "internal mirror (https://) of the release assets, published on the anonymous /healthz as cli_artifact_base so the console's install line and 'wardyn runner setup' fetch from it: <base>/v<version>/<asset>. Empty (default) publishes none"),
 		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),

@@ -403,6 +403,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
+| `WARDYN_DAEMON_PROXY_ALWAYS` | string (CSV) | (unset) | full host names whose service grant token request always uses the daemon proxy, even past a no-proxy list: `WARDYN_DAEMON_PROXY_URL` or `_SECRET` (http, https), else `HTTPS_PROXY` (also socks5, socks5h, host:port). Boot refuses an unusable proxy or entry. [Details](#wardyn_daemon_proxy_always) |
 | `WARDYN_DEMO_VIDEO_BASE_URL` | string (URL) | (unset) | operator-run mirror base URL re-pointing the Getting Started demo episodes (flag `-demo-video-base-url`; `ValidateDemoVideoBaseURL`, [`internal/api/llm_gateway.go`](../internal/api/llm_gateway.go)) for an air-gapped deployment; unset downloads from GitHub directly. [Details](#wardyn_demo_video_base_url) |
 | `WARDYN_CLI_ARTIFACT_BASE` | string (URL) | (unset) | internal mirror of the release assets, published on the anonymous `/healthz` as `cli_artifact_base` (flag `-cli-artifact-base`; `ValidateCLIArtifactBase`, [`internal/api/cli_artifact_base.go`](../internal/api/cli_artifact_base.go)). The console's install line and `wardyn runner setup` fetch from it; unset publishes nothing. [Details](#wardyn_cli_artifact_base) |
 | `WARDYN_ORG_CA_FINGERPRINTS` | string (CSV) | (unset) | SHA-256 fingerprints of the organisation's CA certificates, published on the anonymous `/healthz` as `org_ca_fingerprints` (flag `-org-ca-fingerprints`; `ParseOrgCAFingerprints`, [`internal/api/org_ca_fingerprints.go`](../internal/api/org_ca_fingerprints.go)) for people to compare with what `wardyn ca add` prints; unset publishes none. [Details](#wardyn_org_ca_fingerprints) |
@@ -2248,6 +2249,21 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - That value is a chart-render-time default, not a boot-time guarantee; `daemonProxySecretMode` still independently refuses only a group- or world-**writable** file regardless of what `defaultMode` renders.
 - A Kubernetes Secret volume is always root-owned, never wardynd's own uid, so the other-readable refusal above never fires on it either.
 - `0440`, `0400` and even a wider `0644`/`0444` all boot — only a writable `defaultMode` (e.g. `0660`) is caught.
+
+### `WARDYN_DAEMON_PROXY_ALWAYS`
+
+- Host names whose **service grant token request** always goes to the daemon proxy, past `WARDYN_DAEMON_NO_PROXY` and `NO_PROXY` (flag `-daemon-proxy-always`; `serviceGrantTransport`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)).
+- Only that request, on its own transport. Every other call routes as it did without the list.
+- The proxy is `WARDYN_DAEMON_PROXY_URL` or `_SECRET`, else `HTTPS_PROXY`.
+- Match: the exact host, case-insensitive; a trailing dot and a port are ignored.
+- A non-ASCII token address matches in its IDNA-ASCII form, so list `xn--` names.
+- Subdomains are **not** included: `login.corp.example` never covers `x.login.corp.example` or `corp.example`.
+- `WARDYN_DAEMON_NO_PROXY` matches as `x/net/http/httpproxy` does: `corp.example` covers it and its subdomains, `.corp.example` or `*.corp.example` only the subdomains, `*` all.
+- Boot refuses an entry that is an IP address, a numeric name such as `127.1`, `localhost`, or not a host name.
+- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a link-local endpoint. It is compared in its IDNA-ASCII form, so a Unicode spelling of either side matches; one that does not convert refuses boot.
+- A refusal names the variable and the entry's position, never its text.
+- Boot also refuses with no proxy, or an `HTTPS_PROXY` that is not usable, or a proxy port outside 1 to 65535, so a listed host is never sent direct.
+- Every mode that installs the daemon transport refuses too, key rotation, rewrap and recovery rehearsal included, as for a malformed `WARDYN_DAEMON_PROXY_URL`.
 
 ### `WARDYN_DEMO_VIDEO_BASE_URL`
 

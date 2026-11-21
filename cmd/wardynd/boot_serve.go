@@ -218,6 +218,11 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	// Provider service grants: every replica warms and reports its own tokens, with or
+	// without a runner (a headless API serves them too); the claimed clean-up of a
+	// removed grant runs on the sweeper leader only.
+	go goSafe("service.grant.refresher", func() { srv.StartServiceGrantRefresher(rootCtx) })
+	leaderGo(rootCtx, leader, "service.grant.cleanup", srv.RunServiceGrantCleanup)
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
