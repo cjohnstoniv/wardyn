@@ -43,6 +43,7 @@ const PortalActivationKey = "portal_issuers_activation"
 
 // PortalActivation is the activation's audit record. The events' ids and time are fixed when the mark
 // commits, so any replica can deliver them later and the audit table keeps one row each (WithAuditReplay).
+// It is settled only once the audit table holds both events; settling drops everything but audited_at.
 type PortalActivation struct {
 	ActorType       string     `json:"actor_type"`
 	Actor           string     `json:"actor"`
@@ -58,7 +59,8 @@ type PortalActivationStore interface {
 	PortalIssuersActivated(ctx context.Context) (bool, error)
 	ActivatePortalIssuersAs(ctx context.Context, a PortalActivation) (activated bool, err error)
 	PendingPortalActivation(ctx context.Context) (PortalActivation, bool, error)
-	MarkPortalActivationAudited(ctx context.Context) (bool, error)
+	PortalActivationLanded(ctx context.Context) (activate, override bool, err error)
+	SettlePortalActivation(ctx context.Context) (bool, error)
 	UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error)
 }
 
@@ -88,7 +90,7 @@ func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []str
 //
 // activated is true only when this call set the mark, so of two concurrent activations exactly one is told it
 // did and its record is the stored one. a carries the actor and the overridden sessions; the event ids and
-// time are fixed here, and the caller delivers the rows (PendingPortalActivation, MarkPortalActivationAudited).
+// time are fixed here, and the caller delivers the rows (PendingPortalActivation, PortalActivationLanded, SettlePortalActivation).
 func (s PG) ActivatePortalIssuersAs(ctx context.Context, a PortalActivation) (activated bool, err error) {
 	a.EventAt = time.Now().UTC().Truncate(time.Microsecond)
 	a.ActivateEventID, a.OverrideEventID, a.AuditedAt = uuid.New(), uuid.Nil, nil
@@ -114,7 +116,7 @@ func (s PG) ActivatePortalIssuersAs(ctx context.Context, a PortalActivation) (ac
 	return tag.RowsAffected() == 1, nil
 }
 
-// PendingPortalActivation is the committed activation whose events were not yet marked delivered. ok is false
+// PendingPortalActivation is the committed activation whose events are not yet settled. ok is false
 // when portals are off, when the record is delivered, and when the mark predates the record (an older
 // server's mark has none and owes nothing).
 func (s PG) PendingPortalActivation(ctx context.Context) (a PortalActivation, ok bool, err error) {
@@ -135,17 +137,47 @@ func (s PG) PendingPortalActivation(ctx context.Context) (a PortalActivation, ok
 	return a, true, nil
 }
 
-// MarkPortalActivationAudited records that the activation's events were delivered, where they were not yet,
-// and reports whether this call did. A crash after the append and before this leads to one more replay, which
-// adds no row.
-func (s PG) MarkPortalActivationAudited(ctx context.Context) (bool, error) {
+// portalActivationRowSQL is the audit_events row of the record's event, found by the id and time the winning
+// write fixed. The audit table is the only receipt: a local spool line, a recorder that said it accepted the
+// event, and a replay that was a no-op are not.
+func portalActivationRowSQL(idKey, action string) string {
+	return `EXISTS (SELECT 1 FROM audit_events e WHERE e.id = (config -> $1::text ->> '` + idKey + `')::uuid
+		AND e."time" = (config -> $1::text ->> 'event_at')::timestamptz AND e.action = '` + action + `')`
+}
+
+// PortalActivationLanded reports which of the owed record's events the shared audit table holds, with the
+// stored time the record fixed. Both are false when nothing is owed.
+func (s PG) PortalActivationLanded(ctx context.Context) (activate, override bool, err error) {
+	err = s.Pool.QueryRow(ctx, `
+		SELECT `+portalActivationRowSQL("activate_event_id", "portal_issuers.activate")+`,
+		       `+portalActivationRowSQL("override_event_id", "portal_issuers.activate_override")+`
+		  FROM site_config WHERE singleton AND config -> $1::text ->> 'activate_event_id' IS NOT NULL
+		   AND config -> $1::text ->> 'audited_at' IS NULL`, PortalActivationKey).Scan(&activate, &override)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("store: read landed portal activation events: %w", err)
+	}
+	return activate, override, nil
+}
+
+// SettlePortalActivation settles the activation's record, and reports whether this call did. It does so only
+// in the one statement that finds the activate event, and the override event when sessions were overridden, in
+// the audit table with the id and time the record fixed. Settling replaces the record with a delivery marker
+// that holds the time only: the operator's principal, the sessions and the event ids leave the document in
+// the same statement, so nothing in it can attribute the audit rows once their subject's key is erased.
+func (s PG) SettlePortalActivation(ctx context.Context) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE site_config
-		   SET config = jsonb_set(config, ARRAY[$1::text, 'audited_at'], to_jsonb(clock_timestamp()))
+		   SET config = jsonb_set(config, ARRAY[$1::text], jsonb_build_object('audited_at', to_jsonb(clock_timestamp())))
 		 WHERE singleton AND config -> $1::text ->> 'activate_event_id' IS NOT NULL
-		   AND config -> $1::text ->> 'audited_at' IS NULL`, PortalActivationKey)
+		   AND config -> $1::text ->> 'audited_at' IS NULL
+		   AND `+portalActivationRowSQL("activate_event_id", "portal_issuers.activate")+`
+		   AND (jsonb_array_length(config -> $1::text -> 'sessions') = 0
+		        OR `+portalActivationRowSQL("override_event_id", "portal_issuers.activate_override")+`)`, PortalActivationKey)
 	if err != nil {
-		return false, fmt.Errorf("store: mark portal activation audited: %w", err)
+		return false, fmt.Errorf("store: settle portal activation: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }

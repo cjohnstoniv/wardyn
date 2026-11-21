@@ -67,10 +67,24 @@ type portalActivationMonitor struct {
 	last    time.Time
 	samples []portalSample
 	seen    map[portalAlarmKey]bool
-	unsent  bool // the activation's audit rows were owed and not yet delivered at the last attempt
+	unsent  bool      // the activation's audit rows were owed and not yet settled at the last attempt
+	retryAt time.Time // no new send of the owed rows before this
 }
 
-// owed reports whether the activation's audit rows are still undelivered, so the monitor retries soon.
+// mayRetry reports whether the owed rows may be sent at now.
+func (m *portalActivationMonitor) mayRetry(now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !now.Before(m.retryAt)
+}
+
+func (m *portalActivationMonitor) retryAfter(at time.Time) {
+	m.mu.Lock()
+	m.retryAt = at
+	m.mu.Unlock()
+}
+
+// owed reports whether the activation's audit rows are still unsettled, so the monitor retries soon.
 func (m *portalActivationMonitor) owed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -278,43 +292,66 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"activated": true, "overridden_sessions": len(suspects)})
 }
 
-// deliverPortalActivation delivers the activation's audit rows when they are still owed, from the record the
+// portalActivationRetryEvery is how long a replica leaves an activation whose rows it sent and could not see
+// in the shared audit table before it sends them again, so a replica whose rows wait in its local spool does
+// not append them again every tick.
+const portalActivationRetryEvery = time.Minute
+
+// deliverPortalActivation delivers the activation's audit rows while they are still owed, from the record the
 // winning write committed: the actor, the sessions the operator overrode and each event's fixed id and time.
 // Every delivery, by the activating request or any replica's monitor, is a replay of the same events
-// (store.WithAuditReplay), so the audit table keeps one row each however often it runs. The record is marked
-// delivered only after every row was accepted; a row that was not leaves it owed for the next tick.
+// (store.WithAuditReplay), so the audit table keeps one row each however often it runs.
+//
+// Delivery is not settlement. A recorder that returns nil or audit.ErrSpooled may hold the row only in this
+// pod's local spool, which a replaced pod loses, so the record is settled only when the store reads both
+// events, with their fixed times, in the shared audit table (SettlePortalActivation). Until then every
+// replica sends what it does not see there.
 func (s *Server) deliverPortalActivation(ctx context.Context, ps store.PortalActivationStore) {
+	m := s.portalMonitor()
 	rec, owed, err := ps.PendingPortalActivation(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "portal activation: read the owed audit rows", slog.Any("err", err))
-		s.portalMonitor().setOwed(true)
+		m.setOwed(true)
 		return
 	}
 	if !owed {
-		s.portalMonitor().setOwed(false)
+		m.setOwed(false)
+		return
+	}
+	m.setOwed(true)
+	now := s.cfg.Now()
+	if !m.mayRetry(now) {
+		return
+	}
+	landedActivate, landedOverride, err := ps.PortalActivationLanded(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "portal activation: read the audit table", slog.Any("err", err))
 		return
 	}
 	ctx = store.WithAuditReplay(ctx)
 	actorType := types.ActorType(rec.ActorType)
-	activate := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate", "portal_issuers", "success",
-		mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(rec.Sessions)}))
-	activate.ID, activate.Time = rec.ActivateEventID, rec.EventAt
-	delivered := s.recordAuditDurably(ctx, activate)
-	if delivered && len(rec.Sessions) > 0 {
+	if !landedActivate {
+		activate := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate", "portal_issuers", "success",
+			mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(rec.Sessions)}))
+		activate.ID, activate.Time = rec.ActivateEventID, rec.EventAt
+		s.recordAuditDurably(ctx, activate)
+	}
+	if len(rec.Sessions) > 0 && !landedOverride {
 		override := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate_override", "portal_issuers", "success",
 			mustJSON(map[string]any{"sessions": rec.Sessions}))
 		override.ID, override.Time = rec.OverrideEventID, rec.EventAt
-		delivered = s.recordAuditDurably(ctx, override)
+		s.recordAuditDurably(ctx, override)
 	}
-	if !delivered {
-		slog.WarnContext(ctx, "portal activation: the audit rows were not accepted, they stay owed")
-		s.portalMonitor().setOwed(true)
+	settled, err := ps.SettlePortalActivation(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "portal activation: settle the audit rows", slog.Any("err", err))
+		m.retryAfter(now.Add(portalActivationRetryEvery))
 		return
 	}
-	if _, err := ps.MarkPortalActivationAudited(ctx); err != nil {
-		slog.WarnContext(ctx, "portal activation: mark the audit rows delivered", slog.Any("err", err))
-		s.portalMonitor().setOwed(true)
+	if !settled {
+		slog.WarnContext(ctx, "portal activation: the audit rows are not in the shared audit table yet, they stay owed")
+		m.retryAfter(now.Add(portalActivationRetryEvery))
 		return
 	}
-	s.portalMonitor().setOwed(false)
+	m.setOwed(false)
 }

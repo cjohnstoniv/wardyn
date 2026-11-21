@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -24,7 +26,8 @@ type activationStore struct {
 	lose     bool // another caller's write set the mark first
 	sessions []types.ClientSession
 	rec      *store.PortalActivation // the committed record, as the winning write stored it
-	marked   bool
+	settled  bool
+	landed   func(uuid.UUID) bool // whether the shared audit table holds the event
 }
 
 func (s *activationStore) PortalIssuersActivated(context.Context) (bool, error) { return s.on, nil }
@@ -41,13 +44,26 @@ func (s *activationStore) ActivatePortalIssuersAs(_ context.Context, a store.Por
 	return true, nil
 }
 func (s *activationStore) PendingPortalActivation(context.Context) (store.PortalActivation, bool, error) {
-	if s.rec == nil || s.marked {
+	if s.rec == nil || s.settled {
 		return store.PortalActivation{}, false, nil
 	}
 	return *s.rec, true, nil
 }
-func (s *activationStore) MarkPortalActivationAudited(context.Context) (bool, error) {
-	s.marked = true
+func (s *activationStore) PortalActivationLanded(context.Context) (bool, bool, error) {
+	if s.rec == nil || s.settled || s.landed == nil {
+		return false, false, nil
+	}
+	return s.landed(s.rec.ActivateEventID), s.landed(s.rec.OverrideEventID), nil
+}
+
+// SettlePortalActivation settles only when both events are in the audit table, and drops the raw record, as the
+// store's one statement does.
+func (s *activationStore) SettlePortalActivation(context.Context) (bool, error) {
+	if s.rec == nil || s.settled || s.landed == nil || !s.landed(s.rec.ActivateEventID) ||
+		(len(s.rec.Sessions) > 0 && !s.landed(s.rec.OverrideEventID)) {
+		return false, nil
+	}
+	s.settled, s.rec = true, &store.PortalActivation{}
 	return true, nil
 }
 func (s *activationStore) UntaggedClientSessions(context.Context) ([]types.ClientSession, error) {
@@ -139,75 +155,126 @@ func TestPortalIssuersActivate_BodyNamingMarkRefused(t *testing.T) {
 	}
 }
 
-// downAudit is an audit recorder that refuses every event while down is set, as an audit store that is out.
-type downAudit struct {
+// sharedAudit stands for the shared audit table: it keeps one row per event id, as a replay does.
+type sharedAudit struct {
 	recRecorder
-	down bool
 }
 
-func (d *downAudit) Record(ctx context.Context, ev types.AuditEvent) error {
-	if d.down {
-		return errors.New("the audit store is down")
+func (a *sharedAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if a.has(ev.ID) {
+		return nil
 	}
-	return d.recRecorder.Record(ctx, ev)
+	return a.recRecorder.Record(ctx, ev)
 }
 
-// The replay decision. A committed activation whose rows were not accepted stays owed and the monitor retries
-// it soon; once accepted it is delivered with the record's own ids, time, actor and sessions and marked, and a
-// later tick owes and writes nothing. A record with no overridden session owes one row, not two; with nothing
-// committed nothing is written.
-func TestPortalActivationDelivery_ReplaysTheCommittedRecordOnce(t *testing.T) {
-	fake := &activationStore{}
-	h := newHarness(t)
-	srv := New(baseTestConfig(h, fake))
-	rec := &downAudit{down: true}
-	srv.cfg.Audit = rec
-
-	srv.deliverPortalActivation(context.Background(), fake)
-	if n := len(rec.snapshot()); n != 0 || srv.portalMonitor().owed() {
-		t.Fatalf("with nothing committed: %d rows, owed %v; want 0 and not owed", n, srv.portalMonitor().owed())
-	}
-
-	if won, err := fake.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{
-		ActorType: string(types.ActorHuman), Actor: "ops@example.com", Sessions: []string{"billing-job@10.0.0.9"}}); err != nil || !won {
-		t.Fatalf("seed the committed activation = %v, %v", won, err)
-	}
-	srv.deliverPortalActivation(context.Background(), fake)
-	if fake.marked || !srv.portalMonitor().owed() {
-		t.Fatalf("rows refused by the audit store: marked %v, owed %v; want unmarked and owed", fake.marked, srv.portalMonitor().owed())
-	}
-
-	rec.down = false
-	srv.deliverPortalActivation(context.Background(), fake)
-	got := rec.snapshot()
-	if !fake.marked || srv.portalMonitor().owed() || len(got) != 2 {
-		t.Fatalf("after the audit store returned: marked %v, owed %v, %d rows; want marked, not owed, 2 rows", fake.marked, srv.portalMonitor().owed(), len(got))
-	}
-	for i, want := range []struct {
-		action string
-		id     uuid.UUID
-	}{{"portal_issuers.activate", fake.rec.ActivateEventID}, {"portal_issuers.activate_override", fake.rec.OverrideEventID}} {
-		ev := got[i]
-		if ev.Action != want.action || ev.ID != want.id || !ev.Time.Equal(fake.rec.EventAt) || ev.Actor != "ops@example.com" || ev.ActorType != types.ActorHuman {
-			t.Errorf("row %d = %s id %s time %s actor %s/%s; want %s id %s time %s actor human/ops@example.com",
-				i, ev.Action, ev.ID, ev.Time, ev.ActorType, ev.Actor, want.action, want.id, fake.rec.EventAt)
+func (a *sharedAudit) has(id uuid.UUID) bool {
+	for _, ev := range a.snapshot() {
+		if ev.ID == id {
+			return true
 		}
 	}
-	if !strings.Contains(string(got[1].Data), "billing-job@10.0.0.9") {
-		t.Errorf("the override row's data %s does not name the overridden session", got[1].Data)
+	return false
+}
+
+// localSpoolAudit is a replica whose store write fails for the held event ids and whose local spool takes
+// them, with the two answers production gives: the spooling recorder's error wrapping audit.ErrSpooled, and the
+// sealing recorder's nil for a row it appended to the spool alone.
+type localSpoolAudit struct {
+	shared  *sharedAudit
+	hold    map[uuid.UUID]bool
+	nilBack bool
+	spooled []types.AuditEvent
+}
+
+func (l *localSpoolAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if !l.hold[ev.ID] {
+		return l.shared.Record(ctx, ev)
 	}
-	srv.deliverPortalActivation(context.Background(), fake)
-	if n := len(rec.snapshot()); n != 2 {
-		t.Errorf("a tick after delivery wrote %d more rows, want none", n-2)
+	l.spooled = append(l.spooled, ev)
+	if l.nilBack {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", audit.ErrSpooled, errors.New("the audit store is down"))
+}
+
+// A record is settled only when the shared audit table holds both rows. The replica that lost one to its
+// local spool, whether the recorder answered ErrSpooled or nil, leaves the record owed and sends nothing
+// again for a minute; a second replica with a working store delivers the missing row with the record's ids,
+// time, actor and sessions, then settles, and a settled record owes and writes nothing.
+func TestPortalActivationDelivery_SettlesOnlyWhatTheSharedTableHolds(t *testing.T) {
+	for _, nilBack := range []bool{false, true} {
+		fake := &activationStore{}
+		h := newHarness(t)
+		clock := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+		table := &sharedAudit{}
+		fake.landed = table.has
+		newServer := func(rec audit.Recorder) *Server {
+			srv := New(baseTestConfig(h, fake))
+			srv.cfg.Audit = rec
+			srv.cfg.Now = func() time.Time { return clock }
+			return srv
+		}
+		first := newServer(table)
+		first.deliverPortalActivation(context.Background(), fake)
+		if len(table.snapshot()) != 0 || first.portalMonitor().owed() {
+			t.Fatalf("nilBack=%v, nothing committed: %d rows, owed %v; want 0 and not owed", nilBack, len(table.snapshot()), first.portalMonitor().owed())
+		}
+
+		if won, err := fake.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{
+			ActorType: string(types.ActorHuman), Actor: "ops@example.com", Sessions: []string{"billing-job@10.0.0.9"}}); err != nil || !won {
+			t.Fatalf("seed the committed activation = %v, %v", won, err)
+		}
+		rec := *fake.rec
+		local := &localSpoolAudit{shared: table, hold: map[uuid.UUID]bool{rec.OverrideEventID: true}, nilBack: nilBack}
+		first = newServer(local)
+		first.deliverPortalActivation(context.Background(), fake)
+		if fake.settled || !first.portalMonitor().owed() || !table.has(rec.ActivateEventID) || table.has(rec.OverrideEventID) || len(local.spooled) != 1 {
+			t.Fatalf("nilBack=%v, one row in the shared table, one in the local spool: settled %v owed %v activate-in-table %v override-in-table %v spooled %d; want not settled, owed, 1, 0, 1",
+				nilBack, fake.settled, first.portalMonitor().owed(), table.has(rec.ActivateEventID), table.has(rec.OverrideEventID), len(local.spooled))
+		}
+		first.deliverPortalActivation(context.Background(), fake)
+		if len(local.spooled) != 1 {
+			t.Errorf("nilBack=%v, a tick inside the retry wait spooled %d lines, want 1", nilBack, len(local.spooled))
+		}
+
+		// The first replica and its spool are gone. Another replica sees the missing row and delivers it.
+		second := newServer(table)
+		second.deliverPortalActivation(context.Background(), fake)
+		got := table.snapshot()
+		if !fake.settled || second.portalMonitor().owed() || len(got) != 2 {
+			t.Fatalf("nilBack=%v, after the second replica: settled %v owed %v rows %d; want settled, not owed, 2 rows", nilBack, fake.settled, second.portalMonitor().owed(), len(got))
+		}
+		for i, want := range []struct {
+			action string
+			id     uuid.UUID
+		}{{"portal_issuers.activate", rec.ActivateEventID}, {"portal_issuers.activate_override", rec.OverrideEventID}} {
+			ev := got[i]
+			if ev.Action != want.action || ev.ID != want.id || !ev.Time.Equal(rec.EventAt) || ev.Actor != "ops@example.com" || ev.ActorType != types.ActorHuman {
+				t.Errorf("nilBack=%v row %d = %s id %s time %s actor %s/%s; want %s id %s time %s actor human/ops@example.com",
+					nilBack, i, ev.Action, ev.ID, ev.Time, ev.ActorType, ev.Actor, want.action, want.id, rec.EventAt)
+			}
+		}
+		if !strings.Contains(string(got[1].Data), "billing-job@10.0.0.9") {
+			t.Errorf("nilBack=%v, the override row's data %s does not name the overridden session", nilBack, got[1].Data)
+		}
+		if fake.rec.Actor != "" || len(fake.rec.Sessions) != 0 {
+			t.Errorf("nilBack=%v, the settled record still holds %+v", nilBack, *fake.rec)
+		}
+		second.deliverPortalActivation(context.Background(), fake)
+		if n := len(table.snapshot()); n != 2 {
+			t.Errorf("nilBack=%v, a tick after settlement wrote %d more rows, want none", nilBack, n-2)
+		}
 	}
 
+	// An activation with no overridden session owes one row.
 	plain := &activationStore{}
-	psrv := New(baseTestConfig(h, plain))
-	prec := &downAudit{}
-	psrv.cfg.Audit = prec
+	plainTable := &sharedAudit{}
+	plain.landed = plainTable.has
+	psrv := New(baseTestConfig(newHarness(t), plain))
+	psrv.cfg.Audit = plainTable
 	_, _ = plain.ActivatePortalIssuersAs(context.Background(), store.PortalActivation{ActorType: string(types.ActorHuman), Actor: "ops@example.com"})
 	psrv.deliverPortalActivation(context.Background(), plain)
-	if n := len(prec.snapshot()); n != 1 || !plain.marked {
-		t.Errorf("an activation with no override owes %d rows (marked %v), want 1 and marked", n, plain.marked)
+	if n := len(plainTable.snapshot()); n != 1 || !plain.settled {
+		t.Errorf("an activation with no override owes %d rows (settled %v), want 1 and settled", n, plain.settled)
 	}
 }
