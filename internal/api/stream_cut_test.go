@@ -838,17 +838,18 @@ func TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket(t *testing.T) {
 }
 
 // TestStreamCut_BatchDeadlineSharedAcrossWrites: a handler sets one deadline for a batch (as the run-events
-// loop does) and its writes and flush make slow progress. They share that one budget: the batch stops at its
-// deadline, not one per-write budget later per write.
+// loop does). Two writes make slow progress and succeed; then the client stops reading and the batch's flush
+// blocks. The flush has only what is left of the batch's one budget, not a fresh per-operation one, and a batch
+// with no successful write fails the test.
 func TestStreamCut_BatchDeadlineSharedAcrossWrites(t *testing.T) {
 	conns := make(chan *stallConn, 4)
 	type result struct {
-		at     time.Time
-		writes int
-		err    error
+		start, flushed time.Time
+		writes         int
+		flushErr, err  error
 	}
 	done := make(chan result, 1)
-	const budget = 400 * time.Millisecond
+	const budget, slow = 600 * time.Millisecond, 50 * time.Millisecond // a chunk takes a few socket writes
 	srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
 		sc := <-conns
 		_, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
@@ -857,22 +858,24 @@ func TestStreamCut_BatchDeadlineSharedAcrossWrites(t *testing.T) {
 			done <- result{err: err}
 			return
 		}
-		sc.setSlow(150 * time.Millisecond)
-		if err := c.SetWriteDeadline(time.Now().Add(budget)); err != nil {
+		sc.setSlow(slow)
+		start := time.Now()
+		if err := c.SetWriteDeadline(start.Add(budget)); err != nil {
 			done <- result{err: err}
 			return
 		}
-		start, n := time.Now(), 0
+		res := result{start: start}
 		chunk := []byte(strings.Repeat("x", 32<<10))
-		for ; n < 10; n++ {
+		for ; res.writes < 2; res.writes++ {
 			if _, err := cw.Write(chunk); err != nil {
 				break
 			}
 		}
-		if n == 10 {
-			_ = http.NewResponseController(cw).Flush()
-		}
-		done <- result{at: start, writes: n}
+		sc.stall(true) // the client stops reading
+		_, _ = cw.Write([]byte("tail"))
+		res.flushErr = http.NewResponseController(cw).Flush()
+		res.flushed = time.Now()
+		done <- res
 		_ = c.SetWriteDeadline(time.Time{})
 	})
 	resp, err := http.Get(srv.URL)
@@ -886,14 +889,17 @@ func TestStreamCut_BatchDeadlineSharedAcrossWrites(t *testing.T) {
 		if r.err != nil {
 			t.Fatal(r.err)
 		}
-		if r.writes >= 10 {
-			t.Fatalf("ten writes of 150 ms each all went inside one %v batch deadline", budget)
+		if r.writes != 2 {
+			t.Fatalf("%d of 2 slow writes succeeded inside the %v batch: no progress before the blocked flush", r.writes, budget)
 		}
-		if d := time.Since(r.at); d > budget+250*time.Millisecond {
-			t.Errorf("the batch stopped %v after its start, want by its %v deadline", d, budget)
+		if r.flushErr == nil {
+			t.Fatal("the blocked flush succeeded")
 		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("the batch never stopped")
+		if d := r.flushed.Sub(r.start); d < budget-50*time.Millisecond || d > budget+250*time.Millisecond {
+			t.Errorf("the blocked flush returned %v after the batch began, want at its %v deadline", d, budget)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the blocked flush outlived its batch's deadline by seconds: it had a fresh budget")
 	}
 }
 
