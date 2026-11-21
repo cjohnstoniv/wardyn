@@ -563,7 +563,9 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 		if cause := portalFetchCause(err); cause != portalCauseUnreachable {
 			return cause, 0, 0 // the key set's failure callback has already dropped the verifier under it
 		}
-		v.settle(portalCauseIssuerDown)
+		if shown := v.settle(portalCauseIssuerDown); shown != portalCauseIssuerDown {
+			return shown, 0, 0 // a rule refusal recorded since the publish stands; a network recovery does not clear it
+		}
 		return portalCauseKeysUnreachable, v.outageWait(), 0
 	}
 	v.settle("")
