@@ -81,8 +81,9 @@ type ServiceGrantStore interface {
 	PutSiteConfigGrants(ctx context.Context, cfg types.SiteConfig, change ServiceGrantChange) (types.SiteConfig, error)
 	// ServiceGrantDoc reads the stored grants, claims and mark, whatever rows exist.
 	ServiceGrantDoc(ctx context.Context) (ServiceGrantDoc, error)
-	// SettleServiceGrantCleanup removes one claim. The caller holds the site-config document lock.
-	SettleServiceGrantCleanup(ctx context.Context, uid string) error
+	// SettleServiceGrantCleanup removes one claim and reports whether this call removed it, so only the attempt
+	// that did writes the settlement's audit row. The caller holds the site-config document lock.
+	SettleServiceGrantCleanup(ctx context.Context, uid string) (bool, error)
 	UpsertServiceGrantStatus(ctx context.Context, row ServiceGrantStatusRow) error
 	TouchServiceGrantReplica(ctx context.Context, replicaID string) error
 	ServiceGrantStatuses(ctx context.Context, uids []string) ([]ServiceGrantStatusRow, error)
@@ -265,21 +266,22 @@ func ServiceGrantDocQ(ctx context.Context, q Querier) (ServiceGrantDoc, error) {
 }
 
 // SettleServiceGrantCleanup removes the claim on uid (ServiceGrantStore).
-func (s PG) SettleServiceGrantCleanup(ctx context.Context, uid string) error {
+func (s PG) SettleServiceGrantCleanup(ctx context.Context, uid string) (bool, error) {
 	return SettleServiceGrantCleanupQ(ctx, s.Pool, uid)
 }
 
 // SettleServiceGrantCleanupQ removes one uid's claim, and no other, from the stored claims. The caller holds
 // the site-config document lock; the claims are not part of the document an ETag covers, so no writer's
 // If-Match fails for it.
-func SettleServiceGrantCleanupQ(ctx context.Context, q Querier, uid string) error {
-	if _, err := q.Exec(ctx, `
+func SettleServiceGrantCleanupQ(ctx context.Context, q Querier, uid string) (bool, error) {
+	tag, err := q.Exec(ctx, `
 		UPDATE site_config
 		   SET config = config #- ARRAY[$1::text, $2::text], updated_at = now()
-		 WHERE singleton AND jsonb_exists(config -> $1::text, $2::text)`, ServiceGrantCleanupsKey, uid); err != nil {
-		return fmt.Errorf("store: settle service grant cleanup: %w", err)
+		 WHERE singleton AND jsonb_exists(config -> $1::text, $2::text)`, ServiceGrantCleanupsKey, uid)
+	if err != nil {
+		return false, fmt.Errorf("store: settle service grant cleanup: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // UpsertServiceGrantStatus writes one replica's outcome for one provider. An older attempt never replaces a

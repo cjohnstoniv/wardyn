@@ -83,17 +83,21 @@ func (s *Server) resolveServiceGrantInjection(w http.ResponseWriter, r *http.Req
 	lane providerKeyLane, fail resolveServiceGrantFail,
 ) bool {
 	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeProviderSignIn)
-	if refusal := s.serviceGrantResolveRefusal(rec, p); refusal != nil {
-		return fail(refusal.status, refusal.reason, refusal.msg, map[string]any{"drift": refusal.drift, "owner": rec.OwnerSubject})
+	if refusal := s.serviceGrantRowRefusal(rec, p); refusal != nil {
+		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
 	}
 	tok, err := s.serviceGrantToken(ctx, p, rec.ServiceGrantDigest, serviceGrantTriggerResolve)
 	if err != nil {
 		return s.failServiceGrantResolve(err, rec, fail)
 	}
-	if again, ok := s.reReadServiceGrantRow(ctx, run, rec); !ok {
-		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, endpointOIDCResolveUnreadable, nil)
-	} else if refusal := s.serviceGrantResolveRefusal(rec, again); refusal != nil {
-		return fail(refusal.status, refusal.reason, refusal.msg, map[string]any{"drift": refusal.drift, "owner": rec.OwnerSubject})
+	// The same row, lane and host checks again, after the token request: whatever moved while it ran is a
+	// refusal, and a read that fails is the only thing that answers 503.
+	again, _, refusal := s.endpointOIDCLiveRow(ctx, run, rec, minted)
+	if refusal == nil {
+		refusal = s.serviceGrantRowRefusal(rec, again)
+	}
+	if refusal != nil {
+		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
 	}
 	value := formatInjectionValue(lane.format, []byte(tok.token))
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(tok.token), []byte(value)) {
@@ -113,41 +117,17 @@ func (s *Server) resolveServiceGrantInjection(w http.ResponseWriter, r *http.Req
 	return true
 }
 
-type serviceGrantResolveRefused struct {
-	status int
-	reason string
-	msg    string
-	drift  string
-}
-
-// serviceGrantResolveRefusal repeats the owner and the grant checks against a row: the owner is a service
+// serviceGrantRowRefusal repeats the owner and the grant checks against a row: the owner is a service
 // identity still listed, and the row's grant digest is the snapshot's. nil passes.
-func (s *Server) serviceGrantResolveRefusal(rec providerGrantSnapshot, p types.ModelProvider) *serviceGrantResolveRefused {
+func (s *Server) serviceGrantRowRefusal(rec providerGrantSnapshot, p types.ModelProvider) *endpointOIDCRefusal {
+	extra := func(drift string) map[string]any { return map[string]any{"drift": drift, "owner": rec.OwnerSubject} }
 	switch {
 	case !serviceGrantAppliesTo(p, rec.OwnerSubject) || !serviceGrantListed(p.OIDC.ServiceGrant, rec.OwnerSubject):
-		return &serviceGrantResolveRefused{http.StatusForbidden, reasonServiceGrantNotListed, mpServiceGrantNotListed, "not_listed"}
+		return &endpointOIDCRefusal{http.StatusForbidden, reasonServiceGrantNotListed, mpServiceGrantNotListed, extra("not_listed")}
 	case serviceGrantDigest(p) != rec.ServiceGrantDigest:
-		return &serviceGrantResolveRefused{http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged, "service_grant"}
+		return &endpointOIDCRefusal{http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged, extra("service_grant")}
 	}
 	return nil
-}
-
-// reReadServiceGrantRow reads the site configuration again and returns the run's provider for the snapshot's
-// harness, after the same drift check the resolve began with. ok=false: it could not be read, or the row moved.
-func (s *Server) reReadServiceGrantRow(ctx context.Context, run types.AgentRun, rec providerGrantSnapshot) (types.ModelProvider, bool) {
-	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return types.ModelProvider{}, false
-	}
-	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
-	if err != nil {
-		return types.ModelProvider{}, false
-	}
-	p, found := modelProviderByID(siteCfg.ModelProviders, providerID)
-	if endpointOIDCDrift(rec, p, found && launched, harness) != "" {
-		return types.ModelProvider{}, false
-	}
-	return p, true
 }
 
 // failServiceGrantResolve answers a failed mint: drift is 403 scope_changed, a transient failure is 503

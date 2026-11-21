@@ -25,6 +25,37 @@ const (
 // starts it on every replica, never through the leader-only runner.
 func (s *Server) StartServiceGrantRefresher(ctx context.Context) {
 	s.goBackground(func() { s.runServiceGrantRefresher(ctx, serviceGrantPassEvery) })
+	s.goBackground(func() { s.runServiceGrantHeartbeat(ctx, serviceGrantPassEvery) })
+}
+
+// runServiceGrantHeartbeat keeps this replica's seen_at fresh and sweeps old status rows. It is its own loop,
+// so a pass held by a slow token endpoint or a blocked store cannot make this replica look departed.
+func (s *Server) runServiceGrantHeartbeat(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		s.serviceGrantHeartbeat(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func (s *Server) serviceGrantHeartbeat(ctx context.Context) {
+	gs, ok := s.serviceGrantStore()
+	if !ok {
+		return
+	}
+	hctx, cancel := context.WithTimeout(ctx, serviceGrantStatusWriteBound)
+	defer cancel()
+	if err := gs.TouchServiceGrantReplica(hctx, s.svcGrant.replica()); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not mark this replica seen for service grants", slog.Any("err", err))
+	}
+	if _, err := gs.SweepServiceGrantStatuses(hctx); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not sweep stale service grant statuses", slog.Any("err", err))
+	}
 }
 
 func (s *Server) runServiceGrantRefresher(ctx context.Context, every time.Duration) {
@@ -49,18 +80,14 @@ func (s *Server) serviceGrantPassSafely(ctx context.Context) {
 	s.serviceGrantPass(ctx)
 }
 
-// serviceGrantPass is one refresher pass: it marks this replica seen, retires masks no grant names, and
-// attempts the rows that are due, at most 8 at once and one per row.
+// serviceGrantPass is one refresher pass: it retires masks no grant names and attempts the rows that are due, at
+// most 8 at once and one per row. The replica heartbeat is its own loop (runServiceGrantHeartbeat).
 func (s *Server) serviceGrantPass(ctx context.Context) {
-	if gs, ok := s.serviceGrantStore(); ok {
-		if err := gs.TouchServiceGrantReplica(ctx, s.svcGrant.replica()); err != nil {
-			slog.WarnContext(ctx, "wardynd: could not mark this replica seen for service grants", slog.Any("err", err))
-		}
-		if _, err := gs.SweepServiceGrantStatuses(ctx); err != nil {
-			slog.WarnContext(ctx, "wardynd: could not sweep stale service grant statuses", slog.Any("err", err))
-		}
-	}
-	s.reconcileServiceGrantMasks(ctx)
+	// The mask reconciliation runs beside the attempts, never ahead of them: a name another request holds is
+	// left to the next pass.
+	reconciled := make(chan struct{})
+	go func() { defer close(reconciled); s.reconcileServiceGrantMasks(ctx) }()
+	defer func() { <-reconciled }()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil || sc.ModelProviders == nil {
 		return

@@ -996,4 +996,5 @@ const (
 	reasonServiceGrantSecretKept             = "service_grant_secret_kept"              // the secret's deletion did not finish; it stays listed and is retried
 	reasonServiceGrantCleanupRevisionChanged = "service_grant_cleanup_revision_changed" // the record was written outside Wardyn after the removal; it needs reconciling
 	reasonServiceGrantCleanupUnsupported     = "service_grant_cleanup_unsupported"      // the secret store keeps no revision, so nothing is deleted
+	reasonServiceGrantSecretChanged          = "service_grant_secret_changed"           // the secret record changed while its delete ran; it is kept
 )

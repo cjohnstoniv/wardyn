@@ -152,7 +152,15 @@ func serviceGrantDigest(p types.ModelProvider) string {
 		return ""
 	}
 	g := p.OIDC.ServiceGrant
-	sum := sha256.Sum256(mustJSON([]any{p.UID, p.BaseURL, authHeader(p.Auth),
+	lanes := map[string][3]string{}
+	for _, h := range p.Harnesses {
+		lanes[h.Harness] = [3]string{h.Path, h.AuthHeader, h.AuthFormat}
+	}
+	format := ""
+	if p.Auth != nil {
+		format = p.Auth.Format
+	}
+	sum := sha256.Sum256(mustJSON([]any{p.UID, p.BaseURL, authHeader(p.Auth), format, lanes,
 		g.GrantType, g.TokenURL, g.ClientID, g.Scope, g.Audience, g.ClientAuth}))
 	return hex.EncodeToString(sum[:])
 }

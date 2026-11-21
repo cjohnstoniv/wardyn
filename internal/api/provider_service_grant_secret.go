@@ -168,8 +168,12 @@ func (s *Server) reconcileServiceGrantMasks(ctx context.Context) {
 
 func (s *Server) reconcileServiceGrantMask(ctx context.Context, name string) {
 	mu := s.svcGrant.nameLock(name)
-	mu.Lock()
+	if !mu.TryLock() {
+		return // a read, a write or a delete of this record is in flight and applies its own mask; try the next pass
+	}
 	defer mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, serviceGrantStatusWriteBound)
+	defer cancel()
 	uid, _ := serviceGrantSecretUID(name)
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {

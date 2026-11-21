@@ -229,12 +229,13 @@ func (s *Server) serviceGrantToken(ctx context.Context, p types.ModelProvider, s
 }
 
 func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvider, digest, trigger string) (serviceGrantMinted, error) {
+	started := s.cfg.Now() // the attempt's one timestamp: a failure is recorded at it, never at the time it ends
 	active, err := s.serviceGrantsActive(ctx)
 	if err != nil {
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 	}
 	if !active {
-		return s.serviceGrantFailure(ctx, p, digest, "", svcFail(svcReasonNotActivated, true))
+		return s.serviceGrantFailure(ctx, p, digest, "", started, svcFail(svcReasonNotActivated, true))
 	}
 	name := serviceGrantSecretName(p.UID)
 	rev, revOK, err := s.serviceGrantRevision(ctx, name)
@@ -243,13 +244,13 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	}
 	if revOK && rev == "" {
 		s.dropServiceGrantCache(p.UID)
-		return s.serviceGrantFailure(ctx, p, digest, rev, svcFail(svcReasonSecretGone, true))
+		return s.serviceGrantFailure(ctx, p, digest, rev, started, svcFail(svcReasonSecretGone, true))
 	}
 	if hit, ok := s.cachedServiceGrantToken(p.UID, digest, rev, revOK, serviceGrantReuseMargin); ok {
 		return hit, nil
 	}
-	if s.serviceGrantPaced(p.UID, digest, rev, trigger) {
-		return s.serviceGrantFallback(p.UID, digest, rev, revOK)
+	if f, paced := s.serviceGrantPacedFailure(p.UID, digest, rev, trigger); paced {
+		return s.serviceGrantFallback(p.UID, digest, rev, revOK, f)
 	}
 	key := p.UID + "|" + digest + "|" + rev
 	v, err, _ := s.svcGrant.flights.Do(key, func() (any, error) {
@@ -258,7 +259,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	if err != nil {
 		var se *serviceGrantError
 		if errors.As(err, &se) {
-			return s.serviceGrantFailure(ctx, p, digest, rev, se)
+			return s.serviceGrantFailure(ctx, p, digest, rev, started, se)
 		}
 		return serviceGrantMinted{}, err
 	}
@@ -283,29 +284,50 @@ func (s *Server) dropServiceGrantCache(uid string) {
 	delete(s.svcGrant.cache, uid)
 }
 
-// serviceGrantPaced reports whether this attempt would repeat, under the same digest and revision, a failed one
-// started less than a minute ago. Only a resolve or a dispatch is paced: the refresher attempts a failed row once a pass.
-func (s *Server) serviceGrantPaced(uid, digest, rev, trigger string) bool {
+// serviceGrantPacedFailure returns the failed attempt this one would repeat, under the same digest and
+// revision and started less than a minute ago. Only a resolve or a dispatch is paced: the refresher attempts a
+// failed row once a pass. The failure is returned by value, so the answer that follows never reads it again.
+func (s *Server) serviceGrantPacedFailure(uid, digest, rev, trigger string) (serviceGrantFailed, bool) {
 	if trigger == serviceGrantTriggerRefresh {
-		return false
+		return serviceGrantFailed{}, false
 	}
 	s.svcGrant.mu.Lock()
 	defer s.svcGrant.mu.Unlock()
 	f, ok := s.svcGrant.failed[uid]
-	return ok && f.digest == digest && f.rev == rev && s.cfg.Now().Sub(f.at) < serviceGrantPacing
+	return f, ok && f.err != nil && f.digest == digest && f.rev == rev && s.cfg.Now().Sub(f.at) < serviceGrantPacing
 }
 
 // serviceGrantFailure records a failed attempt and answers: a cached token with more than a minute left, minted
 // under the current digest and revision, is still returned unless the secret is gone; otherwise the error.
-func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider, digest, rev string, e *serviceGrantError) (serviceGrantMinted, error) {
-	now := s.cfg.Now()
+func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider, digest, rev string, started time.Time, e *serviceGrantError) (serviceGrantMinted, error) {
+	if e.reason != svcReasonNotActivated {
+		// What was read before the request may be gone: look again before a status row is written or a cached
+		// token is served. Authoritative absence evicts and refuses; a moved revision gets the one retry; a
+		// changed row is drift; a failed read serves nothing from the cache.
+		liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, serviceGrantSecretName(p.UID))
+		liveDigest, found := s.liveServiceGrantDigest(ctx, p.UID)
+		switch {
+		case !found || liveDigest != digest:
+			return serviceGrantMinted{}, errServiceGrantDrift
+		case rerr != nil:
+			return serviceGrantMinted{}, e
+		case liveOK && liveRev == "":
+			s.dropServiceGrantCache(p.UID)
+			e = svcFail(svcReasonSecretGone, true)
+		case liveOK && liveRev != rev:
+			return serviceGrantMinted{}, errServiceGrantRevisionMoved
+		}
+	}
 	s.svcGrant.mu.Lock()
 	if s.svcGrant.failed == nil {
 		s.svcGrant.failed = map[string]serviceGrantFailed{}
 	}
-	s.svcGrant.failed[p.UID] = serviceGrantFailed{at: now, digest: digest, rev: rev, err: e}
+	// An older attempt that ends late never replaces a newer attempt's record, here or in the status row.
+	if prev, ok := s.svcGrant.failed[p.UID]; !ok || !prev.at.After(started) {
+		s.svcGrant.failed[p.UID] = serviceGrantFailed{at: started, digest: digest, rev: rev, err: e}
+	}
 	s.svcGrant.mu.Unlock()
-	s.writeServiceGrantStatus(ctx, p, digest, now, nil, e)
+	s.writeServiceGrantStatus(ctx, p, digest, started, nil, e)
 	if e.reason == svcReasonSecretGone {
 		return serviceGrantMinted{}, e
 	}
@@ -316,12 +338,10 @@ func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider,
 	return serviceGrantMinted{}, e
 }
 
-// serviceGrantFallback answers a paced attempt: the last failure's error, or a live cached token as above.
-func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool) (serviceGrantMinted, error) {
-	s.svcGrant.mu.Lock()
-	f := s.svcGrant.failed[uid]
-	s.svcGrant.mu.Unlock()
-	if c, ok := s.cachedServiceGrantToken(uid, digest, rev, revOK, serviceGrantFallbackMargin); ok && f.err != nil && f.err.reason != svcReasonSecretGone {
+// serviceGrantFallback answers a paced attempt from the failure it was paced by: a live cached token as in
+// serviceGrantFailure, or that failure's error.
+func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool, f serviceGrantFailed) (serviceGrantMinted, error) {
+	if c, ok := s.cachedServiceGrantToken(uid, digest, rev, revOK, serviceGrantFallbackMargin); ok && f.err.reason != svcReasonSecretGone {
 		return c, nil
 	}
 	return serviceGrantMinted{}, f.err
@@ -397,7 +417,9 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 		s.svcGrant.cache = map[string]serviceGrantCached{}
 	}
 	s.svcGrant.cache[p.UID] = serviceGrantCached{serviceGrantMinted: tok, digest: digest, rev: rev, revOK: revOK}
-	delete(s.svcGrant.failed, p.UID)
+	if f, ok := s.svcGrant.failed[p.UID]; ok && !f.at.After(sent) {
+		delete(s.svcGrant.failed, p.UID)
+	}
 	s.svcGrant.mu.Unlock()
 	s.writeServiceGrantStatus(ctx, p, digest, sent, &tok, nil)
 	return tok, nil

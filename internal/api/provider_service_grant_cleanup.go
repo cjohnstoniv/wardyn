@@ -197,10 +197,13 @@ func (s *Server) serviceGrantCleanupSettle(ctx context.Context, gs store.Service
 }
 
 func (s *Server) settleServiceGrantClaim(ctx context.Context, gs store.ServiceGrantStore, uid string, claim store.ServiceGrantCleanup) cleanupOutcome {
-	if err := gs.SettleServiceGrantCleanup(ctx, uid); err != nil {
+	removed, err := gs.SettleServiceGrantCleanup(ctx, uid)
+	if err != nil {
 		return cleanupKept
 	}
-	s.auditServiceGrantSecretDelete(ctx, uid, claim.ProviderID, true)
+	if removed { // a second attempt that found the claim already gone settles nothing and audits nothing
+		s.auditServiceGrantSecretDelete(ctx, uid, claim.ProviderID, true)
+	}
 	return cleanupSettled
 }
 

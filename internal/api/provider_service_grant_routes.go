@@ -9,11 +9,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -35,24 +37,26 @@ type putServiceGrantSecretRequest struct {
 }
 
 const (
-	mpServiceGrantDestination = "The provider's token URL, client id or gateway address is not the one this secret was written for; check them and write the secret again"
+	mpServiceGrantSecretUnreadable  = "Wardyn could not read or delete this provider's service grant secret just now; retry"
+	mpServiceGrantSecretUnsupported = "The secret store keeps no revision, so Wardyn deletes nothing; the record is kept"
+	mpServiceGrantSecretChanged     = "The secret record was written by someone else while this request ran; it is kept. Read the provider again and retry"
+	mpServiceGrantDestination       = "The provider's token URL, client id or gateway address is not the one this secret was written for; check them and write the secret again"
 )
 
 // serviceGrantRouteRow reads the live row for a route that holds the document lock: 404 for no such provider,
 // 409 service_grant_not_configured for one with no grant. ok=false: the answer is written.
-func (s *Server) serviceGrantRouteRow(w http.ResponseWriter, r *http.Request, id string) (types.ModelProvider, store.ServiceGrantDoc, bool) {
+//
+// forWrite is the secret route's PUT: a row that kept its uid after its grant was removed, whose secret record
+// is still to be deleted, answers 409 service_grant_cleanup_pending, not "not configured".
+func (s *Server) serviceGrantRouteRow(w http.ResponseWriter, r *http.Request, id string, forWrite bool) (types.ModelProvider, store.ServiceGrantDoc, bool) {
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
 		return types.ModelProvider{}, store.ServiceGrantDoc{}, false
 	}
 	p, found := modelProviderByID(sc.ModelProviders, id)
-	switch {
-	case !found:
+	if !found {
 		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, "no such model provider")
-		return p, store.ServiceGrantDoc{}, false
-	case p.OIDC == nil || p.OIDC.ServiceGrant == nil:
-		writeErrorReason(w, http.StatusConflict, reasonServiceGrantNotConfigured, "provider has no service grant: "+id)
 		return p, store.ServiceGrantDoc{}, false
 	}
 	var doc store.ServiceGrantDoc
@@ -61,6 +65,14 @@ func (s *Server) serviceGrantRouteRow(w http.ResponseWriter, r *http.Request, id
 			writeServerError(w, r, "read service grants", err)
 			return p, doc, false
 		}
+	}
+	if p.OIDC == nil || p.OIDC.ServiceGrant == nil {
+		if _, pending := doc.Cleanups[p.UID]; pending && forWrite {
+			writeErrorReason(w, http.StatusConflict, reasonServiceGrantCleanupPending, serviceGrantCleanupPendingMsg(p.ID))
+		} else {
+			writeErrorReason(w, http.StatusConflict, reasonServiceGrantNotConfigured, "provider has no service grant: "+id)
+		}
+		return p, doc, false
 	}
 	return p, doc, true
 }
@@ -78,7 +90,7 @@ func (s *Server) handlePutServiceGrantSecret(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer unlock()
-	p, doc, ok := s.serviceGrantRouteRow(w, r, chi.URLParam(r, "id"))
+	p, doc, ok := s.serviceGrantRouteRow(w, r, chi.URLParam(r, "id"), true)
 	if !ok {
 		return
 	}
@@ -119,12 +131,27 @@ func (s *Server) handleDeleteServiceGrantSecret(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer unlock()
-	p, _, ok := s.serviceGrantRouteRow(w, r, chi.URLParam(r, "id"))
+	p, _, ok := s.serviceGrantRouteRow(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}
-	if err := s.deleteServiceGrantRecord(r.Context(), serviceGrantSecretName(p.UID), nil); err != nil {
-		writeServerError(w, r, "delete the service grant secret", err)
+	// Only the record this request observed is deleted: a replacement written between the read and the delete
+	// carries another revision and stays.
+	name := serviceGrantSecretName(p.UID)
+	rev, revOK, err := s.serviceGrantRevision(r.Context(), name)
+	switch {
+	case err != nil:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonServiceGrantUnavailable, mpServiceGrantSecretUnreadable)
+		return
+	case !revOK:
+		writeErrorReason(w, http.StatusConflict, reasonServiceGrantCleanupUnsupported, mpServiceGrantSecretUnsupported)
+		return
+	}
+	if err := s.deleteServiceGrantRecord(r.Context(), name, &rev); errors.Is(err, secretstore.ErrRevisionChanged) {
+		writeErrorReason(w, http.StatusConflict, reasonServiceGrantSecretChanged, mpServiceGrantSecretChanged)
+		return
+	} else if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonServiceGrantUnavailable, mpServiceGrantSecretUnreadable)
 		return
 	}
 	s.auditServiceGrantSecret(r.Context(), r, "model_provider.service_grant.secret_delete", p, "success", nil)
@@ -154,7 +181,7 @@ func (s *Server) handleDeleteServiceGrant(w http.ResponseWriter, r *http.Request
 	defer unlock()
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	target, _, ok := s.serviceGrantRouteRow(w, r, id)
+	target, _, ok := s.serviceGrantRouteRow(w, r, id, false)
 	if !ok {
 		return
 	}

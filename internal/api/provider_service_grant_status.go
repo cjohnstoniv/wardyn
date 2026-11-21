@@ -26,6 +26,9 @@ const (
 
 	auditServiceGrantMintAction = "model_provider.service_grant.mint"
 
+	// serviceGrantStatusWriteBound bounds the detached status write of one attempt.
+	serviceGrantStatusWriteBound = 5 * time.Second
+
 	// mpServiceGrantRefusal is the create and dispatch refusal for a grant that cannot be minted.
 	mpServiceGrantRefusal = "Wardyn could not get a token for this provider's service grant (%s); an administrator must check its client credentials"
 	// mpServiceGrantNotListed is the sentence of a service identity the grant does not list.
@@ -64,7 +67,10 @@ func (s *Server) writeServiceGrantStatus(ctx context.Context, p types.ModelProvi
 	} else if e != nil {
 		row.Outcome, row.Reason, row.OAuthError, row.HTTPStatus, row.Egress = "failed", e.reason, e.oauthError, e.httpStatus, e.egress
 	}
-	if err := gs.UpsertServiceGrantStatus(context.WithoutCancel(ctx), row); err != nil {
+	// Detached from the caller, and bounded: a status write that hangs must not hold the caller's lock or pass.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantStatusWriteBound)
+	defer cancel()
+	if err := gs.UpsertServiceGrantStatus(wctx, row); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not record a service grant's status", slog.String("provider", p.ID), slog.Any("err", err))
 	}
 }
