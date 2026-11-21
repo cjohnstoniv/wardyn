@@ -528,9 +528,26 @@ func TestPortalLookup_KeysDroppedAfterOwnFetchArePending(t *testing.T) {
 		h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
 		h.clock.Advance(time.Hour)
 		h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
-		// The held exchange's own fetch answered, but the keys it brought are gone: 503, not 400.
-		if r := x.release(); r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseKeysCooldown {
-			t.Fatalf("the held exchange got %+v, want 503 cause %q", r, portalCauseKeysCooldown)
+		// The held exchange's own fetch answered, but trust in it was rejected since: 503 under the active
+		// refusal's cause, not 400 and not keys_cooldown (there is no verified address waiting for keys).
+		if r := x.release(); r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseIssuerMismatch {
+			t.Fatalf("the held exchange got %+v, want 503 cause %q", r, portalCauseIssuerMismatch)
+		}
+	})
+	t.Run("a verified replacement address waiting for its keys", func(t *testing.T) {
+		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+		warmPortal(h)
+		h.idp.publish(t, "k2", 1)
+		h.clock.Advance(59*time.Minute + 50*time.Second)
+		h.mustAdmit(h.kidToken("k2", 1)) // an unknown-kid fetch starts the key budget 10 s before the hour
+		x := pauseAfterPrepare(t, h, h.token(h.accessClaims()))
+		h.idp.set(func(f *fakeIdP) { f.jwksURI = h.reg.Issuer + "/v2/keys" })
+		h.clock.Advance(20 * time.Second)
+		h.wantUnavailable(h.token(h.accessClaims()), portalCauseKeysCooldown)
+		// Discovery verified a new address and its keys wait for the budget: keys_cooldown, with the rest of it.
+		r := x.release()
+		if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseKeysCooldown || r.RetryAfter != 10*time.Second {
+			t.Fatalf("the held exchange got %+v, want 503 cause %q with Retry-After 10s", r, portalCauseKeysCooldown)
 		}
 	})
 	t.Run("the fetch the lookup waited on, then an address change", func(t *testing.T) {
@@ -565,4 +582,74 @@ func TestPortalLookup_KeysDroppedAfterOwnFetchArePending(t *testing.T) {
 			t.Fatalf("class = %v, want a token refusal", r.Class)
 		}
 	})
+}
+
+func TestPortalRefresh_DiscoveryFailureEnforcedBeforeReport(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fail  func(h *portalHarness, timedOut *atomic.Bool)
+		cause string
+	}{
+		{"a refused discovery document", func(h *portalHarness, _ *atomic.Bool) {
+			h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
+		}, portalCauseIssuerMismatch},
+		{"a refresh that times out", func(_ *portalHarness, timedOut *atomic.Bool) { timedOut.Store(true) }, portalCauseUnreachable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var holdReport, timedOut atomic.Bool
+			reported, resume := make(chan struct{}), make(chan struct{})
+			var resumeOnce sync.Once
+			releaseReport := func() { resumeOnce.Do(func() { close(resume) }) }
+			h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {
+				o.fetchTimeout = 2 * time.Second
+				o.OnRefreshFailure = func(PortalRefreshFailure) {
+					if holdReport.CompareAndSwap(true, false) {
+						close(reported)
+						<-resume
+					}
+				}
+			})
+			t.Cleanup(releaseReport)
+			h.idp.set(func(f *fakeIdP) {
+				f.override = func(w http.ResponseWriter, r *http.Request) bool {
+					if timedOut.Load() && strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
+						<-r.Context().Done() // answered only once the request's own bound has cut it off
+						return true
+					}
+					return false
+				}
+			})
+			warmPortal(h)
+			h.clock.Advance(59*time.Minute + 50*time.Second)
+			// An exchange is through prepare while the verifier is healthy, and is held before its key.
+			x := pauseAfterPrepare(t, h, h.token(h.accessClaims()))
+			tc.fail(h, &timedOut)
+			holdReport.Store(true)
+			h.clock.Advance(10 * time.Second) // discovery is due
+			refresh := make(chan PortalRefusal, 1)
+			tok := h.token(h.accessClaims())
+			go func() {
+				_, r := h.pi.VerifyDetail(context.Background(), h.reg, tok, PortalTokenTypeAccess)
+				refresh <- r
+			}()
+			select {
+			case <-reported:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the refresh failure was never reported")
+			}
+			// The report is held: the failure must already be enforced, so the prepared exchange is refused.
+			if r := x.release(); r.Reason != PortalIssuerUnavailable {
+				t.Fatalf("the prepared exchange got %+v while the report was held, want 503", r)
+			}
+			releaseReport()
+			select {
+			case r := <-refresh:
+				if r.Reason != PortalIssuerUnavailable || r.Cause != tc.cause {
+					t.Fatalf("the refreshing exchange got %+v, want 503 cause %q", r, tc.cause)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the refreshing exchange never answered")
+			}
+		})
+	}
 }

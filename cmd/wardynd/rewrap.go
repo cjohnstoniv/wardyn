@@ -95,7 +95,7 @@ func rewrapMode(f *bootFlags) error {
 	}
 	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancelConn()
-	pool, err := db.Connect(connCtx, *f.dsn)
+	pool, err := db.Connect(connCtx, *f.dsn, toolDBOption("rewrap"))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

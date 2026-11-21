@@ -26,6 +26,13 @@ import (
 // Trimmed and case-folded (Unicode: a Kelvin sign in place of the k in
 // "admin-token" folds too). No comparison matches a variant today; refusing
 // one keeps that true if a comparison ever folds.
+//
+// "delegate:" stays reserved for portal people too (delegate:person:<k>:<e>): no
+// human door admits one. Three places name them on purpose, each with its own
+// test: the delegated lane on a portal grant whose portal row owns the key
+// (delegation.go), erasure of a person's records (person_erasure.go), and the
+// issuer-portal exchange, which checks the token's raw sub and person id with
+// this function and never the principal it computes (delegation_portal.go).
 func (s *Server) isReservedPrincipal(p string) bool {
 	p = strings.ToLower(strings.TrimSpace(p))
 	if strings.HasPrefix(p, types.ServicePrincipalPrefix) { // a service identity (#1508): authenticates only by its own tokens
