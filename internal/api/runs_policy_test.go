@@ -305,7 +305,7 @@ func TestHandleListRuns_NoParams_OldScopeUnchanged(t *testing.T) {
 
 type creatorOnlyFake struct{ *pagerFake }
 
-func (f *creatorOnlyFake) ListRunsPageByCreator(_ context.Context, createdBy string, p store.Page) ([]types.AgentRun, error) {
+func (f *creatorOnlyFake) ListRunsPageByCreator(_ context.Context, createdBy string, p store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	var out []types.AgentRun
 	for _, r := range f.runs {
 		if r.CreatedBy == createdBy {
