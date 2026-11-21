@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -47,9 +48,16 @@ type fakePortalVerifier struct {
 	// enforceAge makes the fake apply the registration's maximum token age as the verifier does: a token at or
 	// past it is refused stale, and the grant's signed end is the earlier of iat + age and the token's expiry.
 	enforceAge bool
+	// claims are the signed claims of the token, and the registration's one required claim is matched against them.
+	claims map[string]string
+	// inVerify runs while a verification is in flight, after the exchange read its portal and before its writes.
+	inVerify func()
 }
 
 func (f *fakePortalVerifier) VerifyDetail(_ context.Context, reg oidc.PortalRegistration, raw, declared string) (oidc.PortalSubject, oidc.PortalRefusal) {
+	if f.inVerify != nil {
+		f.inVerify()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asks = append(f.asks, portalAsk{reg: reg, raw: raw, declared: declared})
@@ -57,6 +65,9 @@ func (f *fakePortalVerifier) VerifyDetail(_ context.Context, reg oidc.PortalRegi
 		return oidc.PortalSubject{}, f.refusal
 	}
 	subj := f.subj
+	if reg.RequiredClaim != "" && f.claims[reg.RequiredClaim] != reg.RequiredClaimValue {
+		return oidc.PortalSubject{}, oidc.PortalRefusal{Reason: oidc.SubjectTokenClaimMismatch, Class: oidc.PortalRefusedAdmission}
+	}
 	if f.enforceAge {
 		age := reg.MaxSubjectTokenAge
 		if age <= 0 {
@@ -168,17 +179,38 @@ func (p *portalStore) LookupPortalPerson(context.Context, string, string) (types
 	return types.PortalPerson{}, store.ErrNotFound
 }
 
-func (p *portalStore) PendingPortalIntroductions(context.Context, int) ([]store.PortalIntroduction, error) {
+func (i *portalIdent) introduction() store.PortalIntroduction {
+	return store.PortalIntroduction{IdentityID: i.id, Principal: i.principal, IssuerKey: i.key, PortalID: i.introBy,
+		Issuer: i.realIssuer, EventID: i.eventID, EventAt: i.eventAt}
+}
+
+// PendingPortalIntroductions is the oldest owed introductions across every identity, at most limit, as the store reads them.
+func (p *portalStore) PendingPortalIntroductions(_ context.Context, limit int) ([]store.PortalIntroduction, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
 	var out []store.PortalIntroduction
 	for _, i := range p.idents {
 		if !i.audited {
-			out = append(out, store.PortalIntroduction{IdentityID: i.id, Principal: i.principal, IssuerKey: i.key, PortalID: i.introBy,
-				Issuer: i.realIssuer, EventID: i.eventID, EventAt: i.eventAt})
+			out = append(out, i.introduction())
 		}
 	}
+	sort.Slice(out, func(a, b int) bool { return out[a].EventAt.Before(out[b].EventAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
+}
+
+// PendingPortalIntroductionFor is one identity's own owed introduction, by its id.
+func (p *portalStore) PendingPortalIntroductionFor(_ context.Context, id uuid.UUID) (store.PortalIntroduction, bool, error) {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	for _, i := range p.idents {
+		if i.id == id && !i.audited {
+			return i.introduction(), true, nil
+		}
+	}
+	return store.PortalIntroduction{}, false, nil
 }
 
 func (p *portalStore) MarkPortalIntroductionAudited(_ context.Context, id uuid.UUID) (bool, error) {
@@ -555,7 +587,11 @@ func TestPortalExchange_AuditRows(t *testing.T) {
 	// A denial: reason, issuer, k and profile, and the claim's name, never a value.
 	h.ver.refusal = oidc.PortalRefusal{Reason: oidc.SubjectTokenClaimMismatch, Class: oidc.PortalRefusedAdmission}
 	h.exchange(t, d.ID, cred, "the-subject-token", nil)
-	want := map[string]any{"reason": oidc.SubjectTokenClaimMismatch, "issuer": portalTestIssuer, "k": k, "token_profile": oidc.PortalProfileAccessToken, "claim": "tenant"}
+	admission := map[string]any{"group": false, "claim": "tenant", "portal_managed": true}
+	want := map[string]any{
+		"reason": oidc.SubjectTokenClaimMismatch, "issuer": portalTestIssuer, "k": k, "token_profile": oidc.PortalProfileAccessToken, "claim": "tenant",
+		"max_subject_token_age_seconds": float64(300), "grant_ttl_seconds": float64(300), "admission": admission,
+	}
 	if rows := h.exchangeRows(); len(rows) != 1 || rows[0].Outcome != "denied" || rows[0].Actor != delegateActor(d.ID) || rows[0].Target != "" || !portalSameJSON(portalRowData(t, rows[0]), want) {
 		t.Fatalf("denial rows = %+v, want exactly %v", rows, want)
 	}
@@ -576,7 +612,7 @@ func TestPortalExchange_AuditRows(t *testing.T) {
 	want = map[string]any{
 		"user_type": types.UserTypeStandard, "role": "user", "issuer": portalTestIssuer, "k": k, "token_profile": oidc.PortalProfileAccessToken,
 		"max_subject_token_age_seconds": float64(300), "grant_ttl_seconds": float64(300),
-		"admission": map[string]any{"group": false, "claim": "tenant", "portal_managed": true},
+		"admission": admission,
 	}
 	if !portalSameJSON(got, want) {
 		t.Fatalf("success row data = %v, want %v", got, want)
@@ -747,7 +783,7 @@ func TestPortalExchange_RefreshFailureCountsMetric(t *testing.T) {
 	var b strings.Builder
 	counter.write(&b)
 	key := oidc.PortalIssuerKey(reg.Issuer)
-	if !strings.Contains(b.String(), `wardyn_portal_issuer_refresh_failures_total{issuer_key="`+key+`",source="scheduled",cause="`) {
+	if !strings.Contains(b.String(), `wardyn_portal_issuer_refresh_failures_total{issuer_key="`+key+`",portal="",source="scheduled",cause="`) {
 		t.Fatalf("a failed refresh left the metric without a series for the issuer:\n%s", b.String())
 	}
 	// And it renders on the scrape.

@@ -40,6 +40,14 @@ type PortalVerifier interface {
 	VerifyDetail(ctx context.Context, reg oidc.PortalRegistration, raw, declaredType string) (oidc.PortalSubject, oidc.PortalRefusal)
 }
 
+// portalIntroductionFinder is the store's read of one identity's own owed introduction, by the identity's id:
+// the event with its fixed id and time, and false when none is owed. A store without it falls back to the
+// oldest portalIntroductionBatch owed events across all identities, which misses the person's own behind a
+// backlog of that size (the leaver sweep still delivers it).
+type portalIntroductionFinder interface {
+	PendingPortalIntroductionFor(ctx context.Context, identity uuid.UUID) (store.PortalIntroduction, bool, error)
+}
+
 // portalIntroductionBatch bounds how many owed introduction events one exchange looks through for the
 // identity it just touched. The portal leaver sweep delivers the rest.
 const portalIntroductionBatch = 100
@@ -108,7 +116,14 @@ func portalAdmissionAudit(d types.Delegate) map[string]any {
 // delegation.exchange row naming the portal, the issuer and k, and never a token or a claim value.
 func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.Delegate, subjectToken, actorToken string, authorizedAt time.Time) {
 	ctx := r.Context()
-	base := map[string]any{"issuer": d.Issuer, "k": d.IssuerKey, "token_profile": d.TokenProfile}
+	// Every row of the exchange, denied or successful, names the settings that governed it: the exact issuer,
+	// its key, the profile, the two freshness settings and the admission rule by names only (whether a group
+	// is required, the portal-managed flag, the one claim's name), never a claim value or a group.
+	base := map[string]any{
+		"issuer": d.Issuer, "k": d.IssuerKey, "token_profile": d.TokenProfile,
+		"max_subject_token_age_seconds": int(portalMaxAge(d) / time.Second), "grant_ttl_seconds": int(portalGrantTTL(d) / time.Second),
+		"admission": portalAdmissionAudit(d),
+	}
 	deny := func(status int, code, target, reason string, extra map[string]any) {
 		data := map[string]any{"reason": reason}
 		for k, v := range base {
@@ -161,6 +176,11 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 			w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
 		}
 		deny(status, code, "", refusal.Reason, extra)
+		return
+	}
+	// A person never takes the name of the local operator's seat, whatever shape the operator was given.
+	if s.isLocalOperatorName(subj.Principal) {
+		deny(http.StatusBadRequest, "invalid_grant", "", oidc.DenialReservedPrincipal, nil)
 		return
 	}
 	// The revocation sequence is read before the person's cutoff is checked, as the console exchange does,
@@ -238,8 +258,6 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	}
 	data := map[string]any{
 		"grant": grant.ID, "expires_at": grant.ExpiresAt, "user_type": grant.UserType, "role": oidc.RoleUser,
-		"max_subject_token_age_seconds": int(portalMaxAge(d) / time.Second), "grant_ttl_seconds": int(portalGrantTTL(d) / time.Second),
-		"admission": portalAdmissionAudit(d),
 	}
 	for k, v := range base {
 		data[k] = v
@@ -291,6 +309,17 @@ func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err 
 // id and time were fixed when the identity row was inserted, so every delivery, by this exchange, a later one
 // through any portal, or the leaver sweep, is a replay of one event and the audit table keeps one row.
 func (s *Server) deliverPortalIntroductions(ctx context.Context, ps store.PortalIdentityStore, identity uuid.UUID) {
+	if f, ok := ps.(portalIntroductionFinder); ok {
+		p, owed, err := f.PendingPortalIntroductionFor(ctx, identity)
+		if err != nil {
+			slog.WarnContext(ctx, "api: read this person's owed portal introduction failed", "error", err)
+			return
+		}
+		if owed {
+			s.deliverPortalIntroduction(ctx, ps, p)
+		}
+		return
+	}
 	owed, err := ps.PendingPortalIntroductions(ctx, portalIntroductionBatch)
 	if err != nil {
 		slog.WarnContext(ctx, "api: read owed portal introductions failed", "error", err)
@@ -331,11 +360,16 @@ func portalGrantPrincipalOK(g types.PortalGrant) bool {
 	return len(g.Principal) > len(prefix) && strings.HasPrefix(g.Principal, prefix)
 }
 
-// PortalRefreshFailures counts failed refreshes of a portal issuer's discovery or keys, by issuer key, source
-// and coarse cause. It is the portal verifier's OnRefreshFailure target and renders on /metrics.
+// PortalRefreshFailures counts failed refreshes of a portal issuer's discovery or keys, by issuer key, the portals registered on
+// it, source and coarse cause. It is the portal verifier's OnRefreshFailure target and renders on /metrics.
 type PortalRefreshFailures struct {
+	// Portals names the live portals registered on an issuer at the moment of a failure, by delegate id: the
+	// attribution two portals on one issuer share. nil, or an empty answer, attributes to none. A delegate
+	// id is a bounded, non-person label; nothing about a person, a token or a credential is ever one.
+	Portals func(issuer string) []string
+
 	mu     sync.Mutex
-	counts map[[3]string]int64
+	counts map[[4]string]int64
 }
 
 // Record counts one failed refresh. An issuer is labelled by its key, which is bounded and reveals no address.
@@ -343,24 +377,35 @@ func (p *PortalRefreshFailures) Record(f oidc.PortalRefreshFailure) {
 	if p == nil {
 		return
 	}
+	var portals []string
+	if p.Portals != nil {
+		portals = p.Portals(f.Issuer)
+	}
+	if len(portals) == 0 {
+		portals = []string{""}
+	}
+	key := oidc.PortalIssuerKey(f.Issuer)
+	slog.Warn("api: issuer portal refresh failed", "issuer_key", key, "portals", portals, "source", f.Source, "cause", f.Cause)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.counts == nil {
-		p.counts = map[[3]string]int64{}
+		p.counts = map[[4]string]int64{}
 	}
-	p.counts[[3]string{oidc.PortalIssuerKey(f.Issuer), f.Source, f.Cause}]++
+	for _, id := range portals {
+		p.counts[[4]string{key, id, f.Source, f.Cause}]++
+	}
 }
 
 // write appends the counter in the exposition format. A counter nothing has recorded renders only its header.
 func (p *PortalRefreshFailures) write(w io.Writer) {
-	fmt.Fprint(w, "# HELP wardyn_portal_issuer_refresh_failures_total Failed refreshes of an issuer portal's discovery document or keys, by issuer key, source (scheduled or unknown_kid) and coarse cause. While one is failing the issuer's exchanges answer 503.\n"+
+	fmt.Fprint(w, "# HELP wardyn_portal_issuer_refresh_failures_total Failed refreshes of an issuer portal's discovery document or keys, by issuer key, portal (delegate id), source (scheduled or unknown_kid) and coarse cause. While one is failing the issuer's exchanges answer 503.\n"+
 		"# TYPE wardyn_portal_issuer_refresh_failures_total counter\n")
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	keys := make([][3]string, 0, len(p.counts))
+	keys := make([][4]string, 0, len(p.counts))
 	for k := range p.counts {
 		keys = append(keys, k)
 	}
@@ -373,14 +418,15 @@ func (p *PortalRefreshFailures) write(w io.Writer) {
 		return false
 	})
 	for _, k := range keys {
-		fmt.Fprintf(w, "wardyn_portal_issuer_refresh_failures_total{issuer_key=%q,source=%q,cause=%q} %d\n", k[0], k[1], k[2], p.counts[k])
+		fmt.Fprintf(w, "wardyn_portal_issuer_refresh_failures_total{issuer_key=%q,portal=%q,source=%q,cause=%q} %d\n", k[0], k[1], k[2], k[3], p.counts[k])
 	}
 }
 
 // writePortalRulingError answers 422 for the two rulings of the store's writes of admin-written person lists
 // (a portal person on a list that confers a role, or on one whose issuer is not bound) and reports whether it
-// did. Every handler of such a write, and the decision of a held change, maps its store error through it, so
-// the answer is one: 422 delegate_person_not_allowed or 422 delegate_person_unknown_portal.
+// did. writeServerError, the one presenter every store failure of a handler goes through, calls it, so the
+// answer is one: 422 delegate_person_not_allowed or 422 delegate_person_unknown_portal. A presenter of a
+// held change's decision that does not go through writeServerError calls it directly.
 func writePortalRulingError(w http.ResponseWriter, err error) bool {
 	switch {
 	case errors.Is(err, store.ErrDelegatePersonNotAllowed):
@@ -391,6 +437,14 @@ func writePortalRulingError(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	return true
+}
+
+// isLocalOperatorName reports whether name is the configured local operator's seat, compared as
+// isReservedPrincipal compares it. The operator's name is protected whatever its spelling looks like, a
+// portal person's included.
+func (s *Server) isLocalOperatorName(name string) bool {
+	op := strings.ToLower(strings.TrimSpace(s.cfg.LocalOperator))
+	return op != "" && strings.ToLower(strings.TrimSpace(name)) == op
 }
 
 // isPortalPersonName reports whether name is a well-formed portal person, delegate:person:<k>:<e>, with k

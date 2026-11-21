@@ -772,9 +772,10 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 // runs, outputs and recordings stamped with it belong to the deployment's
 // automation, not to someone who can ask to be forgotten. A portal person
 // (delegate:person:<k>:<e>) is a person, and the one reserved name erasure
-// accepts. It reports whether it answered.
+// accepts, unless the name is the configured local operator's: that seat is
+// protected first, whatever shape it was given. It reports whether it answered.
 func (s *Server) refuseReservedErasure(w http.ResponseWriter, r *http.Request, action, name string) bool {
-	if !s.isReservedPrincipal(name) || isPortalPersonName(name) {
+	if !s.isReservedPrincipal(name) || (isPortalPersonName(name) && !s.isLocalOperatorName(name)) {
 		return false
 	}
 	s.auditOwnerRefusal(r, action, name, reasonReservedPrincipal)
