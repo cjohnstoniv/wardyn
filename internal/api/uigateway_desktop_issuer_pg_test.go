@@ -1,0 +1,126 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"io"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// An issuer portal's desktop stream on Postgres: its re-check runs from the opening check, beside the stream,
+// so neither a stalled setup (the start lock, the dial) nor a slow Closed-set read delays it. Re-checks are
+// scaled to relayEvery.
+
+// stallingDialer is a runner whose desktop dial waits for its context, as a display that never answers does.
+type stallingDialer struct {
+	*sshFakeRunner
+	dialed chan time.Time
+}
+
+func (f *stallingDialer) DialDesktop(ctx context.Context, _ string) (io.ReadWriteCloser, error) {
+	f.dialed <- time.Now()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// slowClosedStore answers the Closed set after delay, once slow is set.
+type slowClosedStore struct {
+	issuerPGStore
+	slow  *atomic.Bool
+	delay time.Duration
+}
+
+func (s slowClosedStore) UIDesktopClosed(ctx context.Context, key string, now time.Time) (bool, error) {
+	if s.slow.Load() {
+		time.Sleep(s.delay)
+	}
+	return s.issuerPGStore.UIDesktopClosed(ctx, key, now)
+}
+
+// desktopPGRig is the issuer PG rig on a Linux VM run, its gateway on a real server.
+func desktopPGRig(t *testing.T) (*issuerPGRig, *httptest.Server) {
+	t.Helper()
+	rig := newIssuerPGRig(t, okBackend())
+	rig.run.MachineKind = types.MachineLinuxVM
+	rig.store.putRun(rig.run)
+	rig.srv.uiDesktop.recheckEvery = relayEvery
+	srv := httptest.NewServer(rig.gateway)
+	t.Cleanup(srv.Close)
+	return rig, srv
+}
+
+// viewerClosed reads v's socket until it fails and returns when it did.
+func viewerClosed(v *desktopViewer) <-chan time.Time {
+	closed := make(chan time.Time, 1)
+	go func() {
+		for {
+			if _, _, err := v.ws.Read(context.Background()); err != nil {
+				closed <- time.Now()
+				return
+			}
+		}
+	}()
+	return closed
+}
+
+// TestUIDesktopIssuerPortal_StalledSetupCutWithin40s_PG: the display's dial stalls; a suspend during it ends
+// the stream within one re-check and its bound.
+func TestUIDesktopIssuerPortal_StalledSetupCutWithin40s_PG(t *testing.T) {
+	rig, srv := desktopPGRig(t)
+	rig.srv.uiDesktop.recheckWait = relayBound
+	dr := &stallingDialer{sshFakeRunner: rig.runner, dialed: make(chan time.Time, 1)}
+	rig.srv.cfg.Runner = dr
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, rig.uiHarness, srv.URL, rig.desktopCookie())
+	closed := viewerClosed(v)
+	select {
+	case <-dr.dialed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the display was never dialed")
+	}
+	at := time.Now()
+	rig.suspend(t)
+	select {
+	case got := <-closed:
+		cutBy(t, "desktop, suspend during a stalled dial", at, got, relayEvery+relayBound+relaySlack)
+	case <-time.After(15 * time.Second):
+		t.Fatal("the desktop outlived a suspend during its setup")
+	}
+}
+
+// TestUIDesktopIssuerPortal_SlowClosedSetLookupDoesNotDelayRecheck_PG: every Closed-set read takes most of its
+// bound, read back to back; a suspend still ends the stream within one re-check and a fast lookup, not behind
+// a Closed-set read.
+func TestUIDesktopIssuerPortal_SlowClosedSetLookupDoesNotDelayRecheck_PG(t *testing.T) {
+	rig, srv := desktopPGRig(t)
+	const bound = 2 * time.Second
+	rig.srv.uiDesktop.recheckWait = bound
+	rig.srv.uiDesktopClosedEvery = 50 * time.Millisecond
+	slow := &atomic.Bool{}
+	rig.srv.cfg.Store = slowClosedStore{issuerPGStore: rig.srv.cfg.Store.(issuerPGStore), slow: slow, delay: bound * 9 / 10}
+	dr := &desktopFakeRunner{sshFakeRunner: rig.runner, dialled: make(chan string, 8)}
+	rig.srv.cfg.Runner = dr
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, rig.uiHarness, srv.URL, rig.desktopCookie())
+	v.handshake()
+	slow.Store(true)
+	time.Sleep(bound) // the stream's loop is inside a slow Closed-set read
+	closed := viewerClosed(v)
+	at := time.Now()
+	rig.suspend(t)
+	select {
+	case got := <-closed:
+		cutBy(t, "desktop, suspend beside a slow Closed-set read", at, got, relayEvery+relaySlack)
+	case <-time.After(15 * time.Second):
+		t.Fatal("the desktop outlived a suspend")
+	}
+}

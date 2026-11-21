@@ -220,3 +220,28 @@ func (s *Server) relayStillHolds(ctx context.Context, sess uiSession) error {
 	}
 	return nil
 }
+
+// desktopIssuerCut is the guarded cut over an issuer portal's desktop stream, and r's context, w and a no-op stop
+// for any other. It is made before the upgrade, so the hijack registers with it, and its watch runs from
+// checkStart, the opening check's start, before the start lock and the dial: the stream ends at its known end
+// (uiStreamEnd; a desktop never renews), and the run's full re-check (desktopRunCheck) runs every
+// uiDesktopRecheck, bounded by uiDesktopRecheckWait, on its own goroutine, apart from the Closed set's read. A
+// check that fails cuts the stream, so it ends within one re-check of the event (40 s).
+func (s *Server) desktopIssuerCut(r *http.Request, w http.ResponseWriter, sess uiSession, checkStart, end time.Time) (context.Context, http.ResponseWriter, *streamCut, func()) {
+	if !issuerPortalPerson(sess.Via, sess.Principal) {
+		return r.Context(), w, nil, func() {}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	cut := newStreamCut(w, s.uiStreamEnd(sess, end), cancel)
+	every := cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck)
+	cut.watch(ctx, checkStart.Add(every), every, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait), func(lctx context.Context) error {
+		if _, code, _ := s.desktopRunCheck(lctx, sess); code != 0 {
+			return errRelayAuthorityEnded
+		}
+		return nil
+	})
+	return ctx, cut.Writer(w), cut, func() {
+		defer cancel()
+		cut.End()
+	}
+}
