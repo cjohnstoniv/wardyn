@@ -692,6 +692,12 @@ func (s *Server) cancelQueuedRunsOf(ctx context.Context, owner, reason string) (
 		if err != nil {
 			return n, err
 		}
+		// Only a run still waiting is this batch's to cancel. One that timed out, started or was cancelled since the
+		// listing keeps its own end: the kill's claim below is QUEUED to KILLED and nothing else, so a run that
+		// leaves QUEUED between this read and the claim is lost to it and counts zero.
+		if run.State != types.RunQueued {
+			continue
+		}
 		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": reason})
 		if err != nil {
 			return n, err
