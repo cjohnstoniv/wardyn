@@ -96,6 +96,27 @@ func (e *authorityEnv) run(t *testing.T, owner string, unit *uuid.UUID, via uuid
 	return got
 }
 
+// runAs is run, then moved to state with its creation and end times set: ended is how long ago it ended (zero
+// leaves a live run alone), created is its creation time (zero keeps now).
+func (e *authorityEnv) runAs(t *testing.T, owner string, unit *uuid.UUID, via uuid.UUID, state types.RunState, ended time.Duration, created time.Time) types.AgentRun {
+	t.Helper()
+	r := e.run(t, owner, unit, via)
+	if created.IsZero() {
+		created = r.CreatedAt
+	}
+	var endedAt *time.Time
+	if ended > 0 {
+		at := time.Now().UTC().Add(-ended)
+		endedAt = &at
+	}
+	if _, err := e.st.Pool.Exec(context.Background(), `UPDATE agent_runs SET state = $2, ended_at = $3, created_at = $4 WHERE id = $1`,
+		r.ID, string(state), endedAt, created); err != nil {
+		t.Fatalf("move a seeded run to %s: %v", state, err)
+	}
+	r.State, r.CreatedAt = state, created
+	return r
+}
+
 func (e *authorityEnv) get(t *testing.T, bearer, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	return do(t, e.h.srv, "GET", path, bearer, "")

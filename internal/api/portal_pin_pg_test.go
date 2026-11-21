@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -96,9 +98,17 @@ func TestPortalPin_DeletedPinUnitRefused_PG(t *testing.T) {
 		if runs := decodePortalRuns(t, w.Body.Bytes()); len(runs) != 0 {
 			t.Errorf("list after the delete = %d runs, want none", len(runs))
 		}
-		w = e.get(t, tok, "/api/v1/runs?status=all&view=mine")
-		if h := w.Header().Get("X-Wardyn-Hidden-Older"); h != "0" {
-			t.Errorf("hidden count = %q, want 0 (no run is counted)", h)
+		w = e.get(t, tok, "/api/v1/runs?view=user")
+		if w.Code != http.StatusOK {
+			t.Fatalf("filtered list after the delete = %d %s, want 200", w.Code, w.Body)
+		}
+		for _, h := range []string{"X-Wardyn-Hidden-Older", "X-Wardyn-Hidden-Killed"} {
+			if got := w.Header().Get(h); got != "0" {
+				t.Errorf("%s = %q, want 0 (no run is counted)", h, got)
+			}
+		}
+		if runs := decodePortalRuns(t, w.Body.Bytes()); len(runs) != 0 {
+			t.Errorf("filtered list after the delete = %d runs, want none", len(runs))
 		}
 	})
 	t.Run("direct read", func(t *testing.T) {
@@ -113,8 +123,9 @@ func TestPortalPin_DeletedPinUnitRefused_PG(t *testing.T) {
 	})
 }
 
-// 3 x page size runs alternate in and out of the pin: every page is full, the cursors reach every in-pin run
-// exactly once, and the hidden counts count only in-pin runs, on the plain and the filtered list.
+// Live runs alternate in and out of the pin, with older and killed rows hidden by the filtered list inside and
+// outside it: every page is full, the cursors reach every in-pin run exactly once, and both hidden counts count
+// only the in-pin rows.
 func TestPortalPin_ListFilteredToPin_PG(t *testing.T) {
 	e := newAuthorityEnv(t)
 	d := e.portal(t, e.bind(t), &e.plat.ID)
@@ -126,33 +137,108 @@ func TestPortalPin_ListFilteredToPin_PG(t *testing.T) {
 		if i%2 == 0 {
 			unit = &e.team.ID
 		}
-		r := e.run(t, person, unit, d.ID)
+		r := e.runAs(t, person, unit, d.ID, types.RunRunning, 0, time.Time{})
 		if unit == &e.team.ID {
 			want[r.ID] = true
 		}
 	}
-	for _, base := range []string{"/api/v1/runs?", "/api/v1/runs?view=mine&status=all&"} {
-		got := map[uuid.UUID]int{}
-		for offset := 0; ; offset += page {
-			w := e.get(t, tok, base+"limit="+strconv.Itoa(page)+"&offset="+strconv.Itoa(offset))
-			runs := decodePortalRuns(t, w.Body.Bytes())
-			for _, r := range runs {
-				got[r.ID]++
-			}
-			if len(runs) < page {
-				break
-			}
-			if len(runs) != page {
-				t.Fatalf("%s: a page held %d runs, want %d", base, len(runs), page)
-			}
+	hide := func(unit *uuid.UUID, n int, state types.RunState, ago time.Duration) {
+		for range n {
+			e.runAs(t, person, unit, d.ID, state, ago, time.Time{})
 		}
-		if len(got) != len(want) {
-			t.Errorf("%s: reached %d runs, want the %d in the pin", base, len(got), len(want))
+	}
+	hide(&e.team.ID, 2, types.RunCompleted, 10*24*time.Hour) // older than ended_within=7d, in the pin
+	hide(&e.other.ID, 3, types.RunCompleted, 10*24*time.Hour)
+	hide(&e.team.ID, 3, types.RunKilled, 72*time.Hour) // killed more than a day ago, in the pin
+	hide(&e.other.ID, 2, types.RunKilled, 72*time.Hour)
+
+	count := func(w *httptest.ResponseRecorder, name string) int {
+		t.Helper()
+		n, err := strconv.Atoi(w.Header().Get(name))
+		if err != nil {
+			t.Fatalf("header %s = %q on %d %s", name, w.Header().Get(name), w.Code, w.Body)
 		}
-		for id, n := range got {
-			if !want[id] || n != 1 {
-				t.Errorf("%s: run %s seen %d times (in pin %v)", base, id, n, want[id])
-			}
+		return n
+	}
+	for _, c := range []struct {
+		query         string
+		older, killed int
+	}{{"", 0, 3}, {"&ended_within=7d", 2, 3}} {
+		w := e.get(t, tok, "/api/v1/runs?view=user"+c.query+"&limit=5")
+		if w.Code != http.StatusOK {
+			t.Fatalf("filtered list %q = %d %s, want 200", c.query, w.Code, w.Body)
+		}
+		if o, k := count(w, "X-Wardyn-Hidden-Older"), count(w, "X-Wardyn-Hidden-Killed"); o != c.older || k != c.killed {
+			t.Errorf("filtered list %q hidden older %d killed %d, want %d and %d (in-pin rows only)", c.query, o, k, c.older, c.killed)
+		}
+	}
+	got := map[uuid.UUID]int{}
+	for offset := 0; ; offset += page {
+		w := e.get(t, tok, "/api/v1/runs?view=user&ended_within=7d&limit="+strconv.Itoa(page)+"&offset="+strconv.Itoa(offset))
+		if w.Code != http.StatusOK {
+			t.Fatalf("filtered page at offset %d = %d %s, want 200", offset, w.Code, w.Body)
+		}
+		runs := decodePortalRuns(t, w.Body.Bytes())
+		for _, r := range runs {
+			got[r.ID]++
+		}
+		if len(runs) < page {
+			break
+		}
+		if len(runs) != page {
+			t.Fatalf("a page held %d runs, want %d", len(runs), page)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("reached %d runs, want the %d in the pin", len(got), len(want))
+	}
+	for id, n := range got {
+		if !want[id] || n != 1 {
+			t.Errorf("run %s seen %d times (in pin %v)", id, n, want[id])
+		}
+	}
+}
+
+// The plain list pages on an offset, so runs created at one instant need a defined order: with every run's
+// creation time equal, each in-pin run is reached exactly once across the page boundaries (the creator query
+// breaks the tie on id, as the filtered path does).
+func TestPortalPin_PlainListTiedTimesPageExactlyOnce_PG(t *testing.T) {
+	e := newAuthorityEnv(t)
+	d := e.portal(t, e.bind(t), &e.plat.ID)
+	person, tok := e.person(t, d, "alice")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	want := map[uuid.UUID]bool{}
+	for i := 0; i < 12; i++ {
+		unit := &e.other.ID
+		if i%3 != 0 {
+			unit = &e.team.ID
+		}
+		r := e.runAs(t, person, unit, d.ID, types.RunRunning, 0, at)
+		if unit == &e.team.ID {
+			want[r.ID] = true
+		}
+	}
+	const page = 3
+	got := map[uuid.UUID]int{}
+	for offset := 0; ; offset += page {
+		w := e.get(t, tok, "/api/v1/runs?limit="+strconv.Itoa(page)+"&offset="+strconv.Itoa(offset))
+		if w.Code != http.StatusOK {
+			t.Fatalf("plain page at offset %d = %d %s, want 200", offset, w.Code, w.Body)
+		}
+		runs := decodePortalRuns(t, w.Body.Bytes())
+		for _, r := range runs {
+			got[r.ID]++
+		}
+		if len(runs) < page {
+			break
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("plain list reached %d runs, want the %d in the pin", len(got), len(want))
+	}
+	for id, n := range got {
+		if !want[id] || n != 1 {
+			t.Errorf("run %s seen %d times (in pin %v)", id, n, want[id])
 		}
 	}
 }
