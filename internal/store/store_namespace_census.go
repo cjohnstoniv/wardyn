@@ -212,6 +212,19 @@ var namespaceCensusExempt = map[string]string{
 }
 
 // censusKeyShape is what a k is: 26 characters of lowercase base32.
+// NamespaceCensusColumns is the columns the census reads, for the test that proves each one is found.
+func NamespaceCensusColumns() []CensusColumn {
+	out := make([]CensusColumn, len(namespaceCensusColumns))
+	for i, c := range namespaceCensusColumns {
+		out[i] = CensusColumn(c)
+	}
+	return out
+}
+
+// CensusColumn is one column the census reads: its table and name, whether it holds JSON, and the filter on
+// its row when the column names a subject of any type.
+type CensusColumn = censusColumn
+
 var censusKeyShape = regexp.MustCompile(`^[a-z2-7]{26}$`)
 
 // NamespaceCensusQ counts, per column, the stored strings that start delegate:person:<issuerKey>:, and

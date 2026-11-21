@@ -99,6 +99,9 @@ func (s PG) MarkPortalIdentityPurged(ctx context.Context, id uuid.UUID, mode Por
 	if _, err = tx.Exec(ctx, `UPDATE principal_identities SET purged_at = clock_timestamp(), display_email = '' WHERE id = $1`, id); err != nil {
 		return false, fmt.Errorf("store: mark portal identity purged: %w", err)
 	}
+	if _, err = tx.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id = $1`, id); err != nil {
+		return false, fmt.Errorf("store: delete portal use: %w", err)
+	}
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO deprovision_jobs (identity_id, kind, step, target) VALUES ($1, $2, $3, '')
 		ON CONFLICT (identity_id, kind, step, target) DO NOTHING`, id, JobKindPurge, JobStepAuditDeprovision); err != nil {

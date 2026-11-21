@@ -114,7 +114,19 @@ func (s PG) MintPortalGrant(ctx context.Context, g types.PortalGrant, raw string
 				RETURNING *)
 			SELECT `+portalGrantCols+` FROM g JOIN delegates d ON d.id = g.delegate_id`,
 			id, g.DelegateID, hashToken(raw), g.Principal, g.UserType, chain, g.SubjectIssuedAt, g.RevSeq, dbnow, end))
-		return err
+		if err != nil {
+			return err
+		}
+		// The person's use of this portal is recorded where the grants' expiry and a suspension do not reach.
+		// A person with no identity row records nothing; the exchange writes the identity first.
+		if _, err = q.Exec(ctx, `
+			INSERT INTO portal_person_portals (identity_id, delegate_id, first_used_at, last_used_at)
+			SELECT id, $1, $3, $3 FROM principal_identities WHERE issuer = $4 AND principal = $2
+			ON CONFLICT (identity_id, delegate_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at`,
+			g.DelegateID, g.Principal, dbnow, types.PortalPersonPrefix+key); err != nil {
+			return fmt.Errorf("store: record portal use: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return types.PortalGrant{}, time.Time{}, err

@@ -129,11 +129,10 @@ func (s PG) LookupPortalPerson(ctx context.Context, issuer, personID string) (ty
 		return types.PortalPerson{}, fmt.Errorf("store: read issuer binding: %w", err)
 	}
 	p := types.PortalPerson{Principal: types.PortalPrincipal(key, personID)}
-	var introducedBy *uuid.UUID
 	err = s.Pool.QueryRow(ctx, `
-		SELECT id, display_email, deactivated_at, purged_at, introduced_by FROM principal_identities
+		SELECT id, display_email, deactivated_at, purged_at FROM principal_identities
 		 WHERE issuer = $1 AND principal = $2`, types.PortalPersonPrefix+key, p.Principal).
-		Scan(&p.IdentityID, &p.DisplayEmail, &p.DeactivatedAt, &p.PurgedAt, &introducedBy)
+		Scan(&p.IdentityID, &p.DisplayEmail, &p.DeactivatedAt, &p.PurgedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.PortalPerson{}, ErrNotFound
 	}
@@ -141,9 +140,10 @@ func (s PG) LookupPortalPerson(ctx context.Context, issuer, personID string) (ty
 		return types.PortalPerson{}, fmt.Errorf("store: read portal person: %w", err)
 	}
 	p.PortalsUsed, err = collect(ctx, s.Pool, "list", "portals a person used", `
-		SELECT d.id, d.name, d.run_in_under, d.revoked_at FROM delegates d
-		 WHERE d.issuer <> '' AND (d.id = $2 OR d.id IN (SELECT delegate_id FROM portal_grants WHERE principal = $1))
-		 ORDER BY d.created_at, d.id`, []any{p.Principal, introducedBy}, func(r pgx.Row) (types.PortalUsed, error) {
+		SELECT d.id, d.name, d.run_in_under, d.revoked_at FROM portal_person_portals u
+		  JOIN delegates d ON d.id = u.delegate_id
+		 WHERE u.identity_id = $1
+		 ORDER BY u.first_used_at, d.id`, []any{p.IdentityID}, func(r pgx.Row) (types.PortalUsed, error) {
 		var u types.PortalUsed
 		return u, r.Scan(&u.Delegate, &u.Name, &u.RunInUnder, &u.RevokedAt)
 	})

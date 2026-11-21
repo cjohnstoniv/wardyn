@@ -12,11 +12,13 @@ package store
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,6 +26,10 @@ import (
 // on. It is exported for the write conditions of other lanes' statements, which refuse a write that would
 // need the activation before it is set.
 const PortalIssuersActivatedKey = "portal_issuers_activated_at"
+
+// PortalSessionUnknown is the label and address UntaggedClientSessions reports for a client session whose
+// details the calling role cannot read.
+const PortalSessionUnknown = "unknown"
 
 // PortalActivationStore is the activation's store surface, optional like the other portal stores.
 type PortalActivationStore interface {
@@ -69,12 +75,16 @@ func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []str
 // at least 0.10.2: an empty label, an older version, any other label, or a session whose label the caller
 // cannot read. It reads pg_stat_activity, so it sees only the connections that exist when it runs, and a label
 // is only what the client chose; the activation's veto and the hourly alarm are a report, not a proof.
+//
+// A role without pg_read_all_stats sees another role's session with its backend type, application name and
+// address masked. Such a session is still a client, and nothing about it shows it is current, so it counts as
+// untagged and is reported with the label and address "unknown" (PortalSessionUnknown).
 func (s PG) UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error) {
 	all, err := collect(ctx, s.Pool, "list", "client sessions", `
-		SELECT COALESCE(application_name, ''), COALESCE(client_addr::text, '')
+		SELECT COALESCE(application_name, $1), CASE WHEN application_name IS NULL THEN $1 ELSE COALESCE(client_addr::text, '') END
 		  FROM pg_stat_activity
-		 WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'
-		 ORDER BY application_name, client_addr`, nil, func(r pgx.Row) (types.ClientSession, error) {
+		 WHERE datname = current_database() AND pid <> pg_backend_pid() AND `+db.OtherClientSQL+`
+		 ORDER BY 1, 2`, []any{PortalSessionUnknown}, func(r pgx.Row) (types.ClientSession, error) {
 		var c types.ClientSession
 		return c, r.Scan(&c.Label, &c.ClientAddr)
 	})
@@ -90,26 +100,32 @@ func (s PG) UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, 
 	return out, nil
 }
 
-// wardydLabelAtLeast0102 reports whether label is wardynd/<version>/<replica>, or wardynd-<tool>/<version>,
-// with a version of 0.10.2 or later. A prerelease of 0.10.2 counts as 0.10.2.
+// The two label shapes a 0.10.2 wardynd sets as application_name (db.WithApplicationName): the server's
+// wardynd/<version>/<replica> and a subcommand's wardynd-<tool>/<version>. Anything else is not one, however
+// close: a label with no replica, with an extra component or with another tool shape is suspect.
+var (
+	serverLabelRE = regexp.MustCompile(`^wardynd/(` + labelVersion + `)/[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	toolLabelRE   = regexp.MustCompile(`^wardynd-[a-z0-9][a-z0-9-]*/(` + labelVersion + `)$`)
+)
+
+// labelVersion is a version as internal/version.Version spells it: three numbers and an optional prerelease.
+const labelVersion = `[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?`
+
+// wardydLabelAtLeast0102 reports whether label is exactly one of the two shapes above with a version of
+// 0.10.2 or later. A prerelease of 0.10.2 counts as 0.10.2.
 func wardydLabelAtLeast0102(label string) bool {
-	head, rest, ok := strings.Cut(label, "/")
-	if !ok || (head != "wardynd" && !strings.HasPrefix(head, "wardynd-")) {
+	m := serverLabelRE.FindStringSubmatch(label)
+	if m == nil {
+		m = toolLabelRE.FindStringSubmatch(label)
+	}
+	if m == nil {
 		return false
 	}
-	version, _, _ := strings.Cut(rest, "/")
-	version = strings.TrimPrefix(version, "v")
-	if i := strings.IndexAny(version, "-+"); i >= 0 {
-		version = version[:i]
-	}
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
-		return false
-	}
+	version, _, _ := strings.Cut(m[1], "-")
 	var n [3]int
-	for i, p := range parts {
+	for i, p := range strings.Split(version, ".") {
 		v, err := strconv.Atoi(p)
-		if err != nil || v < 0 {
+		if err != nil {
 			return false
 		}
 		n[i] = v

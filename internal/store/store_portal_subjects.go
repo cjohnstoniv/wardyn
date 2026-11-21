@@ -13,7 +13,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -87,24 +89,96 @@ func ruleDelegatePersonSubject(ctx context.Context, q rowQuerier, column, subjec
 	}
 }
 
-// uiAppCallerRE finds a user caller that names a portal person inside any stored policy document: the
-// caller form is user:<principal>, folded to lower case.
-var uiAppCallerRE = regexp.MustCompile(`user:delegate:person:([a-z2-7]{26}):`)
+// userCallerPrefix starts a UI-app caller that names a person: user:<sub or email>.
+const userCallerPrefix = "user:"
 
-// ruleUIAppCallersQ is the ruling for the UI-app callers inside the policy documents a write stores (a
-// policy spec, a unit's ceiling or overlay, a preset's request, a template revision's document). The callers
-// live in JSON, so it reads each document as text and, for every issuer key a user caller names, takes that
-// key's binding FOR KEY SHARE on q before the write, in key order so two writes never wait on each other. A
-// key with no binding is ErrDelegatePersonUnknownPortal. q must be the write's transaction.
-func ruleUIAppCallersQ(ctx context.Context, q rowQuerier, docs ...[]byte) error {
+// uiAppCallerKeys decodes each document and returns the sorted, de-duplicated issuer keys of the portal people
+// named as callers of a UI app. It inspects only the callers of the entries of a "ui_apps" array, wherever in
+// the document that array sits (a policy, a unit's ceiling or overlay, a launch request's policy overlay, a
+// template's document), so any JSON spelling of a caller is read as the decoded string and free text such as a
+// task or a description is never read. A caller that names a portal person but has no well-formed issuer key
+// is ErrDelegatePersonUnknownPortal.
+func uiAppCallerKeys(docs ...[]byte) ([]string, error) {
 	var keys []string
 	for _, d := range docs {
-		for _, m := range uiAppCallerRE.FindAllStringSubmatch(strings.ToLower(string(d)), -1) {
-			keys = append(keys, m[1])
+		if len(bytes.TrimSpace(d)) == 0 {
+			continue
+		}
+		var doc any
+		if err := json.Unmarshal(d, &doc); err != nil {
+			return nil, fmt.Errorf("store: read a policy document for its callers: %w", err)
+		}
+		var walkErr error
+		var walk func(v any)
+		walk = func(v any) {
+			switch t := v.(type) {
+			case map[string]any:
+				for k, child := range t {
+					if k == "ui_apps" {
+						if apps, ok := child.([]any); ok {
+							for _, a := range apps {
+								if app, ok := a.(map[string]any); ok {
+									if callers, ok := app["callers"].([]any); ok {
+										for _, c := range callers {
+											if str, ok := c.(string); ok {
+												key, err := portalKeyOfCaller(str)
+												if err != nil {
+													walkErr = err
+												} else if key != "" {
+													keys = append(keys, key)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+					walk(child)
+				}
+			case []any:
+				for _, child := range t {
+					walk(child)
+				}
+			}
+		}
+		walk(doc)
+		if walkErr != nil {
+			return nil, walkErr
 		}
 	}
 	slices.Sort(keys)
-	for _, k := range slices.Compact(keys) {
+	return slices.Compact(keys), nil
+}
+
+// portalKeyOfCaller is the issuer key of a user caller that names a portal person, "" for any other caller.
+func portalKeyOfCaller(caller string) (string, error) {
+	c := strings.TrimSpace(caller)
+	if len(c) < len(userCallerPrefix) || !strings.EqualFold(c[:len(userCallerPrefix)], userCallerPrefix) {
+		return "", nil
+	}
+	canon := types.CanonicalUserSubject(c[len(userCallerPrefix):])
+	if !strings.HasPrefix(canon, types.PortalPersonPrefix) {
+		return "", nil
+	}
+	m := portalKeyInPrincipal.FindStringSubmatch(canon)
+	if m == nil || len(canon) == len(m[0]) {
+		return "", ErrDelegatePersonUnknownPortal
+	}
+	return m[1], nil
+}
+
+// ruleUIAppCallersQ is the ruling for the UI-app callers inside the policy documents a write stores (a
+// policy spec, a unit's ceiling or overlay, a preset's request, a template revision's document). For every
+// issuer key a user caller names it takes that key's binding FOR KEY SHARE on q before the write, in key
+// order so two writes never wait on each other. A key with no binding is ErrDelegatePersonUnknownPortal. q
+// must be the write's transaction.
+func ruleUIAppCallersQ(ctx context.Context, q rowQuerier, docs ...[]byte) error {
+	keys, err := uiAppCallerKeys(docs...)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
 		var one int
 		err := q.QueryRow(ctx, `SELECT 1 FROM portal_issuers WHERE issuer_key = $1 FOR KEY SHARE`, k).Scan(&one)
 		switch {
