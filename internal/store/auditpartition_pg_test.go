@@ -352,6 +352,11 @@ func TestPG_VerifyAuditChain_DetectsAMissingPartition(t *testing.T) {
 // on itself until the context ended.
 func TestPG_PartitionExportHoldsNoConnectionWhileARowRuns(t *testing.T) {
 	c := newPartChain(t)
+	// The fixture stops at 0119. The subject lookups of a sealed actor read principal_identity_unbinds, which
+	// references principal_identities, so those two tables are created first; principal_keys is 0108's.
+	for _, f := range []string{"0113_principal_identities.sql", "0283_principal_identity_unbinds.sql"} {
+		execMigrationFile(t, c.pool, f)
+	}
 	cfg := c.pool.Config()
 	cfg.MaxConns = 1
 	small, err := pgxpool.NewWithConfig(context.Background(), cfg)
