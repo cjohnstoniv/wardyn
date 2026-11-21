@@ -410,13 +410,13 @@ func run() error {
 	gatewayClientCA := bootKeys.gatewayClientCA()
 	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	// Console sign-in's issuer is recorded, and refused when a portal binding already uses it, after the
-	// migrations and before this replica serves a request (D18).
+	// migrations and before this replica serves a request.
 	if feats.authn != nil {
 		if err := recordConsoleIssuer(bootCtx, pool, feats.authn.Issuer(), replicaID()); err != nil {
 			return err
 		}
 	}
-	portalIssuers, portalFailures, err := buildPortalIssuers(f, lm.operator)
+	portalIssuers, portalFailures, err := buildPortalIssuers(f, lm.operator, st)
 	if err != nil {
 		return err
 	}

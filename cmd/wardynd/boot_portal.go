@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,8 +57,8 @@ func portalIssuerOptions(hosts, caFile, localOperator string, counter *api.Porta
 }
 
 // buildPortalIssuers builds the verifier set and the counter its refresh failures land on.
-func buildPortalIssuers(f *bootFlags, localOperator string) (*oidc.PortalIssuers, *api.PortalRefreshFailures, error) {
-	counter := &api.PortalRefreshFailures{}
+func buildPortalIssuers(f *bootFlags, localOperator string, st store.PG) (*oidc.PortalIssuers, *api.PortalRefreshFailures, error) {
+	counter := &api.PortalRefreshFailures{Portals: livePortalsOn(st)}
 	opts, err := portalIssuerOptions(*f.portalInternalHosts, *f.portalInternalCAFile, localOperator, counter)
 	if err != nil {
 		return nil, nil, err
@@ -66,6 +68,28 @@ func buildPortalIssuers(f *bootFlags, localOperator string) (*oidc.PortalIssuers
 		return nil, nil, fmt.Errorf("refusing to start: issuer portals: %w", err)
 	}
 	return p, counter, nil
+}
+
+// livePortalsOn names, by delegate id, the portals registered and not revoked on an issuer, for the refresh
+// failure counter and its log line: two portals sharing an issuer share its failures, and the operator needs
+// to see which registrations they hit. A read that fails attributes to none.
+func livePortalsOn(st store.PG) func(issuer string) []string {
+	return func(issuer string) []string {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		all, err := st.ListDelegates(ctx)
+		if err != nil {
+			return nil
+		}
+		var ids []string
+		for _, d := range all {
+			if d.Issuer == issuer && d.RevokedAt == nil {
+				ids = append(ids, d.ID.String())
+			}
+		}
+		sort.Strings(ids)
+		return ids
+	}
 }
 
 // errConsoleIssuerIsPortal is the boot refusal of a console issuer that equals a portal binding's issuer.
