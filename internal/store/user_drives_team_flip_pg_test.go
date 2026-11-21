@@ -138,3 +138,77 @@ func boolWord(b bool) string {
 	}
 	return "false"
 }
+
+// driveIDLockSQL takes the advisory lock a write of one drive id holds to its commit (UpsertUserDrive), as a test
+// transaction standing in for the first registration of an id that has no row yet.
+const driveIDLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended('user_drives:' || $1::text, 0))`
+
+// Registrations of an id that has no row yet are serialised before any row exists: with one of them in flight, two
+// more PUTs of the same id (one personal, one shared) wait, and when it commits they run one after another and both
+// succeed on the one row. Without the id's own lock a PUT finds no row to lock, goes on to its INSERT and, behind a
+// registration that created the drive, takes the conflict-update path with an allocation predicate judged in a
+// snapshot that predates the allocations made since.
+func TestPG_DriveRegistration_AbsentIDWaitsForTheRegistrationInFlight(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	id := uuid.New()
+	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, id) })
+	release := holdTx(t, pool, driveIDLockSQL, id.String())
+	personal, shared := newUserDrive("reg-"+uuid.NewString()[:8]), newUserDrive("reg-"+uuid.NewString()[:8])
+	personal.ID, shared.ID = id, id
+	shared.Team, shared.Writable = true, true
+	blockedP, resultP := parked(func() error { _, err := st.UpsertUserDrive(ctx, personal, true); return err })
+	blockedS, resultS := parked(func() error { _, err := st.UpsertUserDrive(ctx, shared, true); return err })
+	if !blockedP || !blockedS {
+		release()
+		t.Fatalf("registrations of an absent id did not wait for the one in flight (personal blocked %v, shared blocked %v)", blockedP, blockedS)
+	}
+	waitForPortalLock(t, "both registrations waiting on the id's lock", func() bool { return backendsWaiting(t, pool, true, "user_drives:") == 2 })
+	if n := rowCount(t, pool, `SELECT count(*) FROM user_drives WHERE id = $1`, id); n != 0 {
+		release()
+		t.Fatalf("%d row(s) for the id while its registrations wait, want none", n)
+	}
+	release()
+	if err := resultP(); err != nil {
+		t.Errorf("personal registration behind the one in flight: %v", err)
+	}
+	if err := resultS(); err != nil {
+		t.Errorf("shared registration behind the one in flight: %v", err)
+	}
+	if n := rowCount(t, pool, `SELECT count(*) FROM user_drives WHERE id = $1`, id); n != 1 {
+		t.Errorf("%d row(s) for the id after both registrations, want 1", n)
+	}
+}
+
+// The outcome the lock above protects: an id registered personal, a group allocated under that mode, and a later PUT of
+// the same id that flips it to shared is refused and leaves the drive and the allocation as they were.
+func TestPG_DriveRegistration_AllocationUnderTheFirstModeBlocksALaterFlip(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	d := newUserDrive("reg-" + uuid.NewString()[:8])
+	d.ID = uuid.New()
+	if _, err := st.UpsertUserDrive(ctx, d, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE drive_id = $1`, d.ID)
+		_ = st.DeleteUserDrive(ctx, d.ID)
+	})
+	if _, err := st.AddUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: "platform",
+		DriveID: d.ID, Enabled: true, CreatedBy: "admin@example.com"}, true); err != nil {
+		t.Fatal(err)
+	}
+	flip := d
+	flip.Team, flip.Writable = true, true
+	for _, refuse := range []bool{false, true} {
+		if _, err := st.UpsertUserDrive(ctx, flip, refuse); !errors.Is(err, store.ErrDriveAllocated) {
+			t.Errorf("flip of a registered, allocated id (refuseIfAllocated %v): err = %v, want ErrDriveAllocated", refuse, err)
+		}
+	}
+	if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Team {
+		t.Errorf("drive = %+v, %v; want it still personal", got, err)
+	}
+	if n := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, d.ID); n != 1 {
+		t.Errorf("%d allocation row(s), want the one", n)
+	}
+}
