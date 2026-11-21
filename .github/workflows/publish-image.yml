@@ -184,6 +184,8 @@ jobs:
             echo "tags<<TAGEOF"
             printf '%s\n' "${tags[@]}"
             echo "TAGEOF"
+            # The commit stamped into the binaries; empty on a tag ref, which keeps the bare version.
+            if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
           } >> "$GITHUB_OUTPUT"
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v3
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -196,7 +198,33 @@ jobs:
           platforms: linux/amd64,linux/arm64
           # No attestation manifests in the index; see release.yml's `provenance: false` note.
           provenance: false
+          # The build context has no .git, so the commit goes in by build arg: /healthz and `wardyn --version`
+          # then report <version>+<commit>. Empty on a tag ref, which keeps the bare version.
+          build-args: |
+            REVISION=${{ steps.tags.outputs.revision }}
           tags: ${{ steps.tags.outputs.tags }}
+      # The per-commit image must report the commit it was built from, in the CLI and in the daemon (the
+      # daemon's /healthz reads the same internal/version string). A tag ref keeps the bare version.
+      - name: Check the image reports its revision
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+          REVISION: ${{ steps.tags.outputs.revision }}
+        run: |
+          set -euo pipefail
+          got="$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/wardyn "$IMAGE_REF" version)"
+          if [ -n "$REVISION" ]; then
+            case "$got" in *"+${REVISION::9}") ;; *) echo "::error::wardyn version printed '$got', want it to end in +${REVISION::9}"; exit 1;; esac
+          else
+            case "$got" in *+*) echo "::error::wardyn version printed '$got', want the bare version on a tag ref"; exit 1;; esac
+          fi
+          if [ -n "$REVISION" ]; then
+            cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
+            docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+            docker rm "$cid" >/dev/null
+            grep -aqF "internal/version.buildRevision=${REVISION}" "$RUNNER_TEMP/wardynd" \
+              || { echo "::error::the wardynd binary was not stamped with revision ${REVISION}"; exit 1; }
+          fi
+          echo "image reports: $got"
       # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>
       # carry a verifiable signature rather than being the one publishing lane
       # that produced unsigned artifacts.

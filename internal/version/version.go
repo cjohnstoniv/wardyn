@@ -20,6 +20,11 @@ const Version = "0.10.1"
 // that detects a release build.
 var releaseBuild string
 
+// buildRevision is the commit an image build was made from, stamped via -ldflags -X by the Dockerfile's
+// REVISION arg (publish-image.yml's per-commit build). The image build context carries no .git, so the
+// toolchain records no vcs.revision of its own; String() falls back to this one. Empty everywhere else.
+var buildRevision string
+
 // readBuildInfo is a seam so a test can stand in for the running binary's own
 // module info, which only debug.ReadBuildInfo can read.
 var readBuildInfo = debug.ReadBuildInfo
@@ -34,19 +39,20 @@ func String() string {
 	if releaseBuild == "true" {
 		return Version
 	}
-	info, ok := readBuildInfo()
-	if !ok {
-		return Version
-	}
 	var rev string
 	var dirty bool
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			dirty = s.Value == "true"
+	if info, ok := readBuildInfo(); ok {
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
 		}
+	}
+	if rev == "" {
+		rev = buildRevision
 	}
 	if rev == "" {
 		return Version
