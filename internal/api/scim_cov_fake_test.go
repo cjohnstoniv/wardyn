@@ -1167,7 +1167,7 @@ type scimCovPaged struct {
 	errAction string
 }
 
-func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.UUID, f store.AuditFilter, _ store.Page) ([]types.AuditEvent, error) {
+func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.UUID, f store.AuditFilter, page store.Page) ([]types.AuditEvent, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, "QueryAuditEventsFilteredPage")
@@ -1180,6 +1180,9 @@ func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.U
 		if f.Matches(ev) {
 			out = append(out, ev)
 		}
+	}
+	if page.Limit > 0 && len(out) > page.Limit { // the limit applies after the filter, as the store's does
+		out = out[:page.Limit]
 	}
 	return out, nil
 }

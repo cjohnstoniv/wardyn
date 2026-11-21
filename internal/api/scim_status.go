@@ -22,8 +22,8 @@ const (
 	// scimStatusListCap caps each list GET /scim/status returns: the card is a glance, and a
 	// backlog past this is read in Audit.
 	scimStatusListCap = 200
-	// scimStatusAuditScan is how many of the newest audit rows are read to find the token slot that
-	// last matched and the purges that listed drives.
+	// scimStatusAuditScan is how many of the newest audit rows are read for each token slot and for the
+	// purges that listed drives.
 	scimStatusAuditScan = 200
 )
 
@@ -171,25 +171,29 @@ func (s *Server) scimAuditRows(ctx context.Context, f store.AuditFilter) ([]type
 }
 
 // scimLastTokenSlot is the bearer slot of the newest audit row that names one: a scim.user.* row or a group
-// member removal, both of which record the slot of the request that caused them. The sweeper's own rows name
-// no bearer.
+// member removal, both of which record the slot of the request that caused them. Each slot is read on its
+// own, with the slot in the row's filter, so the scan limit applies to rows that name a bearer and the
+// sweeper's rows (which name the sweeper) can never crowd a real update out of it; empty means no row of the
+// scan names either bearer.
 func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
-	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim."})
-	if err != nil {
-		return "", err
+	var slot string
+	var newest time.Time
+	for _, sl := range []string{scimSlotPrimary, scimSlotNext} {
+		rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.", DataContains: string(mustJSON(map[string]string{"slot": sl}))})
+		if err != nil {
+			return "", err
+		}
+		for _, ev := range rows { // newest first
+			if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
+				continue
+			}
+			if slot == "" || ev.Time.After(newest) {
+				slot, newest = sl, ev.Time
+			}
+			break
+		}
 	}
-	for _, ev := range rows { // newest first
-		if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
-			continue
-		}
-		var d struct {
-			Slot string `json:"slot"`
-		}
-		if json.Unmarshal(ev.Data, &d) == nil && (d.Slot == scimSlotPrimary || d.Slot == scimSlotNext) {
-			return d.Slot, nil
-		}
-	}
-	return "", nil
+	return slot, nil
 }
 
 // scimDrivesToReclaim is the drives the purges listed that still need their purged person's storage

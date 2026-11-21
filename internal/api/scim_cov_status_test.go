@@ -240,6 +240,23 @@ func TestSCIMCovStatusLastTokenSlotCountsGroupRemovalsToo(t *testing.T) {
 	}
 }
 
+// The scan limit applies to rows that name a bearer: a backlog of the sweeper's own rows, newer than the
+// last request a token made, does not push that request out of the read and leave the card saying no token
+// was used. Catches a read that takes the newest 200 scim.* rows and filters by slot afterwards.
+func TestSCIMCovStatusLastTokenSlotSurvivesASweeperBacklog(t *testing.T) {
+	t0 := scimCovNow
+	var rows []types.AuditEvent // newest first
+	for i := 0; i < scimStatusAuditScan+50; i++ {
+		rows = append(rows, scimCovAudit("scim.user.deactivate", "x", t0.Add(-time.Duration(i)*time.Second), `{"slot":"sweeper"}`))
+		rows = append(rows, scimCovAudit("scim.group.member_remove", "x", t0.Add(-time.Duration(i)*time.Second), `{"slot":"sweeper","group":"g"}`))
+	}
+	rows = append(rows, scimCovAudit("scim.user.write", "x", t0.Add(-time.Hour), `{"slot":"next"}`))
+	e, _ := scimCovPagedEnv(t, newSCIMCovStore(), rows)
+	if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != "next" {
+		t.Errorf("status = %d, last_token_slot %q, want next: %d sweeper rows are newer than it", w.Code, body.LastTokenSlot, len(rows)-1)
+	}
+}
+
 func TestSCIMCovStatusAuditReadFailures(t *testing.T) {
 	for _, c := range []struct{ name, action string }{
 		{"the slot read", ""},
