@@ -70,6 +70,17 @@ func buildPortalIssuers(f *bootFlags, localOperator string, st store.PG) (*oidc.
 	return p, counter, nil
 }
 
+// bootPortalIssuers is the portal half of the boot sequence: when console sign-in is configured its issuer is
+// recorded, and refused when a portal binding already uses it, and the verifier set is then built.
+func bootPortalIssuers(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, localOperator string, st store.PG, consoleSignIn *oidc.Authenticator) (*oidc.PortalIssuers, *api.PortalRefreshFailures, error) {
+	if consoleSignIn != nil {
+		if err := recordConsoleIssuer(ctx, pool, consoleSignIn.Issuer(), replicaID()); err != nil {
+			return nil, nil, err
+		}
+	}
+	return buildPortalIssuers(f, localOperator, st)
+}
+
 // livePortalsOn names, by delegate id, the portals registered and not revoked on an issuer, for the refresh
 // failure counter and its log line: two portals sharing an issuer share its failures, and the operator needs
 // to see which registrations they hit. A read that fails attributes to none.
