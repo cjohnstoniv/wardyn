@@ -232,6 +232,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var errs []error
+	gone := false
+memberOps:
 	for _, op := range ops {
 		if op.Attr != scim.AttrMembers {
 			continue
@@ -244,9 +246,10 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
 			}
 			if errors.Is(err, store.ErrNotFound) {
-				// A deletion committed after the group was read: nobody is added, and the request is refused.
-				writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
-				return
+				// A deletion committed after the group was read: nobody is added, the rest is the deletion's,
+				// and the request is refused below, after any earlier failure.
+				gone = true
+				break memberOps
 			}
 			if err != nil {
 				errs = append(errs, err)
@@ -264,6 +267,12 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := errors.Join(errs...); err != nil {
 		s.scimServerError(w, r, "update the group", err)
+		return
+	}
+	// An earlier removal that failed answers 5xx first: its ledger stays pending, and the 404 would tell the
+	// identity provider the request was settled.
+	if gone {
+		writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
 		return
 	}
 	if externalIDRefused {

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/scim"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -501,6 +502,85 @@ func TestSCIMCovDeleteGroupRemovesAMemberAddedAfterTheListing(t *testing.T) {
 		if j.IdentityID == late.ID && !j.Done {
 			t.Errorf("the late member's %s step is still pending", j.Step)
 		}
+	}
+}
+
+// A DELETE whose second pass fails answers 5xx with the group already gone: the provider's retry finds no group,
+// and the sweeper finishes the removal the delete left pending.
+func TestSCIMCovDeleteGroupSecondPassFailureIsFinishedBySweeper(t *testing.T) {
+	st := newSCIMCovStore()
+	late := scimCovPerson(st, "sub-late")
+	g := st.addGroup(scimCovGroupExternal, "Engineering")
+	e := newSCIMCovEnv(t, &lateJoinStore{scimCovStore: st, late: late.ID})
+	e.rev.set(nil, errors.New("cut unavailable"))
+
+	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "cut unavailable")
+	if _, ok := st.groups[g.ID]; ok {
+		t.Fatal("the group is still stored; the failure was not in the second pass")
+	}
+	if steps := st.pendingSteps(late.ID, store.JobKindGroupRemove); len(steps) == 0 {
+		t.Fatal("the late member's removal is not pending after the failed second pass")
+	}
+	scimCovWantError(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), http.StatusNotFound, "")
+
+	e.rev.set(nil, nil)
+	st.sweepRemovals = true
+	if err := e.srv.SweepSCIMPurge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if steps := st.pendingSteps(late.ID, store.JobKindGroupRemove); len(steps) != 0 {
+		t.Errorf("the sweeper left the late member's removal pending: %v", steps)
+	}
+	if rows := e.auditRows("scim.group.member_remove"); len(rows) != 1 || rows[0].Target != late.ID.String() {
+		t.Errorf("removal rows %+v, want one for the late member", rows)
+	}
+}
+
+// A deadlock in the delete's transaction rolls it all back, the ledger it would have opened for a late member
+// included: the 5xx keeps the group, and the retry removes that member and finishes.
+func TestSCIMCovDeleteGroupDeadlockIsRetried(t *testing.T) {
+	st := newSCIMCovStore()
+	m, late := scimCovPerson(st, "sub-1"), scimCovPerson(st, "sub-2")
+	g := st.addGroup(scimCovGroupExternal, "Engineering", m.ID)
+	st.failNext("DeleteScimGroup", &pgconn.PgError{Code: "40P01", Message: "deadlock detected"}, 1)
+	e := newSCIMCovEnv(t, &lateJoinStore{scimCovStore: st, late: late.ID})
+
+	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "deadlock")
+	if _, ok := st.groups[g.ID]; !ok {
+		t.Fatal("the group is gone after a delete that rolled back")
+	}
+	if w := e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("the retried DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if _, ok := st.groups[g.ID]; ok {
+		t.Error("the retried DELETE left the group")
+	}
+	targets := map[string]int{}
+	for _, ev := range e.auditRows("scim.group.member_remove") {
+		targets[ev.Target]++
+	}
+	if len(targets) != 2 || targets[m.ID.String()] != 1 || targets[late.ID.String()] != 1 {
+		t.Errorf("removal rows per person %v, want one each for the member and the late member", targets)
+	}
+}
+
+// A PATCH whose earlier removal failed and whose later add finds the group gone answers the failure (5xx), not
+// the 404: the removal is still owed.
+func TestSCIMCovPatchFailedRemoveThenAddToAGoneGroupAnswersTheFailure(t *testing.T) {
+	st := newSCIMCovStore()
+	m, other := scimCovPerson(st, "sub-1"), scimCovPerson(st, "sub-2")
+	g := st.addGroup(scimCovGroupExternal, "Engineering", m.ID)
+	st.failNext("AddScimGroupMembers", store.ErrNotFound, 1)
+	e := newSCIMCovEnv(t, st)
+	e.rev.set(nil, errors.New("cut unavailable"))
+
+	w := e.scim(http.MethodPatch, "/scim/v2/Groups/"+g.ID.String(), scimCovPatch(scimCovGroupRemove(m.ID.String()), scimCovGroupAdd(other.ID.String())))
+	scimCovWantRetry(t, w, "cut unavailable")
+	if steps := st.pendingSteps(m.ID, store.JobKindGroupRemove); len(steps) == 0 {
+		t.Error("the failed removal is not pending")
+	}
+	if slices.Contains(st.groupMembers(g.ID), other.ID) {
+		t.Error("the add to a gone group admitted someone")
 	}
 }
 
